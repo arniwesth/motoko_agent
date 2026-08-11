@@ -1,0 +1,894 @@
+-- src/core/dst_run_report.ail
+--
+-- WI-A14 piece 3, under ADR-001 D11: the run report and its counters.
+--
+-- D11 names the fields:
+--
+--   "Every run reports generator id/version, attempted seeds, completed
+--    SystemRun count, harness/generator failures, fault classes reached, NAMED
+--    RECOVERY BRANCHES REACHED, waived fault classes with their waiving
+--    conditions, terminal reasons reached, and elapsed budget."
+--
+-- ============================================================================
+-- THE TWO COUNTERS ARE SEPARATE, AND D11 SAYS WHY IN ONE SENTENCE
+-- ============================================================================
+--
+--   "Class-reached and branch-reached are separate counters read from D3's
+--    catalogue artifact: reaching a fault class is not evidence that the
+--    production branch it targets was executed, and only the second is the
+--    coverage the acceptance test asks for."
+--
+-- So `class_coverage` and `branch_coverage` are two lists, both DERIVED from
+-- `fault_catalogue()` rather than written out here. A class the artifact omits
+-- cannot be discovered by a counter that reads the artifact — which is the
+-- property D3's own header calls the load-bearing one, arriving downstream.
+--
+-- A single merged "coverage" number would be the natural tidy-up and it would
+-- silently answer the weaker question: the tool classes are reached by the
+-- world's own `world_tool`, which returns the fault WITHOUT reaching the
+-- dispatcher, so the class is reached and `tool_phase.tool_outcome_message`'s
+-- branch is a separate event.
+--
+-- ============================================================================
+-- NOT-REACHED IS FOUR DIFFERENT FACTS, AND A WAIVER IS A FIFTH
+-- ============================================================================
+--
+-- Cluster 12 is emphatic about this and it is the easiest thing here to lose to
+-- tidying. Three classes are unreached today for three DIFFERENT reasons:
+--
+--   `approval_deadline_exceeded`   STRUCTURALLY unreachable. D2 gives
+--                                  ExpectApproval a deadline; the driver's
+--                                  approval channel carries none, and
+--                                  `DenyAfterTimeout` is a DECISION, not a
+--                                  duration. A declared gap, not a solved
+--                                  problem.
+--   the provider latency/fault     ONE NAMED CHANGE away — `ScriptedStep` has
+--                                  no latency or error channel, so a generated
+--                                  provider fault has nowhere to be chosen
+--                                  into (cluster 10's correction 2).
+--   `ToolCorrelationMismatch`,     CODEC-COVERED, SCENARIO-UNREACHED. They
+--   `ToolDeadlineExceeded`         travel the same codec as `ToolFailed` and
+--                                  are pinned by round-trip rows; no generated
+--                                  scenario has exercised them.
+--
+-- Reporting those as one "unreached" number states three different facts as
+-- one. And NONE of the three is a waiver: D3 requires a waived class to be
+-- NAMED WITH ITS WAIVING CONDITION, and a class nobody waived that nobody
+-- reached is a coverage gap, not a permission.
+--
+-- `ReachStatus` is therefore a sum with a reason on every non-reached variant,
+-- and `validate_report` rejects a `Waived` whose condition is blank or which
+-- the catalogue does not declare conditional.
+--
+-- ============================================================================
+-- THE ENV CLASS'S COMPLETENESS EVIDENCE IS A DIFFERENT KIND (clusters 7/8)
+-- ============================================================================
+--
+-- Six world-request classes have an INDEPENDENT RUNTIME WITNESS: the driver's
+-- own counters say how many provider calls, tool dispatches and approval reads
+-- happened, and the recorded log is checked against them.
+--
+-- ENVIRONMENT READS HAVE NONE. Their completeness rests on a SOURCE-DERIVED key
+-- set (`dst_discovery.driver_env_keys`) and it asserts MULTIPLICITY, not
+-- presence — because the driver reads `MOTOKO_TOOL_TIMEOUT_MS` once per native
+-- tool dispatch, so a recorder that logged the first read of each key and
+-- dropped the rest would satisfy a presence check while losing two reads in
+-- three. Reporting both kinds under one "complete" heading would let the weaker
+-- evidence inherit the stronger one's standing, so the kind is a field.
+--
+-- ============================================================================
+-- D8'S CLAUSE THIS LAYER MUST NOT VIOLATE
+-- ============================================================================
+--
+--   "Large exact payloads may live in a CI artifact addressed by digest; a
+--    digest without retained bytes is not sufficient for replay."
+--
+-- The encoding already enforces it — `encode_artifact` retains the bytes and
+-- carries the digest INSIDE the artifact. A report that named only a hash would
+-- reintroduce at the REPORTING layer exactly what the artifact refuses to
+-- represent, so `ReplayReference` carries the path and the identity together
+-- and `replay-reference-digest-without-bytes` rejects a reference with an
+-- identity and no path. D8 also requires CI output to carry a copy-pasteable
+-- local replay command, which `replay_command` builds from the path.
+
+module src/core/dst_run_report
+
+import std/list as List (length)
+import std/string as Str (startsWith)
+import std/option (Option, Some, None)
+
+import src/core/dst_fault_catalogue (
+  FaultClass,
+  RecoveryBranch, Branch, NoReachableBranch,
+  Applicability, AlwaysApplicable, ConditionalOn,
+  branch_id,
+  fault_catalogue,
+  fault_catalogue_version,
+  required_class_ids,
+  conditional_class_ids,
+  waiving_condition,
+  find_class
+)
+
+import src/core/dst_generator (BoundFailure, bound_failure_message)
+
+import src/core/dst_result (
+  DstResult, RunCompleted, RunFailed,
+  HarnessFailureKind, harness_failure_kind_name
+)
+
+import src/core/dst_discovery (driver_env_keys, EnvExpectation)
+
+import src/core/dst_invariants (
+  Violation, violation_rule, violation_family, family_id
+)
+
+export pure func run_report_version() -> string { "run-report/1" }
+
+-- ============================================================================
+-- PART 1 — reach status: four ways not to be reached, plus a waiver
+-- ============================================================================
+
+export type ReachStatus
+  -- Observed at run time.
+  = Reached
+  -- No production path exists at all. A DECLARED GAP: the reason names what is
+  -- missing, and closing it is design work rather than more seeds.
+  | UnreachableStructurally(string)
+  -- Reachable once one named change lands. Different from the above because a
+  -- seed sweep will never reach it and a reader should not go looking.
+  | UnreachableUntilChange(string)
+  -- Its codec/round trip is pinned but no scenario drives it. Different from
+  -- both above because MORE SEEDS IS THE FIX, and only for this one.
+  | CoveredNotExercised(string)
+  -- D3's waiver: the profile does not exercise the class and NAMES the
+  -- condition that waives it. Not one of the three above — a waiver is a
+  -- permission, and the three above are gaps.
+  | Waived(string)
+
+export pure func reach_id(s: ReachStatus) -> string {
+  match s {
+    Reached => "reached",
+    UnreachableStructurally(_) => "unreachable-structurally",
+    UnreachableUntilChange(_) => "unreachable-until-change",
+    CoveredNotExercised(_) => "covered-not-exercised",
+    Waived(_) => "waived"
+  }
+}
+
+export pure func reach_reason(s: ReachStatus) -> string {
+  match s {
+    Reached => "",
+    UnreachableStructurally(r) => r,
+    UnreachableUntilChange(r) => r,
+    CoveredNotExercised(r) => r,
+    Waived(c) => c
+  }
+}
+
+export pure func is_reached(s: ReachStatus) -> bool {
+  match s { Reached => true, _ => false }
+}
+
+export pure func is_waived(s: ReachStatus) -> bool {
+  match s { Waived(_) => true, _ => false }
+}
+
+-- The five statuses, for a report that counts by kind rather than by a boolean.
+export pure func all_reach_ids() -> [string] {
+  [reach_id(Reached),
+   reach_id(UnreachableStructurally("")),
+   reach_id(UnreachableUntilChange("")),
+   reach_id(CoveredNotExercised("")),
+   reach_id(Waived(""))]
+}
+
+-- ============================================================================
+-- PART 2 — the two counters
+-- ============================================================================
+
+export type ClassCoverage = {
+  class_id: string,
+  status: ReachStatus,
+  -- How many times the class was observed. Kept alongside the status rather
+  -- than derived from it, because "reached once" and "reached forty times" are
+  -- different coverage facts and a rotating corpus reports the second.
+  times: int
+}
+
+-- The branch counter. `branch_id` is read from the catalogue row rather than
+-- supplied by the caller, so a report cannot claim coverage of a branch the
+-- artifact does not name.
+export type BranchCoverage = {
+  class_id: string,
+  branch_id: string,
+  status: ReachStatus,
+  times: int
+}
+
+-- Every required class, with nothing observed. The starting point a runner
+-- folds observations into — built FROM the catalogue so a class the artifact
+-- omits is absent here too, and `validate_report` then reports it against
+-- `required_class_ids()`.
+export pure func empty_class_coverage(rows: [FaultClass]) -> [ClassCoverage] {
+  match rows {
+    [] => [],
+    r :: rest => {
+      let status = match r.applicability {
+        ConditionalOn(c) => Waived(c),
+        AlwaysApplicable => CoveredNotExercised("no scenario in this window drove the class")
+      };
+      ({ class_id: r.class_id, status: status, times: 0 }) :: empty_class_coverage(rest)
+    }
+  }
+}
+
+export pure func empty_branch_coverage(rows: [FaultClass]) -> [BranchCoverage] {
+  match rows {
+    [] => [],
+    r :: rest => {
+      -- A class whose catalogue row says there is NO reachable branch reports
+      -- structurally unreachable, carrying the row's own reason verbatim. That
+      -- is D3's `NoReachableBranch` travelling into D11's counter instead of
+      -- being flattened to "not covered".
+      let status = match r.recovery_branch {
+        NoReachableBranch(why) => UnreachableStructurally(why),
+        Branch(_) => match r.applicability {
+          ConditionalOn(c) => Waived(c),
+          AlwaysApplicable => CoveredNotExercised("no scenario in this window executed the branch")
+        }
+      };
+      ({ class_id: r.class_id, branch_id: branch_id(r.recovery_branch),
+         status: status, times: 0 }) :: empty_branch_coverage(rest)
+    }
+  }
+}
+
+export pure func mark_class(cs: [ClassCoverage], class_id: string, status: ReachStatus) -> [ClassCoverage] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      if c.class_id == class_id
+      then ({ c | status: status, times: c.times + (if is_reached(status) then 1 else 0) }) :: rest
+      else c :: mark_class(rest, class_id, status)
+  }
+}
+
+export pure func mark_branch(bs: [BranchCoverage], class_id: string, status: ReachStatus) -> [BranchCoverage] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      if b.class_id == class_id
+      then ({ b | status: status, times: b.times + (if is_reached(status) then 1 else 0) }) :: rest
+      else b :: mark_branch(rest, class_id, status)
+  }
+}
+
+export pure func classes_with_status(cs: [ClassCoverage], id: string) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      if reach_id(c.status) == id then c.class_id :: classes_with_status(rest, id)
+      else classes_with_status(rest, id)
+  }
+}
+
+export pure func branches_with_status(bs: [BranchCoverage], id: string) -> [string] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      if reach_id(b.status) == id then b.branch_id :: branches_with_status(rest, id)
+      else branches_with_status(rest, id)
+  }
+}
+
+-- THE COUNTER PAIR THE ACCEPTANCE TEST READS, and the reason it is a pair.
+-- Equal numbers here are not a tautology and not an error: they are the
+-- statement that every class reached also executed its branch, which is what
+-- D11 asks for and which the two counters can only say by being separate.
+export type CoveragePair = { classes_reached: int, branches_reached: int }
+
+export pure func coverage_pair(cs: [ClassCoverage], bs: [BranchCoverage]) -> CoveragePair {
+  { classes_reached: List.length(classes_with_status(cs, "reached")),
+    branches_reached: List.length(branches_with_status(bs, "reached")) }
+}
+
+-- ============================================================================
+-- PART 3 — completeness evidence, which comes in two kinds
+-- ============================================================================
+
+export type EvidenceKind
+  -- An independent runtime counter the recorded log is checked against.
+  = RuntimeWitness(string)
+  -- A key set read off the driver's SOURCE, asserting multiplicity rather than
+  -- presence. Weaker, and labelled so it cannot inherit the other's standing.
+  | SourceDerivedKeySet(string)
+
+export pure func evidence_kind_id(k: EvidenceKind) -> string {
+  match k {
+    RuntimeWitness(_) => "runtime-witness",
+    SourceDerivedKeySet(_) => "source-derived-key-set"
+  }
+}
+
+export pure func evidence_note(k: EvidenceKind) -> string {
+  match k { RuntimeWitness(n) => n, SourceDerivedKeySet(n) => n }
+}
+
+export type CompletenessEvidence = {
+  world_class: string,
+  kind: EvidenceKind,
+  witnessed: int,
+  logged: int
+}
+
+-- The env class's evidence, built from the source-derived key set so the report
+-- and the checker cannot drift into two notions of which keys the driver reads.
+export pure func env_evidence(expected: [EnvExpectation], logged_reads: int) -> CompletenessEvidence {
+  { world_class: "environment_read",
+    kind: SourceDerivedKeySet("derived from dst_discovery.driver_env_keys() over ${List.length(driver_env_keys())} driver keys; asserts MULTIPLICITY, not presence — the driver reads MOTOKO_TOOL_TIMEOUT_MS once per native tool dispatch, so a recorder logging only the first read of each key would look complete"),
+    witnessed: expected_total(expected),
+    logged: logged_reads }
+}
+
+pure func expected_total(es: [EnvExpectation]) -> int {
+  match es {
+    [] => 0,
+    e :: rest => e.count + expected_total(rest)
+  }
+}
+
+export pure func runtime_evidence(world_class: string, witnessed: int, logged: int) -> CompletenessEvidence {
+  { world_class: world_class,
+    kind: RuntimeWitness("an independent driver counter for this class, compared against the recorded log"),
+    witnessed: witnessed, logged: logged }
+}
+
+-- ============================================================================
+-- PART 4 — the CI replay affordance (D8)
+-- ============================================================================
+
+-- Both halves, together. The identity alone is the thing D8 forbids as
+-- sufficient, so the type cannot express it without the path also being
+-- present — and `validate_report` rejects a blank path with a non-blank
+-- identity by name rather than defaulting it.
+export type ReplayReference = {
+  generator_id: string,
+  generator_version: string,
+  seed: int,
+  artifact_path: string,
+  artifact_identity: string,
+  -- The manifest the program ran under. D11: a program promoted without one
+  -- "is not a reproduction unit — it is a program nobody can state the meaning
+  -- of", because D8's reproducibility promise is conditioned on it.
+  manifest_id: string
+}
+
+-- The copy-pasteable half D8 requires of CI output, and it names a REAL entry
+-- point rather than an illustrative one.
+--
+-- `scripts/dst/run_report_dst.ail --entry replay_artifact` exists, reads the
+-- path from `MOTOKO_DST_PROGRAM`, and calls `dst_persistence.load_program` — so
+-- pasting this line loads the retained bytes and reports what they decode to.
+-- A command naming an entry point nobody wrote would satisfy every check in
+-- this module while being unpasteable, which is the same shape as a digest with
+-- no bytes: a reference that looks like one and is not. `make run_report`
+-- greps the script for the entry point for exactly that reason.
+export pure func replay_entry_point() -> string { "replay_artifact" }
+
+export pure func replay_command(r: ReplayReference) -> string {
+  "MOTOKO_DST_PROGRAM=${r.artifact_path} ailang run --caps IO,FS,Env --entry ${replay_entry_point()} scripts/dst/run_report_dst.ail"
+}
+
+export pure func replay_line(r: ReplayReference) -> string {
+  "replay ${r.generator_id}/${r.generator_version} seed ${r.seed} under manifest '${r.manifest_id}':\n    ${replay_command(r)}\n    artifact: ${r.artifact_path}  identity: ${r.artifact_identity}"
+}
+
+-- ============================================================================
+-- PART 5 — the report
+-- ============================================================================
+
+export type HarnessFailureCount = { kind: string, count: int }
+export type TerminalReasonCount = { reason: string, count: int }
+
+export type RunReport = {
+  -- D8's recorded axes, so a report can be read years later.
+  generator_id: string,
+  generator_version: string,
+  program_schema_version: string,
+  event_vocabulary_version: string,
+  fault_catalogue_version: string,
+  profile_id: string,
+  profile_version: string,
+  manifest_id: string,
+
+  -- D11's seed window. `seeds_attempted` is the window as issued; the gate
+  -- compares it against what completed, so a silently truncated window fails
+  -- rather than reporting a smaller success.
+  seeds_attempted: [int],
+  seeds_minimum: int,
+  runs_completed: int,
+
+  harness_failures: [HarnessFailureCount],
+  generator_failures: [BoundFailure],
+
+  class_coverage: [ClassCoverage],
+  branch_coverage: [BranchCoverage],
+  terminal_reasons: [TerminalReasonCount],
+  completeness: [CompletenessEvidence],
+
+  -- D8's first failed invariant, typed rather than a string a caller could
+  -- invent. None on a clean window.
+  first_failed_invariant: Option[Violation],
+
+  elapsed_ms: int,
+  budget_ms: int,
+  replay_refs: [ReplayReference]
+}
+
+-- ============================================================================
+-- PART 6 — the gate
+-- ============================================================================
+
+export type ReportRejection
+  = SeedWindowEmpty
+  | SeedWindowBelowMinimum(int, int)
+  | SeedWindowTruncated(int, int)
+  | RequiredClassUnaccounted(string)
+  | RequiredClassNotReached(string)
+  | RequiredBranchNotReached(string, string)
+  | WaivedWithoutCondition(string)
+  | WaivedButNotConditional(string)
+  | UnknownClassCounted(string)
+  | BranchNotInCatalogue(string, string)
+  | ReplayReferenceWithoutBytes(string)
+  | ReplayReferenceWithoutManifest(string)
+  | BudgetExceeded(int, int)
+
+export pure func report_rule(r: ReportRejection) -> string {
+  match r {
+    SeedWindowEmpty => "seed-window-empty",
+    SeedWindowBelowMinimum(_, _) => "seed-window-below-minimum",
+    SeedWindowTruncated(_, _) => "seed-window-truncated",
+    RequiredClassUnaccounted(_) => "required-class-unaccounted",
+    RequiredClassNotReached(_) => "required-class-not-reached",
+    RequiredBranchNotReached(_, _) => "required-branch-not-reached",
+    WaivedWithoutCondition(_) => "waived-without-condition",
+    WaivedButNotConditional(_) => "waived-but-not-conditional",
+    UnknownClassCounted(_) => "unknown-class-counted",
+    BranchNotInCatalogue(_, _) => "branch-not-in-catalogue",
+    ReplayReferenceWithoutBytes(_) => "replay-reference-digest-without-bytes",
+    ReplayReferenceWithoutManifest(_) => "replay-reference-without-manifest",
+    BudgetExceeded(_, _) => "budget-exceeded"
+  }
+}
+
+export pure func report_message(r: ReportRejection) -> string {
+  match r {
+    SeedWindowEmpty =>
+      "[seed-window-empty] the report declares no attempted seeds; D11 fails a zero window rather than treating it as a vacuous pass, because a search gate that searched nothing is indistinguishable from one that found nothing",
+    SeedWindowBelowMinimum(minimum, attempted) =>
+      "[seed-window-below-minimum] ${attempted} seed(s) attempted against an operator-accepted minimum of ${minimum}; D11 makes the minimum a declared number and asserts the exact count completed",
+    SeedWindowTruncated(attempted, accounted) =>
+      "[seed-window-truncated] ${attempted} seed(s) were attempted and ${accounted} are accounted for by completed runs plus harness failures; the difference is a silently truncated window, which D11 fails",
+    RequiredClassUnaccounted(c) =>
+      "[required-class-unaccounted] D3 requires class '${c}' and the report carries no coverage row for it; every counter reads its ids from the catalogue artifact, so a class with no row is a silent coverage claim rather than a smaller report",
+    RequiredClassNotReached(c) =>
+      "[required-class-not-reached] required class '${c}' was not reached and is not waived; D11's fixed coverage bank must collectively reach every required class the profile does not waive, and D3 requires each waiver to be DECLARED WITH ITS CONDITION rather than inferred from a miss",
+    RequiredBranchNotReached(c, b) =>
+      "[required-branch-not-reached] the recovery branch '${b}' targeted by class '${c}' did not execute; reaching the class is NOT evidence that the branch ran — D11 keeps them as separate counters for exactly this, and only branch-reached is the coverage the acceptance test asks for",
+    WaivedWithoutCondition(c) =>
+      "[waived-without-condition] class '${c}' is reported waived with a blank condition; D3 makes an unstated waiver a coverage claim the decision does not grant",
+    WaivedButNotConditional(c) =>
+      "[waived-but-not-conditional] class '${c}' is reported waived and D3's catalogue declares it AlwaysApplicable; an unconditional class cannot be waived, and reporting it so converts a gap into a permission",
+    UnknownClassCounted(c) =>
+      "[unknown-class-counted] the report counts class '${c}', which D3's catalogue does not declare; a counter that can invent an id can report coverage of a class nothing defines",
+    BranchNotInCatalogue(c, b) =>
+      "[branch-not-in-catalogue] the report counts branch '${b}' for class '${c}' and the catalogue names a different branch for it; the branch id is read from the artifact so that a report cannot claim coverage of a branch nobody declared",
+    ReplayReferenceWithoutBytes(ident) =>
+      "[replay-reference-digest-without-bytes] a replay reference carries identity '${ident}' and no artifact path; D8 says in as many words that 'a digest without retained bytes is not sufficient for replay', and a report naming only a hash reintroduces at the reporting layer exactly what the encoding refuses to represent",
+    ReplayReferenceWithoutManifest(path) =>
+      "[replay-reference-without-manifest] the replay reference for '${path}' names no execution manifest; D8's reproducibility promise is CONDITIONED on the recorded manifest and profile, so a program promoted without one is not a reproduction unit but a program nobody can state the meaning of (D11)",
+    BudgetExceeded(budget, elapsed) =>
+      "[budget-exceeded] the window used ${elapsed} ms against a declared budget of ${budget} ms; D11 makes the elapsed budget a reported field and the plan selects seed counts from measured CI cost, which an unbounded window makes unmeasurable"
+  }
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+pure func find_class_row(cs: [ClassCoverage], id: string) -> Option[ClassCoverage] {
+  match cs {
+    [] => None,
+    c :: rest => if c.class_id == id then Some(c) else find_class_row(rest, id)
+  }
+}
+
+pure func find_branch_row(bs: [BranchCoverage], id: string) -> Option[BranchCoverage] {
+  match bs {
+    [] => None,
+    b :: rest => if b.class_id == id then Some(b) else find_branch_row(rest, id)
+  }
+}
+
+-- The seed window. Three separate rules, because "no seeds", "too few seeds"
+-- and "seeds that started and were not accounted for" are three different
+-- operational failures and a single count check conflates them.
+pure func validate_window(r: RunReport) -> [ReportRejection] {
+  let attempted = List.length(r.seeds_attempted);
+  let failures = total_failures(r.harness_failures);
+  let accounted = r.runs_completed + failures;
+  let empty = if attempted == 0 then [SeedWindowEmpty] else [];
+  let below = if attempted > 0 && attempted < r.seeds_minimum
+              then [SeedWindowBelowMinimum(r.seeds_minimum, attempted)] else [];
+  let truncated = if attempted > 0 && accounted != attempted
+                  then [SeedWindowTruncated(attempted, accounted)] else [];
+  empty ++ below ++ truncated
+}
+
+pure func total_failures(fs: [HarnessFailureCount]) -> int {
+  match fs {
+    [] => 0,
+    f :: rest => f.count + total_failures(rest)
+  }
+}
+
+-- Set completeness against D3's required list, in BOTH directions: every
+-- required class has a row, and every counted class is one the catalogue
+-- declares.
+pure func validate_class_set(cs: [ClassCoverage], required: [string], rows: [FaultClass]) -> [ReportRejection] {
+  missing_rows(required, cs) ++ unknown_rows(cs, required) ++ waiver_rules(cs, rows)
+}
+
+pure func missing_rows(required: [string], cs: [ClassCoverage]) -> [ReportRejection] {
+  match required {
+    [] => [],
+    id :: rest =>
+      (match find_class_row(cs, id) {
+         None => [RequiredClassUnaccounted(id)],
+         Some(_) => []
+       }) ++ missing_rows(rest, cs)
+  }
+}
+
+pure func unknown_rows(cs: [ClassCoverage], required: [string]) -> [ReportRejection] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      (if contains_str(required, c.class_id) then [] else [UnknownClassCounted(c.class_id)])
+        ++ unknown_rows(rest, required)
+  }
+}
+
+-- D3's waiver rules, both of them. A blank condition is an unstated waiver; a
+-- waiver on an AlwaysApplicable class is a gap being converted into a
+-- permission, which is the direction that actually loses coverage.
+pure func waiver_rules(cs: [ClassCoverage], rows: [FaultClass]) -> [ReportRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let here =
+        if is_waived(c.status) then
+          if reach_reason(c.status) == "" then [WaivedWithoutCondition(c.class_id)]
+          else match waiving_condition(rows, c.class_id) {
+            None => [WaivedButNotConditional(c.class_id)],
+            Some(_) => []
+          }
+        else [];
+      here ++ waiver_rules(rest, cs_tail_rows(rows))
+    }
+  }
+}
+
+-- The catalogue is passed through unchanged; named rather than inlined so the
+-- recursion reads as a fold over the coverage rows and not over both lists.
+pure func cs_tail_rows(rows: [FaultClass]) -> [FaultClass] { rows }
+
+-- The coverage obligation D11 states, over the classes the profile did NOT
+-- waive. Class-level and branch-level are reported by DIFFERENT rules, so a
+-- report that reached every class while executing no branch fails on the second
+-- and says so.
+pure func validate_coverage(r: RunReport, rows: [FaultClass]) -> [ReportRejection] {
+  class_reach(r.class_coverage) ++ branch_reach(r.branch_coverage, rows)
+}
+
+pure func class_reach(cs: [ClassCoverage]) -> [ReportRejection] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      (if is_reached(c.status) || is_waived(c.status) then []
+       else [RequiredClassNotReached(c.class_id)])
+        ++ class_reach(rest)
+  }
+}
+
+pure func branch_reach(bs: [BranchCoverage], rows: [FaultClass]) -> [ReportRejection] {
+  match bs {
+    [] => [],
+    b :: rest => {
+      let declared = match find_class(rows, b.class_id) {
+        None => "",
+        Some(row) => branch_id(row.recovery_branch)
+      };
+      let mismatch = if declared != "" && declared != b.branch_id
+                     then [BranchNotInCatalogue(b.class_id, b.branch_id)] else [];
+      -- A branch the catalogue itself says is unreachable is NOT a coverage
+      -- failure; it is D3's own declaration travelling through. Reporting it as
+      -- a miss would demand coverage of something the artifact states does not
+      -- exist, and the report would be permanently red for a reason no seed can
+      -- fix.
+      let unreached =
+        if is_reached(b.status) || is_waived(b.status) then []
+        else match b.status {
+          UnreachableStructurally(_) => [],
+          _ => [RequiredBranchNotReached(b.class_id, b.branch_id)]
+        };
+      mismatch ++ unreached ++ branch_reach(rest, rows)
+    }
+  }
+}
+
+pure func validate_replay_refs(rs: [ReplayReference]) -> [ReportRejection] {
+  match rs {
+    [] => [],
+    r :: rest => {
+      let bytes = if r.artifact_identity != "" && r.artifact_path == ""
+                  then [ReplayReferenceWithoutBytes(r.artifact_identity)] else [];
+      let manifest = if r.artifact_path != "" && r.manifest_id == ""
+                     then [ReplayReferenceWithoutManifest(r.artifact_path)] else [];
+      bytes ++ manifest ++ validate_replay_refs(rest)
+    }
+  }
+}
+
+export pure func validate_report(r: RunReport) -> [ReportRejection] {
+  let rows = fault_catalogue();
+  let budget = if r.budget_ms > 0 && r.elapsed_ms > r.budget_ms
+               then [BudgetExceeded(r.budget_ms, r.elapsed_ms)] else [];
+  validate_window(r)
+    ++ validate_class_set(r.class_coverage, required_class_ids(), rows)
+    ++ validate_coverage(r, rows)
+    ++ validate_replay_refs(r.replay_refs)
+    ++ budget
+}
+
+export pure func report_ok(r: RunReport) -> bool {
+  List.length(validate_report(r)) == 0
+}
+
+export pure func has_report_rule(rs: [ReportRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if report_rule(r) == rule then true else has_report_rule(rest, rule)
+  }
+}
+
+export pure func first_report_message(rs: [ReportRejection]) -> string {
+  match rs { [] => "", r :: _ => report_message(r) }
+}
+
+-- ============================================================================
+-- PART 7 — the projection D11 calls "the run reports"
+-- ============================================================================
+
+pure func join_str(xs: [string]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => x,
+    x :: rest => "${x}, ${join_str(rest)}"
+  }
+}
+
+pure func seed_list(xs: [int]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => "${x}",
+    x :: rest => "${x}, ${seed_list(rest)}"
+  }
+}
+
+pure func failure_lines(fs: [HarnessFailureCount]) -> string {
+  match fs {
+    [] => "",
+    f :: rest => "\n    harness ${f.kind}: ${f.count}${failure_lines(rest)}"
+  }
+}
+
+pure func generator_lines(fs: [BoundFailure]) -> string {
+  match fs {
+    [] => "",
+    f :: rest => "\n    ${bound_failure_message(f)}${generator_lines(rest)}"
+  }
+}
+
+pure func terminal_lines(ts: [TerminalReasonCount]) -> string {
+  match ts {
+    [] => "",
+    t :: rest => "\n    ${t.reason}: ${t.count}${terminal_lines(rest)}"
+  }
+}
+
+-- Each non-reached class printed WITH ITS REASON. A list of names would be the
+-- merged number in a different shape.
+pure func status_lines(cs: [ClassCoverage]) -> string {
+  match cs {
+    [] => "",
+    c :: rest => {
+      let here = if is_reached(c.status) then "\n    ${c.class_id}: reached ×${c.times}"
+                 else "\n    ${c.class_id}: ${reach_id(c.status)} — ${reach_reason(c.status)}";
+      "${here}${status_lines(rest)}"
+    }
+  }
+}
+
+pure func branch_lines(bs: [BranchCoverage]) -> string {
+  match bs {
+    [] => "",
+    b :: rest => {
+      let here = if is_reached(b.status) then "\n    ${b.class_id} → ${b.branch_id}: reached ×${b.times}"
+                 else "\n    ${b.class_id} → ${b.branch_id}: ${reach_id(b.status)}";
+      "${here}${branch_lines(rest)}"
+    }
+  }
+}
+
+pure func evidence_lines(es: [CompletenessEvidence]) -> string {
+  match es {
+    [] => "",
+    e :: rest =>
+      "\n    ${e.world_class} [${evidence_kind_id(e.kind)}] witnessed=${e.witnessed} logged=${e.logged}\n        ${evidence_note(e.kind)}${evidence_lines(rest)}"
+  }
+}
+
+pure func replay_lines(rs: [ReplayReference]) -> string {
+  match rs {
+    [] => "",
+    r :: rest => "\n    ${replay_line(r)}${replay_lines(rest)}"
+  }
+}
+
+pure func first_invariant_line(v: Option[Violation]) -> string {
+  match v {
+    None => "(none)",
+    Some(x) => "${family_id(violation_family(x))}/${violation_rule(x)}"
+  }
+}
+
+export pure func render_report(r: RunReport) -> string {
+  let pair = coverage_pair(r.class_coverage, r.branch_coverage);
+  "run report ${run_report_version()}
+  generator:    ${r.generator_id}/${r.generator_version}
+  schemas:      program=${r.program_schema_version} vocabulary=${r.event_vocabulary_version} catalogue=${r.fault_catalogue_version}
+  profile:      ${r.profile_id}/${r.profile_version} under manifest '${r.manifest_id}'
+  seeds:        ${List.length(r.seeds_attempted)} attempted (minimum ${r.seeds_minimum}): ${seed_list(r.seeds_attempted)}
+  completed:    ${r.runs_completed} SystemRun(s)
+  failures:${failure_lines(r.harness_failures)}${generator_lines(r.generator_failures)}
+  first failed invariant: ${first_invariant_line(r.first_failed_invariant)}
+  COUNTERS (D11 keeps these separate; reaching a class is not evidence its branch ran)
+    fault classes reached:     ${pair.classes_reached} of ${List.length(r.class_coverage)}
+    recovery branches reached: ${pair.branches_reached} of ${List.length(r.branch_coverage)}
+  class coverage:${status_lines(r.class_coverage)}
+  branch coverage:${branch_lines(r.branch_coverage)}
+  terminal reasons reached:${terminal_lines(r.terminal_reasons)}
+  completeness evidence (two KINDS; the second does not inherit the first's standing):${evidence_lines(r.completeness)}
+  elapsed:      ${r.elapsed_ms} ms of ${r.budget_ms} ms
+  replay (D8: a digest without retained bytes is not sufficient):${replay_lines(r.replay_refs)}"
+}
+
+-- ============================================================================
+-- Inline tests. The report-level rows live in scripts/dst/run_report_dst.ail,
+-- where a whole report can be constructed and mutated.
+-- ============================================================================
+
+pure func test_reach_status_has_five_distinct_ids() -> bool
+  tests [((), true)]
+  {
+    List.length(all_reach_ids()) == 5 && ids_distinct(all_reach_ids(), [])
+  }
+
+pure func ids_distinct(xs: [string], seen: [string]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_str(seen, x) then false else ids_distinct(rest, x :: seen)
+  }
+}
+
+-- THE ROW THAT STOPS THE MERGE. Three of the four non-reached statuses must
+-- stay distinguishable, and a waiver must not be one of them: `is_waived` is
+-- true only for `Waived`, and `is_reached` only for `Reached`, so a report
+-- cannot count a structural gap as a permission or a permission as coverage.
+pure func test_a_waiver_is_not_a_reach_and_a_gap_is_not_a_waiver() -> bool
+  tests [((), true)]
+  {
+    let structural = UnreachableStructurally("no branch");
+    let pending = UnreachableUntilChange("one field");
+    let covered = CoveredNotExercised("codec only");
+    let waived = Waived("the profile installs none");
+    not is_reached(structural) && not is_reached(waived)
+      && not is_waived(structural) && not is_waived(pending) && not is_waived(covered)
+      && is_waived(waived)
+  }
+
+pure func test_empty_coverage_is_built_from_the_catalogue() -> bool
+  tests [((), true)]
+  {
+    let rows = fault_catalogue();
+    List.length(empty_class_coverage(rows)) == List.length(required_class_ids())
+      && List.length(empty_branch_coverage(rows)) == List.length(required_class_ids())
+  }
+
+-- D3's `NoReachableBranch` must arrive in the branch counter AS a structural
+-- gap, carrying the catalogue's own reason — not flattened to "not covered",
+-- which would demand coverage of something the artifact says does not exist.
+pure func test_no_reachable_branch_becomes_a_structural_gap() -> bool
+  tests [((), true)]
+  {
+    let bs = empty_branch_coverage(fault_catalogue());
+    match find_branch_row(bs, "extension_effect_fault") {
+      None => false,
+      Some(b) => reach_id(b.status) == "unreachable-structurally" && reach_reason(b.status) != ""
+    }
+  }
+
+pure func test_conditional_classes_start_waived_with_their_condition() -> bool
+  tests [((), true)]
+  {
+    let cs = empty_class_coverage(fault_catalogue());
+    let conditional = conditional_class_ids(fault_catalogue());
+    List.length(conditional) == 2 && all_waived_with_reason(cs, conditional)
+  }
+
+pure func all_waived_with_reason(cs: [ClassCoverage], ids: [string]) -> bool {
+  match ids {
+    [] => true,
+    id :: rest =>
+      match find_class_row(cs, id) {
+        None => false,
+        Some(c) =>
+          if is_waived(c.status) && reach_reason(c.status) != ""
+          then all_waived_with_reason(cs, rest) else false
+      }
+  }
+}
+
+pure func test_every_rejection_message_names_its_rule() -> bool
+  tests [((), true)]
+  {
+    messages_named(sample_rejections())
+  }
+
+pure func messages_named(rs: [ReportRejection]) -> bool {
+  match rs {
+    [] => true,
+    r :: rest =>
+      if Str.startsWith(report_message(r), "[${report_rule(r)}] ")
+      then messages_named(rest) else false
+  }
+}
+
+pure func sample_rejections() -> [ReportRejection] {
+  [SeedWindowEmpty, SeedWindowBelowMinimum(1, 0), SeedWindowTruncated(2, 1),
+   RequiredClassUnaccounted("c"), RequiredClassNotReached("c"),
+   RequiredBranchNotReached("c", "b"), WaivedWithoutCondition("c"),
+   WaivedButNotConditional("c"), UnknownClassCounted("c"),
+   BranchNotInCatalogue("c", "b"), ReplayReferenceWithoutBytes("sha"),
+   ReplayReferenceWithoutManifest("p"), BudgetExceeded(1, 2)]
+}
+
+pure func test_rejection_rules_are_distinct() -> bool
+  tests [((), true)]
+  {
+    List.length(sample_rejections()) == 13
+      && ids_distinct(rules_of_rejections(sample_rejections()), [])
+  }
+
+pure func rules_of_rejections(rs: [ReportRejection]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest => report_rule(r) :: rules_of_rejections(rest)
+  }
+}

@@ -51,13 +51,22 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Only 13 of the 34 currently reach the returned trace; the
--- other 21 are projected through `ledger_emit` alone. Classifying by current
--- behaviour would declare 21 events display-only and make D6.4's parity
--- obligation vacuous — it would bless the exact gap D6.4 exists to close. The
--- artifact says which events BELONG in the ledger; WI-A14's invariant then
--- measures the distance. `reaches_trace_today` records the survey separately so
--- the two are never confused.
+-- that is deliberate. 14 of the 34 reach the returned trace (13 at WI-A8, plus
+-- `DoneEvent` which WI-A14 closed); the other 20 are projected through
+-- `ledger_emit` alone. Classifying by current behaviour would declare them
+-- display-only and make D6.4's parity obligation vacuous — it would bless the
+-- exact gap D6.4 exists to close. The artifact says which events BELONG in the
+-- ledger; WI-A14's invariant then measures the distance.
+-- `reaches_trace_today` records the survey separately so the two are never
+-- confused.
+--
+-- AND THE SEPARATION EARNED SOMETHING CONCRETE. WI-A14 closed one gap, and
+-- `event_vocabulary_version` did NOT change: D8 makes a change to a variant, a
+-- wire name, a payload schema or a CLASSIFICATION a version change, and
+-- `reaches_trace_today` is none of those four. Had the survey been folded into
+-- the classification, closing a gap would have been a compatibility event and
+-- every old trace would have needed a decoder — which is a strong argument for
+-- keeping a measurement out of an artifact whose changes are versioned.
 --
 -- Six rows are display-only, and three of those six share one reason: the
 -- compaction wire events are the display face of a `CompactionStageRecord`,
@@ -342,9 +351,9 @@ export pure func event_vocabulary() -> [EventRow] {
 
     { variant: "DoneEvent", wire_names: ["done"],
       payload: [req("step"), req("output"), opt("source")],
-      -- LOGICAL, and the one row that resisted the binary — see
-      -- classification_findings().
-      classification: Logical, reaches_trace_today: false },
+      -- LOGICAL, and the one row that resisted the binary. WI-A14 RESOLVED the
+      -- tension rather than inheriting it; see classification_findings().
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "EmptyStopFinalize", wire_names: ["empty_stop_finalize"],
       payload: [req("step"), req("input_tokens"), req("estimated_input_tokens"),
@@ -419,7 +428,7 @@ export pure func classification_findings() -> [ClassificationFinding] {
   [
     {
       variant: "DoneEvent",
-      tension: "Classified Logical because D6.3 requires the returned outcome, the DoneEvent when present, and the RunSummary to AGREE — an invariant over its content, which is exactly what DisplayOnly denies. But D6.3 also says it is 'not a second terminal record', and D6.1 requires the RunSummary to be the FINAL record of the returned trace, while the driver projects the DoneEvent AFTER c2_finalize has appended the RunSummary. So D6.4's obligation on a Logical event ('reaches the returned trace') and D6.1's final-record invariant cannot both be satisfied by appending it where it is emitted. The resolution is available — append the DoneEvent BEFORE finalizing — but it is a change to a terminal path and therefore WI-A14's call to make against its invariant set, not this artifact's. Recorded here so the classification is not mistaken for a decision that the append is free."
+      tension: "RESOLVED by WI-A14; recorded because the resolution is the interesting part. The tension WI-A8 could not settle: D6.3 requires the returned outcome, the DoneEvent when present, and the RunSummary to AGREE — an invariant over its content, which is exactly what DisplayOnly denies — while D6.1 requires the RunSummary to be the FINAL record of the returned trace, and the driver projected the DoneEvent AFTER c2_finalize had appended the summary. Both cannot hold by APPENDING it where it is emitted. What made the resolution free is that D6.4's obligation is PARITY and not a shared transition — the decision says so in as many words and names streams as the case where a shared transition is impossible — so the append and the projection are separated at this one site: session.ail's Finalize arm appends the DoneEvent BEFORE c2_finalize and projects it after, unchanged. The returned trace holds ... DoneEvent, RunSummary with the summary still final (D6.1); the wire still carries run_summary before done, so no compatibility surface moves (D8); and D6.3's agreement is now decidable over the returned trace alone, which dst_invariants.outcome_agreement_findings reads. The alternative — reclassifying it DisplayOnly — was refused: DisplayOnly means 'cannot change invariant results', and D6.3 is an invariant over precisely this event's content, so the reclassification would have made D6.3 unstatable rather than satisfied."
     }
   ]
 }
@@ -785,12 +794,20 @@ pure func test_duplicate_row_is_rejected() -> bool
 -- The D6.4 gap this artifact makes countable. Asserting the number pins it, so
 -- a row silently flipping `reaches_trace_today` shows up here rather than
 -- quietly shrinking WI-A14's work list.
+--
+-- FIFTEEN at WI-A8, FOURTEEN after WI-A14 closed `DoneEvent`. The assertion on
+-- DoneEvent is stated in the NEGATIVE direction on purpose: the gap may only
+-- shrink, and `dst_invariants.d64_gap_register` carries the remaining fourteen
+-- with a reason each, asserted equal to this list in both directions — so a
+-- variant that leaves the gap without leaving the register is red there, and a
+-- variant reclassified into DisplayOnly to leave it is red on the pinned
+-- display-only baseline. Neither escape is available by editing one place.
 pure func test_logical_gap_is_recorded() -> bool
   tests [((), true)]
   {
-    List.length(logical_variants_not_in_trace(event_vocabulary())) == 15
+    List.length(logical_variants_not_in_trace(event_vocabulary())) == 14
       && contains_str(logical_variants_not_in_trace(event_vocabulary()), "StreamDelta")
-      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "DoneEvent")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "DoneEvent")
   }
 
 pure func test_findings_reference_real_rows() -> bool

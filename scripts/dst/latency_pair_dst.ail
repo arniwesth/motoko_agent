@@ -1,0 +1,565 @@
+-- scripts/dst/latency_pair_dst.ail
+--
+-- WI-A14 piece 2, under ADR-001 D4:
+--
+--   "hold the request and underlying completion result constant while changing
+--    only latency/clock advancement, and demonstrate the expected different
+--    observed completion-versus-timeout behaviour. Both programs must replay
+--    deterministically."
+--
+-- ============================================================================
+-- S8 APPLIES IN BOTH DIRECTIONS, AND THIS FILE IS WHERE
+-- ============================================================================
+--
+-- S8: when a guard asserts that X influences Y, check that X cannot reach Y
+-- EXCEPT through the mechanism under test. This is literally an "X influences
+-- Y" assertion — latency influences the observed outcome — and S8 was earned by
+-- a defect of precisely this shape: a generator that reached its output through
+-- a DECORATIVE path (the seed printed into prose) and passed a sensitivity axis
+-- while every trajectory was identical.
+--
+--   * The decorative-path half. If the two worlds differed anywhere but
+--     `duration_ms` — a timestamp in a payload, a duration in a message — the
+--     pair would prove the ENCODING carries the number, not that time matters.
+--     `scenario_the_pair_differs_only_in_latency` compares the two world inputs
+--     FIELD BY FIELD and requires every field except `duration_ms` to be equal.
+--
+--   * The unwalked-branch half, which S8's complement calls the cheaper failure
+--     to fall into. If neither trajectory ever ENTERS the timeout branch, the
+--     pair certifies nothing and reads identically to a pair that does. So the
+--     latencies are chosen to BIND — 40 ms under a 1000 ms deadline and 3000 ms
+--     over it — and the branch is shown taken by reading BOTH OPERANDS of the
+--     comparison off the recorded interaction, not by observing that the
+--     outcomes differ.
+--
+--   * And the control that makes "except through the mechanism" executable.
+--     `world_tool`'s guard is `inv.timeout_ms > 0 && t.duration_ms >
+--     inv.timeout_ms`. The THIRD world is the slow one with no declared
+--     deadline (`MOTOKO_TOOL_TIMEOUT_MS=0`), and it must COMPLETE. If a 3000 ms
+--     tool faulted with no deadline in force, latency would be reaching the
+--     outcome AROUND the deadline comparison, and the pair above would be
+--     measuring duration rather than lateness. Nothing else in this file can
+--     see that.
+--
+-- ============================================================================
+-- THE PAIR IS BUILT ON THE TOOL CLASS, AND THAT IS A CORRECTION
+-- ============================================================================
+--
+-- The handoff put D4's latency pair together with the `ScriptedStep` latency
+-- widening cluster 10 deferred, on the reading that the pair needs it. It does
+-- not, and the distinction is worth stating because it changes what is blocked
+-- on what:
+--
+--   * D4's pair needs a class with a LATENCY CHANNEL, a DECLARED DEADLINE and a
+--     COMPARISON between them. The tool class has had all three since WI-A12:
+--     `ScriptedTool.duration_ms`, `ToolInvocation.timeout_ms` read through the
+--     env class at `tool_phase.ail:343`, and `world_tool`'s guard. The pair is
+--     buildable today and this file builds it.
+--
+--   * The PROVIDER class has none of the three. Widening `ScriptedStep` gives
+--     it a latency channel, which closes cluster 10's declared D2 gap — the
+--     generator chooses "a compatible response, fault, and latency" and chooses
+--     only the response on that class. That is a real obligation and it is not
+--     D4's: a provider latency with no provider deadline still has no
+--     completion-versus-timeout behaviour to demonstrate.
+--
+-- Reported as a plan correction rather than silently taken.
+
+module scripts/dst/latency_pair_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/ai (Message, ToolCall)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/test/stub_step (RecordingWorld, ScriptedStep)
+import src/core/ports (WorldState, ScriptedTool, empty_world_state)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtensionHooks, ExtCtx, ToolSchema, PromptPatch, BudgetPatch, BudgetPlan,
+  PreStepDecision, PassThrough,
+  ToolPolicyDecision, Pending, DenyAfterTimeout,
+  ToolHandleDecision, Delegate,
+  ResponseInterceptDecision, NoIntercept,
+  FinalizeDecision, NoDecision,
+  ExtRuntime
+)
+
+import src/core/dst_interaction (
+  Interaction, IdentityBody,
+  ToolIdentity,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  outcome_status_id, interaction_kind, total_advance_ms, of_kind
+)
+import src/core/dst_fault_catalogue (
+  fault_class_tool_deadline_exceeded, required_class_ids
+)
+import src/core/dst_program (
+  ExecutionProgram, program_schema_version, validate_program, validate_bounds
+)
+import src/core/dst_profile (ExecutionManifest, validate_manifest)
+import src/core/dst_driver_only (driver_only, driver_only_version, driver_only_manifest)
+import src/core/dst_replay (
+  ReplayMismatch, replay_message, strict_replay_findings, world_state_of,
+  refusal_message, refusal_rule
+)
+import src/core/dst_persistence (
+  encode_artifact, EncodeOutcome, Encoded, EncodeRefused,
+  artifact_identity, program_digest
+)
+
+-- ---------------------------------------------------------------------------
+-- The declared numbers, in one place
+-- ---------------------------------------------------------------------------
+--
+-- Named rather than inlined, because the whole pair is an argument about the
+-- relationship between three numbers and a reader must be able to check it
+-- without reading two world builders.
+
+pure func deadline_ms() -> int { 1000 }
+pure func fast_ms() -> int { 40 }
+pure func slow_ms() -> int { 3000 }
+
+-- ---------------------------------------------------------------------------
+-- Driver plumbing (the driver_only shape the other DST scripts use)
+-- ---------------------------------------------------------------------------
+
+pure func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate }
+func no_intercept(_ctx: ExtCtx, _text: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
+func no_solver(_ctx: ExtCtx, _text: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("latency pair: approval required", DenyAfterTimeout)
+}
+
+func rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks: ExtensionHooks = {
+    id: id, provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: passthrough_pre_step,
+    on_tool_policy: pending_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}
+
+func run_recording(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    6, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+-- ---------------------------------------------------------------------------
+-- The two worlds. IDENTICAL except for one integer.
+-- ---------------------------------------------------------------------------
+
+pure func tc(id: string) -> ToolCall { { id: id, name: "T", arguments: "{}" } }
+
+-- The provider script is shared by both worlds by CONSTRUCTION rather than by
+-- two equal literals: two literals that happen to agree today are two literals
+-- that can drift, and the pair's whole claim is that nothing but the latency
+-- differs.
+pure func shared_script() -> [ScriptedStep] {
+  [{ prose: "call the tool", tool_calls: [tc("call-1")],
+     input_tokens: 200, output_tokens: 100, finish_reason: "tool_calls", chunks: [] },
+   { prose: "done", tool_calls: [],
+     input_tokens: 210, output_tokens: 110, finish_reason: "stop", chunks: [] }]
+}
+
+pure func shared_answers() -> [string] { ["{\"type\":\"approve\"}"] }
+
+-- THE UNDERLYING COMPLETION RESULT, held constant. D4 says "hold the request
+-- and underlying completion result constant"; this is that result, and both
+-- worlds get it from here so neither can carry a different one.
+pure func shared_content() -> string { "TOOL-OUTPUT" }
+
+pure func tool_of(duration: int) -> ScriptedTool {
+  { tool_call_id: "", duration_ms: duration, code: "", message: "", content: shared_content() }
+}
+
+pure func env_of(limit_ms: int) -> [{ key: string, value: string }] {
+  [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "${limit_ms}" },
+   { key: "MOTOKO_HEADLESS", value: "1" }]
+}
+
+pure func world_of(duration: int, limit_ms: int) -> WorldState {
+  { empty_world_state() |
+    script: shared_script(), approvals: shared_answers(),
+    env: env_of(limit_ms), tools: [tool_of(duration)] }
+}
+
+pure func fast_world() -> WorldState { world_of(fast_ms(), deadline_ms()) }
+pure func slow_world() -> WorldState { world_of(slow_ms(), deadline_ms()) }
+-- The S8 control: slow, with NO declared deadline.
+pure func slow_no_deadline_world() -> WorldState { world_of(slow_ms(), 0) }
+
+-- ---------------------------------------------------------------------------
+-- The program
+-- ---------------------------------------------------------------------------
+
+pure func manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.26.0", "4.0", "{}",
+                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+}
+
+pure func program_of(log: [Interaction], initial: WorldState, tag: string) -> ExecutionProgram {
+  { schema_version: program_schema_version(),
+    generator_id: "latency_pair_${tag}",
+    generator_version: "1",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
+      synthetic_environment: initial.env,
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_only/${driver_only_version()}"
+    },
+    bounds: { max_interactions: 256, max_chunks_per_interaction: 16,
+              max_payload_bytes: 4096, max_resource_size: 4096,
+              max_clock_advance_ms: 60000 },
+    manifest: manifest(),
+    interactions: log }
+}
+
+-- ---------------------------------------------------------------------------
+-- Reading the tool interaction back
+-- ---------------------------------------------------------------------------
+
+pure func first_tool(log: [Interaction]) -> Option[Interaction] {
+  match of_kind(log, "expect_tool") {
+    [] => None,
+    i :: _ => Some(i)
+  }
+}
+
+-- The two operands of `world_tool`'s comparison, read off the RECORD. This is
+-- what makes "the branch was taken" a reading rather than an inference: the
+-- recorded `deadline_ms` IS `inv.timeout_ms` (recording_tool passes it through)
+-- and the recorded `advance_ms` IS the elapsed duration the world charged.
+export type Operands = { advance: int, deadline: int, status: string, fault_class: string }
+
+pure func operands_of(i: Interaction) -> Operands {
+  { advance: i.outcome.advance_ms,
+    deadline: i.deadline_ms,
+    status: outcome_status_id(i.outcome.status),
+    fault_class: i.outcome.fault_class_id }
+}
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+func report_replay(ms: [ReplayMismatch]) -> () ! {IO} {
+  match ms {
+    [] => (),
+    m :: rest => { let _ = println("      ${replay_message(m)}"); report_replay(rest) }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 1 — S8's decorative-path half, over the world INPUTS
+-- ---------------------------------------------------------------------------
+
+func scenario_the_pair_differs_only_in_latency() -> bool ! {IO} {
+  let _ = println("\n-- S8: latency cannot reach the outcome except through the deadline comparison --");
+  let a = fast_world();
+  let b = slow_world();
+  let ta = head_tool(a.tools);
+  let tb = head_tool(b.tools);
+
+  -- Field by field over the tool input. `content` is D4's "underlying
+  -- completion result" and it is the field a lazy pair would have differed in.
+  let c1 = check("the two tool inputs agree on tool_call_id, code, message and content",
+                 ta.tool_call_id == tb.tool_call_id && ta.code == tb.code
+                   && ta.message == tb.message && ta.content == tb.content,
+                 "the pair differs somewhere other than latency, so it would prove the encoding carries a number rather than that time matters");
+  let c2 = check("the two tool inputs differ in duration_ms, and only there (${ta.duration_ms} vs ${tb.duration_ms})",
+                 ta.duration_ms != tb.duration_ms, "the two latencies are equal — there is no axis");
+  -- The rest of the world: same script, same approvals, same declared deadline.
+  let c3 = check("the provider script, the approval queue and the declared deadline are identical",
+                 List.length(a.script) == List.length(b.script)
+                   && scripts_equal(a.script, b.script)
+                   && strings_equal(a.approvals, b.approvals)
+                   && envs_equal(a.env, b.env),
+                 "the two worlds differ outside the tool queue");
+  let c4 = check("the declared deadline lies strictly between the two latencies (${fast_ms()} < ${deadline_ms()} < ${slow_ms()})",
+                 fast_ms() < deadline_ms() && deadline_ms() < slow_ms(),
+                 "a deadline outside the pair means one branch is never entered, and an unentered branch reads identically to an unbroken one");
+  c1 && c2 && c3 && c4
+}
+
+pure func head_tool(ts: [ScriptedTool]) -> ScriptedTool {
+  match ts {
+    [] => { tool_call_id: "<absent>", duration_ms: -1, code: "", message: "", content: "" },
+    t :: _ => t
+  }
+}
+
+pure func scripts_equal(a: [ScriptedStep], b: [ScriptedStep]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b {
+      [] => false,
+      y :: ys =>
+        x.prose == y.prose && x.finish_reason == y.finish_reason
+          && x.input_tokens == y.input_tokens && x.output_tokens == y.output_tokens
+          && List.length(x.tool_calls) == List.length(y.tool_calls)
+          && scripts_equal(xs, ys)
+    }
+  }
+}
+
+pure func strings_equal(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && strings_equal(xs, ys) }
+  }
+}
+
+pure func envs_equal(a: [{ key: string, value: string }], b: [{ key: string, value: string }]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b {
+      [] => false,
+      y :: ys => x.key == y.key && x.value == y.value && envs_equal(xs, ys)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 2 — the pair itself, run through the real driver
+-- ---------------------------------------------------------------------------
+
+export type HalfRun = { log: [Interaction], ok: bool, clock: int }
+
+func run_half(label: string, w: WorldState) -> HalfRun
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let run = run_recording("lat_${label}", w);
+  { log: run.world.log,
+    ok: match run.result { Ok(_) => true, Err(_) => false },
+    clock: run.world.clock_ms }
+}
+
+func scenario_the_pair() -> bool
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("\n-- D4: the same request and completion result, two latencies --");
+  let fast = run_half("fast", fast_world());
+  let slow = run_half("slow", slow_world());
+
+  match first_tool(fast.log) {
+    None => check("the fast run dispatched a tool", false, "no tool interaction was recorded — the pair has nothing to compare"),
+    Some(fi) => match first_tool(slow.log) {
+      None => check("the slow run dispatched a tool", false, "no tool interaction was recorded"),
+      Some(si) => {
+        let fo = operands_of(fi);
+        let so = operands_of(si);
+        let _ = println("      fast: advance=${fo.advance}ms deadline=${fo.deadline}ms status=${fo.status} class='${fo.fault_class}'");
+        let _ = println("      slow: advance=${so.advance}ms deadline=${so.deadline}ms status=${so.status} class='${so.fault_class}'");
+
+        -- THE REQUEST IS CONSTANT. Same identity, same projection: D4's "hold
+        -- the request constant" asserted rather than assumed from the fact that
+        -- both worlds were built by the same function.
+        let c1 = check("both runs made the SAME tool request (identity and projection identical)",
+                       interaction_kind(fi) == interaction_kind(si)
+                         && fi.request_projection == si.request_projection,
+                       "the two runs did not issue the same request:\n        ${fi.request_projection}\n        ${si.request_projection}");
+
+        -- THE BRANCH, READ FROM BOTH OPERANDS. Not inferred from the outcome:
+        -- the deadline is the same in both, the advance differs, and each run's
+        -- pair of operands sits on its own side of the comparison.
+        let c2 = check("both runs carry the SAME declared deadline (${fo.deadline}ms), read through the env class",
+                       fo.deadline == so.deadline && fo.deadline == deadline_ms(),
+                       "the deadlines differ (${fo.deadline} vs ${so.deadline}) — then the pair changed two things");
+        let c3 = check("the fast run's advance is UNDER the deadline (${fo.advance} <= ${fo.deadline}) and it COMPLETED",
+                       fo.advance <= fo.deadline && fo.status == "ok" && fo.fault_class == "",
+                       "the fast half did not complete under its deadline");
+        let c4 = check("the slow run's advance is OVER the deadline (${so.advance} > ${so.deadline}) and it recorded ${fault_class_tool_deadline_exceeded()}",
+                       so.advance > so.deadline && so.status == "fault"
+                         && so.fault_class == fault_class_tool_deadline_exceeded(),
+                       "the slow half did not take the deadline branch: status=${so.status} class='${so.fault_class}'");
+
+        -- The clock delta is exactly the latency delta. "Changing only latency"
+        -- measured rather than asserted: every other advance in the two runs is
+        -- identical, so the world clocks differ by precisely the duration
+        -- difference.
+        let c5 = check("the two runs' clocks differ by exactly the latency difference (${slow.clock - fast.clock} == ${slow_ms() - fast_ms()})",
+                       slow.clock - fast.clock == slow_ms() - fast_ms(),
+                       "the clock delta is ${slow.clock - fast.clock} and the latency delta is ${slow_ms() - fast_ms()}; something other than the tool duration moved the clock");
+        c1 && c2 && c3 && c4 && c5
+      }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 3 — S8's "except through the mechanism", executable
+-- ---------------------------------------------------------------------------
+
+func scenario_no_deadline_no_fault() -> bool
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("\n-- S8's control: the SAME slow latency with no declared deadline must COMPLETE --");
+  let run = run_half("control", slow_no_deadline_world());
+  match first_tool(run.log) {
+    None => check("the control run dispatched a tool", false, "no tool interaction recorded"),
+    Some(i) => {
+      let o = operands_of(i);
+      let _ = println("      control: advance=${o.advance}ms deadline=${o.deadline}ms status=${o.status} class='${o.fault_class}'");
+      -- The advance is the SAME 3000 ms that faulted above. Only the declared
+      -- deadline changed, and it went to zero — `world_tool`'s guard is
+      -- `inv.timeout_ms > 0 && duration > limit_ms`, so the branch must not be
+      -- entered. If this went red, latency would be reaching the outcome around
+      -- the deadline comparison and scenario 2 would be measuring duration.
+      let c1 = check("the control carries the same ${slow_ms()}ms latency as the slow half",
+                     o.advance == slow_ms(),
+                     "the control's latency is ${o.advance}ms, not ${slow_ms()}ms — it is not the same input");
+      let c2 = check("with no declared deadline (${o.deadline}) the same latency COMPLETES",
+                     o.deadline == 0 && o.status == "ok" && o.fault_class == "",
+                     "a ${slow_ms()}ms tool faulted with no deadline in force — latency is reaching the outcome around the deadline comparison, so the pair above measures duration and not lateness");
+      c1 && c2
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 4 — both programs replay deterministically (D4's second sentence)
+-- ---------------------------------------------------------------------------
+
+func replay_half(label: string, w: WorldState) -> bool
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let discovery = run_recording("latd_${label}", w);
+  let program = program_of(discovery.world.log, w, label);
+  let structural = validate_program(program, required_class_ids());
+  let c1 = check("${label}: the discovered program validates",
+                 List.length(structural) == 0 && List.length(validate_bounds(program)) == 0,
+                 "${List.length(structural)} structural rejection(s)");
+  let c2 = check("${label}: its manifest validates against driver_only/${driver_only_version()}",
+                 List.length(validate_manifest(program.manifest, driver_only())) == 0,
+                 "the manifest does not describe the profile it names");
+  match world_state_of(program, required_class_ids()) {
+    Err(r) => {
+      let _ = println("      ${refusal_message(r)}");
+      check("${label}: the program reconstitutes a world", false, "refused with ${refusal_rule(r)}")
+    },
+    Ok(replay_world) => {
+      let replay = run_recording("latr_${label}", replay_world);
+      let ms = strict_replay_findings(program.interactions, replay.world.log);
+      let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+      let c3 = check("${label}: the exact program replays to an identical interaction log",
+                     List.length(ms) == 0, "${List.length(ms)} mismatch(es) above");
+      -- The terminal outcome is the axis the interaction comparison cannot see.
+      let d_ok = match discovery.result { Ok(_) => true, Err(_) => false };
+      let r_ok = match replay.result { Ok(_) => true, Err(_) => false };
+      let c4 = check("${label}: the replay reproduces the terminal outcome",
+                     d_ok == r_ok,
+                     "discovery ended ${if d_ok then "Ok" else "Err"} and the replay ended ${if r_ok then "Ok" else "Err"}");
+      -- And the LATENCY survives the round trip. `world_state_of` restores the
+      -- tool queue's duration from `TimedOutcome.advance_ms`; a reconstitution
+      -- that dropped it would replay the slow half as a fast one, and every
+      -- identity would still match.
+      let c5 = check("${label}: the reconstituted tool queue carries the latency back",
+                     tool_durations_match(replay_world.tools, w.tools),
+                     "the reconstituted durations are ${durations(replay_world.tools)} against the original ${durations(w.tools)} — a replay that loses the latency reproduces the wrong branch while agreeing at every identity");
+      c1 && c2 && c3 && c4 && c5
+    }
+  }
+}
+
+pure func tool_durations_match(a: [ScriptedTool], b: [ScriptedTool]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x.duration_ms == y.duration_ms && tool_durations_match(xs, ys) }
+  }
+}
+
+pure func durations(ts: [ScriptedTool]) -> string {
+  match ts {
+    [] => "",
+    t :: [] => "${t.duration_ms}",
+    t :: rest => "${t.duration_ms}, ${durations(rest)}"
+  }
+}
+
+func scenario_both_replay() -> bool
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("\n-- D4: both programs must replay deterministically --");
+  let a = replay_half("fast", fast_world());
+  let b = replay_half("slow", slow_world());
+  a && b
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 5 — the two programs are genuinely two
+-- ---------------------------------------------------------------------------
+--
+-- A pair whose halves encode identically is one program reported twice, and
+-- every check above would still pass on it. The identity is `sha256Hex` of the
+-- exact bytes, which is the only thing in the persistence module described as
+-- unique.
+
+func scenario_the_pair_is_two_programs() -> bool
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("\n-- the pair is TWO programs, not one reported twice --");
+  let fast_run = run_recording("latid_fast", fast_world());
+  let slow_run = run_recording("latid_slow", slow_world());
+  let pa = program_of(fast_run.world.log, fast_world(), "fast");
+  let pb = program_of(slow_run.world.log, slow_world(), "slow");
+  match encode_artifact(pa) {
+    EncodeRefused(_) => check("the fast program encodes", false, "refused"),
+    Encoded(bytes_a) => match encode_artifact(pb) {
+      EncodeRefused(_) => check("the slow program encodes", false, "refused"),
+      Encoded(bytes_b) => {
+        let ia = artifact_identity(bytes_a);
+        let ib = artifact_identity(bytes_b);
+        let _ = println("      fast identity: ${ia}");
+        let _ = println("      slow identity: ${ib}");
+        check("the two artifacts have different identities", ia != ib,
+              "the pair encodes to one artifact — the halves are the same program and every check above is vacuous")
+      }
+    }
+  }
+}
+
+export func main() -> ()
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("=== latency_pair_dst (D4) ===");
+  let _ = println("  i deadline=${deadline_ms()}ms, fast=${fast_ms()}ms, slow=${slow_ms()}ms");
+
+  let c1 = scenario_the_pair_differs_only_in_latency();
+  let c2 = scenario_the_pair();
+  let c3 = scenario_no_deadline_no_fault();
+  let c4 = scenario_both_replay();
+  let c5 = scenario_the_pair_is_two_programs();
+
+  if c1 && c2 && c3 && c4 && c5 then println("\nlatency_pair_dst PASS")
+  else {
+    let _ = println("\nlatency_pair_dst FAIL");
+    exit(1)
+  }
+}

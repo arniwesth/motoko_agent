@@ -109,6 +109,16 @@ still produces its own rule. Only a fixture that must pass can. Three demonstrat
   whole mechanism. **A fixture whose quantities are all equal cannot distinguish which quantity a
   check is reading.**
 
+**A14's refinement, and it is about the SHAPE of the fixture rather than about asserting it: S7 asks
+for TWO different things and conflating them bloats the fixture for nothing.** "Every shape the
+specification protects is PRESENT" and "no two QUANTITIES are equal" are separate obligations.
+`invariants_dst`'s surviving fixture names the eleven quantities in its distinctness set — the counts
+that at least two checks read and could therefore confuse — and deliberately leaves out the four
+singleton interaction classes (env read, clock advance, random draw, extension effect), which appear
+once each purely for shape coverage and whose counts no check compares to anything. Making those
+distinct too would have meant sixteen environment reads in a fixture that needs one. **Name the
+distinctness set; do not infer it from the numbers.**
+
 **Assert both obligations executably; do not merely satisfy them.** Stage 3 promoted this after its
 first `rich` fixture documented a tool-fault case it never reached — the queue held two entries
 against one approved dispatch, so the header claimed a shape the run did not contain. The fix is not
@@ -199,6 +209,18 @@ of the input that happened to be chosen — and it is why stage 5's pinned seeds
 **The decorative path requires an author to write something decorative; the unwalked branch requires
 only that they not think of it.** A14's latency pair and A15's corpora have both exposures.
 
+**A14's latency pair, and the third form S8 can take: the CONTROL that makes "except through the
+mechanism" executable.** The pair holds a tool's request and completion result constant and changes
+only `duration_ms`, so both S8 halves apply — and both are discharged by assertions rather than by
+care. The decorative half: the two world inputs are compared FIELD BY FIELD and every field except
+the latency must be equal. The unwalked half: the declared deadline is asserted to lie STRICTLY
+BETWEEN the two latencies, so neither branch can go unentered. **What neither of those can see is
+whether latency reaches the outcome AROUND the deadline comparison**, and the answer is a THIRD
+world: the same 3000 ms latency with no declared deadline, which must COMPLETE. `world_tool`'s guard
+is `inv.timeout_ms > 0 && duration > timeout`; dropping the first conjunct reddens that control and
+nothing else in the file. **A control world is cheaper than either half and it is the only one that
+tests the "except" in S8's sentence — carry it to A15's corpora.**
+
 **The complement's cheapest instance, from A13 stage 6, and it lives inside a TEST rather than a
 digest: a NEGATIVE CONTROL must fail the rule for the reason under test, not for an earlier
 reason.** Site 23's `has_jwt` requires a `eyJ` prefix *and* three plausible segments; reducing it to
@@ -278,6 +300,19 @@ of the session despite carrying two bindings' worth of care, because stage 3 had
 fitted a parameter; the canary was ~70% of it, all of that in the discovered bindings and the
 sweep/re-pin loops they forced. **Summing bindings across independent pieces and comparing the total
 to a previous stage's total predicts the average of two things that never touch.**
+
+**Seventh data point, and the widest spread yet — the discovered count predicts and the total does
+not.** WI-A14's three pieces carried 7 bindings (4 decided, 3 discovered), 6 (4, 2) and 4 (4, 0), and
+the measured windows are **56, 12 and 10 minutes**. The totals predict roughly 56 : 48 : 32; the
+discovered counts order them correctly and get the shape roughly right.
+
+**And A14 adds a finding to S6's FIRST term rather than its second: grounding is paid PER SESSION,
+not per piece.** Piece 3 — a new module, a new acceptance script, a make target with three structural
+guards and thirteen mutation rows — cost **twelve minutes**, the cheapest composition this project
+has measured, because piece 1 had already read every input artifact it needed (the catalogue, the
+profile, the persistence store, the discovery witness). **That is an argument for cutting items by
+SHARED INPUTS rather than by obligation**, and it is the same shape as cluster 12's finding that A13
+stage 6 was two pieces sized as one.
 
 **Sixth data point, and it refines the second term rather than adding a model: weight by DISCOVERED
 bindings, not by the total.** A13 stage 6's two pieces carried 4 bindings (3 decided, 1 discovered)
@@ -1246,10 +1281,62 @@ have known.**
    cannot reach restores it. Cost when it fires: ~6 files, ~6 minutes, all loud with the remedy stated
    at the point of failure.
 
-**WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
-A9, A13 (**COMPLETE 2026-08-03 — this item is unblocked**); the parity-classification invariants
+**WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.**
+**COMPLETE 2026-08-04** (`00dbdb4`, `ea81e66`, `3dd8a82`) — three commits, one per mission piece;
+`make dst` exit 0 at **551 checks** against 466 at the item's start. Cluster 13's report is
+`NOTE-cluster-13-execution-report-and-plan-corrections.md`. **WI-A15 is unblocked.** Two assigned
+sub-items are explicitly NOT done and are carried below with owners.
+
+Depended on
+A9, A13 (**COMPLETE 2026-08-03**); the parity-classification invariants
 additionally depend on A8, **which landed 2026-08-02 — so this dependency is now satisfied and the
 prohibition is discharged.**
+
+**THREE CORRECTIONS THIS ITEM EARNED, and the first changes what A15 is blocked on.**
+
+1. **D4's latency pair does NOT need the `ScriptedStep` widening, and this plan said it did** — in
+   A13 stage 4's scope note, in item 2 below, and in cluster 10's correction 2. D4's pair needs a
+   class with a **latency channel**, a **declared deadline** and a **comparison** between them; the
+   **tool** class has had all three since WI-A12 (`ScriptedTool.duration_ms`,
+   `ToolInvocation.timeout_ms` read through the env class at `tool_phase.ail:343`, `world_tool`'s
+   guard). `scripts/dst/latency_pair_dst.ail` builds the pair on it and touches no world-input type.
+   The **provider** class has none of the three, so widening `ScriptedStep` closes cluster 10's D2
+   completeness gap and **not** D4's — a provider latency with no provider deadline has no
+   completion-versus-timeout behaviour to demonstrate. **The two obligations are separable and only
+   the first is met.**
+2. **Provider FAULT and provider LATENCY are different fields, and this plan says "both one field
+   away (`advance_ms`)".** Right for the latency, wrong for the fault: a provider fault is delivered
+   on the `AIError` path, so `ScriptedStep` needs an **error case**, not an advance. Two fields, two
+   changes. `dst_run_report.documented_coverage()` records the provider classes as
+   `unreachable-until-change` with the corrected reason.
+3. **D7 has TWELVE families and this item's sizing basis below says eleven.** `make invariants`
+   now counts the declared `InvariantFamily` variants against `all_families()`, so the number is
+   checkable rather than transcribed.
+
+**What A14 did NOT do, both assigned, both unblocked, neither started.**
+
+- **The `ScriptedStep` latency widening.** Not needed for D4 (correction 1) but still the open half
+  of D2's "response, fault, and latency" on the provider class. **Predicted zero A5 anchor cost,
+  source-derived rather than measured:** `session.ail` references `[ScriptedStep]` as a *type* at
+  2656 and 2677 and **constructs none**, and adding a field to a record breaks only construction
+  sites (P1's probe). 28 literal sites across `stub_step`, `ports`, `dst_replay`, `dst_generator`
+  and eight scripts.
+- **`max_resource_size`** — see item 3 below, now decided and sized.
+
+**A14's own decisions, resolved.**
+
+- **`DoneEvent`: RESOLVED.** `session.ail`'s `Finalize` arm appends it **before** `c2_finalize` and
+  projects it **after**, unchanged. What makes this free is that **D6.4's obligation is PARITY, not
+  a shared transition** — so D6.4, D6.1, D6.3 and D8's wire order all hold at once. The D6.4 gap is
+  **14**, each remaining entry carrying its reason in `dst_invariants.parity_gap_reasons()`.
+  `event_vocabulary_version` did **not** change, because `reaches_trace_today` is not one of D8's
+  four versioned properties — which is the dividend of A8 keeping the survey out of the
+  classification.
+- **The coordinate-independent A5 anchor: DO NOT BUILD IT.** Fifth data point, and it runs against
+  the case. A14 piece 1 edited `session.ail` **above** two anchors and paid **zero**, by sizing the
+  replacement to the same line count. **The cascade correlates with adding a `StepProvider`
+  VARIANT, not with editing near an anchor** — and a variant forces a match arm that no anchoring
+  scheme can keep in place. Revisit only when an item must add a variant.
 
 **Four things A13 hands this item, from cluster 12's close.**
 
@@ -1264,12 +1351,26 @@ prohibition is discharged.**
 2. **The three unreached fault classes are unreached in three DIFFERENT ways and D11's counters must
    not merge them.** `approval_deadline_exceeded` is *structurally* unreachable — D2 gives
    `ExpectApproval` a deadline and the driver's approval channel carries no duration, so this is a
-   declared gap and not a solved problem. The provider fault class is *one `ScriptedStep` field away*
-   (cluster 10's correction 2, and this item's D4 latency pair is the same field). `ToolCorrelationMismatch`
-   and `ToolDeadlineExceeded` are *codec-covered, scenario-unreached*. Three counters, three meanings.
-3. **`max_resource_size` is now encoded and round-tripped**, so deleting it is a schema change — which
-   is the point of having a schema version. Either give it a resource that can grow or delete it, and
-   if deleting, follow D8's migration rule rather than editing the frozen specimen.
+   declared gap and not a solved problem. The provider fault class needs **an error case on
+   `ScriptedStep`** — **not** the `advance_ms` latency field, and **not** D4's latency pair; all three
+   were conflated by earlier revisions of this plan, by A14's handoff and by cluster 10, and cluster
+   13 separated them (corrections 1 and 2). A provider *fault* is delivered on the `AIError` path and
+   a provider *latency* is an advance: **two fields, two changes.** And **D4's pair needed neither** —
+   it requires a class with a latency channel, a declared deadline **and** a comparison between them,
+   and the **tool** class has had all three since WI-A12 (`ScriptedTool.duration_ms`,
+   `ToolInvocation.timeout_ms`, `world_tool`'s guard), so A14 built the pair on that class touching no
+   world-input type. A provider latency with no provider deadline has no
+   completion-versus-timeout behaviour to demonstrate. `ToolCorrelationMismatch` and
+   `ToolDeadlineExceeded` are *codec-covered, scenario-unreached*. Three counters, three meanings.
+3. **`max_resource_size` — DECIDED by A14, and it is a generator-version item rather than a field
+   edit.** Deleting it is a schema change, and specifically: `bounds` encodes as a five-field
+   tab-separated line with `required_header_tags()` declaring arity 5, and both frozen specimens
+   carry `bounds\t18\t19\t4096\t21\t22` — so dropping the field makes the decoder **refuse
+   them**. But the decisive argument is not the cost: **D2 requires five declared bounds** and
+   deleting the fourth makes the set 4 of 5, which is a specification regression wearing a cleanup's
+   clothes. **So: keep the bound and rebind it to a resource that grows** — and that changes when
+   `choose_environment`'s bounded alternative fires, which changes the draw stream, which is a
+   **generator-version bump** with a canary re-pin. **Owner: A15**, which already re-pins seeds.
 4. **Check whether the latency/fault widening adds a `StepProvider` VARIANT before assuming it is
    free.** A13 stages 3–6 all paid nothing on A5's anchors by writing below them and running
    `sed -n '161p'` after each edit; stage 2 and cluster 10 both paid a `driver_only` re-issue, and both
@@ -1304,9 +1405,13 @@ a promoted failure travels as one artifact — exact program **with** its execut
 D11's promotion rule; **and the failure report carries a copy-pasteable local replay command or a
 retained artifact reference** (D8), without which a CI failure is not reproducible by the person
 reading it.
-*Size:* **estimate — 3–5 days.** Basis: eleven D7 invariant families over an existing trace ADT,
-plus the latency pair; each invariant is small but the set is wide, and the parity family cannot
-start before A8. No measurement covers this; treat the range as coarse.
+*Size:* **estimated 3–5 days; MEASURED at 78 minutes** on the git wall clock (handoff `0dd098f` to
+`3dd8a82`), split 56 / 12 / 10 across pieces 1, 3 and 2. The estimate's basis said "eleven D7
+invariant families" — twelve, per correction 3 — and treated the set's WIDTH as the cost. It is not:
+the cost was three **discovered** bindings in piece 1 against two and zero in the others, and the
+twelve families themselves were transcription once their shape was decided. **The estimate is off by
+roughly two orders of magnitude and the reason is legible: it sized the artifact, and S6 says to
+count the decisions.**
 
 **WI-A15. Build D11's two corpora and their CI jobs.** Depends on A13 (**COMPLETE 2026-08-03**),
 A14. An earlier revision
