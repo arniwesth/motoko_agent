@@ -683,8 +683,8 @@ program_persistence:
 			exit 1; \
 		fi; \
 	done; \
-	echo "  ✓ both frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes, predating no encoder change yet)"; \
-	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
+	echo "  ✓ all three frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes, now predating one schema version, and $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') lines of v2 bytes closing WI-D17 two-tier surface)"; \
+	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
 	     src scripts --include=*.ail || true); \
 	if [ -n "$$writers" ]; then \
 		echo "FAIL: something in the tree writes to the frozen fixtures:"; \

@@ -933,3 +933,75 @@ this — **and D19 pinned `ExtensionEffect` at literal zero in `absent_classes` 
 unreachability is STRUCTURAL**, which is the distinction it used to justify witnessing the three
 filesystem classes rather than removing them. **If this is that class's home, "structural" is the wrong
 word and the pin has to move.**
+
+**Cluster 39 = WI-D22, the program schema bump: HANDED OFF 2026-08-08**,
+`HANDOFF-execute-d22-the-program-schema-bump.md`. **The change three items have owed and one has
+scheduled** — WI-D21 ended by naming it and by handing it the `proc_exec` rename so a published-ABI
+break is spent once rather than twice.
+
+**The clustering finding is that the bump carries THREE payloads, not the two S23's threshold counted.**
+`InitialWorld.files` (owed since D17, and D18 grew it a field before it was taken) and
+`ScriptedTool.exit_code` (D21) are the two consumers that scheduled it. The third is free with them and
+nobody has to be told twice: **D17's two-tier compatibility surface.** `post_v1_interactions()` holds
+exactly `FileWriteIdentity`, `FileRemoveIdentity` and `DirMakeIdentity` — verified — and D17 recorded
+that nothing in the tree can freeze them *"because there are no historical bytes containing them; the
+only fix is a future freeze at a future schema version."* **This is that version, and skipping it grows
+the surface a fourth class next time.**
+
+**And grounding it turned up a trap that is live now.** `decodable_schema_versions()` is
+`[program_schema_version()]` — a one-element list **derived from the current version** — so bumping the
+producer alone makes the build unable to decode the frozen v1 artifact it is required to keep decoding.
+The module's own comment already states the rule (*"a migration extends this list and keeps the old
+decode path… there is no third option"*), which makes this a case of a guard that will fire correctly
+if the item reads it and will look like a regression if it does not.
+
+**Clustering note to carry: a version constant has a producer and its transcribers, and the
+transcribers are where the bump goes wrong.** Measured: `dst_replay.ail:999`'s `fixture_program()` is
+**the only live transcription of `"execution-program/1"` outside the producer** — the other two
+occurrences are comments. **S23 was promoted for exactly this shape and D14 paid for it live**, so the
+handoff asks the item to decide whether that literal is deliberately pinned at v1 or is the current
+version transcribed, rather than to update it reflexively.
+
+**The design question is where `FsNode` lives, and the cheap answer is a trap.** `FsNode` is
+`ports.ail:517`; `dst_program` does not import `ports` and `ports` does not import `dst_program`, so
+there is **no cycle** and three options are open — import, move the type down to `dst_interaction`
+which both already import, or give `InitialWorld` a structurally-identical anonymous
+`[{path, kind, content}]`. **The third reintroduces exactly what D18's sum was chosen to prevent —
+a directory carrying a file body — at the persistence boundary, which is where hand-written and
+corrupted artifacts enter.**
+
+**Cluster 40 = WI-D23, the exit code reaches the caller: HANDED OFF 2026-08-09**,
+`HANDOFF-execute-d23-the-exit-code-reaches-the-caller.md`. **The build WI-D21 drafted and stopped,
+resumed now that WI-D22 removed the stop** — links 1, 3 and 4 of D21's seven, plus the link its table
+did not number: `tool_outcome_text`'s `ToolCompleted` arm is `c.content` (`session.ail:819`), so the
+`exit_code` D22 added travels from the script through `world_tool` and **dies one seam short of the
+only caller the seam exists for.** A typed field nothing projects is the counted mode one layer up:
+absent-at-the-bridge reads identically to never-typed.
+
+**Grounding corrected two of D21's numbers, in the direction S22 predicts.** The `ExtProcOutcome`
+construction census is **seven sites, not the four link 1 priced** — the bridge, `ctx_defaults`, three
+packages, and two DST scripts (`declared_vs_performed.ail:162`, `long_qwen_compaction_dst.ail:250`)
+that a package-scoped reading misses. And three of the seven still carry pre-rename parameter names
+(`_cmd, _cwd` at `ctx_defaults.ail:16` among them) — **the rename's census said five bindings and the
+tree holds at least eight sites that state the contract**, so the "complete" rename has a residue
+exactly where the census's unit ended.
+
+**The three-versus-four exec discrepancy dissolves at the producer's unit.** The protocol note says
+compose keeps "three exec"; the tree holds four `exec(` call sites. `ext_ambient_inventory` counts
+**import sites** (`compose.ail:24`, `author_tools.ail:13`, `authoring/dispatcher.ail:6` — three), and
+the four call sites sit behind them. Neither number is wrong; quoting either without its unit makes
+the other read as an error — S15's quoted-forward shape, avoided this time by running the producer.
+
+**The clustering finding that sets the sequence: typing and routing are separable, and the recording
+identity is what separates them.** Routing compose's `exec` sites through `proc_exec` makes every
+recorded compose run emit a program the validator rejects — `recording_tool` (`ports.ail:1619`)
+stamps `ToolIdentity("loop_v2", "", …)` off the bridge's blank call id, D21 §4's asserted row. So the
+discrimination item routes **nothing**, and the routing belongs to the item that threads
+`ExtCtx.ext_id` and builds the eighth recording adapter. Stated with its condition (S25): this holds
+while the recording adapter's identity construction stands.
+
+**Clustering note to carry: a shipped schema field's reasons-not-to are now stale prose, and they are
+in three files.** `types.ail:170-179` ("requires a program_schema_version bump"), `ports.ail`'s live
+arm ("OUT OF THIS ITEM'S SCOPE"), and the catalogue's coverage-gap entry (the class-projection gap
+this item closes). D2's rule applies — the reason expired while some conclusions hold — and the
+handoff routes each to a two-part restatement rather than a deletion.

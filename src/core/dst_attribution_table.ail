@@ -226,15 +226,15 @@ export pure func attribution_rows() -> [AttributionRow] {
 -- eight reads are reachable by installation, not by attribution.
 export pure func unconditional_core_sites() -> [CoreSite] {
   [
-    { site: { file: "src/core/session.ail", line: 965 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1061 }, effect: "Clock", routed: true,
       note: "ext_ports_of's extension clock seam — the SIXTH routed core site, added by WI-C5. It replaced the ambient `session.ail:878` rather than joining it: widening ExtPorts.clock_now to take the world token removed the shape obstacle that plan rule S2 had accommodated, so the seam routes through Ports.clock_now like every other" },
-    { site: { file: "src/core/session.ail", line: 1224 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1320 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 1330 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1426 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2775 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2871 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2885 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2981 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
     { site: { file: "src/core/tool_phase.ail", line: 413 }, effect: "Clock", routed: true,
       note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it. WI-D20 moved it 373 -> 413 and CHANGED ITS ARGUMENT: it read ports.clock_now(world) and now reads ports.clock_now(handle_world), because a DELEGATING on_tool_handle may have advanced the world before this native dispatch begins and starting from `world` would discard what it did. Same site, same effect, same routing, different starting world — recorded here because the other two tool_phase anchors this item moved are byte-identical drift and this one is not" },
@@ -654,7 +654,7 @@ pure func test_discovered_site_in_neither_list_is_rejected() -> bool
   tests [((), true)]
   {
     let discovered: [CoreSite] = [
-      { site: { file: "src/core/session.ail", line: 1330 }, effect: "Clock", routed: true, note: "" },
+      { site: { file: "src/core/session.ail", line: 1426 }, effect: "Clock", routed: true, note: "" },
       { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
       { site: { file: "src/core/omitted.ail", line: 42 }, effect: "Clock", routed: false, note: "" }
     ];

@@ -103,6 +103,10 @@ import src/core/dst_program (
   validate_program
 )
 import src/core/dst_generator (GeneratorBounds)
+-- WI-D22: the seeded initial file table is kinded, and `fs_kind_id` /
+-- `fs_content_of` are the vocabulary the codec itself writes — used here so the
+-- instrument cannot drift from the thing it measures.
+import src/core/fs_node (FsNode, FsFile, FsDir, fs_kind_id, fs_content_of)
 import src/core/dst_profile (ExecutionManifest, PackageVersion)
 import src/core/dst_fault_catalogue (required_class_ids)
 import src/core/dst_replay (
@@ -628,15 +632,56 @@ pure func specimen_manifest() -> ExecutionManifest {
 -- newline inside `messages_and_policy`, and a backslash inside an environment
 -- value. Those are the three characters the line format is built out of, so a
 -- specimen without them would freeze bytes that never exercise the escape.
-pure func specimen_world() -> InitialWorld {
+--
+-- WI-D22 SPLIT THIS THE SAME WAY WI-D17 SPLIT THE INTERACTIONS, and for the
+-- identical reason one level up: `InitialWorld` gained a `files` field at
+-- execution-program/2, and a field added after a freeze CANNOT BE IN THE FROZEN
+-- BYTES. Putting the seeded table into this function would have changed the
+-- world `frozen_v1_program()` is built from, and the v1 fixture would have
+-- decoded to a different program — which the row would have reported, correctly,
+-- as this build silently reinterpreting an old artifact.
+--
+-- So `frozen_v1_world()` is pinned at what v1 contained, `specimen_world()` adds
+-- what came after, and the two frozen-bytes rows take the one that matches their
+-- own bytes.
+pure func frozen_v1_world() -> InitialWorld {
   { messages_and_policy: "role=user\tmsg=hello\nrole=system\tmsg=be brief",
     synthetic_environment: [
       { key: "MOTOKO_SESSION_ID", value: "dst-session-0001" },
       { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
       { key: "MOTOKO_HEADLESS", value: "headless-on" },
       { key: "PATH_WITH_BACKSLASH", value: "C:\\tmp\\dir" }],
+    files: [],
     clock_epoch: 17,
     extension_profile: "profile.specimen" }
+}
+
+-- WI-D22's seeded file table, and it is built to freeze the CODEC rather than to
+-- look like a filesystem. Four entries, one per case the encoding has to keep
+-- apart:
+--
+--   1. an ordinary file with a body;
+--   2. a PRESENT-BUT-EMPTY file, whose content is "" — the entry that a decoder
+--      inferring the kind from an empty content would read back as a directory;
+--   3. an explicit EMPTY DIRECTORY, which serialises to the same `content: ""`
+--      as (2) and differs ONLY in the kind field. This pair is the whole reason
+--      `kind` is written explicitly, and freezing them adjacent is what makes a
+--      codec that drops the kind visible in the bytes rather than only in a
+--      round trip;
+--   4. a path carrying a TAB and a body carrying a NEWLINE and a BACKSLASH,
+--      because the escape is per-line and these three characters are what the
+--      line format is built out of. `world.file` is a three-field line, so it is
+--      the first tag in this schema where a mid-field tab could split a record
+--      into the wrong arity.
+pure func post_v1_files() -> [{ path: string, node: FsNode }] {
+  [{ path: "/w/seed/catalog.json", node: FsFile("{\"context_limits\":{\"m\":71}}") },
+   { path: "/w/seed/present-but-empty.json", node: FsFile("") },
+   { path: "/w/seed/empty-dir", node: FsDir },
+   { path: "/w/seed/tab\tin path", node: FsFile("line one\nline two\\end") }]
+}
+
+pure func specimen_world() -> InitialWorld {
+  { frozen_v1_world() | files: post_v1_files() }
 }
 
 pure func specimen_bounds() -> GeneratorBounds {
@@ -777,13 +822,49 @@ pure func encoded_specimen() -> string {
 -- in every field EXCEPT the interaction list, which stops at the seven classes
 -- that existed at the freeze — see `frozen_v1_interactions()` for why the split
 -- exists and what it costs.
+-- WI-D22 ADDED THE TWO OVERRIDES BESIDE THE INTERACTION LIST, and the
+-- `schema_version` one turned a comparison that had been vacuous since the
+-- encoding landed into a real one. `program_diff`'s first row compares
+-- `schema_version`; through WI-D21 both sides of that comparison were
+-- `program_schema_version()` — the specimen stamped it and `dst_persistence`'s
+-- `project` stamped it back on decode — so the field could not disagree however
+-- wrong the artifact was. `project` now carries the version the BYTES declared,
+-- so this record has to declare v1 to match, and a build that started
+-- reinterpreting v1 bytes as v2 would be named by that row.
 pure func frozen_v1_program() -> ExecutionProgram {
-  { specimen_program() | interactions: frozen_v1_interactions() }
+  { specimen_program() |
+    schema_version: "execution-program/1",
+    initial_world: frozen_v1_world(),
+    interactions: frozen_v1_interactions() }
 }
 
 pure func encoded_frozen_v1() -> string {
   match encode_artifact(frozen_v1_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
 }
+
+-- WI-D22'S FROZEN v2 BYTES, AND WHAT THEY CLOSE.
+--
+-- WI-D17 §7b recorded the debt in one sentence: the classes added after the v1
+-- freeze have codec paths that are ROUND-TRIPPED AND NOT FROZEN, "nothing in the
+-- tree can freeze them, because there are no historical bytes containing them,
+-- and the only fix is a future freeze at a future schema version." Three classes
+-- were in that state — `file_write`, `file_remove` (WI-D17) and `dir_make`
+-- (WI-D18) — and this is that version, so this is that freeze.
+--
+-- It is FREE with the bump and it was not free without one: freezing them at v1
+-- would have meant either regenerating the v1 bytes, which WI-D17's row forbids
+-- because it destroys the only artifact predating the current encoder, or
+-- shipping a second v1 artifact whose schema version claimed a content v1 never
+-- had.
+--
+-- WHAT IS IN IT: `specimen_program()` entire — all eleven interactions, so every
+-- identity class this build defines is in frozen bytes for the first time, plus
+-- WI-D22's seeded `world.file` table, which is the new section the v1 bytes have
+-- no line for.
+--
+-- THE v1 BYTES ARE NOT REGENERATED and must never be. Both fixtures are checked,
+-- against different programs, by two rows that cannot be satisfied by one file.
+pure func v2_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v2.artifact" }
 
 pure func v1_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v1.artifact" }
 pure func v0_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v0.artifact" }
@@ -808,6 +889,12 @@ pure func program_diff(a: ExecutionProgram, b: ExecutionProgram) -> [string] {
     ++ di("world.clock_epoch", aw.clock_epoch, bw.clock_epoch)
     ++ d("world.extension_profile", aw.extension_profile, bw.extension_profile)
     ++ env_diff(aw.synthetic_environment, bw.synthetic_environment)
+    -- WI-D22. Compared by PATH AND KIND AND CONTENT, not by length: a codec that
+    -- dropped the kind would round-trip an empty directory back as a
+    -- present-but-empty file, and the table's length, its paths and its contents
+    -- would all still match. That is the exact pair `post_v1_files()` entries 2
+    -- and 3 exist to hold.
+    ++ files_diff(aw.files, bw.files)
     ++ di("bounds.max_interactions", ab.max_interactions, bb.max_interactions)
     ++ di("bounds.max_chunks_per_interaction", ab.max_chunks_per_interaction, bb.max_chunks_per_interaction)
     ++ di("bounds.max_payload_bytes", ab.max_payload_bytes, bb.max_payload_bytes)
@@ -851,6 +938,20 @@ pure func env_diff(a: [{ key: string, value: string }], b: [{ key: string, value
     ["world.synthetic_environment length (${show(List.length(a))} vs ${show(List.length(b))})"]
   else if str_eq_list(keys_of(a), keys_of(b)) && str_eq_list(values_of(a), values_of(b)) then []
   else ["world.synthetic_environment contents"]
+}
+
+-- One entry rendered so that all three of its distinguishing components are in
+-- the compared string. `fs_kind_id` rather than a literal, so this instrument
+-- reads the same vocabulary the codec writes.
+pure func file_labels(xs: [{ path: string, node: FsNode }]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => ["${x.path}|${fs_kind_id(x.node)}|${fs_content_of(x.node)}"] ++ file_labels(rest)
+  }
+}
+
+pure func files_diff(a: [{ path: string, node: FsNode }], b: [{ path: string, node: FsNode }]) -> [string] {
+  list_diff("world.files", file_labels(a), file_labels(b))
 }
 
 pure func package_ids(ps: [PackageVersion]) -> [string] {
@@ -1045,6 +1146,13 @@ pure func specimen_scalars() -> [string] {
    m.profile_rules_version, m.coverage_rules_version, m.attribution_rules_version,
    m.fault_catalogue_version]
     ++ keys_of(w.synthetic_environment) ++ values_of(w.synthetic_environment)
+    -- WI-D22: the seeded file PATHS, which are pairwise distinct. The seeded
+    -- CONTENTS are deliberately NOT here and could not be: two of the four
+    -- legitimately hold "" — a present-but-empty file and an empty directory —
+    -- and that collision is the whole point of the pair. Their
+    -- distinguishability is asserted by `files_diff`, which compares the kind
+    -- too, rather than by a pairwise-distinctness row that they cannot satisfy.
+    ++ file_paths(w.files)
     ++ package_ids(m.extension_packages)
     ++ m.classifier_2_set ++ m.unrouted_fields ++ m.scan_roots
 }
@@ -1054,6 +1162,10 @@ pure func specimen_ints() -> [int] {
   [specimen_program().seed, specimen_world().clock_epoch,
    b.max_interactions, b.max_chunks_per_interaction, b.max_payload_bytes,
    b.max_resource_size, b.max_clock_advance_ms]
+}
+
+pure func file_paths(xs: [{ path: string, node: FsNode }]) -> [string] {
+  match xs { [] => [], x :: rest => [x.path] ++ file_paths(rest) }
 }
 
 pure func all_distinct_strings(xs: [string], seen: [string]) -> bool {
@@ -1182,6 +1294,53 @@ func scenario_the_frozen_v1_specimen_still_decodes() -> bool ! {IO, FS} {
   }
 }
 
+-- WI-D22. THE SAME ROW FOR v2, AND THE ACCOUNTING IT CLOSES.
+--
+-- Byte-for-byte identity is asserted here and only INFORMED about for v1, and
+-- the asymmetry is deliberate rather than a copy that drifted. The v1 bytes
+-- predate the current encoder, so "the encoder still produces them" is a fact
+-- about history that a permitted backward-compatible change can falsify. The v2
+-- bytes were frozen BY this encoder, so if they stop matching it, either the
+-- encoding changed without a version moving — which is the thing this whole
+-- module exists to catch — or the file was regenerated, which is the response
+-- that is not available. There is no third reading, so it is a failure and not
+-- an ⓘ.
+--
+-- And the count is asserted, because that is the debt: ZERO identity classes may
+-- be round-tripped-but-not-frozen once this row passes. `kinds_absent` is run
+-- against the classes in the FROZEN bytes rather than against
+-- `specimen_interactions()`, which is what makes a twelfth class added later
+-- redden this row instead of quietly rejoining the two-tier surface.
+func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
+  match FS.readFileResult(v2_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen v2 specimen could not be read (${e}); WI-D17's two-tier compatibility surface is still open and nothing says so"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_specimen();
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN v2 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          let _ = println("      This build changed the encoding without moving program_schema_version().");
+          let _ = println("      Add a decode path and bump to execution-program/3. Do NOT regenerate this file.");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(specimen_program(), back);
+          let ok = List.length(diff) == 0;
+          let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
+          let none_unfrozen = List.length(unfrozen) == 0;
+          let _ = if ok then println("  ✓ the frozen v2 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v2 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if matches_encoder then println("    ✓ the current encoder still produces those exact bytes")
+                  else println("    ✗ the current encoder no longer produces the frozen v2 bytes; unlike v1 these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/3 rather than regenerating the file");
+          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen — WI-D17's two-tier compatibility surface is CLOSED (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes)")
+                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are still frozen by nothing: ${join_keys(unfrozen)} — a class added after this freeze reopens WI-D17 §7b's two-tier surface, and the fix is a further schema version, not an edit to these bytes");
+          ok && matches_encoder && none_unfrozen
+        }
+      }
+    }
+  }
+}
+
 -- The fail-closed half, against real bytes rather than a hand-built record.
 func scenario_an_unknown_schema_fails_closed() -> bool ! {IO, FS} {
   match FS.readFileResult(v0_fixture_path()) {
@@ -1224,7 +1383,22 @@ func scenario_decode_mutants() -> bool ! {IO} {
           bytes: Str.replace(good, "\ndigest\t", "\nnotdigest\t") },
         { rule: "artifact-unknown-schema-version",
           label: "a schema version this build does not know",
-          bytes: Str.replace(good, "execution-program/1\n", "execution-program/9\n") },
+          -- WI-D22: this reads `program_schema_version()` rather than the
+          -- literal it used to hold. `good` is what THIS build encodes, so a
+          -- transcribed "execution-program/1" stopped matching the moment the
+          -- version moved and the row would have gone green while replacing
+          -- nothing — a mutant that mutates nothing is refused for the reason
+          -- the UNMUTATED artifact is refused, which is never.
+          bytes: Str.replace(good, "${program_schema_version()}\n", "execution-program/9\n") },
+        -- WI-D22's two initial-world file rules. Both take a VALID `world.file`
+        -- line and corrupt exactly the component the rule is about, so a decoder
+        -- that stopped checking one of them turns its own row red by name.
+        { rule: "artifact-unknown-file-kind",
+          label: "an initial-world file entry whose kind this build does not define",
+          bytes: retag(good, "\tfile\t{\"context_limits", "\tsymlink\t{\"context_limits") },
+        { rule: "artifact-directory-carries-content",
+          label: "a directory entry carrying a file body",
+          bytes: retag(good, "empty-dir\tdir\t", "empty-dir\tdir\tSURPRISE") },
         { rule: "artifact-unknown-tag",
           label: "a line whose tag this schema does not define",
           bytes: retag(good, "generator_id\t", "generator_idx\t") },
@@ -1485,6 +1659,7 @@ export func main() -> () ! {IO, FS} {
   let j = scenario_round_trip();
   let k = scenario_deterministic_and_diffable();
   let l = scenario_the_frozen_v1_specimen_still_decodes();
+  let l2 = scenario_the_frozen_v2_specimen_still_decodes();
   let m = scenario_an_unknown_schema_fails_closed();
   let _ = println("  decode mutation rows — one corruption at a time");
   let n = scenario_decode_mutants();
@@ -1494,7 +1669,7 @@ export func main() -> () ! {IO, FS} {
   let q = scenario_the_store_round_trips_and_refuses_a_collision();
   let _ = println("  regression replay over the frozen program");
   let r = scenario_regression_replay_consumes_the_frozen_program();
-  if a && b && c && d && e && f && g && h && i && j && k && l && m && n && o && q && r
+  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && m && n && o && q && r
   then println("program_persistence_dst PASS")
   else {
     let _ = println("program_persistence_dst FAIL");

@@ -498,6 +498,122 @@ not re-issued (D4)"*. **The second profile binds the same table at the same iden
 cascade now has two consumers and the anchors target names one. **A third profile extends the list
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
+**S33. INFERRING A PROPERTY FROM A PROXY THAT USUALLY AGREES WITH IT IS ONE DEFECT CLASS, NOT EIGHT —
+AND THE DISTINGUISHING INPUT IS THE THING TO BUILD.** Consolidating rule, promoted 2026-08-08 from the
+whole D16–D22 cluster rather than from one item. **S28 and S31 are each one face of it, and about half
+of the instrument-weaker-than-its-claim counter is the same shape.** They are kept because they were
+earned; this is what they have in common.
+
+**Eight instances, spanning production code, instruments, and the analysis used to plan the work:**
+
+| What was read | What was meant | The input where they diverge |
+|---|---|---|
+| `import` lines (classifier 3) | effects a hook can perform | **a dead import** — D20 removed six |
+| a reference through a **constructor** | a call at registration time | `register_with_config` **building** the hooks record |
+| a **substring** in source | a call site | `contains(s, "readFile(")` in `guard.ail` |
+| the `fault_class_*` **accessors** | the catalogue | a class in `required_class_ids()` and not in the accessors — **11 vs 7** |
+| `List.length(entries) > 0` | `present` | **a directory that exists and is empty** |
+| `provider_calls > 0` | "the hook was dispatched" | a run where the driver called the model and **the hook never ran** |
+| `fileExists` | "is a file" | **a directory** — and the two adapters disagreed on it at HEAD |
+| a value **derived from the same producer** | the artifact's own field | an artifact whose version differs from the build's |
+
+**Why fixtures miss it, stated as the mechanism rather than as bad luck: the proxy and the truth agree
+on almost every input BY CONSTRUCTION.** A suite assembled from realistic cases will not contain the
+divergent one, so the row passes and reads as evidence. **Three separate mutants in this cluster passed
+first time for exactly this reason** (D18 §5, D19 mutant 1, D20 mutant 2), and in all three the repair
+was to the fixture, not the code.
+
+**And several distinguishing inputs did not EXIST until the project built them.** An empty directory was
+unrepresentable before D18; a second decodable schema version before D22. **So a proxy can be sound
+when written and become a defect when the system grows the state that separates it** — which is why
+these surface late and why an old green row is not evidence that the property still holds.
+
+**The operating test, and it is one question: what does this actually read, and what input makes that
+differ from what it means?** If the answer is "nothing realistic", the proxy is fine and say so at the
+site. If you cannot construct the input in-process, **narrow the label and name the gap** — D20 §8.2
+did, and a row that would pass either way is worse than no row.
+
+**S32. A DEFAULT IS ADMISSIBLE EXACTLY WHEN THE OLD VERSION'S OWN SEMANTICS FIXED THE VALUE; REFUSAL IS
+REQUIRED WHEN THEY DID NOT.** Earned by WI-D22, and it is the rule S30 was missing — S30 says a field
+added without a version bump reinterprets silently, and says nothing about what to do *with* the
+version.
+
+**Both "old fields default" and "old fields refuse" are wrong as blanket answers, and the same
+migration needs both.** WI-D22 shipped the pair:
+
+- **`world.file` absent → `files: []`, a DEFAULT and correct.** At v1 the field existed nowhere and
+  `world_state_of` unconditionally reconstituted an empty table, **so an empty table is what a v1
+  program MEANT.** The decoder reproduces v1's semantics rather than guessing at them.
+- **`exit_code` absent → REFUSAL.** v1 runs really did execute subprocesses that exited with something,
+  and **every default that is a valid exit status claims to know what.** Verified at
+  `ports.ail:2139-2141`: `opt_int_field` then `ToolRecordUndecodable`, naming the pinned runner.
+
+**The test is not "is the field new" — it is "did the old version have an answer".** A field whose
+absence the old semantics determined is recoverable; a field whose absence the old semantics merely did
+not record is not, and defaulting it fabricates an observation the recorder never made.
+
+**And the negative controls are what make the refusal mean something**, both required because either
+alone is passed by a broken decoder: an explicit `"exit_code":0` must decode **to 0**, so the refusal
+cannot be satisfied by treating every zero as absent; and the current encoder's own output must contain
+the key, so nothing this build writes can trip it.
+
+**S31. "STRUCTURALLY UNREACHABLE" MUST NAME THE SHAPE FACTS THAT MAKE IT SO — AND WHEN THEY ARE
+FINALLY NAMED, CHECK EACH ONE.** Earned by WI-D21, whose own re-derivation produced two grounds and
+**both fell** — the second on a re-measurement that also defeated my correction of the first.
+
+WI-D19 pinned `ExtensionEffect` at zero in `absent_classes` calling its unreachability **structural**
+rather than "nothing calls it yet", and used that distinction to justify **witnessing** the three
+filesystem classes instead of removing them. **The word was load-bearing for a decision and the ground
+was never written down**, so D21 had to re-derive it before it could decide whether to move a pin.
+
+**It named two grounds. BOTH FELL, and the second round of measurement defeated my own correction of
+the first.** I recorded that one of them held; it does not.
+
+- *"The catalogue has no class to name"* is **false**. `required_class_ids()` is asserted at **11**
+  (`dst_fault_catalogue.ail:821`, verified); the "seven" came from reading the `fault_class_*`
+  accessors, which are a **subset**. `extension_effect_fault` is row eleven and is in
+  `required_class_ids()`, so `validate_static_references` accepts it — **and its coverage-gap entry
+  (`:442`) has named this exact seam since WI-C5**: *"ExtPorts.proc_exec IS routed but projects the
+  typed tool outcome back down to a string, so an extension can observe that a tool failed and not
+  which fault class it was."*
+- *"The bridge cannot name its caller"* is **not structural either**, which is where I went wrong.
+  `ExtensionHooks.id` (`types.ail:641`) is on every registry entry the dispatcher folds over. **The id
+  exists at the dispatch site and merely fails to reach the closure**, because `ext_ports_of` builds one
+  `ExtPorts` per step and shares it. **A threading gap** — per-extension ports, or an `ext_id` on
+  `ExtCtx`, closes it.
+
+**The honest ground is neither: all SEVEN `record_interaction` call sites live in `ports.ail` and NOT
+ONE constructs `ExtensionEffectIdentity`** — verified, zero constructions, and `RandomDrawIdentity` is
+in the same position. **Routing this seam to the class means building an EIGHTH recording adapter, not
+relabelling a seventh**, which is nearer to *"nothing routes it yet"* than to the contrast D19 drew.
+
+**So the rule: an unreachability claim is a CONJUNCTION, only as strong as its weakest term — and each
+term must be read off the thing itself, not off the nearest accessor.** Both failures here are that one
+mistake at different layers: the seam's capability inferred from `ExtProcOutcome` instead of followed
+to `run_process_result`, and the catalogue's contents inferred from its accessors instead of from
+`required_class_ids()`. **Zero remains the right expectation, so the pin is correct and its recorded
+reason is not** — and it was left untouched deliberately, because re-wording it in place would destroy
+the evidence that D19's justification was measured and found wanting.
+
+**S30. ADDING A FIELD TO A PERSISTED PAYLOAD WITHOUT MOVING THE SCHEMA VERSION MAKES A RECORDED FAILURE
+REPLAY AS A SUCCESS.** Earned by WI-D21 as the reason a "one field" widening is a whole item.
+
+`decode_tool_outcome` reads with `str_field(root, "<name>", <default>)`. **A field added to the encoder
+is absent from every artifact already recorded, and absent decodes to the default.** For an exit code
+every candidate default means success, so:
+
+> **a recorded run in which `ailang check` failed replays as a run in which it passed, and every count
+> balances.**
+
+**And the loud guard does not fire.** `dst_persistence` refuses an unknown schema version by design —
+but the version would be **unchanged**, so it refuses nothing. **The instrument that exists for exactly
+this is silent precisely when the defect is introduced**, which is D8's prohibition on silent
+reinterpretation.
+
+**The rule: a persisted payload's field set is versioned data, not a record's shape.** The escape hatch
+— encode only when known, decode absence as a sentinel — buys a **third state** in every consumer, which
+is manufacturing a state to avoid versioning. Name it; do not take it.
+
 **S29. A HOOK SLOT'S DRIVER ARMS MUST BE AUDITED BEFORE THE SLOT IS ROUTED — AND THE DROP IS USUALLY
 ONE FRAME ABOVE THE DISPATCHER.** Earned by WI-D19 and WI-D20. **Two slots audited, two drops found, and
 the second was worse than the first.**
@@ -3227,6 +3343,177 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D22, 2026-08-08 (~1h25m) — `execution-program/2`. ALL THREE PAYLOADS SHIPPED; THE RENAME DID NOT,
+AND THE STOP CONDITION WAS RIGHT TO FIRE.**
+Verified at review: `program_schema_version()` is **`"execution-program/2"`** and
+`decodable_schema_versions()` is **`["execution-program/1", program_schema_version()]`** — written out
+oldest-first so a future bump must decide rather than inherit. `InitialWorld` carries
+**`files: [{ path, node: FsNode }]`** and `world_state_of` reads it (`dst_replay.ail:777`) instead of
+reconstituting `[]`. `ScriptedTool` and `ToolCompleted` both carry `exit_code`.
+**`execution-program-v2.artifact` exists and the v1 bytes are UNTOUCHED** — last modified at A13,
+verified by log. Green at review: `program_persistence`, `world_state`, `discovery`,
+`execution_program`, `anchors`, `predicate_anchors`.
+
+**D17's TWO-TIER COMPATIBILITY SURFACE IS CLOSED, and the gate says so in its own words:** *"0 identity
+class(es) round-tripped-but-not-frozen — WI-D17's two-tier compatibility surface is CLOSED (all 10
+classes are in frozen bytes)"*. Three classes had no historical bytes since D17; there are none now.
+**The v1 row also reached the ⓘ it was written for and had never printed in the artifact's life** — a
+backward-compatible encoding change is permitted, and v2 asserts byte identity as a **failure** where v1
+only informs, because v1's bytes predate this encoder and v2's were frozen by it.
+
+**THE FOURTH PAYLOAD NOBODY SCOPED: THE DECODER WAS REWRITING THE VERSION IT HAD JUST READ.**
+`dst_persistence.project` stamped `program_schema_version()` onto every decoded program. **At one
+decodable version that is behaviour-preserving and invisible; at two it is a decoder discarding a fact
+it was handed** — and it made `program_diff`'s `schema_version` row, in a scenario whose whole claim is
+*"field by field"*, **structurally incapable of failing on that field.** The bump armed it and exposed
+it in the same change. `frozen_v1_program()` now declares `execution-program/1` (`:836`, verified) so
+the row compares two things that can disagree.
+
+**EARNED S32, AND IT IS THE RULE S30 WAS MISSING.** S30 says a field added without a version bump
+reinterprets silently; it says nothing about what to do *with* the version. This item shipped both
+answers in one migration and the discriminator is right.
+
+**THE `FsNode` LOCATION: a NEW std-only module `src/core/fs_node.ail`**, and both of my three options
+were declined for better reasons than I gave. Importing `ports` upward was declined **on direction** —
+`dst_persistence` imports `dst_program`, so the effectful port layer would enter the pure program
+schema's import graph. Moving it into `dst_interaction` was declined **on honesty**: cheapest, and it
+makes that module's header false, because **an `FsNode` is not an interaction.** Cost measured at five
+import sites; `fs_node` imports `std/option` and `std/list` only.
+
+**THE TWO CODECS ARE SEPARATE AND NOW SHARE THE VOCABULARY RATHER THAN THE CODEC** — the answer my
+handoff asked for and a better one than "share or pin". They differ in **format** (JSON vs
+tab-separated), **lifetime** (one hook call vs outliving the build), and **what an unreadable entry
+means**: `ext_world` falls back to `FsFile` because an old token predates the `kind` key, while the
+artifact **REFUSES**, because no artifact predates `world.file` at all. **Merging them would force one
+of those answers onto the other side.** `fs_kind_id`/`fs_node_of_kind` moved into `fs_node` and
+**neither codec writes the literal `"file"` or `"dir"` any more**, so renaming a kind in only one of
+them is no longer expressible.
+
+**THE RENAME'S STOP CONDITION FIRED AND D21'S COUPLING ARGUMENT DOES NOT SURVIVE.** `execution-program/N`
+and `motoko-ext-abi@X.Y` are independent compatibility surfaces with independent consumers, and the
+bump shipped without touching one type in `types.ail`. **And the half seven deferrals never stated is
+now stated:** `ExtPorts` is a **record**, every extension constructs one by writing every label, so a
+renamed label is **a construction that no longer type-checks at `register_with_config`** — the one
+function every extension package must export. No deprecation window, no shim, no source satisfying both
+ABIs. **That is categorically unlike the fifteen deferred rows, every one of which is a widening or an
+addition an unchanged consumer keeps compiling against.** A rename is a `6.0`. Verified: `proc_exec`
+unchanged, `ailang.toml` still 5.0.
+
+**THE ANCHOR CASCADE DID NOT FIRE, AND THE REPORT'S READING OF THAT IS WRONG.** Zero drift, verified —
+*"6 anchors and 7 references all match"*, `driver_only_version` **19**, `no_ops_version` **6**. The
+report calls this *"a genuine data point against D21's finding that a comment-only edit fires the
+cascade."* **It is not against it; it is outside its scope.** D21's law is *any edit to
+`ext_ports_of`* — a function in `session.ail`. D22 edited prose in `types.ail`, a different file with no
+anchors, and its own preceding sentence says the rename is what would have touched `ext_ports_of`.
+**The observation is real and confirms the law is SCOPED rather than general; it is not evidence
+against it.**
+
+**COUNTERS KEPT APART, AND THE SPLIT PAID FOR ITSELF.** Silent-wrong **75, unchanged**, across
+forty-four runs — and the item correctly declined to inflate it with the version-rewrite (no wrong
+answer at HEAD, since only one version existed) or with the redaction hole it **authored and closed in
+the same commit**. Instrument-weaker-than-its-claim **6 → 7**. **This is the first item to add to the
+second counter without adding to the first**, which is exactly the discrimination D21 opened it for.
+
+**Also discovered, and both are the kind that only appear when a field lands:** `scan_program` did not
+scan the seeded file table and **could not have** — D8's redact gate now has its one path into an
+artifact, and `recording_file_write`'s own comment says a file body is *"the single most likely place in
+this whole surface for a credential to appear"*; its answer was "do not put it there", and a seed must,
+so `scan_file_table` scans **path and body**. And `world.file` is **the first three-field repeatable tag
+in the schema**, hence the first place a mid-field tab can split a record into the wrong arity — fixed
+arity 3 with empty content for directories, rather than an arity that depends on its own second field.
+
+**One process rule earned and it is not in S13/S17/S28:** `make sync_packages` must be re-run **after
+any edit to a type a package's import graph can see**, not only once at the start — a stale
+`ailang.lock` produced *"record field 'exit_code' not found"* against a source line that plainly had it.
+
+**And a concurrent session's commit `b23a44e` swept up two of this item's files** via a `git commit -a`
+shape while a `git stash` was taken for a HEAD baseline. Content intact, attribution wrong, **left
+unrepaired deliberately** — rewriting another session's commit is the more expensive mistake.
+
+**WI-D21, 2026-08-08 (~1h05m) — THE SUBPROCESS DISCRIMINATION: DECISION TAKEN, BUILD DRAFTED AND
+STOPPED, AND THE SEAM ALREADY EMITS A REJECTED PROGRAM.**
+**NOTE: this item's implementation is UNCOMMITTED at review** — `types.ail`, `session.ail`,
+`dst_program.ail`, `compose.ail`, `author_tools.ail`, the three no-op packages and `ailang.lock` are
+modified in the working tree, and the report itself is untracked. Gates verified green in that state:
+`execution_program`, `discovery`, `declared_vs_performed` (40 passed, 0 failed).
+
+**THE FINDING THE HANDOFF DID NOT HAVE, AND IT IS THE ITEM'S BEST OUTPUT.** Verified end to end: the
+bridge sets `call: { id: "", … }` (`session.ail:961`); `recording_tool` records
+`ToolIdentity("loop_v2", inv.call.id, inv.call.tool)` (`ports.ail:1540`); `dst_program.ail:277` emits
+`IdentityComponentMissing(o, "tool call_id")` for a blank. **So the first extension to call `proc_exec`
+in a recorded run makes the recorder emit a program its own validator refuses.** Latent because nothing
+calls it — which is why it earned an assertion rather than a sentence, with a real-call-id control so
+the row fails for the blank and not for the fixture.
+
+**THE IDENTITY CLASS IS `ExtensionEffectIdentity`, on two of D2's rules that `ToolIdentity` breaks
+here**, both verified: `ExtensionEffectIdentity(ext_id, class_id, _call_id)` is the only class where a
+blank call id is legitimate (`dst_program.ail:283-285` exempts it and requires the other two), and
+`recording_tool` hardcodes origin `"loop_v2"`, which names the driver's loop as the producer of an
+extension-initiated dispatch. **The first-order problem is that the interaction is INVALID**, not that
+a compiler invocation lands in the tool census.
+
+**MY HANDOFF INVOKED D1's STOP CONDITION AND SHOULD NOT HAVE, AND THE ITEM IS RIGHT.** I wrote that the
+two adapters *"cannot agree on a widened `ExtProcOutcome`, which is D1's stop condition."* **They agree
+today, on a string** — `ToolCompleted.content` and `ScriptedTool.content` are both `string` and a
+scripted entry can carry the identical JSON. **The disagreement appears only once the discrimination is
+TYPED, which is a design cost rather than a falsification.** I escalated a price into a stop condition.
+**The conclusion survives**: it is a core class change, and the item priced it at **seven links** —
+adding `dispatch_one`'s `(ToolCall) -> string` contract, which my chain missed.
+
+**THE PIN IS UNTOUCHED, D19'S STATED GROUND DOES NOT HOLD, AND MY FIRST CORRECTION OF THIS WAS ITSELF
+TOO WEAK — see S31.** D21 re-asked D19's "structural" as the handoff required and kept the pin, which
+is right. I corrected its first draft's catalogue claim and then wrote that its OTHER ground still
+held. **It does not.** `ExtensionHooks.id` (`types.ail:641`) is on every registry entry; the id exists
+at the dispatch site and merely fails to reach the closure, because `ext_ports_of` builds one
+`ExtPorts` per step and shares it — **a threading gap, not a shape fact.** The honest ground is the one
+neither of us had: **all seven `record_interaction` call sites are in `ports.ail` and none constructs
+`ExtensionEffectIdentity`**, verified, so this needs an **eighth recording adapter**. **Zero is still
+the right expectation; the pin is correct and its recorded reason is wrong, and it was left in place so
+that stays visible.**
+
+**AND MY HANDOFF PROPAGATED D20'S ANCHOR NUMBER WITHOUT ITS SCOPE.** I wrote *"a moved anchor touches
+NINE files"*. Measured here: **six**, because the three `*_dst.ail` discovered-site fixtures carry
+`tool_phase.ail:318` — verified at `driver_only_dst.ail:75` and `profile_definition_dst.ail:111` — and
+this item moved only `session.ail`. **Nine is the price of a `tool_phase` move; a `session.ail`-only
+move is six.**
+
+**AND THE ANCHOR LAW REACHED ITS FINAL FORM ON THE CHEAPEST POSSIBLE DEMONSTRATION.** D18's law was
+"every Route B *surface* item"; D20's exception was "a non-surface item too, if it needs a driver-side
+codec". **This item added no seam, no import and no expression — it wrote a COMMENT BLOCK inside
+`ext_ports_of` — and all five `session.ail` anchors moved +96.** So the rule is **any edit to
+`ext_ports_of`, prose included**, re-baselines the list and re-issues both profiles. Verified: anchors
+green, `driver_only_version` **19**, `no_ops_version` **6**.
+
+**One internal inconsistency, flagged rather than edited:** the report's §12.5 still reads *"D19's word
+was right and its ground was never stated"*, which its own §5.3 now contradicts. §5.3 is the measured
+one.
+
+**THE PARAMETER RENAME SHIPPED AND THE MISREADING WAS WIDER THAN I SAID.** `proc_exec` is now
+`(w, tool: string, args_json: string)`, verified. I said two items misread it; measured, **five
+bindings read the two positional strings two incompatible ways** — the bridge as `(name, args)`, three
+no-op packages as `(_cmd, _cwd)`, and the ABI row documenting neither. **A conformance harness is a
+template**, so an implementation written from `(cmd, cwd)` shells out the tool name in a directory named
+by a JSON blob, compiles, and is wired backwards. **Counted: 75 across forty-three runs.** The field
+NAME `proc_exec` is itself the cause, is priced, and is correctly deferred to the schema-bump item —
+splitting them spends a published-ABI break twice.
+
+**THE SCHEMA BUMP IS SCHEDULED, WITH TWO CONSUMERS.** `InitialWorld.files` (owed since D17, grown a
+field by D18) and `ScriptedTool.exit_code`. S23's threshold, and S30 is why it cannot be a widening
+that "just adds a field".
+
+**A SECOND COUNTER OPENED, AND IT IS THE RIGHT CALL.** *"A row that measures less than its label"* is an
+**instrument weaker than its claim** — nothing ships wrong, the evidence is thinner than advertised —
+against the 75 counter's **production sites where the wrong answer ships silently**. Same cause, different
+consequence. **Opened at six** (D18 §5, D19 §11, D20 §8 ×3, and D21's own control clause written to avoid
+becoming one). Four consecutive items hit it before anyone counted it.
+
+**Also discovered and recorded at the site:** the bridge hardcodes `workdir: "."` and `timeout_ms: 0`,
+so a routed subprocess runs where the process started and **this seam can never produce
+`ToolDeadlineExceeded`**. And `run_process_result` wraps in `bash -lc`, so the seam reaches **arbitrary
+command lines** — it is not narrow, it is untyped.
+
+**Nothing routed; yields unmoved at 4 of 15 and 5 of 15**, compose still at 11 ambient sources.
 
 **WI-D19 + WI-D20, 2026-08-08 (~52m and ~1h13m) — THE FIRST TWO ROUTINGS. Compose's hook-reachable
 filesystem and clock effects are now fully mediated.**

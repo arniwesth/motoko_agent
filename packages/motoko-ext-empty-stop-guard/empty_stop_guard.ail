@@ -58,7 +58,15 @@ func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcom
 -- exactly `noop_clock_now`'s reason below: this port executes nothing, so there
 -- is no cursor to advance. It would be a silent defect in a binding that DID
 -- something, and no type tells the two apart.
-func noop_proc_exec(world: ExtWorld, _cmd: string, _cwd: string) -> ExtProcOutcome ! {IO, Process, FS} {
+--
+-- WI-D21 RENAMED THE PARAMETERS. They read `_cmd, _cwd` here, and the seam
+-- takes a MOTOKO TOOL NAME and that tool's JSON ARGUMENTS -- see the ABI row.
+-- Both are `string`, so the wrong reading compiled; this binding ignores them
+-- and was harmless, but it is a template, and a real implementation written
+-- from a `(cmd, cwd)` signature would shell out the tool name in a directory
+-- named by a JSON blob. That is why the rename reached bindings that use
+-- neither argument.
+func noop_proc_exec(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
   { output: "", next_state: world }
 }
 

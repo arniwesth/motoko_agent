@@ -29,7 +29,11 @@ import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/test/scripted_ports (run_v2_with_scripted_world)
 import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_config as register_structural_compaction)
 import src/core/test/stub_step (prose_step)
-import src/core/ports (ScriptedStep, WorldState, empty_world_state, FsNode, FsFile) -- WI-D18: the file table's entry is kinded
+import src/core/ports (ScriptedStep, WorldState, empty_world_state)
+-- WI-D18: the file table's entry is kinded. WI-D22 moved `FsNode` down to a
+-- std-only module so the persisted program schema could name it without
+-- importing the port layer.
+import src/core/fs_node (FsNode, FsFile)
 
 -- test/tiny model has context_limit_for = 100 tokens = ~400 chars
 -- under the (length+3)/4 token estimator. Crossing thresholds:

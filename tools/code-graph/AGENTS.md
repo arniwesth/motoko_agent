@@ -46,6 +46,104 @@ must treat `incomplete=true` as "unknown", not "no".
 The `unimported` query means "not reachable via static imports from declared roots";
 it never means dead or safe to delete.
 
+## Layout projections (`layout`, `edges_agg`)
+
+`tools/code-graph/layout/build_layout.py` generates two further tables into
+`.out/`, and `extract.sh` runs it as its last step (deliberately without
+`|| true` — a broken layout fails the refresh):
+
+```
+layout(node_id, level, x, y, radius, snapshot)
+edges_agg(level, src_agg, dst_agg, kind, weight, exactness)
+```
+
+They are a deterministic containment layout of the **all** profile: nested
+circle packing over the directory tree, area = `modules.n_funcs`, sibling order
+by `sha256(node_path)`, coordinates quantized to 9 decimals against a unit root
+circle. Same tree ⇒ byte-identical tables.
+
+LOD levels are **path-prefix classes**: L0 is the first path segment, L1 the
+two-segment prefix, L2 the module. A module shallower than a level's prefix
+depth is its own aggregate at that level. Directories deeper than two segments
+are packing containers: they get `layout` rows at level 2 and never appear in
+`edges_agg`. Edge weights roll up exactly — `weight(n, A→B)` equals the sum of
+its level `n+1` children, checked by the validator, never aggregated at render
+time. `exactness` is `exact` for `imports` and `approximate` for `invokes`; a
+consumer that draws them alike is lying at a glance.
+
+```bash
+python3 tools/code-graph/layout/build_layout.py          # rebuild (self-validating)
+python3 tools/code-graph/layout/validate_layout.py       # 5 named rules over .out/
+python3 tools/code-graph/layout/stability_probe.py --check
+```
+
+Freshness is keyed by the `snapshot` column, not by mtime: `cgq.py` recomputes
+it from the current `extraction_status` and prints a `STALE:` banner when a
+query touches `layout`/`edges_agg` and the keys disagree. Rebuild rather than
+trust a bannered layout.
+
+### The interactive map
+
+`tools/code-graph/viewer/map_view.py` renders these tables as a zoomable map.
+**It runs on the host, never in the devcontainer** (no GPU here, by decision):
+`viewer/install_host.sh` builds the pinned environment and prints the launch
+command. Container-side you can still check the geometry with
+`python3 tools/code-graph/viewer/map_view.py --dry-run`, which imports nothing
+GPU-bound.
+
+Edges are bundled along the containment tree and every polyline is precomputed
+at load — nothing is aggregated at render time, so what the canvas draws is what
+`edges_agg` says. Edge appearance comes from one tested function
+(`viewer/styles.py:style_for`): `imports` solid, `invokes` dashed and
+desaturated, unknown dotted, and a stale snapshot restyles everything plus pins
+a banner. If the map ever draws an approximate edge like an exact one, that is a
+test failure, not a preference.
+
+## DST trace overlay (`activity`, `tool_modules`, traces, heat)
+
+The overlay attributes DST ledger-trace records to subject modules so dynamic
+questions ("which modules does DST actually exercise?") become answerable
+against the same store. Three generated artifacts, none committed:
+
+```
+.out/vocabulary.json              34 event-vocabulary rows, exported from AILANG
+.out/traces/<profile>/<seed>.jsonl  one run's returned ledger trace (overlay format v1)
+activity(seed, event_idx, record_key, subject_id, rule_kind)
+tool_modules(key, kind, module)   tool/extension -> module map
+```
+
+```bash
+# 1. export the vocabulary (needed by the validators; never grep the source for
+#    these counts — a test fixture at dst_event_vocabulary.ail:807 makes them wrong)
+ailang run --caps IO,FS --entry main scripts/dst/export_vocabulary.ail
+# 2. export one trace per seed (one profile + one seed per invocation, always)
+scripts/dst/run_export_trace.sh --seed 7
+# 3. build activity for ONE profile, then render and validate
+python3 tools/code-graph/overlay/build_activity.py --profile driver_only
+python3 tools/code-graph/overlay/render_heat.py --seed 7
+python3 tools/code-graph/overlay/validate_overlay.py
+python3 tools/code-graph/query/cgq.py q touched 7
+python3 tools/code-graph/query/cgq.py q divergence 7 11
+```
+
+`activity` is **per profile**: the schema has no profile or run column, so the
+same seed under two profiles collides on every key. One `activity.csv` covers one
+profile, and `build_activity.py --profile` is required, not optional. For the
+same reason `q divergence` answers the **two-seed** case only — the same seed
+across two code versions is the primary case and cannot be held by this schema.
+
+`rule_kind ∈ {fixed, payload_routed, correlated, unattributed}` records *how* a
+subject was derived, so views can weight by attribution quality without a fuzzy
+confidence number. Records are never dropped: an unmapped tool, extension or
+`ErrorEvent.source` yields an explicit `unattributed` row **and** a counted token
+in the build report. Treat a rising unattributed count as a curated map falling
+behind, not as noise.
+
+Freshness for `activity` is keyed to trace files, not to `extraction_status`, so
+queries touching it report a trace-file count in `meta` rather than an
+extraction-staleness banner. The heat renderer checks `layout` freshness itself
+and banners the canvas.
+
 ## Project-memory concept edges (`concept_edges`)
 
 `concept_edges` is a directed relation graph between `.agent` Markdown sections,

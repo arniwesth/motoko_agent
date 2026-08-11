@@ -201,7 +201,10 @@ pure func shared_answers() -> [string] { ["{\"type\":\"approve\"}"] }
 pure func shared_content() -> string { "TOOL-OUTPUT" }
 
 pure func tool_of(duration: int) -> ScriptedTool {
-  { tool_call_id: "", duration_ms: duration, code: "", message: "", content: shared_content() }
+  -- WI-D22: `exit_code` is part of "the underlying completion result held
+  -- constant" — both worlds take it from here, so the pair still differs in
+  -- `duration_ms` and only there.
+  { tool_call_id: "", duration_ms: duration, code: "", message: "", content: shared_content(), exit_code: -1 }
 }
 
 pure func env_of(limit_ms: int) -> [{ key: string, value: string }] {
@@ -237,6 +240,11 @@ pure func program_of(log: [Interaction], initial: WorldState, tag: string) -> Ex
     initial_world: {
       messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
       synthetic_environment: initial.env,
+      -- WI-D22: `execution-program/2` seeds the world's file table from the
+      -- program. This fixture seeds nothing, which is what it did before the
+      -- field existed; the seeded case is exercised in dst_replay and in the
+      -- persistence specimen.
+      files: [],
       clock_epoch: initial.clock_ms,
       extension_profile: "driver_only/${driver_only_version()}"
     },
@@ -317,7 +325,7 @@ func scenario_the_pair_differs_only_in_latency() -> bool ! {IO} {
 
 pure func head_tool(ts: [ScriptedTool]) -> ScriptedTool {
   match ts {
-    [] => { tool_call_id: "<absent>", duration_ms: -1, code: "", message: "", content: "" },
+    [] => { tool_call_id: "<absent>", duration_ms: -1, code: "", message: "", content: "", exit_code: -1 },
     t :: _ => t
   }
 }

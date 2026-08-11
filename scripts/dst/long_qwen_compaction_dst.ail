@@ -243,7 +243,8 @@ func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback 
 -- threads the token and returns it UNCHANGED, which is S12's identity
 -- transition and correct here because this fixture executes nothing.
 func fixed_exec(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
-  { outcome: ToolCompleted({ tool_call_id: inv.call.id, content: "" }), next_state: state }
+  -- WI-D22: `exit_code: -1`, because this fixture executes nothing.
+  { outcome: ToolCompleted({ tool_call_id: inv.call.id, content: "", exit_code: -1 }), next_state: state }
 }
 
 func fixed_ext_exec(world: ExtWorld, _name: string, _args: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", next_state: world } }
