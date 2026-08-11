@@ -53,14 +53,10 @@ func format_msgs_for_summary(msgs: [Msg]) -> string {
 func summarization_prompt(old_turns: [Msg], recent_turns: [Msg]) -> string {
   let old_text = format_msgs_for_summary(old_turns);
   let recent_count = list_length(recent_turns);
-  "Summarize the following conversation history in 2-3 sentences for a continuing agent session.
-Preserve:
-- Key decisions made
-- Files modified
-- Errors encountered and how they were resolved
-- Original task objective and current task state
-- Unresolved stop conditions, progress gates, and status/reporting cadence
-- Latest status/progress facts and the next required action
+  "Summarize the following conversation history for a continuing agent session using exactly these headings:
+Goal / Constraints / Progress / Key Decisions / Next Steps / Critical Context.
+Preserve exact paths, symbol names, errors and resolutions, stop conditions, progress gates, and status cadence.
+End with a CUMULATIVE FILE OPERATIONS line listing every known file read, created, modified, or deleted.
 
 Do not frame this as a new session, fresh context window, or handoff. Do not ask the user what to do
 next unless the old turns prove the original task is complete.
@@ -72,6 +68,21 @@ RECENT TURNS (keep these verbatim - ${show(recent_count)} messages):
 [... see recent context ...]
 
 Provide a concise summary that captures essential context for continuing the original task."
+}
+
+func update_summarization_prompt(previous_summary: string, delta: [Msg], recent_turns: [Msg]) -> string {
+  "Update the structured compaction summary using only the new turns below.
+Preserve every still-relevant fact and the cumulative file-operation line from PREVIOUS SUMMARY; add facts from NEW TURNS.
+Use exactly these headings: Goal / Constraints / Progress / Key Decisions / Next Steps / Critical Context.
+Preserve exact paths and symbol names. End with one CUMULATIVE FILE OPERATIONS line.
+
+PREVIOUS SUMMARY:
+${previous_summary}
+
+NEW TURNS TO FOLD:
+${format_msgs_for_summary(delta)}
+
+VERBATIM TAIL (${show(list_length(recent_turns))} messages) follows outside the summary."
 }
 
 -- Number of summarizer attempts before giving up. A transient provider
@@ -203,6 +214,26 @@ func split_body(body: [Msg], keep_recent: int) -> { old: [Msg], recent: [Msg] } 
   }
 }
 
+func msg_tokens(m: Msg) -> int { (string_length(m.content) + 3) / 4 }
+
+func msgs_tokens(msgs: [Msg]) -> int {
+  match msgs { [] => 0, m :: rest => msg_tokens(m) + msgs_tokens(rest) }
+}
+
+func old_count_for_tail_budget(msgs: [Msg], budget: int, total: int) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest =>
+      if total <= budget then 0
+      else 1 + old_count_for_tail_budget(rest, budget, total - msg_tokens(m))
+  }
+}
+
+func split_body_tokens(body: [Msg], budget: int) -> { old: [Msg], recent: [Msg] } {
+  let initial = split_at(body, old_count_for_tail_budget(body, budget, msgs_tokens(body)));
+  adjust_split_boundary(initial.old, initial.recent)
+}
+
 func split_msgs(msgs: [Msg], keep_recent: int) -> SplitResult {
   let p = split_prefix(msgs);
   let body = split_body(p.rest, keep_recent);
@@ -326,6 +357,29 @@ func cached_summary(artifacts: Json, digest: string) -> Option[string] {
   }
 }
 
+type RollingCache = { summary: string, boundary_marker: int }
+
+func rolling_cache(artifacts: Json) -> Option[RollingCache] {
+  match get(artifacts, "compaction_ai") {
+    None => None,
+    Some(node) => match get(node, "summary") {
+      None => None,
+      Some(sj) => match asString(sj) {
+        None => None,
+        Some(summary) => match getInt(node, "boundary_marker") {
+          None => None,
+          Some(boundary) => Some({ summary: summary, boundary_marker: boundary })
+        }
+      }
+    }
+  }
+}
+
+func drop_msgs(msgs: [Msg], n: int) -> [Msg] {
+  if n <= 0 then msgs
+  else match msgs { [] => [], _ :: rest => drop_msgs(rest, n - 1) }
+}
+
 func last_ran_step(artifacts: Json) -> int {
   match get(artifacts, "compaction_ai") {
     None => -1,
@@ -336,11 +390,13 @@ func last_ran_step(artifacts: Json) -> int {
   }
 }
 
-func cache_artifact(digest: string, summary: string, step: int) -> Json {
+func cache_artifact(digest: string, summary: string, boundary_marker: int, step: int) -> Json {
   jo([
     kv("compaction_ai", jo([
       kv("segment_digest", js(digest)),
       kv("summary", js(summary)),
+      kv("boundary_marker", jnum(_int_to_float(boundary_marker))),
+      kv("covered_upto", jnum(_int_to_float(boundary_marker))),
       kv("last_ran_step", jnum(_int_to_float(step)))
     ]))
   ])
@@ -348,40 +404,56 @@ func cache_artifact(digest: string, summary: string, step: int) -> Json {
 
 -- Assemble the Compacted decision from a resolved summary (fresh or
 -- cached). Returns PassThrough if the summary fails to relieve pressure.
-func finalize_compaction(ctx: ExtCtx, msgs: [Msg], prefix: [Msg], recent_turns: [Msg], old_count: int, digest: string, summary: string, pct: int) -> PreStepDecision {
+func finalize_compaction(ctx: ExtCtx, msgs: [Msg], prefix: [Msg], recent_turns: [Msg], old_count: int, digest: string, summary: string, boundary_marker: int, pct: int, refreshed: bool) -> PreStepDecision {
   let status = latest_runtime_status_result(msgs);
   let compacted = prefix ++ [summary_msg(ctx, summary, status)] ++ recent_turns;
   let new_pct = usage_percent(ctx, compacted, ctx.context_limit);
   if new_pct > pct then PassThrough
-  else Compacted(compacted, "AI-summarized ${show(old_count)} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary, ctx.step))
+  else {
+    let action = if refreshed then "AI-folded" else "AI-cache-reused";
+    Compacted(compacted, "${action} ${show(old_count)} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary, boundary_marker, ctx.step))
+  }
 }
 
 export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
   let pct = usage_percent(ctx, msgs, ctx.context_limit);
   if pct < cfg.threshold_pct then PassThrough
-  else if cfg.rate_limit_enabled && last_ran_step(ctx.artifacts) >= 0 && (ctx.step - last_ran_step(ctx.artifacts)) > 0 && (ctx.step - last_ran_step(ctx.artifacts)) < cfg.min_gap_steps && pct < cfg.hard_override_pct then PassThrough
   else {
-    let keep_recent = if pct >= 90 then (cfg.keep_recent / 2) else cfg.keep_recent;
-    let split_result = split_msgs(msgs, keep_recent);
-    let old_turns = split_result.old;
-    let recent_turns = split_result.recent;
-
-    if list_length(old_turns) == 0 then PassThrough
-    else {
-      let projected = split_result.prefix ++ recent_turns;
-      let projected_pct = usage_percent(ctx, projected, ctx.context_limit);
-      if pct - projected_pct < cfg.min_relief_pct then PassThrough
-      else {
-      let digest = segment_digest(old_turns);
-      match cached_summary(ctx.artifacts, digest) {
-        Some(cached) => finalize_compaction(ctx, msgs, split_result.prefix, recent_turns, list_length(old_turns), digest, cached, pct),
-        -- Fresh summary: on any returned failure, skip compaction this step
-        -- rather than splice a broken placeholder into the context (MOT-38).
-        None => match summarize_with_ai_result(ctx, summarization_prompt(old_turns, recent_turns), cfg.model) {
-          Ok(summary) => finalize_compaction(ctx, msgs, split_result.prefix, recent_turns, list_length(old_turns), digest, summary, pct),
-          Err(_) => PassThrough
+    let p = split_prefix(msgs);
+    let budget = cfg.keep_recent_tokens;
+    match rolling_cache(ctx.artifacts) {
+      Some(cache) => {
+        let tail = drop_msgs(p.rest, cache.boundary_marker);
+        let safety_refresh = ctx.context_limit > 0 && ctx.telemetry.last_input_tokens * 100 / ctx.context_limit >= cfg.hard_override_pct;
+        if (budget <= 0 || msgs_tokens(tail) <= budget) && not safety_refresh then
+          finalize_compaction(ctx, msgs, p.prefix, tail, cache.boundary_marker, segment_digest(drop_msgs(p.rest, cache.boundary_marker)), cache.summary, cache.boundary_marker, pct, false)
+        else {
+          let cut = if budget > 0 then split_body_tokens(tail, budget) else split_body(tail, cfg.keep_recent);
+          if list_length(cut.old) == 0 then
+            finalize_compaction(ctx, msgs, p.prefix, tail, cache.boundary_marker, segment_digest(tail), cache.summary, cache.boundary_marker, pct, false)
+          else match summarize_with_ai_result(ctx, update_summarization_prompt(cache.summary, cut.old, cut.recent), cfg.model) {
+            Ok(summary) => {
+              let boundary = cache.boundary_marker + list_length(cut.old);
+              finalize_compaction(ctx, msgs, p.prefix, cut.recent, boundary, segment_digest(cut.old), summary, boundary, pct, true)
+            },
+            Err(_) => finalize_compaction(ctx, msgs, p.prefix, tail, cache.boundary_marker, segment_digest(tail), cache.summary, cache.boundary_marker, pct, false)
+          }
         }
-      }
+      },
+      None => {
+        let split_result = if budget > 0 then { prefix: p.prefix, old: split_body_tokens(p.rest, budget).old, recent: split_body_tokens(p.rest, budget).recent } else split_msgs(msgs, cfg.keep_recent);
+        if list_length(split_result.old) == 0 then PassThrough
+        else {
+          let projected = split_result.prefix ++ split_result.recent;
+          if pct - usage_percent(ctx, projected, ctx.context_limit) < cfg.min_relief_pct then PassThrough
+          else match summarize_with_ai_result(ctx, summarization_prompt(split_result.old, split_result.recent), cfg.model) {
+            Ok(summary) => {
+              let boundary = list_length(split_result.old);
+              finalize_compaction(ctx, msgs, split_result.prefix, split_result.recent, boundary, segment_digest(split_result.old), summary, boundary, pct, true)
+            },
+            Err(_) => PassThrough
+          }
+        }
       }
     }
   }
@@ -392,6 +464,7 @@ func test_cfg(rate_limit_enabled: bool) -> CompactionAiConfig {
     model: "test-summarizer",
     threshold_pct: 1,
     keep_recent: 4,
+    keep_recent_tokens: 120,
     min_relief_pct: 5,
     rate_limit_enabled: rate_limit_enabled,
     min_gap_steps: 3,
@@ -478,7 +551,7 @@ func test_ai_batch_compacts_many_old_messages() -> bool
     let msgs = repeated_pairs(8, long_content());
     match compact_with_ai(test_ctx_stub(1, 250, empty_ext_artifacts()), msgs, test_cfg(false)) {
       Compacted(out, note, _) =>
-        contains(note, "AI-summarized")
+        contains(note, "AI-folded")
           && list_length(out) < list_length(msgs)
           && not recent_starts_with_tool(out),
       PassThrough => false
@@ -499,7 +572,7 @@ func test_ai_summarizer_failure_degrades_to_passthrough() -> bool
     }
   }
 
-func test_ai_rate_limit_gap_and_same_step_cache() -> bool
+func test_ai_over_threshold_reuses_cache_without_passthrough() -> bool
   tests [((), true)]
   {
     let msgs = repeated_pairs(8, long_content());
@@ -507,15 +580,16 @@ func test_ai_rate_limit_gap_and_same_step_cache() -> bool
     match compact_with_ai(test_ctx_stub(10, 1000, empty_ext_artifacts()), msgs, cfg) {
       PassThrough => false,
       Compacted(out1, _, artifacts) => {
-        let later = compact_with_ai(test_ctx_stub(11, 1000, artifacts), msgs, cfg);
+        let grown_msgs = msgs ++ [user("new contiguous tail fact")];
+        let later = compact_with_ai(test_ctx_stub(11, 1000, artifacts), grown_msgs, cfg);
         let same_step = compact_with_ai(test_ctx_stub(10, 1000, artifacts), msgs, cfg);
         match later {
-          PassThrough =>
-            match same_step {
-              Compacted(out2, _, _) => list_length(out1) == list_length(out2),
-              PassThrough => false
-            },
-          Compacted(_, _, _) => false
+          Compacted(out2, note, _) =>
+            contains(note, "AI-cache-reused")
+              && list_length(out2) == list_length(out1) + 1
+              && match out2 { [] => false, _ => contains(canonical_msgs(out2), "new contiguous tail fact") }
+              && match same_step { Compacted(_, _, _) => true, PassThrough => false },
+          PassThrough => false
         }
       }
     }

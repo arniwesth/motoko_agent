@@ -1,14 +1,15 @@
 # Ephemeral re-derivation is now the dominant compaction cost (post strategy-fix live datapoint)
 
 ## Status
-open — source-grounded against prior art (2026-07-11); plan drafted
-(`../projects/006_compactor_strategy/PLAN-rederivation-context-strategy.md`). Residual of Consequence 1
+in progress — Engine A and WS4a implemented in `9dde8b0` and `1fa1aaf`; WS3 and live drift/cost
+measurement remain (see
+`../projects/006_compactor_strategy/NOTE-rederivation-implementation-findings.md`). Residual of Consequence 1
 of [`ephemeral-compaction-and-ai-noop-thrash.md`](ephemeral-compaction-and-ai-noop-thrash.md), which the
 already-scoped [`PLAN-compactor-strategy.md`](../projects/006_compactor_strategy/PLAN-compactor-strategy.md)
 explicitly excludes.
 
 ## Branch
-arniwesth/mot-38-progress-contract-finalize-guard-extension
+arniwesth/mot-39-rederivation-context-strategy
 
 ## Description
 Follow-up live datapoint from a `make live_qwen36_compaction_heavy_headless` run captured while
@@ -144,9 +145,11 @@ leverage:
 2. **Cached incremental fold + big verbatim tail (engine).** Cache `{summary, boundary}` in artifacts;
    each pass folds prior summary + only the turns past the boundary (pi's `previousSummary` merge,
    moved to ext-state); raise `keep_recent` to a **token budget** (≈20k), not 6–10 messages. Adopt the
-   structured summary schema + a cumulative file-op line so lossy summaries stay safe. *(This is the
-   incremental-fold "Option A"; content-addressed chunk memoization is the fallback if merge-drift
-   degrades quality.)*
+   structured summary schema + a cumulative file-op line so lossy summaries stay safe. *(Two co-primary
+   engines: rolling fold "Option A" — pi's mechanism, best for interactive lengths — and frozen
+   content-addressed chunk memoization "Option B" — no cumulative drift, ~zero steady-state cost, best
+   for long-horizon runs like the 1000-step stress target. Build A first; a drift measurement picks the
+   long-horizon engine. Not primary/fallback — see the plan's WS2.)*
 3. **Durability layer.** A model-controlled evidence store (Motoko's `scratchpad` ≈ this) surfaced
    after compaction with a **pointer, not payload** — cheaper than the current re-inject-the-data
    runtime-status capsule, and it lets the summary be lossier/cheaper safely.
