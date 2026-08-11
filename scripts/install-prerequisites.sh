@@ -264,6 +264,17 @@ ensure_user_local_bin_on_path() {
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
   fi
   export PATH="$HOME/.local/bin:$PATH"
+  # GitHub Actions gives every `run:` step a fresh non-interactive shell, which
+  # reads neither .bashrc nor .profile, so the two lines above reach nothing but
+  # the rest of THIS process. $GITHUB_PATH is the only channel that carries a
+  # PATH entry to the next step; without it a workflow that installs the
+  # toolchain here and calls `ailang` in a later step fails instantly with
+  # "command not found" while the install step reports success.
+  if [[ -n "${GITHUB_PATH:-}" ]]; then
+    if ! grep -qxF "$HOME/.local/bin" "$GITHUB_PATH" 2>/dev/null; then
+      echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------

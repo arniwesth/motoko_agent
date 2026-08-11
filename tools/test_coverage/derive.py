@@ -552,12 +552,21 @@ EXPECTED: dict[str, set[str]] = {
     "skip_unrecorded.ail": {"unrecorded_skip"},
 }
 
-# The self-test's own skip table records ONLY the named-test-block limitation,
-# so skip_recorded.ail survives and skip_unrecorded.ail -- which skips for a
+# The self-test's own skip table records ONLY the generator limitation, so
+# skip_recorded.ail survives and skip_unrecorded.ail -- which skips for a
 # different reason -- fires. Both directions of the table are exercised by real
 # skips rather than by a stubbed reason string.
+#
+# This used to record "Named test blocks not yet implemented", which was the
+# skip skip_recorded.ail produced when v0.26.0 parsed `test "..."` blocks and ran
+# none of them. v0.33.0 implements the form, so that reason stopped appearing in
+# any run: the record went stale, the `always` marking fired stale_skip_record
+# against the self-test's own table, and skip_recorded.ail was left with no skip
+# to be tolerated for. Both fixture and table now hang off a limitation that is
+# still real on this pin AND is deterministic -- no draw makes an Option[string]
+# generator appear -- so neither can flake green.
 SELFTEST_RECORDS = [{
-    "prefix": "Named test blocks not yet implemented",
+    "prefix": "no generator for parameter",
     "expected": "always",
 }]
 

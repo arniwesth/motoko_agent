@@ -17,31 +17,27 @@
     "Matching is by PREFIX because both reasons below carry variable tails",
     "(generated inputs, locations)."
   ],
+  "_retired": [
+    "The `Named test blocks not yet implemented` record lived here from the",
+    "inventory's first day until the pin moved to AILANG v0.33.0, which",
+    "implements the form. It went stale exactly as its own disposition",
+    "predicted, the `always` marking fired stale_skip_record, and the six tests",
+    "in src/core/prompts_test.ail stopped being skipped.",
+    "",
+    "They did not start passing. v0.33.0 lifts each named test body into a",
+    "synthetic module and, in a file whose ONLY tests are named blocks, never",
+    "compiles `$builtin` for it — so the six failed with LDR001 on the file's",
+    "own `import src/core/prompts`. That is a NEW upstream defect, filed",
+    "against the pin, and it is not a skip: nothing here can record it, because",
+    "these tests now run and fail rather than being passed over.",
+    "",
+    "So the six were rewritten as `tests [...]` blocks on local wrappers, the",
+    "idiom src/core/parse_test.ail already uses. The old disposition refused",
+    "that rewrite on the grounds that it would hide an unimplemented form; the",
+    "form is implemented now, and tools/test_coverage/fixtures/named_only.ail",
+    "keeps it covered, so the objection no longer holds."
+  ],
   "records": [
-    {
-      "prefix": "Named test blocks not yet implemented",
-      "kind": "upstream-limitation",
-      "expected": "always",
-      "why": [
-        "AILANG v0.26.0 parses `test \"name\" { ... }` blocks and then skips",
-        "every one of them, while the runner prints `All tests passed!` and",
-        "exits 0. src/core/prompts_test.ail carries six tests in this form and",
-        "all six are dead: `6 tests: 0 passed, 0 failed, 6 skipped`.",
-        "",
-        "This is the vacuity shape the exit status cannot express, and it is",
-        "why every rule in derive.py reads a number rather than a return code."
-      ],
-      "disposition": [
-        "Not fixable in this repo on this pin. The tests are correct and will",
-        "start running when upstream implements the form; the `always` marking",
-        "means the day that happens, this record goes stale and the inventory",
-        "says so rather than leaving six tests quietly passing without running.",
-        "",
-        "Filed against the pin rather than worked around: rewriting the six as",
-        "`tests [...]` blocks would restore the coverage but would also hide",
-        "that the form is unimplemented from every other file that uses it."
-      ]
-    },
     {
       "prefix": "no generator for parameter",
       "kind": "upstream-limitation",

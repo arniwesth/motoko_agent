@@ -5,8 +5,29 @@ module tools/test_coverage/fixtures/named_only
 -- the `named-test` pattern would leave it detected and escape; this file has
 -- nothing else to be found by, and fires `undetected` the moment the pattern
 -- stops matching. A pattern no fixture can lose is a pattern nobody checks.
+--
+-- WHY THE BODIES ARE BARE ARITHMETIC AND MUST STAY THAT WAY. v0.33.0 runs named
+-- test blocks by lifting each body into a synthetic module, and in a file whose
+-- ONLY tests are named blocks it never compiles `$builtin` for that module. Any
+-- body needing a builtin then dies before it asserts anything:
+--
+--   test "x" { startsWith("abc", "ab") }  ->  EVA002 ... $builtin._str_startsWith
+--   test "x" { contains("abc", "b") }     ->  EVA002 ... $builtin._str_find
+--   test "x" { not false }                ->  EVA002 ... $builtin.not_Bool
+--
+-- Even `not` is a builtin. Only expressions the evaluator folds inline — integer
+-- arithmetic and comparison on literals — run at all. skip_recorded.ail's four
+-- named blocks call `startsWith` and PASS, because that file also carries a
+-- conventional `tests [...]` block, which gets `$builtin` compiled and the
+-- lifted bodies then resolve; being named-test-ONLY is precisely what breaks it,
+-- and being named-test-ONLY is precisely this fixture's job.
+--
+-- So the two constraints are in tension on this pin and the resolution is to
+-- keep the form and drop the imports. Do not add an import or a stdlib call
+-- here, and do not add a `tests [...]` block to "fix" it — the first makes this
+-- a permanent `failing` row, the second destroys the only thing it covers. The
+-- defect is filed upstream rather than absorbed; when it is fixed, this file can
+-- go back to asserting something less trivial.
 
-import std/string (contains)
-
-test "contains empty needle" { contains("abc", "") }
-test "contains middle" { contains("abc", "b") }
+test "arithmetic identity" { 1 + 1 == 2 }
+test "arithmetic product" { 3 * 4 == 12 }

@@ -1,14 +1,25 @@
 module tools/test_coverage/fixtures/skip_recorded
 
--- SURVIVOR under a table that records the `Named test blocks` limitation.
--- Seven tests: three inline cases that RUN, and four `test "..."` blocks that
--- v0.26.0 skips entirely while still printing "All tests passed!" and exiting
--- 0. src/core/prompts_test.ail is in exactly this state at HEAD with six.
+-- SURVIVOR under a table that records the `no generator for parameter`
+-- limitation. Eight tests: three inline cases and four `test "..."` blocks that
+-- all RUN, plus one property AILANG generates from the `requires` below and
+-- then skips, because its generator covers primitives only and cannot feed an
+-- `Option[string]`. src/core/tool_runtime.ail loses two properties this way.
 --
--- Its four quantities are total=7, passed=3, failed=0, skipped=4. R1 reads
+-- Its four quantities are total=8, passed=7, failed=0, skipped=1. R1 reads
 -- `failed` and R7 reads `skipped`; keeping them unequal here and unequal the
 -- other way round in failing_test.ail is what stops either rule from being
 -- satisfied by the other one's number.
+--
+-- IT USED TO SKIP FOR A DIFFERENT REASON. Until the pin moved to v0.33.0 the
+-- four `test "..."` blocks were themselves the skip: v0.26.0 parsed them and
+-- ran none, so this file read total=7, passed=3, skipped=4, and the tolerated
+-- reason was "Named test blocks not yet implemented". v0.33.0 implements the
+-- form, those four now run, and the file lost every skip it had — which would
+-- have left it surviving VACUOUSLY, demonstrating nothing about whether a
+-- recorded skip is tolerated. The skip is now produced by a limitation that is
+-- still real on this pin, and is deterministic rather than draw-dependent, so
+-- the fixture asserts what it claims to on every run.
 
 import std/string (startsWith)
 
@@ -20,6 +31,17 @@ export pure func shout(s: string) -> string
   ]
   {
     "${s}!"
+  }
+
+-- The recorded skip. `requires` makes AILANG generate a property test; the
+-- generator has nothing that produces an `Option[string]`, so it reports
+-- "no generator for parameter o: Option[string]" and skips. Deterministic:
+-- unlike "requires not satisfied by random input", no sequence of draws makes
+-- this one run, so the fixture cannot flake green.
+export pure func or_default(o: Option[string], d: string) -> string
+  requires { d != "" }
+  {
+    match o { Some(s) => s, None => d }
   }
 
 test "startsWith empty needle" { startsWith("abc", "") }
