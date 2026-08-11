@@ -22,11 +22,16 @@
 > **zero**), `driver_plus_no_ops` v9 (**non-zero and entirely of no-ops** — 32 hooks / 4
 > extensions, 16 satisfying criterion 2 vacuously), `driver_plus_compose` v1 (compose installed —
 > the first effectful extension; 7 hooks covered, `on_tool_handle` excluded). The honest coverage
-> claim at HEAD is the computed vacuity register: **exactly one of forty classification entries
-> rests on a measured AND substantive basis** (`compose`/`on_response_intercept`); hermeticity is
-> enforced **per profile** (compose's registration runs ambient, gap stated not closed); the
-> `extension_effect_fault` class is waived by every profile. The label covers the generated axis
-> only. §0, §6, and §8 each carry part of this load — the compliance pass checks all occurrences.
+> claim at HEAD is D28's MANDATORY successor sentence, carried near-verbatim in §8: coverage is
+> non-zero and **one hook deep** — **exactly one of forty classification entries rests on a
+> measured AND substantive basis** (`compose`/`on_response_intercept`, existential witness);
+> **ten of fifteen extensions installed in no profile, fourteen of fifteen with no dynamic
+> evidence**. The one-of-forty is a documented one-shot fold, NOT a standing instrument — never
+> write "prints/guards" of it. Hermeticity is enforced **per profile** (compose's registration
+> runs ambient, gap stated not closed); the `extension_effect_fault` class is waived by every
+> profile; `driver_only` emits no coverage statement (register defect — report it as such). The
+> label covers the generated axis only. §0, §6, and §8 each carry part of this load — the
+> compliance pass checks all occurrences.
 > **The spine doc (refreshed 2026-08-07) predates D27/D28 and is stale on all of the above —
 > source coverage claims from the D27/D28 NOTEs, not from it.**
 
@@ -46,13 +51,13 @@ whose classes demonstrably reach named production recovery branches, a virtual c
 by production timeout behavior, and strict replay of the exact recorded execution program.
 Distinctively, the project reserved the unqualified word "DST" behind a written seven-pillar
 conformance bar and adopted it only when an eleven-row automated acceptance gate passed —
-first for one deliberately empty execution profile (`driver_only`), then re-run across three
-profiles including one installing an effectful extension — and it computes rather than asserts what
+first for one empty execution profile (`driver_only`), then re-run across three profiles
+including one installing an effectful extension — and it computes rather than asserts what
 its green results rest on: at the current revision, exactly one of forty
-coverage-classification entries stands on a measured and substantive basis, a number the
-system prints and guards. We present the ports-swap architecture, the deterministic test
-world, and this conformance-and-vacuity accounting as a transplantable methodology for
-testing agent infrastructure.
+coverage-classification entries stands on a measured and substantive basis, a number derived
+by a documented fold over classification lines the profiles print. We present the ports-swap
+architecture, the deterministic test world, and this conformance-and-vacuity accounting as a
+transplantable methodology for testing agent infrastructure.
 
 ---
 
@@ -96,8 +101,9 @@ policy up to end-to-end deterministic sessions (§4). Second, a deterministic te
 seeded discovery that generates the *ordering* of environment events by reacting to the
 requests production code actually makes, a logical-fault catalogue whose classes demonstrably
 reach named production recovery branches, a virtual clock that production timeout behavior
-observes, and strict replay of the exact recorded execution program. Third — and least common
-in the literature — a conformance-and-vacuity accounting discipline (§6): the project reserved
+observes, and strict replay of the exact recorded execution program. Third — and, to our
+knowledge, rare in the literature — a conformance-and-vacuity accounting discipline (§6): the
+project reserved
 the word "DST" behind a written bar, met it through an automated acceptance gate, and computes
 rather than asserts what its green results rest on, down to the honest statement that exactly
 one of forty coverage-classification entries at HEAD is both measured and substantive. §7
@@ -115,12 +121,16 @@ effect system, and the Motoko loop itself.
 
 DST entered field practice through systems infrastructure. FoundationDB made simulation a
 first-class development mode: the database runs single-threaded inside a simulated network,
-disk, and clock, all deterministic functions of a seed, with faults injected by the scheduler
-and invariants checked continuously. TigerBeetle's VOPR applies the same shape to a
-state-machine replica set; Antithesis moves the determinism boundary down to a hypervisor so
-that unmodified software can be simulated. Beneath the differences, the shared contract is:
-a seed generates the environment's event schedule; the *real* system code executes inside it;
-invariants judge the result; the seed (plus versions) is a complete reproduction key.
+disk, and machine layer, all deterministic functions of a seed, with faults injected both
+through that simulated layer and through Buggify-style cooperative fault points compiled into
+the production code itself, and invariants checked continuously. TigerBeetle's VOPR applies
+the same shape to a state-machine replica set; Antithesis moves the determinism boundary down
+to a hypervisor so that unmodified software can be simulated. Beneath the differences, the
+shared contract is: a seed generates the environment's event schedule; the *real* system code
+executes inside it; invariants judge the result; the seed (plus versions) is a complete
+reproduction key. Motoko keeps the contract but diverges on one design axis — its faults are
+modeled *outcomes* at a typed boundary, never in-code fault points — a divergence §5.2
+defends.
 
 Neighboring methods each keep part of this contract. Property-based testing generates *inputs*
 from a seed but not the environment's event schedule; trace replay reproduces an environment
@@ -131,12 +141,14 @@ this report's naming story: the system's own seeded axis was classified as prope
 testing over agent-loop state — "strictly stronger than trace replay, strictly weaker than
 DST" — until the full world existed.
 
-For agent harnesses specifically, the testing literature is thin. Benchmark suites
-(SWE-bench-style) and harness-optimization work measure end-task capability of the
+For agent harnesses specifically, we are aware of no comparable published treatment. Benchmark
+suites (SWE-bench-style) and harness-optimization work measure end-task capability of the
 model-plus-harness system; they are statistical instruments, not regression oracles, and they
 say nothing about whether a compaction preserved tool-call pairing. Regression testing of the
-harness itself, where discussed at all, is conventional unit and smoke testing. The gap this
-report addresses is exactly there.
+harness itself, where discussed at all, is conventional unit and smoke testing. The two things
+this report contributes to that gap are the transplant itself — the provider-as-environment
+simulation of §§3–5 — and the vacuity accounting of §6, which we have not seen practiced in
+any testing literature.
 
 ### 2.2 AILANG effects and capabilities
 
@@ -151,19 +163,23 @@ conformance discipline on exactly this asymmetry.
 
 ### 2.3 The Motoko loop
 
-The production system under test is a step loop. A pure decision function
-(`decide : StepState → StepDecision`) chooses the next action; model, tool, and hook phases
-execute against a ports boundary and return typed results plus state deltas; a driver
-(`session.ail`) threads the state, executes decisions, and emits every ledger event — it is
-the sole emitter, a property §3.3 depends on. Around the loop sits an extension system:
-third-party extensions bind hooks (`on_pre_step`, `on_tool_handle`, `on_response_intercept`,
-`on_solver_candidate`, …) behind a versioned ABI, with a conformance kit released in lockstep
-majors that certifies compactor extensions against structural invariants. The ABI's hook
-surface — which hooks are unconditionally dispatched, which effects each hook row declares —
-becomes central in §6, because it determines what an installed extension *could* do, and
-therefore what a profile that installs one has actually covered.
+The production system under test is a step loop, drawn as the shaded core of Figure 1 (next
+section). A pure decision function (`decide : StepState → StepDecision`) chooses the next
+action; model, tool, and hook phases execute against a ports boundary and return typed
+results plus state deltas; a driver (`session.ail`) threads the state, executes decisions,
+and emits every ledger event — it is the sole emitter, a property §3.3 depends on.
 
-[FIG-1 appears in §3.]
+Around the loop sits an extension system: an installed extension binds *hooks* — named
+interception points the driver dispatches at fixed moments in the step. For example,
+`on_pre_step` runs before context is assembled (this is where a compaction extension rewrites
+the conversation), and `on_response_intercept` runs over each provider response before the
+loop consumes it. Hooks are declared behind a versioned ABI that fixes, for every hook, when
+it is dispatched and which effects its implementation may declare; a conformance kit
+(versioned in lockstep with the ABI) certifies extensions against structural invariants. Two
+facts about this surface matter later: some hooks are dispatched *unconditionally* (a profile
+cannot exclude them and still claim coverage), and each hook's declared effect row bounds what
+an installed extension *could* do — which is exactly what §6's coverage accounting has to
+reason about.
 
 ---
 
@@ -226,12 +242,14 @@ ledger events. The ledger is a typed vocabulary (`LedgerTrace`/`LedgerRecord` in
 typed in-memory ledger; replay comparison operates on normalized records (payload digests, stage
 records, extension-diagnostic events).
 
-Sole emission is what makes "the ledger is the trace" a sound oracle claim: there is no second
-channel through which an interesting boundary observation could leave the system unrecorded, so
-an invariant over the ledger is an invariant over everything the run observably did. Where that
-claim has exceptions, the system enumerates them rather than hoping — §6 discusses the two
-vocabulary variants that do not reach the returned trace today, and the stated reading under
-which the completeness row passes.
+Sole emission is what makes "the ledger is the trace" a sound oracle claim *for the driven
+session*: within the driver's execution, there is no second channel through which a boundary
+observation could leave the system unrecorded, so an invariant over the ledger is an invariant
+over everything the driven run observably did. The scope qualifier is deliberate, and the
+system enumerates its exceptions rather than hoping: two vocabulary variants do not reach the
+returned trace today (§6's "stated reading"), and extension *registration* — which runs before
+the driver dispatches anything — sits outside the ledger entirely, a gap §6.3 and §8 return
+to.
 
 ### 3.4 Capabilities as a conformance check — and the stated limit
 
@@ -427,22 +445,31 @@ exclude.)
 production code actually makes: the generator chooses modeled outcomes, logical faults, and
 virtual latencies as the run unfolds, and records the resulting ordered, versioned
 `ExecutionProgram`. *Strict replay* consumes that exact serialized program without invoking the
-generator and compares normalized terminal traces. The program, not the seed alone, is the
-reproduction key — a seed re-derives the program only while the generator version stands still,
-and the program survives generator evolution. Recorded programs carry their execution manifest
-inside the artifact.
+generator and compares normalized terminal traces — normalization operates per record (payload
+digests, stage records, extension-diagnostic events), and the discovery-vs-replay identity is
+asserted by a gate in every sweep, not once at qualification. (The full normalization rules
+are not enumerated in this report; what bounds over-normalization in practice is that replay
+compares interaction logs and world-request censuses member-for-member, not digests alone —
+§8 notes the residual.) The program, not the seed alone, is the reproduction key — a seed
+re-derives the program only while the generator version stands still, and the program survives
+generator evolution. Recorded programs carry their execution manifest inside the artifact.
 
 The remaining pillars, concretely:
 
-- **Faults are modeled outcomes, not injected internal decisions.** The catalogue's nine
-  required classes span provider errors (retryable, non-retryable, protocol-inconsistent,
-  partial-stream-then-error, empty-terminal), typed tool failures (`ToolFailed`,
-  `ToolCorrelationMismatch`, `ToolDeadlineExceeded`), and approval denial. All nine reach named
-  production recovery branches (Table 3) — eight found **by search** over seeds, one by
-  construction, with the constructed case carrying its own measured justification (0 of 260
-  swept seeds reach it).
+- **Faults are modeled outcomes, not injected internal decisions.** This is the deliberate
+  divergence from Buggify-style in-code fault points (§2.1), and it is the natural choice
+  here: every fault the harness can experience arrives *through* the typed world boundary —
+  a provider error is a response, a tool failure is an outcome, a denial is an approval
+  result — so the boundary is the complete injection surface and production code carries no
+  test-only branches. The catalogue names eleven classes: provider errors (retryable,
+  non-retryable, protocol-inconsistent, partial-stream-then-error, empty-terminal), typed tool
+  failures (`ToolFailed`, `ToolCorrelationMismatch`, `ToolDeadlineExceeded`), and the approval
+  outcomes. Nine are required and reached — eight found **by search** over seeds, one by
+  construction with its own measured justification (0 of 260 swept seeds reach it) — and two
+  are waived with distinct stated conditions (Table 3).
 
-  **Table 3 — the fault catalogue: class → named recovery branch.** The class-to-branch map is
+  **Table 3 — the fault catalogue: nine of eleven classes reached (eight by search, one by
+  construction), two waived with distinct stated conditions.** The class-to-branch map is
   printed in full by the gate on every run, so a class that quietly lost its branch is visible
   in CI output. (Source: `src/core/dst_fault_catalogue.ail`; reached/waived status per the D28
   rerun.)
@@ -463,9 +490,10 @@ The remaining pillars, concretely:
 - **Virtual time matters, demonstrably.** A latency pair with identical provider script,
   approval queue, and declared deadline — differing only in clock advancement — makes the same
   tool request, yet 4 of 9 native tool results in the slow half (and only the slow half) carry
-  `ToolDeadlineExceeded`, with no OS timeout involved. Every profile-reachable time-bearing
-  read in core routes through the world clock; the routed-set claim is *computed at the bound
-  revision* (7 reachable sites, 6 routed, 1 declared and instrumented — the live adapter).
+  `ToolDeadlineExceeded`, with no OS timeout involved. All but one profile-reachable
+  time-bearing read in core routes through the world clock — the one exception is the live
+  adapter, declared and instrumented rather than routed — and the routed-set claim is
+  *computed at the bound revision* (7 reachable sites, 6 routed, 1 declared).
 - **Hermeticity is probed two-sidedly.** Five poison pairs each show the deterministic world
   *completing* with a capability withheld (`AI`, `Clock`, `Env`, `FS`, `Process`) while the
   live wiring *dies* under the same withholding — evidence that the deterministic path
@@ -524,18 +552,22 @@ worth more than one that does not, and this is the pattern this section is about
 §"The eleven answers"; D28 note §1.]
 
 The two runs bracket the interesting period, and the deltas tell the story better than either
-snapshot. Row 3 ("is the tested boundary honest?") passed at D5 *vacuously* in every
-installed-extension clause, because the profile installed nothing; at D28 it is "the row that
-changed most" — the coverage floor, the exclusion rule, and the per-extension disclosure are
-all exercised non-vacuously across the two newer profiles, and the one clause still vacuous in
-all three is precisely identified (and belongs to a *producer*, not a profile — a distinct
-finding). Row 5 ("does virtual time matter?") was real at D5 but explicitly non-transferable;
-at D28 it is **re-earned on routing**: the first profile whose installed extensions read a
-clock at all does so through the world's routed port, with zero ambient clock sources measured
-in any hook path. Rows 6 and 9 now hold what the record calls their strongest instances in the
-tree — a real traced session with an installed effectful extension, recorded, validated, and
-strictly replayed to an identical interaction log. Row 10 changed shape rather than strength:
-hermeticity became a *per-profile* statement (§6.3).
+snapshot. Row 3 ("is the tested boundary honest?"; Appendix A, row 3) passed at D5 *vacuously*
+in every installed-extension clause, because the profile installed nothing; at D28 it is "the
+row that changed most" — the coverage floor, the exclusion rule, and the per-extension
+disclosure are all exercised non-vacuously across the two newer profiles, and the one clause
+still vacuous in all three is precisely identified. That clause's vacuity belongs to a
+*producer*, not a profile: the classifier tool it quantifies over has an empty member set at
+HEAD, so the clause passes over nothing under any profile — a vacuity class that no
+per-profile question can surface, found only by asking each surviving exemption why it
+survives. Row 5 ("does virtual time matter?"; Appendix A, row 5) was real at D5 but explicitly
+non-transferable; at D28 it is **re-earned on routing**: the first profile whose installed
+extensions read a clock at all does so through the world's routed port, with zero ambient
+clock sources measured in any hook path. Rows 6 and 9 (Appendix A) now hold what the record
+calls their strongest instances in the tree — a real traced session with an installed
+effectful extension, recorded, validated, and strictly replayed to an identical interaction
+log. Row 10 changed shape rather than strength: hermeticity became a *per-profile* statement
+(§6.3).
 
 The through-line is the register the closing note computes: **all four vacuities the gate
 reported at D5 still exist at D28; three had their ground replaced by a measurement; none was
@@ -546,11 +578,20 @@ re-wording the claim.
 
 A profile is a named, versioned execution manifest, and the accounting rule — decided at
 adoption, before there was a second profile to tempt anyone — is that **coverage is earned per
-profile and inherited by none**. Three profiles exist at HEAD:
+profile and inherited by none**. Each covered hook receives a *classification entry* grading
+it on two criteria from the acceptance test: **criterion 1** applies to hooks claimed
+effect-free and rests on the hook's declared effect row (an *assumed* basis — the declaration,
+not a measurement); **criterion 2** applies to world-mediating hooks and asks that their
+effects flow through the world protocol's ports (§5.2) carrying origin tags — satisfiable
+*vacuously* (the hook performed no effects for the clauses to range over) or *substantively*
+(it did, and they were routed and tagged). Three profiles exist at HEAD:
 
 - **`driver_only` v22** — installs nothing. Extension-model coverage **zero**: the baseline
-  the name was earned on, kept deliberately empty. It emits no coverage `STATEMENT` line at
-  all — having nothing to state is itself stated.
+  the name was earned on. One honesty defect is open here, booked on the record's own
+  register: this profile emits no coverage statement at all, machine-readable or prose — the
+  mandatory zero-coverage sentence survives only as prose in a shell epilogue, and the closing
+  note names a checked emitter for it "the one piece of mechanisation worth building." The
+  profile that has nothing to state does not yet *state* that it has nothing to state.
 - **`driver_plus_no_ops` v9** — four extensions, 32 covered hooks, and a computed sentence
   attached to the number: coverage is "NON-ZERO and ENTIRELY OF NO-OPS … of which 16 satisfy
   criterion 2's port and origin-tag clauses VACUOUSLY, i.e. over an empty set of performed
@@ -562,16 +603,29 @@ profile and inherited by none**. Three profiles exist at HEAD:
   tree. Its statement: seven hooks covered, "of which 1 mediate the world SUBSTANTIVELY
   through a D1 port and 2 satisfy criterion 2 vacuously."
 
-The tree-wide summary is a fold over classification lines the profiles already print, and it
-is the most important number in this report. Forty classification entries exist across the
-three profiles. Nineteen are world-mediation entries, of which eighteen are satisfied
-vacuously. Twenty-one of the forty rest on an assumed rather than measured basis. **Exactly
-one of forty entries rests on a basis that is both measured and substantive**: compose's
-`on_response_intercept`, witnessed by discovery under `driver_plus_compose` v1 — and the
-witness is existential, a record of what that run performed, not a bound on what the extension
-could do. The register's own framing is the right one: the goal asked for *a* demonstration
-and this is it; "stating it as one-of-forty is the difference between reporting the
-demonstration and overclaiming from it."
+The tree-wide summary — the most important number in this report — is a fold over the
+classification lines the profiles print, performed and recorded in the closing acceptance
+note; no standing aggregator exists, a fact itself on the register (§8). Table 4 gives the
+breakdown.
+
+**Table 4 — the vacuity register: forty classification entries, one measured and
+substantive.**
+
+| Profile | Entries | Criterion 1 (assumed basis) | Criterion 2 vacuous | Criterion 2 substantive | Excluded |
+|---|---:|---:|---:|---:|---:|
+| `driver_only` v22 | 0 | — | — | — | 0 |
+| `driver_plus_no_ops` v9 | 32 | 16 | 16 | 0 | 0 |
+| `driver_plus_compose` v1 | 8 | 4 | 2 | **1** | 1 |
+| **Total** | **40** | 20 | 18 | **1** | 1 |
+
+**Exactly one of forty entries rests on a basis that is both measured and substantive**:
+compose's `on_response_intercept`, witnessed by discovery under `driver_plus_compose` v1 —
+and the witness is existential, a record of what that run performed, not a bound on what the
+extension could do. Twenty-one of the forty rest on an assumed rather than measured basis —
+the twenty criterion-1 entries plus the one exclusion, whose basis is disclosure.
+The register's own framing is the right one: the goal asked for *a* demonstration and this is
+it; "stating it as one-of-forty is the difference between reporting the demonstration and
+overclaiming from it."
 
 Two entries in that register show the discipline under load. First, hermeticity: the five
 poison pairs of §5.2 are `driver_only`'s discipline, and they do not extend across
@@ -653,6 +707,17 @@ kinds — fixed, promoted-regression, constructed-for-class — while a rotating
 contiguous 240-seed epochs whose shards partition the window. Failing seeds are promoted into
 the fixed suite by hand; there is no automatic promotion (§8).
 
+What has the search *found*? The honest answer is that the record keeps no cumulative
+bugs-found ledger, and this report declines to assert a yield number it cannot derive. What
+the record does show: the PR corpus's three member kinds include **promoted regressions** —
+programs promoted precisely because they once failed, each required to name its failure (a
+mutant check fails the bank if a promoted member names none) — and counterexamples are
+retained with their manifests (one banked seed produces five fault classes in a single
+`Err`-terminating run). The defects this report can narrate end-to-end are construction-time
+catches (the frozen-cursor variant of §5.2; the wrong-but-green outcomes §6 exists to
+prevent), not a quantified field yield; §8 records this as a limitation of the evaluation,
+not a claim of absence.
+
 The reproduction contract, operationally: a seeded-axis failure line names its family and
 seed, and `DST_BASE_SEED=<seed> DST_SEEDS=1 make <gate>` replays exactly that case; a
 world-axis failure names its recorded program, and strict replay re-executes the program
@@ -685,14 +750,32 @@ discipline (capabilities are per-process, and registration reads configuration a
 before any hook is dispatched); there the determinism claim rides record-to-strict-replay
 identity — a documented substitution, not an oversight.
 
-**Coverage is thin, and the system says exactly how thin.** One of forty classification
-entries is measured-and-substantive; twenty-one rest on an assumed basis whose evidentiary
-amendment is drafted but unlanded; `extension_effect_fault` is waived by every profile; one
-acceptance clause is vacuous in all three profiles for a reason belonging to a *producer*
-rather than a profile — a vacuity class invisible to per-profile questions, found by asking
-each surviving exemption why it survives; and no run in the tree reaches an excluded dispatch
-(that mechanism is exercised by fixture only). Coverage is per-profile and non-transferable by
-rule. None of this is concealed by the green table, which is the point of §6.
+**Coverage is thin, and the system says exactly how thin.** The record's own successor
+caveat, declared mandatory in every report and therefore repeated here near-verbatim: the
+axis's extension-model coverage is non-zero **and it is one hook deep** — of forty
+classification entries exactly one rests on a measured and substantive basis, and that basis
+is existential; **ten of the fifteen extensions in the tree are installed in no profile, and
+fourteen of the fifteen have no dynamic evidence of any kind.** What has been tested about
+the extension model is one mediated hook in one session. Beyond that: twenty-one entries rest
+on an assumed basis whose evidentiary amendment is drafted but unlanded;
+`extension_effect_fault` is waived by every profile; one acceptance clause is vacuous in all
+three profiles for a reason belonging to a *producer* rather than a profile (§6.2); no run in
+the tree reaches an excluded dispatch (fixture-only); the one-of-forty fold itself has no
+standing aggregator (it is re-derived by hand from lines the profiles print — on the register
+as the mechanization worth building); and `driver_only` still emits no checked coverage
+statement (§6.3). Coverage is per-profile and non-transferable by rule. None of this is
+concealed by the green table, which is the point of §6.
+
+**The evaluation is conformance-heavy and yield-light.** This report demonstrates that the
+system meets a demanding definition; it does not quantify the system's bug-finding power. No
+cumulative found-bug ledger exists (§7); and while reachability of recovery branches is
+proven (Table 3) and several oracle components carry mutant checks (the replay-identity
+mutant, the corpus's promoted-without-failure and budget mutants, the harness-failure
+mutants), there is no systematic mutation study showing which of the twelve invariant
+families would catch which classes of *incorrect* recovery. Reachability is not oracle
+strength; converting the oracle from described to evidenced is future work in the same spirit
+as the two-sided poison probes. The strict-replay comparison's normalization rules are
+likewise summarized (§5.2) rather than enumerated here.
 
 **Search is breadth without minimization.** There is no shrinking, and no automatic promotion
 of a failing nightly seed into the fixed suite — promotion is by hand. The PR corpus's cost
@@ -763,8 +846,8 @@ profiles). Wording condensed from the two notes; the notes are the record.
 ## Appendix B — The shared scenario harness, in full
 
 `src/core/test/dst_harness.ail` (64 lines) is the entire in-repo runner; it is reproduced
-nearly whole because its size is the point — the machinery of §§3–5 lives in the world and the
-gates, not in the harness.
+nearly whole (the type declarations repeat §4.2's listing) because its size is the point —
+the machinery of §§3–5 lives in the world and the gates, not in the harness.
 
 ```ailang
 export type ScenarioFailure = {

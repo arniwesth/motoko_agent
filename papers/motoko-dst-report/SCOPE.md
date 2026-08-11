@@ -119,3 +119,23 @@ coverage — the D27/D28 NOTEs are the authority.)**
 4. **Sections 1–2, 7–9**, abstract last.
 5. **Compliance pass** — check every "DST" occurrence names a profile; check both mandatory
    coverage caveats appear; re-derive all counts from gate output.
+
+## Freeze checklist additions (adopted 2026-08-10 from Deli Chen's paper-writing skill,
+`victorchen96.github.io/auto_research/skill/paper-writing.html` — the transferable subset only;
+its survey-specific machinery (citation-count gates, LQS scoring, MECE taxonomy design,
+experiment loop) deliberately NOT adopted for this systems report)
+
+- **Multi-persona review pass with anti-inflation rules** before freeze: ≥3 independent
+  reviewer lenses (DST practitioner / skeptical epistemologist / newcomer), independent
+  scoring, median score, weaknesses labeled Major/Minor and routed to sections; first-round
+  score capped at 7.0; at least one unresolved weakness must persist in the report's own
+  limitations; regression-check previously fixed weaknesses on re-review.
+- **Hedge-ladder pass**: audit every "demonstrates/shows/proves/suggests/may" against the
+  actual evidence class behind it; claim strength must never exceed evidence strength.
+- **Abstract–conclusion alignment check** and terminology-consistency sweep.
+- **Caption rule**: every figure/table caption states the key finding, not a description.
+- **Citation verification**: every external citation checked against arXiv/DBLP (title,
+  authors, year, venue) before freeze.
+- **Gap sharpening in §2.1**: differentiation must name what no existing DST writeup covers
+  (provider-as-environment transplant; computed vacuity accounting) — "no one has written this
+  up yet" alone is insufficient.
