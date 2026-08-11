@@ -1413,8 +1413,53 @@ twelve families themselves were transcription once their shape was decided. **Th
 roughly two orders of magnitude and the reason is legible: it sized the artifact, and S6 says to
 count the decisions.**
 
-**WI-A15. Build D11's two corpora and their CI jobs.** Depends on A13 (**COMPLETE 2026-08-03**),
-A14. An earlier revision
+**WI-A15. Build D11's two corpora and their CI jobs.**
+**COMPLETE 2026-08-04** (`ff54c0f`, `ee4311c`) — two commits, one per corpus; `make dst` exit 0 at
+**700 checks** against 591 at the item's start, `make check_core` exit 0 at 51 modules. Cluster 14's
+report is `NOTE-cluster-14-execution-report-and-plan-corrections.md`.
+
+**CORRECTION 0, AND IT CHANGES WHAT HAPPENS NEXT: A15 IS NOT THE LAST ITEM IN MILESTONE A.** This
+plan, the cluster map's prose and A15's own handoff all say it is. **A15 is the last item on the
+CRITICAL PATH** (1 → 6 → 7 → 8 → 9). **WI-A17 is still open** — spawned by cluster 4, never assigned
+a cluster, and recorded as unassigned in the cluster map's own last row for ten clusters. An item
+that enters the plan sideways does not acquire a cluster and nothing in the process notices.
+**Milestone A is one item short, and A17 is the item that checks whether inline tests run at all.**
+
+**FOUR FURTHER CORRECTIONS THIS ITEM EARNED.**
+
+1. **A CORPUS NEEDS TWO KEYS, and this plan's prescription fixes the other direction.** The plan says
+   to key on `dst_persistence.artifact_identity` BECAUSE the (id, version, seed) triple aliases under
+   site 22. Measured over 30 adjacent (v2, s) / (v1, s+1) pairs through the real driver: **29/29
+   share a trajectory, 0/29 share an identity** — because `generator_version` is a field INSIDE the
+   encoded bytes. Identity keying cannot merge site 22's aliases. It fixes the opposite direction —
+   two different programs sharing one triple, which is D4's latency pair and the direction that
+   LOSES a program. Coverage needs a second key over the interactions alone
+   (`dst_corpus.trajectory_key`). **A plan can identify a defect correctly and prescribe a repair for
+   the wrong direction of it.**
+2. **D11's two counters have two DIFFERENT OBSERVERS and only one is in-process.** `NativeToolDenied`
+   and `NativeToolResults` are both in `d64_gap_register()`, so branch-reached is observable ONLY on
+   the wire, from production code that knows nothing about the interaction log. That is a stronger
+   reason to keep the counters separate than the one D11 gives.
+3. **The fixed bank reaches FOUR of nine required non-waived classes by search; a fifth is reachable
+   only by CONSTRUCTION.** `provider_empty_terminal_response` — 0 of 260 seeds, 0
+   `empty_stop_finalize` records on the wire across the whole sweep. Cluster 12's limit arriving
+   where the plan predicted the SHAPE and not the INSTANCE (the plan named the provider fault class).
+4. **`documented_coverage()` declared one class Reached that no seed reaches.** True by hand-authored
+   scenarios elsewhere, false of every generated program — the exact hazard a declared register
+   carries, and now recorded as the fact it has.
+
+**`max_resource_size`: DEFERRED, and cluster 13's ground for assigning it here is wrong.** It is not
+unlike D2's other four bounds — measured at HEAD, NO honest bound binds, and that is D2's specified
+behaviour rather than a defect (`make seeded_generator` asserts zero generator failures on the honest
+bounds). S8's complement is already discharged by `canary_bounds_tight`, which binds every limit for
+every seed. What is genuinely weak is narrower: the quantity it reports has a static range of one
+value. **It is a ONE-DRAW item, not a rebinding.** And cluster 13's sizing ground runs backwards:
+A15 does not *re-pin* seeds, it *pins new ones from a sweep*, so a version bump does not share work
+with the sweep — it serializes in front of it and makes every swept number provisional. **Owner: the
+first item that touches the generator after the corpora exist** (in practice the B wave, which
+re-sweeps anyway), and the corpora are the instrument that makes the new binding measurable.
+
+*Historical scoping note.* An earlier revision
 scheduled corpus *reporting* in A14 and left the corpora themselves unbuilt, which C4 would then
 gate against. Build: the **blocking PR corpus** of fixed seeds and exact promoted regression
 programs; the **scheduled rotating corpus** whose seed window changes deterministically; both CI
@@ -1469,7 +1514,14 @@ layer.
 silently truncated, or below-minimum window (tested by forcing one); the fixed bank collectively
 reaches every required non-waived fault class in A7's catalogue; a promoted counterexample enters
 the fixed corpus with its manifest attached.
-*Size:* **estimate — 2–4 days**, dominated by CI cost measurement rather than code.
+*Size:* ~~estimate — 2–4 days, dominated by CI cost measurement rather than code~~ →
+**MEASURED: 58 minutes**, two commits (43 + 16), sixteen recorded bindings of which **seven were
+discovered**. The CI cost measurement was **76 seconds of it** — 260 seeds through the real driver,
+which is where `measured_ms_per_seed() = 292` comes from and what both jobs' minimums are arithmetic
+over. Wrong in the same direction and for the same reason as every previous estimate: it sized the
+artifact rather than counting the decisions. **The DISCOVERED count predicts for the fourth
+consecutive measurement** — totals of 9 and 7 predict 43 : 33, discovered counts of 5 and 2 give
+43 : 17, and the measured windows are 43 : 16.
 
 **WI-A16. Wire the unrun driver coverage into `make` and CI — do this before A9 and A12.** No
 dependencies; it is Makefile and workflow work, and it is sequenced first because it *protects* the
@@ -1508,9 +1560,15 @@ that `check_core` type-checks `src/core/*.ail` but never *runs* their inline tes
 wire strings — were executed by nothing. A16 put those two files in `make terminal_trace`, but the
 general defect stands: **`ailang check` coverage and `ailang test` coverage are separate axes and
 only the first has a target.** Cluster 1's C6/C7 did not catch it because they looked at
-`src/core/test/` rather than `src/core/`. Also fix or retire `scripts/dst/probe_phase_vocab_sealed.ail`,
-which fails at baseline (`IMP010: symbol 'MkHistory' not exported`) and stayed broken precisely
-because it is in no target.
+`src/core/test/` rather than `src/core/`. **And wire `scripts/probe_phase_vocab_sealed.ail` with INVERTED polarity — it is not broken.**
+An earlier revision of this item said "fix or retire" it, at the wrong path (`scripts/dst/`), on the
+grounds that it "fails at baseline with `IMP010` and stayed broken because it is in no target". Its
+first line reads *"This probe is expected to FAIL with IMP010: phase_vocab's sealed constructors must
+not be importable outside `src/core/phase_vocab.ail`"*, and project 004 records that failure as its
+pass condition. **The compiler refusing the import IS the sealing assertion holding**; making it
+compile inverts an invariant that has held since 004. Six cluster reports carried it as "pre-existing,
+broken, in no target" and none checked what it asserts. The target must require the `IMP010` failure,
+and treat a successful compile as the failure.
 *Acceptance evidence:* every `.ail` file carrying inline tests is in a target CI invokes, verified
 by an inventory that fails when a file with tests is unreferenced — not a hand-maintained list;
 breaking one inline test turns CI red.

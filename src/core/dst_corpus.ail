@@ -1,0 +1,1257 @@
+-- src/core/dst_corpus.ail
+--
+-- WI-A15, under ADR-001 D11: the two corpora, their keys, their seed windows
+-- and the gate both CI jobs run.
+--
+-- D11 names two corpora and one delegation:
+--
+--   "1. a blocking PR corpus containing fixed seeds and exact promoted
+--       regression programs; and
+--    2. a scheduled rotating corpus whose seed window changes deterministically
+--       and is reported.
+--    ...
+--    PR and scheduled jobs each declare an operator-accepted minimum seed count;
+--    the gate asserts that exact count completed. A zero, silently truncated, or
+--    below-minimum window fails."
+--
+-- ============================================================================
+-- THE MEASUREMENT THAT DECIDED THIS MODULE'S SHAPE: A CORPUS NEEDS TWO KEYS
+-- ============================================================================
+--
+-- The plan and A15's handoff both say to key the corpus on
+-- `dst_persistence.artifact_identity` — the sha256 of the exact bytes, "the
+-- only key in this module that is unique" — and to do so BECAUSE
+-- (generator_id, generator_version, seed) aliases under site 22: `seed_state`
+-- is `in_range(salt_hash("${id}/${version}") + seed)`, so the version hash and
+-- the seed are ADDED and version "2" at seed s is the same stream as version
+-- "1" at seed s+1.
+--
+-- THAT PRESCRIPTION IS HALF RIGHT, AND THE HALF IT MISSES IS THE HALF SITE 22
+-- IS ABOUT. Measured at HEAD over 30 adjacent (v2, s) / (v1, s+1) pairs run
+-- through the real driver:
+--
+--   identical TRAJECTORY  — same interactions, same draws, same clock : 29/29
+--   identical ARTIFACT IDENTITY                                       :  0/29
+--
+-- The identities differ because `generator_version` is a FIELD INSIDE THE
+-- ENCODED BYTES. So keying on `artifact_identity` does not merge site 22's
+-- aliases; it cannot, because the two artifacts genuinely are different bytes.
+--
+-- The two keys therefore answer two different questions and a corpus needs
+-- both:
+--
+--   `artifact_identity`   ADDRESSING. Deduplicates the same program filed
+--                         twice, and SEPARATES two different programs that
+--                         share a triple — D4's latency pair is the worked
+--                         example: two worlds differing in one integer, one
+--                         (id, version, seed), two identities. This is the
+--                         direction that LOSES a program, and it is the one the
+--                         plan's argument is really about.
+--
+--   `trajectory_key`      COVERAGE. A digest of the interactions and NOTHING
+--                         from the generator axes. Two members sharing it
+--                         contribute one program's worth of coverage however
+--                         many triples they claim, which is exactly site 22's
+--                         sentence — "a corpus holding (v1, seed 4) and
+--                         (v2, seed 3) has one program's worth of coverage
+--                         while reporting two" — and the identity key is blind
+--                         to it.
+--
+-- A corpus that counted coverage on the identity key would report 29 programs
+-- where it has 1. `AliasedTrajectory` is the rule that fires, and it fires on
+-- an input the identity rule reports as clean.
+--
+-- ============================================================================
+-- THE RULE A ROTATING WINDOW BREAKS BY ACCIDENT
+-- ============================================================================
+--
+-- D11 asks for a window that "changes deterministically and is reported". That
+-- is TWO properties, and a window that ignores its input satisfies the first
+-- PERFECTLY: the same seeds every scheduled run are byte-identical reports,
+-- every gate green, and the corpus searches one neighbourhood forever while
+-- reporting that it rotates. Determinism is the one property a FROZEN window
+-- has in the highest degree, and it is 0-for-27 across thirteen clusters.
+--
+-- So S8 is applied to the rotation directly: the epoch must not be able to
+-- reach the reported seeds EXCEPT through the rotation, and that is checked
+-- rather than described.
+--
+--   `RotationPositionFrozen(i)`  fires when window position i takes the same
+--                                value at every sampled epoch. A window built
+--                                as "a fixed prefix plus a rotating tail" is
+--                                deterministic, moves, and is still pinned at
+--                                every prefix position; only a per-position
+--                                check sees that.
+--
+--   `RotationWrapNotExercised`   is S8's COMPLEMENT (stage 5). The rotation
+--                                wraps at the end of the seed space; a sample
+--                                of epochs that never crosses the boundary
+--                                leaves the wrap branch UNWALKED, and an
+--                                unwalked branch reads identically to an absent
+--                                one.
+--
+--   `EpochUnresolved(raw)`       is the leak that would defeat both. If the
+--                                scheduler's input is absent and the job
+--                                DEFAULTS it to 0, the window is frozen while
+--                                every check above still passes — because the
+--                                rotation is fine; it is the input that stopped
+--                                arriving. `resolve_epoch` fails closed and
+--                                never substitutes a constant.
+--
+-- ============================================================================
+-- A ZERO WINDOW PASSES A "NO FAILURES" GATE, WHICH IS WHY D11 COUNTS
+-- ============================================================================
+--
+-- "A zero, silently truncated, or below-minimum window fails." A gate asserting
+-- "no member failed" is green on a window that ran NO members — zero failures
+-- out of zero runs — so the three window rules assert the DECLARED COUNT
+-- COMPLETED and are three separate rules, because "searched nothing",
+-- "searched too little" and "started work that vanished" are three different
+-- operational failures that one count check conflates.
+--
+-- ============================================================================
+-- WHAT A MEMBER MAY NOT BE
+-- ============================================================================
+--
+-- D11: "A scheduled failure retains its exact resolved program TOGETHER WITH
+-- THE EXECUTION MANIFEST IT RAN UNDER ... The two travel as one artifact. D8's
+-- reproducibility promise is conditioned on the recorded manifest and profile,
+-- so a program promoted without one is not a reproduction unit — it is a
+-- program nobody can state the meaning of."
+--
+-- The manifest is therefore NOT a field a caller supplies beside the path:
+-- `member_of` takes the decoded `ExecutionProgram` and reads the manifest out
+-- of it, so "the two travel as one artifact" is structural. A member built from
+-- a path and a hand-written manifest would satisfy every rule below while
+-- naming a manifest the bytes do not carry.
+--
+-- And D11's stale clause is a rule rather than a reinterpretation: "A corpus
+-- member whose manifest is stale or unresolvable is not silently reinterpreted:
+-- strict replay fails closed, and regression replay may proceed only with the
+-- difference recorded." `MemberManifestStale` carries the drifted field, the
+-- recorded value and the live one — `dst_profile.validate_manifest`'s own
+-- finding travelling through, not a second notion of staleness.
+
+module src/core/dst_corpus
+
+import std/list as List (length)
+import std/string as Str (foldChars, charCode, startsWith)
+import std/option (Option, Some, None)
+import std/crypto (sha256Hex)
+
+import src/core/dst_interaction (
+  Interaction,
+  identity_projection
+)
+import src/core/dst_replay (outcome_projection)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_profile (
+  ExecutionManifest, ProfileDefinition,
+  ManifestRejection, ManifestFieldMissing, ManifestProfileMismatch, ManifestVersionDrifted,
+  validate_manifest
+)
+import src/core/dst_fault_catalogue (
+  FaultClass,
+  fault_catalogue, required_class_ids, conditional_class_ids, find_class,
+  RecoveryBranch, Branch, NoReachableBranch, branch_id
+)
+
+export pure func corpus_rules_version() -> string { "corpus-rules/1" }
+
+-- ---------------------------------------------------------------------------
+-- PART 1 — the two keys
+-- ---------------------------------------------------------------------------
+
+-- The COVERAGE key. Every interaction, and nothing from the generator axes.
+--
+-- The projections are the ones stage 3 and stage 4 already assert read every
+-- field of an identity and of an outcome, so a member whose recorded answers
+-- differ anywhere moves this key. Deliberately NOT a function of
+-- generator_id/version/seed: that is the whole point — it is what makes the key
+-- blind to site 22's version offset and therefore able to see it.
+export pure func trajectory_text(xs: [Interaction]) -> string {
+  match xs {
+    [] => "",
+    i :: rest =>
+      "${identity_projection(i.identity)}|${i.request_projection}|${outcome_projection(i)};${trajectory_text(rest)}"
+  }
+}
+
+export pure func trajectory_key(xs: [Interaction]) -> string {
+  sha256Hex(trajectory_text(xs))
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 2 — what a member is, and why it is in the bank
+-- ---------------------------------------------------------------------------
+
+-- D11's bank is "fixed seeds and exact promoted regression programs". A third
+-- kind is forced by measurement rather than chosen: the plan's own limit on
+-- sweep-and-filter — "sweeping selects among things that exist and cannot cover
+-- a space the producer does not reach". Measured over 260 seeds, the generator
+-- reaches four of the nine required non-waived classes and provably cannot
+-- reach `provider_empty_terminal_response`, because every generated terminal
+-- step carries non-empty prose (`gp${draws}-${arg}`) and
+-- `session.c2_loop`'s empty-stop branch is guarded by `trim(info.output) == ""`.
+--
+-- A constructed member NAMES the class it exists for, and that justification is
+-- checkable: if a seed later reaches the class, the construction is no longer
+-- justified and `ConstructedForReachableClass` fires. The register can only
+-- shrink, and closing an entry is forced to be recorded — the same shape as
+-- `d64_gap_register()` and `documented_coverage()`, arriving a third time.
+export type MemberKind
+  = FixedSeed(string)
+  | PromotedRegression(string)
+  | ConstructedForClass(string, string)
+
+export pure func member_kind_id(k: MemberKind) -> string {
+  match k {
+    FixedSeed(_) => "fixed-seed",
+    PromotedRegression(_) => "promoted-regression",
+    ConstructedForClass(_, _) => "constructed-for-class"
+  }
+}
+
+export pure func member_reason(k: MemberKind) -> string {
+  match k {
+    FixedSeed(why) => why,
+    PromotedRegression(why) => why,
+    ConstructedForClass(_, why) => why
+  }
+}
+
+-- The class a constructed member exists for; blank for the other two kinds.
+export pure func constructed_for(k: MemberKind) -> string {
+  match k {
+    ConstructedForClass(class_id, _) => class_id,
+    FixedSeed(_) => "",
+    PromotedRegression(_) => ""
+  }
+}
+
+export pure func all_member_kind_ids() -> [string] {
+  [member_kind_id(FixedSeed("")),
+   member_kind_id(PromotedRegression("")),
+   member_kind_id(ConstructedForClass("", ""))]
+}
+
+export type CorpusMember = {
+  member_id: string,
+  kind: MemberKind,
+
+  -- D8's three recorded axes. Kept because a report must name them; NOT used as
+  -- the key, for the reason the header measures.
+  generator_id: string,
+  generator_version: string,
+  seed: int,
+
+  -- D8's retained bytes and their digest. A path with no identity, or an
+  -- identity with no path, is the "digest without retained bytes" D8 forbids.
+  artifact_path: string,
+  artifact_identity: string,
+  artifact_bytes: int,
+
+  -- The coverage key.
+  trajectory_key: string,
+
+  -- Read OUT OF the program, never supplied beside it.
+  manifest: ExecutionManifest,
+
+  -- What this member was OBSERVED to reach. Not a declaration: the acceptance
+  -- suite fills these from a real run and D11 keeps the two counters separate
+  -- because they have different observers — the class from the recorded
+  -- interaction log, the branch from the driver's own wire emissions.
+  classes_reached: [string],
+  branches_reached: [string]
+}
+
+-- The only constructor. `manifest`, `trajectory_key`, the generator axes and
+-- the byte count are all derived from the program and the bytes, so a member
+-- cannot claim a manifest, a trajectory or a seed the artifact does not carry.
+export pure func member_of(
+  member_id: string,
+  kind: MemberKind,
+  p: ExecutionProgram,
+  artifact_path: string,
+  artifact_identity: string,
+  artifact_bytes: int,
+  classes_reached: [string],
+  branches_reached: [string]
+) -> CorpusMember {
+  let key = trajectory_key(p.interactions);
+  { member_id: member_id,
+    kind: kind,
+    generator_id: p.generator_id,
+    generator_version: p.generator_version,
+    seed: p.seed,
+    artifact_path: artifact_path,
+    artifact_identity: artifact_identity,
+    artifact_bytes: artifact_bytes,
+    trajectory_key: key,
+    manifest: p.manifest,
+    classes_reached: classes_reached,
+    branches_reached: branches_reached }
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 3 — the job, and its operator-accepted minimum
+-- ---------------------------------------------------------------------------
+
+-- D11 makes the minimum "operator-accepted", which means it is a declared
+-- number with an owner rather than a tuning parameter, and the plan selects it
+-- "from measured CI cost". Both jobs' numbers are derived in
+-- `pr_job()`/`scheduled_job()` below from one measured constant.
+export type CorpusJob = {
+  job_id: string,
+  minimum_seeds: int,
+  budget_ms: int,
+  shards: int,
+  retention_runs: int
+}
+
+-- MEASURED, not chosen: 260 seeds through the real driver in 76.0 s of wall
+-- clock, one process start included — 292 ms per seed, taken from the slower of
+-- two runs (the faster was 66.0 s / 254 ms). Every number below is this
+-- constant times a declared budget, so re-measuring moves them together and the
+-- arithmetic is visible instead of being folded into a literal.
+export pure func measured_ms_per_seed() -> int { 292 }
+
+export pure func seeds_affordable_in(budget_ms: int) -> int {
+  budget_ms / measured_ms_per_seed()
+}
+
+-- The BLOCKING job. It runs on every PR, so its budget is a share of a gate a
+-- human waits for: `make dst` is 200 s measured at this item's start, and 5 s is
+-- 2.5% of it. 5000 / 292 = 17 seeds affordable; the declared minimum is 12,
+-- which leaves the promoted and constructed members inside the same budget.
+export pure func pr_job() -> CorpusJob {
+  { job_id: "dst-pr-corpus",
+    minimum_seeds: 12,
+    budget_ms: 5000,
+    shards: 1,
+    retention_runs: 0 }
+}
+
+-- The SCHEDULED job. Nobody waits for it, so the budget is a wall-clock window
+-- rather than a share of a gate: 600 s / 292 ms = 2054 seeds affordable, and the
+-- declared minimum is 240 — under 12% of what the budget permits, which is the
+-- headroom a rotating window needs for the runs that terminate long.
+--
+-- 4 shards of 60. `retention_runs` is 14: a fortnight of scheduled runs, which
+-- is the window in which a rotation that stopped moving is still visible in the
+-- retained reports.
+export pure func scheduled_job() -> CorpusJob {
+  { job_id: "dst-scheduled-corpus",
+    minimum_seeds: 240,
+    budget_ms: 600000,
+    shards: 4,
+    retention_runs: 14 }
+}
+
+-- The whole TARGET's wall clock, which is a DIFFERENT quantity from the seed
+-- window's and is not derivable from it: `make corpus_pr` also persists every
+-- member, loads each back off disk and runs twelve mutation rows. Measured at
+-- 28.5 s for the whole PR target (13 real driver runs, persistence, load-back,
+-- twelve mutation rows and the module's own inline tests). The ceiling is a
+-- regression guard on CI cost rather
+-- than a budget — D11 delegates seed counts to measured cost, and a measured
+-- constant nobody re-measures is exactly the kind of number this project keeps
+-- finding stale. If this fires, re-measure and move `measured_ms_per_seed()`
+-- with it rather than raising the ceiling alone.
+export pure func pr_target_ceiling_ms() -> int { 45000 }
+export pure func scheduled_target_ceiling_ms() -> int { 120000 }
+
+-- One shard's share of a job. The minimum and the budget are DIVIDED, so a
+-- sharded run is held to the same total as a serial one: `shard_minimums_sum`
+-- asserts they add back up, which is D11's truncation rule arriving a third
+-- time — a shard scheme that rounded each minimum down would let four shards
+-- collectively search less than the job declares while every shard passed.
+export pure func shard_job(j: CorpusJob, index: int) -> CorpusJob {
+  let n = if j.shards > 0 then j.shards else 1;
+  let base = j.minimum_seeds / n;
+  let extra = if index < (j.minimum_seeds % n) then 1 else 0;
+  { j | job_id: "${j.job_id}-shard-${index}",
+        minimum_seeds: base + extra,
+        budget_ms: j.budget_ms / n,
+        shards: 1 }
+}
+
+export pure func shard_minimums_sum(j: CorpusJob) -> int {
+  sum_shards(j, 0)
+}
+
+pure func sum_shards(j: CorpusJob, index: int) -> int {
+  if index >= j.shards then 0
+  else shard_job(j, index).minimum_seeds + sum_shards(j, index + 1)
+}
+
+export pure func job_projection(j: CorpusJob) -> string {
+  "${j.job_id}: minimum ${j.minimum_seeds} seed(s), budget ${j.budget_ms} ms (${seeds_affordable_in(j.budget_ms)} affordable at ${measured_ms_per_seed()} ms/seed), ${j.shards} shard(s), retaining ${j.retention_runs} run(s)"
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 4 — the rotating window
+-- ---------------------------------------------------------------------------
+
+-- The seed space and the stride. `window_size` seeds are taken starting at
+-- `epoch * window_size` modulo the space, so consecutive epochs take DISJOINT
+-- windows and the whole space is covered before any seed repeats — a rotation
+-- that revisited before exhausting would search a neighbourhood while reporting
+-- that it moved.
+export type RotationConfig = {
+  space_first: int,
+  space_size: int,
+  window_size: int
+}
+
+export type SeedWindow = {
+  epoch: int,
+  first: int,
+  seeds: [int]
+}
+
+export pure func scheduled_rotation() -> RotationConfig {
+  { space_first: 1, space_size: 1024, window_size: 240 }
+}
+
+-- The DEMO scale, and it exists for one reason: `make dst` must actually RUN
+-- seeds off a rotating window, not merely check the arithmetic that produces
+-- one. A gate that only ever evaluates `rotating_window` purely certifies that
+-- the window moves and says nothing about the window's seeds being executable
+-- — S8's complement, on the job rather than on the rotation.
+--
+-- It is a SCALED config and not a different mechanism: the same
+-- `rotating_window`, the same `validate_rotation`, the same shard partition,
+-- and its own declared minimum. `scaled_rotation`/`scaled_job` are the only
+-- place the choice is made, so a caller cannot mix a full job with a demo
+-- window.
+--
+-- THE HAZARD THIS INTRODUCES IS NAMED AND GATED. A scheduled CI job that
+-- quietly selected this scale would report a rotating corpus while searching
+-- four seeds, which is the frozen-window failure wearing a smaller number.
+-- `make corpus_rotating` greps the workflow to prove the scheduled job does not
+-- select it.
+export pure func demo_rotation() -> RotationConfig {
+  { space_first: 1, space_size: 26, window_size: 4 }
+}
+
+export pure func demo_job() -> CorpusJob {
+  { job_id: "dst-scheduled-corpus-demo",
+    minimum_seeds: 4,
+    budget_ms: 4000,
+    shards: 2,
+    retention_runs: 1 }
+}
+
+export pure func demo_scale_id() -> string { "demo" }
+
+export pure func scaled_rotation(scale: string) -> RotationConfig {
+  if scale == demo_scale_id() then demo_rotation() else scheduled_rotation()
+}
+
+export pure func scaled_job(scale: string) -> CorpusJob {
+  if scale == demo_scale_id() then demo_job() else scheduled_job()
+}
+
+pure func wrapped(cfg: RotationConfig, offset: int) -> int {
+  cfg.space_first + (offset % cfg.space_size)
+}
+
+pure func window_seeds(cfg: RotationConfig, start: int, i: int) -> [int] {
+  if i >= cfg.window_size then []
+  else wrapped(cfg, start + i) :: window_seeds(cfg, start, i + 1)
+}
+
+-- EVERY seed is a function of the epoch. There is no prefix, no anchor seed and
+-- no "plus the fixed bank" — the fixed bank is a different corpus with its own
+-- job, and folding it in here is precisely the shape `RotationPositionFrozen`
+-- exists to reject.
+export pure func rotating_window(cfg: RotationConfig, epoch: int) -> SeedWindow {
+  let start = (epoch * cfg.window_size) % cfg.space_size;
+  { epoch: epoch,
+    first: wrapped(cfg, start),
+    seeds: window_seeds(cfg, start, 0) }
+}
+
+-- The window as CI reports it. D11 requires the window to be reported, and a
+-- report that printed the seeds without the epoch would not let a reader
+-- re-derive it — which is the difference between a window that is reported and
+-- one that is merely displayed.
+export pure func window_projection(cfg: RotationConfig, w: SeedWindow) -> string {
+  "epoch ${w.epoch}: ${List.length(w.seeds)} seed(s) from ${w.first} over space [${cfg.space_first}, ${cfg.space_first + cfg.space_size - 1}] (stride ${cfg.window_size})"
+}
+
+-- ---------------------------------------------------------------------------
+-- The epoch, and the leak that would freeze the window silently
+-- ---------------------------------------------------------------------------
+--
+-- The scheduler supplies the epoch. If it is absent and the job DEFAULTS it,
+-- every rotation check below still passes — the rotation is fine, the input
+-- stopped arriving — and the window is frozen. So there is no default.
+export type EpochSource
+  = EpochResolved(int)
+  | EpochUnresolved(string)
+
+export pure func epoch_source_id(e: EpochSource) -> string {
+  match e {
+    EpochResolved(_) => "epoch-resolved",
+    EpochUnresolved(_) => "epoch-unresolved"
+  }
+}
+
+-- Parses a non-negative decimal epoch, and refuses everything else BY NAME
+-- rather than by falling back. A blank string is the case that matters: it is
+-- what an unset scheduler variable reads as.
+export pure func resolve_epoch(raw: string) -> EpochSource {
+  if raw == "" then EpochUnresolved("the scheduler supplied no epoch; D11's window must change deterministically and a defaulted epoch is a window that reports rotation while searching one neighbourhood forever")
+  else match parse_nonneg(raw) {
+    None => EpochUnresolved("the scheduler supplied '${raw}', which is not a non-negative decimal epoch; substituting a constant here would freeze the window while every rotation check stayed green"),
+    Some(n) => EpochResolved(n)
+  }
+}
+
+pure func parse_nonneg(s: string) -> Option[int] {
+  let acc = Str.foldChars(digit_step, { ok: true, any: false, v: 0 }, s);
+  if acc.ok && acc.any then Some(acc.v) else None
+}
+
+pure func digit_step(acc: { ok: bool, any: bool, v: int }, c: string) -> { ok: bool, any: bool, v: int } {
+  let code = Str.charCode(c);
+  if code >= 48 && code <= 57 then { ok: acc.ok, any: true, v: acc.v * 10 + (code - 48) }
+  else { ok: false, any: acc.any, v: acc.v }
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 5 — sharding, which is the truncation rule one level down
+-- ---------------------------------------------------------------------------
+--
+-- D11 fails a silently truncated window. A shard scheme that drops a seed
+-- truncates the window without changing the window, so the partition is
+-- asserted rather than assumed: every seed lands in exactly one shard, and the
+-- shards' union is the window.
+export pure func shard_of(w: SeedWindow, shards: int, index: int) -> [int] {
+  take_stride(w.seeds, shards, index, 0)
+}
+
+pure func take_stride(xs: [int], shards: int, index: int, i: int) -> [int] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      (if shards > 0 && (i % shards) == index then [x] else [])
+        ++ take_stride(rest, shards, index, i + 1)
+  }
+}
+
+pure func union_shards(w: SeedWindow, shards: int, index: int) -> [int] {
+  if index >= shards then []
+  else shard_of(w, shards, index) ++ union_shards(w, shards, index + 1)
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 6 — the gate
+-- ---------------------------------------------------------------------------
+
+export type CorpusRejection
+  = CorpusEmpty
+  | WindowZero
+  | WindowBelowMinimum(int, int)
+  | WindowTruncated(int, int)
+  | DuplicateIdentity(string, string, string)
+  | AliasedTrajectory(string, string, string)
+  | MemberWithoutBytes(string)
+  | MemberWithoutManifest(string)
+  | MemberManifestStale(string, string)
+  | RequiredClassNotCovered(string)
+  | RequiredBranchNotCovered(string, string)
+  | ConstructedForReachableClass(string, string)
+  | ConstructedForUnknownClass(string, string)
+  | PromotedWithoutFailure(string)
+  | ShardsDoNotPartition(int, int)
+  | RotationPositionFrozen(int)
+  | RotationWrapNotExercised(int)
+  | RotationWindowNotDisjoint(int)
+  | EpochNotResolved(string)
+  | CorpusBudgetExceeded(int, int)
+
+export pure func corpus_rule(r: CorpusRejection) -> string {
+  match r {
+    CorpusEmpty => "corpus-empty",
+    WindowZero => "window-zero",
+    WindowBelowMinimum(_, _) => "window-below-minimum",
+    WindowTruncated(_, _) => "window-truncated",
+    DuplicateIdentity(_, _, _) => "duplicate-identity",
+    AliasedTrajectory(_, _, _) => "aliased-trajectory",
+    MemberWithoutBytes(_) => "member-digest-without-bytes",
+    MemberWithoutManifest(_) => "member-without-manifest",
+    MemberManifestStale(_, _) => "member-manifest-stale",
+    RequiredClassNotCovered(_) => "required-class-not-covered",
+    RequiredBranchNotCovered(_, _) => "required-branch-not-covered",
+    ConstructedForReachableClass(_, _) => "constructed-for-reachable-class",
+    ConstructedForUnknownClass(_, _) => "constructed-for-unknown-class",
+    PromotedWithoutFailure(_) => "promoted-without-failure",
+    ShardsDoNotPartition(_, _) => "shards-do-not-partition",
+    RotationPositionFrozen(_) => "rotation-position-frozen",
+    RotationWrapNotExercised(_) => "rotation-wrap-not-exercised",
+    RotationWindowNotDisjoint(_) => "rotation-window-not-disjoint",
+    EpochNotResolved(_) => "epoch-not-resolved",
+    CorpusBudgetExceeded(_, _) => "corpus-budget-exceeded"
+  }
+}
+
+export pure func corpus_message(r: CorpusRejection) -> string {
+  match r {
+    CorpusEmpty =>
+      "[corpus-empty] the corpus declares no members; D11 makes search a first-class GATE and a gate with nothing in it is green for the same reason a zero window is — no member failed because no member ran",
+    WindowZero =>
+      "[window-zero] the job attempted no seeds; D11 fails a zero window rather than treating it as a vacuous pass, because a gate asserting 'no failures' is satisfied by zero failures out of zero runs",
+    WindowBelowMinimum(minimum, attempted) =>
+      "[window-below-minimum] ${attempted} seed(s) attempted against an operator-accepted minimum of ${minimum}; D11 makes the minimum a DECLARED number with an owner and asserts the exact count completed, so lowering it is a decision and not a tuning parameter",
+    WindowTruncated(attempted, completed) =>
+      "[window-truncated] ${attempted} seed(s) were attempted and ${completed} completed; the difference is a silently truncated window, which D11 fails separately from a below-minimum one because 'started work that vanished' and 'declared too little work' are different operational failures",
+    DuplicateIdentity(identity, a, b) =>
+      "[duplicate-identity] members '${a}' and '${b}' share artifact identity ${identity}; the identity is the sha256 of the exact bytes and is the one key in the store that is unique, so two members carrying it are one artifact filed twice and the corpus is reporting a size it does not have",
+    AliasedTrajectory(key, a, b) =>
+      "[aliased-trajectory] members '${a}' and '${b}' record the SAME trajectory (key ${key}) under different generator axes. This is site 22 arriving at the corpus layer: `seed_state` ADDS the version hash to the seed, so version '2' at seed s is the same stream as version '1' at seed s+1 — measured at 29 of 29 adjacent pairs. The artifact identities DIFFER (0 of 29 collided) because `generator_version` is a field inside the encoded bytes, so the identity key cannot see this and a corpus keyed on it alone reports two programs' worth of coverage while holding one",
+    MemberWithoutBytes(identity) =>
+      "[member-digest-without-bytes] a member carries identity '${identity}' and no artifact path; D8 says in as many words that 'a digest without retained bytes is not sufficient for replay', and a corpus of references reintroduces at the corpus layer exactly what the encoding refuses to represent",
+    MemberWithoutManifest(path) =>
+      "[member-without-manifest] the member at '${path}' carries no resolvable execution manifest; D11 requires the program and the manifest it ran under to travel AS ONE ARTIFACT, because D8's reproducibility promise is conditioned on the manifest — a program promoted without one is not a reproduction unit but a program nobody can state the meaning of",
+    MemberManifestStale(path, detail) =>
+      "[member-manifest-stale] the member at '${path}' has a manifest that no longer resolves against HEAD: ${detail}. D11 does not permit silent reinterpretation — strict replay fails CLOSED here, and regression replay may proceed only with the difference RECORDED, which is what this rejection is",
+    RequiredClassNotCovered(c) =>
+      "[required-class-not-covered] no member of the fixed bank reaches required class '${c}', and the profile does not waive it; D11's bank must COLLECTIVELY reach every required non-waived class, and D3 requires a waiver to be declared with its condition rather than inferred from a miss — an unreached class is a coverage finding, not a permission",
+    RequiredBranchNotCovered(c, b) =>
+      "[required-branch-not-covered] the bank reaches class '${c}' and no member executed the recovery branch '${b}' it targets; D11 keeps class-reached and branch-reached as SEPARATE counters for exactly this, and only branch-reached is the coverage the acceptance test asks for. The two have different observers: the class is read from the recorded interaction log, the branch from the driver's own wire emissions",
+    ConstructedForReachableClass(c, member) =>
+      "[constructed-for-reachable-class] member '${member}' is CONSTRUCTED and justified by class '${c}' being unreachable by search, and a swept seed now reaches it. The justification has closed and must be recorded: the member becomes a fixed seed or the reason changes. This register may only SHRINK, which is what stops 'the generator cannot produce this' from outliving the generator that could not",
+    ConstructedForUnknownClass(c, member) =>
+      "[constructed-for-unknown-class] member '${member}' is constructed for class '${c}', which D3's catalogue does not declare; a constructed member that can name an id nothing defines can justify itself against a class that does not exist",
+    PromotedWithoutFailure(member) =>
+      "[promoted-without-failure] member '${member}' is a promoted regression and names no failure it reproduces; D11 promotes a SCHEDULED FAILURE to the fixed corpus 'before or with the fix', so a promotion with no failure behind it is a seed nobody can retire because nobody can say what it caught",
+    ShardsDoNotPartition(window, sharded) =>
+      "[shards-do-not-partition] the window holds ${window} seed(s) and the shards cover ${sharded}; a shard scheme that drops a seed truncates the window WITHOUT changing the window, so D11's truncation rule has to be asserted one level down or the parallel job silently searches less than the serial one",
+    RotationPositionFrozen(i) =>
+      "[rotation-position-frozen] window position ${i} takes the same seed at every sampled epoch, so the epoch cannot reach that seed except by not reaching it. D11 asks for a window that changes deterministically AND is reported, and a window that ignores its input satisfies the first perfectly — same seeds every run, byte-identical reports, every gate green. Determinism is the property a FROZEN window has in the highest degree (S8)",
+    RotationWrapNotExercised(sampled) =>
+      "[rotation-wrap-not-exercised] ${sampled} sampled epoch(s) never carried the window across the end of the seed space, so the wrap branch is outside what this check can certify. S8's complement: a pinned artifact certifies exactly the paths its trajectory walks, and the paths it does not walk are not pinned but ABSENT — which reads identically to unchanged",
+    RotationWindowNotDisjoint(epoch) =>
+      "[rotation-window-not-disjoint] the window at epoch ${epoch} overlaps the window at the epoch before it; consecutive windows must be disjoint or the rotation revisits a neighbourhood before exhausting the space, which is a window that moves without searching",
+    EpochNotResolved(why) =>
+      "[epoch-not-resolved] ${why}",
+    CorpusBudgetExceeded(budget, elapsed) =>
+      "[corpus-budget-exceeded] the run used ${elapsed} ms against a declared budget of ${budget} ms; the plan selects seed counts from MEASURED CI cost, which an unbounded run makes unmeasurable"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The corpus, and its window
+-- ---------------------------------------------------------------------------
+
+export type Corpus = {
+  corpus_id: string,
+  job: CorpusJob,
+  members: [CorpusMember],
+  seeds_attempted: [int],
+  runs_completed: int,
+  elapsed_ms: int
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+pure func contains_int(xs: [int], t: int) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_int(rest, t)
+  }
+}
+
+-- D11's three window rules, kept apart for the reason the header gives.
+pure func validate_window(c: Corpus) -> [CorpusRejection] {
+  let attempted = List.length(c.seeds_attempted);
+  let zero = if attempted == 0 then [WindowZero] else [];
+  let below = if attempted > 0 && attempted < c.job.minimum_seeds
+              then [WindowBelowMinimum(c.job.minimum_seeds, attempted)] else [];
+  let truncated = if attempted > 0 && c.runs_completed != attempted
+                  then [WindowTruncated(attempted, c.runs_completed)] else [];
+  zero ++ below ++ truncated
+}
+
+-- Both keys, in both directions. `DuplicateIdentity` is the addressing rule and
+-- `AliasedTrajectory` is the coverage rule; the header measures why one cannot
+-- stand for the other.
+pure func validate_keys(ms: [CorpusMember]) -> [CorpusRejection] {
+  match ms {
+    [] => [],
+    m :: rest => key_clashes(m, rest) ++ validate_keys(rest)
+  }
+}
+
+pure func key_clashes(m: CorpusMember, rest: [CorpusMember]) -> [CorpusRejection] {
+  match rest {
+    [] => [],
+    o :: more => {
+      let dup = if m.artifact_identity != "" && m.artifact_identity == o.artifact_identity
+                then [DuplicateIdentity(m.artifact_identity, m.member_id, o.member_id)] else [];
+      let alias = if m.trajectory_key == o.trajectory_key
+                  then [AliasedTrajectory(m.trajectory_key, m.member_id, o.member_id)] else [];
+      dup ++ alias ++ key_clashes(m, more)
+    }
+  }
+}
+
+-- D8's retained bytes and D11's manifest, per member.
+pure func validate_members(ms: [CorpusMember], d: ProfileDefinition, rows: [FaultClass], swept: [string]) -> [CorpusRejection] {
+  match ms {
+    [] => [],
+    m :: rest => member_rules(m, d, rows, swept) ++ validate_members(rest, d, rows, swept)
+  }
+}
+
+pure func member_rules(m: CorpusMember, d: ProfileDefinition, rows: [FaultClass], swept: [string]) -> [CorpusRejection] {
+  let bytes = if m.artifact_identity != "" && m.artifact_path == ""
+              then [MemberWithoutBytes(m.artifact_identity)] else [];
+  let manifest_rejections = validate_manifest(m.manifest, d);
+  let manifest = if List.length(manifest_rejections) > 0
+                 then [MemberManifestStale(m.artifact_path, first_manifest_detail(manifest_rejections))]
+                 else [];
+  let no_manifest = if m.artifact_path != "" && m.manifest.profile_id == ""
+                    then [MemberWithoutManifest(m.artifact_path)] else [];
+  let promoted = match m.kind {
+    PromotedRegression(why) => if why == "" then [PromotedWithoutFailure(m.member_id)] else [],
+    FixedSeed(_) => [],
+    ConstructedForClass(_, _) => []
+  };
+  let constructed = match m.kind {
+    ConstructedForClass(class_id, _) => {
+      let unknown = match find_class(rows, class_id) {
+        None => [ConstructedForUnknownClass(class_id, m.member_id)],
+        Some(_) => []
+      };
+      let reachable = if contains_str(swept, class_id)
+                      then [ConstructedForReachableClass(class_id, m.member_id)] else [];
+      unknown ++ reachable
+    },
+    FixedSeed(_) => [],
+    PromotedRegression(_) => []
+  };
+  bytes ++ no_manifest ++ manifest ++ promoted ++ constructed
+}
+
+pure func first_manifest_detail(rs: [ManifestRejection]) -> string {
+  match rs {
+    [] => "",
+    r :: _ => match r {
+      ManifestFieldMissing(f) => "field '${f}' is blank",
+      ManifestProfileMismatch(m, dd) => "manifest names profile '${m}' and the definition is '${dd}'",
+      ManifestVersionDrifted(f, recorded, live) => "${f} recorded '${recorded}', HEAD reports '${live}'"
+    }
+  }
+}
+
+-- D11's collective bank obligation, over the classes the profile does NOT
+-- waive. Both counters, and the branch id read from the catalogue row rather
+-- than from the member, so a member cannot claim a branch nobody declared.
+export pure func bank_classes(ms: [CorpusMember]) -> [string] {
+  match ms {
+    [] => [],
+    m :: rest => m.classes_reached ++ bank_classes(rest)
+  }
+}
+
+export pure func bank_branches(ms: [CorpusMember]) -> [string] {
+  match ms {
+    [] => [],
+    m :: rest => m.branches_reached ++ bank_branches(rest)
+  }
+}
+
+-- The required classes the profile does not waive: D3's required list minus the
+-- conditional ones, derived from the catalogue in both directions rather than
+-- written out.
+export pure func required_non_waived(rows: [FaultClass]) -> [string] {
+  let waived = conditional_class_ids(rows);
+  drop_ids(required_class_ids(), waived)
+}
+
+pure func drop_ids(xs: [string], drop: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (if contains_str(drop, x) then [] else [x]) ++ drop_ids(rest, drop)
+  }
+}
+
+pure func validate_coverage(ms: [CorpusMember], rows: [FaultClass], expected: [string]) -> [CorpusRejection] {
+  let classes = bank_classes(ms);
+  let branches = bank_branches(ms);
+  coverage_rules(expected, classes, branches, rows)
+}
+
+pure func coverage_rules(expected: [string], classes: [string], branches: [string], rows: [FaultClass]) -> [CorpusRejection] {
+  match expected {
+    [] => [],
+    c :: rest => {
+      let here =
+        if not contains_str(classes, c) then [RequiredClassNotCovered(c)]
+        else {
+          let declared = match find_class(rows, c) {
+            None => "",
+            Some(row) => branch_id(row.recovery_branch)
+          };
+          if declared != "" && not contains_str(branches, declared)
+          then [RequiredBranchNotCovered(c, declared)] else []
+        };
+      here ++ coverage_rules(rest, classes, branches, rows)
+    }
+  }
+}
+
+-- The whole gate for a corpus. `expected` is the coverage the bank is being
+-- held to and `swept` is the set of classes a seed sweep was OBSERVED to reach;
+-- both are supplied by the caller because both are measurements, and a module
+-- that wrote them out would be declaring what this item exists to observe.
+export pure func validate_corpus(
+  c: Corpus, d: ProfileDefinition, expected: [string], swept: [string]
+) -> [CorpusRejection] {
+  let rows = fault_catalogue();
+  let empty = if List.length(c.members) == 0 then [CorpusEmpty] else [];
+  let budget = if c.job.budget_ms > 0 && c.elapsed_ms > c.job.budget_ms
+               then [CorpusBudgetExceeded(c.job.budget_ms, c.elapsed_ms)] else [];
+  empty
+    ++ validate_window(c)
+    ++ validate_keys(c.members)
+    ++ validate_members(c.members, d, rows, swept)
+    ++ validate_coverage(c.members, rows, expected)
+    ++ budget
+}
+
+export pure func corpus_ok(c: Corpus, d: ProfileDefinition, expected: [string], swept: [string]) -> bool {
+  List.length(validate_corpus(c, d, expected, swept)) == 0
+}
+
+export pure func has_corpus_rule(rs: [CorpusRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if corpus_rule(r) == rule then true else has_corpus_rule(rest, rule)
+  }
+}
+
+export pure func first_corpus_message(rs: [CorpusRejection]) -> string {
+  match rs { [] => "", r :: _ => corpus_message(r) }
+}
+
+export pure func corpus_rules_of(rs: [CorpusRejection]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest => corpus_rule(r) :: corpus_rules_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 7 — the rotation's own gate, which is S8 applied to a seed window
+-- ---------------------------------------------------------------------------
+
+-- Sampled over a CONTIGUOUS range of epochs, because the wrap branch is entered
+-- only by crossing the end of the space and a scattered sample can miss it.
+export pure func validate_rotation(cfg: RotationConfig, first_epoch: int, sampled: int) -> [CorpusRejection] {
+  let frozen = frozen_positions(cfg, first_epoch, sampled, 0);
+  let wrap = if wrap_crossings(cfg, first_epoch, sampled, 0) == 0
+             then [RotationWrapNotExercised(sampled)] else [];
+  let disjoint = disjointness(cfg, first_epoch, sampled, 1);
+  frozen ++ wrap ++ disjoint
+}
+
+-- POSITION BY POSITION, not window by window. A window built as a fixed prefix
+-- plus a rotating tail changes at every epoch and is pinned at every prefix
+-- position; a whole-window comparison is green on it.
+pure func frozen_positions(cfg: RotationConfig, first_epoch: int, sampled: int, i: int) -> [CorpusRejection] {
+  if i >= cfg.window_size then []
+  else {
+    let moved = position_moves(cfg, first_epoch, sampled, i);
+    (if moved then [] else [RotationPositionFrozen(i)]) ++ frozen_positions(cfg, first_epoch, sampled, i + 1)
+  }
+}
+
+pure func position_moves(cfg: RotationConfig, first_epoch: int, sampled: int, i: int) -> bool {
+  let baseline = nth_seed(rotating_window(cfg, first_epoch).seeds, i);
+  any_differs(cfg, first_epoch, sampled, i, baseline, 1)
+}
+
+pure func any_differs(cfg: RotationConfig, first_epoch: int, sampled: int, i: int, baseline: int, k: int) -> bool {
+  if k >= sampled then false
+  else {
+    let here = nth_seed(rotating_window(cfg, first_epoch + k).seeds, i);
+    if here != baseline then true
+    else any_differs(cfg, first_epoch, sampled, i, baseline, k + 1)
+  }
+}
+
+pure func nth_seed(xs: [int], i: int) -> int {
+  match xs {
+    [] => -1,
+    x :: rest => if i <= 0 then x else nth_seed(rest, i - 1)
+  }
+}
+
+-- How many sampled epochs carry the window across the end of the space. The
+-- window wraps exactly when its last seed is smaller than its first.
+pure func wrap_crossings(cfg: RotationConfig, first_epoch: int, sampled: int, k: int) -> int {
+  if k >= sampled then 0
+  else {
+    let w = rotating_window(cfg, first_epoch + k);
+    let last = nth_seed(w.seeds, cfg.window_size - 1);
+    (if last < w.first then 1 else 0) + wrap_crossings(cfg, first_epoch, sampled, k + 1)
+  }
+}
+
+pure func disjointness(cfg: RotationConfig, first_epoch: int, sampled: int, k: int) -> [CorpusRejection] {
+  if k >= sampled then []
+  else {
+    let prev = rotating_window(cfg, first_epoch + k - 1);
+    let here = rotating_window(cfg, first_epoch + k);
+    let overlap = shares_any(prev.seeds, here.seeds);
+    (if overlap then [RotationWindowNotDisjoint(first_epoch + k)] else [])
+      ++ disjointness(cfg, first_epoch, sampled, k + 1)
+  }
+}
+
+pure func shares_any(a: [int], b: [int]) -> bool {
+  match a {
+    [] => false,
+    x :: rest => if contains_int(b, x) then true else shares_any(rest, b)
+  }
+}
+
+-- The shard partition, asserted rather than assumed.
+export pure func validate_shards(w: SeedWindow, shards: int) -> [CorpusRejection] {
+  let covered = List.length(union_shards(w, shards, 0));
+  let declared = List.length(w.seeds);
+  if covered != declared then [ShardsDoNotPartition(declared, covered)] else []
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 8 — THE SHRINK-ONLY REGISTER, and it lives here so there is ONE of it
+-- ---------------------------------------------------------------------------
+--
+-- WI-A14 shipped `run_report_dst.documented_coverage()` as an explicitly
+-- DECLARED register — "not a measurement", labelled as such in the rendered
+-- output — and assigned A15 the job of replacing it with observations. A15
+-- measured it, and two of its entries CLOSED: the fixed bank reaches
+-- `ToolCorrelationMismatch` and `ToolDeadlineExceeded`, which the register
+-- recorded as "undriven by the pinned seeds; MORE SEEDS IS THE FIX". More seeds
+-- was the fix.
+--
+-- The register lives HERE rather than in either consumer because two registers
+-- that must agree will not: `corpus_pr_dst` asserts it against a real sweep in
+-- both directions and `run_report_dst` renders it, and if each kept its own
+-- copy the closing of an entry would have to be remembered twice. This is the
+-- third use of the shrink-only pattern (`d64_gap_register`,
+-- `documented_coverage`) and the first where the register has two consumers.
+--
+-- `status_id` is a STRING and not a `ReachStatus`, because that type lives in
+-- `dst_run_report`, which is above this module: carrying the constructor here
+-- would invert the dependency to make a rendering decision. `run_report_dst`
+-- maps the id and asserts every id it sees is one `all_reach_ids()` declares,
+-- so a typo is a red row rather than a silently uncounted class.
+export type UnreachableClass = {
+  class_id: string,
+  status_id: string,
+  why: string
+}
+
+-- The required non-waived classes that NO member of the corpus reaches, each
+-- with the KIND of unreachability and its reason. Cluster 12's rule: these are
+-- unreached in different ways and a single "unreached" number states several
+-- different facts as one.
+--
+-- None of these is a waiver. D3 requires a waived class to be named with its
+-- waiving condition, and a class nobody waived that nobody reached is a
+-- coverage gap, not a permission.
+export pure func unreachable_by_search() -> [UnreachableClass] {
+  [{ class_id: "provider_error_retryable",
+     status_id: "unreachable-until-change",
+     why: "`ScriptedStep` has no error channel, so a generated AIError has nowhere to be chosen into (cluster 10 correction 2). Cluster 13 correction 2 separates this from the LATENCY field: a provider fault travels the AIError path and needs an ERROR CASE, not an advance — two fields, two changes" },
+   { class_id: "provider_error_non_retryable",
+     status_id: "unreachable-until-change",
+     why: "as provider_error_retryable: the same missing `ScriptedStep` error case" },
+   { class_id: "provider_protocol_inconsistent_result",
+     status_id: "covered-not-exercised",
+     why: "the generator's tool_args are always well-formed JSON, so the malformed-arguments branch is reachable by a scenario that writes one and is driven by no seed. Measured: 0 of 260" },
+   { class_id: "provider_partial_stream_then_error",
+     status_id: "unreachable-structurally",
+     why: "`live_ports` returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can produce a non-empty emission log to compare a projection against; the retry/finalize half is reachable, the PARITY half is not observable. EXTERNALLY BLOCKED" }]
+}
+
+export pure func unreachable_class_ids() -> [string] {
+  unreachable_ids_of(unreachable_by_search())
+}
+
+pure func unreachable_ids_of(rs: [UnreachableClass]) -> [string] {
+  match rs { [] => [], r :: rest => r.class_id :: unreachable_ids_of(rest) }
+}
+
+-- What the bank IS held to: every required non-waived class minus the register.
+-- Derived in both directions, so a class can be in neither list only if the
+-- catalogue itself changed.
+export pure func expected_bank_coverage() -> [string] {
+  drop_ids(required_non_waived(fault_catalogue()), unreachable_class_ids())
+}
+
+export pure func unreachable_reason(class_id: string) -> string {
+  reason_of(unreachable_by_search(), class_id)
+}
+
+pure func reason_of(rs: [UnreachableClass], class_id: string) -> string {
+  match rs {
+    [] => "",
+    r :: rest => if r.class_id == class_id then r.why else reason_of(rest, class_id)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 9 — the report projection
+-- ---------------------------------------------------------------------------
+
+pure func member_lines(ms: [CorpusMember]) -> string {
+  match ms {
+    [] => "",
+    m :: rest =>
+      "\n    ${m.member_id} [${member_kind_id(m.kind)}] ${m.generator_id}/${m.generator_version} seed ${m.seed}\n        artifact: ${m.artifact_path} (${m.artifact_bytes} bytes)\n        identity: ${m.artifact_identity}\n        trajectory: ${m.trajectory_key}\n        manifest: ${m.manifest.profile_id}/${m.manifest.profile_version}\n        classes: ${join_str(m.classes_reached)}\n        branches: ${join_str(m.branches_reached)}\n        why: ${member_reason(m.kind)}${member_lines(rest)}"
+  }
+}
+
+pure func join_str(xs: [string]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => x,
+    x :: rest => "${x}, ${join_str(rest)}"
+  }
+}
+
+pure func join_ints(xs: [int]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => "${x}",
+    x :: rest => "${x}, ${join_ints(rest)}"
+  }
+}
+
+export pure func render_corpus(c: Corpus) -> string {
+  "corpus ${c.corpus_id} ${corpus_rules_version()}
+  job:          ${job_projection(c.job)}
+  seeds:        ${List.length(c.seeds_attempted)} attempted (minimum ${c.job.minimum_seeds}): ${join_ints(c.seeds_attempted)}
+  completed:    ${c.runs_completed}
+  elapsed:      ${c.elapsed_ms} ms of ${c.job.budget_ms} ms
+  members:      ${List.length(c.members)}${member_lines(c.members)}"
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. The rotation's tests come first: they are the executable
+-- statement of this module's whole risk, and they were written and run RED
+-- against a frozen window before `rotating_window` existed.
+-- ---------------------------------------------------------------------------
+
+pure func sample_rejections() -> [CorpusRejection] {
+  [CorpusEmpty,
+   WindowZero,
+   WindowBelowMinimum(12, 3),
+   WindowTruncated(12, 9),
+   DuplicateIdentity("sha", "a", "b"),
+   AliasedTrajectory("traj", "a", "b"),
+   MemberWithoutBytes("sha"),
+   MemberWithoutManifest("p"),
+   MemberManifestStale("p", "d"),
+   RequiredClassNotCovered("c"),
+   RequiredBranchNotCovered("c", "b"),
+   ConstructedForReachableClass("c", "m"),
+   ConstructedForUnknownClass("c", "m"),
+   PromotedWithoutFailure("m"),
+   ShardsDoNotPartition(240, 239),
+   RotationPositionFrozen(0),
+   RotationWrapNotExercised(4),
+   RotationWindowNotDisjoint(3),
+   EpochNotResolved("why"),
+   CorpusBudgetExceeded(1, 2)]
+}
+
+pure func all_rules_distinct(rs: [CorpusRejection], seen: [string]) -> bool {
+  match rs {
+    [] => true,
+    r :: rest => {
+      let id = corpus_rule(r);
+      if id == "" || contains_str(seen, id) then false
+      else all_rules_distinct(rest, id :: seen)
+    }
+  }
+}
+
+pure func test_every_rejection_has_a_distinct_rule_and_a_message_naming_it() -> bool
+  tests [((), true)]
+  {
+    all_rules_distinct(sample_rejections(), [])
+      && all_messages_name_their_rule(sample_rejections())
+  }
+
+pure func all_messages_name_their_rule(rs: [CorpusRejection]) -> bool {
+  match rs {
+    [] => true,
+    r :: rest =>
+      Str.startsWith(corpus_message(r), "[${corpus_rule(r)}]") && all_messages_name_their_rule(rest)
+  }
+}
+
+-- THE CENTRAL RULE. Every position of the window moves, the wrap branch is
+-- entered, and consecutive windows are disjoint.
+pure func test_the_rotating_window_actually_rotates() -> bool
+  tests [((), true)]
+  {
+    List.length(validate_rotation(scheduled_rotation(), 0, 6)) == 0
+  }
+
+-- The frozen window: the one-line wrong answer, and it is PERFECTLY
+-- deterministic. `validate_rotation` must name the position rather than merely
+-- returning something.
+pure func test_a_frozen_window_is_rejected_at_every_position() -> bool
+  tests [((), true)]
+  {
+    -- A space of one: every epoch maps to the same offset, so every position
+    -- serves the same seed. Perfectly deterministic, byte-identical reports.
+    let stuck: RotationConfig = { space_first: 1, space_size: 1, window_size: 4 };
+    let rs = validate_rotation(stuck, 0, 6);
+    has_corpus_rule(rs, "rotation-position-frozen")
+  }
+
+-- S8's complement, and it is the cheaper of the two to fall into: a sample that
+-- never crosses the end of the space leaves the wrap branch absent, and absent
+-- reads identically to unchanged.
+pure func test_a_sample_that_never_wraps_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let wide: RotationConfig = { space_first: 1, space_size: 1000000, window_size: 4 };
+    has_corpus_rule(validate_rotation(wide, 0, 3), "rotation-wrap-not-exercised")
+  }
+
+-- The epoch never defaults. A blank input is the case that matters, because it
+-- is what an unset scheduler variable reads as, and a default there freezes the
+-- window while every rotation check above stays green.
+pure func test_the_epoch_fails_closed_rather_than_defaulting() -> bool
+  tests [((), true)]
+  {
+    epoch_source_id(resolve_epoch("")) == "epoch-unresolved"
+      && epoch_source_id(resolve_epoch("nightly")) == "epoch-unresolved"
+      && epoch_source_id(resolve_epoch("12x")) == "epoch-unresolved"
+      && epoch_source_id(resolve_epoch("0")) == "epoch-resolved"
+      && epoch_source_id(resolve_epoch("20260804")) == "epoch-resolved"
+  }
+
+pure func test_the_same_epoch_gives_the_same_window() -> bool
+  tests [((), true)]
+  {
+    let a = rotating_window(scheduled_rotation(), 7);
+    let b = rotating_window(scheduled_rotation(), 7);
+    a.first == b.first && eq_ints(a.seeds, b.seeds)
+      && rotating_window(scheduled_rotation(), 8).first != a.first
+  }
+
+export pure func eq_ints(a: [int], b: [int]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xr => match b {
+      [] => false,
+      y :: yr => if x == y then eq_ints(xr, yr) else false
+    }
+  }
+}
+
+-- The demo scale is a SCALED config and not a weaker one: every rotation
+-- property the full config is held to, the demo config is held to as well. A
+-- demo that satisfied a smaller contract would make `make dst`'s real-driver
+-- half certify something the scheduled job does not do.
+pure func test_the_demo_scale_satisfies_the_same_rotation_contract() -> bool
+  tests [((), true)]
+  {
+    List.length(validate_rotation(demo_rotation(), 0, 8)) == 0
+      && List.length(validate_shards(rotating_window(demo_rotation(), 3), demo_job().shards)) == 0
+      && demo_job().minimum_seeds == demo_rotation().window_size
+      && scaled_rotation(demo_scale_id()).window_size == demo_rotation().window_size
+      && scaled_rotation("full").window_size == scheduled_rotation().window_size
+      && scaled_job("full").minimum_seeds == scheduled_job().minimum_seeds
+  }
+
+pure func test_the_shards_partition_the_window() -> bool
+  tests [((), true)]
+  {
+    let w = rotating_window(scheduled_rotation(), 3);
+    List.length(validate_shards(w, scheduled_job().shards)) == 0
+      && List.length(shard_of(w, 4, 0)) == 60
+      && List.length(validate_shards(w, 0)) == 1
+  }
+
+-- The shard minimums ADD BACK UP to the job's. A scheme that rounded each one
+-- down would let four shards collectively search less than the job declares
+-- while every shard reported a passing window — D11's truncation failure
+-- distributed across workers, where no single worker can see it.
+pure func test_the_shard_minimums_sum_to_the_job_minimum() -> bool
+  tests [((), true)]
+  {
+    shard_minimums_sum(scheduled_job()) == scheduled_job().minimum_seeds
+      && shard_minimums_sum(demo_job()) == demo_job().minimum_seeds
+      -- and an uneven split still adds up, which is what the remainder term is
+      -- for; 7 over 4 shards is 2+2+2+1 and not 1+1+1+1.
+      && shard_minimums_sum({ scheduled_job() | minimum_seeds: 7, shards: 4 }) == 7
+      && shard_job({ scheduled_job() | minimum_seeds: 7, shards: 4 }, 0).minimum_seeds == 2
+      && shard_job({ scheduled_job() | minimum_seeds: 7, shards: 4 }, 3).minimum_seeds == 1
+  }
+
+-- The minimums are ARITHMETIC over one measured constant, not literals with a
+-- comment. A re-measurement moves them together and this row is what says so.
+pure func test_the_minimums_fit_their_measured_budgets() -> bool
+  tests [((), true)]
+  {
+    seeds_affordable_in(pr_job().budget_ms) >= pr_job().minimum_seeds
+      && seeds_affordable_in(scheduled_job().budget_ms) >= scheduled_job().minimum_seeds
+      && scheduled_job().minimum_seeds == scheduled_rotation().window_size
+  }
+
+-- The register and the expectation PARTITION the obligation: a class can be in
+-- neither only if the catalogue itself changed, and that is a compile-time
+-- visible edit rather than a silent gap.
+pure func test_the_register_and_the_expectation_partition_the_obligation() -> bool
+  tests [((), true)]
+  {
+    List.length(expected_bank_coverage()) + List.length(unreachable_by_search())
+      == List.length(required_non_waived(fault_catalogue()))
+      && List.length(unreachable_by_search()) == 4
+      && all_have_reasons(unreachable_by_search())
+      && no_overlap(expected_bank_coverage(), unreachable_class_ids())
+  }
+
+pure func all_have_reasons(rs: [UnreachableClass]) -> bool {
+  match rs {
+    [] => true,
+    r :: rest => if r.why == "" || r.status_id == "" then false else all_have_reasons(rest)
+  }
+}
+
+pure func no_overlap(a: [string], b: [string]) -> bool {
+  match a {
+    [] => true,
+    x :: rest => if contains_str(b, x) then false else no_overlap(rest, b)
+  }
+}
+
+pure func test_required_non_waived_drops_exactly_the_conditional_classes() -> bool
+  tests [((), true)]
+  {
+    let rows = fault_catalogue();
+    let all_required = List.length(required_class_ids());
+    let waived = List.length(conditional_class_ids(rows));
+    List.length(required_non_waived(rows)) == all_required - waived
+      && waived == 2
+      && not contains_str(required_non_waived(rows), "approval_deadline_exceeded")
+      && not contains_str(required_non_waived(rows), "extension_effect_fault")
+  }

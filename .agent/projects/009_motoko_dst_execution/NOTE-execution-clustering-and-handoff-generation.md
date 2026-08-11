@@ -50,15 +50,23 @@ disagree, the plan wins and this note is stale.
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
 | 7 | **A13** | discovery/replay | 3, 4, 5, 6 (all landed) | **DONE 2026-08-03 — all six stages.** `9c4d724`, `8b0d605`, `2d752da`, `f77adf1`, `177d0cb`+`be8393c`, `6c4894e`+`e01a978`. Reports: `NOTE-cluster-7-…` through `NOTE-cluster-12-…`. `make dst` exit 0 at **466 checks**, from 0 at the item's start. **A14 and A15 unblocked** |
 | 8 | **A14** | invariants, latency pair, D11 reporting | 7 (landed) | **DONE 2026-08-04** — `00dbdb4`, `ea81e66`, `3dd8a82`. Report: `NOTE-cluster-13-…`. 78 min on the clock, split 56/12/10 across three pieces. `DoneEvent` resolved; the coordinate anchor decided *not to build* |
-| 9 | **A15** | the two corpora and their CI jobs | 8 (landed) | **Handoff written**: `HANDOFF-execute-a15-corpora-and-ci.md`. The last item in Milestone A. Carries a generator-version bump (`max_resource_size`), so it re-pins the canary and stage 4's seeds |
-| — | **A17** | `Makefile`/CI; the `ailang test` coverage axis | — | **Groundable now, standalone, parallelisable.** Small; unassigned to a cluster since cluster 4 spawned it |
+| 9 | **A15** | the two corpora and their CI jobs | 8 (landed) | **DONE 2026-08-04** — `ff54c0f`, `ee4311c`. Report: `NOTE-cluster-14-…`. 58 min on the clock, split 43/16. `make dst` exit 0 at **700 checks**. The `max_resource_size` bump was **NOT** taken: deferred as a one-draw item with the reasoning recorded, because a version bump serializes in front of the corpus sweep rather than sharing work with it |
+| **10** | **A17** | `Makefile`/CI; the `ailang test` coverage axis | — | **OPEN, AND IT IS THE LAST ITEM IN MILESTONE A.** **Handoff written**: `HANDOFF-execute-a17-test-coverage-axis.md`. Measured gap: 38 files carry inline tests, 25 are in a target, **14 are in none** (all passing today). Unassigned since cluster 4 spawned it — see cluster 14's correction 0 |
 
 **Clusters 1, 2 and 3 are mutually independent and can run in parallel** across sessions or agents.
 Cluster 2 in particular is anchor-independent of the driver work — it inventories source rather than
 editing it — which is why its handoff is safe to write before cluster 1 lands.
 
-**The critical path is 1 → 6 → 7 → 8** (A1 → A2 → A12 → A13 → A14/A15). Clusters 2–5 feed it but do
-not lengthen it. A13 and B2 are the two 1–2 week items and dominate the schedule.
+**The critical path is 1 → 6 → 7 → 8 → 9** (A1 → A2 → A12 → A13 → A14 → A15). Clusters 2–5 feed it
+but do not lengthen it. A13 and B2 are the two 1–2 week items and dominate the schedule.
+
+**The critical path completed 2026-08-04 with A15. MILESTONE A DID NOT.** Cluster 10 (A17) is the
+remaining item and it is off the critical path, which is exactly why it was missed: **A17 was
+SPAWNED by cluster 4 rather than planned, and a spawned item does not acquire a cluster.** Three
+successive handoffs and the plan itself carried "A15 is the last item in Milestone A" while this
+table's own last row said A17 was unassigned. **The completion sentence did not read the cluster
+map.** If another item is ever spawned mid-milestone, give it a cluster number in this table on the
+day it is spawned — an unnumbered row is invisible to every reader who is looking for what is left.
 
 ## The rule that governs handoff *timing*
 

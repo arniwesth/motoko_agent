@@ -24,6 +24,18 @@ As of 2026-07-31 the answer on v0.31.0 is `0`. **A prototype on a fork is not th
 If the trigger has not fired, the only items worth doing are **Open item 1** (the port widening,
 which has no upstream dependency) and the ADR revision round. Stop after those.
 
+## STOP — this handoff was written 2026-07-31 and Milestone A has since completed
+
+**Everything below the trigger condition predates fourteen execution clusters and is stale.** It tells
+you to do "the port widening (Open item 1)" — that is WI-A1 and it landed 2026-08-02. Written before
+`dst_generator`, `dst_corpus`, the pinned canary, the twelve corpus seeds or the 700-check gate
+existed, this document mentions none of them.
+
+**Read `## What Milestone B inherits` at the end of this file instead of `## State you inherit` and
+`## Sequence` below.** Those two sections are retained only as a record of what the spike session
+knew; treat every anchor in them as unverified. The trigger condition above is still correct and is
+still the first thing to check.
+
 ## Mission
 
 Resume project 009 from a spike that answered its five questions and then stopped by design. The
@@ -151,3 +163,97 @@ Findable, unresolved, each with enough detail to pick up cold:
 - **Do not re-point the AILANG clone's `upstream` push URL.** It is disabled deliberately.
 - **F1–F5 are unfixed findings against `ADR-001`.** If the revision round has not happened, say so rather than building on decisions the spike showed are underspecified — particularly F1, where D1 does not say who owns the provider cursor and *both answers compile*.
 - Prefer measurement over estimation where M1/M2 already answer the question.
+
+---
+
+# What Milestone B inherits — current as of 2026-08-04
+
+Written at the close of Milestone A (fourteen clusters, WI-A1 through WI-A15). **Read this section,
+not the 2026-07-31 material above.** Source: `NOTE-cluster-14-execution-report-and-plan-corrections.md`,
+whose closing section was commissioned for exactly this reader.
+
+## Where the project actually is
+
+Milestone A is **one item short**: **WI-A17** (the `ailang test` coverage axis) is open, standalone
+and off the critical path. Everything else — A1 through A16, and P6 — has landed. `make dst` is exit
+0 at **700 checks** across 26 targets, roughly a 4m30s serial cost. `make check_core` is exit 0 at 51
+modules. `driver_only` is at **v3**.
+
+Milestone B's content is known and measured: a repin at **381 effect-row edits across 71 files**, an
+extension-ABI major, and the `Message` migration (M1: 14 min, 28 files, 69 additive sites, 7 needing
+judgement). None of that has changed. What follows is what is true at HEAD and written in no B item.
+
+## Five things that will bite, in the order they will bite
+
+**1. Do not run `make dst` until `make check_core` is green.** The repin turns effect rows into hard
+errors *everywhere at once*, so the first honest signal after B1 is not a test failure — it is
+`ailang check` failing in 71 files. Running the DST gate first produces thousands of lines of
+downstream noise at roughly twenty minutes per attempt.
+
+**2. Three sets of artifacts must be re-pinned by hand and nothing will tell you which.**
+
+| Artifact | What it pins | Why a re-pin is not enough |
+|---|---|---|
+| `dst_generator.pinned_canary_v1`/`v2` | 6 rows of the generator's own stream | Deliberately **un-regenerable** — there is no `--update` flag and adding one is explicitly refused, because a canary regenerated on failure is not a canary |
+| `seeded_generator_dst`'s seeds 9 / 13 / 94 | the equal-census anti-count pair, and the one S7 fixture in 260 | each has an **asserted** reason that must survive a re-sweep or be replaced by one |
+| `corpus_pr_dst.fixed_bank()`'s twelve seeds | five derived selections over a 260-seed sweep | same — the reasons are asserted, not described |
+
+**Budget a re-sweep, not a re-pin.**
+
+**3. `live_ports` returning `emissions: []` is load-bearing in four places, and the recorded-stream
+API changes all four at once**: D6.4's `StreamDelta` parity gap, `stream_parity_findings`' whole
+trajectory, `provider_partial_stream_then_error`'s register entry, and the corpus's expected coverage
+set. That is **one register entry closing**, and closure is asserted in both directions — so **B will
+turn `corpus_pr` red, and that is correct behaviour rather than a break.**
+
+**4. `.github/workflows/dst-corpora.yml` has never run.** It is written, its entry point is checked
+to exist and its matrix is checked against the declared shard count — but no scheduler has executed
+it. The first real scheduled run is an unmeasured event: 240 seeds × 4 shards against a 600 s budget
+derived from a **local** 292 ms/seed. A hosted runner is not a dev container; expect the first run to
+move `measured_ms_per_seed()`, and note the ceiling gates exist to make that visible rather than
+silent.
+
+**5. The two `ScriptedStep` widenings are the cheapest coverage left, and B2 is where they become
+free.** They are **two** changes, not one — a provider *fault* needs an error case, a provider
+*latency* needs `advance_ms` (cluster 13 separated them; earlier revisions conflated both with each
+other and with D4's latency pair, which needed neither and is done). The ABI major already forces a
+lockstep re-release of every extension package and already touches `ExtPorts.ai_step`, so doing them
+inside that wave pays the A5 anchor cascade **once** instead of twice and closes two register entries
+plus D2's completeness gap. **Doing them separately after B2 pays the cascade a second time for no
+reason.** Cluster 13 predicted zero anchor cost for the latency field; that prediction is unmeasured
+and B2 is the item that should measure it.
+
+## Two deferred items with named owners
+
+- **`max_resource_size`** — a **one-draw item, not a rebinding**. The quantity it reports has a static
+  range of one value where the other four bounds report draw-derived quantities. It still costs a
+  generator-version bump. Owner: **the first item that touches the generator after the corpora exist**,
+  which in practice is this wave.
+- **`seed_state`'s version axis** (site 22) — `in_range(salt_hash("${id}/${version}") + seed)` adds the
+  version hash to the seed, so they are interchangeable and a version bump is only a seed offset.
+  Fixing it moves every pinned canary row, every corpus seed and the frozen specimens' meaning at
+  once. It belongs **with** the one-draw item, not before it.
+
+## The process observation that matters most here
+
+**Fourteen clusters produced 31 sites where two answers type-check and the wrong one is silent.
+Determinism caught 0 of 31.** Every one was found by mutating something and reading *why* a row went
+red — or, twice, why one **stayed green**.
+
+Milestone B is 381 mechanical edits and an ABI major: exactly the shape that feels like it needs no
+detectors, and exactly the shape where a silently-wrong edit is invisible inside 71 files of diff.
+**Budget mutation loops as the cost of the wave, not as verification after it.**
+
+## Standing rules that apply unchanged
+
+`PLAN-implementation-deterministic-test-world.md`'s `## Standing rules` — S1 through S8 — were each
+promoted from a defect and each caught later defects nothing else would have. S8's complement is the
+most productive sentence in the plan: **a pinned artifact certifies exactly the paths its trajectory
+walks; unwalked paths are absent, and absent reads identically to unchanged.** Every re-pin in item 2
+above has that exposure.
+
+Three filed AILANG defects have workarounds and will recur: `fb_e44ba922db1c42be` (a call in the
+field-value position of a record update is not a dependency — `let`-bind it; it also has a sibling in
+the head position of a cons), `fb_b39697480a4e8bbc` (an out-of-scope constructor name in a pattern
+binds as a fresh variable), and `fb_2ad074d754cd2c25` (`ailang test`'s cluster harness fails
+non-deterministically at ~6/10 in large modules). All are written up in `.agent/issues/`.
