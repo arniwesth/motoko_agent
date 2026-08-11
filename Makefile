@@ -83,6 +83,7 @@ compaction_dst:
 	ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail
 	ailang run --caps IO,Env,FS --entry main scripts/dst/compaction_catalog_dst.ail
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/scripted_cursor_probe.ail < /dev/null
 	MOTOKO_MODELS_FILE=scripts/fixtures/qwen36-small-model-catalog.json \
 	  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
 	  scripts/dst/long_qwen_compaction_dst.ail < /dev/null

@@ -33,12 +33,12 @@ disagree, the plan wins and this note is stale.
 
 | # | Items | Surface | Depends on | Status |
 |---|---|---|---|---|
-| 1 | **A1 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **Handoff written**: `HANDOFF-execute-a1-a2-port-widenings.md` |
+| 1 | **A1 + P6 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **DONE 2026-08-02** — `e59acaa`, `4ad2c7a`, `6dd1bbe`. Report: `NOTE-cluster-1-execution-report-and-plan-corrections.md` |
 | 2 | **A4 + A5 + A11** | `tools/`, Python; scans the tree, edits none of it | — | Safe to write now |
 | 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | Safe to write now |
-| 4 | **A9** | `session.ail`, `phase_vocab.ail` — driver surface again | after 1 (shared surface) | Wait for 1 |
+| 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **Handoff written**: `HANDOFF-execute-a16-a9-coverage-and-finalizer.md`. A16 first — it wires the unrun driver coverage that protects A9 and A12 |
 | 5 | **A10** | profile/manifest machinery | 2 and 3 | Wait |
-| 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1 | Wait |
+| 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1 (landed), 4 (A16's coverage) | **Groundable**, but read cluster 1's silent-freeze finding first — A12 must land an advancement assertion per cursor *before* threading it |
 | 7 | **A13** | discovery/replay | 3, 4, 5, 6 | Wait |
 | 8 | **A14 + A15** | invariants, latency pair, corpora, CI | 7 | Wait |
 
@@ -58,8 +58,14 @@ Handoffs for clusters 4, 6, 7 and 8 must not be written yet. They would cite anc
 guarantees the staleness the whole discipline exists to prevent. Clusters 2 and 3 are the exception
 and may be written at any time.
 
-The corollary is that this note is **not** a licence to batch-generate the remaining seven handoffs.
+The corollary is that this note is **not** a licence to batch-generate the remaining handoffs.
 Generate one when its cluster becomes groundable.
+
+**Cluster 4 is the evidence this rule is worth its cost.** Its handoff was written after cluster 1
+landed, and re-grounding found that *every* WI-A9 anchor had moved: `emit_run_summary` 833→858, all
+five of its call sites shifted, `finish_reason_str` 820→845. A handoff written before cluster 1
+would have shipped five wrong line numbers into the session least able to notice — one working in a
+file it had never read.
 
 ## Generating the next handoff
 
@@ -85,10 +91,16 @@ building session.
 
 ## What to ask back, every cluster
 
-Until several clusters have landed, every estimate past cluster 1 is an analogy. Each handoff should
-request actual time, files touched, and the **judgement-versus-mechanical site ratio** — M1's 7-of-69
-is what the rest of Milestone A is scheduled against, and if it does not hold, that must surface
-before A13 rather than inside it.
+Each handoff should request actual time, **sites touched** and the
+**judgement-versus-mechanical ratio**. Cluster 1 established why all three matter and corrected the
+model: file-count sizing was wrong by two orders of magnitude, **sites** is the right driver for
+widen-and-converge work, and the judgement ratio for contract-changing work is **~19%**, not M1's
+10%. Neither correction reaches new-artifact work (A13, A14, A15, B2), whose estimates remain
+unmeasured.
+
+Ask also for the *kind* of judgement, not only the count. Cluster 1's most transferable finding was
+qualitative: **two of its nine judgement sites were ones where both alternatives type-check and the
+wrong one is silent.** A count of nine would have hidden that entirely.
 
 Plan defects found while building get filed as plan corrections. Never silently reconciled: executing
 finds what reading does not, and that is the point of building cluster 1 first.
@@ -103,7 +115,16 @@ is v0.26.0, Makefile-guarded.
 ## What invalidates this note
 
 - The plan changing its dependency graph — the plan is authoritative, this map is derived.
-- Cluster 1 landing, which unblocks clusters 4 and 6 and makes their handoffs writable.
+- ~~Cluster 1 landing~~ — **landed 2026-08-02. Clusters 4 and 6 are now groundable and their handoffs
+  writable.** Both must re-ground first: cluster 1 moved `ScriptedStep` to `ports.ail`, widened
+  `Ports.model_step` in both directions, removed `Ports.hooks_runtime`, and added
+  `C2LoopState.provider_state`, so every anchor into those three files has shifted.
+
+**One correction this map owed and now carries (C3).** Cluster 1's row said "A1 + A2". P6 is a plan
+*decision* rather than a work item, so it appeared in no row, yet the plan sequences it into A1's
+edit wave because both touch every construction site. A session working from this map alone would
+have skipped it and a later one would have paid a third full pass. **When generating a handoff, sweep
+the plan's decisions for ones that name an edit wave, not just its work items.**
 - Any cluster proving to be the wrong cut. That is expected for the later ones: the clustering past
   cluster 5 is reasoned rather than measured, and the first two or three executions are what turn it
   into something known.

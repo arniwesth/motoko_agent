@@ -55,7 +55,8 @@ agree; zero anchor corrections were needed.
 | 10 | Exhaustive matches & configs | `match provider` at `session.ail:696` and `scripted_ports.ail:31` are the only `StepProvider` matches left. 14 checked-in configs, **all 14** installing `compaction_ai`; `compose` only in `.motoko/config/ailang`; `test_dummy` in none; `motoko_ext_conformance` absent from `registry_generated.ail`. Latent under-declarations confirmed present: `agents_md.ail:106 walk_agents` performs `FS` rowless; `a2a.ail:131` calls `uuid4()` under a row without `Rand`. |
 
 Executable checks run for this survey: `make effect_inventory` and `effect_inventory_selftest`
-(clean, above), and `scripts/dst/spike_scripted_cursor_probe.ail` against HEAD — **F6 reproduces
+(clean, above), and `scripts/dst/spike_scripted_cursor_probe.ail` against HEAD (renamed to
+`scripted_cursor_probe.ail` when WI-A2 promoted it) — **F6 reproduces
 exactly**: `folding: served=[s0,s1,s2,s2,…] advancing=false`, `FAIL`, `exit(1)`. The probe is the
 executable statement of the first defect this plan fixes.
 
@@ -129,7 +130,9 @@ provider… thread next_provider") describes the pre-`89a1d67` contract and is d
 which rewrites that region anyway. The ADR's anchors into `stub_step.ail` are re-grounded in the
 same change, filed as a normal amendment — not a review round.
 
-**P6. `Ports.hooks_runtime` is removed.** D1 requires the plan to give it a demonstrated production
+**P6. `Ports.hooks_runtime` is removed.** *(Executed 2026-08-02, `4ad2c7a`, with cluster 1. It has
+no work-item row, so the cluster map must name it — see C3 in
+`NOTE-cluster-1-execution-report-and-plan-corrections.md`.)* D1 requires the plan to give it a demonstrated production
 purpose or remove it. The survey found zero calls of the field repo-wide — only constructions. It
 is deleted in the same edit wave as WI-A1 (both touch every construction site; separate commit).
 
@@ -142,10 +145,23 @@ dependency graph, so if the two disagree, this plan wins.
 
 Milestone A is upstream-independent and starts now. Milestone B is **triggered**, not queued: it
 begins the day a released AILANG ships the recorded-stream API, and interleaves with whatever A-item
-is in flight. Milestone C depends on B. Sizing cites M1/M2 from
-`NOTE-spike-findings-real-driver-vertical.md` rather than re-estimating; "M1-class" means additive
-and mechanical with a compiler-driven fix loop written first — the 14-minute figure held *only*
-because tooling preceded editing, and that discipline is part of each estimate.
+is in flight. Milestone C depends on B.
+
+**Sizing model, corrected by measurement at cluster 1** (`NOTE-cluster-1-execution-report-and-plan-corrections.md`):
+
+- **Size widen-and-converge work by *sites touched*, not files and not days.** A1 and A2 were
+  estimated at half a day and 1–2 days and measured at ~5.5 and ~10 minutes — wrong by roughly two
+  orders of magnitude, systematically, because both scaled M1 by *file* count. Scaling M1's 14
+  minutes by *site* count predicts ~10 minutes for cluster 1's 48 sites against the ~18 actually
+  spent editing. That is the model.
+- **The judgement ratio for contract-changing work is ~19%, not M1's 10%** (A1 3/13, A2 6/35).
+  M1's additive band understates anything that changes a contract.
+- **This does not generalise to new-artifact work.** A7, A8, A10, A13, A14, A15 and B2 build things
+  that do not exist; nothing here measures those and their estimates stand unrevised.
+- The 14-minute discipline held for the reason M1 gave: **tooling first.** Cluster 1 wrote a
+  parallel `ailang check` over the affected import closure (22 modules, 12 s) that surfaces one
+  error per module instead of one per compile. Without it, convergence costs one round-trip per
+  site. Budget the tool before the edits, every time.
 
 ### Milestone A — pre-repin (pinned v0.26.0)
 
@@ -153,9 +169,11 @@ because tooling preceded editing, and that discipline is part of each estimate.
 loss-channel rule). Behaviour-preserving: `emissions: []` at every construction site. Edit surface:
 the `ports.ail` type, `ports_shape_probe`, 2 `stub_step.ail` adapters, 3 `long_qwen` sites, and the
 3 result consumers (`dispatch_step`, `ext_ai_step`, `long_qwen:744`).
-*Size:* **estimate by analogy — half a day** including the fix loop. Basis: 4 files against M1's
-28, same additive technique; deliberately slower per file than M1's rate, which is the safe
-direction.
+*Size:* ~~estimate by analogy — half a day~~ → **MEASURED: ~5.5 min, 6 files** (`e59acaa`,
+2026-08-02). The estimate was wrong by ~2 orders of magnitude and the edit surface named 4 files, not
+6 — it missed `fake_model`/`fake_ports` in `scripted_ports.ail`, a construction site reached through
+`ports_shape_probe`. See `NOTE-cluster-1-execution-report-and-plan-corrections.md` (C1); size
+remaining widenings by **sites touched**, not files or days.
 *Acceptance evidence:* `make check_core` green; `make dst` targets pass unchanged; a
 `Scripted`-provider test asserts the emission log is present and empty. Note per D1: **this item
 does not enable WI-A2** — a successor cursor is not an emission.
@@ -172,11 +190,16 @@ amendment). Not behaviour-preserving; `ScriptedPortsState`/`scripted_model_next`
 reusable code. Edit surface: `ports.ail`, `stub_step.ail`, `scripted_ports.ail`, `session.ail` (32
 `provider:` occurrences bound the edit surface), `agent_loop_v2.ail`, import sites of
 `ScriptedStep`, DST scripts.
-*Size:* **estimate by analogy — 1–2 days**, tooling first. Basis: M1's judgement band, not its
-additive band, dominates — this changes a contract rather than adding a field.
-*Acceptance evidence:* `scripts/dst/spike_scripted_cursor_probe.ail` prints PASS and exits 0, and
-is promoted from spike naming into the `make dst` aggregate as a permanent regression test;
-`phase_c2_wiring_scenarios` 18/18; `check_core` green; `grep` finds no `assistant_count`-derived
+*Size:* ~~estimate by analogy — 1–2 days~~ → **MEASURED: ~10 min, 9 files, 35 sites of which 6
+needed judgement** (`6dd1bbe`, 2026-08-02). Tooling first, as specified, and that is why it held.
+The "judgement band dominates" call was right: 17% here against M1's 10%. **Two of the six are sites
+where both alternatives type-check and the wrong one silently reproduces F6** — see
+`NOTE-cluster-1-execution-report-and-plan-corrections.md`, which WI-A12 must read before threading
+`world_state` through the same successor literals.
+*Acceptance evidence:* the F6 probe prints PASS and exits 0, and is promoted out of spike naming
+into the `make dst` aggregate as a permanent regression test — landed as
+`scripts/dst/scripted_cursor_probe.ail`, wired at `Makefile:86`;
+`phase_c2_wiring_scenarios` at its full count (**19** once WI-A1 adds its emission-log scenario to that harness — an earlier revision said 18/18, which A1 necessarily moves); `check_core` green; `grep` finds no `assistant_count`-derived
 script index. The extension model path is **not** fixed here and no work item pretends otherwise:
 `ext_ai_step` (`session.ail:662`) discards state by ABI shape until Milestone B.
 
@@ -230,6 +253,12 @@ fail-closed validator. New construction; the required classes, per-class fields 
 applicability condition, delivery constructor, named recovery-branch id, logical transition), and
 the 007-D1.3 physical-fault tripwire are all fixed in D3 — the work is the artifact and validator,
 not the design.
+**One uncovered case cluster 1 surfaced belongs in this catalogue.** After A2, an extension-issued
+`ai_step` against a `Scripted` provider is handed a fresh empty `ProviderState` and serves
+`terminal_step()`, per D1's exclusion of the extension model path. **No test in the tree changed its
+output**, which means nothing covers "an extension calls `ai_step` against a `Scripted` provider" —
+and that is the concrete reason D1's rule (a conformant interim profile must exclude *every* hook an
+`ai_step`-calling extension registers) currently has no instrument behind it.
 *Acceptance evidence:* validator fails closed on a class row missing any field or naming an unknown
 constructor; **and on a catalogue missing any required D3 class id** — set completeness, not only
 row shape, because every downstream counter reads its ids from this artifact and therefore cannot
@@ -333,10 +362,26 @@ unable to carry D3's typed tool fault classes. Behaviour-preserving throughout: 
 delegate to today's code paths; `emissions`/state plumbing verified against `Scripted` providers.
 Spike Q1 confirmed the threading and Q2 confirmed routing tractability (its count clause falsified
 and superseded by the 13-site inventory); the spike's surgery is *not* imported — this is fresh
-work at HEAD.
+work at HEAD. **Also deletes `ported_provider`'s now-dead `history` parameter** (`_history` at
+`session.ail`, six call sites): it existed only to compute the `base_assistant_count` that A2
+retired, and D1 keeps the seam stable until `world_state` replaces it — which is this item (C5).
+
+**The silent-freeze hazard is this item's defining risk, and cluster 1 measured it rather than
+predicting it.** A2 threaded thirteen `C2LoopState` successor literals. The compiler forces the new
+field to be *present* at all thirteen but accepts `st.provider_state` at every one — while six are
+downstream of the dispatch call and must carry the successor. Cluster 1 verified the failure
+empirically: flipping all six to the carry-forward form type-checks clean (`✓ No errors found!`) and
+serves `[s0,s0,s0,…]` in **both** scenarios — a total freeze, worse than F6 itself. Only
+`scripted_cursor_probe` catches it. **A12 threads more cursors through the same literals, at a
+larger site count, for values with no equivalent instrument.**
+*Therefore, binding:* **land an executable advancement assertion for each cursor before threading
+it.** Not after. A cursor threaded without one is indistinguishable from a cursor frozen, in a tree
+where every type-check passes.
 *Size:* **estimate — several days**, staged as one PR per effect class. Basis: the spike threaded
 world state and routed the clock on a throwaway branch; this repeats that behaviour-preservingly
-across six effect classes plus the typed tool contract.
+across six effect classes plus the typed tool contract. Per the corrected model, re-size against
+sites once the per-class site counts are known — A2's 35 sites for one cursor is the anchor, and
+the advancement assertions are new work the spike never did.
 *Acceptance evidence per class:* existing targets green; the class's poison probe (capability
 withheld) passes for the deterministic entry point and fails for the live world — the F3-corrected
 per-run backstop; for the tool class, the typed contract carries ordinary success, typed
@@ -401,6 +446,25 @@ silently truncated, or below-minimum window (tested by forcing one); the fixed b
 reaches every required non-waived fault class in A7's catalogue; a promoted counterexample enters
 the fixed corpus with its manifest attached.
 *Size:* **estimate — 2–4 days**, dominated by CI cost measurement rather than code.
+
+**WI-A16. Wire the unrun driver coverage into `make` and CI — do this before A9 and A12.** No
+dependencies; it is Makefile and workflow work, and it is sequenced first because it *protects* the
+remaining driver items rather than following them. Cluster 1 found a live gap: **eight smoke scripts
+that exercise the driver's full loop are in no `make` target and no CI job** —
+`scripts/smoke_v2_{dp7_gate,pending_full_loop,compaction_full_loop,stream_parity,ext_fixture_parity,cost_budget_full_loop,compaction_chain}.ail`
+and `smoke_phase_a_tool_parity.ail` — and **`src/core/test/scripted_ports.ail`'s six unit tests are
+run by nothing**, since `check_core` covers `src/core/*.ail` only. Verified at HEAD: all nine have
+zero references in the Makefile.
+
+This is not hygiene. WI-A2 changed the contract every one of those eight depends on and nothing in
+the repo would have run them; cluster 1 ran all eight by hand and all eight passed, but the next
+driver change has no such guarantee. `smoke_v2_dp7_gate` is the **only** executable coverage of
+`c2_after_dp7`, whose two successor literals A2 had to thread — precisely the code path A12's
+silent-freeze hazard threatens.
+*Acceptance evidence:* all nine run in a `make` target reachable from CI; the target fails when any
+one of them fails (verified by breaking one deliberately); `scripted_ports.ail`'s unit tests are in
+a named target.
+*Size:* **estimate — under a day.** Basis: wiring, not authoring; the scripts exist and pass today.
 
 ### Milestone B — the repin (trigger: a released AILANG carrying the recorded-stream API)
 

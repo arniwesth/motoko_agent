@@ -6,21 +6,108 @@
 
 module src/core/ports
 
-import std/ai (Message, StepResult, AIError, StreamChunk)
+import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
 import std/result (Result)
 import std/trace as Trace
-import pkg/sunholo/motoko_ext_abi/types (ExtRuntime)
 import src/core/phase_vocab (ApprovalRequest)
 
 export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
 
+-- A scripted LLM turn: what the "model" returns for one exchange.
+--
+-- WI-A2 relocated this here from `src/core/test/stub_step.ail`. It has to be
+-- declared at or below this module because `ProviderState` carries it and both
+-- the module declaring the widened port and the driver holding the
+-- `C2LoopState` field must name that type. The obvious alternative,
+-- `ScriptedPortsState` (`src/core/test/scripted_ports.ail`), cannot be used:
+-- that module imports `ports`, `stub_step` AND `session`, so either consumer
+-- closes a module cycle, which AILANG rejects (LDR002). Parameterising `Ports`
+-- over its state type is not an escape either — the declaration is accepted but
+-- instantiation fails unification on the pin. `ScriptedPortsState` and
+-- `scripted_model_next` are therefore a design precedent, not reusable code.
+export type ScriptedStep = {
+  prose: string,
+  tool_calls: [ToolCall],
+  input_tokens: int,
+  output_tokens: int,
+  finish_reason: string,
+  chunks: [string]
+}
+
+-- The provider's own state, threaded through `model_step` in and out.
+--
+-- WI-A2, under ADR-001 D1's cursor-ownership paragraph. This is a record and
+-- not a sum (plan decision P1): a reviewer's probe on the pin widened a
+-- `ProviderState` already used in a cross-module port signature and the port
+-- module came out byte-identical, the compiler flagging only the construction
+-- site. That is the additive-edit shape we want when the world state grows.
+--
+-- The first field is the scripted cursor: the remaining script tail, the
+-- threading style `scripted_model_next` already demonstrates. Live and
+-- caller-supplied adapters are stateless and return their input unchanged —
+-- D1's specified identity transition, not a per-construction-site decision.
+--
+-- No approval or clock cursor rides along (plan decision P2), and the ground is
+-- no-interim-consumer rather than structural closure: the scripted
+-- `approval_read` is a constant deny with no position to thread, and the
+-- virtual clock only exists once `world_state` lands — which subsumes and
+-- deletes this type's interim home anyway. A pre-`world_state` need for a
+-- non-constant approval would force a SECOND bidirectional port widening and
+-- is P2's named trigger to reopen the decision, not something to solve here.
+export type ProviderState = {
+  script: [ScriptedStep]
+}
+
+-- `ported_provider` returns the initial state alongside the Ports — D1's "a
+-- pair, or a paired constructor". Splitting them at the loop boundary is what
+-- keeps the cursor in one explicit driver field instead of inside the Ports.
+export type PortedProvider = {
+  ports: Ports,
+  state: ProviderState
+}
+
+-- The state a stateless provider carries, and the initial state for every
+-- non-scripted arm of `ported_provider`.
+export pure func empty_provider_state() -> ProviderState {
+  { script: [] }
+}
+
+-- One provider exchange: the typed step outcome, plus the ordered log of the
+-- intermediate emissions that call produced.
+--
+-- WI-A1, under ADR-001 D1's loss-channel rule. `model_step` takes a multi-fire
+-- `(StreamChunk) -> () ! {IO}` callback whose values the returning closure
+-- discards, while returning only `Result[StepResult, AIError]` — a concrete,
+-- demonstrated loss, one layer above `std/ai`, which nothing downstream can
+-- recover from. The ordering rule is: widen the port before adopting whatever
+-- fills it, because the port is where the information is thrown away.
+--
+-- Every construction site returns `emissions: []` today, so this widening is
+-- behaviour-preserving; what it buys is that adopting a recorded-stream API
+-- later fills exactly one closure, in `live_ports`.
+--
+-- The rule is scoped to ports with a *demonstrated* loss channel, and today
+-- that is exactly this one field: `approval_read` is a synchronous resolution
+-- and `clock_now` is a point read, and neither has an intermediate channel
+-- through which a value could be silently dropped.
+--
+-- WI-A2 added `next_state`. That is a SECOND widening of `model_step`, on a
+-- second and separately stated ground — state threading, not a discarded
+-- emission channel — and unlike the first it is not behaviour-preserving,
+-- because it changes the port's input shape and every construction site's
+-- contract. A successor cursor is not an emission; WI-A1 did not enable this.
+export type ProviderExchange = {
+  emissions: [StreamChunk],
+  result: Result[StepResult, AIError],
+  next_state: ProviderState
+}
+
 export type Ports = {
-  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
+  model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
   approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env},
-  tool_exec: (string, string) -> string ! {IO, Process, FS},
-  hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  tool_exec: (string, string) -> string ! {IO, Process, FS}
 }
 
 func deny_approval(_req: ApprovalRequest) -> ApprovalResolution ! {IO} {
@@ -34,15 +121,13 @@ func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 export func ports_shape_probe(
-  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
-  hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
 ) -> Ports {
   {
     model_step: model_step,
     approval_read: deny_approval,
     clock_now: fake_clock,
     env_get: fake_env,
-    tool_exec: fake_tool,
-    hooks_runtime: hooks_runtime
+    tool_exec: fake_tool
   }
 }
