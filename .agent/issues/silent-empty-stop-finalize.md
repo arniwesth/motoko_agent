@@ -1,7 +1,7 @@
 # Session finalizes silently on an empty model response ("silent death")
 
 ## Status
-open
+resolved
 
 ## Branch
 arniwesth/mot-34-layer-2-harness-boundary

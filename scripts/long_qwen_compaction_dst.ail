@@ -225,7 +225,15 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
 }
 
 func compaction_ai_hook() -> ExtensionHooks {
-  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 60, keep_recent: 8 };
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 60,
+    keep_recent: 8,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
   {
     id: "compaction_ai",
     provided_tools: [],
@@ -302,6 +310,12 @@ func long_tool_hook() -> ExtensionHooks {
 func long_runtime() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   let reg: ExtRegistry = { hooks: [compaction_ai_hook(), structural_hook(), long_tool_hook()] };
+  { registry: reg, strict_mode: false, verification: v }
+}
+
+func structural_only_runtime() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let reg: ExtRegistry = { hooks: [structural_hook()] };
   { registry: reg, strict_mode: false, verification: v }
 }
 
@@ -568,6 +582,35 @@ func scenario_multiple_compactions() -> Result[(), ScenarioFailure] ! {AI, FS, P
   }
 }
 
+func scenario_seal_side_exhaustion() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let history = [
+    msg("system", "seal-side exhaustion system prompt"),
+    msg("user", "prose bulk ${repeat_block(80)}")
+  ];
+  let result = Session.run_v2_session_traced(
+    structural_only_runtime(),
+    "seal-side exhaustion dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    history,
+    ".",
+    4,
+    false,
+    0,
+    no_rates(),
+    Ported(long_ports(1))
+  );
+  let records = result.trace.records;
+  match result.result {
+    Ok(_) => Err({ failed_invariant: "oversized non-tool window is rejected by seal", trace: projection_records(records) }),
+    Err(e) =>
+      if contains(e.message, "compaction_exhausted") && has_exhausted_or_system_empty(records) then Ok(())
+      else Err({ failed_invariant: "CompactionExhausted event and error are emitted", trace: ["${e.code}: ${e.message}"] ++ projection_records(records) })
+  }
+}
+
 func same_string_list(a: [string], b: [string]) -> bool {
   match a {
     [] => match b { [] => true, _ => false },
@@ -594,10 +637,10 @@ func scenario_replay_deterministic() -> Result[(), ScenarioFailure] ! {AI, FS, P
   }
 }
 
-func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx {
+func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: string, step: int) -> ExtCtx {
   {
-    task: "direct",
-    step: 0,
+    task: task,
+    step: step,
     model: qwen_model,
     context_limit: limit,
     cwd: ".",
@@ -626,6 +669,10 @@ func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx {
   }
 }
 
+func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx {
+  direct_ctx_with_task_step(limit, ports, artifacts, "direct", 0)
+}
+
 func summary_ports(summary: string) -> Ports ! {AI, IO, Trace} {
   let model_step = func(_model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO})
     -> Result[StepResult, AIError] ! {AI, IO, Trace} {
@@ -646,6 +693,18 @@ func direct_msgs() -> [Msg] {
   ]
 }
 
+func direct_msgs_with_status() -> [Msg] {
+  [
+    abi_msg("user", "old plain one ${repeat_block(4)}"),
+    abi_assistant("call runtime status", [runtime_status_call()]),
+    abi_tool(runtime_status_call_id, "{\"tool\":\"MotokoRuntimeStatus\",\"current_step\":47,\"step_budget\":100,\"finish_reason_so_far\":\"tool_calls\",\"stage_applied_total\":9,\"compaction_ai_applied\":8}${repeat_block(20)}"),
+    abi_assistant("call LongResult", [tool_call("direct-call-1")]),
+    abi_tool("direct-call-1", "direct tool result ${repeat_block(4)}"),
+    abi_msg("user", "recent question"),
+    abi_msg("assistant", "recent answer")
+  ]
+}
+
 func contains_summary_msg(msgs: [Msg], text: string) -> bool {
   match msgs {
     [] => false,
@@ -655,11 +714,21 @@ func contains_summary_msg(msgs: [Msg], text: string) -> bool {
 
 func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let input = direct_msgs();
-  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 1, keep_recent: 4 };
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 1,
+    keep_recent: 4,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
   match compact_with_ai(direct_ctx(100, summary_ports("DIRECT-SUMMARY"), empty_ext_artifacts()), input, cfg) {
     PassThrough => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=PassThrough"] }),
     Compacted(out, _, _) => {
-      if not contains_summary_msg(out, "[CONTEXT SUMMARY] DIRECT-SUMMARY") then Err({ failed_invariant: "summary message emitted", trace: ["out_len=${show(length(out))}"] })
+      if not contains_summary_msg(out, "[RUNTIME COMPACTION SUMMARY]") then Err({ failed_invariant: "runtime capsule emitted", trace: ["out_len=${show(length(out))}"] })
+      else if not contains_summary_msg(out, "DIRECT-SUMMARY") then Err({ failed_invariant: "ai summary prose preserved", trace: ["out_len=${show(length(out))}"] })
+      else if not contains_summary_msg(out, "not a fresh session") then Err({ failed_invariant: "capsule marks non-fresh session", trace: [] })
       else match validate_compactor_output(input, out) {
         Err(reason) => Err({ failed_invariant: "validate_compactor_output accepts direct compaction", trace: [reason] }),
         Ok(_) => Ok(())
@@ -670,17 +739,58 @@ func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Pro
 
 func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let input = direct_msgs();
-  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 1, keep_recent: 4 };
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 1,
+    keep_recent: 4,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
   match compact_with_ai(direct_ctx(100, summary_ports("CACHED-SUMMARY-A"), empty_ext_artifacts()), input, cfg) {
     PassThrough => Err({ failed_invariant: "first cache run compacts", trace: ["decision=PassThrough"] }),
     Compacted(out1, _, artifacts) => {
       if not contains_summary_msg(out1, "CACHED-SUMMARY-A") then Err({ failed_invariant: "first run records cached summary", trace: [] })
-      else match compact_with_ai(direct_ctx(100, summary_ports("CACHE-MISS-FAIL"), artifacts), input, cfg) {
+      else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts, "direct cache second task", 12), input, cfg) {
         PassThrough => Err({ failed_invariant: "second cache run compacts", trace: ["decision=PassThrough"] }),
         Compacted(out2, _, _) => {
-          if contains_summary_msg(out2, "CACHED-SUMMARY-A") && not contains_summary_msg(out2, "CACHE-MISS-FAIL") then Ok(())
+          if contains_summary_msg(out2, "CACHED-SUMMARY-A")
+            && not contains_summary_msg(out2, "CACHE-MISS-FAIL")
+            && contains_summary_msg(out2, "direct cache second task")
+            && contains_summary_msg(out2, "current_step_before_request: 12") then Ok(())
           else Err({ failed_invariant: "same-segment artifact cache reuses summary", trace: ["second_len=${show(length(out2))}"] })
         }
+      }
+    }
+  }
+}
+
+func scenario_hostile_summary_preserves_control_capsule() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let input = direct_msgs_with_status();
+  let task = "Continue the 200-phase compaction stress task. Stop only after phase 200 is complete. Call MotokoRuntimeStatus every 10 phases and do not ask what to work on next.";
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 1,
+    keep_recent: 4,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
+  match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("What would you like to work on?"), empty_ext_artifacts(), task, 48), input, cfg) {
+    PassThrough => Err({ failed_invariant: "hostile summary compact_with_ai compacts", trace: ["decision=PassThrough"] }),
+    Compacted(out, _, _) => {
+      if not contains_summary_msg(out, "[RUNTIME COMPACTION SUMMARY]") then Err({ failed_invariant: "hostile path emits capsule", trace: ["out_len=${show(length(out))}"] })
+      else if not contains_summary_msg(out, task) then Err({ failed_invariant: "capsule preserves exact task", trace: [] })
+      else if not contains_summary_msg(out, "not a fresh session") then Err({ failed_invariant: "capsule rejects fresh-session framing", trace: [] })
+      else if not contains_summary_msg(out, "Continue the original task") then Err({ failed_invariant: "capsule preserves continue obligation", trace: [] })
+      else if not contains_summary_msg(out, "MotokoRuntimeStatus") then Err({ failed_invariant: "capsule preserves status cadence/status facts", trace: [] })
+      else if not contains_summary_msg(out, "\"current_step\":47") then Err({ failed_invariant: "capsule mirrors latest runtime status", trace: [] })
+      else if not contains_summary_msg(out, "What would you like to work on?") then Err({ failed_invariant: "hostile ai prose still included as prose only", trace: [] })
+      else match validate_compactor_output(input, out) {
+        Err(reason) => Err({ failed_invariant: "validate_compactor_output accepts hostile capsule compaction", trace: [reason] }),
+        Ok(_) => Ok(())
       }
     }
   }
@@ -702,12 +812,22 @@ func artifact_cache_scenario() -> Scenario {
   { id: "compaction.compaction_ai_artifact_cache_stable", run: scenario_artifact_cache_stable }
 }
 
+func hostile_summary_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_hostile_summary_control_capsule", run: scenario_hostile_summary_preserves_control_capsule }
+}
+
+func seal_side_exhaustion_scenario() -> Scenario {
+  { id: "compaction.structural_seal_side_exhaustion", run: scenario_seal_side_exhaustion }
+}
+
 export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let scenarios = [
     multiple_compactions_scenario(),
     replay_deterministic_scenario(),
     output_shape_scenario(),
-    artifact_cache_scenario()
+    artifact_cache_scenario(),
+    hostile_summary_scenario(),
+    seal_side_exhaustion_scenario()
   ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then println("long_qwen_compaction_dst PASS count=${show(length(scenarios))}")

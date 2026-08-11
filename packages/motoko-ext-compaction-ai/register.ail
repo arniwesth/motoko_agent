@@ -4,7 +4,7 @@
 module sunholo/motoko_ext_compaction_ai/register
 
 import std/env (getEnvOr)
-import std/json (decode, getString, getInt)
+import std/json (decode, getString, getInt, getBool)
 import std/option (Option, Some, None)
 import std/fs (readFileResult)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -53,7 +53,31 @@ func read_compaction_ai_config(profile_dir: string) -> CompactionAiConfig ! {Env
             None => default_config().keep_recent,
             Some(k) => k
           };
-          { model: model, threshold_pct: threshold_pct, keep_recent: keep_recent }
+          let min_relief_pct = match getInt(json, "min_relief_pct") {
+            None => default_config().min_relief_pct,
+            Some(v) => v
+          };
+          let rate_limit_enabled = match getBool(json, "rate_limit_enabled") {
+            None => default_config().rate_limit_enabled,
+            Some(v) => v
+          };
+          let min_gap_steps = match getInt(json, "min_gap_steps") {
+            None => default_config().min_gap_steps,
+            Some(v) => v
+          };
+          let hard_override_pct = match getInt(json, "hard_override_pct") {
+            None => default_config().hard_override_pct,
+            Some(v) => v
+          };
+          {
+            model: model,
+            threshold_pct: threshold_pct,
+            keep_recent: keep_recent,
+            min_relief_pct: min_relief_pct,
+            rate_limit_enabled: rate_limit_enabled,
+            min_gap_steps: min_gap_steps,
+            hard_override_pct: hard_override_pct
+          }
         }
       }
     }

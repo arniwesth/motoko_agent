@@ -17,6 +17,7 @@ import pkg/sunholo/motoko_ext_microrag/register (register_with_config as registe
 import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config as register_compaction_ai)
 import pkg/sunholo/motoko_ext_scratchpad/register (register_with_config as register_scratchpad)
 import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_config as register_compaction_structural)
+import pkg/sunholo/motoko_ext_empty_stop_guard/register (register_with_config as register_empty_stop_guard)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistry)
@@ -37,6 +38,7 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] {
   else if name == "compaction_ai" then Some(register_compaction_ai(cfg))
   else if name == "scratchpad" then Some(register_scratchpad(cfg))
   else if name == "compaction_structural" then Some(register_compaction_structural(cfg))
+  else if name == "empty_stop_guard" then Some(register_empty_stop_guard(cfg))
   else None
 }
 

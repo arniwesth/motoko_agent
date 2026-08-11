@@ -529,6 +529,7 @@ export type CostWarningInfo = { threshold: string, step: int, pct: int, total_co
 export type Dp7RejectedInfo = { step: int, errors: string }
 export type CheckpointInfo = { reason: string, before_digest: string, after_digest: string }
 export type DoneInfo = { step: int, output: string, source: string }
+export type EmptyStopFinalizeInfo = { step: int, input_tokens: int, estimated_input_tokens: int, context_limit: int }
 export type ErrorInfo = { source: string, code: string, message: string }
 export type FeedbackInfo = { step: int, feedback: string }
 export type HybridBashInfo = { step: int, cmd: string }
@@ -612,6 +613,7 @@ export type LedgerEvent
   | ExtInterceptHandled(ToolHandledInfo)     -- [prod] ext_intercept_handled
   | HybridBashExtracted(HybridBashInfo)      -- [prod] hybrid_bash_extracted
   | DoneEvent(DoneInfo)                      -- [prod] done
+  | EmptyStopFinalize(EmptyStopFinalizeInfo) -- [prod] empty_stop_finalize
   | ExtSolverFeedback(FeedbackInfo)          -- [prod] ext_solver_feedback
   | PersistNudge(PersistNudgeInfo)           -- [prod] persist_nudge
   | NativeToolCalls(ToolBatchInfo)           -- [prod] native_tool_calls
@@ -685,6 +687,7 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     ExtInterceptHandled(i) => [kv("type", js("ext_intercept_handled")), kv("step", jnum(_int_to_float(i.step))), kv("tool", js(i.tool)), kv("exit_code", jnum(_int_to_float(i.exit_code)))],
     HybridBashExtracted(i) => [kv("type", js("hybrid_bash_extracted")), kv("step", jnum(_int_to_float(i.step))), kv("cmd", js(i.cmd))],
     DoneEvent(i) => done_kvs(i),
+    EmptyStopFinalize(i) => [kv("type", js("empty_stop_finalize")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("context_limit", jnum(_int_to_float(i.context_limit)))],
     ExtSolverFeedback(i) => [kv("type", js("ext_solver_feedback")), kv("step", jnum(_int_to_float(i.step))), kv("feedback", js(i.feedback))],
     PersistNudge(i) => [kv("type", js("persist_nudge")), kv("step", jnum(_int_to_float(i.step))), kv("nudge_num", jnum(_int_to_float(i.nudge_num))), kv("budget", jnum(_int_to_float(i.budget)))],
     NativeToolCalls(i) => [kv("type", js("native_tool_calls")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool_calls", i.payload)],
@@ -1109,6 +1112,7 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(HybridBashExtracted({ step: 1, cmd: "echo hi" }), "{\"type\":\"hybrid_bash_extracted\",\"step\":1,\"cmd\":\"echo hi\"}")
     && golden(DoneEvent({ step: 1, output: "ok", source: "" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\"}")
     && golden(DoneEvent({ step: 1, output: "ok", source: "ext_solver_accept" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\",\"source\":\"ext_solver_accept\"}")
+    && golden(EmptyStopFinalize({ step: 96, input_tokens: 22312, estimated_input_tokens: 8600, context_limit: 131072 }), "{\"type\":\"empty_stop_finalize\",\"step\":96,\"input_tokens\":22312,\"estimated_input_tokens\":8600,\"context_limit\":131072}")
     && golden(ExtSolverFeedback({ step: 1, feedback: "fix" }), "{\"type\":\"ext_solver_feedback\",\"step\":1,\"feedback\":\"fix\"}")
     && golden(PersistNudge({ step: 1, nudge_num: 2, budget: 3 }), "{\"type\":\"persist_nudge\",\"step\":1,\"nudge_num\":2,\"budget\":3}")
     && golden(NativeToolCalls({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_calls\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"tool_calls\":[]}")

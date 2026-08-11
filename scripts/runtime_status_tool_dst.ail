@@ -205,6 +205,10 @@ func first_tool_status_ok(msgs: [Message], expected_id: string) -> bool {
         && contains(first, "\"steps_executed_so_far\":1")
         && contains(first, "\"step_budget\":8")
         && contains(first, "\"digest\":\"sha256:")
+        && contains(first, "\"context_window\"")
+        && contains(first, "\"last_sent\"")
+        && contains(first, "\"uncompacted_pending\"")
+        && contains(first, "\"note\"")
         && match tool_ids(msgs) { id :: _ => id == expected_id, _ => false },
     _ => false
   }

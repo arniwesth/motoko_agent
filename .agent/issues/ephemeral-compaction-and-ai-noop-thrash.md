@@ -1,7 +1,7 @@
 # Structural compaction over-escalates to emergency tier under sustained overflow (ephemeral model is by-design)
 
 ## Status
-open
+implemented
 
 ## Branch
 arniwesth/mot-34-layer-2-harness-boundary
@@ -63,7 +63,7 @@ This is **PLAN-level work, not an ADR** — it refines an already-extension-resi
 # AI compactor no-op thrash: summarizes 1 turn for 0% relief, every step
 
 ## Status
-open
+implemented
 
 ## Branch
 arniwesth/mot-34-layer-2-harness-boundary

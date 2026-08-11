@@ -1,6 +1,6 @@
 module sunholo/motoko_ext_compaction_structural/compaction_structural
 
-import std/string (length, substring)
+import std/string (contains, length, substring)
 import std/list (foldl)
 import std/result (Result, Ok, Err)
 import std/json (jo)
@@ -26,6 +26,8 @@ export pure func elide_hard_keep_last() -> int { 5 }
 export pure func emergency_keep_last() -> int { 3 }
 
 export pure func emergency_final_keep_last() -> int { 1 }
+
+export pure func result_target_pct() -> int { elide_tier_pct() }
 
 pure func count_tool_msgs(msgs: [Msg]) -> int {
   foldl(\acc m. acc + (if m.role == "tool" then 1 else 0), 0, msgs)
@@ -145,26 +147,39 @@ pure func structural_note(tier: string, keep_last: int) -> string {
   "structural: tier=${tier} keep_last=${show(keep_last)}"
 }
 
+pure func calibrated_ctx_usage(ctx: ExtCtx, msgs: [Msg]) -> int {
+  calibrated_usage_percent_with_limit(msgs, ctx.context_limit, ctx.telemetry.last_input_tokens, ctx.telemetry.last_estimated_input_tokens)
+}
+
+pure func candidate_fits(ctx: ExtCtx, msgs: [Msg]) -> bool {
+  calibrated_ctx_usage(ctx, msgs) < result_target_pct()
+}
+
 export pure func compact_for_pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision {
-  let pct = calibrated_usage_percent_with_limit(msgs, ctx.context_limit, ctx.telemetry.last_input_tokens, ctx.telemetry.last_estimated_input_tokens);
-  if pct >= emergency_pct() then {
-    let emergency1 = elide_old_tool_results(msgs, emergency_keep_last());
-    if not same_msgs(msgs, emergency1) then Compacted(emergency1, structural_note("emergency", emergency_keep_last()), jo([]))
+  if candidate_fits(ctx, msgs) then PassThrough
+  else {
+    let tier1 = elide_old_tool_results(msgs, elide_keep_last());
+    if not same_msgs(msgs, tier1) && candidate_fits(ctx, tier1) then
+      Compacted(tier1, structural_note("tier1", elide_keep_last()), jo([]))
     else {
-      let emergency2 = elide_old_tool_results(msgs, emergency_final_keep_last());
-      if not same_msgs(msgs, emergency2) then Compacted(emergency2, structural_note("emergency", emergency_final_keep_last()), jo([]))
-      else PassThrough
+      let hard = elide_old_tool_results(msgs, elide_hard_keep_last());
+      if not same_msgs(msgs, hard) && candidate_fits(ctx, hard) then
+        Compacted(hard, structural_note("hard", elide_hard_keep_last()), jo([]))
+      else {
+        let emergency = elide_old_tool_results(msgs, emergency_keep_last());
+        if not same_msgs(msgs, emergency) && candidate_fits(ctx, emergency) then
+          Compacted(emergency, structural_note("emergency", emergency_keep_last()), jo([]))
+        else {
+          let floor = elide_old_tool_results(msgs, emergency_final_keep_last());
+          if same_msgs(msgs, floor) then PassThrough
+          else if candidate_fits(ctx, floor) then
+            Compacted(floor, structural_note("emergency", emergency_final_keep_last()), jo([]))
+          else
+            Compacted(floor, structural_note("floor", emergency_final_keep_last()), jo([]))
+        }
+      }
     }
   }
-  else if pct >= elide_hard_tier_pct() then {
-    let elided = elide_old_tool_results(msgs, elide_hard_keep_last());
-    if same_msgs(msgs, elided) then PassThrough else Compacted(elided, structural_note("hard", elide_hard_keep_last()), jo([]))
-  }
-  else if pct >= elide_tier_pct() then {
-    let elided = elide_old_tool_results(msgs, elide_keep_last());
-    if same_msgs(msgs, elided) then PassThrough else Compacted(elided, structural_note("tier1", elide_keep_last()), jo([]))
-  }
-  else PassThrough
 }
 
 func tool(id: string, content: string) -> Msg {
@@ -177,6 +192,36 @@ func user(content: string) -> Msg {
 
 func long_tool_content() -> string {
   "long tool output that genuinely exceeds eighty characters in length and then keeps on going for a while longer until it definitely passes the elide threshold and triggers actual shortening of the message body"
+}
+
+func very_long_tool_content() -> string {
+  "${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()}"
+}
+
+func repeated_tools(n: int, content: string) -> [Msg] {
+  if n <= 0 then [] else tool("t${show(n)}", content) :: repeated_tools(n - 1, content)
+}
+
+func test_ctx(limit: int) -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "m",
+    context_limit: limit,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1, solver: 1, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: [],
+    state_key: "k",
+    context_limit: limit,
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry()
+  }
 }
 
 func count_elided(msgs: [Msg]) -> int {
@@ -238,27 +283,33 @@ func test_calibrated_usage_affine_and_floor() -> bool
 func test_pre_step_passthrough_when_unchanged() -> bool
   tests [((), true)]
   {
-    let ctx: ExtCtx = {
-      task: "t",
-      step: 0,
-      model: "m",
-      context_limit: 1,
-      cwd: ".",
-      hybrid_tools: false,
-      budget: { total: 1, solver: 1, verifier: 0 },
-      mode: "default",
-      workdir: ".",
-      env_server_url: "",
-      budget_remaining: 1,
-      history_slice: [],
-      state_key: "k",
-      context_limit: 1,
-      ports: noop_ext_ports(),
-      artifacts: empty_ext_artifacts(),
-      telemetry: zero_token_telemetry()
-    };
+    let ctx = test_ctx(1);
     match compact_for_pre_step(ctx, [tool("t1", "short")]) {
       PassThrough => true,
       Compacted(_, _, _) => false
+    }
+  }
+
+func test_pre_step_passthrough_when_input_under_target() -> bool
+  tests [((), true)]
+  {
+    let ctx = test_ctx(10000);
+    match compact_for_pre_step(ctx, repeated_tools(20, long_tool_content())) {
+      PassThrough => true,
+      Compacted(_, _, _) => false
+    }
+  }
+
+func test_pre_step_selects_gentlest_result_tier() -> bool
+  tests [((), true)]
+  {
+    let ctx = test_ctx(8500);
+    let msgs = repeated_tools(20, very_long_tool_content());
+    match compact_for_pre_step(ctx, msgs) {
+      Compacted(out, note, _) =>
+        contains(note, "tier=tier1")
+          && contains(note, "keep_last=10")
+          && candidate_fits(ctx, out),
+      PassThrough => false
     }
   }
