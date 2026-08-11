@@ -178,6 +178,45 @@ API probe — which is the most natural reading of D1's "a direct positive versi
 a green gate over a broken adoption. **Two subjects, not one**, wherever an item adopts an external
 API. This generalises past streaming and binds C5.
 
+**S16. A parity check whose two sides share a PRODUCER tests threading, not parity — and the
+difference is the whole defect class.** Earned by WI-C3, and measured rather than argued. D6.4 says
+the projected sequence and the returned emission log must match; in-process there is exactly ONE
+observation of the stream (`ProviderExchange.emissions`), because the callback's projections go to
+`ledger_emit`, which returns `()`, and the callback's row is closed `{IO}` so it cannot accumulate
+what it saw. So the invariant's two sides both derive from the returned log. **A de-duplication
+injected into the callback — the projection disagreeing with the returned log, which is literally the
+defect D6.4 names — leaves `stream_parity_dst` COMPLETELY GREEN**, and is caught only by comparing the
+WIRE (what the callback projected) against the returned trace (what the driver appended), which is out
+of process and lives in `run_stream_parity_wire.sh`.
+
+**Reproduced independently at review**, because a claim this load-bearing should not rest on one
+run: a callback that drops one delta class leaves the in-process gate green with **0 findings**
+across all sixteen families on the recording subject, while the wire gate goes red on three rows at
+**`wire_deltas=10` against `trace_deltas=14`** — including the fixture-adequacy row that exists to
+make de-duplication visible.
+
+**Two consequences, and the second is the transferable one.** First, an in-process check built this
+way is still worth having — it tests that every branch carries both channels forward, which is S12's
+identity-transition class on a pair of channels, and WI-C3's mutant A reddens 5 rows with it. Second,
+and generalising past streaming: **before writing any "the projection matches the record" check, name
+the two producers. If they are the same expression, say what the check actually tests at the site, and
+build the second gate somewhere the other producer is observable.** This binds C5's
+declared-versus-performed detector directly, which has exactly this shape.
+
+**The corollary that resized WI-C3, and it is cheap to miss: a variant in `d64_gap_register` has NO
+trace side at all.** `ledger_emit` does not call `ledger_append`. Before WI-C3 the emission witness was
+`[]` because nothing read it AND the trace held zero `StreamDelta` records because nothing appended
+them — **both sides empty, and two empty sides are green.** Any future item that reads "parity is
+checked over the returned trace" for a registered variant is reading a comparison against an empty
+list.
+
+**S17. A mutation loop must save and restore by FILE COPY, never by `git checkout`.** Earned by WI-C3,
+which lost the item's entire implementation to `git checkout src/core/session.ail` used to revert a
+mutant, and recovered only from a `cp` taken seconds earlier in the same command block. **During an
+item the working tree IS the work and git is the only copy of the state before it**; a path-scoped
+checkout does not distinguish the mutant from the ninety minutes underneath it. S8 already asks items
+to budget mutation loops as the cost of a detector — this is the operational half.
+
 **S13. Sweep the whole tree before believing a gate — `check_core` is a SUBSET gate, and the sweep is
 the step every item under budget pressure drops.** Milestone B found five frontiers and **the fifth
 differs in kind**: the first four were found by a compiler that could not reach them yet; the fifth was
@@ -187,6 +226,33 @@ dropped the sweep and said so; B4 ran it first and it refuted the wave's green c
 classifier-2 fixtures B2a had found the same way one item earlier. **A repair loop seeded from the
 failing set cannot see what its own change breaks.** That lesson has now been learned twice and lost
 once. Run the sweep cache-cold (S9), and run it *first*.
+
+**AND RUN IT WITH `AILANG_RELAX_MODULES=1`, which no prior report records and which is worth 76
+files.** Every module under `packages/**` declares a `sunholo/...` module path that does not match its
+file path, so a bare `ailang check` reports MOD010 on all of them. Measured at WI-C3: the unflagged
+sweep reads **146 pass / 93 fail**, the flagged one **222 / 17**. That is a false red four times larger
+than the fifth frontier B4 found, and it would consume an item's remaining budget chasing a break
+nobody made. The sweep is:
+
+**And the MECHANISM, measured at review and worth more than the flag: a WARM CACHE MASKS `MOD010`
+COMPLETELY.** Same file, same command — `packages/motoko-ext-abi/types.ail` passes cache-warm
+without the flag, 12 of 12 sampled package files fail `MOD010` cache-cold without it, and 12 of 12
+pass cache-cold with it. **So the flag's necessity appears ONLY under the discipline S9 and S13
+impose**, which is exactly why three items measured sweeps without ever needing it. Cache-warm and
+unflagged fails *green*; cache-cold and unflagged fails *red* by 76 files — **opposite directions,
+which is why neither reads as a defect on its own**, and only cache-cold with the flag is the real
+number.
+
+```bash
+for f in $(find src scripts packages tools cmd -name '*.ail' | sort); do
+  AILANG_RELAX_MODULES=1 ailang check "$f" >/dev/null 2>&1 || echo "FAIL $f"
+done
+```
+
+The 17 expected failures are stable across B4, C1 and C3: the 7 `TC_ARITY_001` smoke scripts, the
+sealed-vocabulary probe (`IMP010`), 5 `src/examples/`, 3 code-graph fixtures and 1 test-coverage
+fixture. **Confirm the failing set member-for-member rather than the count** — the count moves by one
+whenever an item adds a file.
 
 **S12. An identity transition is the correct answer for a component that did nothing and a silent
 defect for one that did something — and no type distinguishes them.** Earned by B2b, and it is the
@@ -2119,6 +2185,23 @@ block the name:
   scripted `play_chunks` sites still report `emissions: []` while playing chunks. The gap moved from
   producer to consumer. **WI-C3 is what changes that sentence**, and it is now unblocked in a way it
   has never been: the thing it consumes exists.
+  **C3 landed 2026-08-05** (`b145eef`; ~72 min) and **took the BRIDGE option**:
+  `dst_execution.execution_of` builds an `ExecutionUnderTest` from a real run, and
+  `make stream_parity` evaluates **all sixteen D7 families over an execution a run produced** — the
+  first time in this project that any family has been checked against anything but a constructed
+  fixture. **D6.4's named stream exception is discharged**; `StreamDelta` left `d64_gap_register` by
+  being **appended**, not reclassified, and the register went 14 → 13. **D6.4's general obligation is
+  NOT discharged** — twelve of the remaining thirteen are the tool-dispatch fold and the terminal
+  paths.
+  **The finding that resized the item, and it falsifies what the handoff told C3 to expect:**
+  `ledger_emit` writes the wire and calls `emit_trace_event`; it never calls `ledger_append`, which is
+  the only thing that puts a record in the returned `LedgerTrace`. **So the returned trace held ZERO
+  `StreamDelta` records on every path in the driver's history** — the register said so at the site the
+  whole time. It was never "the log has no reader": **both sides were empty, and a parity check over
+  two empty lists is green.** The trace append was therefore a precondition C3 discovered, not a bonus
+  it picked up — and it was *unwritable* before C1, because there was nothing to append from.
+  **The remaining honest gap:** fifteen families run on a real run because they ride along with parity
+  in one script, on one profile, with two adapters — not because anything wires them deliberately.
 
 ## Traps carried forward
 
@@ -2144,6 +2227,21 @@ branch is not HEAD state; the `arniwesth/ailang` fork is not the upstream gate �
   the anchor* is not available to a comment whose job is to be read before the thing it describes, and
   avoiding the cascade would mean writing documentation in the wrong place. **Three consecutive items
   have now paid this; the case for a coordinate-independent anchor is no longer speculative.**
+  **WI-C3 refutes the rest of the claim and adds the operational rule.** C1 moved an anchor with a
+  comment; C3 moved six with a **record field** and an **extracted function**, neither of which has a
+  below-the-anchor version — a record's fields have an order, and a converter must be in scope before
+  its caller. **Four consecutive items have now paid it, and C3 paid it TWICE in one item**: the second
+  payment was caused by three lines of prose added after the first, and was found by `make dst` rather
+  than by remembering. **The cascade is not idempotent across an item — finish every source edit,
+  including comments, BEFORE running it.** Two consumers exist that no checklist in this project names:
+  the `predicate-anchors` script itself, and `attribution_table_dst`'s `omitted_site()` fixture. Both
+  were found by a gate rather than by search.
+- **A tripwire planted for a future item WORKS, and WI-C3 is the first evidence.** WI-A1 spent one line
+  asserting `emission_count == 0` in `phase_c2_wiring_scenarios`, with a written prediction of what its
+  failure would mean. It fired on the first `make dst` after C3 populated the log — the item it was
+  planted for — and was answered by *strengthening* the row rather than relaxing it. **A pin edited to
+  match whatever the code now does is not a pin.** This is the cheapest instrument in the project's
+  inventory and it should be planted deliberately rather than as a byproduct.
 
 ## Out of scope
 

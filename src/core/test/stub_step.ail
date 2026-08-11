@@ -109,13 +109,33 @@ export pure func terminal_step() -> StepResult {
   }
 }
 
-func play_chunks(chunks: [string], on_chunk: (StreamChunk) -> () ! {IO, Trace}) -> () ! {IO, Trace} {
+-- WI-C3: `play_chunks` now takes the CHUNKS rather than their texts, and the
+-- two scripted providers build that list ONCE and both play it and report it as
+-- `emissions`. Before this they played `ContentDelta(x)` per text and returned
+-- `emissions: []` — a provider that streams and reports no stream, which is the
+-- same loss channel `live_ports` had one layer up, and it made every seeded run
+-- produce a witness of zero against a trace of N. A second `[string] ->
+-- [StreamChunk]` conversion at the reporting site would have been two notions of
+-- one quantity; there is one list and it cannot drift from itself.
+func play_chunks(chunks: [StreamChunk], on_chunk: (StreamChunk) -> () ! {IO, Trace}) -> () ! {IO, Trace} {
   match chunks {
     [] => (),
     x :: rest => {
-      let _ = on_chunk(ContentDelta(x));
+      let _ = on_chunk(x);
       play_chunks(rest, on_chunk)
     }
+  }
+}
+
+-- The scripted world models a provider without native reasoning: every scripted
+-- chunk is a ContentDelta, which is what `play_chunks` played before this and is
+-- behaviour-preserving. `Usage` is deliberately absent — a scripted step has no
+-- streamed usage chunk, and manufacturing one would put a chunk in the returned
+-- log that the run did not observe.
+pure func scripted_chunks(cs: [string]) -> [StreamChunk] {
+  match cs {
+    [] => [],
+    c :: rest => ContentDelta(c) :: scripted_chunks(rest)
   }
 }
 
@@ -222,8 +242,9 @@ export func scripted_ports() -> Ports ! {IO, Trace} {
       match state.script {
         [] => { emissions: [], result: Ok(terminal_step()), next_state: state },
         s :: rest => {
-          let _ = play_chunks(s.chunks, on_chunk);
-          { emissions: [], result: Ok(scripted_to_step_result(s)), next_state: { state | script: rest } }
+          let played = scripted_chunks(s.chunks);
+          let _ = play_chunks(played, on_chunk);
+          { emissions: played, result: Ok(scripted_to_step_result(s)), next_state: { state | script: rest } }
         }
       }
     };
@@ -293,9 +314,10 @@ func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (S
             status: OutcomeOk, fault_class_id: "" })
       },
       s :: rest => {
-        let _ = play_chunks(s.chunks, on_chunk);
+        let played = scripted_chunks(s.chunks);
+        let _ = play_chunks(played, on_chunk);
         {
-          emissions: [],
+          emissions: played,
           result: Ok(scripted_to_step_result(s)),
           next_state: record_interaction(
             { state | script: rest },

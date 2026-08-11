@@ -61,34 +61,45 @@
 --      the one D6.4 calls authoritative: "an external `ledger_emit` call is not
 --      evidence that the event is in `LedgerTrace`".
 --
--- WI-A14 CLOSED ONE OF THE FIFTEEN. See `d64_gap_register`.
+-- WI-A14 CLOSED ONE OF THE FIFTEEN; WI-C3 CLOSED A SECOND (`StreamDelta`), and
+-- the register is now THIRTEEN. See `d64_gap_register`.
 --
 -- ============================================================================
--- What the parity family CANNOT do today, stated rather than implied
+-- What the parity family can and cannot do — measured at WI-C3
 -- ============================================================================
 --
 -- D6.4's obligation is parity between logical emissions and returned records.
--- `ledger_emit` is `-> () ! {IO, Trace}` and keeps no in-memory log, so there
--- is no per-run emission witness to compare the trace against, and this module
--- does not pretend otherwise: the runtime half compares the trace against the
--- VOCABULARY, and the emission-vs-trace half is discharged for the one class
--- D6.4 names as its explicit exception — streams — through
+-- `ledger_emit` is `-> () ! {IO, Trace}` and keeps no in-memory log, so there is
+-- still no general per-run emission witness: the runtime half compares the trace
+-- against the VOCABULARY, and the emission-vs-trace half is discharged for the
+-- one class D6.4 names as its explicit exception — streams — through
 -- `ExecutionUnderTest.emissions`.
 --
--- That channel is `ProviderExchange.emissions`. WI-C1 made it non-empty on a
--- live exchange — `live_ports` adopted `stepWithStreamRecorded` — so it is no
--- longer `[]` on every path. THE REASON THIS PARAGRAPH SURVIVES IS UNCHANGED:
--- the driver still has no consumer for the field (`session.ail`'s
--- `exchange.emissions` goes nowhere until WI-C3 builds D6.4's stream-parity
--- reader), and the deterministic adapters that could supply a replayable log
--- still report none. So a REAL RUN still cannot produce the executions this
--- check needs to select among. Per S8's complement, a check whose trajectory never
--- enters its branches certifies nothing and reads identically to one that does
--- — so `stream_parity_findings` is exercised by CONSTRUCTED executions in the
--- acceptance script (omission, duplication, reordering, content drift), not by
--- selecting among the executions a real run can produce. Cluster 12's limit
--- applies exactly: sweep-and-filter selects among things that exist and cannot
--- cover a space the producer does not reach.
+-- WI-C3 CHANGED WHAT THAT CHANNEL CARRIES, and both sides of it moved.
+--
+--   * Before: `session.ail`'s `exchange.emissions` had no reader, so the witness
+--     was `[]` on every path; AND the driver appended no StreamDelta record to
+--     the returned trace, so `stream_records` was `[]` on every path too. BOTH
+--     sides were empty, which is why a constructed fixture was the only way to
+--     exercise this check and why a real run could not be routed through it.
+--   * After: the driver converts the returned chunk log once
+--     (`session.stream_chunk_events`), appends the events to the returned trace,
+--     and threads the same events forward as the run's witness. A real run now
+--     produces an `ExecutionUnderTest` this check can select among — the bridge
+--     is `src/core/dst_execution.execution_of`, and
+--     `scripts/dst/stream_parity_dst.ail` drives it.
+--
+-- WHAT IT STILL CANNOT DO, stated because a green run must not be over-read.
+-- Both sides derive from `ProviderExchange.emissions`, because that is the ONLY
+-- in-process observation of the stream: the callback's own projections go to
+-- `ledger_emit` and its row is closed `{IO}`, so it cannot report what it saw
+-- and D1 rejected the scoped recorder that would let it. In-process,
+-- `stream_parity_findings` therefore tests that the driver carries the trace and
+-- the witness forward together on EVERY branch — six post-call branches against
+-- one trace junction, which is S12's identity-transition class — and not that
+-- the callback projected what the provider returned. The second comparison needs
+-- the WIRE against the trace, which is out of process; `make stream_parity`
+-- does it in the shell and is the only place it is done.
 
 module src/core/dst_invariants
 
@@ -537,10 +548,15 @@ export type ExecutionUnderTest = {
   -- having spent time it did not.
   initial_clock_ms: int,
 
-  -- D6.4's named exception: the sequence projected during the provider
-  -- callback, to be compared against what reached the returned trace. Empty on
-  -- every path today; see the module header for why the check is nonetheless
-  -- exercised.
+  -- D6.4's named exception: the run's stream-emission witness, to be compared
+  -- against what reached the returned trace.
+  --
+  -- WI-C3 gave it a producer. It is `TracedSessionResult.emissions` — the
+  -- ordered logical events derived from every provider exchange's returned chunk
+  -- log — and `dst_execution.execution_of` is the only thing that should fill
+  -- this field from a run. A hand-authored `[]` here is still legal and is what
+  -- the mutation fixture uses, but on a REAL run `[]` now means the witness was
+  -- dropped rather than that none exists, and `StreamParityCount(0, N)` says so.
   emissions: [LedgerEvent],
 
   replay: ReplayObligation,
@@ -625,8 +641,7 @@ export pure func d64_gap_register() -> [string] {
    "ThinkingStreamEnd",
    "NativeToolCalls",
    "NativeToolResults",
-   "SessionSuspend",
-   "StreamDelta"]
+   "SessionSuspend"]
 }
 
 -- Why each registered variant is still a gap, so the register is a work list
@@ -636,9 +651,7 @@ export pure func d64_gap_register() -> [string] {
 export type ParityGap = { variant: string, why: string }
 
 export pure func parity_gap_reasons() -> [ParityGap] {
-  [{ variant: "StreamDelta",
-     why: "D6.4's NAMED EXCEPTION. The provider callback's closed effect row means the projection happens DURING the call and any append happens after it returns, so a shared transition is impossible by construction (D1) — that half is permanent. The obligation is discharged by stream_parity_findings instead, which needs a non-empty emission log. NO LONGER EXTERNALLY BLOCKED: AILANG v0.33.0 shipped stepWithStreamRecorded and WI-C1 adopted it, so live_ports now returns the ordered observed chunks (proven by `make recorded_stream`, D1's five clauses on both outcomes). What remains is OURS and is deferred by choice: the driver has no consumer for the field, and building D6.4's stream-parity reader over it is WI-C3." },
-   { variant: "CostExhausted",
+  [{ variant: "CostExhausted",
      why: "Emitted on the cost-cap terminal path immediately before the finalizer. Closing it is the same one-line append the DoneEvent took and it is NOT blocked; it is out of this item's scope only because it is a second terminal path and the item that changes a terminal path should change one at a time." },
    { variant: "Dp7VerifierRejected",
      why: "Emitted on the re-injection path, which is not terminal: the run continues and terminates later via max-steps or budget. The append is unblocked." },
@@ -1744,11 +1757,16 @@ pure func all_obligations_nonempty(fs: [InvariantFamily]) -> bool {
 -- and the register was not updated, or a Logical variant was moved into the
 -- display-only set to make the parity family green. The second is the one-line
 -- wrong answer, and the module header says why it is wrong.
+--
+-- 14 at WI-A14, THIRTEEN at WI-C3, which closed StreamDelta. The literal is
+-- deliberately not derived from `d64_gap_register()`: a row asserting the
+-- register equals itself is green after any edit, and shrinking the register is
+-- exactly the move that has to be a deliberate, recorded change.
 pure func test_parity_register_agrees_with_the_vocabulary() -> bool
   tests [((), true)]
   {
     List.length(parity_register_findings()) == 0
-      && List.length(d64_gap_register()) == 14
+      && List.length(d64_gap_register()) == 13
       && List.length(display_only_baseline()) == 6
   }
 

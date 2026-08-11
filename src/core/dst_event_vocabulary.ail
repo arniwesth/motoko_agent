@@ -410,10 +410,18 @@ export pure func event_vocabulary() -> [EventRow] {
       payload: [req("step"), req("stream_id"), req("seq"), req("text_delta")],
       -- D6.4's NAMED EXCEPTION: the provider callback's closed effect row means
       -- projection happens during the call and the append after it returns, so
-      -- a single shared transition is impossible by construction. The
-      -- obligation is discharged by an explicitly checked parity invariant
-      -- instead — which is WI-A14's, not this item's.
-      classification: Logical, reaches_trace_today: false }
+      -- a single shared TRANSITION is impossible by construction. That half is
+      -- permanent and unchanged.
+      --
+      -- WI-C3 flipped the SURVEY. The append after the call was not merely
+      -- unwritten, it was unwritable: before `stepWithStreamRecorded` there was
+      -- nothing to append FROM, because the callback consumed each chunk and
+      -- returned `()`. WI-C1 supplied the returned log and WI-C3 appends it, so
+      -- StreamDelta records now reach the returned trace and this row is `true`.
+      -- The parity obligation is discharged separately by
+      -- `stream_parity_findings`, which compares the trace's records against the
+      -- run's emission witness.
+      classification: Logical, reaches_trace_today: true }
   ]
 }
 

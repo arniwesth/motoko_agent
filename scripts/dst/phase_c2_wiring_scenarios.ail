@@ -699,21 +699,29 @@ func decision_record_append_name_round_trip_scenario() -> Scenario {
   { id: "phase_c.c2.decision_record_append_name_round_trip", seed: "fixed", run: scenario_decision_record_append_name_round_trip }
 }
 
--- WI-A1 acceptance. Asserts the widened port shape directly against the only
--- scripted provider a session run actually executes: the exchange carries an
--- emission log, and it is empty.
+-- WI-A1 acceptance, REVISED AT WI-C3 BECAUSE ITS OWN TRIPWIRE FIRED.
 --
--- The script's step is a *chunked* one, so `play_chunks` fires the callback
--- twice during the call. That both of those chunks are delivered and none of
--- them appears in `exchange.emissions` is the point: WI-A1 builds the channel,
--- it does not fill it. The producer end is filled by the recorded-stream
--- adoption, in exactly one closure (`live_ports`). If this scenario ever starts
--- failing on the emptiness clause, something began populating the log and the
--- behaviour-preserving claim needs re-checking.
-func scenario_scripted_exchange_carries_empty_emission_log() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+-- The original scenario asserted `emission_count == 0` and carried this
+-- sentence: "if this scenario ever starts failing on the emptiness clause,
+-- something began populating the log and the behaviour-preserving claim needs
+-- re-checking." WI-C3 populated it, this row went red on the first `make dst`
+-- after, and that is the tripwire working rather than a scenario to relax. It
+-- is recorded here rather than quietly rewritten, because a pin that is edited
+-- to match whatever the code now does is not a pin.
+--
+-- WHAT THE ROW ASSERTS NOW, and it is strictly stronger than the emptiness it
+-- replaces: the scripted exchange reports EXACTLY the chunks it played. The
+-- script's step is a chunked one, so `play_chunks` fires the callback twice
+-- during the call; before WI-C3 both were delivered and neither appeared in
+-- `exchange.emissions`, which was the same loss channel `live_ports` had one
+-- layer up and which made every seeded run produce a witness of zero against a
+-- trace of N. The count is derived from the fixture rather than written as a
+-- literal, so the two cannot drift.
+func scenario_scripted_exchange_reports_the_chunks_it_played() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let base = [msg("system", "s"), msg("user", "u")];
   let ports = scripted_ports();
-  let state = scripted_world_state([chunked_prose_step("done", ["chunk-a", "chunk-b"])]);
+  let played = ["chunk-a", "chunk-b"];
+  let state = scripted_world_state([chunked_prose_step("done", played)]);
   let swallow = func(_c: StreamChunk) -> () ! {IO} { () };
   let exchange = ports.model_step(state, "phase-c-model", base, swallow);
   let emission_count = length(exchange.emissions);
@@ -721,20 +729,22 @@ func scenario_scripted_exchange_carries_empty_emission_log() -> Result[(), Scena
     Ok(r) => r.message.content,
     Err(e) => "err:${e.code}"
   };
-  ok_or_failure(emission_count == 0 && served == "done", "scripted exchange carries an empty emission log", [
+  ok_or_failure(emission_count == length(played) && emission_count > 0 && served == "done",
+    "scripted exchange reports exactly the chunks it played", [
     "emission_count=${show(emission_count)}",
+    "played=${show(length(played))}",
     "served=${served}"
   ])
 }
 
-func scripted_exchange_carries_empty_emission_log_scenario() -> Scenario {
-  { id: "phase_c.c2.scripted_exchange_carries_empty_emission_log", seed: "fixed", run: scenario_scripted_exchange_carries_empty_emission_log }
+func scripted_exchange_reports_played_chunks_scenario() -> Scenario {
+  { id: "phase_c.c2.scripted_exchange_reports_the_chunks_it_played", seed: "fixed", run: scenario_scripted_exchange_reports_the_chunks_it_played }
 }
 
 export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Stream, Trace} {
   let scenarios = [
     decision_record_append_name_round_trip_scenario(),
-    scripted_exchange_carries_empty_emission_log_scenario(),
+    scripted_exchange_reports_played_chunks_scenario(),
     traced_prose_decisions_scenario(),
     traced_tool_decisions_scenario(),
 	    tool_call_with_stop_finish_still_runs_scenario(),

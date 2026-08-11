@@ -356,19 +356,26 @@ export pure func empty_world_state() -> WorldState {
 -- observed chunks, and the prediction that the adoption would be one closure
 -- held exactly — two lines and one import symbol.
 --
--- SAY WHAT IS TRUE NOW, WHICH IS NARROWER THAN "UNBLOCKED". The log is
--- PRODUCED; it has NO DRIVER CONSUMER. `session.ail`'s `exchange.emissions`
--- still goes nowhere, and D6.4's stream-parity invariant that would read it is
--- WI-C3's. A non-empty log and a consumed log are different claims, and only
--- the first is true here.
+-- WI-C3 GAVE IT A CONSUMER, which is the sentence three previous versions of
+-- this note could not write. `session.ail`'s model-step site converts the
+-- returned log once (`stream_chunk_events`), APPENDS the resulting events to
+-- the returned `LedgerTrace` — closing `StreamDelta` in D6.4's gap register —
+-- and threads the same events forward as the run's emission witness, out
+-- through `TracedSessionResult.emissions`. `make stream_parity` drives it.
 --
--- The scripted construction sites still return `[]`, and for 17 of the 18 that
--- is correct — an error path or a terminal step emits nothing. The two that
--- call `play_chunks` are the exception worth knowing about: they PLAY chunks
--- through `on_chunk` and then report none, which is this field's own loss
--- channel one layer down. That is the deterministic half of D1's parity claim
--- and it belongs to the item that builds the reader, not to the one that
--- filled the producer.
+-- The two scripted sites that call `play_chunks` are populated too. They used to
+-- play chunks through `on_chunk` and report none — this field's own loss channel
+-- one layer down, and the deterministic half of D1's parity claim. They now
+-- build the chunk list once and both play it and report it, so it cannot drift
+-- from itself. The other 16 scripted sites still return `[]` and that remains
+-- correct: an error path or a terminal step emits nothing.
+--
+-- WHAT IS STILL NOT TRUE, because a consumed log is not the whole obligation:
+-- both sides of the in-process parity check derive from THIS field, since the
+-- callback's projections go to `ledger_emit` and its row is closed `{IO}`. So a
+-- projection that disagrees with the returned log is invisible in-process and is
+-- caught only by the wire gate. Measured, not argued — see
+-- `scripts/dst/run_stream_parity_wire.sh`.
 --
 -- The rule is scoped to ports with a *demonstrated* loss channel, and today
 -- that is exactly this one field: `approval_read` is a synchronous resolution
@@ -727,9 +734,10 @@ export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecu
 --
 --   * all three class mappings are then one screen apart, so "which fields of
 --     a decision reach the world" is answerable in one place;
---   * `stub_step.ail:182` is an A5 attribution anchor. Its history is the point:
+--   * `stub_step.ail:202` is an A5 attribution anchor. Its history is the point:
 --     `:161` until WI-B2b's threading moved it, re-derived to `:163` at WI-B4,
---     and moved again to `:182` by WI-C1. Putting the decision mapping HERE
+--     moved to `:182` by WI-C1 and to `:202` by WI-C3. Putting the decision
+--     mapping HERE
 --     means `stub_step` widens ONE existing import line and adds no import
 --     statement, so this particular edit does not move the anchor. Cluster 8
 --     paid a five-artifact cascade including a mandatory `driver_only` re-issue

@@ -1,0 +1,382 @@
+-- scripts/dst/stream_parity_dst.ail
+--
+-- WI-C3 acceptance: D6.4's stream-parity obligation, held on a RUN rather than
+-- on a fixture.
+--
+-- ============================================================================
+-- What is new here, and it is not the invariant
+-- ============================================================================
+--
+-- `dst_invariants.stream_parity_findings` already existed and was already good:
+-- it checks count and order SEPARATELY, and keys on `variant_id|
+-- ledger_event_key` so content drift is caught. `scripts/dst/invariants_dst.ail`
+-- already proves it red against omission, duplication and reordering.
+--
+-- What did not exist was a BRIDGE from a run to an `ExecutionUnderTest`. Until
+-- WI-C3 the whole D7 suite had exactly one construction site — a hand-authored
+-- fixture — so all sixteen families ran against a constructed value and its
+-- mutants. This script is the first thing in the tree that drives the real
+-- driver, converts what it returns into an `ExecutionUnderTest`, and asks the
+-- invariant set about it.
+--
+-- ============================================================================
+-- The three ways this could be green and worthless, and what stops each
+-- ============================================================================
+--
+--   1. BOTH SIDES EMPTY. Before this item the witness was `[]` on every path
+--      AND the returned trace held zero StreamDelta records on every path, so
+--      parity compared two empty lists and passed. Every scenario below asserts
+--      a POSITIVE count on each side independently, and the counts are read from
+--      the script fixture rather than written as literals, so they cannot drift.
+--   2. ONE SCENARIO, ONE BRANCH. The driver has six branches after the provider
+--      call and the witness is set in each of them. A scenario that only ever
+--      reaches the finalize branch certifies nothing about the other five —
+--      S8's complement. So the run below is MULTI-STEP and passes through the
+--      tool-call branch before it finalizes, and the witness must span both
+--      steps.
+--   3. A CHECK THAT CANNOT FAIL. Four mutants are applied to the REAL
+--      execution — not to a fixture — and each must produce its own rule.
+--
+-- ============================================================================
+-- What this does NOT prove, stated because the green must not be over-read
+-- ============================================================================
+--
+-- Both sides of the comparison derive from `ProviderExchange.emissions`. That is
+-- not a shortcut: it is the only in-process observation of the stream, because
+-- the callback's projections go to `ledger_emit` and its row is closed `{IO}`.
+-- So this script tests that the driver carries the trace and the witness forward
+-- TOGETHER on every branch. It does not test that the callback projected what
+-- the provider returned — that is a wire-against-trace comparison, it is out of
+-- process, and `scripts/dst/run_stream_parity_wire.sh` is the only place it is
+-- made.
+
+module scripts/dst/stream_parity_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/ai (Message)
+import src/core/config (CostRates)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/session (TracedSessionResult)
+import src/core/session as Session
+import src/core/test/stub_step (
+  Scripted, RecordingWorld, scripted_world_state,
+  empty_rt, chunked_prose_step, tool_step
+)
+import src/core/ports (ScriptedStep, WorldState)
+import src/core/phase_vocab (LedgerTrace, LedgerRecord, LedgerEvent, StreamDelta, WireRecord)
+import src/core/dst_result (unknown_replay_metadata)
+import src/core/dst_interaction (Interaction, ProviderIdentity, StreamChunkRecord)
+import src/core/dst_execution (execution_of, emission_count)
+import src/core/dst_invariants (
+  ExecutionUnderTest, NoReplay,
+  Violation, stream_parity_findings, rules_of, join_str, has_rule,
+  evaluate, violations_in, EmissionParity, record_variant
+)
+
+func zero_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 10, solver: 10, verifier: 0 }
+}
+
+pure func system_msg() -> Message {
+  { role: "system", content: "stream parity system prefix", tool_calls: [], tool_call_id: "", images: [] }
+}
+
+-- ---------------------------------------------------------------------------
+-- The fixture, and its adequacy is ASSERTED rather than described (S7)
+-- ---------------------------------------------------------------------------
+--
+-- Order-distinguishing texts with a DELIBERATE ADJACENT REPEAT, carried over
+-- from WI-C2's fixture and for the same reason: an implementation that returned
+-- a set, or de-duplicated, produces a shorter log and only the repeat can see
+-- it. The two steps carry DIFFERENT chunk counts so that a witness which
+-- recorded one step twice, or dropped a step, cannot land on the right total.
+
+pure func step_one_chunks() -> [string] {
+  ["s1-alpha", "rep", "rep", "s1-omega"]
+}
+
+pure func step_two_chunks() -> [string] {
+  ["s2-alpha", "s2-beta", "s2-omega"]
+}
+
+pure func script() -> [ScriptedStep] {
+  [{ tool_step("bash", "{\"cmd\":\"true\"}", "sp1") | chunks: step_one_chunks() },
+   chunked_prose_step("done", step_two_chunks())]
+}
+
+pure func expected_emissions() -> int {
+  List.length(step_one_chunks()) + List.length(step_two_chunks())
+}
+
+pure func has_adjacent_repeat(xs: [string]) -> bool {
+  match xs {
+    [] => false,
+    _ :: [] => false,
+    a :: rest =>
+      match rest {
+        b :: _ => if a == b then true else has_adjacent_repeat(rest)
+      }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Reading the two sides
+-- ---------------------------------------------------------------------------
+
+pure func stream_records_in(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest =>
+      (if record_variant(r) == "StreamDelta" then 1 else 0) + stream_records_in(rest)
+  }
+}
+
+pure func trace_stream_count(t: LedgerTrace) -> int {
+  stream_records_in(t.records)
+}
+
+-- The trace side, rendered for the WIRE comparison. `run_stream_parity_wire.sh`
+-- reads this line and the `thinking_delta` events on stdout and asserts they are
+-- the same sequence. That is the one comparison whose two sides have genuinely
+-- different producers — the wire is what the CALLBACK projected during the call,
+-- this line is what the driver APPENDED from the log the provider returned — and
+-- it is the half the in-process check structurally cannot make.
+pure func trace_stream_texts(rs: [LedgerRecord]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) =>
+          match e {
+            StreamDelta(i) => i.text :: trace_stream_texts(rest),
+            _ => trace_stream_texts(rest)
+          },
+        _ => trace_stream_texts(rest)
+      }
+  }
+}
+
+pure func pipe_join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => "${x}|${pipe_join(rest)}"
+  }
+}
+
+pure func trace_of_run(run: TracedSessionResult) -> LedgerTrace { run.trace }
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}")
+          else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+pure func rule_list(vs: [Violation]) -> string { join_str(rules_of(vs)) }
+
+-- ---------------------------------------------------------------------------
+-- The THIRD side, and it is the only one produced by a different code path
+-- ---------------------------------------------------------------------------
+--
+-- The recording adapter writes each played chunk into the world's interaction
+-- log through `chunk_records`, which is a different function reached by a
+-- different channel from the `emissions` the exchange returns. So for a
+-- RecordingWorld run the log's chunk texts are an INDEPENDENT observation of the
+-- same stream, and comparing them against the witness tests something the
+-- in-process parity check structurally cannot: that two producers agree about
+-- what was streamed, rather than that one channel was threaded twice.
+--
+-- It is available only under the recording adapter. `live_ports` records
+-- nothing into the world, so this side does not exist on a live run and the
+-- report says so rather than pretending the coverage is general.
+
+pure func chunk_texts(cs: [StreamChunkRecord]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest => c.text :: chunk_texts(rest)
+  }
+}
+
+pure func logged_chunk_texts(log: [Interaction]) -> [string] {
+  match log {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ProviderIdentity(_, _, _) => chunk_texts(i.outcome.chunks) ++ logged_chunk_texts(rest),
+        _ => logged_chunk_texts(rest)
+      }
+  }
+}
+
+pure func witness_texts(es: [LedgerEvent]) -> [string] {
+  match es {
+    [] => [],
+    e :: rest =>
+      match e {
+        StreamDelta(i) => i.text :: witness_texts(rest),
+        _ => witness_texts(rest)
+      }
+  }
+}
+
+pure func strings_equal(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ :: _ => false },
+    x :: xs => match b { [] => false, y :: ys => if x == y then strings_equal(xs, ys) else false }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Mutants, applied to the REAL execution rather than to a constructed one
+-- ---------------------------------------------------------------------------
+
+pure func drop_first(es: [LedgerEvent]) -> [LedgerEvent] {
+  match es { [] => [], _ :: rest => rest }
+}
+
+pure func duplicate_first(es: [LedgerEvent]) -> [LedgerEvent] {
+  match es { [] => [], e :: rest => e :: e :: rest }
+}
+
+pure func swap_first_two(es: [LedgerEvent]) -> [LedgerEvent] {
+  match es {
+    [] => [],
+    a :: rest => match rest { [] => [a], b :: tail => b :: a :: tail }
+  }
+}
+
+func expect_rule(label: string, findings: [Violation], rule: string) -> bool ! {IO} {
+  report(label, has_rule(findings, rule),
+         "expected ${rule}; got: ${rule_list(findings)}")
+}
+
+-- ---------------------------------------------------------------------------
+-- One scenario: run the driver, bridge it, ask the invariant set
+-- ---------------------------------------------------------------------------
+
+func check_execution(
+  label: string,
+  run: TracedSessionResult,
+  expect_logged_side: bool,
+  expected_family_rules: [string]
+) -> bool ! {IO} {
+  let x = execution_of(run, 0, NoReplay, 12, 3, 0, [], unknown_replay_metadata());
+  let trace = run.trace;
+  let witness_n = emission_count(x);
+  let trace_n = trace_stream_count(trace);
+  let _ = println("  [${label}] witness=${show(witness_n)} trace_stream_records=${show(trace_n)} expected=${show(expected_emissions())}");
+
+  -- ANTI-VACUITY, each side independently. Before WI-C3 BOTH were zero on every
+  -- path, so parity compared two empty lists and passed.
+  let side_a = report("${label}: the run produced a NON-EMPTY emission witness",
+                      witness_n > 0,
+                      "witness is empty — the driver dropped ProviderExchange.emissions, or the adapter played chunks and reported none");
+  let side_b = report("${label}: the returned trace holds StreamDelta records",
+                      trace_n > 0,
+                      "the returned trace holds no StreamDelta record — the driver projected the deltas and appended none");
+  -- The witness must span BOTH steps, which is what makes this a test of the
+  -- per-branch accumulation rather than of one branch.
+  let side_c = report("${label}: the witness spans both steps",
+                      witness_n == expected_emissions(),
+                      "witness=${show(witness_n)} expected=${show(expected_emissions())} — a total equal to one step\'s count means a branch dropped its accumulation");
+
+  let findings = stream_parity_findings(x.emissions, trace);
+  let parity_ok = report("${label}: D6.4 stream parity holds on a real run",
+                         List.length(findings) == 0,
+                         "rules: ${rule_list(findings)}");
+  let family = violations_in(evaluate(x), EmissionParity);
+  let family_ok = report("${label}: the EmissionParity family is clean over the whole run",
+                         List.length(family) == 0,
+                         "rules: ${rule_list(family)}");
+
+  -- The mutants are applied to THIS execution. `invariants_dst` already kills
+  -- omission, duplication and reordering on a constructed fixture; per S14 the
+  -- gate has to drive our own closure, so these are the same three defects
+  -- injected into a witness a real run produced.
+  let m1 = expect_rule("${label}: omitting one real emission is caught",
+                       stream_parity_findings(drop_first(x.emissions), trace), "stream-parity-count");
+  let m2 = expect_rule("${label}: duplicating one real emission is caught",
+                       stream_parity_findings(duplicate_first(x.emissions), trace), "stream-parity-count");
+  let m3 = expect_rule("${label}: reordering two real emissions is caught, with the count UNCHANGED",
+                       stream_parity_findings(swap_first_two(x.emissions), trace), "stream-parity-order");
+  let m3b = report("${label}: the reordering mutant does NOT trip the count rule",
+                   not has_rule(stream_parity_findings(swap_first_two(x.emissions), trace), "stream-parity-count"),
+                   "the reordering mutant tripped the count rule, so the order row cannot certify order");
+
+  -- The third side, where it exists.
+  let logged = logged_chunk_texts(x.world.log);
+  let logged_ok =
+    if expect_logged_side then
+      report("${label}: the world\'s recorded chunk log agrees with the witness, TEXT FOR TEXT",
+             strings_equal(logged, witness_texts(x.emissions)),
+             "recorded=${show(List.length(logged))} witness=${show(witness_n)} — two producers disagree about what was streamed")
+    else
+      report("${label}: the non-recording adapter logs no chunks, as expected",
+             List.length(logged) == 0,
+             "a non-recording adapter recorded ${show(List.length(logged))} chunk texts");
+
+  -- THE WHOLE SET over a real run, PINNED rather than printed. This is the
+  -- first thing in the tree that evaluates all sixteen D7 families against an
+  -- execution a run produced, and a printed count is a number nobody checks —
+  -- asserting the exact rule set is what turns a future regression red.
+  let all = evaluate(x);
+  let _ = println("STREAM_TRACE ${label} ${pipe_join(trace_stream_texts(trace.records))}");
+  let _ = println("  [${label}] all sixteen families over the real run: ${show(List.length(all))} finding(s)${if List.length(all) == 0 then "" else " — ${rule_list(all)}"}");
+  let set_ok = report("${label}: the whole invariant set reports exactly its expected rules",
+                      strings_equal(rules_of(all), expected_family_rules),
+                      "expected [${join_str(expected_family_rules)}]; got [${rule_list(all)}]");
+
+  side_a && side_b && side_c && parity_ok && family_ok && m1 && m2 && m3 && m3b && logged_ok && set_ok
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  println("=== stream_parity_dst (D6.4) ===");
+
+  -- Fixture adequacy, asserted rather than described (S7): every row below is
+  -- vacuous if the script does not actually stream, and a fixture\'s coverage
+  -- drifts silently as the driver changes.
+  let fixture_ok =
+    report("fixture: the script streams more than two chunks",
+           expected_emissions() > 2,
+           "expected_emissions=${show(expected_emissions())}")
+    && report("fixture: step one carries an adjacent repeat, so de-duplication is visible",
+           has_adjacent_repeat(step_one_chunks()),
+           "step_one_chunks has no adjacent repeat")
+    && report("fixture: the two steps carry different chunk counts",
+           List.length(step_one_chunks()) != List.length(step_two_chunks()),
+           "the two steps carry equal counts, so a duplicated or dropped step would land on the right total");
+
+  -- Subject 1: the scripted adapter, which most of `make dst` drives.
+  let scripted_run = Session.run_v2_session_traced(
+    empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    [system_msg()], "/tmp", 6, false, 0, zero_rates(), Scripted(script())
+  );
+    -- MEASURED, not assumed, and it is a real property of the adapter rather than
+  -- a defect: `scripted_ports` advances the virtual clock through `virtual_clock`
+  -- and records NO interaction, so D7 family 11 sees an advance the log cannot
+  -- account for. The recording adapter below balances to zero findings, which is
+  -- what makes this attributable to the adapter and not to the driver.
+  let r1 = check_execution("scripted", scripted_run, false, ["clock-balance"]);
+
+  -- Subject 2: the RECORDING adapter, which is the only one that supplies the
+  -- third side above. Two subjects rather than one, per S14 — a single adapter
+  -- would certify the bridge against the adapter it was written with.
+  let recording_run = Session.run_v2_session_traced(
+    empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    [system_msg()], "/tmp", 6, false, 0, zero_rates(),
+    RecordingWorld(scripted_world_state(script()))
+  );
+  let r2 = check_execution("recording", recording_run, true, []);
+
+  if fixture_ok && r1 && r2 then println("stream_parity_dst PASS")
+  else {
+    let _ = println("stream_parity_dst FAIL");
+    exit(1)
+  }
+}
