@@ -652,3 +652,35 @@ extensions import it. **That is what makes the yield 4 of 15 rather than 1.**
 previous one**, not by the plan and not by the handoff. D10's producer probe, D11's cache bound, and
 now D12's producer choice. **Grounding is no longer resizing items — it is choosing between designs**,
 and the handoff's job has shifted accordingly: carry the measurement, not the instruction.
+
+
+## Cluster 30 outcome, and cluster 31 = `basis` and the per-extension barrier
+
+**WI-D12: classifier 3 BUILT, GREEN, and IN `make dst`** — `RESOLUTION 19/19`, **`PORT-MEDIATED
+(4 of 15)`**, `UNRESOLVED (0)`, selftest zero failures, verified at review. **Third independent
+derivation of 4 of 15, from a producer neither prior derivation used.** It found the **builtin door**
+nobody had named — `compaction_structural.ail:251` calls `_list_length` directly and no import would
+flag it — and corrected the ADR's textual-route figure from **1 of 15 to 0 of 15**, because the
+criterion's unit is the closure and `motoko-ext-abi/types.ail` imports `std/json (jo)` into all
+fifteen.
+
+**Cluster 31 = WI-D13: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d13-basis-and-the-per-extension-barrier.md`.
+
+**Grounding found the shape of the item, and it is not the obvious one.** The obvious next step is
+"install `compaction_structural` and get a non-zero coverage number". **It cannot be taken, because no
+artifact in this tree can hold classifier 3's answer:** `HookClassificationEntry` has three fields and
+no `basis`, and `check_barrier_count` derives a barrier as a property of a **slot** — reading the ABI
+row and the dispatch table, nothing per-extension. **The measurement exists and the vocabulary to
+record it does not.**
+
+**Clustering note: an instrument's first real output can be un-recordable, and that is a work item
+rather than a defect.** Four clusters built toward classifier 3 on the assumption that its verdict was
+the hard part. The verdict took one item; **making the tree able to say it is a separate one**, and it
+was invisible until the verdict existed. **Where a new producer is scheduled, schedule the artifact
+that carries its answer in the same breath.**
+
+**And the trigger is armed.** `check_barrier_count` goes red at zero deliberately. Re-shaping its
+derivation to `(extension, slot)` can take the count to zero for one extension **without touching the
+ABI** — which is exactly the case that message was written for, and the handoff scopes the install out
+on that ground.

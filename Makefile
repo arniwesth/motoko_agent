@@ -196,7 +196,7 @@ hook_guard:
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -1972,6 +1972,70 @@ ext_call_inventory:
 
 ext_call_inventory_selftest:
 	@python3 tools/ext_call_inventory/derive.py --self-test
+
+# ---------------------------------------------------------------------------
+# ADR-001 Amendment A, WI-D12: CLASSIFIER 3 -- the extension-closure
+# ambient-source inventory. The fourth deferred gate mechanism, admitted
+# 2026-08-06 by both acceptance reviewers.
+#
+# Answers criterion 2 by MEASUREMENT rather than by reading a declared row:
+# per extension, whether every effect it can perform arrives through a field
+# call on an `ExtPorts`-typed value. A declared row cannot distinguish mediation
+# from ambience at any width -- the effect checker gives a port-mediated body and
+# a fully ambient one the identical verdict -- so no row-reading instrument can
+# stand in for this one.
+#
+# BOTH TARGETS ARE IN `make dst`, DELIBERATELY, and this comment is the reason.
+# Classifier 1's degradation was invisible for thirty-three items because
+# neither of ITS targets is: its self-test went from comparing 43 stdlib modules
+# to comparing 1, on an unchanged tree, and both targets stayed green. Per plan
+# rule S13, a gate outside the aggregate target degrades invisibly whether it
+# fails loudly or passes vacuously. Do not move these out.
+#
+# CACHE PRECONDITION -- stated here, where the target lives, and not only in
+# derive.py's docstring:
+#
+#   The producer is the compiler's own cached per-symbol interface data,
+#   .ailang/cache/compile/modules/std__*/iface.json (schema ailang.iface/v1).
+#   Every std module an extension's closure imports must have one.
+#
+#   The tool ESTABLISHES that itself, before deriving, by running
+#   `AILANG_RELAX_MODULES=1 ailang check <package>/register.ail` for each of the
+#   fifteen extensions -- so neither target depends on the other having run, on
+#   `make dst` ordering, or on cache state a reader would have to guess at.
+#   `--no-provision` measures what a cold tree would have answered.
+#
+#   This is the one thing classifier 1 could not do. Its producer needs the
+#   stdlib-adjacent cache at ~/.local/share/ailang/std/.ailang/cache/, and WI-D11
+#   proved NO repository operation rebuilds it: a 243-file cache-cold sweep
+#   leaves it at 0 and `make dst` in full leaves it at 52. Measured two-sided at
+#   WI-D12, this producer's cache IS rebuilt by the project's own compilation --
+#   from every repo-local `.ailang` removed, the tool's own provisioning restores
+#   resolution to 19/19 and reproduces the warm answer exactly.
+#
+# RESOLUTION IS REPORTED AS A FRACTION AND ENFORCED. Anything short of total is
+# exit 1. A green run here means "every extension resolved AND these were
+# clean"; it can never mean "the tool found nothing to look at". That
+# `agree=0 disagree=0` shape has cost this project two items.
+#
+# `ext_ambient_inventory_selftest` runs the fixture suite: one fixture per
+# unresolvable shape the ADR's acceptance criterion names -- module alias, bare
+# module, missing cached interface, symbol absent from the interface, and an
+# effect-VARIABLE row -- plus a sixth for a compiler builtin of unknown effect,
+# which needs no import and which an import-only inventory therefore never sees.
+# `compaction_structural` calls `_list_length` directly, so that door is not
+# hypothetical. Each shape is paired with a RESOLVING CONTROL: a rejection-only
+# suite is passed by a classifier that resolves nothing. The suite also pins the
+# 4-of-15 yield in BOTH directions and asserts the fifteen package directories
+# member by member, per plan rule S22 -- `scratchpad` lives at
+# `packages/motoko_scratchpad`, so a directory-name resolver silently returns 14.
+# ---------------------------------------------------------------------------
+.PHONY: ext_ambient_inventory ext_ambient_inventory_selftest
+ext_ambient_inventory:
+	@python3 tools/ext_ambient_inventory/derive.py
+
+ext_ambient_inventory_selftest:
+	@python3 tools/ext_ambient_inventory/derive.py --self-test
 
 # ---------------------------------------------------------------------------
 # WI-A17: the `ailang test` coverage axis.

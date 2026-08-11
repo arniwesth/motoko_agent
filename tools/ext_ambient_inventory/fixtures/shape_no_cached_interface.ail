@@ -1,0 +1,10 @@
+-- SHAPE 3/5: no cached interface for the module.
+-- This is the CACHE PRECONDITION failing.  Classifier 1's defect was that an
+-- empty producer read as an absence of findings; here it reads as a rejection.
+module fixtures/shape_no_cached_interface
+
+import std/nonexistent_fixture_module (someSymbol)
+
+export func emit(s: string) -> () {
+  ()
+}

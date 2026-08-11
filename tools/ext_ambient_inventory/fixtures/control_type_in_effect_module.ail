@@ -1,0 +1,11 @@
+-- RESOLVING CONTROL for symbol granularity (property 3).
+-- `std/ai` is the most effect-bearing module in the stdlib and `Message` is a
+-- TYPE.  A module-granular classifier rejects this, and so fails every
+-- extension that touches a type from an effect-bearing module.
+module fixtures/control_type_in_effect_module
+
+import std/ai (Message)
+
+export func emit(s: string) -> () {
+  ()
+}

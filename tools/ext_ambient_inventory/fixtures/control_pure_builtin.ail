@@ -1,0 +1,11 @@
+-- RESOLVING CONTROL for the builtin door.
+-- `_list_length` is called directly by `compaction_structural`.  It is provably
+-- effect-free on compiler-derived evidence -- `std/list.length`'s body calls it
+-- and carries a closed empty cached row -- so it must NOT be a rejection.
+-- Paired with shape_unknown_builtin.ail: together they show the builtin check
+-- discriminates rather than blanket-rejecting.
+module fixtures/control_pure_builtin
+
+export func emit(xs: [int]) -> int {
+  _list_length(xs)
+}

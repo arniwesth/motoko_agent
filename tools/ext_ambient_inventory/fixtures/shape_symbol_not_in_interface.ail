@@ -1,0 +1,9 @@
+-- SHAPE 4/5: the symbol is imported but the module's interface exports no such
+-- name -- a re-export or wrapper this tool cannot resolve to a concrete row.
+module fixtures/shape_symbol_not_in_interface
+
+import std/json (definitely_not_an_export_of_std_json)
+
+export func emit(s: string) -> () {
+  ()
+}

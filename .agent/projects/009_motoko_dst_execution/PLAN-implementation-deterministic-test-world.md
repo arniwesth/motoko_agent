@@ -356,6 +356,22 @@ from the registry entirely reddened only the ONE arm that names it by id. Three 
 therefore establish "the fold ran and performed nothing", not "the subject ran and performed
 nothing", and the two are joined by a separate structural row rather than conflated.
 
+**AND WI-D12 ADDS THE DOOR AN INVENTORY DOES NOT WATCH: an instrument scoped to IMPORTS is blind to
+effects that need no import.** AILANG's effects are performed by `_`-prefixed compiler builtins —
+`std/io.println` is literally `_io_println(s)` — **and a builtin requires no import statement.** An
+import-only ambient inventory sees none of them. **Not hypothetical, and verified at review:**
+`packages/motoko-ext-compaction-structural/compaction_structural.ail:251` calls `_list_length(...)`
+directly, and **nothing in that file's import list would flag it** — so an import-only classifier 3
+would have cleared *the very extension it was built to clear* with an unaudited raw builtin in its
+closure. Seven distinct builtins are called across the fifteen extension closures.
+
+**The fix is the same producer, not a list:** a builtin is provably effect-free only when some
+`std/*` export whose body calls it carries a **closed empty cached row**, because the effect checker
+is transitive through direct builtin calls. **68 builtins are wrapped by an effect-bearing export;
+all seven the tree uses resolve pure, so the yield is unchanged — but unchanged by measurement.**
+**The general rule: enumerate the ways a subject can reach the thing you are scanning for, before
+choosing the unit you scan.**
+
 **AND WI-D11 FOUND THE RULE STATED CORRECTLY IN ONE FILE AND VIOLATED IN THE NEXT.**
 `src/core/dst_attribution_table.ail:446-448` says, verbatim: *"The discovered set is an ARGUMENT,
 never a constant in this module. It comes from an inventory run against the source, and **hardcoding
@@ -468,6 +484,16 @@ measurement.
 sides.** D6's answer is the general one: the gate now derives its subject list from
 `registry_generated.ail` and asserts membership both ways, so **an extension added tomorrow cannot
 escape measurement by not being noticed.**
+
+**AND WI-D12 SHOWS THE QUANTIFIER'S UNIT CHANGING THE ANSWER: the ADR's own "1 of 15" for the
+textual route is 0 of 15 under the ADR's own property 2.** The figure reasons over each extension's
+**package sources** — *"`std/json.jo` carries no row and three of those four import it"*, which is
+exactly right about the packages. **But the amendment's property 2 makes the unit the transitive
+CLOSURE**, and `packages/motoko-ext-abi/types.ail:12` imports `std/json (Json, jo)` and is in **all
+fifteen** closures — verified at review, `decision_framework`'s closure is two modules and one of them
+is that file. So under the textual route all four are rejected, not three. **The correction
+STRENGTHENS the criterion it appears in**: the clause exists to say the cheapest producer would have
+destroyed the result, and under the criterion's own quantifier it destroys all of it.
 
 **AND THE FALSIFIER MUST COVER HOW THE SET IS RESOLVED, NOT ONLY WHAT IT CONTAINS.** Found by the
 amendment review, and it is the sharpest instance of this rule yet: `scratchpad`'s package directory
@@ -2988,6 +3014,40 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D12, 2026-08-07 (~1h02m) — CLASSIFIER 3 IS BUILT, GREEN, AND IN `make dst`.**
+`tools/ext_ambient_inventory/derive.py`, fourteen fixtures, two targets **inside the aggregate gate**.
+Verified at review: both exit 0, **`RESOLUTION 19/19 std modules (100%)`**, **`PORT-MEDIATED (4 of
+15)`** — `compaction_structural`, `decision_framework`, `empty_stop_guard`,
+`progress_contract_guard` — **`UNRESOLVED (0)`**, selftest zero failures. **Third independent
+derivation of 4 of 15, from a producer neither prior derivation used.** Zero AILANG source files
+changed.
+
+**It did not inherit classifier 1's cache defect, and the reason is structural rather than careful:
+the tool ESTABLISHES its own precondition**, running `ailang check` over each of the fifteen
+registrable extensions before deriving. Measured two-sided — **a cold tree with `--no-provision`
+reports 0 clean / 15 unresolved / exit 1**, which is the `agree=0 disagree=0` shape refused in the
+denominator, where it can be refused. Resolution is printed as a fraction and anything short of total
+is exit 1.
+
+**Its sharpest finding was in neither the handoff nor the amendment — see S16's builtin-door
+extension.** An import-only inventory would have cleared `compaction_structural` with an unaudited
+`_list_length` call in its closure.
+
+**And it corrected the ADR's own parenthetical — see S22's quantifier extension: the textual route's
+yield is 0 of 15, not 1.**
+
+**The barrier count is still THREE and classifier 3 does not move it.** A classifier clearing an
+extension does not clear a barrier; a profile installing one does, and nothing is installed.
+**What is unblocked: `compaction_structural` is now the tree's first extension for which criterion 2
+is established by measurement**, and nothing else stands between it and the first non-zero
+extension-model coverage number in this project.
+
+**One instrument observation carried forward and strengthened:** the stdlib-adjacent cache stayed at
+**0 files** through the cache-cold sweep, through `make sync_packages` in isolation, and through
+`make dst` in full — twice. WI-D11 recorded 52 after that sequence. **What produces that cache remains
+unidentified and nothing this repository runs is a candidate**, which removes one more explanation for
+classifier 1's owed repair rather than supplying one.
 
 **WI-D11, 2026-08-07 (~21 min) — DOES THE NAME ADOPTION STAND? **YES, QUALIFIED.** Zero files
 changed.
