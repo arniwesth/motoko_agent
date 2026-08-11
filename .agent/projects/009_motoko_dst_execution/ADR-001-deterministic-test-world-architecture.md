@@ -787,6 +787,32 @@ availability for subsequent calls; deadline outcomes specify whether work comple
 after the observation. Torn/partial physical writes remain excluded, but “timeout” cannot leave
 the simulator's logical state ambiguous.
 
+**Amendment, 2026-08-02 (WI-A7 implemented; `a7d70b5`). Two required classes have less production
+branch behind them than this table implies, and the catalogue records both rather than mapping them
+to a placeholder.**
+
+- **The provider protocol-inconsistent class names two forms and only one is reachable.** The
+  malformed `ToolCall.arguments` form has a real branch (`tool_dispatch_adapter.tool_call_to_envelope`
+  degrades to an empty JSON object and the per-tool argument extraction reports missing fields). The
+  inconsistent-`StepResult` form has **none**: `model_phase.phase_from_result` projects a
+  `StepResult` into a `ProviderResult` event without validating it, so a result whose
+  `finish_reason` disagrees with its `tool_calls`, or which repeats a tool-call id, reaches the loop
+  unremarked.
+- **The approval-deadline class has no clock-driven branch in production at all.** No policy
+  declares an elapsed-time approval deadline. `resolve_approval`'s only no-response branch is
+  end-of-input — channel closure, which the code itself labels `"timeout — no approval received"`.
+  The class being conditional makes this legitimate rather than a defect, but a profile claiming it
+  covers a *timed* deadline would be over-claiming, so the condition is named in the artifact.
+
+**A third class has no reachable branch at all, and the artifact says so.** `ExtPorts.ai_step`
+delivers no fault: `session.ext_ai_step` hands the port a fresh empty world, so against a `Scripted`
+provider the empty script serves `terminal_step()` and the extension is told the model answered.
+That is the concrete reason D1's rule — a conformant interim profile must exclude every hook an
+`ai_step`-calling extension registers — currently has no instrument behind it. The catalogue permits
+`NoReachableBranch` **only for a conditional class and only with a reason**; an unconditionally
+applicable class naming it is a validator rejection, because a decorative fault that cannot influence
+the production session does not satisfy this decision.
+
 The injection boundary matters. A malformed `ToolCall.arguments` string or inconsistent
 `StepResult` can be delivered through the typed provider boundary and exercises session validation.
 A malformed raw HTTP/SSE payload exercises a provider adapter parser, not the session, unless that
@@ -1155,6 +1181,28 @@ hook slots are dispatched by an unconditional fold over `rt.registry.hooks`
 system-prompt build, before any provider call, and the run terminates as `HarnessFailure`. Such a
 profile emits zero `SystemRun`s and can satisfy neither D11's minimum completed count nor any D7
 invariant.
+
+**Amendment, 2026-08-02 (WI-A6 implemented; `935bd46`). SEVEN slots are unconditionally dispatched,
+not six, and the paragraph above leaves the eighth unaccounted for.** Six plus one gated is seven;
+the missing slot is `on_describe_tools`, and it is unconditional:
+
+```text
+src/core/tool_catalog.ail:114   collect_ext_schemas folds EVERY registered hook
+src/core/tool_catalog.ail:125   tools_with_extensions calls that fold
+src/core/test/stub_step.ail:133 live_ports calls it on EVERY model step
+```
+
+The survey above looked only in `src/core/ext/runtime.ail`, where six dispatches live. The seventh
+is in the tool catalogue because it builds the schema list rather than driving the loop, and it is
+reached at least as often as any of the six. **The consequence is load-bearing: a profile excluding
+`on_describe_tools` must be rejected, and under "six" it would have loaded clean.** Both readings
+type-check and the wrong one is silent, so the correction is carried by an assertion rather than by
+this paragraph — `test_seven_slots_are_unconditional` and the `describe_tools_excluded` fixture in
+`scripts/dst/profile_coverage_dst.ail`, plus a structural guard in `make profile_coverage` that
+counts the ABI record's `on_*` fields. The general lesson, recorded because it already recurred once
+in this project: **when a count and an enumeration disagree by one, the enumeration is the claim —
+find the missing member before trusting the count.** The current live line numbers are
+`ext/runtime.ail:213, 229, 275, 319, 363, 414` unconditional and `:337` gated.
 
 **The rule the dispatch shape actually forces: an extension with any *unconditionally dispatched* hook
 excluded may not be installed in a conformant profile — it must be omitted from the install list.**
@@ -1653,6 +1701,28 @@ could not be written against `ledger_record_name` and needed a bespoke matcher. 
 plan must therefore schedule the artifact as construction with a fail-closed validator, and **must
 not schedule any D7 parity invariant or acceptance row that depends on the logical/display-only
 classification before the artifact exists** — those checks are undecidable until it does.
+
+**Amendment, 2026-08-02 (WI-A8 implemented; `c873002`). Two things this clause left implicit, both
+found by building it.**
+
+*First, the classification must be SEMANTIC, not a survey of what the driver appends today.* Only 13
+of the 34 variants reach the returned trace at HEAD. Classifying by current behaviour produces a
+complete, cleanly validating artifact that declares 21 events display-only — and D6.4's parity
+obligation then becomes vacuous, blessing the exact gap it exists to close. Both readings validate;
+the wrong one is silent. The implemented artifact keeps the survey in a separate field and exposes
+`logical_variants_not_in_trace()`, which is **15 today** and is D7's work list.
+
+*Second, `DoneEvent` does not classify cleanly, and that is a finding about this decision rather than
+a judgement call.* D6.3 requires the returned outcome, the `DoneEvent` and the `RunSummary` to
+**agree** — an invariant over the `DoneEvent`'s content, which is exactly what "display-only ...
+cannot change invariant results" denies. But D6.1 requires the `RunSummary` to be the **final**
+record of the returned trace, and the driver projects the `DoneEvent` after `c2_finalize` has
+appended it. So D6.4's obligation on a logical event and D6.1's final-record invariant cannot both
+be satisfied by appending it where it is emitted. A resolution exists — append the `DoneEvent`
+before finalizing — but it changes a terminal path and belongs with D7's invariant set, not with the
+vocabulary. The artifact classifies it `Logical` and records the tension in
+`classification_findings()`, printed on every run of `make event_vocabulary`, so the classification
+is not mistaken for a decision that the append is free.
 
 The artifact is
 validated at load and **fails closed on an unclassified variant**, so a new event cannot enter the

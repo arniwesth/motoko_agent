@@ -1,0 +1,600 @@
+-- scripts/dst/world_state_probe.ail
+--
+-- WI-A12's advancement-and-completeness instrument. It exists BEFORE the
+-- threading it watches, which is the binding sequencing rule in the plan, and
+-- the rule exists because two clusters measured the failure rather than
+-- predicting it:
+--
+--   * Cluster 1 (WI-A2) threaded thirteen `C2LoopState` successor literals. The
+--     compiler forces the new field to be PRESENT at all thirteen but accepts
+--     the carry-forward value `st.<field>` at every one, while six are
+--     downstream of the dispatch call and must carry the successor. Flipping
+--     those six type-checks clean (`✓ No errors found!`) and serves
+--     [s0,s0,s0,…] in every scenario — a total freeze.
+--
+--   * Cluster 4 (WI-A9) found the same hazard one level worse, in TRACE
+--     arguments: handing `c2_finalize` `st.trace` instead of the trace carrying
+--     the decision record type-checks, silently drops the record, and STILL
+--     SATISFIES the one-RunSummary invariant. A cursor-only assertion is green
+--     while the evidence is being dropped.
+--
+-- A12 threads `world_state` through those same literals AND through a finalizer
+-- taking a trace argument, so this probe asserts BOTH axes:
+--
+--   A. ADVANCEMENT — the cursor moves, per scenario.
+--   B. COMPLETENESS — every record the run appends survives into the returned
+--      trace, asserted by counting records against an independently known
+--      quantity rather than by re-reading the trace's own summary.
+--   C. DETERMINISM — two runs of the same scripted world produce identical
+--      served sequences AND identical record-kind sequences. This is the axis
+--      that catches an UN-ROUTED effect read: an ambient reader varies between
+--      two runs of the same world, a routed one cannot.
+--
+-- Axis C is why this file is not just `scripted_cursor_probe` with more
+-- assertions. That probe compares two DIFFERENT scenarios against each other,
+-- so a defect consistent across both is invisible to it — exactly the blind
+-- spot `smoke_parity` has, which diffs a build against itself.
+--
+-- Scenarios:
+--   advance  — clean 5-step script, no compaction. Cursor must advance and the
+--              trace must be complete.
+--   fold     — the F6 shape: an on_pre_step hook folds older turns into a
+--              summary, capping the assistant count. A cursor derived from
+--              message history PINS here; a threaded one does not.
+--   exhaust  — a script of continuers under a step budget it cannot meet, so
+--              the run takes the FAIL terminal path. This is the path where
+--              cluster 4's trace-argument hazard lives: the decision record and
+--              the RunSummary must BOTH be in the returned trace.
+
+module scripts/dst/world_state_probe
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/ai (Message, ToolCall)
+import std/json (Json, jo)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/phase_vocab (
+  LedgerRecord,
+  WireRecord,
+  DecisionRecord,
+  CompactionStageRecord,
+  ProviderResult,
+  RunSummary,
+  DoneEvent,
+  ErrorEvent,
+  LedgerTrace
+)
+import src/core/test/stub_step (Scripted, ScriptedWorld, ScriptedStep, tool_step, prose_step)
+import src/core/ports (WorldState, empty_world_state)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  Compacted,
+  Delegate,
+  ExtCtx,
+  ExtRuntime,
+  ExtensionHooks,
+  FinalizeDecision,
+  NoDecision,
+  NoIntercept,
+  NoOpinion,
+  Deny,
+  Allow,
+  PassThrough,
+  DenyAfterTimeout,
+  Pending,
+  PreStepDecision,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolHandleDecision,
+  ToolPolicyDecision,
+  ToolSchema
+)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func step_named(name: string) -> ScriptedStep {
+  { tool_step("T", "{}", name) | prose: name }
+}
+
+-- Four continuers then a terminator: under a correctly advancing cursor the
+-- driver serves s0..s3 then "done" and stops.
+func script() -> [ScriptedStep] {
+  [step_named("s0"), step_named("s1"), step_named("s2"), step_named("s3"), prose_step("done")]
+}
+
+-- All continuers and no terminator: the run cannot stop on its own and must
+-- take the max-steps FAIL path.
+func endless_script() -> [ScriptedStep] {
+  [step_named("e0"), step_named("e1"), step_named("e2"), step_named("e3"),
+   step_named("e4"), step_named("e5"), step_named("e6"), step_named("e7")]
+}
+
+-- ---------------------------------------------------------------------------
+-- Extension plumbing
+-- ---------------------------------------------------------------------------
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate }
+func no_intercept(_ctx: ExtCtx, _text: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
+func no_solver(_ctx: ExtCtx, _text: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+func deny_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Deny("probe: tools denied") }
+
+pure func summary_msg() -> Msg {
+  { role: "assistant", content: "[SUMMARY] folded", tool_calls: [], tool_call_id: "" }
+}
+
+pure func drop_first(n: int, xs: [Msg]) -> [Msg] {
+  if n <= 0 then xs
+  else match xs { [] => [], _ :: rest => drop_first(n - 1, rest) }
+}
+
+pure func fold(msgs: [Msg]) -> [Msg] {
+  let n = List.length(msgs);
+  if n <= 4 then msgs else summary_msg() :: drop_first(n - 2, msgs)
+}
+
+func folding_pre_step(_ctx: ExtCtx, msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let folded = fold(msgs);
+  if List.length(folded) == List.length(msgs) then PassThrough
+  else Compacted(folded, "probe: folded older turns into one summary", jo([]))
+}
+
+func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+  {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: pre,
+    on_tool_policy: deny_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  }
+}
+
+func rt_with(pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}, id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Projections
+-- ---------------------------------------------------------------------------
+
+-- Axis A. Which scripted step the provider served, in order, read off the
+-- trace rather than the message list so it works on the Err path too.
+pure func served_from_trace(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e {
+          ProviderResult(i) => (if i.text == "" then "stop" else i.text) :: served_from_trace(rest),
+          _ => served_from_trace(rest)
+        },
+        _ => served_from_trace(rest)
+      }
+  }
+}
+
+-- Axis B/C. A coarse but total kind projection over the returned trace. Every
+-- record maps to something, so a DROPPED record shortens this list — which is
+-- the whole point. The named kinds are exactly the ones cluster 4 showed can
+-- vanish while every existing assertion stays green.
+pure func record_kind(r: LedgerRecord) -> string {
+  match r {
+    DecisionRecord(_) => "decision",
+    CompactionStageRecord(_) => "stage",
+    WireRecord(e) => match e {
+      ProviderResult(_) => "provider_result",
+      RunSummary(_) => "run_summary",
+      DoneEvent(_) => "done",
+      ErrorEvent(_) => "error",
+      _ => "wire"
+    }
+  }
+}
+
+pure func kinds(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest => record_kind(r) :: kinds(rest)
+  }
+}
+
+-- Axis A/C for the CLOCK cursor. `duration_ms` on the RunSummary is
+-- `finalize_now - started_at`, so it is a difference of two driver clock reads
+-- and is the cheapest observable that both of them produce. Read off the
+-- RETURNED trace, so it also rides the completeness axis.
+pure func duration_from_trace(records: [LedgerRecord]) -> Option[int] {
+  match records {
+    [] => None,
+    r :: rest =>
+      match r {
+        WireRecord(RunSummary(i)) => Some(i.duration_ms),
+        _ => duration_from_trace(rest)
+      }
+  }
+}
+
+pure func count_of(target: string, xs: [string]) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x == target then 1 else 0) + count_of(target, rest)
+  }
+}
+
+pure func join(xs: [string]) -> string {
+  match xs { [] => "", x :: [] => x, x :: rest => "${x},${join(rest)}" }
+}
+
+pure func eq_list(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && eq_list(xs, ys) }
+  }
+}
+
+pure func strictly_advancing(xs: [string]) -> bool {
+  match xs {
+    [] => true,
+    _ :: [] => true,
+    a :: rest => match rest { b :: _ => a != b && strictly_advancing(rest), [] => true }
+  }
+}
+
+pure func last_of(xs: [string]) -> string {
+  match xs { [] => "", x :: [] => x, _ :: rest => last_of(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Assertions
+-- ---------------------------------------------------------------------------
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+-- Axis A + B for one run. `expect_served` is the served sequence an advancing
+-- cursor must produce; it is written out literally rather than derived from the
+-- run, so a frozen cursor cannot satisfy it by agreeing with itself.
+func assert_run(label: string, traced: TracedSessionResult, expect_served: [string]) -> bool ! {IO} {
+  let served = served_from_trace(traced.trace.records);
+  let ks = kinds(traced.trace.records);
+  let _ = println("${label}: served=[${join(served)}] kinds=${show(List.length(ks))} records");
+
+  let a1 = check("${label}: cursor advances", strictly_advancing(served),
+                 "served=[${join(served)}] — a repeat means the cursor froze");
+  let a2 = check("${label}: served sequence is exactly the script", eq_list(served, expect_served),
+                 "expected [${join(expect_served)}] got [${join(served)}]");
+  -- Completeness. One provider_result per served step, and the trace ENDS with
+  -- exactly one run_summary (D6.1). Counting rather than re-reading the summary
+  -- is deliberate: a dropped record must change a number here.
+  let a3 = check("${label}: one provider_result per served step",
+                 count_of("provider_result", ks) == List.length(expect_served),
+                 "provider_result=${show(count_of("provider_result", ks))} expected ${show(List.length(expect_served))}");
+  let a4 = check("${label}: exactly one run_summary, and it is last",
+                 count_of("run_summary", ks) == 1 && last_of(ks) == "run_summary",
+                 "run_summary=${show(count_of("run_summary", ks))} last=${last_of(ks)}");
+  a1 && a2 && a3 && a4
+}
+
+-- Axis C. Two runs of the SAME scripted world must be indistinguishable. This
+-- is the assertion that fails on an un-routed ambient read, and it is the one
+-- the later effect classes lean on.
+func assert_deterministic(label: string, a: TracedSessionResult, b: TracedSessionResult) -> bool ! {IO} {
+  let sa = served_from_trace(a.trace.records);
+  let sb = served_from_trace(b.trace.records);
+  let ka = kinds(a.trace.records);
+  let kb = kinds(b.trace.records);
+  let c1 = check("${label}: served sequence is reproducible", eq_list(sa, sb),
+                 "[${join(sa)}] vs [${join(sb)}]");
+  let c2 = check("${label}: record-kind sequence is reproducible", eq_list(ka, kb),
+                 "[${join(ka)}] vs [${join(kb)}]");
+  -- THE CLOCK CURSOR'S ADVANCEMENT ASSERTION (WI-A12, clock class).
+  --
+  -- `duration_ms` is the difference between two driver clock reads. Under the
+  -- routed world clock it is a function of the world alone, so two runs of the
+  -- same scripted world must agree EXACTLY. Under an ambient `now()` it is wall
+  -- time and the two runs disagree by however long the machine took.
+  --
+  -- This is the assertion that fails on an UN-ROUTED clock site, and unlike a
+  -- "the value is present" check it cannot be satisfied by carrying a stale
+  -- cursor forward. It is paired with the non-zero check below because a
+  -- world clock that never advances is also perfectly reproducible — a frozen
+  -- cursor and a routed one are indistinguishable on determinism alone, which
+  -- is cluster 1's freeze hazard restated for the clock.
+  let da = duration_from_trace(a.trace.records);
+  let db = duration_from_trace(b.trace.records);
+  let c3 = match da {
+    None => check("${label}: run_summary carries a duration", false, "no RunSummary in the returned trace"),
+    Some(x) => match db {
+      None => check("${label}: run_summary carries a duration", false, "no RunSummary in the second run"),
+      Some(y) =>
+        check("${label}: clock reads are reproducible across runs", x == y,
+              "duration_ms ${show(x)} vs ${show(y)} — an ambient clock varies between two runs of the same world")
+        && check("${label}: the world clock advances", x > 0,
+                 "duration_ms=${show(x)} — a clock that never advances is reproducible but frozen")
+    }
+  };
+  c1 && c2 && c3
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenarios
+-- ---------------------------------------------------------------------------
+
+func run_with(rt: ExtRuntime, steps: int, s: [ScriptedStep]) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    rt, "task", "", false, budget(), "phase-c-model", history(), ".",
+    steps, false, 0, zero_rates(), Scripted(s)
+  )
+}
+
+-- ---------------------------------------------------------------------------
+-- Approval class (WI-A12)
+-- ---------------------------------------------------------------------------
+
+-- A policy that sends every tool call to the approval channel, so the driver
+-- performs one approval read per call.
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("probe: approval required", DenyAfterTimeout)
+}
+
+func approval_hooks(id: string) -> ExtensionHooks {
+  { hooks(id, passthrough_pre_step) | on_tool_policy: pending_policy }
+}
+
+func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow }
+
+func allow_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [{ hooks(id, passthrough_pre_step) | on_tool_policy: allow_policy }] }, strict_mode: false, verification: v }
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [approval_hooks(id)] }, strict_mode: false, verification: v }
+}
+
+-- The denial each approval read produced, in order — the approval cursor's
+-- equivalent of `served_from_trace`.
+--
+-- Read off the RETURNED MESSAGES, not the trace, and that is not a shortcut.
+-- `NativeToolDenied` is `ledger_emit`-only: it goes to the wire and is never
+-- appended to the returned trace (cluster 4 measured the same emit/append
+-- imbalance, 37 vs 15). The tool result message IS the production-visible
+-- consequence — it is what the model sees on the next turn — so asserting on it
+-- tests the thing that matters rather than the thing that is convenient.
+pure func tool_message_contents(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" then m.content :: tool_message_contents(rest)
+      else tool_message_contents(rest)
+  }
+}
+
+-- Positional containment: reason[i] must appear in tool message[i].
+pure func reasons_in_order(expected: [string], contents: [string]) -> bool {
+  match expected {
+    [] => true,
+    e :: erest => match contents {
+      [] => false,
+      c :: crest => contains(c, e) && reasons_in_order(erest, crest)
+    }
+  }
+}
+
+func run_world(rt: ExtRuntime, steps: int, w: WorldState) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  run_world_history(rt, steps, w, history())
+}
+
+func run_world_history(rt: ExtRuntime, steps: int, w: WorldState, h: [Message]) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    rt, "task", "", false, budget(), "phase-c-model", h, ".",
+    steps, false, 0, zero_rates(), ScriptedWorld(w)
+  )
+}
+
+-- The RunSummary's finish_reason, off the returned trace.
+pure func finish_from_trace(records: [LedgerRecord]) -> string {
+  match records {
+    [] => "(none)",
+    r :: rest =>
+      match r {
+        WireRecord(RunSummary(i)) => i.finish_reason,
+        _ => finish_from_trace(rest)
+      }
+  }
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("world_state_probe: WI-A12 advancement + trace completeness");
+
+  -- advance: the clean path.
+  let advance = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
+  let ok_advance = assert_run("advance", advance, ["s0", "s1", "s2", "s3", "done"]);
+
+  -- fold: the F6 shape. A history-derived cursor pins here.
+  let folding = run_with(rt_with(folding_pre_step, "probe_fold"), 12, script());
+  let ok_fold = assert_run("fold", folding, ["s0", "s1", "s2", "s3", "done"]);
+
+  -- exhaust: the FAIL terminal path, where cluster 4's trace-argument hazard
+  -- lives. The decision record AND the run_summary must both survive.
+  let exhaust = run_with(rt_with(passthrough_pre_step, "probe_exhaust"), 3, endless_script());
+  let ex_kinds = kinds(exhaust.trace.records);
+  let ex_served = served_from_trace(exhaust.trace.records);
+  let _ = println("exhaust: served=[${join(ex_served)}]");
+  let ok_ex_cursor = check("exhaust: cursor advances to the budget",
+                           eq_list(ex_served, ["e0", "e1", "e2"]),
+                           "expected [e0,e1,e2] got [${join(ex_served)}]");
+  let ok_ex_outcome = check("exhaust: run took the failure path",
+                            match exhaust.result { Ok(_) => false, Err(_) => true },
+                            "expected Err from a script with no terminator");
+  let ok_ex_decision = check("exhaust: the decision record survives into the returned trace",
+                             count_of("decision", ex_kinds) > 0,
+                             "kinds=[${join(ex_kinds)}] — a finalizer handed the wrong trace drops it silently");
+  let ok_ex_summary = check("exhaust: exactly one run_summary, and it is last",
+                            count_of("run_summary", ex_kinds) == 1 && last_of(ex_kinds) == "run_summary",
+                            "kinds=[${join(ex_kinds)}]");
+
+  -- approval: THE APPROVAL CURSOR'S ADVANCEMENT ASSERTION.
+  --
+  -- Three tool calls, three seeded approval inputs carrying DISTINCT deny
+  -- reasons. The driver must serve them in order, so the recorded denial
+  -- reasons are [alpha, bravo, charlie]. A frozen approval cursor serves
+  -- [alpha, alpha, alpha]; an un-routed one reads stdin, hits EOF, and serves
+  -- the default-deny reason three times. Both are caught, and neither is
+  -- distinguishable from correct behaviour on the determinism axis alone —
+  -- every one of those failures is perfectly reproducible.
+  let approval_world: WorldState = {
+    empty_world_state() |
+    script: [step_named("a0"), step_named("a1"), step_named("a2"), prose_step("done")],
+    approvals: [
+      "{\"type\":\"deny\",\"reason\":\"alpha\"}",
+      "{\"type\":\"deny\",\"reason\":\"bravo\"}",
+      "{\"type\":\"deny\",\"reason\":\"charlie\"}"
+    ]
+  };
+  let appr = run_world(approval_rt("probe_approval"), 12, approval_world);
+  let appr_tools = match appr.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let _ = println("approval: ${show(List.length(appr_tools))} tool results returned");
+  let ok_appr = check("approval: the approval cursor advances through its queue",
+                      reasons_in_order(["alpha", "bravo", "charlie"], appr_tools),
+                      "expected alpha/bravo/charlie in the first three tool results — a repeat means the cursor froze, a 'timeout' reason means it is un-routed and reading stdin");
+
+  let appr2 = run_world(approval_rt("probe_approval"), 12, approval_world);
+  let appr2_tools = match appr2.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let ok_appr_det = check("approval: the served approvals are reproducible",
+                          eq_list(appr_tools, appr2_tools),
+                          "two runs of the same world disagreed");
+
+  -- env: THE ENV CLASS'S ASSERTION.
+  --
+  -- Env reads are a keyed lookup, not a cursor, so "advancement" is the wrong
+  -- test — there is no position to freeze. The right test is PROVENANCE: does
+  -- the value the driver acted on come from the world or from the process?
+  --
+  -- `MOTOKO_HEADLESS` makes that decidable through behaviour rather than
+  -- through a reported value. It sets `require_system_prompt: not headless`, so
+  -- with a history carrying NO system message the two answers diverge into
+  -- different terminal outcomes:
+  --
+  --   headless "1"  -> the run proceeds and reaches its scripted terminator
+  --   headless ""   -> the run seals with system-prompt-empty
+  --
+  -- CI's process environment does not set MOTOKO_HEADLESS, so an un-routed read
+  -- yields "" and the first case FAILS. The world cannot fake this by agreeing
+  -- with the ambient environment, which is what makes it evidence.
+  let no_system: [Message] = [msg("user", "u")];
+  let headless_world: WorldState = {
+    empty_world_state() |
+    script: [prose_step("done")],
+    env: [{ key: "MOTOKO_HEADLESS", value: "1" }]
+  };
+  let plain_world: WorldState = { empty_world_state() | script: [prose_step("done")] };
+  let with_headless = run_world_history(approval_rt("probe_env_h"), 4, headless_world, no_system);
+  let without_headless = run_world_history(approval_rt("probe_env_p"), 4, plain_world, no_system);
+  let fin_h = finish_from_trace(with_headless.trace.records);
+  let fin_p = finish_from_trace(without_headless.trace.records);
+  let _ = println("env: headless-from-world finish=${fin_h}, headless-unset finish=${fin_p}");
+  let ok_env = check("env: the driver read MOTOKO_HEADLESS from the world, not the process",
+                     fin_h == "stop",
+                     "finish_reason=${fin_h}, expected stop — an un-routed read sees the process env, where MOTOKO_HEADLESS is unset");
+  let ok_env_ctl = check("env: the same world without the key takes the other branch",
+                         fin_p == "error",
+                         "finish_reason=${fin_p}, expected error — if this also passes, the assertion above proves nothing");
+
+  -- tools: THE TYPED TOOL CONTRACT'S ASSERTION.
+  --
+  -- All four behaviours the plan names, through one production adapter
+  -- contract, in one run: ordinary success, a typed execution error, a
+  -- wrong-call-id correlation fault, and completion after the deadline.
+  --
+  -- Each is a DISTINCT typed outcome, and the point of the class is that a
+  -- `(string, string) -> string` port could not tell three of them apart — they
+  -- would all have arrived as some string. So the assertion checks that each
+  -- fault reaches the model as its own discriminated payload, in order, which
+  -- is simultaneously the advancement check for the tool cursor: a frozen queue
+  -- serves the first outcome four times.
+  --
+  -- MOTOKO_TOOL_TIMEOUT_MS is read through the ENV class landed earlier, so the
+  -- deadline is configured by the world too, not by a constant.
+  let tool_world: WorldState = {
+    empty_world_state() |
+    script: [step_named("t0"), step_named("t1"), step_named("t2"), step_named("t3"), prose_step("done")],
+    env: [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "50" }],
+    tools: [
+      { tool_call_id: "", duration_ms: 1,  code: "",         message: "",             content: "OK-ALPHA" },
+      { tool_call_id: "", duration_ms: 1,  code: "ExitCode", message: "boom-bravo",   content: "" },
+      { tool_call_id: "WRONG-ID", duration_ms: 1, code: "",  message: "",             content: "" },
+      { tool_call_id: "", duration_ms: 999, code: "",        message: "",             content: "OK-DELTA" }
+    ]
+  };
+  let tools_run = run_world(allow_rt("probe_tools"), 12, tool_world);
+  let tool_msgs = match tools_run.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let _ = println("tools: ${show(List.length(tool_msgs))} tool results returned");
+  let ok_tool_ok = check("tools: ordinary success carries the tool's own output",
+                         reasons_in_order(["OK-ALPHA"], tool_msgs),
+                         "first tool result did not carry OK-ALPHA");
+  let ok_tool_err = check("tools: a typed execution error is discriminated, not a string",
+                          reasons_in_order(["OK-ALPHA", "boom-bravo"], tool_msgs),
+                          "second tool result did not carry the typed ExitCode fault");
+  let ok_tool_corr = check("tools: a wrong-call-id answer is a correlation fault",
+                           reasons_in_order(["OK-ALPHA", "boom-bravo", "WRONG-ID"], tool_msgs),
+                           "third tool result did not report the correlation mismatch");
+  let ok_tool_dl = check("tools: completion after the deadline is its own outcome",
+                         reasons_in_order(["OK-ALPHA", "boom-bravo", "WRONG-ID", "ToolDeadlineExceeded"], tool_msgs),
+                         "fourth tool result did not report a deadline fault — the run took 999ms against a 50ms timeout");
+
+  -- determinism: same world twice.
+  let again = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
+  let ok_det = assert_deterministic("repeat", advance, again);
+
+  if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
+     && ok_appr && ok_appr_det && ok_env && ok_env_ctl
+     && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det then
+    println("world_state_probe PASS")
+  else {
+    let _ = println("world_state_probe FAIL");
+    exit(1)
+  }
+}

@@ -6,10 +6,10 @@
 module src/core/tool_phase
 
 import std/ai (Message, ToolCall)
-import std/json (Json, jo, kv, js, jb, encode, decode, get, asString)
+import std/json (Json, jo, kv, js, jb, jnum, encode, decode, get, asString)
 import std/list as List (length)
 import std/option (Option, Some, None)
-import std/string (startsWith)
+import std/string (startsWith, trim)
 import std/trace as Trace
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtRuntime, PolicyDefault, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
 import src/core/ext/runtime (dispatch_tool_policy, dispatch_tool_handle)
@@ -30,7 +30,12 @@ import src/core/phase_vocab (
   handled_tool_message,
   tool_result_message
 )
-import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied)
+import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, WorldState, ToolInvocation, ToolExecution, ToolOutcome, ToolCompleted, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded)
+import src/core/dst_fault_catalogue (
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded
+)
 import src/core/tool_contract (ToolResultEnvelope)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for_v2)
@@ -146,8 +151,8 @@ export pure func native_plan(calls: [ToolCall]) -> ToolPlan {
 }
 
 export type ToolDispatchOutcome
-  = ToolDispatchDone([Message])
-  | ToolDispatchPending({ request: ApprovalRequest, accumulated: [Message] })
+  = ToolDispatchDone({ msgs: [Message], world: WorldState })
+  | ToolDispatchPending({ request: ApprovalRequest, accumulated: [Message], world: WorldState })
 
 pure func policy_default_allow(default: PolicyDefault) -> bool {
   match default {
@@ -208,7 +213,66 @@ func emit_scratchpad_result_if_present(emit: (LedgerEvent) -> () ! {IO, Trace}, 
   else ()
 }
 
+-- WI-A12's typed tool contract. `ports`/`world` come in and the successor world
+-- goes out, which is why this returns a record rather than a bare `Message`.
+--
+-- Only the Native branch consumes the world today: the scratchpad and
+-- extension-Handled branches are extension-side effects (D5 / WI-C5), and the
+-- Delegated branch performs no execution at all. Each of those returns the
+-- world UNCHANGED rather than pretending otherwise.
+pure func parse_timeout_ms(raw: string) -> int {
+  match _stringToInt(trim(raw)) { Some(n) => if n > 0 then n else 0, None => 0 }
+}
+
+-- Render a typed tool outcome as the tool-result message the model sees.
+--
+-- The success path is byte-identical to the pre-A12 `tool_result_message(call,
+-- content)`, which is what makes this class behaviour-preserving. The three
+-- fault variants are new REACHABLE outcomes, each carrying its own code, so a
+-- model (and a trace reader) can tell an execution failure from a misaddressed
+-- answer from a late one. That discrimination is the whole point of D1's part
+-- 3; a string return collapsed all three into "some text".
+--
+-- WI-A7: the three `fault_class` names are no longer literals here. They are
+-- D3's stable class ids for these three classes, and the catalogue
+-- (src/core/dst_fault_catalogue.ail) is their single source of truth — the
+-- catalogue ADOPTED these exact strings precisely because they already reached
+-- the model through this function, so this is a reference change with no wire
+-- change. Two vocabularies for one concept is the drift D3's "one catalogue is
+-- the single source of truth" exists to prevent, and nothing would have caught
+-- it: both spellings type-check and neither was validated.
+export pure func tool_outcome_message(call: ToolCall, o: ToolOutcome) -> Message {
+  match o {
+    ToolCompleted(c) => tool_result_message(call, c.content),
+    ToolFailed(f) =>
+      tool_fault_message(call, fault_class_tool_failed(), encode(jo([
+        kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))
+      ]))),
+    ToolCorrelationMismatch(m) =>
+      tool_fault_message(call, fault_class_tool_correlation_mismatch(), encode(jo([
+        kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))
+      ]))),
+    ToolDeadlineExceeded(d) =>
+      tool_fault_message(call, fault_class_tool_deadline_exceeded(), encode(jo([
+        kv("tool_call_id", js(d.tool_call_id)),
+        kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))),
+        kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))
+      ])))
+  }
+}
+
+pure func tool_fault_message(call: ToolCall, fault_class: string, detail: string) -> Message {
+  tool_result_message(call, encode(jo([
+    kv("error", jb(true)),
+    kv("tool", js(call.name)),
+    kv("fault_class", js(fault_class)),
+    kv("detail", js(detail))
+  ])))
+}
+
 export func execute_allowed_tool_call(
+  ports: Ports,
+  world: WorldState,
   rt: ExtRuntime,
   ctx: ExtCtx,
   call: ToolCall,
@@ -217,7 +281,7 @@ export func execute_allowed_tool_call(
   stream_id: string,
   ohmy_pi: bool,
   emit: (LedgerEvent) -> () ! {IO, Trace}
-) -> Message ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+) -> { msg: Message, next_state: WorldState } ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
   let envelope = tool_call_to_envelope(call);
   if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
     let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
@@ -237,7 +301,7 @@ export func execute_allowed_tool_call(
       exit_code: result_env.exit_code
     }));
     let _ = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
-    handled_tool_message(call.id, result_env)
+    { msg: handled_tool_message(call.id, result_env), next_state: world }
   } else {
     let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
     match handle_decision {
@@ -250,7 +314,7 @@ export func execute_allowed_tool_call(
           exit_code: result_env.exit_code
         }));
         let _ = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
-        handled_tool_message(call.id, result_env)
+        { msg: handled_tool_message(call.id, result_env), next_state: world }
       },
       Delegate => {
         let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
@@ -262,7 +326,7 @@ export func execute_allowed_tool_call(
               tool: call.name,
               id: call.id
             }));
-            delegated_deferred_message(call)
+            { msg: delegated_deferred_message(call), next_state: world }
           },
           Native => {
             let _ = emit(V2ToolDispatchStart({
@@ -271,13 +335,28 @@ export func execute_allowed_tool_call(
               tool: call.name,
               id: call.id
             }));
-            let result_content = dispatch_one(workdir, call);
+            -- THE ROUTED SITE. Before A12 this was a bare `dispatch_one`; the
+            -- typed contract now carries the request, the deadline and a
+            -- discriminated result. The deadline budget is read through the ENV
+            -- class, so the world configures it rather than a constant.
+            let started = ports.clock_now(world);
+            let budget = ports.env_get(started.next_state, "MOTOKO_TOOL_TIMEOUT_MS", "0");
+            let invocation: ToolInvocation = {
+              call: tool_call_to_envelope(call),
+              workdir: workdir,
+              timeout_ms: parse_timeout_ms(budget.value),
+              started_at_ms: started.now_ms
+            };
+            let execution = ports.tool_exec(budget.next_state, invocation);
             let _ = emit(V2ToolDispatchComplete({
               step: step_idx,
               stream_id: stream_id,
               id: call.id
             }));
-            tool_result_message(call, result_content)
+            {
+              msg: tool_outcome_message(call, execution.outcome),
+              next_state: execution.next_state
+            }
           }
         }
       }
@@ -286,6 +365,8 @@ export func execute_allowed_tool_call(
 }
 
 export func dispatch_tool_entries(
+  ports: Ports,
+  world: WorldState,
   rt: ExtRuntime,
   ctx: ExtCtx,
   entries: [ToolPlanEntry],
@@ -296,10 +377,12 @@ export func dispatch_tool_entries(
   accumulated: [Message],
   emit: (LedgerEvent) -> () ! {IO, Trace}
 ) -> ToolDispatchOutcome ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
-  dispatch_tool_entries_with_builtin(rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, emit, \_ . None)
+  dispatch_tool_entries_with_builtin(ports, world, rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, emit, \_ . None)
 }
 
 export func dispatch_tool_entries_with_builtin(
+  ports: Ports,
+  world: WorldState,
   rt: ExtRuntime,
   ctx: ExtCtx,
   entries: [ToolPlanEntry],
@@ -312,12 +395,12 @@ export func dispatch_tool_entries_with_builtin(
   builtin: (ToolCall) -> Option[Message]
 ) -> ToolDispatchOutcome ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
   match entries {
-    [] => ToolDispatchDone(accumulated),
+    [] => ToolDispatchDone({ msgs: accumulated, world: world }),
     entry :: rest => {
       let call = entry.call;
       match builtin(call) {
         Some(msg) =>
-          dispatch_tool_entries_with_builtin(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emit, builtin),
+          dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emit, builtin),
         None => {
           let envelope = tool_call_to_envelope(call);
           let policy = dispatch_tool_policy(rt, ctx, envelope);
@@ -331,7 +414,7 @@ export func dispatch_tool_entries_with_builtin(
                 reason: reason
               }));
               let denial_msg = denial_message(call, reason);
-              dispatch_tool_entries_with_builtin(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emit, builtin)
+              dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emit, builtin)
             },
             Pending(reason, default) => {
               let _ = emit(ToolPending({
@@ -349,12 +432,18 @@ export func dispatch_tool_entries_with_builtin(
                   stream_id: stream_id,
                   remaining: rest
                 },
-                accumulated: accumulated
+                accumulated: accumulated,
+                world: world
               })
             },
             _ => {
-              let msg = execute_allowed_tool_call(rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, emit);
-              dispatch_tool_entries_with_builtin(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emit, builtin)
+              -- `executed.next_state`, NOT `world`. Passing `world` here
+              -- type-checks and freezes the tool cursor for the rest of the
+              -- batch — the same defect cluster 1 measured on the provider
+              -- cursor, one seam over. The probe's four-fault sequence is what
+              -- catches it: a frozen queue serves the first outcome four times.
+              let executed = execute_allowed_tool_call(ports, world, rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, emit);
+              dispatch_tool_entries_with_builtin(ports, executed.next_state, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [executed.msg], emit, builtin)
             }
           }
         }

@@ -1,0 +1,116 @@
+-- scripts/dst/world_state_poison.ail
+--
+-- WI-A12's per-class poison probe: the LIVE half of the capability backstop.
+--
+-- D4, as corrected by F3, asks each effect class for a per-run demonstration
+-- that routing actually happened, and the demonstration is a pair:
+--
+--   1. with the class's capability WITHHELD, the deterministic entry point
+--      still completes — proving the scripted world performs no ambient read
+--      of that effect. `make world_state` runs `world_state_probe.ail` that way.
+--   2. with the same capability withheld, the LIVE world dies — proving the
+--      capability is genuinely load-bearing and that (1) is evidence of routing
+--      rather than evidence that nothing reads the effect at all.
+--
+-- This file is (2). Without it, (1) passes vacuously: a probe that completes
+-- with `AI` withheld proves nothing if no code path would have used `AI`
+-- anyway. That vacuity is the same defect cluster 4 filed as C1b — a green
+-- check that implies coverage it does not have.
+--
+-- IMPORTANT: this script drives the LIVE provider and is only ever invoked with
+-- the effect's capability WITHHELD, so it terminates before any network call.
+-- It must never be run with the full capability set; `make world_state` invokes
+-- it only in the withheld configuration and asserts a NON-ZERO exit.
+--
+-- On the pin, a denied ambient effect terminates evaluation: no typed result
+-- and no partial trace. That is D6.6's distinction and cluster 4 measured it
+-- directly — a raw capability bypass stays an expected non-zero run and must
+-- NOT be unified into a typed HarnessFailure.
+
+module scripts/dst/world_state_poison
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/ai (Message)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (LiveAI, ScriptedWorld, tool_step, prose_step)
+import src/core/ports (WorldState, empty_world_state)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan, BudgetPatch, ExtRuntime, ExtCtx, ExtensionHooks, Allow, PassThrough,
+  PreStepDecision, PromptPatch, ToolPolicyDecision, ToolHandleDecision, ToolSchema,
+  ResponseInterceptDecision, FinalizeDecision, Delegate, NoIntercept, NoDecision
+)
+import std/option (None)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+
+-- Allows every tool, so the unseeded world reaches the real dispatcher.
+func allow_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks: ExtensionHooks = {
+    id: "poison_allow",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+    on_tool_policy: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow },
+    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate },
+    on_response_intercept: func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
+    on_solver_candidate: func(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+  };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func empty_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [] }, strict_mode: false, verification: v }
+}
+
+-- The tool class's live half. A world with an EMPTY tool queue delegates to the
+-- real dispatcher, so a run that allows tools performs genuine process
+-- execution — which is what makes the seeded run's completion with `Process`
+-- withheld evidence of routing rather than evidence that no tool ran.
+--
+-- It uses the SCRIPTED provider deliberately: the point is to isolate the tool
+-- effect, so the provider must not be what kills the run.
+func unseeded_tools_run() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("world_state_poison: unseeded tool world, driving the real dispatcher");
+  let w: WorldState = { empty_world_state() | script: [tool_step("BashExec", "{\"cmd\":\"true\"}", "p0"), prose_step("done")] };
+  let traced = Session.run_v2_session_traced(
+    allow_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    4, false, 0, zero_rates(), ScriptedWorld(w)
+  );
+  let outcome = match traced.result { Ok(_) => "ok", Err(e) => "err ${e.code}" };
+  println("world_state_poison REACHED COMPLETION outcome=${outcome} — the withheld capability was not load-bearing")
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  if getEnvOr("POISON_ARM", "") == "tools" then unseeded_tools_run()
+  else {
+  let _ = println("world_state_poison: driving the LIVE world with a capability withheld");
+  let traced = Session.run_v2_session_traced(
+    empty_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    2, false, 0, zero_rates(), LiveAI
+  );
+  let outcome = match traced.result { Ok(_) => "ok", Err(e) => "err ${e.code}" };
+  -- Reaching this line at all means the withheld capability was never needed,
+  -- which falsifies the deterministic half's claim to be evidence of routing.
+  println("world_state_poison REACHED COMPLETION outcome=${outcome} — the withheld capability was not load-bearing")
+  }
+}

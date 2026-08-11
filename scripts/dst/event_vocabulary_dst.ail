@@ -1,0 +1,324 @@
+-- scripts/dst/event_vocabulary_dst.ail
+--
+-- WI-A8 acceptance, under ADR-001 D6.
+--
+-- The artifact declares a wire name and a payload schema for each of the 34
+-- `LedgerEvent` variants. This script is what makes those declarations mean
+-- something: it builds ONE SAMPLE VALUE PER VARIANT and asserts, against the
+-- LIVE projection `phase_vocab.to_schema_v1`, that
+--
+--   1. the artifact's wire name equals the `type` the projection emits;
+--   2. every key the projection emits is declared in the row's payload schema;
+--   3. every key the row declares REQUIRED is emitted; and
+--   4. both `StreamDelta` branches round-trip, since that is the one variant
+--      whose wire name is a function of the payload rather than the tag.
+--
+-- Check 1 alone would have caught the schema error that motivated the
+-- `f(variant, payload)` shape. Checks 2 and 3 are what stop the payload schema
+-- from being decorative prose: without them a row could name any fields at all
+-- and nothing would notice.
+--
+-- THE COMPLETENESS CHECK IS THE SAMPLE LIST, and it is deliberately built by
+-- hand rather than derived. AILANG has no constructor enumeration on the pin,
+-- so nothing can enumerate `LedgerEvent` for us. What CAN be done, and is:
+-- `event_variant_id` is a total match, so a new constructor is a compile error
+-- in the artifact; `make event_vocabulary` then counts the variants in the type
+-- declaration itself and fails if it is not 34, which ties both the row list
+-- and this sample list to the type rather than to each other.
+
+module scripts/dst/event_vocabulary_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/json (Json, JObject, jo, kv, js, asString, get)
+import src/core/phase_vocab (
+  LedgerEvent,
+  ProviderCallPrepared, ScratchpadResult, RunSummary, NativeToolDenied, ToolPending,
+  ExtToolHandled, DelegatedToolDeferred, V2ToolDispatchStart, V2ToolDispatchComplete,
+  Dp7VerifierRejected, CostExhausted, CompactionApplied, CompactionExhausted,
+  ExtCompactionRejected, ExtensionDiagnostic, ThinkingStreamStart, ThinkingStreamEnd,
+  StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
+  DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
+  NativeToolResults, SessionSuspend, SessionStart, ErrorEvent, TotalsUpdated,
+  CheckpointTaken, StreamDelta,
+  to_schema_v1
+)
+import src/core/dst_event_vocabulary (
+  EventRow,
+  PayloadField,
+  ClassificationFinding,
+  VocabularyRejection,
+  EventClassification, Logical, DisplayOnly,
+  event_vocabulary,
+  event_vocabulary_version,
+  event_variant_id,
+  event_wire_name,
+  validate_vocabulary,
+  vocabulary_ok,
+  vocabulary_message,
+  find_row,
+  logical_variants,
+  display_only_variants,
+  logical_variants_not_in_trace,
+  classification_findings,
+  classification_id
+)
+
+-- ---------------------------------------------------------------------------
+-- One sample per variant. Field values are arbitrary; what matters is that
+-- every constructor is present and that the payload-dependent one appears in
+-- both of its branches.
+-- ---------------------------------------------------------------------------
+
+pure func samples() -> [LedgerEvent] {
+  [
+    ProviderCallPrepared({ step: 1, msg_count: 2, estimated_input_tokens: 3,
+      system_prefix_count: 1, system_prefix_chars: 4, system_prefix_digest: "sha256:s",
+      payload_digest: "sha256:p", model: "m" }),
+    ScratchpadResult({ tool_call_id: "tc", request_id: "rq", step: 1, cells_json: "[]" }),
+    RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
+      input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
+      duration_ms: 5, error: "" }),
+    NativeToolDenied({ step: 1, stream_id: "s", tool: "t", id: "i", reason: "r" }),
+    ToolPending({ step: 1, stream_id: "s", tool: "t", id: "i", reason: "r" }),
+    ExtToolHandled({ step: 1, stream_id: "s", tool: "t", id: "i", exit_code: 0 }),
+    DelegatedToolDeferred({ step: 1, stream_id: "s", tool: "t", id: "i" }),
+    V2ToolDispatchStart({ step: 1, stream_id: "s", tool: "t", id: "i" }),
+    V2ToolDispatchComplete({ step: 1, stream_id: "s", id: "i" }),
+    Dp7VerifierRejected({ step: 1, errors: "e" }),
+    CostExhausted({ step: 1, total_cost_millicents: 10, total_cost_usd: 0.1,
+      cap_millicents: 5 }),
+    CompactionApplied({ step: 1, note: "n" }),
+    CompactionExhausted({ step: 1, model: "m", reason: "r" }),
+    ExtCompactionRejected({ step: 1, note: "n" }),
+    ExtensionDiagnostic({ step: 1, extension: "x", code: "c", fields: [] }),
+    ThinkingStreamStart({ step: 1, stream_id: "s", model: "m" }),
+    ThinkingStreamEnd({ step: 1, stream_id: "s", status: "completed" }),
+    StreamErrorRetry({ step: 1, error: "e" }),
+    ProviderResult({ step: 1, text: "t", finish_reason: "stop", tool_calls: 0,
+      input_tokens: 1, output_tokens: 2, cost_usd: 0.0, cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0 }),
+    CostWarning({ threshold: "80", step: 1, pct: 80, total_cost_millicents: 8,
+      total_cost_usd: 0.08, cap_millicents: 10 }),
+    ExtInterceptHandled({ step: 1, stream_id: "s", tool: "t", id: "i", exit_code: 0 }),
+    HybridBashExtracted({ step: 1, cmd: "ls" }),
+    DoneEvent({ step: 1, output: "o", source: "src" }),
+    EmptyStopFinalize({ step: 1, input_tokens: 1, estimated_input_tokens: 2,
+      context_limit: 3 }),
+    ExtSolverFeedback({ step: 1, feedback: "f" }),
+    PersistNudge({ step: 1, nudge_num: 1, budget: 2 }),
+    NativeToolCalls({ request_id: "rq", step: 1, stream_id: "s", payload: jo([]) }),
+    NativeToolResults({ request_id: "rq", step: 1, stream_id: "s", payload: jo([]) }),
+    SessionSuspend({ session_id: "sid", target_profile: "p" }),
+    SessionStart({ task: "t", model: "m", mode: "v2" }),
+    ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }),
+    TotalsUpdated({ step: 1, text: "", finish_reason: "", tool_calls: 0, input_tokens: 1,
+      output_tokens: 2, cost_usd: 0.0, cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0 }),
+    CheckpointTaken({ reason: "r", before_digest: "b", after_digest: "a" }),
+    -- The payload-dependent variant, thinking branch. The reasoning branch is a
+    -- separate sample below: `samples()` is one PER VARIANT (the completeness
+    -- list), and the second branch is an extra round-trip case, not a 35th row.
+    StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "text", text: "d" })
+  ]
+}
+
+pure func reasoning_delta_sample() -> LedgerEvent {
+  StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "reasoning", text: "d" })
+}
+
+-- ---------------------------------------------------------------------------
+-- Reading the live projection back
+-- ---------------------------------------------------------------------------
+
+pure func projected_type(e: LedgerEvent) -> string {
+  match get(to_schema_v1(e), "type") {
+    None => "<no type key>",
+    Some(v) => match asString(v) { None => "<not-a-string>", Some(s) => s }
+  }
+}
+
+pure func kv_keys(kvs: [{key: string, value: Json}]) -> [string] {
+  match kvs {
+    [] => [],
+    x :: rest => x.key :: kv_keys(rest)
+  }
+}
+
+-- Every key the projection emits, minus the discriminator itself.
+pure func projected_keys(e: LedgerEvent) -> [string] {
+  match to_schema_v1(e) {
+    JObject(kvs) => without(kv_keys(kvs), "type"),
+    _ => []
+  }
+}
+
+pure func without(xs: [string], drop: string) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => if x == drop then without(rest, drop) else x :: without(rest, drop)
+  }
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+pure func declared_keys(fs: [PayloadField]) -> [string] {
+  match fs {
+    [] => [],
+    f :: rest => f.key :: declared_keys(rest)
+  }
+}
+
+pure func required_keys(fs: [PayloadField]) -> [string] {
+  match fs {
+    [] => [],
+    f :: rest => if f.required then f.key :: required_keys(rest) else required_keys(rest)
+  }
+}
+
+pure func missing_from(declared: [string], emitted: [string]) -> [string] {
+  match emitted {
+    [] => [],
+    k :: rest =>
+      if contains_str(declared, k) then missing_from(declared, rest)
+      else k :: missing_from(declared, rest)
+  }
+}
+
+pure func join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}, ${join(rest)}"
+  }
+}
+
+-- The four assertions, applied to one sample.
+func assert_round_trip(e: LedgerEvent) -> bool ! {IO} {
+  let v = event_variant_id(e);
+  let declared_name = event_wire_name(e);
+  let actual_name = projected_type(e);
+  match find_row(event_vocabulary(), v) {
+    None => { let _ = println("  ✗ ${v}: no row in the vocabulary"); false },
+    Some(row) => {
+      let name_ok = declared_name == actual_name && contains_str(row.wire_names, actual_name);
+      let emitted = projected_keys(e);
+      let undeclared = missing_from(declared_keys(row.payload), emitted);
+      let unemitted = missing_from(emitted, required_keys(row.payload));
+      let ok = name_ok && List.length(undeclared) == 0 && List.length(unemitted) == 0;
+      let _ = if ok then ()
+              else {
+                let _ = println("  ✗ ${v}:");
+                let _ = if name_ok then () else
+                  println("      wire name: artifact says '${declared_name}', projection emits '${actual_name}'");
+                let _ = if List.length(undeclared) == 0 then () else
+                  println("      emitted but not declared: ${join(undeclared)}");
+                if List.length(unemitted) == 0 then () else
+                  println("      declared required but not emitted: ${join(unemitted)}")
+              };
+      ok
+    }
+  }
+}
+
+func assert_all(es: [LedgerEvent]) -> bool ! {IO} {
+  match es {
+    [] => true,
+    e :: rest => {
+      let here = assert_round_trip(e);
+      let tail = assert_all(rest);
+      here && tail
+    }
+  }
+}
+
+func report_rejections(rs: [VocabularyRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${vocabulary_message(r)}");
+      report_rejections(rest)
+    }
+  }
+}
+
+func print_list(label: string, xs: [string]) -> () ! {IO} {
+  println("      ${label}: ${join(xs)}")
+}
+
+func print_findings(fs: [ClassificationFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => {
+      let _ = println("      ${f.variant}: ${f.tension}");
+      print_findings(rest)
+    }
+  }
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("=== event_vocabulary_dst (D6, ${event_vocabulary_version()}) ===");
+  let rows = event_vocabulary();
+  let ss = samples();
+
+  -- 1. Set completeness: one row per variant, one sample per variant, and the
+  --    projection's name inside each row's declared set.
+  let rs = validate_vocabulary(rows, ss);
+  let c1 = List.length(rs) == 0;
+  let _ = if c1 then
+            println("  ✓ vocabulary validates: ${show(List.length(rows))} rows, ${show(List.length(ss))} variants sampled")
+          else {
+            let _ = println("  ✗ vocabulary REJECTED:");
+            report_rejections(rs)
+          };
+
+  -- 2. THE ROUND TRIP. All 34 variants against the live projection.
+  let c2 = assert_all(ss);
+  let _ = if c2 then println("  ✓ all ${show(List.length(ss))} variants round-trip: wire name and payload schema match the live projection")
+          else println("  ✗ at least one variant does not round-trip");
+
+  -- 3. The second StreamDelta branch. `wire name = f(variant, payload)` is the
+  --    settled schema BECAUSE of this one variant, so both of its branches are
+  --    driven — a one-name-per-variant artifact would pass check 2 and fail here.
+  let c3 = assert_round_trip(reasoning_delta_sample())
+    && event_wire_name(reasoning_delta_sample()) == "reasoning_delta"
+    && event_wire_name(StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "text", text: "d" })) == "thinking_delta";
+  let _ = if c3 then println("  ✓ both StreamDelta branches round-trip (reasoning_delta / thinking_delta)")
+          else println("  ✗ the StreamDelta branches do not both round-trip");
+
+  -- 4. The classification, and the D6.4 gap it makes countable.
+  let logical = logical_variants(rows);
+  let display = display_only_variants(rows);
+  let c4 = List.length(logical) + List.length(display) == 34;
+  let _ = if c4 then println("  ✓ every variant classified: ${show(List.length(logical))} logical, ${show(List.length(display))} display-only")
+          else println("  ✗ the classification does not partition the vocabulary");
+  let _ = print_list("display-only", display);
+
+  let gap = logical_variants_not_in_trace(rows);
+  let _ = println("  i ${show(List.length(gap))} logical variant(s) do NOT reach the returned trace today — D6.4's gap, for WI-A14:");
+  let _ = print_list("gap", gap);
+
+  -- 5. Classification findings: rows that resisted the binary.
+  let fs = classification_findings();
+  let _ = println("  i ${show(List.length(fs))} classification finding(s):");
+  let _ = print_findings(fs);
+
+  -- 6. Negative control. An empty vocabulary must be rejected, or every green
+  --    check above is vacuous.
+  let c6 = not vocabulary_ok([], ss);
+  let _ = if c6 then println("  ✓ control: an empty vocabulary is rejected")
+          else println("  ✗ control: an empty vocabulary validates — the checks above are vacuous");
+
+  if c1 && c2 && c3 && c4 && c6 then println("event_vocabulary_dst PASS")
+  else {
+    let _ = println("event_vocabulary_dst FAIL");
+    exit(1)
+  }
+}

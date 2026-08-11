@@ -60,6 +60,43 @@ Executable checks run for this survey: `make effect_inventory` and `effect_inven
 exactly**: `folding: served=[s0,s1,s2,s2,…] advancing=false`, `FAIL`, `exit(1)`. The probe is the
 executable statement of the first defect this plan fixes.
 
+## Standing rules, earned by execution
+
+These began as per-item clauses and are promoted here because three calibration runs confirmed each
+of them. They bind every remaining item.
+
+**S1. Land the executable assertion *before* the change it guards, and make it cover advancement
+*and* completeness — never determinism alone.** Clusters 1, 4 and 6 produced ten sites where both
+alternatives type-check and the wrong one is silent. The compiler forces the *edit*; it does not
+force the *right* edit. Determinism caught none of the ten; advancement caught the frozen cursors,
+completeness caught the dropped records, and provenance caught the un-routed read. A12's clock
+defect is the sharpest case: type-checks clean, trace-complete, **both determinism axes green**, and
+wrong — visible only as `duration_ms: -1` and only to a check that the cursor moved.
+
+**S2. Prefer the un-routed option that fails loudly over the one that fails silently.** Where a seam
+cannot be routed on this pin, bind it so a future caller trips a gate rather than serving a stale
+value. `ExtPorts.clock_now` cannot be bridged at all (zero-argument port, no zero-arg lambdas in
+expression position), and the two available options were a frozen snapshot — silently wrong, cluster
+1's pinned cursor exactly, invisible to every gate — or an ambient read that turns the `Clock` poison
+probe red the moment anyone calls it. The ambient read is chosen deliberately. Same judgement as
+WI-A16's, and stated once here rather than re-derived per seam.
+
+**S3. Route the cheap instance of a seam before the awkward one.** A12's order put the clock second;
+it overran, and every minute was `clock_now` being the only zero-argument port. `ExtPorts.env_get` is
+two-argument and routed its extension seam in one line. Identical nominal scope, opposite outcome,
+sole difference parameter count — had env run first, the limitation would have surfaced on the cheap
+class.
+
+**S4. Size a constructed artifact by the rows whose content must be *discovered*, not by its row
+count.** Cluster 3 measured the controlled comparison: A7 has 68 sites and took 11.5 minutes; A8 has
+158 and took 8. Every A7 row needed a recovery branch located and confirmed in the driver — eleven
+separate investigations — while A8's thirty-four rows were transcribed from a projection function
+already open, one classification judgement each. **Price discovered rows at roughly a minute each
+and transcribed rows at negligible.** New-artifact sites are markedly *cheaper* per site than
+widen-and-converge sites (7.6–19.8/min against 3.4), because an artifact row costs no compiler
+round-trip — so the site model does not transfer, and the surprise runs opposite to the direction
+the plan hedged against.
+
 ## Decisions this plan owns
 
 The ADR deliberately left these decisions to the plan. They are answered here, once, so no work
@@ -160,11 +197,40 @@ is in flight. Milestone C depends on B.
   terminal returns and eight reachable termination reasons**. Sizing against the helper's callers
   would have missed two terminal paths outright (C2). **For an item that rewrites a *class* of
   things, count the class, not the helper.**
-- **The judgement ratio scales with how much contract an item touches:** M1's additive band 10%,
-  port widenings **~19%** (A1 3/13, A2 6/35), items rewriting a class of returns or a result
-  contract **~27%** (A16 3/11, A9 7/26). Use 27% for A10, A13 and B2.
-- **This does not generalise to new-artifact work.** A7, A8, A10, A13, A14, A15 and B2 build things
-  that do not exist; nothing here measures those and their estimates stand unrevised.
+- **The judgement ratio is predicted by whether the change introduces a value that did not
+  previously exist** — not by "widening versus contract rewrite", which was the earlier reading and
+  A12 falsified it from the inside. Bands: M1's additive 10%; port widenings **~19%**; contract
+  rewrites **~27%**; A12 overall **29%**. But A12's *provider* class was a rename and came in at
+  **13%**, below even the widening band, while every class that added a port shape and routed real
+  call sites sat at **28–38%**. A rename converges mechanically; a new cursor forces a decision at
+  every site that consumes it. Use ~30% for A10, A13, A14 and B2.
+- **For a return-type change, count the destructuring sites before estimating — not the conceptual
+  blast radius.** A12's typed tool contract was projected as "comparable to the five other classes
+  combined" and came in at a third of that, the only over-estimate in three runs. The error was
+  treating "return-class change" as inherently dear: `execute_allowed_tool_call` had **2** call
+  sites and `ToolDispatchOutcome` **2** variants, so the real cost was six destructuring sites in
+  two files. One `grep` for the function name answers it in ninety seconds. Cluster 4's return-class
+  rewrite cost 26 sites because *its* class was seven terminal returns spread across the driver —
+  the spread is the cost, not the return.
+- ~~**This does not generalise to new-artifact work.** A7, A8, A10, A13, A14, A15 and B2 build
+  things that do not exist; nothing here measures those and their estimates stand unrevised.~~
+  **MEASURED 2026-08-02 by cluster 3 (A6, A7, A8). The hedge was right that it does not generalise,
+  and wrong about the direction.** New-artifact sites are markedly CHEAPER per site than converge
+  sites, not dearer — 7.6 / 5.9 / 19.8 sites per minute against cluster 1's 3.4. A converge site
+  costs a compiler round-trip; an artifact row does not. Both new modules type-checked on the first
+  `ailang check` and A8's 34-variant round-trip passed on the first run.
+
+  **So sites/min is the wrong predictor for this class. Cost tracks the number of rows whose content
+  must be DISCOVERED rather than TRANSCRIBED.** A7 and A8 are the controlled comparison: 68 sites in
+  11.5 min against 158 sites in 8, because each of A7's eleven rows needed a recovery branch located
+  and confirmed in the driver, while A8's thirty-four were transcription from one open projection
+  function plus a classification judgement each.
+
+  **Sizing rule for A13, A14 and B2:** count the rows requiring an independent source investigation
+  and price those at roughly one minute each; price transcribed rows at negligible. The judgement
+  BAND transfers unchanged — cluster 3 came in at **30% combined**, exactly the corrected
+  predictor's high band, with A6 at 16% (rules fixed verbatim by D5) and A7 at 44% (two undetermined
+  fields per row). **A7's shape is what to expect from A13 and A14.**
 - The 14-minute discipline held for the reason M1 gave: **tooling first.** Cluster 1 wrote a
   parallel `ailang check` over the affected import closure (22 modules, 12 s) that surfaces one
   error per module instead of one per compile. Without it, convergence costs one round-trip per
@@ -254,6 +320,23 @@ unconditionally-dispatched hook excluded; covered/excluded sets disjoint and exh
 slots; hook **ids**, not counts, in definition and run result.
 *Acceptance evidence:* a fixture profile installing an all-excluded extension is rejected; the
 rejection reason names the rule; `driver_only` (empty install list) passes vacuously.
+*Size:* **MEASURED: ~5 min, 4 files (2 new), 38 sites of which 6 needed judgement** (`935bd46`,
+2026-08-02). Landed as `make profile_coverage`, invoked by CI.
+
+**SEVEN slots are unconditionally dispatched, not six, and this item is where D5's undercount
+shows** (cluster 3, C1; D5 amended 2026-08-02). D5 says six unconditional plus one gated and leaves
+the eighth unnamed. It is `on_describe_tools`, dispatched by an unconditional fold at
+`tool_catalog.ail:114` which `live_ports` reaches on **every model step** — outside the
+`ext/runtime.ail` the ADR surveyed. A profile excluding it must be rejected, and under the stated
+six it would have loaded clean: both readings type-check and the wrong one is silent. **WI-A10 must
+not re-derive the six from D5.**
+
+**The acceptance line above names the weak fixture, and that is a correction worth carrying into
+A10's and A13's acceptance lines.** "An all-excluded extension is rejected" is easy and shallow. The
+fixture that separates this validator from a row-shape validator is the set-completeness one: a
+disclosure whose two lists are disjoint, whose every id is real, and whose **entry count is
+correct** — seven covered plus one excluded is eight — while one slot is classified nowhere. Only
+counting per *slot* rather than per *entry* rejects it.
 
 **WI-A7. Construct D3's fault catalogue** as a versioned, machine-readable artifact with a
 fail-closed validator. New construction; the required classes, per-class fields (stable class id,
@@ -282,6 +365,28 @@ row shape, because every downstream counter reads its ids from this artifact and
 discover a class the artifact omits. An empty catalogue must fail. The two conditional classes
 carry their waiving conditions; D11's class-reached and branch-reached counters read their ids from
 it (exercised in WI-A14).
+*Size:* **MEASURED: ~11.5 min, 7 files (2 new), 68 sites of which 30 needed judgement — 44%, the
+highest ratio measured** (`a7d70b5`, 2026-08-02). Landed as `make fault_catalogue`, invoked by CI.
+**A row here is TWO judgements, not one**: the recovery branch and the logical transition are both
+undetermined by the source, which is why this item sits above the ~30% band while A6 sits below it.
+
+**The max-steps decision, taken (cluster 3, C2).** The `Internal` code is **not** changed. A9
+declined it as caller-visible; grounding it here found the consequence is larger — the driver's
+`Fail` code is emitted as an `error` LEDGER EVENT (`ErrorEvent { code: e.code }`, `session.ail:2506`
+and `:2576`) that the TypeScript TUI consumes, so a new code changes a wire event on every max-steps
+run. That is a compatibility decision D3 does not own. The fragility is removed without it: the
+literal lives once as `max_steps_discriminator_message()` in the catalogue, referenced by both the
+`step_machine` `Fail` that emits it and the `session` matcher that reads it. Still open, stated in
+both places: the discrimination is by message, not by type.
+
+**Three findings the catalogue records rather than papers over** (cluster 3, C3/C4). D3's provider
+protocol-inconsistent class names two forms and only the malformed-`arguments` one has a reachable
+branch — nothing validates a `StepResult` for internal consistency anywhere. D3's approval-deadline
+class has no clock-driven branch in production at all; the only no-response branch is channel
+closure, which `resolve_approval` labels `"timeout"`. And `ExtPorts.ai_step` delivers no fault: it
+is handed a fresh empty world, so a `Scripted` provider serves `terminal_step()` and the extension
+is told the model answered — the one required class carrying `NoReachableBranch`, permitted because
+it is conditional and only with a reason.
 
 **WI-A8. Construct D6's event vocabulary** — the fifth recorded axis. New construction for all 34
 `LedgerEvent` variants: variant, wire name, payload schema, logical/display-only classification;
@@ -302,6 +407,32 @@ schema error; the vocabulary version lands in the execution manifest (WI-A10) an
 **Scheduling prohibition honoured:** no D7 parity invariant or acceptance row depending on the
 classification is scheduled before this item completes — WI-A14's invariant set is explicitly split
 on it.
+*Size:* **MEASURED: ~8 min, 4 files (2 new), 158 sites of which 44 needed judgement** (`c873002`,
+2026-08-02). Landed as `make event_vocabulary`, invoked by CI. 28 logical, 6 display-only.
+
+**The classification is SEMANTIC, not a survey of what is appended today, and that choice was the
+item's sharpest silent-wrong-answer site.** Only 13 of the 34 reach the returned trace at HEAD. A
+survey-based classification declares 21 events display-only, validates cleanly, and makes D6.4's
+parity obligation vacuous — blessing the exact gap it exists to close. The artifact keeps the survey
+in a separate `reaches_trace_today` field, and `logical_variants_not_in_trace()` makes the distance
+countable. **It is 15 today, and that is WI-A14's work list.**
+
+**`DoneEvent` resisted the binary and is reported rather than decided** (cluster 3, C5; the
+handoff's stop rule). D6.3 requires it to AGREE with the outcome and the `RunSummary` — an invariant
+over its content, which display-only denies. But D6.1 requires the `RunSummary` to be the FINAL
+record and the driver projects the `DoneEvent` after `c2_finalize` appends it, so D6.4's
+"reaches the trace" and D6.1's final-record invariant cannot both hold by appending it where it is
+emitted. The resolution (append before finalizing) is a change to a terminal path and therefore
+**WI-A14's call against its invariant set**. Classified `Logical`, recorded in
+`classification_findings()`, printed every run.
+
+**Completeness cannot be a compile error on the pin, and the guards that stand in for it are the
+item's real contribution.** A 35th variant forces an arm in `event_variant_id` (a total match) but
+nothing forces a row or a sample, so it could be compile-clean and absent from the artifact. Three
+`make` guards tie the lists to the TYPE DECLARATION rather than to each other:
+`variants in LedgerEvent == rows == variants with a golden`. **The goldens do cover all 34** — an
+obvious `grep '&& golden('` recount says 30 because the first golden in the block has no leading
+`&&`; the tree was not wrong, the grep was (cluster 3, C7).
 
 **WI-A9. Route every terminal path through one finalizer, type the termination reason, and build
 D6's two result classes** (D6.1, D6.2, D6.6, D6.7). The spike proved `c2_finalize` (append **and**
@@ -334,9 +465,29 @@ failure" among the paths to assert. Eight reachable reasons, all mapping onto th
 strings, so no wire change was required.
 
 **WI-A10. Build the profile definition and execution-manifest machinery, and define `driver_only`
-v1** (D5; P4). Depends on A4, A5, A6, A7, A8: the definition references the attribution table,
-names its waived fault classes by A7's stable class ids, and records the vocabulary version; load
-validation wires in the floor/disclosure checks and both classifier outputs. **Also installs
+v1** (D5; P4). Depends on A4, A5, A6, A7, A8 — **all of A6/A7/A8 landed 2026-08-02**; consume their
+exports rather than re-deriving: `dst_profile_coverage.disclosure_from_ids` is the load-time parse
+that fails closed on an unknown hook id, `dst_fault_catalogue.conditional_class_ids` and
+`waiving_condition` supply P4's waiver list, and `dst_event_vocabulary.event_vocabulary_version()`
+is the manifest's fifth axis. The definition references the attribution table, names its waived
+fault classes by A7's stable class ids, and records the vocabulary version; load validation wires in
+the floor/disclosure checks and both classifier outputs.
+
+**Do not re-derive the unconditional-dispatch set from D5's prose: it is SEVEN slots, not six**
+(cluster 3, C1; ADR D5 amended 2026-08-02). The eighth slot D5 originally left unaccounted is
+`on_describe_tools`, dispatched by an unconditional fold in `tool_catalog.ail:114`
+(`collect_ext_schemas`) reached from `live_ports` on **every model step** — outside the
+`ext/runtime.ail` the ADR surveyed. **Under D5 as written, a profile excluding `on_describe_tools`
+would have loaded clean and then failed closed on the first step.** A6 closed this with
+`test_seven_slots_are_unconditional` and a `describe_tools_excluded` fixture; take the set from
+A6's code, not from prose.
+
+**Take A6's *set-completeness* fixture shape, not its easy one** (cluster 3, C8). This plan's A6
+acceptance named "a fixture profile installing an all-excluded extension is rejected" — satisfiable
+but weak. The fixture that separates a real validator from a row-shape validator is
+`partial_disclosure`: both lists disjoint, every id a real slot, and **the correct total entry
+count**, while one slot is classified nowhere. Only counting per *slot* rather than per *entry*
+catches it. A10's and A13's acceptance lines should name that shape. **Also installs
 runtime routing's fail-closed exclusion check** — dispatch reaching an excluded hook returns an
 in-runner `HarnessFailure` (D5, D6.6), using A9's result types. Load-time rejection and A12's
 capability probes do not implement this path; it is vacuous for `driver_only` and binding from C5
@@ -416,11 +567,23 @@ assertion stays green. A12 now threads `world_state` through those same literals
 finalizer taking a trace argument. **The advancement assertion must therefore cover trace
 completeness, not only cursor advancement**, or a dropped record satisfies every check A9 leaves
 behind.
-*Size:* **estimate — several days**, staged as one PR per effect class. Basis: the spike threaded
-world state and routed the clock on a throwaway branch; this repeats that behaviour-preservingly
-across six effect classes plus the typed tool contract. Per the corrected model, re-size against
-sites once the per-class site counts are known — A2's 35 sites for one cursor is the anchor, and
-the advancement assertions are new work the spike never did.
+*Size:* ~~estimate — several days~~ → **MEASURED: ~92 min, 14 files, 119 sites of which 34 needed
+judgement (29%)**, all six classes plus the typed tool contract (`2b938e1`…`3c2f4ab`, 2026-08-02).
+Third confirmation of the sites-not-files model, and the first on an item the plan sized in days.
+*Status:* **COMPLETE.** A13, A14 and A15 are unblocked.
+
+**Two obligations this item could not discharge, recorded so their absence does not read as an
+oversight.** (1) **The env class has no poison pair** — the driver's own six env reads are all
+routed and `session.ail` has zero `getEnvOr` calls, but a deterministic run still dies with `Env`
+withheld because `context_usage.ail`'s `resolve_context_limit` is `! {Env, FS}` and every env read in
+it computes a path it then reads. Routing the env half alone would pass a poison probe while still
+depending on ambient state — a defect manufactured deliberately. **A12's specified order contains no
+filesystem class**, which is the gap; filed as
+`.agent/issues/context-usage-env-reads-block-the-env-poison-probe.md` with three costed options, and
+the Makefile says "DEFERRED, not skipped" out loud. (2) **`ExtPorts.clock_now` cannot be bridged on
+this pin at all** — it is the only zero-argument port, zero-argument lambdas do not exist in
+expression position, and partial application is unsupported, so no `() -> int` closure can carry the
+world. It is bound to an **ambient read on purpose**: see the pattern below.
 *Acceptance evidence per class:* existing targets green; the class's poison probe (capability
 withheld) passes for the deterministic entry point and fails for the live world — the F3-corrected
 per-run backstop; for the tool class, the typed contract carries ordinary success, typed
@@ -430,7 +593,9 @@ becomes true and is recorded in the profile — a claim that additionally depend
 scheduling prohibition.
 
 **WI-A13. Build discovery and replay** (D2, D8). Depends on A7 (class ids), A9 (result types), A10
-(manifest), A12 (world_state). `ExecutionProgram`/`DiscoveryConfig` types, the seeded generator
+(manifest), A12 (world_state — **landed**). A12 also left a seam this item wants:
+**`ScriptedWorld(WorldState)` on `StepProvider`**, added there so the approval class's assertion
+could seed a world, and the natural entry point for replay. `ExecutionProgram`/`DiscoveryConfig` types, the seeded generator
 with declared bounds, the pure structural validator, strict and regression replay modes, the
 interaction log with causal identities and encounter ordinals. Exact type names are plan-level per
 D2; semantics are fixed there and not re-litigated here. **Three D8 obligations ride here that an
@@ -441,9 +606,20 @@ and compatibility policy** — a deterministic, diffable encoding (its selection
 plan by the ADR's Non-goals) whose schema migrations either preserve old-program decoding or pin a
 runner, never silently reinterpret; D6 binds the event vocabulary to the same rule, so it is
 load-bearing twice.
+**Determinism is the weakest available check and must not be this item's primary assurance.** Three
+calibration runs have now produced ten sites where two alternatives type-check and the wrong one is
+silent, and **the determinism axis caught none of them** — not cluster 1's frozen cursor, not
+cluster 4's dropped trace record, and not one of A12's four. Every one was perfectly reproducible:
+a frozen cursor serves the same wrong value twice, and an un-routed env read is reproducible when
+the variable is unset in both runs. D7 asks for exactly "same seed twice → identical output" as the
+discovery-contract invariant, and A13 will be tempted to lean on it because it feels like a proof of
+correctness. **It is necessary and it is not sufficient. Carry an advancement or completeness
+assertion beside it**, per the standing rule below.
 *Acceptance evidence:* D7's discovery-contract invariant — same manifest/profile/seed twice →
-identical resolved program, interaction log, outcome, normalized trace; a mismatch fixture returns
-typed `HarnessFailure` with position and projection; bounds violations fail as generator errors;
+identical resolved program, interaction log, outcome, normalized trace; **plus a non-determinism
+assertion — advancement or completeness — that would fail on a frozen cursor or a dropped record**;
+a mismatch fixture returns typed `HarnessFailure` with position and projection; bounds violations
+fail as generator errors;
 D8's pinned generator canary exists per stable generator id and fails on a seed remap without a
 generator-version bump; **a secret-shaped fixture is rejected or redacted before persistence**; and
 **an old-schema program either decodes or fails closed with a pinned-runner pointer** — never
@@ -454,8 +630,25 @@ causal identity and ordinals, the canary, and the encoding/compatibility policy 
 set wide, and no measurement covers any of it.
 
 **WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
-A9, A13; the parity-classification invariants additionally depend on A8 and are not scheduled
-before it. **Includes D4's latency-pair demonstration**, which an earlier revision left in WI-C4:
+A9, A13; the parity-classification invariants additionally depend on A8, **which landed 2026-08-02
+— so this dependency is now satisfied and the prohibition is discharged.**
+
+**A8 hands this item two things it must act on rather than inherit quietly** (cluster 3, C5 and the
+classification split):
+
+- **The D6.4 parity work list is `dst_event_vocabulary.logical_variants_not_in_trace()` — 15
+  variants today.** A8 deliberately kept the survey fact (`reaches_trace_today`) in a field separate
+  from the classification, because classifying by survey rather than by semantics would have declared
+  21 events display-only and made D6.4's parity obligation **vacuous — blessing the exact gap it
+  exists to close.** Only 13 of 34 reach the returned trace today. That number is the work, not the
+  answer.
+- **`DoneEvent`'s classification is A14's call to resolve, and A8 says so rather than deciding it.**
+  D6.3 requires the returned outcome, `DoneEvent` and `RunSummary` to *agree* — an invariant over
+  content, which display-only denies — while D6.1 requires `RunSummary` to be the **final** record,
+  and the driver projects `DoneEvent` after `c2_finalize` appends it. Both cannot hold by appending
+  it where it is emitted. The resolution (append before finalizing) is a change to a terminal path,
+  which is this item's decision against its invariant set. A8 classified it `Logical` and recorded
+  the tension in `classification_findings()`, printed every run. **Includes D4's latency-pair demonstration**, which an earlier revision left in WI-C4:
 two replayable programs holding request and underlying completion result constant while changing
 only generated latency/clock movement, producing the expected different completion-versus-timeout
 result without an OS timeout. It is name-gate evidence but not upstream-dependent work — the

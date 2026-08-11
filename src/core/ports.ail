@@ -9,14 +9,17 @@ module src/core/ports
 import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
 import std/result (Result)
 import std/trace as Trace
+import std/json (encode)
 import src/core/phase_vocab (ApprovalRequest)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/tool_dispatch_adapter (dispatch_one)
 
 export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
 
 -- A scripted LLM turn: what the "model" returns for one exchange.
 --
 -- WI-A2 relocated this here from `src/core/test/stub_step.ail`. It has to be
--- declared at or below this module because `ProviderState` carries it and both
+-- declared at or below this module because `WorldState` carries it and both
 -- the module declaring the widened port and the driver holding the
 -- `C2LoopState` field must name that type. The obvious alternative,
 -- `ScriptedPortsState` (`src/core/test/scripted_ports.ail`), cannot be used:
@@ -34,42 +37,178 @@ export type ScriptedStep = {
   chunks: [string]
 }
 
--- The provider's own state, threaded through `model_step` in and out.
+-- The driver's explicit world state, threaded through the ports in and out.
 --
--- WI-A2, under ADR-001 D1's cursor-ownership paragraph. This is a record and
--- not a sum (plan decision P1): a reviewer's probe on the pin widened a
--- `ProviderState` already used in a cross-module port signature and the port
--- module came out byte-identical, the compiler flagging only the construction
--- site. That is the additive-edit shape we want when the world state grows.
+-- WI-A12, under ADR-001 D1. This is the type D1 calls `world_state`: the one
+-- home for every replay and generator cursor, owned and threaded by the real
+-- session driver. WI-A2 introduced it as `ProviderState` carrying the scripted
+-- cursor alone, under an explicitly interim name; A12 renames it to what D1
+-- always called it and subsumes the interim `C2LoopState.provider_state` field,
+-- which is deleted in this same change exactly as D1 requires.
 --
--- The first field is the scripted cursor: the remaining script tail, the
--- threading style `scripted_model_next` already demonstrates. Live and
--- caller-supplied adapters are stateless and return their input unchanged —
--- D1's specified identity transition, not a per-construction-site decision.
+-- It is a record and not a sum (plan decision P1): a reviewer's probe on the
+-- pin widened a state already used in a cross-module port signature and the
+-- port module came out byte-identical, the compiler flagging only the
+-- construction site. That is the additive-edit shape the remaining effect
+-- classes need — each one adds a field here rather than a new seam.
 --
--- No approval or clock cursor rides along (plan decision P2), and the ground is
--- no-interim-consumer rather than structural closure: the scripted
--- `approval_read` is a constant deny with no position to thread, and the
--- virtual clock only exists once `world_state` lands — which subsumes and
--- deletes this type's interim home anyway. A pre-`world_state` need for a
--- non-constant approval would force a SECOND bidirectional port widening and
--- is P2's named trigger to reopen the decision, not something to solve here.
-export type ProviderState = {
-  script: [ScriptedStep]
+-- `script` is the provider cursor: the remaining script tail, the threading
+-- style `scripted_model_next` demonstrates. Live and caller-supplied adapters
+-- are stateless and return their input unchanged — D1's specified identity
+-- transition, not a per-construction-site decision.
+--
+-- The live/deterministic difference lives in the PORT CLOSURE, never in this
+-- record and never in the driver: `live_ports` performs the ambient read,
+-- `scripted_ports` serves from here. Production code calls the port and
+-- branches on nothing, which is what keeps D1's prohibition on production
+-- test-mode branching true as the later effect classes land.
+export type WorldState = {
+  script: [ScriptedStep],
+
+  -- The monotonic virtual clock — D4's "the explicit clock value in
+  -- `world_state` is the only clock". Read and advanced through `clock_now`,
+  -- never directly. The LIVE adapter ignores it entirely and reads ambient wall
+  -- time, which is D1's identity transition; the field being meaningless in a
+  -- live run is correct, not a bug.
+  --
+  -- D4 grants the clock no exemption: no runtime-clock mirror, no
+  -- `--virtual-time` dependency (it does nothing observable on the pin), and no
+  -- conformance assertion comparing an explicit value against a runtime one.
+  clock_ms: int,
+
+  -- The approval-input cursor: the remaining queue of raw operator responses,
+  -- consumed head-first exactly like `script`. Empty means end-of-input, which
+  -- the driver's `resolve_approval` policy turns into the configured default —
+  -- the same thing `readLine()` returning "" means today, so an empty queue is
+  -- behaviour-preserving.
+  --
+  -- It holds RAW input lines, not resolutions. What is nondeterministic is the
+  -- operator's input; `resolve_approval` is pure policy and stays in the driver
+  -- where it belongs. Routing the resolution instead would move production
+  -- policy into the adapter, and let the live and deterministic worlds disagree
+  -- about it.
+  approvals: [string],
+
+  -- The synthetic environment: the key/value map a deterministic run reads
+  -- instead of the process environment. A key that is absent falls back to the
+  -- caller-supplied default, which is exactly what `getEnvOr` does for an unset
+  -- variable, so an empty map is behaviour-preserving.
+  --
+  -- Unlike `script` and `approvals` this is a KEYED LOOKUP, not a cursor: reads
+  -- do not consume it and the successor is the same world. `EnvRead` still
+  -- carries a successor because D1 requires every request to return one, and
+  -- because A13's interaction log will want to record the read (encounter
+  -- ordinals) without changing this port's shape to do it.
+  env: [{ key: string, value: string }],
+
+  -- The tool-execution cursor: the remaining queue of scripted tool outcomes,
+  -- consumed head-first like `script` and `approvals`.
+  --
+  -- An EMPTY queue means "the world has no opinion", and the adapter then
+  -- delegates to the real dispatcher. That fallback is not a convenience: the
+  -- gated smoke scripts `smoke_v2_pending_full_loop` and
+  -- `smoke_phase_a_tool_parity` execute tools for real through this path, so a
+  -- world-queue-only adapter would silently replace their tool results with
+  -- empty strings. Delegating when unseeded is what makes this class
+  -- behaviour-preserving, and it is also what makes the seeded case meaningful:
+  -- a fully-seeded run performs no process execution at all, which is exactly
+  -- what the Process poison pair measures.
+  tools: [ScriptedTool]
 }
 
--- `ported_provider` returns the initial state alongside the Ports — D1's "a
+-- One scripted tool outcome. The fields are ordered by the fault they express,
+-- and the adapter checks them in that order:
+--
+--   tool_call_id  a value different from the request's id is a CORRELATION
+--                 fault — the world answering a question nobody asked. Empty
+--                 means "answer whatever was asked", the ordinary case.
+--   duration_ms   advances the virtual clock. Greater than the invocation's
+--                 timeout is a DEADLINE fault. This is why the deadline is
+--                 testable at all: a virtual clock makes "slow" a scripted
+--                 property rather than a race.
+--   code          non-empty is a typed EXECUTION fault (D3's tool fault class).
+--   content       the tool's own output, on the success path.
+export type ScriptedTool = {
+  tool_call_id: string,
+  duration_ms: int,
+  code: string,
+  message: string,
+  content: string
+}
+
+-- D1's typed tool request: parts 1 and 2 of the three the decision requires —
+-- a typed envelope, and the timeout/deadline information that a
+-- `(string, string)` signature had nowhere to put.
+--
+-- `timeout_ms` of 0 means no deadline, which is the default and preserves
+-- today's behaviour. `started_at_ms` is a world-clock reading taken by the
+-- driver at dispatch, so elapsed time is measured in the same clock the rest of
+-- the run uses rather than against wall time.
+export type ToolInvocation = {
+  call: ToolCallEnvelope,
+  workdir: string,
+  timeout_ms: int,
+  started_at_ms: int
+}
+
+-- D1's part 3: the typed result/error that replaces
+-- `tool_exec: (string, string) -> string`.
+--
+-- The plan is explicit that a request-only widening is not enough — it "would
+-- pass the listed probes while leaving the return an undifferentiated string,
+-- unable to carry D3's typed tool fault classes". The three fault variants are
+-- that carrying capacity. `ToolCompleted` keeps the tool's own output as a
+-- string because at this layer it genuinely is opaque: the typing that matters
+-- is the DISCRIMINATION between completed, failed, misaddressed and late, none
+-- of which a string return can express.
+export type ToolOutcome
+  = ToolCompleted({ tool_call_id: string, content: string })
+  | ToolFailed({ tool_call_id: string, code: string, message: string })
+  | ToolCorrelationMismatch({ expected_id: string, got_id: string })
+  | ToolDeadlineExceeded({ tool_call_id: string, elapsed_ms: int, timeout_ms: int })
+
+export type ToolExecution = {
+  outcome: ToolOutcome,
+  next_state: WorldState
+}
+
+-- One environment read and its successor world.
+export type EnvRead = {
+  value: string,
+  next_state: WorldState
+}
+
+-- One approval read and its successor world. `eof` is carried explicitly rather
+-- than inferred from `raw == ""`: a recorded world must be able to replay an
+-- empty line that the operator actually typed as distinct from a closed
+-- channel, and the driver's policy branches differently on the two.
+export type ApprovalInput = {
+  raw: string,
+  eof: bool,
+  next_state: WorldState
+}
+
+-- A clock read and its successor world. Every port that observes an effect
+-- returns its successor explicitly — D1's `next_world_state` — because a read
+-- that advances a cursor without handing the successor back is the exact
+-- arrangement that reproduced F6 on a second port in P2's reviewer probe.
+export type ClockReading = {
+  now_ms: int,
+  next_state: WorldState
+}
+
+-- `ported_provider` returns the initial world alongside the Ports — D1's "a
 -- pair, or a paired constructor". Splitting them at the loop boundary is what
 -- keeps the cursor in one explicit driver field instead of inside the Ports.
 export type PortedProvider = {
   ports: Ports,
-  state: ProviderState
+  world: WorldState
 }
 
--- The state a stateless provider carries, and the initial state for every
+-- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
-export pure func empty_provider_state() -> ProviderState {
-  { script: [] }
+export pure func empty_world_state() -> WorldState {
+  { script: [], clock_ms: 0, approvals: [], env: [], tools: [] }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -99,35 +238,129 @@ export pure func empty_provider_state() -> ProviderState {
 export type ProviderExchange = {
   emissions: [StreamChunk],
   result: Result[StepResult, AIError],
-  next_state: ProviderState
+  next_state: WorldState
 }
 
 export type Ports = {
-  model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
-  approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
-  clock_now: () -> int ! {Clock},
-  env_get: (string, string) -> string ! {Env},
-  tool_exec: (string, string) -> string ! {IO, Process, FS}
+  model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
+  -- WI-A12's approval class. State-threaded, and it returns the raw input
+  -- rather than a resolution — see `ApprovalInput`. The `ApprovalRequest` is
+  -- passed so a recorded world can correlate the read with the call it is
+  -- approving (D8 causal identities); the live adapter ignores it.
+  approval_read: (WorldState, ApprovalRequest) -> ApprovalInput ! {IO},
+  -- WI-A12's clock class. State-threaded in and out, like `model_step`. The
+  -- `{Clock}` effect stays in the row and that is expected: AILANG fails on a
+  -- capability only when a read is PERFORMED, so the deterministic adapter
+  -- never triggering it is precisely what the poison pair measures.
+  clock_now: (WorldState) -> ClockReading ! {Clock},
+  -- WI-A12's env class. State-threaded like the rest.
+  env_get: (WorldState, string, string) -> EnvRead ! {Env},
+  -- WI-A12's typed tool contract. State-threaded, typed request, typed result.
+  -- No `{Clock}` in the row: the adapter ADVANCES the virtual clock
+  -- arithmetically from the scripted duration, it never reads one. That keeps
+  -- this row identical to `ExtPorts.proc_exec`'s, which is what lets the
+  -- extension seam project onto it without widening the ABI.
+  tool_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS}
 }
 
-func deny_approval(_req: ApprovalRequest) -> ApprovalResolution ! {IO} {
-  ApprovalDenied("scripted approval denied")
+-- The deterministic approval channel: serve the queue head, advance past it.
+-- An empty queue reports end-of-input, which the driver resolves through its
+-- own default-allow policy. Exported for the same reason as `virtual_clock` —
+-- one implementation of the cursor shared by every non-live adapter.
+export func scripted_approval(state: WorldState, _req: ApprovalRequest) -> ApprovalInput ! {IO} {
+  match state.approvals {
+    [] => { raw: "", eof: true, next_state: state },
+    x :: rest => { raw: x, eof: false, next_state: { state | approvals: rest } }
+  }
 }
 
-func fake_clock() -> int ! {Clock} { 0 }
+-- The deterministic clock: serve the world's own value, advance it by one
+-- millisecond. Exported so every non-live adapter shares ONE implementation of
+-- the tick — three copies of "read the field, add one" is three chances for
+-- them to drift, and a clock that drifts between adapters is a determinism
+-- defect no single-adapter test can see.
+--
+-- The tick must be non-zero. A clock returning a constant is perfectly
+-- reproducible and therefore invisible to a determinism assertion — cluster 1's
+-- freeze hazard in the clock's clothing — so `world_state_probe` asserts
+-- advancement separately.
+-- It declares `! {Clock}` while performing no clock read at all. That is not a
+-- lie the type system is forced to swallow, it is the mechanism the poison pair
+-- rests on: AILANG demands a capability only when an effect is PERFORMED, so a
+-- deterministic run keeps `{Clock}` in its row and still completes with the
+-- capability withheld. The declaration is also required — a `pure` function
+-- will not unify into the effectful port slot ("incompatible closed rows"), so
+-- the row cannot simply be narrowed here.
+export func virtual_clock(state: WorldState) -> ClockReading ! {Clock} {
+  { now_ms: state.clock_ms, next_state: { state | clock_ms: state.clock_ms + 1 } }
+}
 
-func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
+-- The deterministic environment: serve the world's map, fall back to the
+-- caller's default when the key is absent.
+export func scripted_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  { value: lookup_env(state.env, key, fallback), next_state: state }
+}
 
-func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
+pure func lookup_env(entries: [{ key: string, value: string }], key: string, fallback: string) -> string {
+  match entries {
+    [] => fallback,
+    e :: rest => if e.key == key then e.value else lookup_env(rest, key, fallback)
+  }
+}
 
+-- The tool adapter. One implementation serves both worlds, which is why
+-- `live_ports` overrides the clock and the approval channel but NOT this: the
+-- only difference between a live and a deterministic tool call is whether the
+-- world has an answer queued, and that is data, not a code path.
+export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  match state.tools {
+    -- No world opinion: perform the real effect, exactly as before A12.
+    [] => {
+      outcome: ToolCompleted({ tool_call_id: inv.call.id, content: dispatch_one(inv.workdir, envelope_to_call(inv.call)) }),
+      next_state: state
+    },
+    t :: rest => {
+      let advanced = { state | tools: rest, clock_ms: state.clock_ms + t.duration_ms };
+      let outcome =
+        if t.tool_call_id != "" && t.tool_call_id != inv.call.id then
+          ToolCorrelationMismatch({ expected_id: inv.call.id, got_id: t.tool_call_id })
+        else if inv.timeout_ms > 0 && t.duration_ms > inv.timeout_ms then
+          ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: inv.timeout_ms })
+        else if t.code != "" then
+          ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message })
+        else
+          ToolCompleted({ tool_call_id: inv.call.id, content: t.content });
+      { outcome: outcome, next_state: advanced }
+    }
+  }
+}
+
+pure func envelope_to_call(e: ToolCallEnvelope) -> ToolCall {
+  { id: e.id, name: e.tool, arguments: encode(e.arguments) }
+}
+
+-- The sole `Ports` constructor. It keeps ONE function-typed parameter and
+-- defaults every other seam, including the deterministic `virtual_clock`;
+-- adapters that need a different seam override it by record update, as
+-- `live_ports` does for the clock.
+--
+-- That shape is forced, not preferred. Taking the clock as a second
+-- function-typed parameter is the obvious design and it does not compile on
+-- pinned v0.26.0: with two function-typed parameters carrying different effect
+-- rows, the checker unifies them against the wrong slots and reports the rows
+-- swapped ("record field 'clock_now': r1 has extra labels [AI IO Trace], r2 has
+-- extra labels [Clock]", and the mirror-image message for 'model_step'). Tested
+-- with both a top-level reference and an inline lambda for the second argument;
+-- both fail identically, so it is the arity and not the argument form. Record
+-- update over a one-parameter constructor avoids the inference path entirely.
 export func ports_shape_probe(
-  model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
+  model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
 ) -> Ports {
   {
     model_step: model_step,
-    approval_read: deny_approval,
-    clock_now: fake_clock,
-    env_get: fake_env,
-    tool_exec: fake_tool
+    approval_read: scripted_approval,
+    clock_now: virtual_clock,
+    env_get: scripted_env,
+    tool_exec: world_tool
   }
 }

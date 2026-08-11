@@ -73,7 +73,259 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary smoke_driver smoke_parity dst_l2 dst_seeded
+
+# D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
+#
+#   1. The fixture PROFILES. Every rejecting shape D5 names, asserted to be
+#      rejected BY ITS RULE rather than merely rejected — a fixture that trips
+#      an unrelated check is green while testing nothing. Plus the two shapes
+#      that must load: driver_only's empty install list (vacuous, per P4) and a
+#      profile excluding only the one GATED hook.
+#
+#   2. A STRUCTURAL GUARD that the eight-slot enumeration still matches the ABI.
+#      `all_hook_slots()` is hand-written and AILANG has no constructor
+#      enumeration on the pin, so a ninth ABI hook could be added and left out
+#      of it while every check in the module still passed — an artifact that
+#      validates while incomplete, which is the exact failure S1 names for
+#      constructed artifacts. Counting the ABI record's `on_*` fields ties the
+#      enumeration to the thing it enumerates instead of to itself.
+#
+# Note the ADR undercounts here and this target is where that shows: D5 says six
+# of eight slots are unconditionally dispatched and one is gated, leaving the
+# eighth unstated. It is `on_describe_tools`, dispatched by an unconditional
+# fold in tool_catalog.ail:114 that live_ports reaches on every model step. So
+# SEVEN are unconditional, and excluding `on_describe_tools` is a rejection.
+# The `on_describe_tools excluded (the seventh)` fixture is that correction.
+.PHONY: profile_coverage
+profile_coverage:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/profile_coverage_dst.ail < /dev/null; \
+	n=$$(awk '/export type ExtensionHooks/,/^}/' packages/motoko-ext-abi/types.ail | grep -c '^  on_'); \
+	if [ "$$n" -ne 8 ]; then \
+		echo "FAIL: the ABI declares $$n hook slots, but src/core/dst_profile_coverage.ail"; \
+		echo "      enumerates 8 in all_hook_slots(). A slot has been added or removed and"; \
+		echo "      the coverage artifact does not know about it, so every profile would"; \
+		echo "      validate while its disclosure was incomplete (D5)."; \
+		awk '/export type ExtensionHooks/,/^}/' packages/motoko-ext-abi/types.ail | grep '^  on_'; \
+		exit 1; \
+	else \
+		echo "  ✓ all_hook_slots() enumerates all $$n ABI hook slots"; \
+	fi; \
+	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
+
+# D3's fault catalogue (WI-A7). Three checks:
+#
+#   1. The acceptance script. Completeness of the SHIPPED catalogue against D3's
+#      table, and the reconciliation of the three tool `fault_class` names
+#      observed on the wire rather than read out of the source — the catalogue
+#      adopted the strings tool_phase already emitted, so the only thing worth
+#      asserting is that the two cannot drift apart again.
+#
+#   2. 007 D1.3's PHYSICAL-FAULT TRIPWIRE, made executable. D3 excludes
+#      torn/partial physical writes from scope and binds that exclusion to
+#      accepted 007 D1.3, carrying its five reopen triggers verbatim: a
+#      crash-recovery, fsync, WAL, resume-from-ledger or replicated-state
+#      correctness contract. Any one of those gives Motoko a physical durability
+#      contract it does not have today, and the moment it has one the exclusion
+#      stops being a scope decision and becomes an untested gap. The tree has
+#      zero hits at baseline, so this fires on the first one.
+#
+#   3. The validator's own unit tests, including the set-completeness cases: an
+#      empty catalogue must fail, and so must one whose every remaining row is
+#      perfect but which omits a single required class.
+.PHONY: fault_catalogue
+fault_catalogue:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/fault_catalogue_dst.ail < /dev/null; \
+	hits=$$(grep -rniE 'fsync|write-ahead log|resume-from-ledger|replicated-state' \
+	          src packages --include=*.ail | grep -v 'dst_fault_catalogue.ail' | wc -l); \
+	if [ "$$hits" -ne 0 ]; then \
+		echo "FAIL: $$hits site(s) suggest a physical durability contract. D3 excludes"; \
+		echo "      torn/partial physical writes and binds that exclusion to accepted"; \
+		echo "      007 D1.3, whose reopen triggers are crash-recovery, fsync, WAL,"; \
+		echo "      resume-from-ledger and replicated-state. Reopen the scope decision"; \
+		echo "      before adding one — the physical-fault exclusion has just become an"; \
+		echo "      untested gap rather than a scope choice."; \
+		grep -rniE 'fsync|write-ahead log|resume-from-ledger|replicated-state' \
+		  src packages --include=*.ail | grep -v 'dst_fault_catalogue.ail'; \
+		exit 1; \
+	else \
+		echo "  ✓ no physical durability contract in the tree (007 D1.3 tripwire clear)"; \
+	fi; \
+	ailang test src/core/dst_fault_catalogue.ail > /dev/null && echo "  ✓ src/core/dst_fault_catalogue.ail"
+
+# D6's event vocabulary, the fifth recorded axis (WI-A8). Four checks:
+#
+#   1. The round trip. All 34 LedgerEvent variants — and BOTH StreamDelta
+#      branches, since that is the one variant whose wire name is a function of
+#      the payload — are projected through the live to_schema_v1 and compared
+#      against the artifact's declared wire name AND payload schema. Checking
+#      only the name would leave the payload schema decorative prose.
+#
+#   2. THREE STRUCTURAL GUARDS, because the artifact's completeness cannot be
+#      made a compile error on the pin. AILANG has no constructor enumeration,
+#      so a 35th LedgerEvent variant would force an arm in event_variant_id
+#      (which is a total match) but could be left out of the row list AND out of
+#      the sample list, and every check above would still pass — an artifact
+#      that validates while incomplete. The guards tie all three lists to the
+#      TYPE DECLARATION rather than to each other:
+#
+#        variants in `export type LedgerEvent`   == rows in event_vocabulary()
+#        rows in event_vocabulary()              == variants with a golden
+#
+#      The second also keeps the BYTE-level pinning total: the goldens in
+#      phase_vocab cover all 34 today, and this is what stops a new variant
+#      entering the vocabulary without one.
+#
+#   3. The vocabulary's own unit tests and phase_vocab's goldens.
+#
+# NOTE for anyone editing src/core/dst_event_vocabulary.ail: guard 2 counts
+# `variant: "` inside the body of `event_vocabulary()`. Writing that string in
+# prose inside that function turns this gate red for no reason — the same shape
+# as terminal_trace's `{ result:` counter over session.ail.
+.PHONY: event_vocabulary
+event_vocabulary:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/event_vocabulary_dst.ail < /dev/null; \
+	variants=$$(awk '/export type LedgerEvent/,/^$$/' src/core/phase_vocab.ail | grep -c '^  [|=]'); \
+	rows=$$(awk '/^export pure func event_vocabulary\(\)/,/^}/' src/core/dst_event_vocabulary.ail | grep -c 'variant: "'); \
+	goldens=$$(grep -oE 'golden\([A-Za-z0-9]+\(' src/core/phase_vocab.ail | sed 's/golden(//' | tr -d '(' | sort -u | wc -l); \
+	if [ "$$variants" -ne "$$rows" ]; then \
+		echo "FAIL: LedgerEvent declares $$variants variants but the vocabulary carries $$rows rows."; \
+		echo "      A variant with no row is an artifact that validates while incomplete —"; \
+		echo "      the wire name, payload schema and logical/display-only classification"; \
+		echo "      of that event are undeclared, and D6 fails closed on exactly that."; \
+		exit 1; \
+	fi; \
+	if [ "$$rows" -ne "$$goldens" ]; then \
+		echo "FAIL: $$rows vocabulary rows but only $$goldens variants have a byte-level"; \
+		echo "      golden in src/core/phase_vocab.ail. The wire projection is a"; \
+		echo "      compatibility surface (project 007); a variant in the vocabulary with"; \
+		echo "      no golden has its NAME pinned but not its BYTES."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ $$variants LedgerEvent variants == $$rows vocabulary rows == $$goldens golden-pinned variants"; \
+	ailang test src/core/dst_event_vocabulary.ail > /dev/null && echo "  ✓ src/core/dst_event_vocabulary.ail"; \
+	ailang test src/core/phase_vocab.ail > /dev/null && echo "  ✓ src/core/phase_vocab.ail (goldens)"
+
+# WI-A12's advancement + trace-completeness gate, landed BEFORE the threading it
+# watches — the plan's binding sequencing rule. The script header carries the
+# full rationale; what belongs here is why it is a separate target and not one
+# more line in compaction_dst: every effect class A12 threads adds its
+# assertions to this one probe, so the gate is named after the thing it guards.
+#
+# Verified falsifiable rather than assumed, by reproducing cluster 1's exact
+# mutation: flipping the six dispatch carry sites to the carry-forward form
+# type-checks clean (`✓ No errors found!`) and turns SEVEN assertions here red.
+# The instructive half is what stayed GREEN under that total freeze — the
+# one-RunSummary invariant and both determinism axes. Each axis is blind to the
+# others' defect class, which is why the probe asserts all three.
+#
+# The target also carries A12's per-class POISON PAIR, D4's F3-corrected
+# per-run backstop. Each effect class contributes two runs:
+#
+#   deterministic + capability withheld  -> must EXIT 0 (nothing reads ambiently)
+#   live          + capability withheld  -> must EXIT NON-ZERO (it is load-bearing)
+#
+# Both halves are required. The first alone passes vacuously — a probe that
+# completes with AI withheld proves nothing if no path would have used AI. That
+# vacuity is cluster 4's C1b defect: a green check implying absent coverage.
+# The poison script drives the LIVE provider and is invoked ONLY in the
+# withheld configuration, so it terminates before any network call.
+#
+# A denied ambient effect terminates evaluation on the pin — no typed result,
+# no partial trace. That is D6.6 and it must stay a raw non-zero run rather
+# than being unified into a typed HarnessFailure.
+#
+# THE ENV CLASS HAS NO POISON PAIR, DELIBERATELY, AND THIS IS THE REASON.
+# All six of the driver's own env reads are routed (session.ail has zero
+# getEnvOr calls). But withholding Env still kills a deterministic run, because
+# `src/core/context_usage.ail` reads MOTOKO_MODELS_FILE / MOTOKO_REPO /
+# MOTOKO_PROFILE_DIR / MOTOKO_CONFIG from `resolve_context_limit`, which the
+# driver calls at six sites.
+#
+# Those reads are NOT routable on their own. `resolve_context_limit` is
+# `! {Env, FS}` and every env read in it exists to compute a FILE PATH that it
+# then reads. Threading the world through the env half would hand back a
+# world-supplied path to an ambient file — a run that passes an Env poison probe
+# while still depending on ambient state. That is a green check implying absent
+# coverage, which is exactly cluster 4's C1b defect, so it is not done here.
+# Completing it needs a filesystem class, which WI-A12's specified order does
+# not contain. Reported as a plan finding rather than worked around.
+#
+# The env class's evidence is therefore PROVENANCE, not capability: the probe
+# seeds MOTOKO_HEADLESS in the world and asserts the driver acted on the world's
+# value, with a control run proving the two branches differ. CI's process
+# environment does not set that variable, so the world cannot pass by agreeing
+# with it.
+.PHONY: world_state
+world_state:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/world_state_probe.ail < /dev/null; \
+	echo "  -- provider class poison pair (AI withheld) --"; \
+	if ailang run --caps IO,Env,FS,Process,Net,SharedMem,Clock,Stream,Trace --entry main \
+	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ deterministic world completes with AI withheld"; \
+	else \
+		echo "FAIL: the deterministic entry point needs AI — the provider class is not routed"; \
+		exit 1; \
+	fi; \
+	if ailang run --caps IO,Env,FS,Process,Net,SharedMem,Clock,Stream,Trace --entry main \
+	     scripts/dst/world_state_poison.ail < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: the LIVE world completed with AI withheld — the capability is not load-bearing, so the check above is vacuous"; \
+		exit 1; \
+	else \
+		echo "  ✓ live world dies with AI withheld"; \
+	fi; \
+	echo "  -- clock class poison pair (Clock withheld) --"; \
+	if ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Stream,Trace --ai-stub --entry main \
+	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ deterministic world completes with Clock withheld (all 4 driver sites routed, P3)"; \
+	else \
+		echo "FAIL: the deterministic entry point still reads an ambient clock — a driver clock site is un-routed"; \
+		exit 1; \
+	fi; \
+	if ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Stream,Trace --ai-stub --entry main \
+	     scripts/dst/world_state_poison.ail < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: the LIVE world completed with Clock withheld — the capability is not load-bearing"; \
+		exit 1; \
+	else \
+		echo "  ✓ live world dies with Clock withheld"; \
+	fi; \
+	echo "  -- env class --"; \
+	echo "  i Env-withheld pair DEFERRED, not skipped — see the note in the Makefile above"; \
+	echo "  i the env class's evidence is the provenance assertion in world_state_probe"; \
+	echo "  -- typed tool contract poison pair (Process withheld) --"; \
+	if ailang run --caps IO,Env,FS,AI,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
+	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ fully-seeded world completes with Process withheld (no real dispatch)"; \
+	else \
+		echo "FAIL: a seeded tool world still reached the real dispatcher — tool_exec is not routed"; \
+		exit 1; \
+	fi; \
+	if POISON_ARM=tools ailang run --caps IO,Env,FS,AI,Net,SharedMem,Clock,Stream,Trace --ai-stub \
+	     --entry main scripts/dst/world_state_poison.ail < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: an UNSEEDED tool world completed with Process withheld — it never reached the real"; \
+		echo "      dispatcher, so the seeded check above is vacuous"; \
+		exit 1; \
+	else \
+		echo "  ✓ unseeded tool world dies with Process withheld"; \
+	fi; \
+	echo "  -- randomness class (D1 request-surface item 5, \"runtime randomness, if any\") --"; \
+	n=$$(grep -l 'std/rand' src/core/*.ail 2>/dev/null | wc -l); \
+	if [ "$$n" -ne 0 ]; then \
+		echo "FAIL: $$n driver module(s) reach std/rand. src/core/*.ail had none when WI-A12"; \
+		echo "      routed its effect classes, so an ambient RNG has appeared and is un-routed."; \
+		echo "      D1 names an ambient RNG as a prohibited hiding place for world state."; \
+		echo "      (src/core/test/ is deliberately excluded: dst_gen.ail is a seeded GENERATOR,"; \
+		echo "       which is explicit randomness outside the driver, not an ambient read in it.)"; \
+		grep -l 'std/rand' src/core/*.ail; \
+		exit 1; \
+	else \
+		echo "  ✓ no driver module (src/core/*.ail) reaches std/rand"; \
+	fi; \
+	echo "  ✓ every run above completed without the Rand capability ever being granted"
 
 # D6's terminal-trace contract (WI-A9). Four checks, in order:
 #

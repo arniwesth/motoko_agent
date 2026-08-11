@@ -1,0 +1,715 @@
+-- src/core/dst_fault_catalogue.ail
+--
+-- WI-A7, under ADR-001 D3: the fault catalogue, as a versioned machine-readable
+-- artifact with a validator that fails closed. D3 fixes the required classes and
+-- the per-class fields; the work here is the artifact and the validator, not the
+-- design.
+--
+-- ONE CATALOGUE IS THE SINGLE SOURCE OF TRUTH. That is the whole point of D3
+-- making this an artifact rather than prose, so this module also owns the two
+-- string literals in the driver that were previously a second, unversioned
+-- vocabulary for the same concepts:
+--
+--   * the three tool `fault_class` names emitted by `tool_phase.tool_fault_message`
+--     (`ToolFailed`, `ToolCorrelationMismatch`, `ToolDeadlineExceeded`), and
+--   * the max-steps discriminator message in `step_machine.call_model_or_fail`.
+--
+-- Both are now exported from here and referenced at their call sites.
+--
+-- ============================================================================
+-- Why three class ids are PascalCase and the other eight are not
+-- ============================================================================
+--
+-- The three tool ids are ADOPTED, not chosen. They already existed as bare
+-- string literals at src/core/tool_phase.ail:234/238/242 and they reach the
+-- model inside a `fault_class` JSON field, so they are a live wire surface.
+-- Inventing snake_case ids beside them would have left the tree with two
+-- vocabularies for one concept — the exact drift this decision exists to
+-- prevent — and renaming them would have changed what reaches the model, which
+-- is a compatibility decision this item does not own. So the catalogue adopts
+-- them verbatim and the call sites now reference these constants. Zero wire
+-- change; one vocabulary. The remaining eight classes have no pre-existing wire
+-- name and are named in the repo's ordinary snake_case.
+--
+-- ============================================================================
+-- THE MAX-STEPS DISCRIMINATION (the decision the plan assigned to this item)
+-- ============================================================================
+--
+-- `decision_fail_reason` (src/core/session.ail) separates max-steps from
+-- internal failure by matching the literal message "v2 loop: step budget
+-- exhausted", because step_machine.ail emits the SAME `Internal` code for the
+-- step-budget failure and the approval-without-pending-call failure. Behaviour
+-- is exact today, but editing that string in one place silently reclassifies
+-- every max-steps run.
+--
+-- DECIDED: the `Internal` code is NOT changed. WI-A9 declined this on the
+-- ground that it would change a caller-visible `AIError` code. Grounding it for
+-- this item found the consequence is strictly larger than A9 had: the driver's
+-- `Fail` code does not stop at the returned `Result` — it is emitted as an
+-- `error` LEDGER EVENT (`ErrorEvent { code: e.code }`, src/core/session.ail:2506
+-- and :2576), which the TypeScript TUI consumes off the wire. Giving the
+-- step-budget `Fail` its own code would therefore change the `code` field of a
+-- wire event on every max-steps run, not merely an internal field. That is a
+-- compatibility decision, and D3 is not the place to take one.
+--
+-- The fragility is removed WITHOUT the wire change instead. The literal now
+-- exists exactly once, here, as `max_steps_discriminator_message()`; both
+-- `step_machine.call_model_or_fail` (which emits it) and
+-- `session.decision_fail_reason` (which matches it) reference that one
+-- constant, so editing it is a single edit that cannot desynchronise the two.
+-- `test_max_steps_discriminator_is_shared` pins the round trip.
+--
+-- What this does NOT fix, stated rather than implied: the discrimination still
+-- rests on a message rather than a type, so a THIRD `Internal` failure whose
+-- message happened to equal this one would be misclassified. Closing that needs
+-- the code change above and therefore the compatibility decision above.
+
+module src/core/dst_fault_catalogue
+
+import std/list as List (length)
+import std/option (Option, Some, None)
+
+-- D8's compatibility rule applies: a change to any class id, field or required
+-- set is a version change, and old records are decoded or a runner is pinned,
+-- never silently reinterpreted.
+export pure func fault_catalogue_version() -> string { "fault-catalogue/1" }
+
+-- ============================================================================
+-- The shared literals. These are the artifact's wire surface.
+-- ============================================================================
+
+export pure func fault_class_tool_failed() -> string { "ToolFailed" }
+export pure func fault_class_tool_correlation_mismatch() -> string { "ToolCorrelationMismatch" }
+export pure func fault_class_tool_deadline_exceeded() -> string { "ToolDeadlineExceeded" }
+
+-- The one string that separates TermMaxSteps from TermInternalFailure. See the
+-- header for why it is a shared constant rather than a new error code.
+export pure func max_steps_discriminator_message() -> string { "v2 loop: step budget exhausted" }
+
+-- ============================================================================
+-- The artifact's shape
+-- ============================================================================
+
+export type FaultBoundary
+  = ProviderBoundary
+  | ToolBoundary
+  | ApprovalBoundary
+  | ExtensionEffectBoundary
+
+export pure func boundary_id(b: FaultBoundary) -> string {
+  match b {
+    ProviderBoundary => "provider",
+    ToolBoundary => "tool",
+    ApprovalBoundary => "approval",
+    ExtensionEffectBoundary => "extension_effect"
+  }
+}
+
+-- D3: two of the required classes are conditional, and when a profile does not
+-- exercise them the run report and the profile definition must NAME the waived
+-- class and the condition that waived it. An unstated waiver is a coverage claim
+-- this decision does not grant — so the condition is a field, not a comment.
+export type Applicability
+  = AlwaysApplicable
+  | ConditionalOn(string)
+
+-- The named production branch the class is intended to reach.
+--
+-- `NoReachableBranch` exists because D3 requires a named branch per class and
+-- the honest answer for one required class is that there is not one. A class
+-- with nowhere to point is a coverage gap worth more than a placeholder, so the
+-- artifact can say it — but only for a CONDITIONAL class, and only with a
+-- reason. `validate_catalogue` rejects an AlwaysApplicable class that claims it:
+-- an unconditional class must point somewhere.
+export type RecoveryBranch
+  = Branch(string)
+  | NoReachableBranch(string)
+
+export pure func branch_id(r: RecoveryBranch) -> string {
+  match r {
+    Branch(b) => b,
+    NoReachableBranch(_) => "<none>"
+  }
+}
+
+-- One row. The five fields are exactly D3's: a stable class id; the
+-- applicability condition if the class is conditional; the production result or
+-- error constructor it is delivered as; the named recovery-branch id it is
+-- intended to reach; and its logical-state transition.
+--
+-- The logical transition is not decorative. D3: "Write-like tool faults specify
+-- whether the all-or-nothing logical update occurred; server-drop faults update
+-- availability for subsequent calls; deadline outcomes specify whether work
+-- completed before or after the observation." Timeout may not leave the
+-- simulator's logical state ambiguous, so every row says what happened.
+export type FaultClass = {
+  class_id: string,
+  boundary: FaultBoundary,
+  applicability: Applicability,
+  delivery_constructor: string,
+  recovery_branch: RecoveryBranch,
+  logical_transition: string
+}
+
+-- ============================================================================
+-- The required set. D3's table, transcribed.
+-- ============================================================================
+--
+-- Set completeness is the load-bearing check: every downstream counter (D11's
+-- class-reached and branch-reached counters, WI-A14) reads its ids from this
+-- artifact and therefore cannot discover a class the artifact omits. A
+-- catalogue missing a class is not a smaller catalogue, it is a silent coverage
+-- claim. So the required ids are listed independently of the rows and the
+-- validator checks the rows against them — an empty catalogue must fail, and it
+-- does.
+export pure func required_class_ids() -> [string] {
+  [-- Provider: retryable AIError, non-retryable AIError, protocol-inconsistent
+   -- typed result, partial stream followed by error, empty terminal response
+   "provider_error_retryable",
+   "provider_error_non_retryable",
+   "provider_protocol_inconsistent_result",
+   "provider_partial_stream_then_error",
+   "provider_empty_terminal_response",
+   -- Tool: typed execution error, protocol-inconsistent result, completion
+   -- after the declared deadline. Ids adopted from the live wire surface.
+   "ToolFailed",
+   "ToolCorrelationMismatch",
+   "ToolDeadlineExceeded",
+   -- Approval: explicit denial, and no response before a declared deadline
+   "approval_denied",
+   "approval_deadline_exceeded",
+   -- Conformant extension effect
+   "extension_effect_fault"]
+}
+
+-- The production constructors a row may name. D3 requires the validator to fail
+-- closed on a row "naming an unknown constructor"; without an enumeration that
+-- check cannot exist, because any string would be acceptable.
+export pure func known_constructors() -> [string] {
+  ["AIError",
+   "StepResult",
+   "ProviderExchange",
+   "ToolCall.arguments",
+   "ToolCompleted",
+   "ToolFailed",
+   "ToolCorrelationMismatch",
+   "ToolDeadlineExceeded",
+   "ApprovalAllowed",
+   "ApprovalDenied",
+   "ExtPorts.ai_step"]
+}
+
+-- ============================================================================
+-- The catalogue
+-- ============================================================================
+
+export pure func fault_catalogue() -> [FaultClass] {
+  [
+    -- ---- Provider boundary ------------------------------------------------
+    {
+      class_id: "provider_error_retryable",
+      boundary: ProviderBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "AIError",
+      recovery_branch: Branch("session.c2_loop/stream_error_retry"),
+      logical_transition: "No assistant message is appended and totals are unchanged; step_idx advances by one and the world advances to exchange.next_state, so the retry consumes step budget. Availability for subsequent calls is unchanged — the retry re-sends the same payload."
+    },
+    {
+      class_id: "provider_error_non_retryable",
+      boundary: ProviderBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "AIError",
+      recovery_branch: Branch("session.c2_loop/provider_failure_finalize"),
+      logical_transition: "Terminal. No assistant message is appended; the run finalizes as TermProviderFailure with the provider's message, and the returned outcome is Err. The provider is unavailable for the remainder of this run by construction — there is no remainder."
+    },
+    {
+      class_id: "provider_protocol_inconsistent_result",
+      boundary: ProviderBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "ToolCall.arguments",
+      recovery_branch: Branch("tool_dispatch_adapter.tool_call_to_envelope/malformed_arguments"),
+      logical_transition: "No logical update occurs for the malformed call: the arguments degrade to an empty JSON object and the per-tool argument extraction reports missing fields back to the model, so the loop continues with a tool-role error message. Delivered through the TYPED provider boundary, so it exercises session validation and claims no wire-parser coverage (D3)."
+    },
+    {
+      class_id: "provider_partial_stream_then_error",
+      boundary: ProviderBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "ProviderExchange",
+      recovery_branch: Branch("session.c2_loop/stream_error_retry"),
+      logical_transition: "The emissions preceding the error were already projected to the wire during the callback, so the logical obligation is D6.4 PARITY rather than a state change: the projected sequence and the returned emission log must match in order and content. The retry or finalize transition is the one the accompanying AIError's class specifies."
+    },
+    {
+      class_id: "provider_empty_terminal_response",
+      boundary: ProviderBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "StepResult",
+      recovery_branch: Branch("session.c2_loop/empty_stop_finalize"),
+      logical_transition: "Terminal, and NOT an error: an EmptyStopFinalize record is appended to the returned trace and projected, then the run finalizes as TermSuccess with an empty output. The history is unchanged beyond the empty assistant turn."
+    },
+
+    -- ---- Tool boundary ----------------------------------------------------
+    {
+      class_id: "ToolFailed",
+      boundary: ToolBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "ToolFailed",
+      recovery_branch: Branch("tool_phase.tool_outcome_message/ToolFailed"),
+      logical_transition: "The tool's all-or-nothing logical update did NOT occur — ports.world_tool returns the fault instead of reaching the dispatcher. The typed fault is rendered into a tool-role message carrying fault_class, code and message, and the loop continues; the model, not the driver, decides how to react."
+    },
+    {
+      class_id: "ToolCorrelationMismatch",
+      boundary: ToolBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "ToolCorrelationMismatch",
+      recovery_branch: Branch("tool_phase.tool_outcome_message/ToolCorrelationMismatch"),
+      logical_transition: "No logical update occurs, and none is recorded against the REQUESTED call either: the world answered an id nobody asked for, so the requested call has no result. Checked before the deadline and before the code, so a misaddressed answer is never mistaken for a late or failed one."
+    },
+    {
+      class_id: "ToolDeadlineExceeded",
+      boundary: ToolBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "ToolDeadlineExceeded",
+      recovery_branch: Branch("tool_phase.tool_outcome_message/ToolDeadlineExceeded"),
+      logical_transition: "The work did NOT complete before the observation — unambiguously, which is what D3 requires of a deadline outcome. ports.world_tool advances the virtual clock by the scripted duration and returns the fault WITHOUT reaching the dispatcher, so no logical update occurred. Enabling this class needs a positive MOTOKO_TOOL_TIMEOUT_MS, which the deterministic world supplies through the env class, so any profile can enable it and it is not conditional on anything outside the world."
+    },
+
+    -- ---- Approval boundary -------------------------------------------------
+    {
+      class_id: "approval_denied",
+      boundary: ApprovalBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "ApprovalDenied",
+      recovery_branch: Branch("session.c2_loop/approval_denied"),
+      logical_transition: "No tool executes, so no logical update occurs. A NativeToolDenied record is projected and a denial message is appended to the accumulated tool batch; the loop continues with the remaining calls in the plan."
+    },
+    {
+      class_id: "approval_deadline_exceeded",
+      boundary: ApprovalBoundary,
+      applicability: ConditionalOn("the production approval policy declares a deadline AND the request's default_allow is false; with default_allow true the same input resolves to ApprovalAllowed and the class is not exercised"),
+      delivery_constructor: "ApprovalDenied",
+      recovery_branch: Branch("tool_phase.resolve_approval/eof"),
+      logical_transition: "No tool executes and no logical update occurs; the request resolves to the policy default. NOTE: no production policy declares a CLOCK-DRIVEN approval deadline today. The only reachable branch is channel closure, which resolve_approval itself reports as \"timeout — no approval received\". A profile claiming this class covers a timed deadline would be over-claiming — see catalogue_coverage_gaps()."
+    },
+
+    -- ---- Conformant extension effect --------------------------------------
+    {
+      class_id: "extension_effect_fault",
+      boundary: ExtensionEffectBoundary,
+      applicability: ConditionalOn("the selected D5 profile installs an extension with an effectful hook that issues this world request; driver_only installs none, so it waives this class by construction (plan P4)"),
+      delivery_constructor: "ExtPorts.ai_step",
+      recovery_branch: NoReachableBranch("The ExtPorts.ai_step seam delivers no fault at all. session.ext_ai_step hands the port a FRESH EMPTY world (empty_world_state()), so against a Scripted provider the empty script serves terminal_step() — \"stub: script exhausted\", finish_reason \"stop\" — and the extension is told the model answered. Not one test in the tree changed output when WI-A2 landed this, which is the concrete reason D1's rule that a conformant profile must exclude every hook of an ai_step-calling extension has no instrument behind it. Widening ExtPorts.ai_step is the ABI major (Milestone B)."),
+      logical_transition: "Undefined at this seam today, and that is the finding rather than the design: because the request is served from a fresh empty world, no fault transition exists to specify. A profile that installs such an extension cannot state this class's transition, which is why D1 requires it to be omitted rather than installed-and-excluded."
+    }
+  ]
+}
+
+-- ============================================================================
+-- Coverage gaps: machine-readable, because a gap recorded as a comment is a
+-- gap nothing can report
+-- ============================================================================
+
+export type CoverageGap = { class_id: string, form: string, why: string }
+
+export pure func catalogue_coverage_gaps() -> [CoverageGap] {
+  [
+    {
+      class_id: "provider_protocol_inconsistent_result",
+      form: "an internally inconsistent StepResult, as opposed to a malformed ToolCall.arguments string",
+      why: "Nothing validates a returned StepResult for internal consistency. model_phase.phase_from_result projects it into a ProviderResult event without checking it, so a result whose finish_reason disagrees with its tool_calls, or which repeats a tool-call id, reaches the loop unremarked. D3 names both forms; only the arguments form has a reachable production branch."
+    },
+    {
+      class_id: "provider_partial_stream_then_error",
+      form: "the PARTIAL-STREAM half of the class",
+      why: "live_ports returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can currently produce a non-empty emission log to compare the projection against. The retry/finalize half of the class is reachable; the parity half is not observable yet, and D6.4's stream-parity invariant that would consume it is WI-A14's."
+    },
+    {
+      class_id: "approval_deadline_exceeded",
+      form: "a CLOCK-DRIVEN approval deadline",
+      why: "No production policy declares one. resolve_approval's only no-response branch is end-of-input, which it labels \"timeout\" but which is channel closure, not elapsed virtual time. D3's class is conditional on the deadline being enabled by production policy, so every profile waives it today — but with the condition named, per D3, rather than silently."
+    },
+    {
+      class_id: "extension_effect_fault",
+      form: "every world-request class reached through ExtPorts",
+      why: "See the row's recovery branch: the ai_step seam is served from a fresh empty world and delivers no fault. ExtPorts.clock_now is likewise unrouted (plan S2). The seam that IS routed, ExtPorts.proc_exec, projects the typed tool outcome back down to a string, so an extension can observe that a tool failed but not which fault class it was."
+    }
+  ]
+}
+
+-- ============================================================================
+-- 007 D1.3's physical-fault tripwire, carried verbatim rather than paraphrased
+-- ============================================================================
+--
+-- D3 excludes torn/partial physical writes from scope and binds that exclusion
+-- to accepted 007 D1.3, carrying its triggers VERBATIM. Any one of these gives
+-- Motoko a physical durability contract it does not have today, and the moment
+-- it has one the physical-fault exclusion stops being a scope decision and
+-- becomes an untested gap. `make fault_catalogue` greps the tree for the
+-- machine-checkable ones.
+export pure func physical_fault_reopen_triggers() -> [string] {
+  ["crash-recovery", "fsync", "WAL", "resume-from-ledger", "replicated-state"]
+}
+
+-- ============================================================================
+-- The validator. Fails closed on row shape AND on set completeness.
+-- ============================================================================
+
+export type CatalogueRejection
+  = MissingRequiredClass(string)
+  | UnknownClassId(string)
+  | DuplicateClassId(string)
+  | EmptyField(string, string)
+  | UnknownConstructor(string, string)
+  | ConditionalWithoutCondition(string)
+  | UnconditionalWithoutBranch(string)
+
+export pure func catalogue_rule(r: CatalogueRejection) -> string {
+  match r {
+    MissingRequiredClass(_) => "required-class-missing",
+    UnknownClassId(_) => "unknown-class-id",
+    DuplicateClassId(_) => "duplicate-class-id",
+    EmptyField(_, _) => "row-field-empty",
+    UnknownConstructor(_, _) => "unknown-constructor",
+    ConditionalWithoutCondition(_) => "conditional-without-condition",
+    UnconditionalWithoutBranch(_) => "unconditional-without-branch"
+  }
+}
+
+export pure func catalogue_message(r: CatalogueRejection) -> string {
+  match r {
+    MissingRequiredClass(c) =>
+      "[required-class-missing] D3 requires class '${c}' and the catalogue does not carry it; every downstream counter reads its ids from here and cannot discover a class this artifact omits",
+    UnknownClassId(c) =>
+      "[unknown-class-id] class '${c}' is not in D3's required set; growing the catalogue is allowed, but the required list must be extended in the same change so set completeness stays decidable",
+    DuplicateClassId(c) =>
+      "[duplicate-class-id] class '${c}' appears more than once",
+    EmptyField(c, f) =>
+      "[row-field-empty] class '${c}' leaves required field '${f}' empty",
+    UnknownConstructor(c, k) =>
+      "[unknown-constructor] class '${c}' names delivery constructor '${k}', which is not a known production constructor",
+    ConditionalWithoutCondition(c) =>
+      "[conditional-without-condition] class '${c}' is conditional but states no waiving condition; an unstated waiver is a coverage claim D3 does not grant",
+    UnconditionalWithoutBranch(c) =>
+      "[unconditional-without-branch] class '${c}' is unconditionally applicable but names no reachable recovery branch; a decorative fault that cannot influence the production session does not satisfy D3"
+  }
+}
+
+pure func contains_str(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == target then true else contains_str(rest, target)
+  }
+}
+
+pure func class_ids(rows: [FaultClass]) -> [string] {
+  match rows {
+    [] => [],
+    r :: rest => r.class_id :: class_ids(rest)
+  }
+}
+
+pure func count_str(xs: [string], target: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x == target then 1 else 0) + count_str(rest, target)
+  }
+}
+
+-- Row shape: every field D3 fixes must be present, the constructor must be one
+-- the production code actually has, a conditional class must carry its
+-- condition, and an unconditional class must point at a branch.
+pure func validate_row(r: FaultClass) -> [CatalogueRejection] {
+  let id_empty = if r.class_id == "" then [EmptyField("<anonymous>", "class_id")] else [];
+  let ctor_empty =
+    if r.delivery_constructor == "" then [EmptyField(r.class_id, "delivery_constructor")] else [];
+  let ctor_known =
+    if r.delivery_constructor != "" && not contains_str(known_constructors(), r.delivery_constructor)
+    then [UnknownConstructor(r.class_id, r.delivery_constructor)] else [];
+  let transition_empty =
+    if r.logical_transition == "" then [EmptyField(r.class_id, "logical_transition")] else [];
+  let branch_empty = match r.recovery_branch {
+    Branch(b) => if b == "" then [EmptyField(r.class_id, "recovery_branch")] else [],
+    NoReachableBranch(why) => if why == "" then [EmptyField(r.class_id, "recovery_branch")] else []
+  };
+  let condition = match r.applicability {
+    AlwaysApplicable =>
+      match r.recovery_branch {
+        NoReachableBranch(_) => [UnconditionalWithoutBranch(r.class_id)],
+        Branch(_) => []
+      },
+    ConditionalOn(c) => if c == "" then [ConditionalWithoutCondition(r.class_id)] else []
+  };
+  id_empty ++ ctor_empty ++ ctor_known ++ transition_empty ++ branch_empty ++ condition
+}
+
+pure func validate_rows(rows: [FaultClass]) -> [CatalogueRejection] {
+  match rows {
+    [] => [],
+    r :: rest => validate_row(r) ++ validate_rows(rest)
+  }
+}
+
+-- Set completeness in BOTH directions. Missing a required class is the
+-- dangerous one; carrying an id outside the required set is caught too, because
+-- growing the catalogue without extending the required list would make the
+-- completeness check quietly weaker on the next change.
+pure func missing_classes(present: [string], required: [string]) -> [CatalogueRejection] {
+  match required {
+    [] => [],
+    c :: rest =>
+      (if contains_str(present, c) then [] else [MissingRequiredClass(c)])
+        ++ missing_classes(present, rest)
+  }
+}
+
+pure func extra_and_duplicate_classes(present: [string], seen: [string]) -> [CatalogueRejection] {
+  match present {
+    [] => [],
+    c :: rest => {
+      let unknown =
+        if contains_str(required_class_ids(), c) then [] else [UnknownClassId(c)];
+      let dup = if contains_str(seen, c) then [DuplicateClassId(c)] else [];
+      unknown ++ dup ++ extra_and_duplicate_classes(rest, c :: seen)
+    }
+  }
+}
+
+export pure func validate_catalogue(rows: [FaultClass]) -> [CatalogueRejection] {
+  let ids = class_ids(rows);
+  validate_rows(rows)
+    ++ missing_classes(ids, required_class_ids())
+    ++ extra_and_duplicate_classes(ids, [])
+}
+
+export pure func catalogue_ok(rows: [FaultClass]) -> bool {
+  List.length(validate_catalogue(rows)) == 0
+}
+
+-- ============================================================================
+-- Lookup, for WI-A10's waiver list and WI-A14's counters
+-- ============================================================================
+
+export pure func find_class(rows: [FaultClass], class_id: string) -> Option[FaultClass] {
+  match rows {
+    [] => None,
+    r :: rest => if r.class_id == class_id then Some(r) else find_class(rest, class_id)
+  }
+}
+
+-- The classes a profile must name as waived if it does not exercise them, each
+-- with the condition that waives it. P4's `driver_only` waives both.
+export pure func conditional_class_ids(rows: [FaultClass]) -> [string] {
+  match rows {
+    [] => [],
+    r :: rest =>
+      match r.applicability {
+        ConditionalOn(_) => r.class_id :: conditional_class_ids(rest),
+        AlwaysApplicable => conditional_class_ids(rest)
+      }
+  }
+}
+
+export pure func waiving_condition(rows: [FaultClass], class_id: string) -> Option[string] {
+  match find_class(rows, class_id) {
+    None => None,
+    Some(r) => match r.applicability {
+      ConditionalOn(c) => Some(c),
+      AlwaysApplicable => None
+    }
+  }
+}
+
+-- ============================================================================
+-- Inline tests
+-- ============================================================================
+
+pure func has_rule(rs: [CatalogueRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if catalogue_rule(r) == rule then true else has_rule(rest, rule)
+  }
+}
+
+pure func ok_row(id: string) -> FaultClass {
+  {
+    class_id: id,
+    boundary: ProviderBoundary,
+    applicability: AlwaysApplicable,
+    delivery_constructor: "AIError",
+    recovery_branch: Branch("session.c2_loop/stream_error_retry"),
+    logical_transition: "t"
+  }
+}
+
+pure func test_shipped_catalogue_validates() -> bool
+  tests [((), true)]
+  {
+    catalogue_ok(fault_catalogue())
+      && List.length(fault_catalogue()) == List.length(required_class_ids())
+  }
+
+-- SET COMPLETENESS. An empty catalogue must fail — it is the limiting case of
+-- a catalogue that is well-formed row-by-row (vacuously) while claiming
+-- coverage of nothing.
+pure func test_empty_catalogue_fails() -> bool
+  tests [((), true)]
+  {
+    let rs = validate_catalogue([]);
+    not catalogue_ok([])
+      && has_rule(rs, "required-class-missing")
+      && List.length(rs) == List.length(required_class_ids())
+  }
+
+-- The sharper set-completeness case: every remaining row is perfect, so every
+-- row-shape check passes, and one required class is simply absent.
+pure func test_catalogue_missing_one_class_fails() -> bool
+  tests [((), true)]
+  {
+    let short = drop_class(fault_catalogue(), "ToolDeadlineExceeded");
+    let rs = validate_catalogue(short);
+    List.length(short) == List.length(fault_catalogue()) - 1
+      && has_rule(rs, "required-class-missing")
+      && not has_rule(rs, "row-field-empty")
+  }
+
+pure func drop_class(rows: [FaultClass], id: string) -> [FaultClass] {
+  match rows {
+    [] => [],
+    r :: rest => if r.class_id == id then drop_class(rest, id) else r :: drop_class(rest, id)
+  }
+}
+
+pure func test_row_missing_a_field_fails() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { ok_row("provider_error_retryable") | logical_transition: "" };
+    has_rule(validate_catalogue([bad]), "row-field-empty")
+  }
+
+pure func test_unknown_constructor_fails() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { ok_row("provider_error_retryable") | delivery_constructor: "NotAConstructor" };
+    has_rule(validate_catalogue([bad]), "unknown-constructor")
+  }
+
+pure func test_conditional_without_condition_fails() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { ok_row("provider_error_retryable") | applicability: ConditionalOn("") };
+    has_rule(validate_catalogue([bad]), "conditional-without-condition")
+  }
+
+-- A decorative fault that cannot influence the production session does not
+-- satisfy D3, and "cannot influence" must be decidable by reading the artifact.
+pure func test_unconditional_without_branch_fails() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { ok_row("provider_error_retryable") | recovery_branch: NoReachableBranch("nowhere") };
+    has_rule(validate_catalogue([bad]), "unconditional-without-branch")
+  }
+
+pure func test_duplicate_class_fails() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_catalogue([ok_row("provider_error_retryable"), ok_row("provider_error_retryable")]), "duplicate-class-id")
+  }
+
+pure func test_unknown_class_fails() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_catalogue([ok_row("invented_class")]), "unknown-class-id")
+  }
+
+-- D3: exactly two of the required classes are conditional, and both must carry
+-- their waiving condition so a profile can name it.
+pure func test_two_conditional_classes_carry_conditions() -> bool
+  tests [((), true)]
+  {
+    let conds = conditional_class_ids(fault_catalogue());
+    List.length(conds) == 2
+      && contains_str(conds, "approval_deadline_exceeded")
+      && contains_str(conds, "extension_effect_fault")
+      && match waiving_condition(fault_catalogue(), "extension_effect_fault") {
+           Some(c) => c != "",
+           None => false
+         }
+  }
+
+-- The three ids adopted from the live wire surface must remain the strings
+-- tool_phase actually emits. If someone renames a class id here, this fails
+-- rather than the tree quietly carrying two vocabularies again.
+pure func test_tool_class_ids_are_the_wire_names() -> bool
+  tests [((), true)]
+  {
+    let ids = class_ids(fault_catalogue());
+    contains_str(ids, fault_class_tool_failed())
+      && contains_str(ids, fault_class_tool_correlation_mismatch())
+      && contains_str(ids, fault_class_tool_deadline_exceeded())
+      && fault_class_tool_failed() == "ToolFailed"
+      && fault_class_tool_correlation_mismatch() == "ToolCorrelationMismatch"
+      && fault_class_tool_deadline_exceeded() == "ToolDeadlineExceeded"
+  }
+
+pure func test_max_steps_discriminator_is_shared() -> bool
+  tests [((), true)]
+  {
+    max_steps_discriminator_message() == "v2 loop: step budget exhausted"
+  }
+
+pure func test_required_ids_are_distinct() -> bool
+  tests [((), true)]
+  {
+    no_duplicates(required_class_ids(), [])
+      && List.length(required_class_ids()) == 11
+  }
+
+pure func no_duplicates(xs: [string], seen: [string]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_str(seen, x) then false else no_duplicates(rest, x :: seen)
+  }
+}
+
+-- Every gap names a class the catalogue carries. A gap recorded against a class
+-- id that does not exist is a gap nobody will find.
+pure func test_gaps_reference_real_classes() -> bool
+  tests [((), true)]
+  {
+    List.length(catalogue_coverage_gaps()) > 0 && gaps_resolve(catalogue_coverage_gaps())
+  }
+
+pure func gaps_resolve(gs: [CoverageGap]) -> bool {
+  match gs {
+    [] => true,
+    g :: rest =>
+      match find_class(fault_catalogue(), g.class_id) {
+        None => false,
+        Some(_) => if g.why == "" || g.form == "" then false else gaps_resolve(rest)
+      }
+  }
+}
+
+pure func test_reopen_triggers_are_007_d1_3_verbatim() -> bool
+  tests [((), true)]
+  {
+    let t = physical_fault_reopen_triggers();
+    List.length(t) == 5
+      && contains_str(t, "crash-recovery")
+      && contains_str(t, "fsync")
+      && contains_str(t, "WAL")
+      && contains_str(t, "resume-from-ledger")
+      && contains_str(t, "replicated-state")
+  }
+
+pure func test_every_class_names_a_boundary() -> bool
+  tests [((), true)]
+  {
+    boundaries_named(fault_catalogue())
+  }
+
+pure func boundaries_named(rows: [FaultClass]) -> bool {
+  match rows {
+    [] => true,
+    r :: rest => if boundary_id(r.boundary) == "" then false else boundaries_named(rest)
+  }
+}

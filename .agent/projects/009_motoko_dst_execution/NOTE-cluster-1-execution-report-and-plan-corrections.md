@@ -1,5 +1,14 @@
 # Note: cluster 1 execution report — WI-A1, P6, WI-A2, with plan corrections
 
+> **INVALIDATED 2026-08-02 by WI-A12 (cluster 6), commits `4401901`–`ebf5788`.** A12 renamed
+> `ProviderState` to `WorldState`, deleted the interim `C2LoopState.provider_state` field this run
+> introduced, and deleted the dead `_history` parameter C5 flagged. C6 was already corrected by
+> cluster 4's C1b (the eight scripts were run-but-ungated, not unrun). **The anchors below are stale;
+> the findings are not.** This note's transferable finding — land the executable advancement
+> assertion BEFORE threading — was confirmed three further times in cluster 6, where it caught three
+> silent-wrong sites before they shipped, and should now be read as a standing rule rather than a
+> per-item clause. See `NOTE-cluster-6-execution-report-and-plan-corrections.md`.
+
 Date: 2026-08-02. Status: closed — all three commits landed green.
 Handoff consumed: `HANDOFF-execute-a1-a2-port-widenings.md`.
 Commits: `e59acaa` (WI-A1), `4ad2c7a` (P6), `6dd1bbe` (WI-A2).
@@ -167,6 +176,14 @@ byte-identically to its baseline.
 
 None of the standing traps fired: no stale-cache type error, no `/tmp` probing, and the pin held at
 v0.26.0 throughout.
+
+## Status: superseded 2026-08-02
+
+**WI-A12 landed (cluster 6) and invalidated this note's code-level facts.** It deleted the
+`C2LoopState.provider_state` field WI-A2 introduced and the dead `ported_provider` `history`
+parameter C5 flagged; C6's "unrun" claim was already corrected by cluster 4's C1b. The measurements
+and the transferable finding stand — and that finding, *land the advancement assertion first*, was
+confirmed three more times in cluster 6 and is now standing rule **S1** in the plan.
 
 ## What invalidates this note
 
