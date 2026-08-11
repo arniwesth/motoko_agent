@@ -197,7 +197,24 @@ import src/core/phase_vocab (LedgerTrace, empty_ledger_trace)
 -- both rules quantify over `hook_classifications`, and `driver_only` has none.
 -- `make driver_only` is what says so, on the same `validate_definition_at_load`
 -- call a runner makes.
-export pure func profile_rules_version() -> string { "profile-rules/2" }
+--
+-- BUMPED TO /3 AT WI-D27, AND THE DIRECTION IS THE OPPOSITE OF /2's. Every rule
+-- change before this one could turn a clean definition into a rejection. This
+-- one WIDENS what is admissible: `recognised_producers` gains `discovery`, a
+-- MEASURED producer, so `WorldMediated` may now rest on a dynamic witness over a
+-- recorded run as well as on classifier 3's static closure verdict. A widening
+-- is versioned for the same reason a narrowing is — "conformant" means something
+-- different after it, and a reader comparing two manifests must be able to see
+-- which rules each was judged under. A definition that loaded clean under /2
+-- still loads clean under /3; the converse does not hold, which is exactly what
+-- the version records.
+--
+-- NO EXISTING PROFILE'S VERDICT MOVES, and again it is checked rather than
+-- asserted: neither `driver_only` nor `driver_plus_no_ops` names the new
+-- producer, and both build their manifests from `profile_rules_version()` rather
+-- than from a literal, so neither is re-issued. `make driver_only` and `make
+-- driver_plus_no_ops` are what say so.
+export pure func profile_rules_version() -> string { "profile-rules/3" }
 
 -- ---------------------------------------------------------------------------
 -- D5 field 2: included extension ids, and per-hook classifications
@@ -294,7 +311,55 @@ export pure func recognised_producers() -> [ClassificationProducer] {
       note: "the ABI's declared effect row, read from source. This is criterion 1's basis and Amendment A's INTERIM rule for criterion 2 (ADR:1415, ADR:1548). It is an ASSUMPTION and the ADR calls it one: a declared row bounds performed effects in one direction only and cannot distinguish mediation from ambience at any width." },
     { producer_id: "disclosure",
       kind: Assumed,
-      note: "the profile's own D5 field 9 excluded-id list. The only admissible basis for ExplicitlyExcluded, which is a DECISION the profile takes rather than a fact about source — and `classification_agrees` below checks the two fields against each other, so this basis is not self-certifying." }
+      note: "the profile's own D5 field 9 excluded-id list. The only admissible basis for ExplicitlyExcluded, which is a DECISION the profile takes rather than a fact about source — and `classification_agrees` below checks the two fields against each other, so this basis is not self-certifying." },
+    -- WI-D27. THE FIRST DYNAMIC PRODUCER, AND THE FIRST ADDITION TO THIS SET
+    -- SINCE IT WAS CLOSED AT WI-D13. Read the note before using it: what it can
+    -- establish is narrow, and the narrowness is the reason it is admissible.
+    --
+    -- WHY IT HAD TO EXIST. Every producer above reads SOURCE. Amendment A's
+    -- fail-closed default (ADR:1548) says criterion 2 may be recorded only on a
+    -- producer that MEASURED it, and named classifier 3 as the one that could.
+    -- Classifier 3 is closure-scoped and whole-extension: it answers "can this
+    -- extension perform ANY effect ambiently ANYWHERE in its transitive
+    -- closure". For `compose` at HEAD the answer is AMBIENT — 8 sources, all of
+    -- them in the three classes ADR-001's goal line disclosed by decision (four
+    -- `println`, registration's three, one AI). So classifier 3 can never clear
+    -- compose, and on its evidence alone no profile could ever install it: the
+    -- three barriers stand and the demonstration clause 1 of the goal line asks
+    -- for would be unreachable by construction rather than by measurement.
+    --
+    -- The goal line already decided the answer, and this entry is its
+    -- machinery: *"the evidence comes from the discovery and witness instruments
+    -- over the recorded run — a DYNAMIC fact, not a classifier verdict"*.
+    --
+    -- WHAT IT MEASURES, EXACTLY, AND IT IS ALL THREE OF CRITERION 2'S CLAUSES:
+    --
+    --   ports       an `ExtensionEffect` interaction EXISTS in the recorded
+    --               program. Only `ExtPorts`'s recording adapter writes that
+    --               class (WI-D24), so its presence is positive evidence that
+    --               the effect arrived through a D1 port. An ambient call
+    --               performs the effect and writes NO interaction.
+    --   origin_tag  the recorded interaction's `identity_origin` is the
+    --               performing extension's own id, stamped by the fold in
+    --               `ext/runtime.ail` rather than by the hook or the recorder.
+    --   world_state the run reached its terminator and the program STRICTLY
+    --               REPLAYS to an identical interaction log, which no chain
+    --               that dropped a successor world can do.
+    --
+    -- WHAT IT CANNOT DO, AND THIS IS WHY IT DOES NOT SUPERSEDE CLASSIFIER 3:
+    -- it is EXISTENTIAL, not universal. It witnesses the effects a run
+    -- performed; it cannot bound the effects a hook COULD perform on an input
+    -- the run did not supply. Classifier 3 quantifies universally over source
+    -- and this one quantifies existentially over one execution, so a profile
+    -- resting a hook on it is claiming "this mediated, here, and the record
+    -- proves it" and NOT "nothing else can happen". A profile that records this
+    -- basis owes the run: `driver_plus_compose_dst` asserts the interaction, the
+    -- origin and the replay of its own graded session, and goes RED if any of
+    -- the three vanishes. Absent that assertion this producer would be the
+    -- fail-open shape `basis` was added to close, one level out.
+    { producer_id: "discovery",
+      kind: Measured,
+      note: "the discovery and witness instruments (src/core/dst_discovery, WI-A13 stage 2; the ExtensionEffect class WI-D24 added) read over a RECORDED, VALIDATED and STRICTLY REPLAYED graded run. DYNAMIC and EXISTENTIAL: it witnesses that a hook's effects arrived through an ExtPorts seam, carried the performing extension's origin tag and threaded successor world state, on the inputs the run supplied. It does NOT bound what the hook could do on other inputs — that is classifier 3's universal question, and this producer neither answers nor replaces it. Admissible for WorldMediated because it measures criterion 2's three clauses directly rather than reading a declaration; admissible only for a profile whose own acceptance script asserts the run, per ADR-001's goal line clause 1." }
   ]
 }
 

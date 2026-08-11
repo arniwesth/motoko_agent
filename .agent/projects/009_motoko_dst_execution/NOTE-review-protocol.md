@@ -40,6 +40,7 @@ away. Budget five to fifteen tool calls per apply. **Run the gates the report sa
 | D21 draft | A7 declares **seven** fault classes, so the class has none to name | `required_class_ids()` is asserted at **11**, and `extension_effect_fault` exists — the seven came from reading the `fault_class_*` **accessors**, a subset |
 | D22 | the quiet anchor run is *"a data point against D21's finding"* | Outside its scope, not against it — D21's law names `ext_ports_of`, in `session.ail`; D22 edited prose in `types.ail` |
 | D24 | silent-wrong goes to **76** (the host-side token rewrite) | Stays **75** — the wrong form never shipped and was not silent (two reachability rows went red), so it is authored-and-closed under D22's rule. Promoted to **S34** instead |
+| D27 handoff | registration discloses "through the D5-field-9 mechanism" | Impossible — `DisclosureIds` carries hook ids only; a mechanism named without checking its shape. Field 6 + `DISCLOSED` lines are the home |
 | D26 handoff | *"the seam's only subprocess door is `bash -lc`"* — so quote the shell string | **False, and following it would have authored a shell injection** at the one model-text argument. The wrap is a conditional fallback (`tool_runtime.ail:888`); the argv door exists. Premise traced to D21 §8's unconditional record, quoted forward five items |
 
 **And the corrections themselves get corrected.** I corrected D21's catalogue claim and then wrote that
@@ -72,7 +73,7 @@ survived from D21 to the D26 handoff — where it nearly became a prescribed inj
 
 ## Two counters, and they are deliberately separate
 
-- **Silent-wrong: 76 across 48 runs.** *Production sites where two answers type-check and the wrong one
+- **Silent-wrong: 76 across 49 runs.** *Production sites where two answers type-check and the wrong one
   ships silently.*
 - **Instrument-weaker-than-its-claim: 7.** *A row that passes while measuring less than its label.*
   Opened at D21.
@@ -101,12 +102,18 @@ commit; D22 declined to and was right.
 paid for it does not belong there. They live at the top of the plan; skim the block before writing a
 handoff, because three or four will apply to any item.
 
-## Where the work stands (2026-08-09, after WI-D26)
+## Where the work stands (2026-08-09, after WI-D27)
 
 Route B is COMPLETE and compose's mediation is done: **8 ambient sources, 36 `ExtPorts` field
 calls** (D26 routed the four `exec` call sites and removed the three `std/process` imports — the
 first yield-adjacent movement since D15). The remainder is exactly the three disclosed classes:
-four `println` (by decision), registration's three (structurally unroutable), one ambient AI. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
+four `println` (by decision), registration's three (structurally unroutable), one ambient AI.
+**Goal-line clause 1 is ACHIEVED (D27):** `driver_plus_compose` v1 records a real traced session
+with compose installed, replays it strictly, and asserts the origin-tagged world-mediated effect —
+under `profile-rules/3`, which admits `discovery` as the first dynamic, EXISTENTIAL producer (it
+witnesses what ran; it does not bound what could). First non-empty `excluded` list
+(`on_tool_handle`, the gated slot, on ambient-AI grounds); `world_mediating_hooks = 1`, the first
+non-zero. Profiles now THREE: driver_only v22, driver_plus_no_ops v9, driver_plus_compose v1. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
 closed at zero classes, and **the typed subprocess discrimination is complete end to end** (D23):
 script → codec → `world_tool` → bridge → `ExtProcOutcome.exit_code`, witnessed at every joint, at
 ABI `5.0`. **The identity work is done** (D24): eight recording adapters, a separate
@@ -131,13 +138,12 @@ none queue.
 session with non-vacuous criterion-2 evidence, plus all fifteen extensions mediated-or-disclosed.
 The remaining critical path, in order:
 
-1. **C5's compose-bearing profile** — the demonstration vehicle; also what ends the solver
-   slot's fixture-less threading label. D26's template: `compose_check_scenario` installs compose
-   through `register_with_config`, records, validates, replays — ~30 lines of wiring. **First
-   obstacle, named:** `handle_compose_tool` is NOT deterministically reachable (ambient AI before
-   anything routed); the intercept path is the deterministic loop.
-2. **The final acceptance rerun** — the closing note; vacuity register and classification table as
-   computed outputs.
+1. **The final acceptance rerun** — the closing note, and the only item left. D5's shape; the
+   vacuity register and the 15-row classification table as COMPUTED outputs, read from the
+   machine-readable places `NOTE-d27` §10 enumerates (`CLAIM`/`CLASSIFICATION`/`STATEMENT`/
+   `DISCLOSED`/`OMITTED` lines, `derive.py --json`). Its discipline is §10.2: the register does not
+   shrink to zero and was never meant to; `discovery` is existential and every cell citing it says
+   so; twelve extensions close by disclosure and measurement, not by rescue.
 
 **The endgame scope rule: a finding joins the queue only if it blocks the goal line's two clauses;
 everything else goes to the plan's maintenance register.** (Door 3's producer, the hook-scope

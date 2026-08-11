@@ -1141,3 +1141,30 @@ document is computed.** The handoff's report-back asks D27 to name the machine-r
 final rerun's vacuity register and classification table should read — the difference between a
 closing note that measures and one that narrates, which is the distinction this whole project
 exists to enforce.
+
+**Cluster 45 = WI-D28, the final acceptance rerun: HANDED OFF 2026-08-09**,
+`HANDOFF-execute-d28-the-final-acceptance-rerun.md`. **The last item on the critical path, and its
+deliverable is a document** — the closing note in D5's shape plus the goal line's two computed
+outputs. The handoff's structure is three disciplines before any content: every number
+command-traceable, nothing fixed in passing, no re-arguing — the eleven rows re-RUN with deltas
+named to their producing items, not re-litigated.
+
+**The grounding quantified clause 2's gap precisely:** 5 of 15 HOOK-PORT-MEDIATED, 2 HOOK-AMBIENT,
+**8 HOOK-UNRESOLVED** — and every UNRESOLVED cell closes by disclosing its door with its
+measurement, door 3's with the upstream filing the goal line prescribed (in scope, bounded, through
+the established `ailang-feedback` channel). The cell algebra is fully derivable from producers
+verified working at HEAD: `derive.py --json` (source_revision in the output), the hook-scope
+rejection reasons, and the `DISCLOSED`/`CLASSIFICATION`/`STATEMENT`/`CLAIM` lines D27 §10
+enumerated for exactly this consumer.
+
+**The register's known state going in is written down so the fold has a falsifiable target:** four
+leanings after D5, three changed by D27 (row 3 carries a red-capable assertion; rows 5 and 7
+re-earned on routing and on exclusion-plus-absence). The fold computes what remains; a fifth
+leaning nobody counted is a finding to include, not to fix — and the register does not shrink to
+zero, which the goal line renounced in advance.
+
+**Clustering note to carry, and it is the loop's own closing observation: the last handoff's job is
+to bound what the closing document may claim, not to enlarge what it covers.** Every prior handoff
+pushed an item toward more measurement; this one spends its stop conditions forbidding repair,
+improvement and re-argument — because a closing note that fixed one more thing would be one more
+item, and the definition of done for a forever-project risk is that the document ships.

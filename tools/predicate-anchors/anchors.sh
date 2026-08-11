@@ -182,6 +182,60 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # Both anchored expressions were compared to `git show HEAD:` character by
 # character and are byte-identical: pure offset drift.
 #
+# WI-D27 MOVED NO ANCHOR AND WIDENED THE CASCADE ANYWAY, which is a shape none
+# of the three measurements above covers. It added a THIRD profile
+# (`driver_plus_compose`, S18's prediction: *"a third profile extends the list
+# again with nothing naming it in advance"*), so every future re-baseline costs
+# TWO more files than it did yesterday and no anchor had to move for that to
+# become true. The list below is DERIVED, by the widened grep, and re-derived at
+# the item — it is not appended to by hand:
+#
+#   $ grep -rn '\(session\|tool_phase\|ext/runtime\).ail", line: [0-9]' --include=*.ail .
+#     scripts/dst/attribution_table_dst.ail        8
+#     scripts/dst/driver_only_dst.ail              2
+#     scripts/dst/driver_plus_compose_dst.ail      2   <- NEW at WI-D27
+#     scripts/dst/driver_plus_no_ops_dst.ail       2
+#     scripts/dst/profile_definition_dst.ail       2
+#     src/core/dst_attribution_table.ail          12
+#
+# THE GREP FINDS THE NEW FILE, and that was VERIFIED rather than assumed: a new
+# fixture that spelled its pins differently would be missed silently, which is
+# D16's pin lesson and the reason this check is written down. The new script's
+# `head_inventory()` carries `ext/runtime.ail:199` and `tool_phase.ail:318` in
+# the same literal shape as its two predecessors', so it is inside the derivation
+# rather than beside it.
+#
+# BOTH GREPS WERE RUN, because the record-form one above cannot see a STRING-form
+# reference (`"src/core/ext/runtime.ail:199"` inside a `classify_site` call). The
+# wider form is
+#   grep -rn '\(session\|tool_phase\|ext/runtime\).ail[":][, ]*\(line: \)\?[0-9]'
+# and it reports 5 hits in `driver_plus_compose_dst.ail` against the record
+# form's 2. THE OTHER THREE ARE NOT ANCHORS: they are prose citations of
+# `session.ail:1417`, `session.ail:939` and `tool_phase.ail:343` — the env-read
+# sites the scenario's witness is derived from, the same class of citation
+# `discovery_dst.ail` carries. They cost a comment re-tense when those sites
+# move, not a profile re-issue, and they are named here so the next item does not
+# have to re-decide which of the five are load-bearing.
+#
+# THE FULL SET A MOVED ANCHOR NOW TOUCHES IS ELEVEN FILES, not nine:
+#
+#   1.  this file                                   (the check itself)
+#   2.  src/core/dst_attribution_table.ail          (the row + 3 test literals)
+#   3.  scripts/dst/attribution_table_dst.ail       (2 literals)
+#   4.  src/core/dst_driver_only.ail                (version + content hash)
+#   5.  src/core/dst_driver_plus_no_ops.ail         (version + content hash)
+#   6.  src/core/dst_driver_plus_compose.ail        (version + content hash)  NEW
+#   7.  scripts/dst/driver_only_dst.ail             (discovered-site fixture)
+#   8.  scripts/dst/driver_plus_no_ops_dst.ail      (discovered-site fixture)
+#   9.  scripts/dst/driver_plus_compose_dst.ail     (discovered-site fixture)  NEW
+#   10. scripts/dst/profile_definition_dst.ail      (discovered-site fixture)
+#   11. src/core/session.ail (or whichever anchored source moved)
+#
+# The RULE stated above is unchanged and this item is its cheapest confirmation:
+# the width is the set of files that PIN the anchors, so adding a pinning file
+# widens the cascade with no anchor moving at all. An item whose deliverable is a
+# profile must price this exactly as a routing item does.
+#
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
@@ -196,7 +250,8 @@ if [ "$fail" -ne 0 ]; then
   echo
   echo "An anchor moved. Do NOT re-baseline it without deciding which site is 'the'"
   echo "attributed one — that is a D4 judgement with other consumers, and correcting"
-  echo "the table re-issues every referring profile (bump driver_only_version and"
-  echo "re-record driver_only_attribution_ref)."
+  echo "the table re-issues every referring profile — THREE of them since WI-D27:"
+  echo "bump driver_only_version, no_ops_version and compose_profile_version, and"
+  echo "re-record all three attribution refs. The eleven-file set is listed above."
   exit 1
 fi

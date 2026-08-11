@@ -3473,6 +3473,66 @@ route.
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
 
+**WI-D27, 2026-08-09 — THE COMPOSE-BEARING PROFILE. GOAL-LINE CLAUSE 1 IS ACHIEVED, AND THE ITEM'S
+CENTRAL ACT WAS A RULES CHANGE THE GOAL LINE HAD ALREADY DECIDED.**
+Verified at review by run: `make driver_plus_compose` green — a full graded session through the
+real traced driver with compose installed via its own `register_with_config`, the routed
+`ailang check` served from the world, **1 world-mediated effect origin-tagged `compose`, reproduced
+by strict replay, 0 mismatches** — plus the guard's rows: the install set re-derived as exactly
+`["compose"]`, the one excluded slot re-derived as the one gated slot, registration's 3 ambient
+sources disclosed **bidirectionally** against classifier 3's own source list, and the coverage
+statement taking its mediating branch for the first time (`world_mediating_hooks = 1`, the first
+non-zero, asserted `== 1` not `> 0`).
+
+**THE RULES CHANGE, RATIFIED AT REVIEW.** The item found that under `profile-rules/2` clause 1 was
+unreachable **by construction**: every recognised producer reads source universally, classifier 3
+can never clear compose (its 8 ambient sources are the three classes the goal line closes by
+disclosure), and `world_mediated_is_measured` refuses assumed bases. The goal line's own wording —
+*"a dynamic fact, not a classifier verdict"* — had decided the answer without building it. The item
+built it: `recognised_producers` gains **`discovery`, kind Measured, the first dynamic and first
+EXISTENTIAL producer** (`dst_profile.ail:360`, its note carrying the universal/existential
+distinction verbatim: it witnesses what a run performed, it does not bound what a hook could do,
+and it neither answers nor replaces classifier 3's question). `profile_rules_version` moves to
+**`profile-rules/3`**, the first bump that WIDENS admissibility — the fixture went red before any
+profile consumed the new basis, which is the version machinery working. The fail-open shape (cite
+`discovery`, run nothing) is closed twice: the producer note restricts the basis to profiles whose
+acceptance script asserts the run, and the guard **fails if the `CLAIM clause1` line is absent**.
+Verified: **4 measured producers**, both predecessor profiles NOT re-issued (v22, v9 — their
+manifests derive from `profile_rules_version()`, so they stay clean under the widening).
+
+**THE FIRST NON-EMPTY `excluded` LIST, and three rules go live.** `on_tool_handle` — the one gated
+slot — is `ExplicitlyExcluded` because compose's tool path reaches ambient AI before anything
+routed (D26 §5.1, the same measurement, acted on rather than inferred). Until this profile,
+`unconditional-hook-excluded`, `classification-disagrees-with-disclosure` and
+`routing_violation_at` had quantified over empty lists — one level below the empty install list
+S21 counts. The exclusion's condition is recorded: honest only while no run under this profile
+dispatches a compose-provided tool, and the graded session's census asserts `expect_tool=0` as a
+claim, not an accident.
+
+**TWO HANDOFF CORRECTIONS AGAINST THIS ROLE, both recorded:** (1) the handoff prescribed
+registration disclosure "through the D5-field-9 mechanism (`disclosures_of`)" — **impossible**:
+`DisclosureIds` carries hook ids only and has no room for an ambient source. A mechanism was named
+without checking its shape (S33's pattern). The disclosure lands in field 6's instruments and the
+machine-readable `DISCLOSED` lines; field 9 is used non-vacuously for the excluded hook instead.
+(2) The DoD's yields triple "(5/15, 4/15, 4/15)" mislabeled the second figure; the measured triple
+is **5/15, 2/15 (HOOK-AMBIENT), 4/15**. All unmoved; only my label was wrong. Also disambiguated by
+the item: the un-install mutant targets **the run's registry**, not the record's
+`installed_extension_ids` — two lists my phrase covered as one; the mutant killed eight rows with
+the non-vacuity row naming what vanished, and mutant B (wrong queue entry served) was caught by the
+content rows while the origin row correctly stayed green — independent evidence, neither
+substituting for the other.
+
+**The cascade joined at eleven files with each consumer's producer named, and one guard was
+corrected in passing:** `check_abi_version`'s subject list was hand-written four paths — correct
+today, silently wrong at the fourth profile — and is now a glob derivation with a floor check
+(**6 sites / 4 files → 10 / 6**, verified). `Env` and `FS` are granted across registration, the
+poison pairs' silence about it is stated in the instrument text, and the determinism claim rides
+the record → strict-replay identity, which mutant A shows going red. **No counters move** (76/49
+runs); the three standing reds unchanged. What the final rerun inherits is §10's table of
+machine-readable places — `CLAIM`, `CLASSIFICATION`, `STATEMENT`, `DISCLOSED`, `OMITTED` lines and
+`derive.py --json` — so the closing note can compute rather than narrate. Implementation
+uncommitted at review; committed as housekeeping, the standing precedent.
+
 **WI-D26, 2026-08-09 — ROUTE COMPOSE'S `exec` SITES. THE MEDIATION IS COMPLETE, THE FIRST
 DETERMINISTIC COMPOSE LOOP RUNS, AND THE HANDOFF'S CENTRAL SAFETY PREMISE WAS FALSE.**
 Verified at review by run: `discovery` green with all twelve new rows — the nine-row
