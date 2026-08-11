@@ -34,7 +34,7 @@ import src/core/tool_dispatch_adapter (dispatch_one)
 -- header for why a second, flatter "recorded request" record projected into
 -- `Interaction` was rejected.
 import src/core/dst_interaction (
-  Interaction, CausalIdentity, IdentityBody, TimedOutcome,
+  Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing
 )
@@ -61,7 +61,9 @@ import src/core/dst_generator (
 import src/core/dst_fault_catalogue (
   fault_class_tool_failed,
   fault_class_tool_correlation_mismatch,
-  fault_class_tool_deadline_exceeded
+  fault_class_tool_deadline_exceeded,
+  -- WI-D1's provider half, read for the same reason and on the same line.
+  provider_error_is_retryable, provider_fault_class_id
 )
 
 export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
@@ -661,6 +663,83 @@ pure func tool_outcome_record(o: ToolOutcome, advanced: int) -> TimedOutcome {
 }
 
 -- ---------------------------------------------------------------------------
+-- WI-D1: the PROVIDER fault, projected the two ways a fault has to be projected
+-- ---------------------------------------------------------------------------
+--
+-- These live here, beside `tool_outcome_record`, for the reason
+-- `generated_provider_entry` gives for the decision mappings: the class
+-- mappings belong one screen apart, so "which fields of a scripted fault reach
+-- the world, and under which class id" is answerable in one place. Putting them
+-- in `stub_step` would also have needed a NEW import statement there, and
+-- `stub_step.ail:202` is an A5 attribution anchor (S18).
+--
+-- 1. THE PRODUCTION VALUE. What `Ports.model_step` hands the driver in place of
+--    a `StepResult`, and `retryable` is the whole item: `session.c2_loop` reads
+--    it through `should_retry_stream_error` and takes the retry branch or the
+--    `TermProviderFailure` finalize. It is DERIVED from the code rather than
+--    carried beside it — see `provider_error_is_retryable`'s note in the
+--    catalogue for the binding and why the alternative was a codec change.
+export pure func scripted_step_ai_error(s: ScriptedStep) -> AIError {
+  { code: s.error_code,
+    message: if s.error_message == "" then s.error_code else s.error_message,
+    retryable: provider_error_is_retryable(s.error_code) }
+}
+
+export pure func scripted_step_faults(s: ScriptedStep) -> bool {
+  s.error_code != ""
+}
+
+-- 2. THE RECORDED VALUE. The same fault as a `TimedOutcome`, so that D11's
+--    class-reached counter can see it and a replay can re-serve it.
+--
+--    The payload is `encode_provider_outcome(s)` on BOTH the ok and the faulted
+--    path, unchanged and with no codec change: it already carries `error_code`
+--    and `error_message` (WI-B2b), and `decode_provider_outcome` already reads
+--    them back. That is what makes the derivation replayable — the code
+--    survives the round trip, so `retryable` re-derives to the same bool and a
+--    replayed run takes the same branch. A `retryable` FIELD would not have
+--    survived it without widening D8's persisted artifact surface.
+--
+--    The chunks are passed in rather than taken from `s.chunks` because the
+--    recorder must record what was PLAYED, and they are also what separates
+--    `provider_partial_stream_then_error` from the two plain error classes.
+--
+-- AND THE DEFECT THIS RECORD MADE VISIBLE, WRITTEN HERE BECAUSE THE SITE IT
+-- CORRECTS COULD NOT CARRY IT. `session.ail`'s unretried-provider-failure
+-- branch finalized from `st.world_state` — the world the STEP WAS ENTERED
+-- with — rather than from `exchange.next_state`. That is plan rule S12's exact
+-- shape, the one WI-B2b named and could not instrument: *the decision falls
+-- back; the world must not.* The provider call HAPPENED. This record was
+-- appended for it and the script cursor advanced past the entry it served, and
+-- the pre-step chain before it may have consumed entries of its own.
+-- Finalizing from the entered world discarded both, so a run ended having
+-- recorded one fewer request than it made — under-recording, on the one path
+-- where the run is over and nothing downstream can notice.
+--
+-- MEASURED, AND THAT IS WHY THE LINE CHANGED RATHER THAN AN ARGUMENT ABOUT IT.
+-- Over a 260-seed sweep the wire carried **75** provider-failure finalizes and
+-- the interaction logs carried **zero** `provider_error_non_retryable` records.
+-- The retry branch directly above it — same fault, same recorder, threading
+-- `exchange.next_state` — recorded its own class on 6 seeds of the same sweep.
+-- Two arms of one match, differing in this expression and in nothing else, is
+-- as close to a controlled experiment as the driver allows. The class was
+-- unreachable by search for this reason and no other, and no recorded reason
+-- named it.
+--
+-- The other two `st.world_state` finalize sites in that match
+-- (`SealSystemPromptEmpty`, `SealExhausted`) discard `chain.next_state` the
+-- same way, and WI-D1 did NOT change them: no profile in this tree reaches
+-- either branch, so the edit would be unexercised by every gate here. Reported
+-- rather than fixed blind.
+export pure func provider_outcome_record(s: ScriptedStep, chunks: [StreamChunkRecord]) -> TimedOutcome {
+  { advance_ms: 0,
+    chunks: chunks,
+    payload: encode_provider_outcome(s),
+    status: if scripted_step_faults(s) then OutcomeFault else OutcomeOk,
+    fault_class_id: provider_fault_class_id(s.error_code, List.length(chunks)) }
+}
+
+-- ---------------------------------------------------------------------------
 -- WI-A13 stage 4: the GENERATING seams
 -- ---------------------------------------------------------------------------
 --
@@ -767,7 +846,18 @@ export pure func generated_provider_entry(state: WorldState, salt: string) -> { 
             input_tokens: d.input_tokens,
             output_tokens: d.output_tokens,
             finish_reason: d.finish_reason,
-            chunks: repeat_chunk(d.chunk_text, d.chunk_count), error_code: "", error_message: "", advance_ms: 0 },
+            chunks: repeat_chunk(d.chunk_text, d.chunk_count),
+            -- WI-D1. Carried straight through: the generator chose the code and
+            -- this is the mechanical mapping the header above says the adapters
+            -- do and nothing else. The CLASS is not decided here — it is
+            -- `provider_fault_class_id(code, chunks)` at the moment the fault is
+            -- recorded, because it depends on the chunks as well as the code.
+            error_code: d.error_code, error_message: d.error_message,
+            -- Still 0, and deliberately: see `choose_provider`'s restated
+            -- latency note. A generated provider latency needs a recorder that
+            -- can see it, and `check_discovery`'s clock balance is right to
+            -- refuse one that cannot.
+            advance_ms: 0 },
     gen: choice.state
   }
 }

@@ -180,6 +180,19 @@ stays true"; it is that a number repeated in two places will be reconciled by wh
 finds first, and a handoff that states which one is authoritative without running it launders a guess
 into a fact.** Third consecutive item to carry this class.
 
+**WI-D1 GIVES S15 ITS PRACTICAL FORM, and it is a rule about how to WRITE a record, not only how to
+read one.** D1 found **seven** stale reasons where its handoff named five — the extra two were in
+`dst_fault_catalogue`'s own coverage-gap register and in `dst_run_report`'s header — and all seven
+carried the same clause, *"`ScriptedStep` has no error channel"*, false since B2b added the field.
+**The discriminator is what the reason was written FROM.** Of the four unreachable-class entries, the
+three that named a **structural cause** ("the type has no such field") were false within an item or
+two of being written; the one that quoted a **measurement** ("the generator's `tool_args` are always
+well-formed JSON — measured 0 of 260") was still true four items later. A structural claim goes stale
+the moment someone adds the field and nothing tells the reason; a measurement stays honest because it
+describes a run rather than a design. **So: when recording why something is unreachable, record the
+measurement, not the diagnosis.** Fourth consecutive item to carry this class, and the first to say
+how to stop carrying it.
+
 **S14. A direct probe of an upstream API is NOT evidence that OUR adoption of it works — the gate
 must drive our own closure.** Earned by WI-C1, and **measured rather than argued**: the natural wrong
 adoption of `stepWithStreamRecorded` (match on the outcome, `Err` arm drops the chunks) is green under
@@ -288,6 +301,17 @@ what turns RED. Nothing asked what stopped printing. **Read a gate's ticks as a 
 files it names**, because a check that vanishes is indistinguishable from a check that passes in every
 signal this project was watching.
 
+**EXTENDED BY WI-D1 FROM AN ABSENT TICK TO AN ABSENT COUNT — the same rule in a second medium.** D1's
+central finding was not a red row: it was a **class census reading zero** where the wire read 75.
+Nothing failed; a number was absent, and absent read identically to *this class is legitimately
+unreachable* — which is precisely what four recorded reasons already claimed, so the zero corroborated
+a story that was wrong. **A zero in a census is a claim, not an observation, and the place to check it
+is a producer on the other side of the process boundary.** The same item also caught its own
+measurement lying in the other direction: a shell regex `(^|,)$c(,|$)` against `classes=ToolFailed,…`
+never matches a leading member, so a census reported `ToolFailed` at 0 of 260 and sent the session
+hunting a defect in `world_tool` that did not exist. **Both halves of the lesson are the same: a zero
+is the cheapest thing for a broken instrument to produce.**
+
 **S17. A mutation loop must save and restore by FILE COPY, never by `git checkout`.** Earned by WI-C3,
 which lost the item's entire implementation to `git checkout src/core/session.ail` used to revert a
 mutant, and recovered only from a `cp` taken seconds earlier in the same command block. **During an
@@ -389,6 +413,24 @@ not.* Both pass every test in the tree. B2b's shipped mitigation is comment-leve
 **a real instrument is an assertion that a component which performed a call did not return the state
 it was given**, which needs a counter the token does not carry. **Where you cannot build the
 instrument, say the mitigation is weaker than a check rather than letting a comment read as one.**
+
+**S12 NOW HAS ITS INSTRUMENT, and WI-D1 built it by accident while closing a fault class.** B2b said a
+real check "needs a counter the token does not carry". **The counter is a recorded fault class that
+only exists if the world was threaded.** `session.c2_loop`'s unretried-provider-failure branch
+finalized from `st.world_state` rather than `exchange.next_state`, discarding the interaction the
+recording adapter had just appended — **75 provider-failure finalizes on the wire against ZERO
+recorded `provider_error_non_retryable` records**, with the retry branch immediately above, threading
+correctly, as the control. Wrong since B2b and invisible to every gate until a class needed that log
+entry. **Verified independently at review: reverting the one expression to `st.world_state` removes
+the class from every bank member and reddens `make corpus_pr`; restoring it brings the class back at
+seeds 3 and 36.** The generalisation: **to instrument an S12 site, give the discarded state something
+to carry that a gate demands** — the defect is unobservable as state and obvious as a missing count.
+The edit was line-count-neutral on purpose (S18), so no anchor moved and no profile was re-issued —
+the first item in four to avoid the cascade rather than pay it.
+
+**Two sibling sites are known and unfixed**, reported rather than repaired because no profile in this
+tree reaches them: `SealSystemPromptEmpty` and `SealExhausted` discard `chain.next_state` the same
+way, ~100 lines above, violating a rule the same file states twenty lines below them.
 
 **S11. `export type X = X` is prohibited where `X` is a record — it resolves to itself and fails at
 every construction site, never at the cause.** Earned by B2a, which found two instances. v0.33.0
@@ -2271,6 +2313,34 @@ row's own visibility reading — a weak profile must be *visible* as weak, which
    specified order contains no filesystem class, so the env pair was deferrable at A12 with no later
    item picking it up. `world_state`'s Makefile note already called this a plan finding; it was never
    lifted into the plan.
+**WI-D1, 2026-08-05 (`27951e7`, ~2h05m) — ROWS 4 AND 11 CLOSE. The unreachable register is EMPTY.**
+The first item of this work list, scheduled by handoff because **the plan has nothing after Milestone
+C**. All four classes are reached by search, `make corpus_pr` is green on the **wider** expected set —
+nine classes, nothing subtracted — and every one is OBSERVED rather than declared. Verified at review:
+9 expected classes, `provider_error_non_retryable` witnessed at seeds 3 and 36, `make anchors` 10/10
+unmoved, `session.ail` 3213 lines before and after.
+
+**Neither row closed by narrowing anything.** The register went to zero *before* the work started (S1)
+and by classes being reached, not reclassified. `retryable` is **derived** from `error_code` with one
+vocabulary in `dst_fault_catalogue` that `dst_generator` imports — chosen over a fifth `ScriptedStep`
+field because that field would have had to travel in `encode_provider_outcome`, which is D8's
+persisted artifact surface, and a field a replay cannot restore is a fault that replays as a
+*different* fault while every count still balances.
+
+**Two rows remain RED and the verdict is unchanged: rows 7 (oracle) and 10 (hermeticity). The name is
+still refused** — nine consecutive items now.
+
+**Caveat measured at review, and it sharpens rather than contradicts D1's M5.** D1 reports that a
+driver ignoring `e.retryable` leaves the in-process suite "completely green" while only the wire gate
+catches it. Reproduced: the **class-coverage rows do stay green** — `✓ every expected class was
+OBSERVED (declared ⊆ observed)` with all nine validating — which is the substantive claim, because the
+recorder derives the class from the code it served rather than from the branch the driver took. But
+`make corpus_pr` still **exits 2**, on the bank *identity* pins, and aborts before reaching the leak
+check at `Makefile:1129`. **So M5 is invisible to the rows that are supposed to see it and caught by a
+pin that is only incidentally in its way** — which means the moment a legitimate change re-derives the
+bank, nothing in-process catches it and the wire gate is the only thing left. That is the S16 reading,
+and it is stronger than "the wire gate is not redundant."
+
 3. **This entry did not say what to do with a NO.** It describes running the table and adopting the
    name. "Expect NO" had to arrive by handoff rather than by plan. **A gate that reports NO with a
    work list is the successful outcome, not the failed one.**
@@ -2425,6 +2495,16 @@ branch is not HEAD state; the `arniwesth/ailang` fork is not the upstream gate �
   including comments, BEFORE running it.** Two consumers exist that no checklist in this project names:
   the `predicate-anchors` script itself, and `attribution_table_dst`'s `omitted_site()` fixture. Both
   were found by a gate rather than by search.
+- **A GENERATOR CHANGE IS A FIVE-ARTIFACT CASCADE, and no item that budgets for "add a draw" budgets
+  for it.** Measured at WI-D1: editing `choose_provider` re-dated the corpus bank (12 seeds, **not one
+  survived**), `seeded_generator`'s S7 fixture *and* its anti-count pair, D8's canary at both versions,
+  `run_report`'s declared register, and one mutation row. **Every one went red and named itself**, which
+  is the system working — and it still cost about an hour that the item's sizing did not contain. Two
+  properties are worth keeping rather than smoothing away: **a mutation row that names a specific
+  unreached class self-reports when that class closes** (D1's `required-class-not-covered` mutant named
+  `provider_error_retryable`, stopped producing a rejection, and went red saying so — re-pointed rather
+  than replaced), and **the two-witnesses rule earns itself exactly here**, since a single-witness bank
+  would have lost classes silently when all twelve seeds moved.
 - **A tripwire planted for a future item WORKS, and WI-C3 is the first evidence.** WI-A1 spent one line
   asserting `emission_count == 0` in `phase_c2_wiring_scenarios`, with a written prediction of what its
   failure would mean. It fired on the first `make dst` after C3 populated the log — the item it was

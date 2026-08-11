@@ -19,39 +19,79 @@
 -- 260 seeds were swept through the real driver and the bank is the union of
 -- five DERIVED selections. Every member therefore has an asserted reason, and a
 -- change to the generator, to a request projection string or to the driver's
--- control flow moves it and fails loudly:
+-- control flow moves it and fails loudly.
 --
---   1, 176      the shortest and longest eligible trajectories (n = 9 and 50).
+-- RE-SWEPT AT WI-D1, AND EVERY MEMBER MOVED — which is the sentence above
+-- doing its job, not failing at it. The generator gained a provider-fault draw
+-- and a malformed-arguments draw; `draw` threads `g.rng`, so a new draw
+-- re-dates every choice after it and each seed now produces a different
+-- trajectory. Four classes also joined the reachable set, so the query has
+-- eight answers where it had four. The selections are unchanged:
+--
+--   1, 192      the shortest and longest eligible trajectories (n = 9 and 59).
 --               S8's complement: a bank that walks only the middle certifies
 --               only the middle, and the paths it does not walk are not pinned
 --               but ABSENT.
---   2, 3        the two smallest seeds reaching approval_denied.
---   6, 20       the two smallest reaching ToolCorrelationMismatch.
---   14, 15      the two smallest reaching ToolDeadlineExceeded.
---   23, 39      the two smallest reaching ToolFailed.
---   114         the richest Err-terminating trajectory (3 classes). It enters
+--   3, 11       the two smallest seeds reaching approval_denied.
+--   26, 31      the two smallest reaching ToolCorrelationMismatch.
+--   3, 14       the two smallest reaching ToolDeadlineExceeded.
+--   8, 14       the two smallest reaching ToolFailed.
+--   17, 20      the two smallest reaching provider_error_retryable.       (D1)
+--   3, 36       the two smallest reaching provider_error_non_retryable.   (D1)
+--   5, 9        the two smallest reaching
+--               provider_partial_stream_then_error.                      (D1)
+--   14, 17      the two smallest reaching
+--               provider_protocol_inconsistent_result.                   (D1)
+--   26          the richest Err-terminating trajectory (5 classes). It enters
 --               as a PROMOTED REGRESSION, so the bank carries D11's second kind
 --               and not only its first.
---   195         THE ONLY SEED OF 260 that reaches all four sweep-reachable
---               classes by itself. One in 260 is why the bank is a query.
+--
+-- The fifth selection CHANGED ITS ANSWER and is recorded as changed rather than
+-- quietly restated: there is no longer a seed reaching every sweep-reachable
+-- class by itself. The most any single trajectory of 260 reaches is FIVE of
+-- eight, and three seeds (14, 26, 125) tie at it. 14 and 26 are in the bank on
+-- other reasons; 125 adds nothing the bank does not already have, so no member
+-- is carried on that selection alone. **A bank whose collective coverage now
+-- exceeds any single member's is the shape D11 asks for and the previous bank
+-- did not have** — seed 195 could carry the whole class obligation alone.
 --
 -- Two witnesses per class rather than one, deliberately: a bank with a single
 -- witness for a class loses that class to any generator drift that moves one
--- seed, and loses it SILENTLY, because the remaining members still pass.
+-- seed, and loses it SILENTLY, because the remaining members still pass. WI-D1
+-- is the drift that rule was written for, and it moved all twelve.
 --
 -- ============================================================================
 -- THE MEASUREMENT THAT CHANGED THE OBSERVER, AND IT IS SITE 25's SHAPE
 -- ============================================================================
 --
 -- The obvious class observer is `Interaction.outcome.fault_class_id`. It is the
--- right quantity and it is INSUFFICIENT ON ITS OWN: `ports.tool_outcome_record`
--- is the only writer, so the field can only ever name the three TOOL classes.
--- A sweep graded by it reports "0 of 260 seeds reach approval_denied" while 152
--- of them do.
+-- right quantity and it is INSUFFICIENT ON ITS OWN. A sweep graded by it alone
+-- reports "0 of 260 seeds reach approval_denied" while 111 of them do.
 --
--- So the class observer is three observers, each named at its site:
+-- HISTORY, IN THE PAST TENSE (plan rule S15). This paragraph used to say the
+-- field "can only ever name the three TOOL classes" because
+-- `ports.tool_outcome_record` was its only writer. **WI-D1 added a second
+-- writer** — `ports.provider_outcome_record` — so the field now names SEVEN
+-- classes, the three tool ones and the three provider exchange faults, plus
+-- blank. The sentence was true when written and is not a reason to stop having
+-- four observers, because two classes still have no fault to name.
+--
+-- So the class observer is FOUR observers, each named at its site:
 --
 --   the three tool classes        `outcome.fault_class_id`
+--   the three provider exchange   `outcome.fault_class_id`, written by
+--   fault classes                 `ports.provider_outcome_record` from the
+--                                 served `error_code` and the chunks PLAYED —
+--                                 which is what separates
+--                                 provider_partial_stream_then_error from the
+--                                 two plain error classes                 (D1)
+--   provider_protocol_            the decoded step's own tool-call arguments,
+--   inconsistent_result           asked of `std/json.decode` — the same
+--                                 question `tool_dispatch_adapter` asks before
+--                                 taking its malformed_arguments branch. NOT a
+--                                 fault of the exchange: the provider returned
+--                                 `Ok`, and what is inconsistent is the typed
+--                                 result it returned                     (D1)
 --   approval_denied               the approval interaction's PAYLOAD, which is
 --                                 the operator's raw answer — `{"type":"deny"}`
 --   provider_empty_terminal_      the provider interaction's decoded outcome:
@@ -71,33 +111,46 @@
 -- WHAT NO SEED CAN REACH, AND WHY THAT IS A FINDING RATHER THAN A WAIVER
 -- ============================================================================
 --
--- Nine required classes are not waived by `driver_only`. Measured over 260
--- seeds, FOUR are reachable and five are not, in four different ways:
+-- Nine required classes are not waived by `driver_only`. Re-measured over 260
+-- seeds at WI-D1: EIGHT are reachable by search and one is not.
 --
---   provider_error_retryable          `ScriptedStep` has no error channel.
---   provider_error_non_retryable      Same field; one named change away.
---   provider_protocol_inconsistent_   the generator's tool_args are always
---   result                            well-formed JSON.
---   provider_partial_stream_then_     `ScriptedStep` has no error channel, so
---   error                             no seed can produce a stream that fails
---                                     PART-WAY. Same field as the two above.
---                                     The PARITY half stopped being the
---                                     obstacle at WI-C3: the adapters now
---                                     report the chunks they play and the
---                                     driver consumes them (`make
---                                     stream_parity`).
+--   provider_error_retryable          18 seeds. WI-D1.
+--   provider_error_non_retryable      23 seeds. WI-D1.
+--   provider_partial_stream_then_     91 seeds. WI-D1.
+--   error
+--   provider_protocol_inconsistent_   49 seeds. WI-D1.
+--   result
+--   ToolFailed                        26 seeds.
+--   ToolCorrelationMismatch           26 seeds.
+--   ToolDeadlineExceeded              25 seeds.
+--   approval_denied                  111 seeds.
+--
 --   provider_empty_terminal_response  UNREACHABLE BY SEARCH and reachable by
 --                                     CONSTRUCTION: every generated terminal
 --                                     step carries non-empty prose
---                                     (`gp${draws}-${arg}`).
+--                                     (`gp${draws}-${arg}`). Re-measured at
+--                                     WI-D1 under the new generator: still
+--                                     0 of 260, so the construction's
+--                                     justification holds unchanged.
 --
--- The last is cluster 12's limit arriving where the plan predicted its SHAPE
--- and not its INSTANCE — the plan named the provider fault class; the
--- measurement adds this one. It is covered by a CONSTRUCTED member, and the
+-- WHAT THE FOUR CLOSED ENTRIES USED TO SAY, KEPT BECAUSE THE ERROR IN THEM IS
+-- THE MORE USEFUL RECORD. Three of the four gave the same reason —
+-- "`ScriptedStep` has no error channel" — and **that reason had been false
+-- since WI-B2b**, which added `error_code`/`error_message` to `ScriptedStep`.
+-- It was quoted forward through four items and two handoffs as a measurement.
+-- What was actually missing was narrower and no entry named it: the two
+-- scripted `model_step` closures wrapped every entry in `Ok(...)`, so nothing
+-- above the transport could serve `Err`; `ProviderDecision` had no fault to
+-- choose; and `AIError.retryable` had no scripted source, which made the two
+-- error classes the same scenario twice. The fourth entry — the generator's
+-- tool_args are always well-formed JSON, 0 of 260 — was accurate.
+--
+-- The remaining one is cluster 12's limit arriving where the plan predicted its
+-- SHAPE and not its INSTANCE. It is covered by a CONSTRUCTED member, and the
 -- construction's justification is checkable: `ConstructedForReachableClass`
 -- fires the moment a swept seed reaches it, so the register can only shrink.
 --
--- None of the five is a waiver. D3 requires a waived class to be named with its
+-- Neither is a waiver. D3 requires a waived class to be named with its
 -- waiving condition, and a class nobody waived that nobody reached is a
 -- coverage gap, not a permission.
 
@@ -110,6 +163,10 @@ import std/string as Str (length)
 import std/ai (Message, ToolCall)
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
+-- WI-D1. `decode` only, and it is the SAME decoder `tool_dispatch_adapter`
+-- calls: the malformed-arguments observer must ask the question production
+-- asks, not a lookalike question about braces.
+import std/json (decode)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -140,7 +197,11 @@ import src/core/dst_fault_catalogue (
   branch_id,
   fault_class_tool_failed,
   fault_class_tool_correlation_mismatch,
-  fault_class_tool_deadline_exceeded
+  fault_class_tool_deadline_exceeded,
+  fault_class_provider_error_retryable,
+  fault_class_provider_error_non_retryable,
+  fault_class_provider_partial_stream_then_error,
+  fault_class_provider_protocol_inconsistent_result
 )
 import src/core/dst_corpus (
   Corpus, CorpusMember, CorpusJob, CorpusRejection,
@@ -346,13 +407,65 @@ pure func count_provider_empty_terminal(xs: [Interaction]) -> int {
   }
 }
 
+-- WI-D1: `provider_protocol_inconsistent_result` is the FOURTH observer, and it
+-- is a fourth one rather than a `fault_class_id` read for a reason worth
+-- stating: the malformed arguments are not a fault of the EXCHANGE. The
+-- provider returned `Ok` — a well-formed `StepResult` — carrying a tool call
+-- whose `arguments` string is not the JSON object the schema promises. D3 calls
+-- that a protocol-inconsistent TYPED result, and the recorded outcome is
+-- correctly `OutcomeOk` with no class id, because nothing about the exchange
+-- failed. So the observer reads the decoded step's own tool calls and asks
+-- whether `std/json` can decode their arguments — which is exactly the question
+-- `tool_dispatch_adapter.tool_call_to_envelope` asks before taking its
+-- `malformed_arguments` branch, asked of the same string.
+pure func count_provider_malformed_args(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => {
+      let here =
+        if interaction_kind(i) != "expect_provider" then 0
+        else match decode_provider_outcome(i.outcome.payload, i.outcome.advance_ms) {
+          ProviderServed(s) => if any_args_undecodable(s.tool_calls) then 1 else 0,
+          ProviderScriptExhausted => 0,
+          ProviderUndecodable(_) => 0
+        };
+      here + count_provider_malformed_args(rest)
+    }
+  }
+}
+
+pure func any_args_undecodable(cs: [ToolCall]) -> bool {
+  match cs {
+    [] => false,
+    c :: rest =>
+      match decode(c.arguments) { Err(_) => true, Ok(_) => any_args_undecodable(rest) }
+  }
+}
+
 -- The observed class set for one run. Derived from the log, never declared.
+--
+-- WI-D1 added the three provider EXCHANGE fault classes, and they read
+-- `outcome.fault_class_id` like the tool classes because that is now a real
+-- source for them: `ports.provider_outcome_record` writes it, deriving the id
+-- from the served `error_code` and the chunks actually played. Before WI-D1
+-- `ports.tool_outcome_record` was the field's ONLY writer, which is why the
+-- header above says a sweep graded on that field alone can name only the three
+-- tool classes. That sentence was true when it was written and is no longer;
+-- the field now names seven.
 pure func observed_classes(xs: [Interaction]) -> [string] {
   (if count_fault_class(xs, fault_class_tool_failed()) > 0 then [fault_class_tool_failed()] else [])
     ++ (if count_fault_class(xs, fault_class_tool_correlation_mismatch()) > 0
         then [fault_class_tool_correlation_mismatch()] else [])
     ++ (if count_fault_class(xs, fault_class_tool_deadline_exceeded()) > 0
         then [fault_class_tool_deadline_exceeded()] else [])
+    ++ (if count_fault_class(xs, fault_class_provider_error_retryable()) > 0
+        then [fault_class_provider_error_retryable()] else [])
+    ++ (if count_fault_class(xs, fault_class_provider_error_non_retryable()) > 0
+        then [fault_class_provider_error_non_retryable()] else [])
+    ++ (if count_fault_class(xs, fault_class_provider_partial_stream_then_error()) > 0
+        then [fault_class_provider_partial_stream_then_error()] else [])
+    ++ (if count_provider_malformed_args(xs) > 0
+        then [fault_class_provider_protocol_inconsistent_result()] else [])
     ++ (if count_approval_denied(xs) > 0 then ["approval_denied"] else [])
     ++ (if count_provider_empty_terminal(xs) > 0 then ["provider_empty_terminal_response"] else [])
 }
@@ -402,19 +515,37 @@ pure func count_with_chunks(xs: [Interaction]) -> int {
 
 export type BankEntry = { seed: int, kind: MemberKind }
 
+-- RE-DERIVED AT WI-D1, AND EVERY MEMBER MOVED. Not one seed of the previous
+-- bank survives, and that is the derivation working rather than failing: the
+-- bank is a query's answer, WI-D1 changed the query, and every reason below is
+-- the answer to the new one.
+--
+-- TWO independent things changed it. First, the generator gained two draws —
+-- the provider fault and the malformed arguments — and `draw` threads
+-- `g.rng`, so inserting a draw re-dates every choice after it. The trajectory a
+-- seed produces is therefore a different trajectory, and a reason like "the
+-- smallest seed reaching ToolFailed" is a claim about the OLD generator that
+-- happens to still type-check. Second, four classes joined the reachable set,
+-- so the query itself has eight answers where it had four.
+--
+-- The five selections are unchanged, and so is the two-witnesses rule: a bank
+-- with a single witness for a class loses it to any generator drift that moves
+-- one seed, and loses it SILENTLY, because the remaining members still pass.
+-- WI-D1 is the item that would have lost it.
 pure func fixed_bank() -> [BankEntry] {
   [{ seed: 1, kind: FixedSeed("the SHORTEST eligible trajectory of 260 (n=9): S8's complement says a bank that walks only the middle certifies only the middle") },
-   { seed: 2, kind: FixedSeed("first of two witnesses for approval_denied — the smallest seed of 260 reaching it") },
-   { seed: 3, kind: FixedSeed("second witness for approval_denied; two per class, because a single witness is lost silently to any generator drift that moves one seed") },
-   { seed: 6, kind: FixedSeed("first of two witnesses for ToolCorrelationMismatch — the smallest seed of 260 reaching it") },
-   { seed: 14, kind: FixedSeed("first of two witnesses for ToolDeadlineExceeded — the smallest seed of 260 reaching it") },
-   { seed: 15, kind: FixedSeed("second witness for ToolDeadlineExceeded") },
-   { seed: 20, kind: FixedSeed("second witness for ToolCorrelationMismatch") },
-   { seed: 23, kind: FixedSeed("first of two witnesses for ToolFailed — the smallest seed of 260 reaching it") },
-   { seed: 39, kind: FixedSeed("second witness for ToolFailed") },
-   { seed: 114, kind: PromotedRegression("the richest Err-terminating trajectory of 260: three fault classes in one run that does NOT end Ok. D11's bank holds promoted regression programs as well as fixed seeds, and a bank whose every member terminates Ok pins only the happy shape of failure") },
-   { seed: 176, kind: FixedSeed("the LONGEST eligible trajectory of 260 (n=50), the other trajectory extreme") },
-   { seed: 195, kind: FixedSeed("THE ONLY SEED OF 260 reaching all four sweep-reachable required classes by itself — one in 260, which is why the bank is a query's answer and not an author's list") }]
+   { seed: 3, kind: FixedSeed("the smallest seed of 260 reaching THREE required classes — approval_denied, ToolDeadlineExceeded and provider_error_non_retryable — so it is the first witness for each. One member, three obligations, and the reason has to name all three or a future reader will read it as satisfying one") },
+   { seed: 5, kind: FixedSeed("first of two witnesses for provider_partial_stream_then_error — the smallest seed of 260 reaching it. WI-D1: unreachable by any seed before this item, because the two scripted model_step closures could not serve Err") },
+   { seed: 8, kind: FixedSeed("first of two witnesses for ToolFailed — the smallest seed of 260 reaching it") },
+   { seed: 9, kind: FixedSeed("second witness for provider_partial_stream_then_error") },
+   { seed: 11, kind: FixedSeed("second witness for approval_denied; two per class, because a single witness is lost silently to any generator drift that moves one seed") },
+   { seed: 14, kind: FixedSeed("second witness for ToolFailed AND for ToolDeadlineExceeded, and first of two for provider_protocol_inconsistent_result. Also one of THREE seeds of 260 jointly reaching the most classes any single trajectory reaches (5 of 8) — the smallest of the three, and it is in the bank on the witness reasons regardless") },
+   { seed: 17, kind: FixedSeed("first of two witnesses for provider_error_retryable — the smallest seed of 260 reaching it — and second witness for provider_protocol_inconsistent_result") },
+   { seed: 20, kind: FixedSeed("second witness for provider_error_retryable") },
+   { seed: 26, kind: PromotedRegression("the richest Err-terminating trajectory of 260: FIVE fault classes in one run that does NOT end Ok. D11's bank holds promoted regression programs as well as fixed seeds, and a bank whose every member terminates Ok pins only the happy shape of failure. Also the smallest seed reaching ToolCorrelationMismatch, so it is that class's first witness") },
+   { seed: 31, kind: FixedSeed("second witness for ToolCorrelationMismatch") },
+   { seed: 36, kind: FixedSeed("second witness for provider_error_non_retryable. WI-D1 measured this class at 0 of 260 BEFORE fixing session.c2_loop's unretried-failure branch, which finalized from the world the step was entered with and so discarded the interaction recording the fault — the fault reached production and the log did not record it") },
+   { seed: 192, kind: FixedSeed("the LONGEST eligible trajectory of 260 (n=59), the other trajectory extreme") }]
 }
 
 -- The class no seed reaches and construction does. Its justification is
@@ -677,11 +808,16 @@ func scenario_the_bank_covers_what_a_seed_can_reach(bs: [BuiltMember]) -> bool !
                  "${join_str(corpus_rules_of(rs))}\n      ${first_corpus_message(rs)}");
   let b = report("corpus_ok agrees", corpus_ok(c, driver_only(), expected, swept),
                  "corpus_ok disagreed with validate_corpus");
-  -- The bank is held to the classes a MEMBER can reach, and the four it cannot
-  -- are named with reasons rather than dropped silently.
-  let d = report("the four unreachable classes are registered with reasons, not waived",
-                 List.length(unreachable_register()) == 4 && all_have_reasons(unreachable_register()),
-                 "an entry has a blank reason; D3's rule for a waived class applies to a coverage gap");
+  -- WI-D1: the register is EMPTY, and this row now says so by name rather than
+  -- by an unremarked 0. It was `== 4` from WI-A15 to WI-C4; the four entries
+  -- are closed, so the bank is held to every required non-waived class with
+  -- nothing subtracted. The `all_have_reasons` conjunct is vacuous over an
+  -- empty register and is kept deliberately — it binds again, unchanged, the
+  -- moment a future item registers a class, and a rule dropped because it
+  -- currently ranges over nothing is a rule nobody restores.
+  let d = report("the unreachable register is EMPTY: every required non-waived class is reached by SEARCH, none subtracted",
+                 List.length(unreachable_register()) == 0 && all_have_reasons(unreachable_register()),
+                 "the register is non-empty (${List.length(unreachable_register())} entr(ies)) — a class has left the reachable set and WI-D1's closure has regressed, or an entry has a blank reason; D3's rule for a waived class applies to a coverage gap");
   let e = report("expected + unreachable == every required non-waived class (${List.length(required_non_waived(fault_catalogue()))})",
                  List.length(expected) + List.length(unreachable_register())
                    == List.length(required_non_waived(fault_catalogue())),
@@ -711,9 +847,13 @@ func scenario_the_register_is_shrink_only(bs: [BuiltMember]) -> bool ! {IO} {
   let b = report("every observed class is EXPECTED (observed ⊆ declared)",
                  List.length(surplus) == 0,
                  "observed and not declared: ${join_str(surplus)} — an unreachable-register entry has CLOSED and must be recorded, which is the whole point of asserting both directions");
-  -- And the unreachable register in the other direction: none of the four may
-  -- be observed. This is the row that fires when `ScriptedStep` gains its error
-  -- case and nobody updates the register.
+  -- And the unreachable register in the other direction: nothing in it may be
+  -- observed. WI-D1 emptied the register, so this row is VACUOUS today and is
+  -- said to be — it was written to fire when the provider fault became
+  -- reachable and nobody updated the register, and that is exactly what
+  -- happened except that the register was updated FIRST (plan rule S1), which
+  -- is why row `a` above is what actually drove this item and this row never
+  -- fired. Kept because it binds the next entry anyone adds.
   let unreached = intersect(observed, unreachable_ids());
   let c = report("no member reaches a class the register calls unreachable",
                  List.length(unreached) == 0,
@@ -951,8 +1091,24 @@ func scenario_every_rule_fires(bs: [BuiltMember]) -> bool ! {IO} {
   let r9 = mutant("a constructed member for a class the catalogue does not declare",
                   { c | members: replace_head(ms, { m0 | kind: ConstructedForClass("no_such_class", "why") }) },
                   expected, swept, "constructed-for-unknown-class");
+  -- WI-D1 changed the class this mutant names, and HOW IT FOUND OUT is worth
+  -- more than the edit. The mutant was `"provider_error_retryable" :: expected`
+  -- — a class the bank could not reach, so demanding it forced the rule to
+  -- fire. WI-D1 made that class reachable, the mutant stopped producing a
+  -- rejection, and this row went RED with "the mutant produced NO rejection —
+  -- the rule cannot fire". **A mutation row that names a specific unreached
+  -- class is self-reporting when that class closes**, which is the property
+  -- worth keeping and the reason this is not replaced with something
+  -- permanently unreachable by construction.
+  --
+  -- `approval_deadline_exceeded` is the successor: required, waived by
+  -- `driver_only`, and unreached by every member because `recording_approval`
+  -- records deadline 0 — the approval channel carries no numeric deadline to
+  -- route, which that function declares as a gap in its own text. When a
+  -- future item routes one, this row goes red the same way and gets the same
+  -- one-line decision.
   let r10 = mutant("a required class no member reaches",
-                   c, "provider_error_retryable" :: expected, swept, "required-class-not-covered");
+                   c, "approval_deadline_exceeded" :: expected, swept, "required-class-not-covered");
   let stripped = strip_branches(ms);
   let r11 = mutant("the classes are reached and no BRANCH is",
                    { c | members: stripped }, expected, swept, "required-branch-not-covered");

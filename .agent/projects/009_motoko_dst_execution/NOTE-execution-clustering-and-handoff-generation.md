@@ -172,7 +172,28 @@ running, and this time the direction reversed: the work is SMALLER than recorded
 recorded reason for these four gaps says `ScriptedStep` has no error channel and no latency channel;
 **B2b added both fields** and five reasons across `dst_corpus` and `dst_generator` still say
 otherwise. What is genuinely missing is named by none of them — **`ScriptedStep` carries no
-`retryable`**, and that bool is the entire distinction between two of the four classes. Original B2a handoff:
+`retryable`**, and that bool is the entire distinction between two of the four classes.
+
+**Cluster 20 outcome: WI-D1 DONE 2026-08-05**, ~2h05m, `27951e7` — **rows 4 and 11 CLOSE**, the
+corpus's unreachable register is empty, and it found a production defect on the way: `c2_loop`'s
+unretried-failure branch finalized from the pre-call world, discarding the interaction that recorded
+the fault. **S12's named class, instrumented for the first time, and the instrument was a fault
+class.** Seven stale reasons, not the five the handoff named.
+
+**Cluster 21 = row 7, close `d64_gap_register`: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-d2-close-the-parity-register-row-7.md`. **Grounding resized it for the seventh item
+running — and this time it found the work is a shape the project has already solved twice.**
+`tool_phase.ail` has **zero** references to `LedgerTrace`, and `dispatch_tool_entries` takes
+`emit: (LedgerEvent) -> () ! {IO, Trace}` over a `ToolDispatchOutcome` that returns messages and world
+but no event log. **That is `on_chunk` over a pre-A1 `ProviderExchange`** — WI-A1's loss channel,
+second instance. The three-step move is already validated: A1 widened the channel, C1 filled it, C3
+gave it a reader, and `c2_trace_wire_events` already does the appending for stream deltas.
+
+**Worth recording as clustering guidance in its own right: the seven-for-seven grounding record in
+Milestones C and D is not a run of luck, it is a property of this plan.** Items were sized from the
+ADR's decisions, and the ADR describes *what must be true*, not *what the tree currently does*. Every
+item's real shape has come from reading HEAD. **Budget for it, and expect the resize to change the
+blocker about half the time.** Original B2a handoff:
 `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —
 **B3 before B2, because B2's scope is unmeasurable until the `images` wall clears** (B1 could see only

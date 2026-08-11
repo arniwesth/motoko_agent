@@ -42,10 +42,23 @@
 --                                  `DenyAfterTimeout` is a DECISION, not a
 --                                  duration. A declared gap, not a solved
 --                                  problem.
---   the provider latency/fault     ONE NAMED CHANGE away — `ScriptedStep` has
---                                  no latency or error channel, so a generated
---                                  provider fault has nowhere to be chosen
---                                  into (cluster 10's correction 2).
+--   the provider latency/fault     WAS "ONE NAMED CHANGE away — `ScriptedStep`
+--                                  has no latency or error channel, so a
+--                                  generated provider fault has nowhere to be
+--                                  chosen into (cluster 10's correction 2)".
+--                                  BOTH HALVES OF THAT ARE NOW WRONG, in two
+--                                  different ways, and it is kept in the past
+--                                  tense (S15) because it was quoted forward
+--                                  as a measurement. The FAULT half: the field
+--                                  existed from WI-B2b and WI-D1 built the
+--                                  branch above it, so the class is reached by
+--                                  search. The LATENCY half: `advance_ms`
+--                                  exists too, so the obstacle was never the
+--                                  field — it is that a generated provider
+--                                  latency needs a recorder that can see it,
+--                                  and `check_discovery`'s clock balance is
+--                                  right to refuse one that cannot. Still
+--                                  owed, restated at `choose_provider`.
 --   `ToolCorrelationMismatch`,     CODEC-COVERED, SCENARIO-UNREACHED. They
 --   `ToolDeadlineExceeded`         travel the same codec as `ToolFailed` and
 --                                  are pinned by round-trip rows; no generated

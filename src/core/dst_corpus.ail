@@ -971,19 +971,35 @@ export type UnreachableClass = {
 -- None of these is a waiver. D3 requires a waived class to be named with its
 -- waiving condition, and a class nobody waived that nobody reached is a
 -- coverage gap, not a permission.
+-- CLOSED AT WI-D1, AND THE REGISTER IS NOW EMPTY. Kept as a function rather
+-- than deleted: it is the shrink-only register, and an empty one is the
+-- statement that every required non-waived class is reached by search. The
+-- partition row below still holds it against the catalogue in both directions,
+-- so a future class added to D3's table lands in `expected_bank_coverage()`
+-- immediately and the bank must reach it or go red — which is the behaviour a
+-- deleted register would lose.
+--
+-- WHAT THE FOUR ENTRIES SAID, AND WHY THE TEXT MATTERED MORE THAN THE COUNT.
+-- Three of the four gave the same reason — "`ScriptedStep` has no error
+-- channel" — and that reason had been false since WI-B2b, which added
+-- `error_code`/`error_message` to `ScriptedStep` and wired them through the
+-- extension seam only. What was actually missing was narrower and no entry
+-- named it: the two scripted `model_step` closures wrapped every entry in
+-- `Ok(...)` unconditionally, so nothing above the transport could serve `Err`;
+-- `ProviderDecision` chose a response and no fault, so the generator had
+-- nothing to choose; and `AIError.retryable` — the bool that separates
+-- `provider_error_retryable` from `provider_error_non_retryable` at
+-- `session.c2_loop`'s `should_retry_stream_error` — had no scripted source at
+-- all. WI-D1 closed those three and derived `retryable` from `error_code`
+-- through `provider_error_is_retryable` in the catalogue; see that function for
+-- why a derivation rather than a fifth field.
+--
+-- None of these was a waiver, and that is why an empty register is a real
+-- result: D3 requires a waived class to be named with its waiving condition,
+-- and a class nobody waived that nobody reached is a coverage gap, not a
+-- permission.
 export pure func unreachable_by_search() -> [UnreachableClass] {
-  [{ class_id: "provider_error_retryable",
-     status_id: "unreachable-until-change",
-     why: "`ScriptedStep` has no error channel, so a generated AIError has nowhere to be chosen into (cluster 10 correction 2). Cluster 13 correction 2 separates this from the LATENCY field: a provider fault travels the AIError path and needs an ERROR CASE, not an advance — two fields, two changes" },
-   { class_id: "provider_error_non_retryable",
-     status_id: "unreachable-until-change",
-     why: "as provider_error_retryable: the same missing `ScriptedStep` error case" },
-   { class_id: "provider_protocol_inconsistent_result",
-     status_id: "covered-not-exercised",
-     why: "the generator's tool_args are always well-formed JSON, so the malformed-arguments branch is reachable by a scenario that writes one and is driven by no seed. Measured: 0 of 260" },
-   { class_id: "provider_partial_stream_then_error",
-     status_id: "unreachable-structurally",
-     why: "The retry/finalize half is reachable, and at WI-C3 the PARITY half became reachable too: the adapters this corpus drives now report the chunks they play, and the driver consumes them (`make stream_parity` checks D6.4 on a real run). BOTH of the obstacles this entry named are gone. What keeps the class unreachable BY SEARCH is now exactly one thing, and it is the PARTIAL-STREAM half rather than the parity half: ScriptedStep has no error channel, so no seed can produce a stream that fails part-way. Same field as provider_error_retryable, one named change away. NOT externally blocked" }]
+  []
 }
 
 export pure func unreachable_class_ids() -> [string] {
@@ -1225,7 +1241,16 @@ pure func test_the_register_and_the_expectation_partition_the_obligation() -> bo
   {
     List.length(expected_bank_coverage()) + List.length(unreachable_by_search())
       == List.length(required_non_waived(fault_catalogue()))
-      && List.length(unreachable_by_search()) == 4
+      -- WI-D1: 4 -> 0. This literal is what makes the register shrink-only in
+      -- the direction that matters — removing an entry is red here until it is
+      -- updated, so a class cannot leave the register unnoticed. The ASYMMETRY
+      -- is the trap and it is stated once: nothing goes red for ADDING
+      -- reachability without removing the entry, because the class simply
+      -- stays out of `expected_bank_coverage()` and the bank is never asked to
+      -- reach it. That is why WI-D1 shrank the register FIRST and let the red
+      -- drive the work (plan rule S1), rather than making the classes
+      -- reachable and then discovering that no gate had noticed.
+      && List.length(unreachable_by_search()) == 0
       && all_have_reasons(unreachable_by_search())
       && no_overlap(expected_bank_coverage(), unreachable_class_ids())
   }
