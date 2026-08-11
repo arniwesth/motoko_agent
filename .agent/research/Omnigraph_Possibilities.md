@@ -94,11 +94,11 @@ This is what Backstage tries to be but from a corporate-platform angle. The ergo
 
 Every Omnigraph repo is a directory. Nothing stops having *multiple* repos, or a meta-repo that imports several. Imagine:
 
-- `~/omnigraph/zeus/repo.omni` — Zeus project decisions
+- `~/omnigraph/project/repo.omni` — project decisions
 - `~/omnigraph/infra/repo.omni` — shared infra decisions
 - `~/omnigraph/personal/repo.omni` — personal engineering learnings across jobs
 
-When working on Zeus, the agent has access to all three. A decision made about retry policy at a *previous* job, stored in `personal`, is visible when the agent is about to implement retry logic in Zeus. Accumulated engineering judgment becomes portable.
+When working on a project, the agent has access to all three. A decision made about retry policy at a *previous* job, stored in `personal`, is visible when the agent is about to implement retry logic in the current project. Accumulated engineering judgment becomes portable.
 
 That's the thing nobody has right now. Your Claude/Copilot sessions forget. Your personal notes don't get injected into the system prompt. Your learnings evaporate when you leave a job. The graph doesn't — it's a directory you take with you.
 
