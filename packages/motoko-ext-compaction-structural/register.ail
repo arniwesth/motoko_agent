@@ -16,7 +16,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
 )
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
 
-func no_budget_patch(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+func no_budget_patch(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 

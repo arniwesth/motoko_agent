@@ -264,7 +264,7 @@ func base_world(script: [ScriptedStep], answers: [string], tools: [ScriptedTool]
 
 func no_describe() -> [ToolSchema] { [] }
 func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
-func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)

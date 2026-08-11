@@ -112,24 +112,46 @@ def check_omission_basis(profile_src, required):
     indistinguishable from passing because everything is right.
 
     The omission is still correct, but its basis moved from classifier 2 to D5's
-    coverage criterion read on DECLARED effect rows. This is the guard for the
-    new basis. It does not re-derive the whole criterion — it pins the single
-    ABI fact that makes the conclusion hold for EVERY extension rather than for
-    `compaction_ai` in particular:
+    coverage criterion read on DECLARED effect rows.
+
+    ===================================================================
+    THE BASIS MOVED AGAIN AT WI-D6 (2026-08-06), AND THIS GUARD FIRED TO
+    MAKE IT MOVE DELIBERATELY.
+    ===================================================================
+
+    WHAT THIS GUARD USED TO ASSERT, and it was correct from WI-B4 until
+    2026-08-06 — kept here in the past tense per plan rule S15 rather than
+    rewritten, because it is a record of why the omission stood for five items:
 
         `ExtensionHooks.on_budget_plan` is unconditionally dispatched, declares
-        a non-empty effect row, and returns a type with no successor field.
+        a NON-EMPTY effect row, and returns a type with no successor field.
 
-    Rows are closed, so that row is not a property of any one binding — every
-    implementation in the tree declares exactly it. `Env` and `FS` are not
-    world-mediated ports, so criterion 1 fails on the declared row; `BudgetPatch`
-    carries no successor, so criterion 2 fails for want of returned world state.
-    D5 forbids installing an extension with any unconditionally-dispatched hook
-    excluded, so no extension is installable at all and the empty install list is
-    forced.
+    Rows are closed, so that row was not a property of any one binding — every
+    implementation in the tree declared exactly it. `Env` and `FS` are not
+    world-mediated ports, so criterion 1 failed on the declared row;
+    `BudgetPatch` carries no successor, so criterion 2 failed for want of
+    returned world state. D5 forbids installing an extension with any
+    unconditionally-dispatched hook excluded, so no extension was installable at
+    all and the empty install list was FORCED.
 
-    This goes red the day WI-C5 widens `on_budget_plan` — which is exactly the
-    day the omission has to be decided again rather than inherited.
+    The docstring said this would go red the day `on_budget_plan` was widened,
+    "which is exactly the day the omission has to be decided again rather than
+    inherited". WI-D6 NARROWED it instead of widening it, the guard fired
+    anyway on the same clause, and the omission was decided again. That is the
+    guard working: it did not care which direction the row moved, only that the
+    basis had changed.
+
+    WHAT THIS GUARD ASSERTS NOW. The polarity of the row check is INVERTED:
+    `on_budget_plan` must declare NO effect row. The other three clauses are
+    unchanged, because they are still true and still load-bearing for a
+    different conclusion.
+
+    AND THE CONCLUSION IS WEAKER, WHICH IS THE POINT. `driver_only` still
+    installs nothing and still covers nothing — but the empty install list is
+    now CHOSEN rather than FORCED. A chosen emptiness covers exactly as much as
+    a forced one. What changed is that a future profile CAN install an
+    extension; this one still does not, and that is a decision this file
+    records rather than a consequence it derives.
     """
     abi = ABI_TYPES.read_text()
 
@@ -140,18 +162,25 @@ def check_omission_basis(profile_src, required):
              f"{ABI_TYPES.relative_to(REPO)} — the omission basis cannot be checked")
     ret_type, row = m.group(1), (m.group(3) or "").strip()
 
-    if not row:
-        fail("`ExtensionHooks.on_budget_plan` no longer declares an effect row.\n"
-             "      driver_only's omission of every extension rests on that row failing\n"
-             "      D5 criterion 1 on DECLARED effects. Re-decide the omission; do not\n"
-             "      inherit it. See the header of src/core/dst_driver_only.ail.")
+    if row:
+        fail(f"`ExtensionHooks.on_budget_plan` declares an effect row again: ! {{{row}}}.\n"
+             "      WI-D6 narrowed it to none after measuring all fifteen bindings and\n"
+             "      finding that not one performs Env or FS (see `make declared_vs_performed`).\n"
+             "      A row here makes the slot fail D5 criterion 1 on DECLARED effects, which\n"
+             "      makes EVERY extension in the tree un-installable again. If that is\n"
+             "      intended, re-decide the omission basis; do not inherit it. See the header\n"
+             "      of src/core/dst_driver_only.ail.")
 
     rm = re.search(r"^export type " + re.escape(ret_type) + r"\s*=\s*\{(.*?)\}", abi, re.M | re.S)
     if not rm:
         fail(f"could not read `{ret_type}` in {ABI_TYPES.relative_to(REPO)}")
+    # Still checked, and still meaningful: criterion 1 now carries the slot, so
+    # a successor appearing here would mean the slot ALSO satisfies criterion 2.
+    # That is not a problem, but it is a change of basis and must be noticed.
     if "next_state" in rm.group(1):
-        fail(f"`{ret_type}` now carries a successor field, so `on_budget_plan` may satisfy\n"
-             "      D5 criterion 2. driver_only's omission basis has changed — re-decide it.")
+        fail(f"`{ret_type}` now carries a successor field, so `on_budget_plan` satisfies\n"
+             "      D5 criterion 2 as well as criterion 1. That is a wider claim than the one\n"
+             "      WI-D6 recorded — re-decide the basis rather than inheriting it.")
 
     disp = (REPO / "src/core/dst_profile_coverage.ail").read_text()
     if not re.search(r"OnBudgetPlan\s*=>\s*Unconditional", disp):
@@ -164,10 +193,11 @@ def check_omission_basis(profile_src, required):
              "      require it (zero classifier-2 member call sites). If installing it is\n"
              "      intended, that is a coverage claim and a profile version bump.")
 
-    print(f"  ✓ omission basis intact: on_budget_plan is Unconditional, declares "
-          f"! {{{row}}}, and returns {ret_type} (no successor)")
-    print("    → no extension is installable under D5 on declared rows; the empty install "
-          "list is forced")
+    print(f"  ✓ omission basis intact: on_budget_plan is Unconditional, declares NO effect "
+          f"row (WI-D6; was ! {{Env, FS}} through WI-D5), and returns {ret_type} (no successor)")
+    print("    → the slot is coverable under D5 criterion 1, so an extension IS installable")
+    print("    → driver_only installs none anyway: the empty install list is now CHOSEN")
+    print("      rather than FORCED, and covers exactly as much as before, which is nothing")
     if not required:
         print("    ! note: check 3 is now VACUOUS (zero classifier-2 member call sites). "
               "This check, not that one, is what holds the omission.")

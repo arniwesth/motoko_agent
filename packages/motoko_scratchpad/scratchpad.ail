@@ -20,7 +20,7 @@ func no_budget_patch() -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
   no_budget_patch()
 }
 

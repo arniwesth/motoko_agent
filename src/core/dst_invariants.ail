@@ -692,7 +692,10 @@ export pure func display_only_baseline() -> [string] {
 -- TWO, NOT THREE. `ExtToolHandled` was expected to survive here on the grounds
 -- that it needs an installed extension. It does not: `dispatch_tool_handle`
 -- returning `Handled` reaches it, which any hook can do without an install and
--- without the `on_budget_plan` ABI change, and
+-- without the `on_budget_plan` ABI change (which WI-D6 has since made, on
+-- 2026-08-06 — the sentence was written before it and is kept as written; the
+-- point it makes is unaffected, since it was about NOT needing that change),
+-- and
 -- `scripts/dst/long_qwen_compaction_dst.ail` had been doing it since long before
 -- WI-D2. MEASURED: 47 `ext_tool_handled` lines on the wire across one `make dst`
 -- run at HEAD before this item. A variant emitted 47 times is not a variant no

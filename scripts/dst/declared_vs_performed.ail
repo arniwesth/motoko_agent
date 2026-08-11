@@ -113,6 +113,28 @@ import pkg/sunholo/motoko_ext_abi/types (
 import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
 import pkg/sunholo/motoko_ext_compose/compose as Compose (register_with_config)
 
+-- WI-D6. Every extension the generated registry can install, imported through
+-- the SAME entry point the host uses (`register_with_config` in each package's
+-- `register` module). The subject list is not hand-written: it is
+-- `src/core/ext/registry_generated.ail`'s import block, and the runner asserts
+-- the two lists agree member for member so an extension added to the host
+-- cannot silently escape measurement.
+import pkg/sunholo/motoko_ext_test_dummy/register as TestDummy (register_with_config)
+import pkg/sunholo/motoko_ext_omnigraph/register as Omnigraph (register_with_config)
+import pkg/sunholo/motoko_ext_context_mode/register as ContextMode (register_with_config)
+import pkg/sunholo/motoko_ext_mcp/register as Mcp (register_with_config)
+import pkg/sunholo/motoko_ext_exa_search/register as ExaSearch (register_with_config)
+import pkg/sunholo/motoko_ext_ailang_docs/register as AilangDocs (register_with_config)
+import pkg/sunholo/motoko_ext_compose/register as ComposeReg (register_with_config)
+import pkg/sunholo/motoko_ext_a2a/register as A2a (register_with_config)
+import pkg/sunholo/motoko_ext_decision_framework/register as DecisionFramework (register_with_config)
+import pkg/sunholo/motoko_ext_microrag/register as Microrag (register_with_config)
+import pkg/sunholo/motoko_ext_compaction_ai/register as CompactionAi (register_with_config)
+import pkg/sunholo/motoko_ext_scratchpad/register as Scratchpad (register_with_config)
+import pkg/sunholo/motoko_ext_compaction_structural/register as CompactionStructural (register_with_config)
+import pkg/sunholo/motoko_ext_empty_stop_guard/register as EmptyStopGuard (register_with_config)
+import pkg/sunholo/motoko_ext_progress_contract_guard/register as ProgressContractGuard (register_with_config)
+
 -- ---------------------------------------------------------------------------
 -- A context with no driver behind it
 -- ---------------------------------------------------------------------------
@@ -224,26 +246,54 @@ pure func compose_cfg(mode: string) -> ComposeHostConfig {
 -- The controls: hooks that genuinely perform the capability under test
 -- ---------------------------------------------------------------------------
 
--- Reads a real environment variable. Same slot, same fold, same declared row as
--- compose's `budget_hook` — the ONLY difference is that this body performs.
-func env_reading_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+-- WI-D6 MOVED THESE CONTROLS FROM `on_budget_plan` TO `on_pre_step`, AND THE
+-- REASON IS THE ITEM'S RESULT RATHER THAN A CONVENIENCE.
+--
+-- At WI-C5 both controls were bound into `on_budget_plan`, whose row was then
+-- the ABI's closed `! {Env, FS}`, so a performing body fitted the slot. D6
+-- narrowed that row to `! {}` — and the compiler IMMEDIATELY REJECTED both
+-- controls:
+--
+--   incompatible closed rows: r1 has extra labels [], r2 has extra labels [Env]
+--
+-- That rejection is the narrowing's own strongest evidence: after D6 it is not
+-- merely true that no binding performs Env or FS in this slot, it is
+-- UNWRITABLE. But it also means the runtime vacuity control can no longer live
+-- in the slot under test, so it moves to the nearest slot that still admits the
+-- capability — `on_pre_step`, dispatched through its own unconditional fold in
+-- the same `ext/runtime.ail`. The control still answers the question it existed
+-- to answer (is the withholding real, and does the harness reach a dispatched
+-- hook), from the same registry shape and the same process.
+--
+-- The control that is LOST — a performing body in this exact slot — is not
+-- lost, it is PROMOTED: it is now a compile-time control in
+-- `run_declared_vs_performed.sh`'s producer-3 section, where a mutant binding
+-- that performs Env under the narrowed row must be REJECTED by the effect
+-- checker. That control is strictly stronger than the runtime one it replaces,
+-- because it is total over inputs where the capability trap is a witness over
+-- one path.
+
+-- Reads a real environment variable, inside a DISPATCHED hook.
+func env_reading_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   let _ = getEnvOr("PATH", "");
-  { requested_total: None, requested_solver: None, requested_verifier: None }
+  { decision: { PassThrough }, next_state: ctx.world }
 }
 
--- Reads a real file. Same slot, same fold, same declared row.
-func fs_reading_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+-- Reads a real file, inside a DISPATCHED hook.
+func fs_reading_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   let _ = readFile("ailang.toml");
-  { requested_total: None, requested_solver: None, requested_verifier: None }
+  { decision: { PassThrough }, next_state: ctx.world }
 }
 
-func control_hooks(budget: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS}) -> ExtensionHooks {
+func control_hooks(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
   { id: "dvp_control",
     provided_tools: [],
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: budget,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+      { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    on_pre_step: pre,
     on_tool_policy: \_ctx _call. Allow,
     on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { { decision: { Delegate }, next_state: ctx.world } },
     on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { { decision: { NoIntercept }, next_state: ctx.world } },
@@ -280,7 +330,7 @@ func witness_hooks() -> ExtensionHooks {
     provided_tools: [],
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: Some(budget_sentinel()), requested_solver: None, requested_verifier: None }
     },
     on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
@@ -370,14 +420,323 @@ export func compose_intercept_inline() -> () ! {AI, Clock, Env, FS, IO, Net, Pro
   reached("compose_intercept_inline", seen)
 }
 
--- CONTROL for Env. Must die with Env withheld.
+-- CONTROL for Env. Must die with Env withheld. Dispatched through the pre-step
+-- fold — see the note above `env_reading_pre_step` for why this control no
+-- longer lives in `on_budget_plan`.
 export func control_env() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
-  let out = Rt.dispatch_budget_plan(rt_of(control_hooks(env_reading_budget)), probe_ctx("tool"), plan());
-  reached("control_env", show(out.total))
+  let out = Rt.dispatch_pre_step_chain(rt_of(control_hooks(env_reading_pre_step)), probe_ctx("tool"), []);
+  reached("control_env", join_ids(stage_ids(out.stages)))
 }
 
 -- CONTROL for FS. Must die with FS withheld.
 export func control_fs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
-  let out = Rt.dispatch_budget_plan(rt_of(control_hooks(fs_reading_budget)), probe_ctx("tool"), plan());
-  reached("control_fs", show(out.total))
+  let out = Rt.dispatch_pre_step_chain(rt_of(control_hooks(fs_reading_pre_step)), probe_ctx("tool"), []);
+  reached("control_fs", join_ids(stage_ids(out.stages)))
+}
+
+
+-- ===========================================================================
+-- WI-D6: THE OTHER FOURTEEN BINDINGS, and the confound that makes the pairing
+-- non-optional
+-- ===========================================================================
+--
+-- WI-C5 measured ONE binding of `on_budget_plan` — compose's. Fifteen
+-- extensions bind the slot, and D6's mission is a row narrowed to what is
+-- HONESTLY performed, which cannot be decided from one of fifteen.
+--
+-- THE CONFOUND, MEASURED BEFORE THE ARMS WERE WRITTEN AND THE REASON THEY COME
+-- IN PAIRS. `register_with_config` is not effect-free for most of these
+-- packages: nine of fourteen read `Env` (a `getEnvOr` for a workdir or profile
+-- directory) and seven of those also read `FS` (a config file, or a
+-- portability gate probing for a marker file). Those reads happen at
+-- REGISTRATION, before any hook is dispatched.
+--
+-- So the naive arm — install the extension, dispatch the hook, capability
+-- withheld — DIES for nine of fifteen subjects, and every one of those deaths
+-- would be scored as "the hook performs Env". That is a FALSE POSITIVE in the
+-- direction that blocks the narrowing, and it would have been indistinguishable
+-- from the real thing in exit status alone.
+--
+-- The fix is a differential. Each extension gets TWO arms run under the SAME
+-- withheld capabilities:
+--
+--   reg_<ext>     registration only, no dispatch
+--   budget_<ext>  the same registration, then the dispatch
+--
+-- and the runner reads the PAIR rather than either arm:
+--
+--   reg completes, budget completes  -> the HOOK performs neither. MEASURED.
+--   reg completes, budget dies       -> the HOOK performs it.     BLOCKING.
+--   reg dies                         -> registration performed it first; the
+--                                       hook was never reached.  CONFOUNDED,
+--                                       and this instrument cannot settle it.
+--
+-- The confounded subjects are settled by a SECOND producer that has no such
+-- blind spot — the compiler's effect inference over the binding's body, which
+-- is total over inputs where the capability trap is a witness over the one path
+-- an arm exercises. See `run_declared_vs_performed.sh`'s producer-3 section and
+-- the mutant control that proves the narrowed row is load-bearing.
+--
+-- WHY THESE ARMS USE `register_with_config` WHERE compose's USES A LITERAL
+-- CONFIG. compose's arm above deliberately bypasses `read_compose_host_config`
+-- so its measurement is about the hook rather than about config IO. These arms
+-- deliberately do the opposite and take the host's real route, because the
+-- question they answer is different: not "can this hook be reached effect-free"
+-- but "what happens when the host installs this extension". The two are
+-- complementary, and the difference is stated here rather than left for a
+-- reader to infer from the call.
+
+-- test_dummy — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_test_dummy() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = TestDummy.register_with_config(0);
+  reached("reg_test_dummy", h.id)
+}
+
+-- test_dummy — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked test_dummy's `on_budget_plan` first.
+export func budget_test_dummy() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = TestDummy.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_test_dummy", show(out.total))
+}
+
+-- omnigraph — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_omnigraph() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Omnigraph.register_with_config(0);
+  reached("reg_omnigraph", h.id)
+}
+
+-- omnigraph — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked omnigraph's `on_budget_plan` first.
+export func budget_omnigraph() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Omnigraph.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_omnigraph", show(out.total))
+}
+
+-- context_mode — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_context_mode() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ContextMode.register_with_config(0);
+  reached("reg_context_mode", h.id)
+}
+
+-- context_mode — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked context_mode's `on_budget_plan` first.
+export func budget_context_mode() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ContextMode.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_context_mode", show(out.total))
+}
+
+-- mcp — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_mcp() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Mcp.register_with_config(0);
+  reached("reg_mcp", h.id)
+}
+
+-- mcp — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked mcp's `on_budget_plan` first.
+export func budget_mcp() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Mcp.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_mcp", show(out.total))
+}
+
+-- exa_search — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_exa_search() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ExaSearch.register_with_config(0);
+  reached("reg_exa_search", h.id)
+}
+
+-- exa_search — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked exa_search's `on_budget_plan` first.
+export func budget_exa_search() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ExaSearch.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_exa_search", show(out.total))
+}
+
+-- ailang_docs — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_ailang_docs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = AilangDocs.register_with_config(0);
+  reached("reg_ailang_docs", h.id)
+}
+
+-- ailang_docs — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked ailang_docs's `on_budget_plan` first.
+export func budget_ailang_docs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = AilangDocs.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_ailang_docs", show(out.total))
+}
+
+-- compose — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_compose() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ComposeReg.register_with_config(0);
+  reached("reg_compose", h.id)
+}
+
+-- compose — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked compose's `on_budget_plan` first.
+export func budget_compose() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ComposeReg.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_compose", show(out.total))
+}
+
+-- a2a — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_a2a() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = A2a.register_with_config(0);
+  reached("reg_a2a", h.id)
+}
+
+-- a2a — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked a2a's `on_budget_plan` first.
+export func budget_a2a() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = A2a.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_a2a", show(out.total))
+}
+
+-- decision_framework — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_decision_framework() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = DecisionFramework.register_with_config(0);
+  reached("reg_decision_framework", h.id)
+}
+
+-- decision_framework — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked decision_framework's `on_budget_plan` first.
+export func budget_decision_framework() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = DecisionFramework.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_decision_framework", show(out.total))
+}
+
+-- microrag — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_microrag() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Microrag.register_with_config(0);
+  reached("reg_microrag", h.id)
+}
+
+-- microrag — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked microrag's `on_budget_plan` first.
+export func budget_microrag() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Microrag.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_microrag", show(out.total))
+}
+
+-- compaction_ai — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_compaction_ai() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = CompactionAi.register_with_config(0);
+  reached("reg_compaction_ai", h.id)
+}
+
+-- compaction_ai — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked compaction_ai's `on_budget_plan` first.
+export func budget_compaction_ai() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = CompactionAi.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_compaction_ai", show(out.total))
+}
+
+-- scratchpad — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_scratchpad() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Scratchpad.register_with_config(0);
+  reached("reg_scratchpad", h.id)
+}
+
+-- scratchpad — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked scratchpad's `on_budget_plan` first.
+export func budget_scratchpad() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Scratchpad.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_scratchpad", show(out.total))
+}
+
+-- compaction_structural — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_compaction_structural() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = CompactionStructural.register_with_config(0);
+  reached("reg_compaction_structural", h.id)
+}
+
+-- compaction_structural — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked compaction_structural's `on_budget_plan` first.
+export func budget_compaction_structural() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = CompactionStructural.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_compaction_structural", show(out.total))
+}
+
+-- empty_stop_guard — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_empty_stop_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = EmptyStopGuard.register_with_config(0);
+  reached("reg_empty_stop_guard", h.id)
+}
+
+-- empty_stop_guard — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked empty_stop_guard's `on_budget_plan` first.
+export func budget_empty_stop_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = EmptyStopGuard.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_empty_stop_guard", show(out.total))
+}
+
+-- progress_contract_guard — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ProgressContractGuard.register_with_config(0);
+  reached("reg_progress_contract_guard", h.id)
+}
+
+-- progress_contract_guard — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked progress_contract_guard's `on_budget_plan` first.
+export func budget_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ProgressContractGuard.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_progress_contract_guard", show(out.total))
 }

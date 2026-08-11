@@ -213,7 +213,7 @@ export func dispatch_build_system_prompt(rt: ExtRuntime, ctx: ExtCtx, base: stri
   fold_prompt_hooks(rt.registry.hooks, ctx, base)
 }
 
-func fold_budget_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock, Env, FS} {
+func fold_budget_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock} {
   match hooks {
     [] => plan,
     h :: rest => {
@@ -225,7 +225,7 @@ func fold_budget_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, plan: BudgetPlan) -
   }
 }
 
-export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock, Env, FS} {
+export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock} {
   fold_budget_hooks(rt.registry.hooks, ctx, plan)
 }
 
@@ -486,7 +486,7 @@ func smoke_hook_a() -> ExtensionHooks {
   let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     ContinueWithFeedback("needs-fix")
   }, next_state: ctx.world } };
-  let budget = func(ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  let budget = func(ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
     { requested_total: Some(9), requested_solver: None, requested_verifier: None }
   };
   {
@@ -513,7 +513,7 @@ func smoke_hook_b() -> ExtensionHooks {
   let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     Accept("accepted")
   }, next_state: ctx.world } };
-  let budget = func(ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  let budget = func(ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
     { requested_total: None, requested_solver: Some(5), requested_verifier: None }
   };
   {
@@ -548,7 +548,7 @@ func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, P
     provided_tools: [],
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
     on_pre_step: pre,
@@ -742,7 +742,7 @@ func dispatch_pending_hook() -> bool ! {Clock, IO}
       provided_tools: [],
       on_describe_tools: \_ . [],
       on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-      on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
         { requested_total: None, requested_solver: None, requested_verifier: None }
       },
       on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
