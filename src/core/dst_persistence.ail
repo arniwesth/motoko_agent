@@ -1,0 +1,1261 @@
+-- D8's persistence path: the encoding, the compatibility policy, and the store.
+--
+-- WI-A13, stage 6, second commit. D8:
+--
+--   "Programs use a deterministic, diffable encoding with an explicit
+--    compatibility policy. The implementation plan may select the encoding and
+--    storage path... A schema migration must either preserve old-program
+--    decoding or provide a pinned runner/artifact; silently reinterpreting an
+--    old program is forbidden... Large exact payloads may live in a CI artifact
+--    addressed by digest; a digest without retained bytes is not sufficient for
+--    replay."
+--
+-- Nothing wrote a program to disk before this commit. The encoding and the
+-- storage path are both selected here, and the four choices that were open are
+-- recorded below because each admitted a second answer that type-checks.
+--
+-- ===========================================================================
+-- CHOICE 1 — LINE-ORIENTED TEXT, NOT JSON, AND THE REASON IS "DIFFABLE"
+-- ===========================================================================
+--
+-- `ports.ail`'s payload codecs use `std/json`, and reusing them here was the
+-- obvious move. It is the wrong one, and the failure is quiet: `std/json`'s
+-- `encode` emits ONE LINE. That is perfectly deterministic — the same program
+-- encodes byte-identically every time — and it is not diffable at all, because
+-- changing one field of one interaction rewrites the only line in the file. A
+-- reviewer reading `git diff` on a regenerated program sees the whole artifact
+-- replaced and cannot see what moved.
+--
+-- D8 asks for BOTH properties and the plan owns the trade. Line-oriented text
+-- gives both: determinism because every value is written in a fixed order by a
+-- pure function of the record with no map iteration anywhere, and diffability
+-- because a one-field change touches exactly two lines — the field's own line
+-- and the digest. `scenario_diffable` asserts that as a number, on three
+-- different field positions, rather than asserting it as a property name.
+--
+-- The large variable-length fields — the request projection, the outcome
+-- payload, and each stream chunk — get their OWN lines rather than sharing the
+-- interaction's line. Those are the fields most likely to change and the ones
+-- that can be long; sharing a line with them would make every payload edit look
+-- like an identity edit in a diff.
+--
+-- ===========================================================================
+-- CHOICE 2 — THE DIGEST IS IN THE ARTIFACT, AND THE BYTES ARE ALWAYS THERE
+-- ===========================================================================
+--
+-- D8 permits a large payload to live in a CI artifact "addressed by digest" and
+-- then closes the door the same sentence opened: "a digest without retained
+-- bytes is not sufficient for replay". So a digest is a NAME here and never a
+-- REPRESENTATION. `artifact_bytes` always carries the whole program; the digest
+-- is a line inside it, computed over the body, and `decode_artifact` verifies
+-- it. There is no encoded form of a program that is a reference to bytes stored
+-- somewhere else, and `DigestMismatch` is what a truncated or edited artifact
+-- produces instead of a program that decodes to something slightly different.
+--
+-- ===========================================================================
+-- CHOICE 3 — SITE 22: THE PATH IS THE IDENTITY, THE KEY IS THE DIGEST
+-- ===========================================================================
+--
+-- D8 names a preserved failure by (generator_id, generator_version, seed), and
+-- cluster 11 measured that this triple is NOT UNIQUE. `seed_state` is
+-- `in_range(salt_hash("${id}/${version}") + seed)` — the version hash and the
+-- seed are ADDED, hence interchangeable — so version "2" at seed s is
+-- byte-identical to version "1" at seed s+1, confirmed across all 259 adjacent
+-- pairs, twice. `test_a_version_bump_is_currently_only_a_seed_offset` in
+-- `dst_generator` pins the defect deliberately.
+--
+-- THE DECISION TAKEN HERE IS TO RECORD THE COLLISION AND KEY ON THE DIGEST,
+-- AND `seed_state` IS LEFT ALONE. Not because the repair is expensive — it is,
+-- it remaps the whole stream and moves stage 4's pinned seeds 9, 13 and 94,
+-- each of which has an asserted reason — but because THE REPAIR WOULD NOT MAKE
+-- THE TRIPLE A KEY:
+--
+--   D8's own reproducibility promise is conditioned on the recorded execution
+--   manifest and profile — "Repeating discovery under the recorded execution
+--   manifest/profile and seed must reproduce the same resolved program". The
+--   program is therefore a function of (manifest/profile, id, version, seed),
+--   and the triple omits the manifest. Two runs at one triple under two
+--   manifests are two different programs TODAY, with or without site 22. So a
+--   store that filed under the triple and believed it unique would be wrong for
+--   a second, independent reason that fixing `seed_state` does not touch.
+--
+-- Both facts point the same way, so the store does not file under a key it
+-- believes to be unique:
+--
+--   * `artifact_path` is derived from the triple, because a STABLE, human-
+--     navigable path is what makes choice 1's diffability worth anything: the
+--     same logical program lands at the same path across regenerations, so
+--     `git diff` shows the change. A content-addressed path would put every
+--     revision at a new name and there would be nothing to diff.
+--   * `artifact_identity` is the DIGEST, and it is the only thing in this module
+--     described as unique. A corpus deduplicates on it. Two artifacts at
+--     different paths sharing an identity are site 22's aliasing made visible
+--     rather than counted twice — which is the harm, and it is A15's: a corpus
+--     holding (v1, seed 4) and (v2, seed 3) has one program's worth of coverage
+--     while reporting two.
+--   * `persist_program` REFUSES to overwrite a path whose existing artifact has
+--     a different digest. The path is not unique, so the store checks instead of
+--     assuming. Writing the same program twice is idempotent; writing a
+--     different one at the same triple is `PersistCollision`, by name.
+--
+-- ===========================================================================
+-- CHOICE 4 — THE DECODER HAS NO FIELD DEFAULTS, AND THAT IS STRUCTURAL
+-- ===========================================================================
+--
+-- Cluster 9 cost this project a decoder that returned fallbacks for every
+-- field: an out-of-scope constructor bound as a fresh variable, the arm became
+-- irrefutable, `ailang check` was clean, and every field read back as its
+-- default. That defect is THIS module's exact subject matter, so the decode is
+-- two phases and the second is only reachable when the first passed:
+--
+--   VALIDATE — every required tag is present exactly once, every tag is known,
+--     every line has its declared arity, every int field parses, every escape
+--     is well-formed. Anything else is a `DecodeRefusal` naming the line.
+--   PROJECT — read the fields. A lookup here cannot miss, because phase one
+--     enumerated the tags from `required_header_tags()` and found them all.
+--
+-- The residual risk is a field the ENCODER writes and `required_header_tags()`
+-- omits: phase one would not miss it, phase two would read "" for it, and both
+-- halves type-check. That is S7's record-level form, and the two guards against
+-- it are the field-by-field round trip with every field holding a DISTINCT
+-- value (`scenario_round_trip`), and the Makefile's manifest-arity guard, which
+-- counts `ExecutionManifest`'s declared fields against the codec's tags.
+--
+-- ===========================================================================
+-- THE COMPATIBILITY POLICY IS A FILE, NOT A PARAGRAPH
+-- ===========================================================================
+--
+-- `scripts/dst/fixtures/execution-program-v1.artifact` is a frozen specimen,
+-- checked into the tree at the moment this encoding landed. THERE IS NO TARGET
+-- THAT REGENERATES IT and that is the point rather than an omission — stage 5
+-- deleted its sweep script after use for the same reason. A compatibility
+-- policy needs a frozen artifact from the past or it tests nothing, and this
+-- project had no past, so one is manufactured deliberately.
+--
+-- Encoder and decoder are written in the same commit and agree BY CONSTRUCTION,
+-- so every round-trip row would pass against a policy that exists only as
+-- prose. The specimen is what makes the clause executable: the current build
+-- must decode those bytes correctly or refuse them by name, and if a future
+-- edit breaks the decode the row goes red and the author must add a v1 decode
+-- path or bump the version and pin a runner. Regenerating the file is the one
+-- response that is not available, because it destroys the evidence.
+--
+-- Per S8's complement, a specimen certifies exactly the shapes it CONTAINS, so
+-- it carries every shape the schema admits and `scenario_specimen_coverage`
+-- asserts that against `all_interaction_kinds()` rather than against a list
+-- written at the assertion site.
+--
+-- The second specimen, `execution-program-v0.artifact`, carries a schema
+-- version this build does not know. It exists so the fail-closed half is tested
+-- against real bytes rather than against a hand-built record: an unknown schema
+-- is `UnknownSchemaVersion`, by name, pointing at the pinned runner.
+
+module src/core/dst_persistence
+
+import std/list as List (length)
+import std/string as Str (
+  length, split, join, startsWith, foldChars, stringToInt, substring, find, contains
+)
+import std/option (Option, Some, None)
+import std/crypto (sha256Hex)
+import std/fs as FS (readFileResult, writeFileResult, fileExists, mkdirAllResult)
+import std/result (Result, Ok, Err)
+
+import src/core/dst_interaction (
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  CausalIdentity,
+  StreamChunkRecord,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  TimedOutcome,
+  Interaction,
+  identity_kind,
+  outcome_status_id,
+  all_interaction_kinds
+)
+import src/core/dst_program (
+  ExecutionProgram,
+  InitialWorld,
+  DiscoveryConfig,
+  program_schema_version,
+  decodable_schema_versions
+)
+import src/core/dst_generator (GeneratorBounds)
+import src/core/dst_profile (ExecutionManifest, PackageVersion)
+import src/core/dst_secrets (
+  SecretFinding,
+  SecretSite,
+  EnvKeySite, InitialWorldSite, ManifestSite,
+  scan_text,
+  scan_env_map,
+  scan_interactions,
+  secret_rule,
+  secret_message
+)
+
+-- ---------------------------------------------------------------------------
+-- Escaping
+-- ---------------------------------------------------------------------------
+
+-- Tab separates fields and newline separates lines, so both must be escaped, and
+-- so must the escape character itself. Carriage return is escaped too: a value
+-- carrying one would otherwise round-trip differently depending on how the file
+-- was checked out, which is a determinism defect that only shows up on somebody
+-- else's machine.
+pure func esc_char(acc: string, c: string) -> string {
+  if c == "\\" then "${acc}\\\\"
+  else if c == "\n" then "${acc}\\n"
+  else if c == "\t" then "${acc}\\t"
+  else if c == "\r" then "${acc}\\r"
+  else "${acc}${c}"
+}
+
+export pure func escape_field(s: string) -> string { Str.foldChars(esc_char, "", s) }
+
+type Unesc = { out: string, pending: bool, bad: bool }
+
+pure func unesc_step(a: Unesc, c: string) -> Unesc {
+  if a.pending then
+    (if c == "n" then { a | out: "${a.out}\n", pending: false }
+     else if c == "t" then { a | out: "${a.out}\t", pending: false }
+     else if c == "r" then { a | out: "${a.out}\r", pending: false }
+     else if c == "\\" then { a | out: "${a.out}\\", pending: false }
+     -- `escape_field` emits no other escape, so any other one is a corrupted
+     -- artifact. Swallowing the backslash here would silently rewrite the value
+     -- and the round trip would still balance.
+     else { a | pending: false, bad: true })
+  else if c == "\\" then { a | pending: true }
+  else { a | out: "${a.out}${c}" }
+}
+
+-- `None` is a malformed escape or a line ending mid-escape. Both are refusals,
+-- never a best-effort string.
+export pure func unescape_field(s: string) -> Option[string] {
+  let r = Str.foldChars(unesc_step, { out: "", pending: false, bad: false }, s);
+  if r.bad || r.pending then None else Some(r.out)
+}
+
+-- ---------------------------------------------------------------------------
+-- The refusal vocabulary
+-- ---------------------------------------------------------------------------
+
+export type DecodeRefusal
+  = UnknownSchemaVersion(string)        -- the version seen
+  | NotAnExecutionProgram(string)       -- why
+  | DigestMismatch(string, string)      -- recorded, computed
+  | UnknownTag(int, string)             -- line number, tag
+  | WrongArity(int, string, int, int)   -- line, tag, expected, found
+  | MalformedEscape(int, string)        -- line, tag
+  | NotAnInteger(int, string, string)   -- line, tag, text
+  | MissingSection(string)              -- tag
+  | RepeatedSection(string)             -- tag
+  | UnknownInteractionKind(int, string) -- line, kind
+  | UnknownOutcomeStatus(int, string)   -- line, status
+  | IncompleteInteraction(int, string)  -- ordinal, what is missing
+
+export pure func decode_rule(r: DecodeRefusal) -> string {
+  match r {
+    UnknownSchemaVersion(_) => "artifact-unknown-schema-version",
+    NotAnExecutionProgram(_) => "artifact-not-an-execution-program",
+    DigestMismatch(_, _) => "artifact-digest-mismatch",
+    UnknownTag(_, _) => "artifact-unknown-tag",
+    WrongArity(_, _, _, _) => "artifact-wrong-arity",
+    MalformedEscape(_, _) => "artifact-malformed-escape",
+    NotAnInteger(_, _, _) => "artifact-not-an-integer",
+    MissingSection(_) => "artifact-missing-section",
+    RepeatedSection(_) => "artifact-repeated-section",
+    UnknownInteractionKind(_, _) => "artifact-unknown-interaction-kind",
+    UnknownOutcomeStatus(_, _) => "artifact-unknown-outcome-status",
+    IncompleteInteraction(_, _) => "artifact-incomplete-interaction"
+  }
+}
+
+export pure func decode_message(r: DecodeRefusal) -> string {
+  match r {
+    UnknownSchemaVersion(v) =>
+      "[artifact-unknown-schema-version] this build writes '${program_schema_version()}' and can decode ${show(List.length(decodable_schema_versions()))} schema version(s); it cannot decode '${v}' and will NOT reinterpret it. D8 forbids silently reinterpreting an old program: replay this artifact with the pinned runner for schema '${v}', or add a decode path for it to decodable_schema_versions() and to this module. Regenerating the artifact is not a migration — it destroys the evidence the artifact exists to carry",
+    NotAnExecutionProgram(why) =>
+      "[artifact-not-an-execution-program] ${why}; the first line of an execution-program artifact is its schema version and the second is its digest, so a file that does not begin that way is not one of these and is refused rather than parsed hopefully",
+    DigestMismatch(recorded, computed) =>
+      "[artifact-digest-mismatch] the artifact records digest ${recorded} but its body hashes to ${computed}; the bytes have been truncated or edited. D8 permits a large payload to be addressed by digest and requires the bytes to be retained, so a body that disagrees with its own digest is not a program that decodes slightly differently — it is not a program",
+    UnknownTag(n, t) =>
+      "[artifact-unknown-tag] line ${n} carries tag '${t}', which this schema does not define; an unknown line is refused rather than skipped, because a skipped line is a field this build read as absent while the writer believed it recorded",
+    WrongArity(n, t, want, got) =>
+      "[artifact-wrong-arity] line ${n} tag '${t}' declares ${want} field(s) and carries ${got}; a short line would otherwise project as a blank field, which is the exact shape of a decoder that returns a default where the encoder wrote a value",
+    MalformedEscape(n, t) =>
+      "[artifact-malformed-escape] line ${n} tag '${t}' contains an escape this schema does not emit; unescaping it as its literal text would silently rewrite the value while the round trip still balanced",
+    NotAnInteger(n, t, txt) =>
+      "[artifact-not-an-integer] line ${n} tag '${t}' holds '${txt}' where an integer is required; there is no default for this field, because a clock epoch or a seed that reads back as 0 replays a different run",
+    MissingSection(t) =>
+      "[artifact-missing-section] the artifact has no '${t}' line; every field of the program is required, and a decoder that supplied a default here would produce a program that is not the one that was written",
+    RepeatedSection(t) =>
+      "[artifact-repeated-section] the artifact carries more than one '${t}' line; which one wins is not decidable, and a decoder that took the first or the last would make the artifact's meaning depend on the decoder",
+    UnknownInteractionKind(n, k) =>
+      "[artifact-unknown-interaction-kind] line ${n} names interaction kind '${k}', which this vocabulary does not define; D2 fixes the seven classes and their identity components, so an eighth is either a newer schema or a corrupted artifact — both are refusals",
+    UnknownOutcomeStatus(n, s) =>
+      "[artifact-unknown-outcome-status] line ${n} names outcome status '${s}'; D2 defines ok, fault and missing, and the three branch differently on replay",
+    IncompleteInteraction(ord, what) =>
+      "[artifact-incomplete-interaction] interaction #${ord} has no ${what} line; every interaction records an identity, an outcome, a request projection and a payload, and an absent one is not an empty one"
+  }
+}
+
+export type ProgramDecode
+  = ProgramDecoded(ExecutionProgram)
+  | ProgramDecodeRefused([DecodeRefusal])
+
+-- ---------------------------------------------------------------------------
+-- The schema's tags
+-- ---------------------------------------------------------------------------
+
+-- Every header tag that must appear EXACTLY ONCE, with its field count.
+--
+-- This list is the decoder's completeness statement and the Makefile counts its
+-- `manifest.` entries against `ExecutionManifest`'s declared fields. A manifest
+-- field added in `dst_profile` and forgotten here would otherwise project as ""
+-- on every decode — the encoder would not write it, the decoder would not miss
+-- it, and both halves type-check.
+export pure func required_header_tags() -> [{ tag: string, arity: int }] {
+  [{ tag: "generator_id", arity: 1 },
+   { tag: "generator_version", arity: 1 },
+   { tag: "seed", arity: 1 },
+   { tag: "world.messages_and_policy", arity: 1 },
+   { tag: "world.clock_epoch", arity: 1 },
+   { tag: "world.extension_profile", arity: 1 },
+   { tag: "bounds", arity: 5 },
+   { tag: "manifest.source_revision", arity: 1 },
+   { tag: "manifest.toolchain", arity: 1 },
+   { tag: "manifest.abi_version", arity: 1 },
+   { tag: "manifest.profile_id", arity: 1 },
+   { tag: "manifest.profile_version", arity: 1 },
+   { tag: "manifest.event_vocabulary_version", arity: 1 },
+   { tag: "manifest.normalized_configuration", arity: 1 },
+   { tag: "manifest.scan_root_commit", arity: 1 },
+   { tag: "manifest.profile_rules_version", arity: 1 },
+   { tag: "manifest.coverage_rules_version", arity: 1 },
+   { tag: "manifest.attribution_rules_version", arity: 1 },
+   { tag: "manifest.fault_catalogue_version", arity: 1 }]
+}
+
+-- Header tags that may appear any number of times, in order. These are the
+-- manifest's four list fields plus the environment map.
+export pure func repeatable_header_tags() -> [{ tag: string, arity: int }] {
+  [{ tag: "world.env", arity: 2 },
+   { tag: "manifest.package", arity: 2 },
+   { tag: "manifest.classifier_2", arity: 1 },
+   { tag: "manifest.unrouted_field", arity: 1 },
+   { tag: "manifest.scan_root", arity: 1 }]
+}
+
+-- Tags whose single field must parse as an integer.
+export pure func integer_header_tags() -> [string] {
+  ["seed", "world.clock_epoch"]
+}
+
+pure func block_tags() -> [{ tag: string, arity: int }] {
+  [{ tag: "i", arity: 5 },
+   { tag: "o", arity: 4 },
+   { tag: "r", arity: 1 },
+   { tag: "p", arity: 1 },
+   { tag: "c", arity: 2 }]
+}
+
+pure func arity_of(ts: [{ tag: string, arity: int }], t: string) -> Option[int] {
+  match ts {
+    [] => None,
+    x :: rest => if x.tag == t then Some(x.arity) else arity_of(rest, t)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Encoding
+-- ---------------------------------------------------------------------------
+
+pure func line1(tag: string, a: string) -> string { "${tag}\t${escape_field(a)}" }
+pure func line2(tag: string, a: string, b: string) -> string {
+  "${tag}\t${escape_field(a)}\t${escape_field(b)}"
+}
+
+pure func env_lines(es: [{ key: string, value: string }]) -> [string] {
+  match es {
+    [] => [],
+    e :: rest => [line2("world.env", e.key, e.value)] ++ env_lines(rest)
+  }
+}
+
+pure func package_lines(ps: [PackageVersion]) -> [string] {
+  match ps {
+    [] => [],
+    p :: rest => [line2("manifest.package", p.package_id, p.version)] ++ package_lines(rest)
+  }
+}
+
+pure func string_lines(tag: string, xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => [line1(tag, x)] ++ string_lines(tag, rest)
+  }
+}
+
+-- The identity's three components, per class. Fixed at three slots with the
+-- unused ones blank rather than variable arity, because a variable-length line
+-- makes a TRUNCATED line indistinguishable from a short class, and the whole
+-- point of the arity check is that a short line is a refusal.
+pure func identity_slots(b: IdentityBody) -> { a: string, b: string, c: string } {
+  match b {
+    ProviderIdentity(origin, step, model) => { a: origin, b: "${step}", c: model },
+    ToolIdentity(origin, call_id, name) => { a: origin, b: call_id, c: name },
+    ApprovalIdentity(origin, call_id, name) => { a: origin, b: call_id, c: name },
+    ExtensionEffectIdentity(ext, class_id, call_id) => { a: ext, b: class_id, c: call_id },
+    EnvironmentReadIdentity(key) => { a: key, b: "", c: "" },
+    RandomDrawIdentity(bounds) => { a: bounds, b: "", c: "" },
+    ClockAdvanceIdentity => { a: "", b: "", c: "" }
+  }
+}
+
+pure func chunk_lines(cs: [StreamChunkRecord]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest => ["c\t${c.offset_ms}\t${escape_field(c.text)}"] ++ chunk_lines(rest)
+  }
+}
+
+pure func interaction_lines(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest => {
+      let s = identity_slots(i.identity.body);
+      let o = i.outcome;
+      ["i\t${i.identity.ordinal}\t${identity_kind(i.identity.body)}\t${escape_field(s.a)}\t${escape_field(s.b)}\t${escape_field(s.c)}",
+       "o\t${i.deadline_ms}\t${o.advance_ms}\t${outcome_status_id(o.status)}\t${escape_field(o.fault_class_id)}",
+       line1("r", i.request_projection),
+       line1("p", o.payload)]
+        ++ chunk_lines(o.chunks)
+        ++ interaction_lines(rest)
+    }
+  }
+}
+
+-- The body: everything after the schema-version and digest lines. Field order is
+-- written out here and is part of the schema — a reordering is a schema change,
+-- because the frozen v1 specimen's bytes are the compatibility test.
+export pure func encode_body(p: ExecutionProgram) -> string {
+  let w = p.initial_world;
+  let m = p.manifest;
+  let b = p.bounds;
+  Str.join("\n",
+    [line1("generator_id", p.generator_id),
+     line1("generator_version", p.generator_version),
+     "seed\t${p.seed}",
+     line1("world.messages_and_policy", w.messages_and_policy),
+     "world.clock_epoch\t${w.clock_epoch}",
+     line1("world.extension_profile", w.extension_profile)]
+      ++ env_lines(w.synthetic_environment)
+      ++ ["bounds\t${b.max_interactions}\t${b.max_chunks_per_interaction}\t${b.max_payload_bytes}\t${b.max_resource_size}\t${b.max_clock_advance_ms}",
+          line1("manifest.source_revision", m.source_revision),
+          line1("manifest.toolchain", m.toolchain),
+          line1("manifest.abi_version", m.abi_version),
+          line1("manifest.profile_id", m.profile_id),
+          line1("manifest.profile_version", m.profile_version),
+          line1("manifest.event_vocabulary_version", m.event_vocabulary_version),
+          line1("manifest.normalized_configuration", m.normalized_configuration),
+          line1("manifest.scan_root_commit", m.scan_root_commit),
+          line1("manifest.profile_rules_version", m.profile_rules_version),
+          line1("manifest.coverage_rules_version", m.coverage_rules_version),
+          line1("manifest.attribution_rules_version", m.attribution_rules_version),
+          line1("manifest.fault_catalogue_version", m.fault_catalogue_version)]
+      ++ package_lines(m.extension_packages)
+      ++ string_lines("manifest.classifier_2", m.classifier_2_set)
+      ++ string_lines("manifest.unrouted_field", m.unrouted_fields)
+      ++ string_lines("manifest.scan_root", m.scan_roots)
+      ++ interaction_lines(p.interactions))
+}
+
+export pure func program_digest(body: string) -> string { sha256Hex(body) }
+
+-- ---------------------------------------------------------------------------
+-- The secret gate, and why encoding is where it sits
+-- ---------------------------------------------------------------------------
+
+-- D8 requires redaction BEFORE persistence, and both arrangements type-check:
+-- redact-then-write, and write-then-redact. The second has already leaked by
+-- the time it runs, and a suite that inspects the in-memory record cannot tell
+-- them apart.
+--
+-- So the ordering is not asserted here, it is STRUCTURAL: producing the bytes
+-- and checking for credentials are the same call. There is no arrangement in
+-- which an artifact exists carrying a credential, because `encode_artifact`
+-- returns a REFUSAL rather than a string. `persist_program` writes what
+-- `encode_artifact` returns and cannot write anything else.
+--
+-- The choice between D8's "reject" and "redact" for a PROGRAM is reject, and
+-- D8's own first sentence is the reason: "Programs contain synthetic values
+-- only". A credential in a program is a defect in the recorder, not in the
+-- artifact, and redacting it produces a program that no longer reproduces the
+-- failure it was preserved for. `dst_secrets.redact_env_map` and
+-- `redact_interactions` exist for artifacts recorded from a live run, where a
+-- credential can legitimately arrive; their trajectory cost is reported.
+export pure func scan_program(p: ExecutionProgram) -> [SecretFinding] {
+  let w = p.initial_world;
+  let m = p.manifest;
+  scan_env_map(w.synthetic_environment)
+    ++ scan_text(InitialWorldSite("messages_and_policy"), w.messages_and_policy)
+    ++ scan_text(InitialWorldSite("extension_profile"), w.extension_profile)
+    ++ scan_text(ManifestSite("normalized_configuration"), m.normalized_configuration)
+    ++ scan_text(ManifestSite("source_revision"), m.source_revision)
+    ++ scan_text(ManifestSite("toolchain"), m.toolchain)
+    ++ scan_interactions(p.interactions)
+}
+
+export type EncodeOutcome
+  = Encoded(string)
+  | EncodeRefused([SecretFinding])
+
+-- The whole artifact: schema version, digest, body, trailing newline.
+--
+-- The trailing newline is load-bearing rather than cosmetic. `decode_artifact`
+-- requires the split to end in an empty element and refuses otherwise, which
+-- turns a truncated file into a named refusal instead of a program whose last
+-- interaction lost its payload line.
+export pure func encode_artifact(p: ExecutionProgram) -> EncodeOutcome {
+  match scan_program(p) {
+    [] => {
+      let body = encode_body(p);
+      Encoded("${program_schema_version()}\ndigest\t${program_digest(body)}\n${body}\n")
+    },
+    fs => EncodeRefused(fs)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Decoding, phase one: parse and validate
+-- ---------------------------------------------------------------------------
+
+type Line = { no: int, tag: string, fields: [string] }
+
+pure func drop_last(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    _ :: [] => [],
+    x :: rest => [x] ++ drop_last(rest)
+  }
+}
+
+pure func last_of(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    _ :: rest => last_of(rest)
+  }
+}
+
+pure func head_or(xs: [string], d: string) -> string {
+  match xs { [] => d, x :: _ => x }
+}
+
+pure func nth_str(xs: [string], n: int) -> string {
+  match xs {
+    [] => "",
+    x :: rest => if n <= 0 then x else nth_str(rest, n - 1)
+  }
+}
+
+pure func unescape_all(fs: [string]) -> Option[[string]] {
+  match fs {
+    [] => Some([]),
+    f :: rest =>
+      match unescape_field(f) {
+        None => None,
+        Some(v) => match unescape_all(rest) { None => None, Some(vs) => Some([v] ++ vs) }
+      }
+  }
+}
+
+-- Parse one line into a tag and its unescaped fields, or a refusal. Arity is
+-- checked HERE, against the schema's declared table, so a truncated line never
+-- reaches the projection as a blank field.
+pure func parse_line(no: int, raw: string) -> { line: [Line], refusals: [DecodeRefusal] } {
+  let parts = Str.split(raw, "\t");
+  let tag = head_or(parts, "");
+  let fields = drop_first(parts);
+  let want = match arity_of(required_header_tags(), tag) {
+    Some(n) => Some(n),
+    None => match arity_of(repeatable_header_tags(), tag) {
+      Some(n) => Some(n),
+      None => arity_of(block_tags(), tag)
+    }
+  };
+  match want {
+    None => { line: [], refusals: [UnknownTag(no, tag)] },
+    Some(n) =>
+      if List.length(fields) != n then
+        { line: [], refusals: [WrongArity(no, tag, n, List.length(fields))] }
+      else match unescape_all(fields) {
+        None => { line: [], refusals: [MalformedEscape(no, tag)] },
+        Some(vs) => { line: [{ no: no, tag: tag, fields: vs }], refusals: [] }
+      }
+  }
+}
+
+pure func drop_first(xs: [string]) -> [string] {
+  match xs { [] => [], _ :: rest => rest }
+}
+
+pure func parse_lines(no: int, raws: [string]) -> { lines: [Line], refusals: [DecodeRefusal] } {
+  match raws {
+    [] => { lines: [], refusals: [] },
+    r :: rest => {
+      let one = parse_line(no, r);
+      let tail = parse_lines(no + 1, rest);
+      { lines: one.line ++ tail.lines, refusals: one.refusals ++ tail.refusals }
+    }
+  }
+}
+
+pure func count_tag(ls: [Line], t: string) -> int {
+  match ls {
+    [] => 0,
+    l :: rest => (if l.tag == t then 1 else 0) + count_tag(rest, t)
+  }
+}
+
+pure func find_tag(ls: [Line], t: string) -> [Line] {
+  match ls {
+    [] => [],
+    l :: rest => (if l.tag == t then [l] else []) ++ find_tag(rest, t)
+  }
+}
+
+-- Every required tag present exactly once. Missing and repeated are separate
+-- refusals because they are different defects: one is a decoder that would have
+-- defaulted, the other is an artifact whose meaning depends on which line the
+-- decoder happens to take.
+pure func check_required(ls: [Line], ts: [{ tag: string, arity: int }]) -> [DecodeRefusal] {
+  match ts {
+    [] => [],
+    t :: rest => {
+      let n = count_tag(ls, t.tag);
+      (if n == 0 then [MissingSection(t.tag)]
+       else if n > 1 then [RepeatedSection(t.tag)]
+       else [])
+        ++ check_required(ls, rest)
+    }
+  }
+}
+
+pure func check_integers(ls: [Line], ts: [string]) -> [DecodeRefusal] {
+  match ts {
+    [] => [],
+    t :: rest => {
+      let found = find_tag(ls, t);
+      (match found {
+         [] => [],
+         l :: _ => {
+           let txt = head_or(l.fields, "");
+           match Str.stringToInt(txt) { Some(_) => [], None => [NotAnInteger(l.no, t, txt)] }
+         }
+       })
+        ++ check_integers(ls, rest)
+    }
+  }
+}
+
+-- `bounds` carries five integers on one line and the arity check has already
+-- confirmed there are five fields; this confirms each is a number.
+pure func check_bounds_line(ls: [Line]) -> [DecodeRefusal] {
+  match find_tag(ls, "bounds") {
+    [] => [],
+    l :: _ => int_fields_of(l, 0, 5)
+  }
+}
+
+pure func int_fields_of(l: Line, i: int, n: int) -> [DecodeRefusal] {
+  if i >= n then []
+  else {
+    let txt = nth_str(l.fields, i);
+    (match Str.stringToInt(txt) { Some(_) => [], None => [NotAnInteger(l.no, l.tag, txt)] })
+      ++ int_fields_of(l, i + 1, n)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Decoding, phase two: project
+--
+-- Only reachable when phase one produced no refusal, which is what makes these
+-- lookups total. See choice 4 in the header.
+-- ---------------------------------------------------------------------------
+
+pure func str_at(ls: [Line], t: string, i: int) -> string {
+  match find_tag(ls, t) { [] => "", l :: _ => nth_str(l.fields, i) }
+}
+
+pure func int_at(ls: [Line], t: string, i: int) -> int {
+  match Str.stringToInt(str_at(ls, t, i)) { Some(n) => n, None => 0 }
+}
+
+pure func pairs_of(ls: [Line], t: string) -> [{ key: string, value: string }] {
+  match ls {
+    [] => [],
+    l :: rest =>
+      (if l.tag == t then [{ key: nth_str(l.fields, 0), value: nth_str(l.fields, 1) }] else [])
+        ++ pairs_of(rest, t)
+  }
+}
+
+pure func packages_of(ls: [Line]) -> [PackageVersion] {
+  match ls {
+    [] => [],
+    l :: rest =>
+      (if l.tag == "manifest.package" then
+         [{ package_id: nth_str(l.fields, 0), version: nth_str(l.fields, 1) }]
+       else [])
+        ++ packages_of(rest)
+  }
+}
+
+pure func strings_of(ls: [Line], t: string) -> [string] {
+  match ls {
+    [] => [],
+    l :: rest =>
+      (if l.tag == t then [nth_str(l.fields, 0)] else []) ++ strings_of(rest, t)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Interaction blocks
+-- ---------------------------------------------------------------------------
+
+pure func is_block_tag(t: string) -> bool {
+  t == "i" || t == "o" || t == "r" || t == "p" || t == "c"
+}
+
+pure func header_lines(ls: [Line]) -> [Line] {
+  match ls {
+    [] => [],
+    l :: rest => if is_block_tag(l.tag) then [] else [l] ++ header_lines(rest)
+  }
+}
+
+pure func body_lines(ls: [Line]) -> [Line] {
+  match ls {
+    [] => [],
+    l :: rest => if is_block_tag(l.tag) then ls else body_lines(rest)
+  }
+}
+
+pure func take_block(ls: [Line], acc: [Line]) -> [Line] {
+  match ls {
+    [] => acc,
+    l :: rest => if l.tag == "i" then acc else take_block(rest, acc ++ [l])
+  }
+}
+
+pure func rest_after_block(ls: [Line]) -> [Line] {
+  match ls {
+    [] => [],
+    l :: rest => if l.tag == "i" then ls else rest_after_block(rest)
+  }
+}
+
+pure func body_of(kind: string, no: int, a: string, b: string, c: string)
+  -> { body: [IdentityBody], refusals: [DecodeRefusal] } {
+  if kind == "expect_provider" then
+    match Str.stringToInt(b) {
+      Some(step) => { body: [ProviderIdentity(a, step, c)], refusals: [] },
+      None => { body: [], refusals: [NotAnInteger(no, "i", b)] }
+    }
+  else if kind == "expect_tool" then { body: [ToolIdentity(a, b, c)], refusals: [] }
+  else if kind == "expect_approval" then { body: [ApprovalIdentity(a, b, c)], refusals: [] }
+  else if kind == "expect_extension_effect" then
+    { body: [ExtensionEffectIdentity(a, b, c)], refusals: [] }
+  else if kind == "environment_read" then { body: [EnvironmentReadIdentity(a)], refusals: [] }
+  else if kind == "runtime_random_draw" then { body: [RandomDrawIdentity(a)], refusals: [] }
+  else if kind == "advance_clock" then { body: [ClockAdvanceIdentity], refusals: [] }
+  else { body: [], refusals: [UnknownInteractionKind(no, kind)] }
+}
+
+pure func status_of(no: int, s: string) -> { status: [OutcomeStatus], refusals: [DecodeRefusal] } {
+  if s == "ok" then { status: [OutcomeOk], refusals: [] }
+  else if s == "fault" then { status: [OutcomeFault], refusals: [] }
+  else if s == "missing" then { status: [OutcomeMissing], refusals: [] }
+  else { status: [], refusals: [UnknownOutcomeStatus(no, s)] }
+}
+
+pure func chunks_of(ls: [Line]) -> [StreamChunkRecord] {
+  match ls {
+    [] => [],
+    l :: rest =>
+      (if l.tag == "c" then
+         [{ offset_ms: match Str.stringToInt(nth_str(l.fields, 0)) { Some(n) => n, None => 0 },
+            text: nth_str(l.fields, 1) }]
+       else [])
+        ++ chunks_of(rest)
+  }
+}
+
+pure func chunk_int_refusals(ls: [Line]) -> [DecodeRefusal] {
+  match ls {
+    [] => [],
+    l :: rest =>
+      (if l.tag == "c" then int_fields_of(l, 0, 1) else []) ++ chunk_int_refusals(rest)
+  }
+}
+
+-- One interaction from its `i` line and the lines that follow it. Every one of
+-- the four required lines is checked for presence: an absent `p` is not an empty
+-- payload, and the difference is what replay serves.
+pure func decode_block(head: Line, tail: [Line])
+  -> { interactions: [Interaction], refusals: [DecodeRefusal] } {
+  let ord_txt = nth_str(head.fields, 0);
+  let kind = nth_str(head.fields, 1);
+  let ord_r = match Str.stringToInt(ord_txt) { Some(_) => [], None => [NotAnInteger(head.no, "i", ord_txt)] };
+  let ord = match Str.stringToInt(ord_txt) { Some(n) => n, None => -1 };
+  let idb = body_of(kind, head.no, nth_str(head.fields, 2), nth_str(head.fields, 3), nth_str(head.fields, 4));
+  let o_lines = find_tag(tail, "o");
+  let r_lines = find_tag(tail, "r");
+  let p_lines = find_tag(tail, "p");
+  let missing = (if List.length(o_lines) == 0 then [IncompleteInteraction(ord, "outcome ('o')")] else [])
+                  ++ (if List.length(o_lines) > 1 then [RepeatedSection("o at interaction #${ord}")] else [])
+                  ++ (if List.length(r_lines) == 0 then [IncompleteInteraction(ord, "request projection ('r')")] else [])
+                  ++ (if List.length(r_lines) > 1 then [RepeatedSection("r at interaction #${ord}")] else [])
+                  ++ (if List.length(p_lines) == 0 then [IncompleteInteraction(ord, "payload ('p')")] else [])
+                  ++ (if List.length(p_lines) > 1 then [RepeatedSection("p at interaction #${ord}")] else []);
+  let ints = (match o_lines { [] => [], l :: _ => int_fields_of(l, 0, 2) })
+               ++ chunk_int_refusals(tail);
+  let st = match o_lines {
+    [] => { status: [], refusals: [] },
+    l :: _ => status_of(l.no, nth_str(l.fields, 2))
+  };
+  let refusals = ord_r ++ idb.refusals ++ missing ++ ints ++ st.refusals;
+  match refusals {
+    [] =>
+      (match idb.body {
+         [] => { interactions: [], refusals: [IncompleteInteraction(ord, "identity")] },
+         b :: _ =>
+           match st.status {
+             [] => { interactions: [], refusals: [IncompleteInteraction(ord, "outcome status")] },
+             s :: _ => {
+               let o = head_or_line(o_lines);
+               { interactions: [{
+                   identity: { ordinal: ord, body: b },
+                   request_projection: field0(r_lines),
+                   deadline_ms: int0(o, 0),
+                   outcome: { advance_ms: int0(o, 1),
+                              chunks: chunks_of(tail),
+                              payload: field0(p_lines),
+                              status: s,
+                              fault_class_id: nth_str(o.fields, 3) } }],
+                 refusals: [] }
+             }
+           }
+       }),
+    _ => { interactions: [], refusals: refusals }
+  }
+}
+
+pure func head_or_line(ls: [Line]) -> Line {
+  match ls { [] => { no: -1, tag: "", fields: [] }, l :: _ => l }
+}
+
+pure func field0(ls: [Line]) -> string {
+  match ls { [] => "", l :: _ => nth_str(l.fields, 0) }
+}
+
+pure func int0(l: Line, i: int) -> int {
+  match Str.stringToInt(nth_str(l.fields, i)) { Some(n) => n, None => 0 }
+}
+
+pure func decode_blocks(ls: [Line]) -> { interactions: [Interaction], refusals: [DecodeRefusal] } {
+  match ls {
+    [] => { interactions: [], refusals: [] },
+    head :: rest =>
+      if head.tag != "i" then
+        { interactions: [], refusals: [UnknownTag(head.no, head.tag)] }
+      else {
+        let block = take_block(rest, []);
+        let one = decode_block(head, block);
+        let tail = decode_blocks(rest_after_block(rest));
+        { interactions: one.interactions ++ tail.interactions,
+          refusals: one.refusals ++ tail.refusals }
+      }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The whole decode
+-- ---------------------------------------------------------------------------
+
+export pure func decode_artifact(bytes: string) -> ProgramDecode {
+  let raw = Str.split(bytes, "\n");
+  if List.length(raw) < 3 then
+    ProgramDecodeRefused([NotAnExecutionProgram("the file has fewer than three lines, so it carries no schema version, no digest and no program")])
+  else if last_of(raw) != "" then
+    ProgramDecodeRefused([NotAnExecutionProgram("the file does not end in a newline, so it is truncated; the final newline is part of this schema precisely so that truncation is a refusal rather than a program with a shortened last interaction")])
+  else {
+    let lines = drop_last(raw);
+    let version = head_or(lines, "");
+    if not decodable(version) then ProgramDecodeRefused([UnknownSchemaVersion(version)])
+    else {
+      let digest_raw = nth_str(lines, 1);
+      let digest_parts = Str.split(digest_raw, "\t");
+      if head_or(digest_parts, "") != "digest" || List.length(digest_parts) != 2 then
+        ProgramDecodeRefused([NotAnExecutionProgram("the second line is not a digest line")])
+      else {
+        let recorded = nth_str(digest_parts, 1);
+        let body = Str.join("\n", drop_first(drop_first(lines)));
+        let computed = program_digest(body);
+        if recorded != computed then
+          ProgramDecodeRefused([DigestMismatch(recorded, computed)])
+        else decode_body(body)
+      }
+    }
+  }
+}
+
+pure func decodable(v: string) -> bool { contains_str(decodable_schema_versions(), v) }
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
+}
+
+pure func decode_body(body: string) -> ProgramDecode {
+  -- Line numbers start at 3 so a refusal points at the line a reader will find
+  -- in the file: 1 is the schema version, 2 is the digest.
+  let parsed = parse_lines(3, Str.split(body, "\n"));
+  match parsed.refusals {
+    r :: rs => ProgramDecodeRefused([r] ++ rs),
+    [] => {
+      let hs = header_lines(parsed.lines);
+      let bs = body_lines(parsed.lines);
+      let structural = check_required(hs, required_header_tags())
+                         ++ check_integers(hs, integer_header_tags())
+                         ++ check_bounds_line(hs);
+      match structural {
+        r :: rs => ProgramDecodeRefused([r] ++ rs),
+        [] => {
+          let blocks = decode_blocks(bs);
+          match blocks.refusals {
+            r :: rs => ProgramDecodeRefused([r] ++ rs),
+            [] => ProgramDecoded(project(hs, blocks.interactions))
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func project(hs: [Line], xs: [Interaction]) -> ExecutionProgram {
+  { schema_version: program_schema_version(),
+    generator_id: str_at(hs, "generator_id", 0),
+    generator_version: str_at(hs, "generator_version", 0),
+    seed: int_at(hs, "seed", 0),
+    initial_world: {
+      messages_and_policy: str_at(hs, "world.messages_and_policy", 0),
+      synthetic_environment: pairs_of(hs, "world.env"),
+      clock_epoch: int_at(hs, "world.clock_epoch", 0),
+      extension_profile: str_at(hs, "world.extension_profile", 0)
+    },
+    bounds: {
+      max_interactions: int_at(hs, "bounds", 0),
+      max_chunks_per_interaction: int_at(hs, "bounds", 1),
+      max_payload_bytes: int_at(hs, "bounds", 2),
+      max_resource_size: int_at(hs, "bounds", 3),
+      max_clock_advance_ms: int_at(hs, "bounds", 4)
+    },
+    manifest: {
+      source_revision: str_at(hs, "manifest.source_revision", 0),
+      toolchain: str_at(hs, "manifest.toolchain", 0),
+      extension_packages: packages_of(hs),
+      abi_version: str_at(hs, "manifest.abi_version", 0),
+      profile_id: str_at(hs, "manifest.profile_id", 0),
+      profile_version: str_at(hs, "manifest.profile_version", 0),
+      event_vocabulary_version: str_at(hs, "manifest.event_vocabulary_version", 0),
+      normalized_configuration: str_at(hs, "manifest.normalized_configuration", 0),
+      classifier_2_set: strings_of(hs, "manifest.classifier_2"),
+      unrouted_fields: strings_of(hs, "manifest.unrouted_field"),
+      scan_roots: strings_of(hs, "manifest.scan_root"),
+      scan_root_commit: str_at(hs, "manifest.scan_root_commit", 0),
+      profile_rules_version: str_at(hs, "manifest.profile_rules_version", 0),
+      coverage_rules_version: str_at(hs, "manifest.coverage_rules_version", 0),
+      attribution_rules_version: str_at(hs, "manifest.attribution_rules_version", 0),
+      fault_catalogue_version: str_at(hs, "manifest.fault_catalogue_version", 0)
+    },
+    interactions: xs }
+}
+
+-- ---------------------------------------------------------------------------
+-- The storage path, and the only key that is unique — see choice 3
+-- ---------------------------------------------------------------------------
+
+pure func slug_char(acc: string, c: string) -> string {
+  if (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9")
+       || c == "." || c == "-" || c == "_"
+  then "${acc}${c}" else "${acc}_"
+}
+
+export pure func path_slug(s: string) -> string {
+  if s == "" then "_" else Str.foldChars(slug_char, "", s)
+}
+
+-- The directory a generator's artifacts live in.
+export pure func artifact_dir(root: string, generator_id: string, generator_version: string) -> string {
+  "${root}/${path_slug(generator_id)}/${path_slug(generator_version)}"
+}
+
+-- The path an artifact is FILED at. Derived from D8's triple and therefore NOT
+-- unique — see choice 3 in the header. It is stable across regenerations of the
+-- same logical program, which is what makes the diffable encoding worth having;
+-- `persist_program` guards the non-uniqueness instead of assuming it away.
+export pure func artifact_path(root: string, p: ExecutionProgram) -> string {
+  "${artifact_dir(root, p.generator_id, p.generator_version)}/seed-${p.seed}.artifact"
+}
+
+-- The only key in this module that is unique: the digest of the exact bytes.
+-- A corpus deduplicates on this, and two artifacts at different paths sharing
+-- an identity are site 22's aliasing made visible rather than counted twice.
+export pure func artifact_identity(bytes: string) -> string {
+  sha256Hex(bytes)
+}
+
+-- ---------------------------------------------------------------------------
+-- The store
+-- ---------------------------------------------------------------------------
+
+export type PersistOutcome
+  = Persisted({ path: string, identity: string, bytes: int })
+  | PersistRefusedSecrets([SecretFinding])
+  | PersistCollision({ path: string, existing: string, incoming: string })
+  | PersistIoError(string)
+
+export pure func persist_rule(o: PersistOutcome) -> string {
+  match o {
+    Persisted(_) => "artifact-persisted",
+    PersistRefusedSecrets(_) => "artifact-refused-secrets",
+    PersistCollision(_) => "artifact-path-collision",
+    PersistIoError(_) => "artifact-io-error"
+  }
+}
+
+export pure func persist_message(o: PersistOutcome) -> string {
+  match o {
+    Persisted(d) => "[artifact-persisted] ${d.path} (${d.bytes} bytes, identity ${d.identity})",
+    PersistRefusedSecrets(fs) =>
+      "[artifact-refused-secrets] nothing was written: the program carries ${show(List.length(fs))} credential-shaped value(s), and D8 requires them rejected or redacted BEFORE persistence. The first is: ${first_secret_message(fs)}",
+    PersistCollision(d) =>
+      "[artifact-path-collision] ${d.path} already holds a DIFFERENT artifact (existing identity ${d.existing}, incoming ${d.incoming}) and was not overwritten. D8 names a preserved failure by (generator_id, generator_version, seed) and that triple is not unique — it omits the execution manifest the program is conditioned on, and cluster 11's site 22 measured that a version bump is currently only a seed offset. Two different programs can legitimately want this path; the store refuses rather than losing one",
+    PersistIoError(e) => "[artifact-io-error] ${e}"
+  }
+}
+
+pure func first_secret_message(fs: [SecretFinding]) -> string {
+  match fs { [] => "(none)", f :: _ => secret_message(f) }
+}
+
+-- Write a program, or refuse. The only route from a program to bytes on disk.
+--
+-- The order of operations is the obligation: `encode_artifact` is called first
+-- and its refusal short-circuits, so there is no path on which a file is opened
+-- for a program carrying a credential.
+export func persist_program(root: string, p: ExecutionProgram) -> PersistOutcome ! {FS} {
+  match encode_artifact(p) {
+    EncodeRefused(fs) => PersistRefusedSecrets(fs),
+    Encoded(bytes) => {
+      let path = artifact_path(root, p);
+      let incoming = artifact_identity(bytes);
+      let existing = existing_identity(path);
+      match existing {
+        Some(id) =>
+          if id != incoming then
+            PersistCollision({ path: path, existing: id, incoming: incoming })
+          else Persisted({ path: path, identity: incoming, bytes: Str.length(bytes) }),
+        None =>
+          match FS.mkdirAllResult(artifact_dir(root, p.generator_id, p.generator_version)) {
+            Err(e) => PersistIoError(e),
+            Ok(_) =>
+              match FS.writeFileResult(path, bytes) {
+                Err(e) => PersistIoError(e),
+                Ok(_) => Persisted({ path: path, identity: incoming, bytes: Str.length(bytes) })
+              }
+          }
+      }
+    }
+  }
+}
+
+func existing_identity(path: string) -> Option[string] ! {FS} {
+  if FS.fileExists(path) then
+    match FS.readFileResult(path) {
+      Ok(b) => Some(artifact_identity(b)),
+      Err(_) => None
+    }
+  else None
+}
+
+export type LoadOutcome
+  = Loaded(ExecutionProgram)
+  | LoadRefused([DecodeRefusal])
+  | LoadIoError(string)
+
+export func load_program(path: string) -> LoadOutcome ! {FS} {
+  match FS.readFileResult(path) {
+    Err(e) => LoadIoError(e),
+    Ok(bytes) =>
+      match decode_artifact(bytes) {
+        ProgramDecoded(p) => Loaded(p),
+        ProgramDecodeRefused(rs) => LoadRefused(rs)
+      }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Query helpers for the acceptance suite
+-- ---------------------------------------------------------------------------
+
+export pure func has_decode_rule(rs: [DecodeRefusal], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if decode_rule(r) == rule then true else has_decode_rule(rest, rule)
+  }
+}
+
+export pure func first_decode_message(rs: [DecodeRefusal]) -> string {
+  match rs { [] => "(no refusal)", r :: _ => decode_message(r) }
+}
+
+-- How many lines two encodings differ in. This is what "diffable" MEANS, and
+-- the acceptance suite asserts it as a number rather than as a property name.
+export pure func differing_lines(a: string, b: string) -> int {
+  diff_count(Str.split(a, "\n"), Str.split(b, "\n"))
+}
+
+pure func diff_count(a: [string], b: [string]) -> int {
+  match a {
+    [] => List.length(b),
+    x :: xs =>
+      match b {
+        [] => List.length(a),
+        y :: ys => (if x == y then 0 else 1) + diff_count(xs, ys)
+      }
+  }
+}
+
+export pure func line_count(s: string) -> int { List.length(Str.split(s, "\n")) }
+
+-- D2's `DiscoveryConfig` is a PROJECTION of the program rather than a second
+-- artifact, so encoding the program encodes the config. Stated as a function so
+-- that a reader looking for "where is the config encoded" finds the answer
+-- rather than concluding it was forgotten.
+export pure func config_of(p: ExecutionProgram) -> DiscoveryConfig {
+  { schema_version: p.schema_version,
+    generator_id: p.generator_id,
+    generator_version: p.generator_version,
+    seed: p.seed,
+    initial_world: p.initial_world,
+    bounds: p.bounds }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests: the parts with no fixture.
+--
+-- The PROGRAM-level rows — round trip, determinism, diffability, the frozen
+-- specimens and the mutation set — live in
+-- scripts/dst/program_persistence_dst.ail, where a whole program can be mutated
+-- one field at a time and where the real manifest is in scope.
+-- ---------------------------------------------------------------------------
+
+-- Escaping round-trips every character the encoding treats specially, INCLUDING
+-- the two delimiters. A codec whose escape is not injective loses a value that
+-- happens to contain a tab, and the loss is silent: the artifact decodes, the
+-- field count balances, and the replayed payload differs.
+pure func test_escaping_round_trips_every_special_character() -> bool
+  tests [((), true)]
+  {
+    let raw = "a\tb\nc\\d\re\\\\f\\ng";
+    let e = escape_field(raw);
+    -- The escaped form contains neither delimiter, which is the property the
+    -- line format depends on.
+    not Str.contains(e, "\t") && not Str.contains(e, "\n")
+      && (match unescape_field(e) { Some(v) => v == raw, None => false })
+  }
+
+-- An escape this schema never emits is a REFUSAL, not a literal. Reading `\q`
+-- as "q" would rewrite the value while the round trip still balanced.
+pure func test_an_unknown_escape_is_refused_rather_than_swallowed() -> bool
+  tests [((), true)]
+  {
+    (match unescape_field("a\\qb") { None => true, Some(_) => false })
+      -- ...and so is a field that ends mid-escape.
+      && (match unescape_field("ab\\") { None => true, Some(_) => false })
+      && (match unescape_field("plain") { Some(v) => v == "plain", None => false })
+  }
+
+-- The two tag tables must not overlap. A tag that is both required-once and
+-- repeatable would be checked by `check_required` and then read by `strings_of`,
+-- and which one won would depend on the order the two happened to run in.
+pure func test_the_tag_tables_are_disjoint_and_cover_the_manifest() -> bool
+  tests [((), true)]
+  {
+    let req = tag_names(required_header_tags());
+    let rep = tag_names(repeatable_header_tags());
+    no_overlap(req, rep)
+      -- 12 manifest scalars plus 4 manifest lists is ExecutionManifest's 16
+      -- fields. The Makefile re-derives that count from dst_profile's own
+      -- declaration rather than trusting this literal.
+      && count_prefixed(req, "manifest.") + count_prefixed(rep, "manifest.") == 16
+  }
+
+pure func tag_names(ts: [{ tag: string, arity: int }]) -> [string] {
+  match ts { [] => [], t :: rest => [t.tag] ++ tag_names(rest) }
+}
+
+pure func no_overlap(a: [string], b: [string]) -> bool {
+  match a {
+    [] => true,
+    x :: rest => not contains_str(b, x) && no_overlap(rest, b)
+  }
+}
+
+pure func count_prefixed(xs: [string], p: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if Str.startsWith(x, p) then 1 else 0) + count_prefixed(rest, p)
+  }
+}
+
+-- The path is derived from D8's triple and the identity is derived from the
+-- bytes, and site 22 is why those are two different things. Asserted here so
+-- that a future edit making the path content-addressed — which looks like a
+-- tidy-up — turns a row red and sends the author to choice 3.
+pure func test_the_path_is_the_triple_and_the_identity_is_the_bytes() -> bool
+  tests [((), true)]
+  {
+    let a = artifact_path("corpus", stub_program("g", "1", 4));
+    let b = artifact_path("corpus", stub_program("g", "2", 3));
+    -- Different triples, different paths, whatever the content turns out to be.
+    a != b
+      && a == "corpus/g/1/seed-4.artifact"
+      -- The identity ignores the triple entirely: it is a function of the bytes.
+      && artifact_identity("same bytes") == artifact_identity("same bytes")
+      && artifact_identity("same bytes") != artifact_identity("other bytes")
+      -- A path component that would escape the directory is slugged, so a
+      -- generator id read from an artifact cannot choose where it is written.
+      && path_slug("../../etc") == ".._.._etc"
+      && path_slug("") == "_"
+  }
+
+pure func stub_program(id: string, version: string, seed: int) -> ExecutionProgram {
+  { schema_version: program_schema_version(),
+    generator_id: id, generator_version: version, seed: seed,
+    initial_world: { messages_and_policy: "", synthetic_environment: [],
+                     clock_epoch: 0, extension_profile: "" },
+    bounds: { max_interactions: 0, max_chunks_per_interaction: 0,
+              max_payload_bytes: 0, max_resource_size: 0, max_clock_advance_ms: 0 },
+    manifest: { source_revision: "", toolchain: "", extension_packages: [],
+                abi_version: "", profile_id: "", profile_version: "",
+                event_vocabulary_version: "", normalized_configuration: "",
+                classifier_2_set: [], unrouted_fields: [], scan_roots: [],
+                scan_root_commit: "", profile_rules_version: "",
+                coverage_rules_version: "", attribution_rules_version: "",
+                fault_catalogue_version: "" },
+    interactions: [] }
+}

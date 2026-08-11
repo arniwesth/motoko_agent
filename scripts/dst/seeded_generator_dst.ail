@@ -1,0 +1,1136 @@
+-- scripts/dst/seeded_generator_dst.ail
+--
+-- WI-A13 stage 4: D2's SEEDED GENERATOR, against the real driver.
+--
+-- Stage 2 built discovery's recording half and ran it against hand-authored
+-- worlds. This stage builds the CHOOSING half — the schema-versioned generator
+-- that "chooses a compatible response, fault, and latency from that request
+-- plus explicit generator state" — and grades it.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT THIS ASSERTS, AND WHY EACH AXIS IS HERE
+-- ---------------------------------------------------------------------------
+--
+--   A. SEED SENSITIVITY, AND IT IS THIS STAGE'S WHOLE RISK. Changing the seed
+--      changes the program; changing nothing else changes nothing. The failure
+--      it catches is a generator that ignores its seed — which is perfectly
+--      deterministic, structurally valid, strictly replayable, and green under
+--      every other gate in this project. Determinism is 0-for-19 across nine
+--      clusters and would be 0-for-20 here, because a generator that ignores
+--      its seed is MORE reproducible, not less.
+--
+--      The rule is CONTENT-shaped, not count-shaped, and the axis carries its
+--      own anti-count control: at least one differently-seeded pair must have
+--      the SAME interaction count and different recorded outcomes. Without that
+--      the whole axis could be reading program LENGTH, which cluster 9's site
+--      19 established a count is blind to. Seeds 9 and 13 are that pair, and
+--      their class censuses are identical down to the last interaction —
+--      2 provider, 1 tool ok, 1 approval ok, 1 env ok, 2 chunked, 4 clock —
+--      so nothing but the recorded outcomes can tell them apart.
+--
+--   B. THE MUTANT, AND IT IS A REAL RUN. `generate` is given a seed to BUILD
+--      the world with and a seed to RECORD on the row; the mutant rows pass a
+--      constant to the first and three different values to the second.
+--      It is the same driver, the same recorder, the same program shape; only
+--      the generator's response to its seed is broken. Axis A must go red on
+--      it, naming `generator-ignores-its-seed`. This is the executable form of
+--      "written before the generator, proven red against a seed-ignoring stub",
+--      and it stays in the suite rather than being a demonstration that was run
+--      once.
+--
+--   C. THE GENERATOR WAS ACTUALLY CONSULTED. Every cursor of a generated world
+--      starts EMPTY, and `gen.draws` must have grown. A generating adapter that
+--      silently fell through to its recording counterpart would leave the world
+--      serving defaults consistently, and consistently is all a determinism
+--      check asks.
+--
+--   D. DECLARED BOUNDS (D2). On the honest bounds, zero generator failures. On
+--      a deliberately tightened one, the named failure fires AND the run stays
+--      bounded — both halves of "exceeding a bound is a generator/harness
+--      failure, NOT an unbounded test run".
+--
+--   E. THE GENERATED PROGRAM IS A VALID PROGRAM. Stage 1's pure structural
+--      validator, and stage 1's declared-bounds check, over a program no human
+--      authored.
+--
+--   F. THE GENERATED PROGRAM STRICTLY REPLAYS. Stage 3's reconstitution
+--      balance, its walk, and its terminal outcome. This is the strongest
+--      available sign that the generator is CHOOSING rather than INVENTING: a
+--      generated request that production control flow never made would show up
+--      as an interaction the replay does not reach.
+--
+--   G. THE REPLAYED RUN IS GRADED BY INDEPENDENT WITNESSES. Stage 3's
+--      tautology control, carried forward and needed for the same reason: the
+--      replay re-uses the recorder that produced the program, so a recorder gap
+--      is on both sides of the comparison by construction.
+--
+--   H. S7's TWO OBLIGATIONS, ASSERTED AND NOT DESCRIBED. The surviving fixture
+--      carries every shape the specification protects, and no two of its
+--      quantities are equal. Seed 94 is that fixture: provider 11, approval
+--      reads 10, approvals served 8, tool dispatches 3, tool ok 2, tool fault 1
+--      — pairwise distinct, so no check can be reading one quantity while
+--      claiming to read another.
+--
+--   I. MUTATION (C5), on every guard this stage adds — including the two
+--      structural findings that keep axis A from being vacuous or count-shaped,
+--      and both halves of S7. Each row mutates a REAL generated log or a real
+--      witness, and the axis ends with the unmutated fixture surviving, because
+--      mutation testing structurally cannot see a guard that fires too much.
+--
+--   J. DETERMINISM, last and least, and here it is worth less than usual: it is
+--      the one property a seed-ignoring generator satisfies BEST.
+--
+--   K. D8's GENERATOR CANARY (stage 5). Pinned per stable generator id: if the
+--      seed-to-choices mapping moves and `generator_version` does not, this
+--      goes red. The pins are PURE — no driver is consulted — so a driver
+--      change cannot produce a false alarm, because a canary that cries wolf
+--      acquires a regeneration target, and a canary regenerated when it fails
+--      certifies nothing while looking green forever. There is deliberately no
+--      such target, no `--update` flag and no `ACCEPT=1`: a red canary has
+--      exactly two legitimate outcomes, bump the version and re-pin by hand, or
+--      fix the generator. The machinery and the pins live in `dst_generator`;
+--      this axis ties them to the identity the suite actually runs under.
+--
+-- ---------------------------------------------------------------------------
+-- WHY THE SEEDS ARE LITERALS, AND WHAT WOULD MAKE THEM STALE
+-- ---------------------------------------------------------------------------
+--
+-- 9, 13 and 94 were found by sweeping 1..260 and reading the class census of
+-- every generated program. They are not arbitrary and they are not
+-- interchangeable:
+--
+--   * 9 and 13 are the EQUAL-CENSUS pair axis A's anti-count control needs.
+--     Their class censuses agree in every column — 14 interactions, 2 provider,
+--     1 tool ok, 1 approval ok, 1 env ok, 2 chunked, 4 clock — so no count
+--     anywhere in this suite can tell them apart and only the recorded
+--     outcomes can.
+--   * 94 is the S7 surviving fixture: of 260 seeds, exactly two reach every
+--     protected shape with pairwise-distinct quantities and still terminate Ok
+--     (68 and 94), and 94 is the richer of the two.
+--
+-- A change to the generator, to a request PROJECTION STRING, or to the driver's
+-- control flow moves all of them, and the failure will be loud: axis H's shape
+-- check or its distinctness check goes red and names the quantity that
+-- collapsed. That is the intended behaviour and NOT a reason to relax the
+-- check — re-sweep and re-pin. The whole point of asserting the fixture's
+-- coverage rather than describing it is that the fixture drifts silently as the
+-- driver changes and the author is the last person who will notice.
+
+module scripts/dst/seeded_generator_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/ai (Message, ToolCall)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/phase_vocab (
+  LedgerRecord, WireRecord, ProviderCallPrepared, LedgerTrace
+)
+import src/core/test/stub_step (GeneratedWorld, RecordingWorld, ScriptedStep)
+import src/core/ports (
+  WorldState, ScriptedTool, empty_world_state,
+  ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable,
+  decode_provider_outcome
+)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/dst_interaction (
+  Interaction,
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity,
+  EnvironmentReadIdentity, ClockAdvanceIdentity,
+  identity_kind,
+  identity_projection,
+  interaction_kind,
+  outcome_status_id,
+  count_kind,
+  approvals_served,
+  total_advance_ms
+)
+import src/core/dst_generator (
+  GeneratorBounds,
+  GeneratorState,
+  SeedRow,
+  SeedFinding,
+  generator_state,
+  salt_hash,
+  choose_environment,
+  generator_failed,
+  bound_failure_message,
+  check_seed_sensitivity,
+  seed_sensitivity_ok,
+  seed_rule,
+  seed_message,
+  has_seed_rule,
+  first_seed_message,
+  CanaryFinding,
+  canary_generator_id,
+  pinned_canary_v1,
+  pinned_canary_v2,
+  check_canary,
+  check_canary_version_axis,
+  canary_ok,
+  canary_rule,
+  canary_message,
+  has_canary_rule
+)
+import src/core/dst_program (
+  ExecutionProgram,
+  InitialWorld,
+  ProgramRejection,
+  validate_program,
+  program_ok,
+  program_message,
+  program_schema_version,
+  validate_bounds
+)
+import src/core/dst_replay (
+  ReplayMismatch,
+  ReconstitutionFinding,
+  ReplayRefusal,
+  outcome_projection,
+  strict_replay_findings,
+  replay_message,
+  world_state_of,
+  reconstitution_balance,
+  reconstitution_message,
+  refusal_rule,
+  refusal_message
+)
+import src/core/dst_discovery (
+  DiscoveryWitness,
+  EnvExpectation,
+  DiscoveryFinding,
+  check_discovery,
+  discovery_message,
+  census,
+  census_line
+)
+import src/core/dst_driver_only (driver_only_manifest)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_fault_catalogue (
+  required_class_ids,
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded
+)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan, BudgetPatch, Delegate, ExtCtx, ExtRuntime, ExtensionHooks,
+  FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
+  PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
+  ToolPolicyDecision, ToolSchema
+)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func generator_id() -> string { "motoko_driver_only" }
+func generator_version() -> string { "1" }
+
+-- The DECLARED bounds. Sized so that no honest run reaches one — a bound that
+-- fires on a legitimate trajectory would report every run as a generator
+-- failure, which is the over-rejection S7 exists to catch, and the "zero
+-- failures on the honest bounds" check below is what would see it.
+func bounds() -> GeneratorBounds {
+  { max_interactions: 96,
+    max_chunks_per_interaction: 4,
+    max_payload_bytes: 512,
+    max_resource_size: 8,
+    max_clock_advance_ms: 2000 }
+}
+
+-- D2's `initial_world`, generated. The synthetic environment is the generator's
+-- choice — "generation may also choose ordinary configuration and message
+-- inputs" — and it is made BEFORE the run because an env read is a keyed
+-- lookup, not a cursor. Everything else starts EMPTY: no script, no approval
+-- queue, no tool queue. Nothing is authored.
+func generated_world(id: string, version: string, seed: int, b: GeneratorBounds) -> WorldState {
+  let g = generator_state(id, version, seed, b);
+  let e = choose_environment(g, "initial_world");
+  { empty_world_state() | gen: e.state, env: e.entries }
+}
+
+-- ---------------------------------------------------------------------------
+-- Extension plumbing: every tool call goes to the approval channel
+-- ---------------------------------------------------------------------------
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate }
+func no_intercept(_ctx: ExtCtx, _text: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
+func no_solver(_ctx: ExtCtx, _text: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("generated: approval required", DenyAfterTimeout)
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks: ExtensionHooks = {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: passthrough_pre_step,
+    on_tool_policy: pending_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Running
+-- ---------------------------------------------------------------------------
+
+func run_world(id: string, w: WorldState, generating: bool) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(),
+    if generating then GeneratedWorld(w) else RecordingWorld(w)
+  )
+}
+
+-- ---------------------------------------------------------------------------
+-- Digests: what axis A actually compares
+-- ---------------------------------------------------------------------------
+
+-- The recorded OUTCOMES, and nothing else. `outcome_projection` is stage 3's
+-- and it is asserted there to read every field of the outcome, so a seed that
+-- changed a payload, a status, an advance or a chunk moves this string. It
+-- deliberately does NOT include the identity or the request projection: axis A
+-- claims the generator chose differently, and what it chose is the OUTCOME.
+pure func outcome_digest(xs: [Interaction]) -> string {
+  match xs {
+    [] => "",
+    i :: rest => "${outcome_projection(i)};${outcome_digest(rest)}"
+  }
+}
+
+-- The whole program, identities and requests included. Used for
+-- reproducibility and for the version axis, where "anything at all differs" is
+-- the claim being made.
+pure func program_digest(xs: [Interaction]) -> string {
+  match xs {
+    [] => "",
+    i :: rest =>
+      "${identity_projection(i.identity)}|${i.request_projection}|${outcome_projection(i)};${program_digest(rest)}"
+  }
+}
+
+func row_of(label: string, seed: int, version: string, log: [Interaction]) -> SeedRow {
+  { label: label, seed: seed, version: version,
+    interaction_count: List.length(log),
+    outcomes: outcome_digest(log),
+    program: program_digest(log) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Witnesses, read off records the recorder did not write. Stage 2's, unchanged.
+-- ---------------------------------------------------------------------------
+
+pure func provider_calls_witnessed(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest =>
+      (match r { WireRecord(ProviderCallPrepared(_)) => 1, _ => 0 })
+        + provider_calls_witnessed(rest)
+  }
+}
+
+pure func provider_steps_witnessed(records: [LedgerRecord]) -> [int] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(ProviderCallPrepared(i)) => i.step :: provider_steps_witnessed(rest),
+        _ => provider_steps_witnessed(rest)
+      }
+  }
+}
+
+pure func provider_steps_recorded(xs: [Interaction]) -> [int] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ProviderIdentity(_, step, _) => step :: provider_steps_recorded(rest),
+        _ => provider_steps_recorded(rest)
+      }
+  }
+}
+
+pure func tool_results_witnessed(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest =>
+      (if m.role == "tool" && not contains(m.content, "denied_by_policy") then 1 else 0)
+        + tool_results_witnessed(rest)
+  }
+}
+
+pure func tool_role_messages(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => (if m.role == "tool" then 1 else 0) + tool_role_messages(rest)
+  }
+}
+
+func env_reads_always() -> [EnvExpectation] {
+  [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
+   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+   { key: "OPENAI_BASE_URL",           count: 1 },
+   { key: "MOTOKO_HEADLESS",           count: 1 },
+   { key: "MOTOKO_SESSION_ID",         count: 1 }]
+}
+
+func env_reads_with_dispatch(dispatches: int) -> [EnvExpectation] {
+  env_reads_always() ++ [{ key: "MOTOKO_TOOL_TIMEOUT_MS", count: dispatches }]
+}
+
+func witness_of(initial: WorldState, run: TracedSessionResult) -> DiscoveryWitness {
+  let final_msgs = match run.result { Ok(ms) => ms, Err(_) => [] };
+  let dispatches = tool_results_witnessed(final_msgs);
+  {
+    provider_calls: provider_calls_witnessed(run.trace.records),
+    tool_dispatches: dispatches,
+    approval_reads: tool_role_messages(final_msgs),
+    approvals_consumed: List.length(initial.approvals) - List.length(run.world.approvals),
+    clock_delta_ms: run.world.clock_ms - initial.clock_ms,
+    expected_env_reads: if dispatches > 0 then env_reads_with_dispatch(dispatches)
+                        else env_reads_always()
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Reporting
+-- ---------------------------------------------------------------------------
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+func report_seed(fs: [SeedFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => { let _ = println("      ${seed_message(f)}"); report_seed(rest) }
+  }
+}
+
+func report_replay(ms: [ReplayMismatch]) -> () ! {IO} {
+  match ms {
+    [] => (),
+    m :: rest => { let _ = println("      ${replay_message(m)}"); report_replay(rest) }
+  }
+}
+
+func report_discovery(fs: [DiscoveryFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => { let _ = println("      ${discovery_message(f)}"); report_discovery(rest) }
+  }
+}
+
+func report_reconstitution(fs: [ReconstitutionFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => { let _ = println("      ${reconstitution_message(f)}"); report_reconstitution(rest) }
+  }
+}
+
+func report_program_rejections(rs: [ProgramRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => { let _ = println("      ${program_message(r)}"); report_program_rejections(rest) }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Log queries
+-- ---------------------------------------------------------------------------
+
+pure func count_status_of_kind(xs: [Interaction], kind: string, status_id: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if interaction_kind(i) == kind && outcome_status_id(i.outcome.status) == status_id then 1 else 0)
+        + count_status_of_kind(rest, kind, status_id)
+  }
+}
+
+pure func count_with_chunks(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if List.length(i.outcome.chunks) > 0 then 1 else 0) + count_with_chunks(rest)
+  }
+}
+
+pure func count_fault_class(xs: [Interaction], cls: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if i.outcome.fault_class_id == cls then 1 else 0) + count_fault_class(rest, cls)
+  }
+}
+
+-- Provider steps whose recorded `finish_reason` DISAGREES with their recorded
+-- tool calls. Stage 3 records the finish reason rather than deriving it,
+-- because `tool_step_finish` exists to produce exactly this and a derived value
+-- would replay the step as a different one while every count balanced. A
+-- generator that only ever produced agreeing pairs would leave that codec
+-- branch unreached by any generated program, so the surviving fixture asserts
+-- it is reached.
+pure func count_finish_disagreement(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (match i.identity.body {
+         ProviderIdentity(_, _, _) =>
+           match decode_provider_outcome(i.outcome.payload) {
+             ProviderServed(s) =>
+               if (List.length(s.tool_calls) > 0 && s.finish_reason != "tool_calls")
+                  || (List.length(s.tool_calls) == 0 && s.finish_reason != "stop")
+               then 1 else 0,
+             ProviderScriptExhausted => 0,
+             ProviderUndecodable(_) => 0
+           },
+         _ => 0
+       }) + count_finish_disagreement(rest)
+  }
+}
+
+pure func contains_int(xs: [int], target: int) -> bool {
+  match xs { [] => false, x :: rest => if x == target then true else contains_int(rest, target) }
+}
+
+pure func all_distinct(xs: [int]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_int(rest, x) then false else all_distinct(rest)
+  }
+}
+
+pure func eq_ints(a: [int], b: [int]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && eq_ints(xs, ys) }
+  }
+}
+
+pure func join_ints(xs: [int]) -> string {
+  match xs { [] => "", x :: [] => "${x}", x :: rest => "${x},${join_ints(rest)}" }
+}
+
+-- ---------------------------------------------------------------------------
+-- The program
+-- ---------------------------------------------------------------------------
+
+pure func generated_manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.26.0", "4.0", "{}",
+                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+}
+
+-- D2's `ExecutionProgram`, and the first one in this project whose three
+-- generator axes describe a generator that exists. Stage 2 wrote
+-- `generator_id: "driver_only_discovery"`, `generator_version: "1"`, `seed: 0`
+-- onto hand-authored programs; these are read off the world's own generator
+-- state, so a program cannot claim a seed the run did not use.
+pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    generator_id: initial.gen.id,
+    generator_version: initial.gen.version,
+    seed: initial.gen.seed,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
+      synthetic_environment: initial.env,
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_only/1"
+    },
+    bounds: initial.gen.bounds,
+    manifest: generated_manifest(),
+    interactions: w.log
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- One generated run, reduced to what the axes need
+-- ---------------------------------------------------------------------------
+
+export type GeneratedRun = {
+  label: string,
+  seed: int,
+  version: string,
+  initial: WorldState,
+  run: TracedSessionResult,
+  row: SeedRow
+}
+
+-- `seed_used` is what the world is actually built with; `seed_claimed` is what
+-- the row records. They are the same for an honest run and DIFFERENT for the
+-- seed-ignoring mutant, which is the whole mechanism of axis B: the mutant is a
+-- real driver run whose generator was handed a constant.
+func generate(label: string, seed_claimed: int, seed_used: int, version: string, b: GeneratorBounds)
+  -> GeneratedRun ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let initial = generated_world(generator_id(), version, seed_used, b);
+  let r = run_world("gen_${label}", initial, true);
+  { label: label, seed: seed_claimed, version: version,
+    initial: initial, run: r,
+    row: row_of(label, seed_claimed, version, r.world.log) }
+}
+
+func rows_of(rs: [GeneratedRun]) -> [SeedRow] {
+  match rs { [] => [], r :: rest => r.row :: rows_of(rest) }
+}
+
+func describe(r: GeneratedRun) -> () ! {IO} {
+  let log = r.run.world.log;
+  println("  ${r.label}: seed=${r.seed} v=${r.version} interactions=${List.length(log)} draws=${r.run.world.gen.draws} clock=${r.run.world.clock_ms} ended=${match r.run.result { Ok(_) => "Ok", Err(_) => "Err" }}")
+}
+
+-- The machine-readable rows. `make seeded_generator` re-derives axis A's
+-- central claim from THESE, outside the AILANG process — a second author for
+-- the one result this stage exists to produce, so an in-process comparison that
+-- silently became a tautology cannot carry the gate on its own.
+func emit_rows(rs: [GeneratedRun]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("SEEDROW ${r.label} seed=${r.seed} version=${r.version} n=${r.row.interaction_count} outcomes_len=${List.length(r.run.world.log)} digest=${digest_tag(r.row.outcomes)}");
+      emit_rows(rest)
+    }
+  }
+}
+
+-- A short, stable tag for an outcome digest, so `make seeded_generator` can
+-- compare rows on one line each. It reuses the generator's OWN string fold
+-- rather than introducing a second implementation of "reduce a string to an
+-- int" — this file has enough to be wrong about already.
+--
+-- A tag collision would make the Makefile's comparison miss a difference the
+-- in-process check already caught, never the reverse: the in-process axis
+-- compares the digests themselves, and this is the SECOND author, not the only
+-- one.
+pure func digest_tag(s: string) -> string { "${salt_hash(s)}" }
+
+-- ---------------------------------------------------------------------------
+-- Axis A + B: seed sensitivity, and the mutant
+-- ---------------------------------------------------------------------------
+
+func axis_seed_sensitivity(honest: [GeneratedRun], mutant: [GeneratedRun]) -> bool ! {IO} {
+  let _ = println("");
+  let _ = println("axis A — seed sensitivity (this stage's whole risk):");
+
+  let rows = rows_of(honest);
+  let fs = check_seed_sensitivity(rows);
+  let _ = if List.length(fs) > 0 then report_seed(fs) else ();
+  let ok_honest = check("changing the seed changes the program, and changing nothing else changes nothing",
+                        List.length(fs) == 0,
+                        "${show(List.length(fs))} finding(s) above");
+
+  let _ = println("");
+  let _ = println("axis B — the same axis against a REAL run whose generator ignores its seed:");
+  let mrows = rows_of(mutant);
+  let mfs = check_seed_sensitivity(mrows);
+  let ok_mutant = check("generator-ignores-its-seed ← a run built with a constant seed under three different requested seeds",
+                        has_seed_rule(mfs, "generator-ignores-its-seed"),
+                        "expected generator-ignores-its-seed; got ${show(List.length(mfs))} finding(s): ${first_seed_message(mfs)}");
+  -- The mutant must fail for the RIGHT reason. A mutant that also tripped the
+  -- structural findings would prove the rule fires on a malformed row set
+  -- rather than on a seed-ignoring generator, and a mutant that trips two rules
+  -- proves neither.
+  let ok_mutant_clean = check("...and for that reason ALONE — the mutant's evidence is otherwise well-formed",
+                              not has_seed_rule(mfs, "generator-seed-evidence-absent")
+                                && not has_seed_rule(mfs, "generator-not-reproducible"),
+                              "the mutant tripped a structural finding as well, so the rule above may be firing on the row set rather than on the generator: ${first_seed_message(mfs)}");
+
+  ok_honest && ok_mutant && ok_mutant_clean
+}
+
+-- ---------------------------------------------------------------------------
+-- Axis C: the generator was actually consulted
+-- ---------------------------------------------------------------------------
+
+func axis_consulted(rs: [GeneratedRun]) -> bool ! {IO} {
+  let _ = println("");
+  let _ = println("axis C — the generator was consulted, and the world authored nothing:");
+  all_consulted(rs)
+}
+
+func all_consulted(rs: [GeneratedRun]) -> bool ! {IO} {
+  match rs {
+    [] => true,
+    r :: rest => {
+      let empty_start =
+        List.length(r.initial.script) == 0
+          && List.length(r.initial.approvals) == 0
+          && List.length(r.initial.tools) == 0
+          && List.length(r.initial.log) == 0;
+      let ok = check("${r.label}: every cursor started empty and the generator made ${show(r.run.world.gen.draws)} choices",
+                     empty_start && r.run.world.gen.draws > 0 && List.length(r.run.world.log) > 0,
+                     "script=${show(List.length(r.initial.script))} approvals=${show(List.length(r.initial.approvals))} tools=${show(List.length(r.initial.tools))} draws=${show(r.run.world.gen.draws)} — a generating adapter that fell through to its recording counterpart would leave the world serving defaults consistently, and consistently is all a determinism check asks");
+      let rest_ok = all_consulted(rest);
+      ok && rest_ok
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Axis D: the declared bounds
+-- ---------------------------------------------------------------------------
+
+func axis_bounds(honest: [GeneratedRun])
+  -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("");
+  let _ = println("axis D — declared bounds (D2):");
+
+  let ok_quiet = all_within_bounds(honest);
+
+  -- The tightened bound. `max_interactions: 6` is below every honest
+  -- trajectory, so the generator must force termination rather than run on.
+  let tight = { bounds() | max_interactions: 6 };
+  let squeezed = generate("bounded", 94, 94, generator_version(), tight);
+  let failures = squeezed.run.world.gen.failures;
+  let _ = report_bound_failures(failures);
+  let ok_fires = check("a tightened max_interactions is reported as a GENERATOR failure",
+                       List.length(failures) > 0,
+                       "the generator reported no failure under max_interactions=6, so the bound is declared and unenforced");
+  -- Both halves of D2's sentence. The failure is reported AND the run stayed
+  -- bounded: a generator that reported the failure and then ran on would have
+  -- satisfied the first half while producing the unbounded run the sentence
+  -- forbids.
+  let ok_bounded = check("...and the run stayed BOUNDED rather than becoming an unbounded test run",
+                         List.length(squeezed.run.world.log) <= 3 * tight.max_interactions,
+                         "the bounded run recorded ${show(List.length(squeezed.run.world.log))} interactions against a declared budget of ${show(tight.max_interactions)}");
+  let ok_named = check("...and the failure NAMES max_interactions",
+                       names_bound(failures, "max_interactions"),
+                       "the reported failures do not name max_interactions, so the message would point a reader at the wrong bound");
+
+  ok_quiet && ok_fires && ok_bounded && ok_named
+}
+
+func all_within_bounds(rs: [GeneratedRun]) -> bool ! {IO} {
+  match rs {
+    [] => true,
+    r :: rest => {
+      let _ = report_bound_failures(r.run.world.gen.failures);
+      let ok = check("${r.label}: zero generator failures against the declared bounds",
+                     not generator_failed(r.run.world.gen),
+                     "${show(List.length(r.run.world.gen.failures))} failure(s) above — a bound that fires on a legitimate trajectory reports every run as a generator failure, which is the over-rejection S7 exists to catch");
+      let rest_ok = all_within_bounds(rest);
+      ok && rest_ok
+    }
+  }
+}
+
+func report_bound_failures(fs: [{ bound: string, limit: int, requested: int }]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => { let _ = println("      ${bound_failure_message(f)}"); report_bound_failures(rest) }
+  }
+}
+
+pure func names_bound(fs: [{ bound: string, limit: int, requested: int }], name: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest => if f.bound == name then true else names_bound(rest, name)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Axes E, F, G, H: the generated program, validated, replayed and graded
+-- ---------------------------------------------------------------------------
+
+func axis_program(r: GeneratedRun, is_survive_fixture: bool)
+  -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let log = r.run.world.log;
+  let program = program_of(r.run.world, r.initial);
+
+  let _ = println("");
+  let _ = println("axis E/F/G — ${r.label}: the generated program, validated and replayed");
+  let _ = println("CENSUS ${r.label} ${census_line(census(log))}");
+
+  -- ---- E: stage 1's structural validator, over a program nobody authored ---
+  let rejections = validate_program(program, required_class_ids());
+  let _ = report_program_rejections(rejections);
+  let ok_valid = check("${r.label}: the generated program passes stage 1's structural validator",
+                       List.length(rejections) == 0,
+                       "${show(List.length(rejections))} rejection(s) — a generator that produces an invalid program has produced an unreplayable artifact");
+  let violations = validate_bounds(program);
+  let ok_within = check("${r.label}: the generated program is within the bounds it declares",
+                        List.length(violations) == 0,
+                        "${show(List.length(violations))} bound violation(s)");
+  -- The generator axes must describe THIS run. A program carrying a seed the
+  -- run did not use is the artifact-level form of the defect this whole stage
+  -- exists to prevent, and it is one field-copy away at all times.
+  let ok_axes = check("${r.label}: the program's generator axes are the ones the run actually used",
+                      program.generator_id == generator_id()
+                        && program.generator_version == r.version
+                        && program.seed == r.initial.gen.seed,
+                      "program says id=${program.generator_id} version=${program.generator_version} seed=${show(program.seed)}; the run used id=${r.initial.gen.id} version=${r.initial.gen.version} seed=${show(r.initial.gen.seed)}");
+
+  -- ---- F: reconstitution and strict replay --------------------------------
+  match world_state_of(program, required_class_ids()) {
+    Err(refusal) => {
+      let _ = println("      ${refusal_message(refusal)}");
+      let ok_rec = check("${r.label}: the generated program reconstitutes a world", false,
+                         "refused with ${refusal_rule(refusal)} — per the handoff, this is a finding about the GENERATOR or about D2, not a reason to relax stage 3");
+      ok_valid && ok_within && ok_axes && ok_rec
+    },
+    Ok(replay_world) => {
+      let rec = reconstitution_balance(program, replay_world);
+      let _ = if List.length(rec) > 0 then report_reconstitution(rec) else ();
+      let ok_rec = check("${r.label}: the reconstituted world accounts for the generated program, both directions",
+                         List.length(rec) == 0,
+                         "${show(List.length(rec))} finding(s) above");
+
+      -- The replay runs on the RECORDING adapters, with no generator in scope.
+      -- That is D2's "replay receives that resolved program and never calls the
+      -- generator", and it is true here structurally: `world_state_of` returns
+      -- a world whose `gen` is `no_generator()`, so the generating adapters
+      -- would fall through even if they were installed.
+      let replay = run_world("genplay_${r.label}", replay_world, false);
+      let actual = replay.world.log;
+      let ms = strict_replay_findings(program.interactions, actual);
+      let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+      let ok_replay = check("${r.label}: the generated program replays to an identical interaction log",
+                            List.length(ms) == 0,
+                            "${show(List.length(ms))} mismatch(es) above — a generated program that cannot be replayed is the strongest available sign the generator is INVENTING rather than choosing");
+      let _ = println("CENSUS ${r.label}_replay ${census_line(census(actual))}");
+
+      let discovery_ok_end = match r.run.result { Ok(_) => true, Err(_) => false };
+      let replay_ok_end = match replay.result { Ok(_) => true, Err(_) => false };
+      let ok_terminal = check("${r.label}: the replay reproduces the terminal outcome",
+                              discovery_ok_end == replay_ok_end,
+                              "generation ended ${if discovery_ok_end then "Ok" else "Err"} and the replay ended ${if replay_ok_end then "Ok" else "Err"}");
+
+      -- ---- G: the replayed run, graded by INDEPENDENT witnesses -----------
+      let w = witness_of(replay_world, replay);
+      let _ = println("  ${r.label}: replay witness provider=${show(w.provider_calls)} tool=${show(w.tool_dispatches)} approval_reads=${show(w.approval_reads)} served=${show(w.approvals_consumed)} clock_delta=${show(w.clock_delta_ms)}ms");
+      let fs = check_discovery(actual, w);
+      let _ = if List.length(fs) > 0 then report_discovery(fs) else ();
+      let ok_witness = check("${r.label}: the REPLAYED run's log accounts for it, against witnesses the recorder did not write",
+                             List.length(fs) == 0,
+                             "${show(List.length(fs))} finding(s) above");
+      let ok_nonvacuous = check("${r.label}: every witness the grading consumes is non-zero",
+                                w.provider_calls > 0 && w.approval_reads > 0
+                                  && w.approvals_consumed > 0 && w.clock_delta_ms > 0
+                                  && w.tool_dispatches > 0,
+                                "provider=${show(w.provider_calls)} tool=${show(w.tool_dispatches)} reads=${show(w.approval_reads)} served=${show(w.approvals_consumed)} clock=${show(w.clock_delta_ms)} — a zero witness grades its class vacuously, and a vacuous check passes");
+
+      let steps_w = provider_steps_witnessed(replay.trace.records);
+      let steps_r = provider_steps_recorded(actual);
+      let ok_steps = check("${r.label}: the replay's recorded provider steps equal the driver's own",
+                           eq_ints(steps_w, steps_r),
+                           "driver=[${join_ints(steps_w)}] recorded=[${join_ints(steps_r)}]");
+
+      -- ---- H: S7's two obligations, on the fixture that must SURVIVE -------
+      let ok_s7 = if is_survive_fixture then axis_s7(r.label, log, w) else true;
+
+      ok_valid && ok_within && ok_axes && ok_rec && ok_replay && ok_terminal
+        && ok_witness && ok_nonvacuous && ok_steps && ok_s7
+    }
+  }
+}
+
+-- S7, asserted rather than satisfied.
+--
+-- The shape list is the GENERATOR's, not stage 3's, and it differs in one
+-- place that is worth stating: a generated world never exhausts its provider
+-- script, because the generator supplies a step at every provider request. An
+-- exhausted-script shape is therefore NOT required here, and requiring it would
+-- be a fixture claiming a shape the generated world cannot reach — cluster 9's
+-- correction 2, in advance.
+--
+-- What is required and is new: a provider step whose recorded finish reason
+-- DISAGREES with its recorded tool calls. Stage 3's provider codec records the
+-- finish reason instead of deriving it precisely for that case, and no
+-- generated program would exercise it if the generator only produced agreeing
+-- pairs.
+-- The two S7 predicates, PURE, so that axis I can mutate their inputs and
+-- require them to fire. A guard that is only ever called on the fixture it
+-- passes on has been shown to pass, not to work (C5).
+pure func fixture_carries_every_shape(log: [Interaction]) -> bool {
+  let tk = identity_kind(ToolIdentity("", "", ""));
+  let ak = identity_kind(ApprovalIdentity("", "", ""));
+  let ek = identity_kind(EnvironmentReadIdentity(""));
+  count_with_chunks(log) > 0
+    && count_status_of_kind(log, tk, "ok") > 0
+    && count_status_of_kind(log, tk, "fault") > 0
+    && count_status_of_kind(log, ak, "ok") > 0
+    && count_status_of_kind(log, ak, "missing") > 0
+    && count_status_of_kind(log, ek, "ok") > 0
+    && count_status_of_kind(log, ek, "missing") > 0
+    && count_kind(log, identity_kind(ClockAdvanceIdentity)) > 0
+    && count_finish_disagreement(log) > 0
+}
+
+pure func fixture_quantities_distinct(log: [Interaction], w: DiscoveryWitness) -> bool {
+  let tk = identity_kind(ToolIdentity("", "", ""));
+  all_distinct([w.provider_calls, w.approval_reads, w.approvals_consumed,
+                w.tool_dispatches,
+                count_status_of_kind(log, tk, "ok"),
+                count_status_of_kind(log, tk, "fault")])
+}
+
+func axis_s7(label: string, log: [Interaction], w: DiscoveryWitness) -> bool ! {IO} {
+  let pk = identity_kind(ProviderIdentity("", 0, ""));
+  let tk = identity_kind(ToolIdentity("", "", ""));
+  let ak = identity_kind(ApprovalIdentity("", "", ""));
+  let ek = identity_kind(EnvironmentReadIdentity(""));
+  let tool_ok = count_status_of_kind(log, tk, "ok");
+  let tool_fault = count_status_of_kind(log, tk, "fault");
+  let appr_ok = count_status_of_kind(log, ak, "ok");
+  let appr_missing = count_status_of_kind(log, ak, "missing");
+  let env_ok = count_status_of_kind(log, ek, "ok");
+  let env_missing = count_status_of_kind(log, ek, "missing");
+  let chunked = count_with_chunks(log);
+  let clocks = count_kind(log, identity_kind(ClockAdvanceIdentity));
+  let disagreements = count_finish_disagreement(log);
+
+  let _ = println("");
+  let _ = println("axis H — S7's two obligations on the surviving fixture:");
+  let ok_shapes = check(
+    "${label}: the surviving fixture carries every shape the specification protects",
+    fixture_carries_every_shape(log),
+    "chunks=${show(chunked)} tool_ok=${show(tool_ok)} tool_fault=${show(tool_fault)} approval_ok=${show(appr_ok)} approval_missing=${show(appr_missing)} env_ok=${show(env_ok)} env_missing=${show(env_missing)} clock=${show(clocks)} finish_disagreements=${show(disagreements)} — a shape the fixture claims and does not reach is a claim, and a fixture's coverage drifts silently as the driver changes. Re-sweep the seeds and re-pin; do not relax this");
+  let ok_distinct = check(
+    "${label}: no two of the surviving fixture's quantities are equal",
+    fixture_quantities_distinct(log, w),
+    "provider=${show(w.provider_calls)} reads=${show(w.approval_reads)} served=${show(w.approvals_consumed)} dispatches=${show(w.tool_dispatches)} tool_ok=${show(tool_ok)} tool_fault=${show(tool_fault)} — a fixture whose quantities are all equal cannot distinguish which quantity a check is reading, which is how stage 2's sites 17 and 18 stayed hidden");
+  -- The fault CLASS, not merely a fault status. D3's tool classes are what D11
+  -- counts, and a fault recorded under a class the catalogue does not define is
+  -- rejected by stage 1 — so this asserts the generated fault reached one of
+  -- the three real classes rather than merely being non-ok.
+  let classes = count_fault_class(log, fault_class_tool_failed())
+                  + count_fault_class(log, fault_class_tool_correlation_mismatch())
+                  + count_fault_class(log, fault_class_tool_deadline_exceeded());
+  let ok_class = check(
+    "${label}: every generated tool fault names one of D3's three tool fault classes",
+    classes == tool_fault && tool_fault > 0,
+    "tool faults=${show(tool_fault)} but only ${show(classes)} name a D3 class");
+
+  ok_shapes && ok_distinct && ok_class
+}
+
+-- ---------------------------------------------------------------------------
+-- Axis I: MUTATION (C5) — every guard this stage adds, shown going red
+-- ---------------------------------------------------------------------------
+--
+-- Axis B is already the mutation row for the seed rule, and it is the strongest
+-- one available because it is a REAL DRIVER RUN. What is left is the rest: the
+-- structural findings that keep axis A from being vacuous or count-shaped, and
+-- S7's two obligations, which are the guards most likely to be written so they
+-- can never fire.
+--
+-- Each row mutates a REAL generated log or a real witness rather than a
+-- hand-built one, so a mutant cannot pass by being unrealistic.
+func axis_mutations(rich: GeneratedRun, poor: GeneratedRun, w_rich: DiscoveryWitness)
+  -> bool ! {IO} {
+  let _ = println("");
+  let _ = println("axis I — mutations (each must go red):");
+
+  -- The anti-count control. Two real rows whose interaction counts differ (38
+  -- and 14) offer no equal-count pair, so the axis must say the evidence could
+  -- be a length difference rather than passing on it.
+  let count_shaped = check_seed_sensitivity([rich.row, poor.row]);
+  let m1 = check("generator-seed-evidence-is-count-shaped ← evidence with no equal-count pair",
+                 has_seed_rule(count_shaped, "generator-seed-evidence-is-count-shaped"),
+                 "expected the anti-count finding; got ${show(List.length(count_shaped))}: ${first_seed_message(count_shaped)}");
+
+  -- Vacuity. One row exercises nothing, and a vacuous check passes.
+  let single = check_seed_sensitivity([rich.row]);
+  let m2 = check("generator-seed-evidence-absent ← a row set with no differently-seeded pair",
+                 has_seed_rule(single, "generator-seed-evidence-absent"),
+                 "expected the vacuity finding; got ${show(List.length(single))}: ${first_seed_message(single)}");
+
+  -- Reproducibility, mutated by claiming two different programs share a seed.
+  let forged = [rich.row, { poor.row | seed: rich.row.seed, version: rich.row.version }];
+  let m3 = check("generator-not-reproducible ← two different programs claiming one seed",
+                 has_seed_rule(check_seed_sensitivity(forged), "generator-not-reproducible"),
+                 "expected the reproducibility finding: ${first_seed_message(check_seed_sensitivity(forged))}");
+
+  -- S7's shape obligation, against a real log that genuinely lacks shapes. The
+  -- `pairA` run has no tool fault, no end-of-input approval and no finish-reason
+  -- disagreement, so a shape check that could not fire would pass on it.
+  let m4 = check("the shape obligation goes red on a real log that is missing shapes",
+                 not fixture_carries_every_shape(poor.run.world.log),
+                 "the shape check passed on ${poor.label}, whose log has no tool fault and no end-of-input approval — a guard that cannot fire certifies nothing");
+
+  -- S7's distinctness obligation, against a witness whose quantities collide.
+  let collided = { w_rich | approval_reads: w_rich.provider_calls };
+  let m5 = check("the distinctness obligation goes red when two quantities collide",
+                 not fixture_quantities_distinct(rich.run.world.log, collided),
+                 "the distinctness check passed with approval_reads forced equal to provider_calls");
+
+  -- And the negative control for the mutations themselves: the unmutated
+  -- fixture must still SURVIVE both. A suite of only-failing rows cannot see an
+  -- over-strict guard, which is the half mutation testing structurally cannot
+  -- reach (S7).
+  let m6 = check("...and the unmutated fixture still survives both obligations",
+                 fixture_carries_every_shape(rich.run.world.log)
+                   && fixture_quantities_distinct(rich.run.world.log, w_rich),
+                 "the real fixture failed an obligation it is supposed to satisfy, so the mutations above prove nothing about over-rejection");
+
+  m1 && m2 && m3 && m4 && m5 && m6
+}
+
+-- ---------------------------------------------------------------------------
+-- Axis J: determinism, last and least
+-- ---------------------------------------------------------------------------
+
+func axis_determinism(a: GeneratedRun, b: GeneratedRun) -> bool ! {IO} {
+  let _ = println("");
+  let _ = println("axis J — determinism (worth less here than anywhere else in this project):");
+  check("two generations at one seed produce byte-identical programs",
+        a.row.program == b.row.program,
+        "the two runs differ — but note that this is the ONE property a seed-ignoring generator satisfies best, which is why it is last")
+}
+
+-- ---------------------------------------------------------------------------
+-- Axis K: D8's GENERATOR CANARY (stage 5)
+-- ---------------------------------------------------------------------------
+--
+-- The canary itself is PURE and lives in `dst_generator`, where its own rows
+-- prove it can go red. It is reported here because this is where a reader is
+-- already looking at the generator, and because a red canary is a DECISION
+-- POINT — the message has to reach a person, not just an exit status.
+--
+-- What this axis adds that the inline rows cannot: it ties the pinned artifact
+-- to the identity THIS SUITE ACTUALLY RUNS. A canary pinned under one generator
+-- id while the suite generates under another is green forever and certifies
+-- nothing, and that is not a hypothetical — it is correction 1 of cluster 10,
+-- where three literals sat on every discovered program claiming a generator
+-- that did not exist.
+func report_canary(fs: [CanaryFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => { let _ = println("      ${canary_message(f)}"); report_canary(rest) }
+  }
+}
+
+func axis_canary() -> bool ! {IO} {
+  let _ = println("");
+  let _ = println("axis K — D8's generator canary (pinned by hand; there is no regeneration path):");
+
+  let ok_identity = check("the canary pins the generator id and version this suite actually runs",
+                          generator_id() == canary_generator_id() && generator_version() == "1",
+                          "the suite generates under '${generator_id()}/${generator_version()}' and the canary pins '${canary_generator_id()}/1' — a canary pinned to an identity nothing runs under is green forever, which is cluster 10's correction 1 one layer up");
+
+  let v1 = check_canary(canary_generator_id(), "1", 0, pinned_canary_v1());
+  let _ = report_canary(v1);
+  let ok_v1 = check("the seed-to-choices mapping at version 1 is the pinned one",
+                    canary_ok(v1),
+                    "${show(List.length(v1))} finding(s) above — read them before touching the pins");
+
+  let v2 = check_canary(canary_generator_id(), "2", 0, pinned_canary_v2());
+  let _ = report_canary(v2);
+  let ok_v2 = check("...and at version 2, the one a legitimate version bump remaps to",
+                    canary_ok(v2),
+                    "${show(List.length(v2))} finding(s) above");
+
+  -- C5, and here it is the entire point of the artifact rather than a
+  -- supporting row: an artifact that cannot fail certifies nothing.
+  let remapped = check_canary(canary_generator_id(), "1", 1, pinned_canary_v1());
+  let ok_red = check("a deliberate seed remap with NO version bump turns the canary RED",
+                     not canary_ok(remapped)
+                       && has_canary_rule(remapped, "generator-seed-remapped-without-a-version-bump")
+                       && has_canary_rule(remapped, "generator-choices-remapped-without-a-version-bump"),
+                     "the canary stayed green on a remapped stream, which means it is pinning something not reachable through a choice — site 21's defect, committed inside the artifact built to prevent it");
+
+  let ok_version = check("the two pinned versions disagree at every shared seed",
+                         canary_ok(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v2()))
+                           && not canary_ok(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v1())),
+                         "D8 requires the generator version to travel with every preserved failure; a version that changes nothing observable makes that axis decorative");
+
+  let ok_vacuous = check("an empty pinned table is REPORTED rather than passing quietly",
+                         has_canary_rule(check_canary(canary_generator_id(), "1", 0, []),
+                                         "generator-canary-is-vacuous"),
+                         "a canary over an empty table compares nothing and passes, and that is the one failure mode a pinned artifact cannot report about itself");
+
+  ok_identity && ok_v1 && ok_v2 && ok_red && ok_version && ok_vacuous
+}
+
+-- ---------------------------------------------------------------------------
+-- Entry points
+-- ---------------------------------------------------------------------------
+
+export func wire_witness() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let rich = generate("rich", 94, 94, generator_version(), bounds());
+  let a = generate("pairA", 9, 9, generator_version(), bounds());
+  let b = generate("pairB", 13, 13, generator_version(), bounds());
+  let _ = emit_rows([rich, a, b]);
+  ()
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("WI-A13 stage 4 — D2's seeded generator");
+
+  -- The honest row set. `pairA`/`pairB` are the equal-census pair axis A's
+  -- anti-count control stands on; `rich` is the S7 surviving fixture; `repeat`
+  -- is reproducibility; `versioned` is D8's version axis.
+  let rich = generate("rich", 94, 94, generator_version(), bounds());
+  let pair_a = generate("pairA", 9, 9, generator_version(), bounds());
+  let pair_b = generate("pairB", 13, 13, generator_version(), bounds());
+  let repeat = generate("repeat", 9, 9, generator_version(), bounds());
+  let versioned = generate("versioned", 9, 9, "2", bounds());
+  let honest = [rich, pair_a, pair_b, repeat, versioned];
+
+  let _ = println("");
+  let _ = println("generated runs:");
+  let _ = describe_all(honest);
+  let _ = emit_rows(honest);
+
+  -- The mutant: three DIFFERENT requested seeds, all built with a constant.
+  let m1 = generate("mutantA", 9, 0, generator_version(), bounds());
+  let m2 = generate("mutantB", 13, 0, generator_version(), bounds());
+  let m3 = generate("mutantC", 94, 0, generator_version(), bounds());
+  let mutant = [m1, m2, m3];
+
+  let ok_a = axis_seed_sensitivity(honest, mutant);
+  let ok_c = axis_consulted(honest);
+  let ok_d = axis_bounds(honest);
+  let ok_efg = axis_program(rich, true);
+  let ok_efg2 = axis_program(pair_a, false);
+  let ok_i = axis_mutations(rich, pair_a, witness_of(rich.initial, rich.run));
+  let ok_j = axis_determinism(pair_a, repeat);
+  let ok_k = axis_canary();
+
+  let _ = println("");
+  if ok_a && ok_c && ok_d && ok_efg && ok_efg2 && ok_i && ok_j && ok_k then {
+    let _ = println("seeded generator: all axes green");
+    ()
+  } else {
+    let _ = println("seeded generator: FAILED");
+    exit(1)
+  }
+}
+
+func describe_all(rs: [GeneratedRun]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => { let _ = describe(r); describe_all(rest) }
+  }
+}

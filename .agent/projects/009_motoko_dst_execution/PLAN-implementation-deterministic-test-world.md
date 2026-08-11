@@ -62,8 +62,10 @@ executable statement of the first defect this plan fixes.
 
 ## Standing rules, earned by execution
 
-These began as per-item clauses and are promoted here because three calibration runs confirmed each
-of them. They bind every remaining item.
+These began as per-item clauses and are promoted here because repeated calibration runs confirmed
+each of them. They bind every remaining item. **Grouped behaviour-first (S1–S3, S7–S8) then sizing
+(S4–S6); the numbering is chronological, so it is not sequential in this order** — references in the
+cluster reports are by number, so they are not renumbered.
 
 **S1. Land the executable assertion *before* the change it guards, and make it cover advancement
 *and* completeness — never determinism alone.** Clusters 1, 4 and 6 produced ten sites where both
@@ -86,6 +88,139 @@ it overran, and every minute was `clock_now` being the only zero-argument port. 
 two-argument and routed its extension seam in one line. Identical nominal scope, opposite outcome,
 sole difference parameter count — had env run first, the limitation would have surfaced on the cheap
 class.
+
+**S7. A rejecting artifact needs a fixture that must SURVIVE, and that fixture must contain every
+shape the specification explicitly protects — with no two of its quantities equal.** Mutation testing
+(C5) proves a guard *can* fire; it cannot see a guard that fires **too much**, because every mutant
+still produces its own rule. Only a fixture that must pass can. Three demonstrations:
+
+- **A13 stage 1 (site 15).** D2 says reject "duplicate interaction identities" and, two paragraphs
+  later, that the ordinal keeps repeated production call ids representable. Both readings type-check;
+  rejecting the identity *body* makes a production retry undecodable. It passed all 18 mutant rows,
+  was perfectly deterministic and trace-complete, and showed up **only** as a valid program being
+  rejected — visible because the base fixture deliberately carries interactions #1 and #8 with a
+  byte-identical tool identity at different ordinals.
+- **A13 stage 2 (site 18).** The assertion built to catch over-recording was itself **over-rejecting**:
+  the approval witness counted answers *consumed* where it needed reads *performed*.
+- **The sharpening, and it is the mechanism.** Both were invisible to the `approve` and `deny`
+  scenarios for the same structural reason — each queues exactly as many approvals as it consumes, so
+  the two quantities are equal and any confusion between them is hidden. The `eof` scenario makes
+  `tool_dispatches=1`, `approval_reads=3`, `approvals_consumed=1` pairwise distinct, and that is the
+  whole mechanism. **A fixture whose quantities are all equal cannot distinguish which quantity a
+  check is reading.**
+
+**Assert both obligations executably; do not merely satisfy them.** Stage 3 promoted this after its
+first `rich` fixture documented a tool-fault case it never reached — the queue held two entries
+against one approved dispatch, so the header claimed a shape the run did not contain. The fix is not
+a better comment: the suite now carries `the surviving fixture carries every shape the specification
+protects` and `no two of the surviving fixture's quantities are equal` as **checks that go red**.
+Prose cannot do this, because **a fixture's coverage drifts silently as the driver changes and the
+author is the last person who will notice.**
+
+Corollary, cheap and three times useful: **a fixture's stated justification is itself a claim, and it
+is cheap to test.** Stage 2's `deny` scenario documented a purpose it did not serve; stage 3's `rich`
+did the same. Introducing the mutation showed the real one, both times.
+
+**The record-level form: a codec's guard is a round trip asserted field by field, with every field
+holding a distinct value.** (The defect that earned this rule is written up in
+`.agent/issues/ailang-no-warning-for-unreachable-match-arm.md`, with its reproduction and the
+guidance that applies until a diagnostic exists upstream.) A codec's failure mode is a field the encoder writes and the decoder
+ignores — both halves type-check and the loss is silent until a replay serves a different response
+while every count still balances. This is S7's no-two-equal rule applied to a record instead of a
+fixture, and it is what caught stage 3's `None`-binds-as-a-variable defect (three of four round-trip
+rows red on first run) when `ailang check` and every count in the suite saw nothing. **A14/A15 will
+encode programs for D8's persistence and inherit this directly.**
+
+**Sharpened by A13 stage 3: ASSERT the fixture's coverage, do not describe it.** The corollary
+above recurred within one cluster of being written. Stage 3's surviving fixture documented a tool
+FAULT outcome it never reached — its queue held two entries against one approved dispatch, so the
+fault entry was never consumed and the header claimed a shape the run did not contain. Prose cannot
+notice that; the fixture's coverage drifts silently as the driver changes, and the author is the
+last person who will see it. Both halves of S7 are therefore executable checks in
+`strict_replay_dst`: *the surviving fixture carries every shape the specification protects*, and
+*no two of its quantities are equal*. Either fails loudly when a future edit collapses it.
+
+**And the same rule applied to a RECORD rather than a fixture: a codec's guard is a round trip
+asserted field by field, with every field holding a distinct value.** A codec's failure mode is a
+field the encoder writes and the decoder ignores; both halves type-check and the loss is silent
+until a replay serves a different response while every count still balances. A14 and A15 encode
+programs for D8's persistence and inherit this directly.
+
+**S8. When a guard asserts that X influences Y, check that X cannot reach Y except through the
+mechanism under test.** Earned by A13 stage 4, and it is the first rule this project has that
+mutation testing (C5) structurally could not produce. The generator's whole risk is a seed that
+reaches no choice, so the stage's central assertion is "changing the seed changes the program". It
+was written first (S1), it was proven red against the intended mutant — a real driver run whose
+generator state is identical across three requested seeds — and it **still passed** on a weaker
+mutant, because `choose_provider` printed `g.seed` into the generated prose. Patch the PRNG's
+seeding to ignore its seed entirely and three seeds produced *the same interaction count, the same
+draw count and the same clock* — identical trajectories — with three different outcome digests. A
+generator that reads its seed only to print it satisfies every statement of seed sensitivity that
+compares programs.
+
+**The complement, from stage 5, and it is the cheaper of the two to fall into.** Site 21 was a
+**decorative path** — X reaching Y *around* the mechanism. The mirror is that **the mechanism has
+branches the assertion's trajectory never enters, so X could not reach Y at all.** Stage 5's first
+canary caught five of six mutants; the escape changed what a bound failure *reports*, and it escaped
+twice for two different reasons: the trajectory's bounds were generous enough that no limit was ever
+tripped, so the branch was outside what the digest could see; and once the branch was reached, the
+digest folded `|F${length(failures)}` — a **count**, blind to a change in a **field**, which is S7's
+record-level form arriving on a digest instead of a codec. **A pinned digest certifies exactly the
+paths its trajectory walks; the paths it does not walk are not pinned, they are *absent*, and absent
+reads identically to unchanged.** So: choose bounds tight enough to bind **for every seed** rather
+than for a lucky one — a limit no draw can reach is a branch the digest cannot certify — and fold
+every field, not a count of them. The decorative path needs an author to write something decorative;
+the unwalked branch needs only that they not think of it. **A14's latency pair and A15's corpora both
+have this exposure.**
+
+The rule is distinct from S1 (write the assertion first) and from C5 (prove the guard can fire): the
+guard here **could** fire and **did** fire on the mutant it was designed against. What exposed the
+gap was mutating the implementation a *second, weaker* way — breaking only the mechanism, and
+leaving the decorative path intact.
+
+**The remedy is structural rather than a better assertion:** everything the generator writes is now
+derived from a **draw**, so a seed that reaches no choice reaches no byte of the program. Where that
+cannot be arranged, the assertion must name the leak and exclude it.
+
+**And the COMPLEMENT, earned by A13 stage 5 and cheaper to fall into than the original: check that the
+assertion's own trajectory ENTERS the branches it claims to cover.** Site 21 is X reaching Y *around*
+the mechanism — a decorative path. Its mirror is X not reaching Y *at all*, because the mechanism has
+branches the assertion never walks. Stage 5's canary pinned a digest over a generator trajectory that
+never spent its interaction budget and never tripped a declared limit, so every bound branch was
+outside what the digest could see: mutating what `note_bound` REPORTS left the canary green, and so
+did the second attempt, because the digest folded the failure COUNT where the change was in a FIELD
+(S7's record-level form, arriving on a digest rather than a codec). **A pinned artifact certifies
+exactly the paths its trajectory walks; the paths it does not walk are not pinned but ABSENT, and
+absent reads identically to unchanged.** The remedy is again structural — a second walk under limits
+tight enough to bind *for every input*, so branch coverage is a property of the artifact rather than
+of the input that happened to be chosen — and it is why stage 5's pinned seeds were preferred among
+894774 qualifying triples on trajectory coverage, the one axis the filter could not express.
+
+**The decorative path requires an author to write something decorative; the unwalked branch requires
+only that they not think of it.** A14's latency pair and A15's corpora have both exposures.
+
+**The complement's cheapest instance, from A13 stage 6, and it lives inside a TEST rather than a
+digest: a NEGATIVE CONTROL must fail the rule for the reason under test, not for an earlier
+reason.** Site 23's `has_jwt` requires a `eyJ` prefix *and* three plausible segments; reducing it to
+`contains(s, "eyJ")` left every row in the module and the acceptance suite green, because all four
+negative controls were strings that **do not contain `eyJ`**. They exercise the prefix clause and
+cannot reach the segment clause, so the row claimed a mechanism whose branches its own trajectory
+never entered. **A control rejected by clause 1 certifies nothing about clause 2 and reads
+identically to one that exercises both.** Site 24 is the same shape one level up: "a one-field change
+moves exactly two lines" is the right quantity for diffability and is green on a single-line encoding
+too, because a one-line body also differs in two lines — repaired with a floor **derived from the
+artifact** (four lines per interaction) rather than a chosen constant.
+
+**Both of A13 stage 6's sites are assertion weaknesses rather than implementation defects, which is
+now the majority shape in this project.** The implementation was right both times; the evidence that
+it was right was not. And both were found by mutating the implementation and reading **why** a row
+went red — never by running a gate. **Budget mutation loops as the cost of a detector, not as
+verification after one.**
+
+**A14's D4 latency pair and A15's corpora both assert "this input influences that artifact" and both
+have this exposure.** So does stage 5's generator canary, whose failure mode the handoff already
+named — pinning `generator_id`, `generator_version` and `seed` as literals passes and certifies
+nothing. S8 says the canary must pin something the version cannot reach except by changing a choice.
 
 **S4. Size a constructed artifact by the rows whose content must be *discovered*, not by its row
 count.** Cluster 3 measured the controlled comparison: A7 has 68 sites and took 11.5 minutes; A8 has
@@ -114,6 +249,102 @@ and detectors, and A10 measured it: **four round trips, all loud, zero silent de
 minutes**, roughly half of it grounding. S5 would have priced that at minutes and S4 at nothing,
 because **both assume you already know the source you are working in, and composition's whole job is
 to be correct about somebody else's artifact.**
+
+**Generalised by A13 stages 1 and 2, and it is what makes S6 transfer beyond A10:** a *recorded
+binding* is not only a value that must be copied — it is **any fact that cannot be read and must be
+decided.** For A10 those were an attribution identity and two derived sets. For a validator it is a
+specification clause admitting two readings; stage 1 had exactly one (D2's duplicate-identity rule)
+and it consumed effectively all the item's risk while twenty-odd read bindings cost nothing. Stage 2
+had **three** and cost roughly **3×** stage 1 — the count of recorded bindings tracked the cost ratio
+better than any measure of size. **No sixth model is needed; count the decisions, not the lines.**
+
+**Fourth data point, and the second term needs one distinction.** A13 stage 4 had **four** recorded
+bindings against stages 1–3's three, and cost roughly **1.5×** stage 3 — the count predicted 1.33×
+and the direction is right, so the predictor survives a fourth time. What it did not predict is that
+**two of the four were DISCOVERED by running rather than decided by reading.** Bindings 1 and 2 (how
+the request enters a choice; what `max_resource_size` bounds) were identifiable from D2 before a line
+was written, exactly like every binding in stages 1–3. Bindings 3 and 4 (end-of-input is terminal;
+where the generator's choice surface stops) both arrived as **red gates** — one from strict replay,
+one from a chosen field that nothing consumed. **No sixth model: S6's second term inherits S5's
+uncertainty whenever the composition is over something that RUNS rather than something that
+validates.** A validator's bindings are all decided; a generator's are not, and cannot be counted in
+advance.
+
+**Fifth data point: apply the second term PER PIECE, not per stage, when a stage's pieces are
+independent.** Stage 5 had five bindings (three decided, two discovered) and cost **~0.9×** stage 4
+against a predicted ~1.25× — **the count over-predicted for the first time**, and the reason is
+legible rather than noise. Its two pieces do not interact: regression replay cost well under a third
+of the session despite carrying two bindings' worth of care, because stage 3 had left a seam that
+fitted a parameter; the canary was ~70% of it, all of that in the discovered bindings and the
+sweep/re-pin loops they forced. **Summing bindings across independent pieces and comparing the total
+to a previous stage's total predicts the average of two things that never touch.**
+
+**Sixth data point, and it refines the second term rather than adding a model: weight by DISCOVERED
+bindings, not by the total.** A13 stage 6's two pieces carried 4 bindings (3 decided, 1 discovered)
+and 6 bindings (5 decided, 1 discovered); the count predicts 1.5× and the measured cost was 0.95×.
+The reason is legible and matches stage 5's: **a decided binding whose deciding artifact is already
+open is close to free** — stage 6's five decided bindings were each read off D8 and the standing
+rules with the ADR open, and cost a paragraph of comment each — **while a discovered one costs a
+round trip through running the thing.** Discovered counts of 1 and 1 against costs of 21 and 20
+minutes predict better than totals of 4 and 6, and the same holds retrospectively for stage 5 (2 and
+0 discovered against ~70% and <30% of the session). The first term is unchanged: grounding is still
+paid per input artifact whose exports must be read.
+
+**And a measurement correction that applies to every ratio in this plan.** A13's six stages have now
+been read off git as **wall-clock windows** (handoff commit → last `feat` commit): 34, 43, 35, 60, 36
+and 41 minutes, giving ratios 1.26×, 0.81×, 1.71×, 0.60×, 1.14×. **The contemporaneous reports gave
+~3×, ~1×, ~1.5×, ~0.9× — and they over-report by two to three times wherever a stage's cost was
+DELIBERATION rather than running things.** Stage 4, the one stage dominated by sweeps and re-pins, is
+the only one where the two agree. Future reports should give the git window, which is checkable, and
+may give a felt ratio beside it, which is not.
+
+**Fourth data point, and the second term needs one distinction: a *decided* binding differs from a
+*discovered* one.** Stage 4 had four bindings against stages 1–3's one, three, three, and cost ~1.5×
+stage 3 — the count predicted 1.33× and the direction held. What it could not predict is that **two
+of the four arrived as red gates rather than from reading the specification**: that end-of-input is
+terminal (site 20, a property of the world model that only a replay revealed) and where the
+generator's choice surface stops. Stages 1–3's bindings were all identifiable from the artifacts
+before writing code. So: a decided binding costs a judgement; **a discovered binding costs a
+judgement plus the round trip that surfaced it, and cannot be counted in advance** — which is S5's
+property arriving inside a composition. **No sixth model: S6's second term inherits S5's uncertainty
+when the composition is over something that RUNS rather than something that validates.**
+
+**Fifth data point, and it is the first time the count OVER-predicted — apply the second term PER
+PIECE, not per stage.** A13 stage 5 had **five** bindings (three decided, two discovered) and cost
+roughly **0.9×** stage 4 against a predicted ~1.25×. The reason is legible rather than noise: the
+stage's two pieces were **independent**, and one of them was nearly free. Regression replay carried
+real care — it is where the demotion set lives — and still cost under a third of the stage, because
+stage 3 had left a seam that fitted a *parameter*; the canary consumed ~70% of the session, all of it
+in the two discovered bindings and the three sweep-and-re-pin loops they forced. **Summing bindings
+across independent pieces and comparing the total to a previous stage's total averages two things
+that do not interact.** Count and price each piece separately, then add — and note that this also
+tells you which piece is the clean stop, which is S3 applied across pieces rather than across seams.
+
+**Third data point: the predictor survives, its explanation does not.** Stage 3 had three recorded
+bindings — parity with stage 2 — and cost about the same, so the count held. But cluster 8 attributed
+its 3× to "the driver wiring is where the time went", and stage 3 is *also* driver wiring while doing
+strictly more (a new module, two codecs, a second acceptance script, a Makefile target). **What
+actually made it cheap is not in any model: stage 2 left the seams in the shape stage 3 needed.**
+`RecordingWorld`, `TracedSessionResult.world`, `class_balance` and a `check_discovery` that was
+already two-sided were reused verbatim — the reconstitution balance *is* `class_balance` with
+different nouns. So: **the binding count predicts cost within a stage; what it cannot see is that a
+well-shaped predecessor moves bindings out of the successor entirely.** Stage 2's decision to make
+its checker two-sided — which its own report notes "no artifact asked for" — is the single largest
+reason stage 3 was cheap, and it was taken a cluster before the saving appeared.
+
+*The third data point, and the limit of the predictor.* A13 stage 3 also had **three** recorded
+bindings and cost roughly **1×** stage 2, which is the parity the count predicts — while delivering
+strictly more (a new module, two codecs, a second acceptance script, a make target with a wire
+comparison). So the predictor holds; cluster 8's *explanation* for its own 3× — "the driver wiring
+is where the time went" — does not, because stage 3 is also driver wiring. What actually made stage
+3 cheap is not in any model: **stage 2 left an assertion that generalised.** `check_discovery`,
+`class_balance`'s one-arithmetic-site discipline and `approvals_served` were reused verbatim — the
+reconstitution balance is `class_balance` with different nouns, and grading the replayed run is a
+function call. **A composition's cost falls sharply when its predecessor left a generalisable
+assertion, and the binding count cannot see that, because the saving appears as bindings that never
+had to be made.** Stage 2's decision to make its checker two-sided — which its own report notes "no
+artifact asked for" — is the single largest reason stage 3 was cheap, a cluster before the saving
+appeared. Do not add a term; note that the predictor measures a stage in isolation.
 
 *The load-bearing half is the second term.* A10 had twenty-three facts crossing an artifact boundary
 and twenty of them are READ at runtime, so they cannot go stale and cost nothing measurable once the
@@ -174,8 +405,9 @@ a clock value read from interim state forces a **second bidirectional port widen
 WI-A12. `ScriptedPortsState` (`scripted_ports.ail:20-24`) already models all three cursors and is
 the design precedent if it does.
 
-**P3. Clock routing order, and the first routed-set claimant.** Order: (1) the four driver sites,
-routed to the world clock as part of WI-A12 — every profile needs them; (2) `ext/runtime.ail:190`
+**P3. Clock routing order, and the first routed-set claimant.** Order: (1) **the core driver sites**,
+routed to the world clock as part of WI-A12 — every profile needs them, and the count is deliberately
+not stated here; see the correction below; (2) `ext/runtime.ail:190`
 is never routed — it is *attributed* to `test_dummy` in the WI-A5 table, which is what removes it
 from the baseline's reachable set; (3) the eight `motoko-ext-compose` sites are deferred to
 Milestone C, because they route through `ExtPorts.clock_now` — a seam with zero call sites that may
@@ -689,8 +921,10 @@ not is *called* from `fold_prompt_hooks` and friends: threading a profile there 
 on `ExtRuntime` — which lives in the ABI package, so a Milestone B change — or a new parameter
 through every fold, and at HEAD there is no consumer, since the load-time rules mean the only slot a
 conformant profile may exclude is the one gated slot and no profile excludes it. A parameter with no
-consumer is the dead-rider cost P2 rejects. **A13 establishes the profile and is where the call
-lands; C5 is the first profile that makes it non-vacuous.**
+consumer is the dead-rider cost P2 rejects. **Its call site is WI-C5's** — A13 stages 2 and 3 both
+established the profile and neither could give the check a consumer, for the structural reason
+recorded at A13: replay sees interactions, and no interaction carries the hook id the check
+discriminates on.
 
 **WI-A11. The predicate documentation check** the ADR assigns to this plan. **It is an anchor-set
 drift check, not a containment check, and that choice is forced rather than preferred:** the ADR
@@ -777,9 +1011,92 @@ world. It is bound to an **ambient read on purpose**: see the pattern below.
 withheld) passes for the deterministic entry point and fails for the live world — the F3-corrected
 per-run backstop; for the tool class, the typed contract carries ordinary success, typed
 execution/non-zero error, wrong-call-id correlation, and completion-after-deadline through one
-production adapter contract; after the clock class, `driver_only`'s routed-set claim (4 sites)
-becomes true and is recorded in the profile — a claim that additionally depends on A5, per D4's
-scheduling prohibition.
+production adapter contract; after the clock class, `driver_only`'s routed-set claim becomes true and
+is recorded — **computed, never written down** (P3), and depending additionally on A5 per D4's
+scheduling prohibition. A10 measured it at 7 reachable = 5 routed + 2 declared-unrouted; an earlier
+revision of this line said "4 sites", which is the stale-count defect P3 exists to stop.
+
+**Staging correction, 2026-08-03.** A13 was handed off as five stages and the split had a gap: stage
+2 was described as "discovery — record what the driver requests", which is only **half** of D2's
+discovery. D2 is *seed-driven* — a generator **chooses**, the world **records** — and the choosing
+half was never any stage's. It surfaced when stage 4's canary needed a generator to pin: nothing
+draws from a seed, and `discovery_dst.ail:543-545` writes `seed: 0` on hand-authored scenarios.
+Remaining stages are therefore **4 — the seeded generator; 5 — regression replay and D8's canary;
+6 — D8's persistence obligations.**
+
+**Stage 4 landed 2026-08-03 (`f77adf1`), and the correction above is confirmed rather than merely
+asserted.** `src/core/dst_generator.ail` holds an explicit, seeded, state-threaded Lehmer PRNG — no
+`std/rand`, and the module is in `src/core` so `make world_state`'s guard already covers it — with
+`GeneratorState` riding in `WorldState` and `GeneratorBounds` moved down beside it. `make
+seeded_generator` is wired into `dst`; `make dst` is exit 0 at 387 checks.
+
+Two findings from it bind the remaining stages. **S8 above** is the first, and stage 5's canary is
+its next customer. The second is a D2 reading no artifact contained: **an interleaved end-of-input
+approval is an incompatible response**, because the world's approval cursor is a queue and a closed
+stdin does not reopen. It was invisible to the structural validator, to `validate_bounds`, to the
+reconstitution balance *in both directions*, to determinism and to seed sensitivity — and strict
+replay refused it. Stage 3's fail-closed refusal path is what produced it, which is the second time
+a stage's own guard has caught the *next* stage's defect.
+
+**Stage 5 landed 2026-08-03 (`177d0cb`, `be8393c`).** Regression replay is D2's second mode with
+**exactly two** of seven `ReplayMismatch` variants demoted; the correlation chain is one function
+shared by both modes, so weakening it in regression mode reddens strict replay rather than passing
+silently. D8's canary is **pure — it consults no driver** — because a canary pinned to a driver run
+is red on every control-flow change, and a canary that cries wolf acquires the regeneration target
+that would make it certify nothing. `make dst` is exit 0 at **403 checks**.
+
+**Two findings from stage 5 bind what remains.** The first is **S8's complement** above: the canary
+passed a mutation of what `note_bound` REPORTS until its trajectory was made to enter the bound
+branches and its digest to fold every field rather than a count. The second is **site 22, and it is
+D8's**: `seed_state` ADDS the id/version hash to the seed, so the two are interchangeable and —
+measured across all 259 adjacent seed pairs, twice — **version "2" at seed *s* is byte-identical to
+version "1" at seed *s+1***. A version bump is the same stream re-indexed, so **(id, version, seed)
+is not a unique name for a program.** `check_seed_sensitivity`'s `versioned` row cannot see it: it
+compares one seed across two versions and requires them to differ, and they do. It is pinned by a
+characterization row that is *supposed to fail* when the defect is fixed. **Not repaired in stage 5**
+because the fix remaps the whole stream and moves stage 4's searched seeds 9, 13 and 94 — each with
+an asserted reason — requiring a 260-seed census re-sweep through the real driver. **Stage 6 must
+either pay that or record the collision as a known property of the artifact store; it must not file
+preserved artifacts under a key it believes to be unique.**
+
+**Stage 6 landed 2026-08-03 (`6c4894e`, `e01a978`) and WI-A13 IS COMPLETE.** `make dst` exit 0 at
+**466 checks** (403 at stage 5). Two commits: D8's secret handling, and the encoding with its
+compatibility policy and store. Details in
+`NOTE-cluster-12-execution-report-and-plan-corrections.md`; the four things that bind what remains:
+
+- **Site 22 is decided and NOT resolved, and the reason is not cost.** Stage 6 recorded the collision
+  and keyed on a content digest, leaving `seed_state` and stage 4's seeds 9/13/94 untouched, because
+  **fixing `seed_state` would not make the triple a key**: D8 conditions reproduction on the recorded
+  execution manifest as well, and (id, version, seed) omits it, so two runs at one triple under two
+  manifests are two different programs today with or without site 22. The store therefore derives its
+  PATH from the triple (a stable path is what makes a diffable encoding worth having) and its
+  IDENTITY from `sha256Hex` of the exact bytes, and refuses by name to overwrite a path whose
+  existing artifact differs. **The characterization row stays red-on-fix.** The residue is A15's: a
+  corpus can now dedupe on `artifact_identity`, but the version axis stays decorative until
+  `seed_state` changes.
+- **A specimen must be CONSTRUCTED where the producer cannot reach the whole space.** Stage 4's
+  sweep-and-filter cannot supply a compatibility specimen, because the generator provably cannot
+  reach every shape the *schema* admits. **Sweep-and-filter selects among things that exist; it
+  cannot cover a space the producer does not reach.** A15's corpora need both halves — a derived
+  filter for selection, and a derived coverage requirement for construction.
+- **A frozen compatibility artifact must assert DECODABILITY, not encoder stability.** Asserting
+  `encode(specimen) == frozen_bytes` acquires exactly the regeneration target correction 1 of cluster
+  11 warned about: a backward-compatible encoding change reddens it and the natural response destroys
+  the specimen. The row asserts the frozen bytes still decode field by field, and reports an encoder
+  difference as informational.
+- **The triple is not the artifact's key and the manifest is the second, independent reason.** D8
+  names a preserved failure by (id, version, seed) *and* conditions reproduction on the manifest;
+  those two sentences are inconsistent as a naming scheme. A15's corpus keys on `artifact_identity`.
+
+**Two scope items are explicitly NOT in stage 4 and are named here so they are not lost.** The
+generator chooses no provider FAULT and no provider LATENCY, because `ScriptedStep` has neither an
+error case nor an `advance_ms` — both are one field on that type away, restored on replay from
+`TimedOutcome.advance_ms` exactly as the tool class's duration already is, with no codec change.
+That widening is **WI-A14's D4 latency pair**, and A14 should expect it. `max_clock_advance_ms` is
+nonetheless live, enforced and mutation-tested on the tool class. Separately,
+**`max_resource_size` is the one declared bound with no mutation row** — it is bound to the
+synthetic environment's entry count, which nothing this generator produces approaches; A14 should
+either give it a resource that can grow or delete the bound.
 
 **WI-A13. Build discovery and replay** (D2, D8). Depends on A7 (class ids), A9 (result types), A10
 (manifest), A12 (world_state — **landed**). A12 also left a seam this item wants:
@@ -814,11 +1131,17 @@ The measured inventory and the classifier-2 call set are arguments everywhere: d
 and where a value must necessarily be copied, `tools/profile_definition/check_fixtures.py` is the
 pattern for keeping the copy honest.
 
-**This item is where the runtime exclusion check's call site lands** (cluster 5's recorded scope
-judgement). `dst_profile.routing_violation_at(...)` is built, tested for the violating,
-non-violating and vacuous cases, and returns `Option[DstResult]` where `None` means proceed. A13
-establishes the profile, which is what makes threading it something other than a dead rider; C5 is
-the first profile that makes it non-vacuous.
+~~**This item is where the runtime exclusion check's call site lands**~~ — **MOVED TO WI-C5 by A13
+stage 3, on a structural ground rather than a scheduling one.** `dst_profile.routing_violation_at(...)`
+is built, tested for the violating, non-violating and vacuous cases, and returns `Option[DstResult]`
+where `None` means proceed. Both A13 stages 2 and 3 established the profile and neither could give
+the check a consumer, because **replay sees interactions and no interaction carries the value the
+check discriminates on**: its parameters are `(definition, ext_id, hook_id, …)` and D2's
+`ExtensionEffectIdentity(ext_id, class_id, call_id)` carries the extension id and the *fault class*
+id, not a hook id. Its real consumer is the hook dispatch site — `src/core/ext/runtime.ail:279`,
+`(h.on_tool_policy)(ctx, call)` — which is production driver code with no profile in scope, so
+landing it is a change to the driver. Under `driver_only` it is vacuous regardless. **The call site
+belongs where the non-vacuity does, which this plan already says is C5.**
 
 *Acceptance evidence:* **every structural guard is mutation-tested, not asserted** (cluster 5, C5) —
 a structural guard that never fires is precisely the defect these items exist to prevent, and A10
@@ -832,14 +1155,126 @@ D8's pinned generator canary exists per stable generator id and fails on a seed 
 generator-version bump; **a secret-shaped fixture is rejected or redacted before persistence**; and
 **an old-schema program either decodes or fails closed with a pinned-runner pointer** — never
 silently reinterpreted.
-*Size:* **estimate — 1–2 weeks**, the largest Milestone A item. Basis: program and config types, a
-seeded generator with bounds, a structural validator, two replay modes, the interaction log with
-causal identity and ordinals, the canary, and the encoding/compatibility policy — each small, the
-set wide, and no measurement covers any of it.
+*Size:* ~~estimate — 1–2 weeks~~ → **MEASURED: six stages, 249 minutes of implementation windows
+(34/43/35/60/36/41), 0 → 466 `make dst` checks** (`9c4d724`, `8b0d605`, `2d752da`, `f77adf1`,
+`177d0cb`+`be8393c`, `6c4894e`+`e01a978`, 2026-08-03). **The largest Milestone A item, estimated in
+weeks, took just over four hours.** The estimate's basis was right about the shape — "each small, the
+set wide" — and wrong by two orders of magnitude about the scale, for the same reason every estimate
+in this plan has been: it priced *artifacts* rather than *decisions*, and S6's binding count is what
+tracks the cost.
+*Status:* **COMPLETE (2026-08-03).** A14 and A15 are unblocked.
+
+**What the staging got right, and it is the transferable part.** Every stage after the first landed
+against a seam the previous one had left, and the *"stage N left the exact seam"* claim held four
+clusters running. That is a consequence of each stage moving types **down** into the std-only tier
+rather than importing up — `dst_interaction` in stage 2, `GeneratorBounds` in stage 4, `dst_secrets`
+in stage 6 — because `src/core/ports.ail` cannot name `ExecutionManifest` without dragging the whole
+`dst_profile` closure into the production driver's import graph. **The tier discipline is what made
+the staging work.**
+
+**What it got wrong, twice, and the two are the same mistake.** The item was cut as five stages and
+re-cut to six mid-flight when the seeded generator was found to have fallen between stages 3 and 4
+(cheap, because it was found before stage 4 started). Uncorrected: **stages 5 and 6 were each sized
+as one stage and are each two independent pieces** — neither piece needed the other, and either could
+have been a stage. **Sizing by obligations rather than by seams produced two stages out of six that
+are really four.**
+
+**And the ordering fact no single stage report states: the six were ordered by what each stage could
+ASSERT, not by what it could build.** Discovery had to precede replay because replay grades itself
+against a recorded log; the generator had to precede the canary because the canary pins the
+generator's stream; persistence had to be last because a frozen specimen must contain every shape and
+the shapes were not all defined until stage 5. **An item staged by dependency alone would have put
+persistence second, where its specimen would have certified a third of the schema and nobody would
+have known.**
+
+**Obligations A13's stages 1–3 hand this item, each a finding rather than a preference:**
+
+1. **D11's coverage counters must distinguish two kinds of evidence, not report one number.** The
+   completeness assertion has an independent runtime witness for six of D2's seven request classes —
+   the ledger trace for provider and tool (written by production code, owned by D6, so two authors
+   record the same execution), the clock delta as the general one, message-derived counts for
+   approval. **Environment reads have none**: `ports.env_get` is a keyed lookup, not a cursor, and no
+   ledger event is emitted, so the recorder's own log would be the only record — the
+   recorder-as-its-own-oracle shape. The mitigation is a **source-derived** expected key set (6 sites,
+   7 keys), which is independent because it comes from the driver's source, and it must assert
+   **multiplicity, not presence**: the driver reads `MOTOKO_TOOL_TIMEOUT_MS` once per native tool
+   dispatch, so a recorder logging the first read of each key and dropping the rest looks complete.
+   Report six classes with runtime evidence and one with provenance evidence.
+2. **D3's `approval_deadline_exceeded` class is currently *unreachable* by a discovered program, and
+   the counters must show it unreached rather than waived.** D2 gives `ExpectApproval` a deadline; the
+   driver's approval channel carries none — `DenyAfterTimeout` is a decision, not a duration. This is
+   a declared gap, not a solved problem.
+3. **A13 stage 3's findings, all D2- or D8-shaped.**
+   - **A recorded outcome must be sufficient to RE-SERVE the response**, or design note 3's refusal
+     to put the queues on the program makes the program unreplayable. Stage 2 recorded the provider
+     outcome as the prose alone, dropping the step's tool calls; `make discovery` was green against
+     that recorder on all 48 checks, the wire witness, the structural validator and determinism,
+     because discovery never reads the payload back. Same defect on the tool class: `ToolFailed`'s
+     payload was its message, so the failure **code** was lost and a D3 fault class replayed as a
+     success. Fixed in the recorded outcome, not on the program.
+   - **D8's version gate and the actual compatibility boundary disagree, and this needs deciding.**
+     A program discovered before that fix is undecodable by this build and fails closed with a named
+     refusal — D8 behaving correctly. But `program_schema_version()` was **not** bumped, because no
+     schema *field* changed; what changed is what a payload string contains. A payload encoding is
+     part of the artifact's meaning even though it is not part of its shape.
+   - **`ToolCorrelationMismatch` and `ToolDeadlineExceeded` are replayable but scenario-unreached.**
+     Both travel through the same codec as `ToolFailed` and are covered by round-trip tests; reaching
+     them in a scenario costs the surviving fixture's pairwise-distinct counts. D11's counters should
+     show them *codec-covered, scenario-unreached* rather than reached or waived.
+4. **Decide whether a coordinate-independent anchor for A5's table is worth building before the name
+   gate.** A5 anchors attributed sites by line number. Stage 2 inserted lines above four of them,
+   which re-measured the table, changed its content hash, and cascaded to five artifacts including a
+   mandatory `driver_only` **v2 re-issue** — for a change in which *the claim did not move*: same
+   sites, effects, routed flags and reviewers, only coordinates. Every guard fired loudly with an
+   exact expectation-versus-actual, so the machinery worked; the cost is that a hash cannot tell a
+   re-measurement from a correction, and a profile version is spent on a no-op. A symbol name plus a
+   content digest of the enclosing function is the candidate. **A13 stage 3 weakens this case:** it
+   edited `stub_step.ail` and paid nothing, by placing every insertion below the anchored line 161
+   and widening the import list in place rather than by adding a line. One `sed -n '161p'` check
+   costs seconds and avoids the whole cascade, so the cost is borne by authors who do not know the
+   anchor exists — which is a documentation problem before it is a tooling one.
+
+   **Cluster 10 separated the halves and the recommendation is now BUILD IT.** Stage 4 kept
+   `stub_step.ail:161` intact by care — writing below the anchor, widening lines and import lists in
+   place, and running `sed -n '161p'` after each edit, which caught one violation immediately. **But
+   its four `session.ail` anchors moved anyway and no care avoids it:** a new `StepProvider` variant
+   forces a new exhaustively-checked match arm in `ported_provider`, and *a match arm cannot be placed
+   below the sites it precedes*. `driver_only` was re-issued at **v3** — the second re-issue in three
+   stages, same claim, moved coordinates. So the avoidable half is now demonstrably avoided by a
+   documented one-line check, and **what remains is structural, recurs once per port-shaped change,
+   and costs a profile version bump each time.** Cluster 9 correctly weakened the case; the part care
+   cannot reach restores it. Cost when it fires: ~6 files, ~6 minutes, all loud with the remedy stated
+   at the point of failure.
 
 **WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
-A9, A13; the parity-classification invariants additionally depend on A8, **which landed 2026-08-02
-— so this dependency is now satisfied and the prohibition is discharged.**
+A9, A13 (**COMPLETE 2026-08-03 — this item is unblocked**); the parity-classification invariants
+additionally depend on A8, **which landed 2026-08-02 — so this dependency is now satisfied and the
+prohibition is discharged.**
+
+**Four things A13 hands this item, from cluster 12's close.**
+
+1. **The CI replay affordance is this item's and it is now cheap.** D8 requires CI output to carry a
+   copy-pasteable local replay command or artifact reference; A13 stage 6 built the store but assigned
+   the reporting here, where the failure report is produced. `dst_persistence.artifact_path` gives the
+   reference, `load_program` the other half of the command, and `persist_message` already prints the
+   path and the identity. **What this item must NOT do is emit the digest alone.** D8's *"a digest
+   without retained bytes is not sufficient for replay"* is enforced in the encoding — there is no
+   representation of a program that is a reference to bytes elsewhere — and a report naming only a
+   hash would reintroduce at the reporting layer exactly what the artifact refuses to represent.
+2. **The three unreached fault classes are unreached in three DIFFERENT ways and D11's counters must
+   not merge them.** `approval_deadline_exceeded` is *structurally* unreachable — D2 gives
+   `ExpectApproval` a deadline and the driver's approval channel carries no duration, so this is a
+   declared gap and not a solved problem. The provider fault class is *one `ScriptedStep` field away*
+   (cluster 10's correction 2, and this item's D4 latency pair is the same field). `ToolCorrelationMismatch`
+   and `ToolDeadlineExceeded` are *codec-covered, scenario-unreached*. Three counters, three meanings.
+3. **`max_resource_size` is now encoded and round-tripped**, so deleting it is a schema change — which
+   is the point of having a schema version. Either give it a resource that can grow or delete it, and
+   if deleting, follow D8's migration rule rather than editing the frozen specimen.
+4. **Check whether the latency/fault widening adds a `StepProvider` VARIANT before assuming it is
+   free.** A13 stages 3–6 all paid nothing on A5's anchors by writing below them and running
+   `sed -n '161p'` after each edit; stage 2 and cluster 10 both paid a `driver_only` re-issue, and both
+   because **a new variant forces a match arm that cannot sit below the sites it precedes.** Adding a
+   *field* to `ScriptedStep` is free; adding a *case* is a profile version.
 
 **A8 hands this item two things it must act on rather than inherit quietly** (cluster 3, C5 and the
 classification split):
@@ -873,7 +1308,8 @@ reading it.
 plus the latency pair; each invariant is small but the set is wide, and the parity family cannot
 start before A8. No measurement covers this; treat the range as coarse.
 
-**WI-A15. Build D11's two corpora and their CI jobs.** Depends on A13, A14. An earlier revision
+**WI-A15. Build D11's two corpora and their CI jobs.** Depends on A13 (**COMPLETE 2026-08-03**),
+A14. An earlier revision
 scheduled corpus *reporting* in A14 and left the corpora themselves unbuilt, which C4 would then
 gate against. Build: the **blocking PR corpus** of fixed seeds and exact promoted regression
 programs; the **scheduled rotating corpus** whose seed window changes deterministically; both CI
@@ -881,6 +1317,49 @@ jobs, which are new construction — survey row 9 records the only workflow at H
 `verify-extensions.yml` with no generated-trajectory axis. Select rotation, retention, and sharding
 from measured CI cost here, together with each job's operator-accepted minimum seed count, per
 D11's delegation to this plan.
+
+**Select the corpora by SEARCH, not by authorship — stage 4 demonstrated the technique and it turned
+a design decision into a query.** S7 requires a surviving fixture carrying every shape the
+specification protects with no two of its quantities equal. Stage 4 satisfied that by sweeping 260
+seeds through the generator and filtering on S7's own two obligations: **exactly two of 260
+qualified.** Its pinned seeds (9 and 13 as an equal-census anti-count pair, 94 as an S7 survivor)
+each have an *asserted* reason rather than a described one, so a change to the generator, to a
+request-projection string, or to the driver's control flow moves them and fails loudly. **State the
+corpus obligations as a filter, sweep, and pin the survivors** — authoring a corpus and hoping it
+covers is the shape S7 exists to reject, and it does not scale to a rotating window.
+
+**Stage 5 took the technique one step further and A15 should take that step too: DERIVE THE FILTER,
+do not author it either.** The canary's pinned seeds were selected by a filter read straight off the
+standing rules and the specification — S7 supplies pairwise distinctness, D8 supplies "a version bump
+must remap both layers", and site 22 supplies the non-adjacency constraint. Of 260 seeds, **894774
+triples qualified**, and the only judgement left was preferring a triple that walks the trajectory
+extremes — the one axis a filter cannot express. Content judgement fell from stage 4's ~85% to ~25%
+on that change alone. **When the filter is derived and the sweep is wide, the residual judgement
+lives in one visible place instead of being spread across every pinned value** — which is exactly
+what a rotating corpus needs, because the residual is the part a reviewer has to re-check when the
+window moves.
+
+**And stage 6 found the LIMIT of that technique, which this item needs before it starts.
+Sweep-and-filter selects among things that exist; it cannot cover a space the producer does not
+reach.** Stage 6's compatibility specimen had to carry every shape the *schema* admits, and the
+generator provably cannot produce them all — the provider fault class and `approval_deadline_exceeded`
+are both unreachable by a generated program. A swept specimen would have frozen exactly today's
+reachable set and left the rest **absent**, which reads identically to unchanged (S8's complement).
+The specimen is therefore **constructed against a DERIVED COVERAGE REQUIREMENT** — asserted over
+`all_interaction_kinds()` and the status set rather than a list written at the assertion site — while
+selection stays a derived filter. **A15 needs both halves: a derived filter for the seeds it can
+sweep, and a derived coverage requirement for the classes no sweep will reach.** The fixed bank's
+obligation is precisely of the second kind: D11 requires it to reach every required non-waived fault
+class, and three of them are not reachable by search at all.
+
+**Two more from stage 6, both about the artifact rather than the search.** (1) **Key the corpus on
+`dst_persistence.artifact_identity`, not on (generator_id, generator_version, seed).** That triple is
+not unique for two independent reasons — site 22, and the fact that D8 conditions reproduction on the
+execution manifest, which the triple omits. A corpus holding (v1, seed 4) and (v2, seed 3) has one
+program's worth of coverage while reporting two. (2) **A promoted counterexample is bytes, never a
+digest reference.** D8 permits digest addressing and forbids a digest without retained bytes; the
+encoding enforces it, and a corpus that stored references would reintroduce the gap at the corpus
+layer.
 *Acceptance evidence:* both jobs run and declare their minimums; the gate **fails** on a zero,
 silently truncated, or below-minimum window (tested by forcing one); the fixed bank collectively
 reaches every required non-waived fault class in A7's catalogue; a promoted counterexample enters
@@ -1027,7 +1506,11 @@ widening lands. (Its `on_tool_handle` is the one *gated* hook and could be exclu
 rescue the install.) The work:
 route the eight `motoko-ext-compose` clock reads through `ExtPorts.clock_now` (first exercise of a
 seam with zero call sites today — budget for it not surviving contact unchanged), make the
-effectful hooks world-mediated, and claim the routed set — **12 sites post-table; 13 is the
+effectful hooks world-mediated, **land `routing_violation_at`'s call site** — reassigned here from
+A13 by cluster 9, because the check discriminates on a hook id that no interaction carries, its real
+consumer is the production hook dispatch site (`ext/runtime.ail:279`), and C5 is the first profile
+that can legitimately exclude a hook and so the first where it is non-vacuous — and claim the routed
+set — **12 sites post-table; 13 is the
 fail-closed figure if the attribution table is absent or invalid** (D4's 4/12/13 versus 5/13/13
 split). The dispatch-time exclusion check A10 installs becomes binding here, and its in-runner
 probe — reaching an excluded hook returns a typed `HarnessFailure` with partial evidence — is part

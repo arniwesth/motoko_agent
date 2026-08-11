@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -193,6 +193,407 @@ profile_definition:
 # this goes red after a table edit, bump `driver_only_version` and re-record the
 # pair; do not make the profile call `table_identity()`, which would turn the
 # comparison into a tautology.
+# D2's execution program and its pure structural validator (WI-A13, stage 1).
+#
+# The acceptance script is MUTATION-BASED: one valid program, one change each,
+# and every row asserts the specific RULE its change violates rather than merely
+# a non-empty rejection list. A guard that is deleted or weakened in one
+# direction turns exactly its own row red — verified by deliberately removing
+# the duplicate-ordinal guard, by dropping one direction of the deadline rule,
+# and by rewriting the duplicate rule to compare identity BODIES.
+#
+# The last of those is why the base program contains a RETRY: interactions #1
+# and #8 carry a byte-identical tool identity at different ordinals. D2 requires
+# a repeated production call id to stay representable "so an invariant can
+# reject them as system behavior rather than the program decoder rejecting the
+# artifact". Rejecting duplicate bodies type-checks, passes every mutant row,
+# and silently makes the retry artifact undecodable — the NEGATIVE CONTROL is
+# the only thing that catches it. If you tighten the duplicate rule and this
+# goes red, the rule is what is wrong, not the fixture.
+.PHONY: execution_program
+execution_program:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/execution_program_dst.ail < /dev/null; \
+	ailang test src/core/dst_program.ail > /dev/null && echo "  ✓ src/core/dst_program.ail"
+
+# WI-A13 stage 2: discovery against `driver_only`. Four checks, in order.
+#
+#   1. The acceptance script. Two scenarios (`approve`, `deny`), each carrying
+#      the two-sided balance, the identity-CONTENT comparisons, seven mutation
+#      rows, the vacuity control, determinism, and stage 1's structural
+#      validator run over the recorded log.
+#
+#   2. THE WIRE WITNESS, and it is the strongest evidence in this stage. The
+#      driver emits `provider_call_prepared` (session.ail, before the
+#      dispatch_step call) and `v2_tool_dispatch_start` (tool_phase.ail, before
+#      the port calls) to the wire through ledger_emit. Neither is appended to
+#      the returned ledger trace, so no AILANG assertion can read them —
+#      cluster 4 measured that same emit/append imbalance. This step captures
+#      the JSONL and compares it against the census the recorder printed. Two
+#      authors, two records, one execution: it is what makes the tool class's
+#      completeness an oracle rather than the recorder grading itself.
+#
+#      `--entry wire_witness` performs exactly ONE run so the comparison is
+#      exact equality with nothing to keep in sync.
+#
+#   3. THE ENV CLASS'S SOURCE DERIVATION. The env class has no runtime witness
+#      at all — `ports.env_get` is a keyed lookup and emits no ledger event — so
+#      its completeness is asserted against the keys the DRIVER'S SOURCE can
+#      read. This step re-derives that set from the `ports.env_get(` call sites
+#      and diffs it against `driver_env_keys()`. The literal is checked, never
+#      trusted: a source-derived set nobody re-derives is a stale literal, and
+#      then the env class's only evidence is the recorder's own word.
+#
+#      This is PROVENANCE evidence, not capability evidence. A13's report and
+#      D11's counters must not add it into one completeness number with the six
+#      classes that have runtime witnesses.
+#
+#   4. The checker's own unit tests, including its negative control and both
+#      over-recording directions.
+#
+# The env grep is anchored to the SYNTACTIC FORM `.env_get(<world>, "KEY"` and
+# not to a bare key name — cluster 7's correction 1. A guard that greps a bare
+# token eventually fires on the artifact documenting it, because these items are
+# required to write prose naming what they check.
+#
+# The receiver is deliberately unanchored. The first version of this grep
+# required `ports.env_get(`, and it silently missed session.ail's
+# MOTOKO_CAPTURE_FAILED_PAYLOAD read, which goes through `st.provider.env_get(`.
+# The derivation caught that itself on its first run — which is the argument for
+# deriving rather than declaring, made by the derivation. A key literal is
+# required, so session.ail's extension-bridge closure (whose key is a variable
+# supplied by an extension) correctly does not match.
+.PHONY: discovery
+discovery:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/discovery_dst.ail < /dev/null; \
+	wire=$$(ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry wire_witness scripts/dst/discovery_dst.ail < /dev/null 2>/dev/null); \
+	w_prov=$$(printf '%s\n' "$$wire" | grep -c '"type":"provider_call_prepared"' || true); \
+	w_tool=$$(printf '%s\n' "$$wire" | grep -c '"type":"v2_tool_dispatch_start"' || true); \
+	c_prov=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS wire .*expect_provider=\([0-9]*\).*/\1/p'); \
+	c_tool=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS wire .*expect_tool=\([0-9]*\).*/\1/p'); \
+	if [ -z "$$c_prov" ] || [ -z "$$c_tool" ]; then \
+		echo "FAIL: the wire_witness run printed no census line — the comparison below would be vacuous"; \
+		exit 1; \
+	fi; \
+	if [ "$$w_prov" -eq 0 ] || [ "$$w_tool" -eq 0 ]; then \
+		echo "FAIL: the driver emitted no provider_call_prepared/v2_tool_dispatch_start to the wire (prov=$$w_prov tool=$$w_tool) — the witness is absent, so a match would prove nothing"; \
+		exit 1; \
+	fi; \
+	if [ "$$w_prov" -ne "$$c_prov" ] || [ "$$w_tool" -ne "$$c_tool" ]; then \
+		echo "FAIL: the interaction log disagrees with the driver's own wire emissions."; \
+		echo "      provider: wire=$$w_prov log=$$c_prov"; \
+		echo "      tool:     wire=$$w_tool log=$$c_tool"; \
+		echo "      These are written by different components. The wire is emitted by production driver code BEFORE the port is called; the log is written by the port. A disagreement is a recorder defect, not a flaky count."; \
+		exit 1; \
+	else \
+		echo "  ✓ the interaction log matches the driver's own wire emissions (provider=$$w_prov, tool=$$w_tool)"; \
+	fi; \
+	derived=$$(grep -ohE '\.env_get\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*,\s*"[A-Z_]+"' \
+	     src/core/session.ail src/core/tool_phase.ail \
+	   | sed -E 's/.*"([A-Z_]+)"/\1/' | sort -u); \
+	declared=$$(sed -n '/^export pure func driver_env_keys/,/^}/p' src/core/dst_discovery.ail \
+	   | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u); \
+	if [ -z "$$derived" ]; then \
+		echo "FAIL: no ports.env_get call sites found in the driver — the derivation is broken, so the diff below would pass vacuously"; \
+		exit 1; \
+	fi; \
+	if [ "$$derived" != "$$declared" ]; then \
+		echo "FAIL: driver_env_keys() disagrees with the ports.env_get call sites in the driver."; \
+		echo "      derived from source:"; printf '%s\n' "$$derived" | sed 's/^/        /'; \
+		echo "      declared in src/core/dst_discovery.ail:"; printf '%s\n' "$$declared" | sed 's/^/        /'; \
+		echo "      The env class has NO runtime witness. This set is its only independent evidence, so a stale literal leaves the recorder grading itself."; \
+		exit 1; \
+	else \
+		echo "  ✓ driver_env_keys() re-derived from the driver's ports.env_get call sites ($$(printf '%s\n' "$$derived" | wc -l | tr -d ' ') keys)"; \
+	fi; \
+	ailang test src/core/dst_discovery.ail > /dev/null && echo "  ✓ src/core/dst_discovery.ail"; \
+	ailang test src/core/dst_interaction.ail > /dev/null && echo "  ✓ src/core/dst_interaction.ail"
+
+# WI-A13 stage 3: strict replay against `driver_only`. Four checks, in order.
+#
+#   1. The acceptance script. Two scenarios — `rich`, which is the fixture that
+#      must SURVIVE and carries every shape D2 protects with no two of its
+#      quantities equal (S7), and `maxsteps`, which ends in `Err` so the
+#      Err-surviving witnesses are exercised on the path where the returned
+#      message list is empty. Each carries the refusal rules, the manifest
+#      check, the two-sided reconstitution balance, the replay comparison, seven
+#      single-position mutation rows, the typed HarnessFailure, determinism, and
+#      — the axis that makes this stage more than a restatement of itself — the
+#      replayed run graded against witnesses the recorder did not write, plus
+#      the tautology control that proves the grading is load-bearing.
+#
+#      Stage 5 adds axis J: D2's REGRESSION mode over those same five mutated
+#      logs, which must record two of them and stay fatal on the other five.
+#      Both modes read one set of inputs on purpose — a regression mode given
+#      its own quietly different fixtures could disagree with strict mode for
+#      reasons that have nothing to do with the demotion set.
+#
+#   2. THE WIRE WITNESS. `v2_tool_dispatch_start` (tool_phase.ail) is emitted
+#      BEFORE the port calls and `provider_call_prepared` (session.ail) is
+#      emitted separately from the dispatch call. Neither is appended to the
+#      returned trace — session.ail hands tool_phase a bare
+#      `\event. ledger_emit(...)` — so no AILANG assertion can read them.
+#      `--entry wire_witness` performs exactly ONE discovery run and ONE replay
+#      of its program, and this step compares the wire's totals against the sum
+#      of the two censuses. NO MULTIPLIER: a sum over the runs that actually
+#      happened cannot go stale when a scenario is added elsewhere.
+#
+#      It also asserts the two censuses are EQUAL, which is strict replay's own
+#      claim restated on the wire's terms — by production code that knows
+#      nothing about the interaction log.
+#
+#   3. THE CODEC TESTS. `world_state_of` reconstitutes the provider script and
+#      the tool queue from recorded payloads, so a codec whose encoder and
+#      decoder disagree about a field produces a replay that serves a different
+#      response while every count still balances. The round trips are in
+#      ports.ail because that is where both halves live.
+#
+#   4. dst_replay's own units: the walk, the outcome projection and the
+#      reconstitution balance, each shown to fire AND to stay quiet.
+.PHONY: strict_replay
+strict_replay:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/strict_replay_dst.ail < /dev/null; \
+	wire=$$(ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry wire_witness scripts/dst/strict_replay_dst.ail < /dev/null 2>/dev/null); \
+	w_prov=$$(printf '%s\n' "$$wire" | grep -c '"type":"provider_call_prepared"' || true); \
+	w_tool=$$(printf '%s\n' "$$wire" | grep -c '"type":"v2_tool_dispatch_start"' || true); \
+	d_prov=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS discovery .*expect_provider=\([0-9]*\).*/\1/p'); \
+	d_tool=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS discovery .*expect_tool=\([0-9]*\).*/\1/p'); \
+	r_prov=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS replay .*expect_provider=\([0-9]*\).*/\1/p'); \
+	r_tool=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS replay .*expect_tool=\([0-9]*\).*/\1/p'); \
+	if [ -z "$$d_prov" ] || [ -z "$$r_prov" ] || [ -z "$$d_tool" ] || [ -z "$$r_tool" ]; then \
+		echo "FAIL: the wire_witness run printed no discovery/replay census pair — the program was refused, or the entry point changed, and every comparison below would be vacuous"; \
+		printf '%s\n' "$$wire" | grep -E 'CENSUS|REFUSED' || true; \
+		exit 1; \
+	fi; \
+	if [ "$$w_prov" -eq 0 ] || [ "$$w_tool" -eq 0 ]; then \
+		echo "FAIL: the driver emitted no provider_call_prepared/v2_tool_dispatch_start to the wire (prov=$$w_prov tool=$$w_tool) — the witness is absent, so a match would prove nothing"; \
+		exit 1; \
+	fi; \
+	if [ "$$d_prov" -ne "$$r_prov" ] || [ "$$d_tool" -ne "$$r_tool" ]; then \
+		echo "FAIL: the replay did not reproduce the discovered run's per-class counts."; \
+		echo "      provider: discovery=$$d_prov replay=$$r_prov"; \
+		echo "      tool:     discovery=$$d_tool replay=$$r_tool"; \
+		exit 1; \
+	fi; \
+	if [ "$$w_prov" -ne "$$((d_prov + r_prov))" ] || [ "$$w_tool" -ne "$$((d_tool + r_tool))" ]; then \
+		echo "FAIL: the interaction logs disagree with the driver's own wire emissions across the discovery/replay pair."; \
+		echo "      provider: wire=$$w_prov logs=$$((d_prov + r_prov))"; \
+		echo "      tool:     wire=$$w_tool logs=$$((d_tool + r_tool))"; \
+		echo "      These are written by different components. The wire is emitted by production driver code BEFORE the port is called; the logs are written by the port. A disagreement is a recorder or replay defect, not a flaky count."; \
+		exit 1; \
+	else \
+		echo "  ✓ discovery and replay agree with the driver's own wire emissions (provider=$$w_prov, tool=$$w_tool over the pair)"; \
+	fi; \
+	ailang test src/core/ports.ail > /dev/null && echo "  ✓ src/core/ports.ail (recorded-outcome codec round trips)"; \
+	ailang test src/core/dst_replay.ail > /dev/null && echo "  ✓ src/core/dst_replay.ail"
+
+# D2's SEEDED GENERATOR (WI-A13 stage 4). Three checks:
+#
+#   1. The acceptance script. Ten axes over five honest generated runs and three
+#      seed-ignoring mutant runs — seed sensitivity, the mutant, the generator
+#      actually being consulted, the declared bounds in both directions, stage
+#      1's validator and stage 3's strict replay over generated programs, S7's
+#      two obligations, the C5 mutations and determinism.
+#
+#   2. dst_generator's own units, which are where the seed-sensitivity RULE is
+#      asserted against hand-built row sets — including a seed-ignoring one that
+#      must go red, written and run before a line of the generator existed (S1).
+#      Stage 5 adds D8's GENERATOR CANARY here: pinned rows per generator id and
+#      version that go red if the seed-to-choices mapping moves without a
+#      version bump. The pins are hand-written literals and there is NO target
+#      that refreshes them — that is the point, not an omission. A red canary is
+#      a decision: bump `generator_version` and re-pin by hand so a reviewer
+#      reads the diff, or fix the generator.
+#
+#   3. THE SEEDROW COMPARISON, out of process. The one result this stage exists
+#      to produce — different seeds produce different programs — is re-derived
+#      HERE from the script's own emitted rows, by a second author that cannot
+#      share a defect with the in-process comparison. Three things are checked
+#      and each is a different way for the claim to be hollow:
+#
+#        * two rows with DIFFERENT seeds have different digests (the claim);
+#        * two rows with the SAME seed have the SAME digest (reproducibility,
+#          without which "different" is just noise);
+#        * the equal-count pair really does have equal interaction counts, so
+#          the difference above cannot be a difference in program LENGTH. A
+#          count is blind to two programs of equal length and different
+#          contents, which is how cluster 9's site 19 stayed hidden through
+#          every count-shaped gate in this suite.
+#
+#      The greps below are anchored to the emitted line's syntactic form
+#      (`^SEEDROW <label> seed=`), not to a bare token. A bare-token guard
+#      eventually fires on the artifact that documents it, which is what kept
+#      `make world_state` red for two clusters.
+.PHONY: seeded_generator
+seeded_generator:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/seeded_generator_dst.ail < /dev/null; \
+	rows=$$(ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry wire_witness scripts/dst/seeded_generator_dst.ail < /dev/null 2>/dev/null); \
+	get() { printf '%s\n' "$$rows" | sed -n "s/^SEEDROW $$1 seed=[0-9]* version=[0-9]* n=\([0-9]*\) outcomes_len=[0-9]* digest=\(-*[0-9]*\)$$/\1 \2/p"; }; \
+	rich=$$(get rich); a=$$(get pairA); b=$$(get pairB); \
+	if [ -z "$$rich" ] || [ -z "$$a" ] || [ -z "$$b" ]; then \
+		echo "FAIL: the wire_witness run emitted no SEEDROW triple — the entry point changed or a run died, and every comparison below would be vacuous"; \
+		printf '%s\n' "$$rows" | grep -E '^SEEDROW' || true; \
+		exit 1; \
+	fi; \
+	n_a=$${a% *}; d_a=$${a#* }; n_b=$${b% *}; d_b=$${b#* }; d_rich=$${rich#* }; \
+	if [ "$$d_a" = "$$d_b" ]; then \
+		echo "FAIL: seeds 9 and 13 produced the SAME outcome digest ($$d_a)."; \
+		echo "      The generator is not reading its seed. D2 makes the seed an input to every"; \
+		echo "      discovery choice; a generator that ignores it produces one program for every"; \
+		echo "      seed — deterministic, structurally valid, strictly replayable, certifying nothing."; \
+		exit 1; \
+	fi; \
+	if [ "$$n_a" -ne "$$n_b" ]; then \
+		echo "FAIL: seeds 9 and 13 no longer have equal interaction counts ($$n_a vs $$n_b)."; \
+		echo "      The difference above could then be a difference in program LENGTH, and a count"; \
+		echo "      is blind to two programs of equal length and different contents. Re-sweep for"; \
+		echo "      an equal-count pair and re-pin it; do not delete this check."; \
+		exit 1; \
+	fi; \
+	if [ "$$d_rich" = "$$d_a" ]; then \
+		echo "FAIL: the rich fixture and seed 9 produced the same outcome digest — the rows are not distinct runs"; \
+		exit 1; \
+	fi; \
+	echo "  ✓ different seeds produce different programs at EQUAL interaction count (n=$$n_a, digests $$d_a vs $$d_b)"; \
+	ailang test src/core/dst_generator.ail > /dev/null && echo "  ✓ src/core/dst_generator.ail (the seed-sensitivity rule, and the PRNG's two silent failure modes)"
+
+# D8's PERSISTENCE OBLIGATIONS (WI-A13 stage 6). Six checks.
+#
+#   1. The acceptance script. The negative control first — an honest synthetic
+#      program survives the detector and redaction of it is the identity — then
+#      the driver's own environment surface, the per-shape mutation rows, the
+#      rule-coverage row, the interaction sites, and D8's reject-or-redact
+#      tension reported rather than decided silently. Then the encoding: the
+#      specimen's shape coverage, the field-by-field round trip, determinism and
+#      diffability as NUMBERS, the frozen v1 artifact, the fail-closed unknown
+#      schema, thirteen decode mutation rows, the ordering obligation read off
+#      the file system, the store's collision refusal, and regression replay
+#      over the program decoded from the frozen bytes.
+#
+#   2. dst_secrets's own units. This is where the detectors' FALSE-POSITIVE
+#      controls live, and they are the load-bearing half: every manifest this
+#      project persists carries a git revision and every artifact carries a
+#      sha256 digest, both of which are long unbroken runs in the credential
+#      alphabet. A detector that scores them refuses every honest program while
+#      looking like it is working.
+#
+#   3. THE STD-ONLY TIER GUARD, below. `dst_secrets` may import std and
+#      `dst_interaction` and nothing else, and that is a structural property
+#      rather than a tidiness preference: WI-A14 records interaction artifacts
+#      at the port seam, and `src/core/ports.ail` cannot import a module that
+#      names `ExecutionManifest` without dragging the whole 1559-line
+#      `dst_profile` closure into the PRODUCTION driver's import graph. Stage 2
+#      moved `Interaction` down for exactly this reason; an import added here
+#      makes the redactor unreachable from the place it is needed, and nothing
+#      else in the build would notice until A14 tried.
+#
+#      The grep is anchored to the syntactic form `^import ` rather than to a
+#      module name, so it cannot be satisfied by renaming and cannot fire on
+#      prose that mentions a module (cluster 7's correction 1).
+#   4. THE MANIFEST ARITY GUARD. `ExecutionManifest` has sixteen fields and the
+#      codec must write and read all sixteen. A field added in `dst_profile` and
+#      forgotten in `required_header_tags()`/`repeatable_header_tags()` would be
+#      silently absent from every artifact: the encoder would not write it, the
+#      decoder would not miss it, and both halves type-check. That is S7's
+#      record-level form, and it is the defect this whole stage exists to
+#      prevent — so it is counted from `dst_profile`'s own declaration rather
+#      than trusted to a literal, exactly as the ProfileDefinition guard above
+#      counts A10's.
+#
+#   5. THE FROZEN SPECIMEN GUARD. `scripts/dst/fixtures/execution-program-v1.artifact`
+#      is the compatibility policy. There is deliberately NO target that
+#      regenerates it — no --update, no ACCEPT=1 — because the encoder and the
+#      decoder were written in the same commit and agree by construction, so
+#      every round-trip row would pass against a policy that exists only as
+#      prose. This guard checks the file is present and non-trivial, so that
+#      deleting it turns the gate red instead of turning the frozen row vacuous.
+#      If the acceptance row goes red, the two permitted responses are to keep a
+#      v1 decode path or to bump the schema version and pin a runner. Rewriting
+#      the file is the one response that is not available.
+#
+#   6. THE NO-REGENERATION GUARD. Nothing in the tree may write to the fixtures
+#      directory. This is the guard that keeps check 5 honest: a convenience
+#      entry point that refreshes the specimen becomes a habit, and the first
+#      person to hit a red compatibility row will use it. The one that produced
+#      these bytes was deleted after use, which is stage 5's discipline for its
+#      canary pins applied to an artifact instead of a table.
+.PHONY: program_persistence
+program_persistence:
+	@set -eu; \
+	ailang run --caps IO,FS --entry main scripts/dst/program_persistence_dst.ail < /dev/null; \
+	declared=$$(awk '/^export type ExecutionManifest/,/^}/' src/core/dst_profile.ail \
+	   | grep -c '^  [a-z_0-9]*:'); \
+	coded=$$(sed -n '/^export pure func required_header_tags/,/^}/p;/^export pure func repeatable_header_tags/,/^}/p' \
+	     src/core/dst_persistence.ail | grep -c 'tag: "manifest\.'); \
+	if [ "$$declared" -eq 0 ] || [ "$$coded" -eq 0 ]; then \
+		echo "FAIL: counted $$declared manifest fields and $$coded codec tags — one of the two derivations is broken, so the comparison below would pass vacuously"; \
+		exit 1; \
+	fi; \
+	if [ "$$declared" -ne "$$coded" ]; then \
+		echo "FAIL: ExecutionManifest declares $$declared fields but the program codec names $$coded of them."; \
+		echo "      declared in src/core/dst_profile.ail:"; \
+		awk '/^export type ExecutionManifest/,/^}/' src/core/dst_profile.ail | grep '^  [a-z_0-9]*:' | sed 's/^/        /'; \
+		echo "      A manifest field the codec does not name is silently absent from every persisted"; \
+		echo "      artifact: the encoder never writes it, the decoder never misses it, and both halves"; \
+		echo "      type-check. D8 conditions its whole reproducibility promise on the recorded manifest,"; \
+		echo "      and D11 says a program promoted without one is not a reproduction unit. Add the field"; \
+		echo "      to encode_body, to required_header_tags (or repeatable_header_tags), and to project."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ the program codec names all $$declared ExecutionManifest fields (re-counted from dst_profile's own declaration)"; \
+	for f in scripts/dst/fixtures/execution-program-v1.artifact \
+	         scripts/dst/fixtures/execution-program-v0.artifact; do \
+		if [ ! -s "$$f" ]; then \
+			echo "FAIL: the frozen specimen $$f is missing or empty."; \
+			echo "      It is THE compatibility policy: encoder and decoder are written together and agree"; \
+			echo "      by construction, so without a frozen artifact from before the current encoder the"; \
+			echo "      policy is prose and the gate is green. It is not regenerable by design."; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "  ✓ both frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes, predating no encoder change yet)"; \
+	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
+	     src scripts --include=*.ail || true); \
+	if [ -n "$$writers" ]; then \
+		echo "FAIL: something in the tree writes to the frozen fixtures:"; \
+		printf '%s\n' "$$writers" | sed 's/^/        /'; \
+		echo "      There must be no regeneration target. A convenience that refreshes the specimen"; \
+		echo "      becomes the first thing anyone reaches for when the compatibility row goes red,"; \
+		echo "      and using it destroys the only artifact in this project that predates the current"; \
+		echo "      encoder. Add a v1 decode path, or bump the schema version and pin a runner."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ nothing in the tree writes to scripts/dst/fixtures — the specimen has no regeneration target"; \
+	ailang test src/core/dst_persistence.ail > /dev/null && echo "  ✓ src/core/dst_persistence.ail (the escape, the tag tables, and the path-vs-identity split site 22 forces)"; \
+	imports=$$(grep -E '^import ' src/core/dst_secrets.ail \
+	   | sed -E 's/^import +([a-zA-Z0-9_/]+).*/\1/' | sort -u); \
+	if [ -z "$$imports" ]; then \
+		echo "FAIL: no import lines found in src/core/dst_secrets.ail — the tier guard below would pass vacuously"; \
+		exit 1; \
+	fi; \
+	foreign=$$(printf '%s\n' "$$imports" | grep -v '^std/' | grep -v '^src/core/dst_interaction$$' || true); \
+	if [ -n "$$foreign" ]; then \
+		echo "FAIL: src/core/dst_secrets.ail imports outside the std-only tier:"; \
+		printf '%s\n' "$$foreign" | sed 's/^/        /'; \
+		echo "      It may import std/* and src/core/dst_interaction and nothing else."; \
+		echo "      WI-A14 redacts interaction artifacts AT THE PORT SEAM, and src/core/ports.ail"; \
+		echo "      cannot import a module naming ExecutionManifest without pulling the whole"; \
+		echo "      dst_profile closure into the production driver's import graph. Stage 2 moved"; \
+		echo "      Interaction down for this reason. Move what you need down, do not import up."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ src/core/dst_secrets.ail stays in the std-only tier ($$(printf '%s\n' "$$imports" | wc -l | tr -d ' ') imports, all std/* or dst_interaction)"; \
+	ailang test src/core/dst_secrets.ail > /dev/null && echo "  ✓ src/core/dst_secrets.ail (the detectors, and the false-positive controls that keep honest artifacts persistable)"
+
 .PHONY: driver_only
 driver_only:
 	@set -eu; \
@@ -399,14 +800,23 @@ world_state:
 		echo "  ✓ unseeded tool world dies with Process withheld"; \
 	fi; \
 	echo "  -- randomness class (D1 request-surface item 5, \"runtime randomness, if any\") --"; \
-	n=$$(grep -l 'std/rand' src/core/*.ail 2>/dev/null | wc -l); \
+	: "The pattern is anchored to the IMPORT FORM, not the bare string 'std/rand'."; \
+	: "WI-A13 found this red at baseline: A12 (cluster 6) wrote the bare-string"; \
+	: "grep, then A10 (cluster 5) landed on top of it with a ForbiddenCapability"; \
+	: "whose instrument PROSE names std/rand while describing this very check, so"; \
+	: "the artifact documenting the guard tripped the guard. --keep-going hid it."; \
+	: "An import is the only way an AILANG module can reach std/rand, so anchoring"; \
+	: "to '^import std/rand' loses no coverage and stops the guard firing on text"; \
+	: "that merely mentions it. This is the same precision the fault_catalogue"; \
+	: "target already needed for its own tripwire."; \
+	n=$$(grep -l '^import std/rand' src/core/*.ail 2>/dev/null | wc -l); \
 	if [ "$$n" -ne 0 ]; then \
 		echo "FAIL: $$n driver module(s) reach std/rand. src/core/*.ail had none when WI-A12"; \
 		echo "      routed its effect classes, so an ambient RNG has appeared and is un-routed."; \
 		echo "      D1 names an ambient RNG as a prohibited hiding place for world state."; \
 		echo "      (src/core/test/ is deliberately excluded: dst_gen.ail is a seeded GENERATOR,"; \
 		echo "       which is explicit randomness outside the driver, not an ambient read in it.)"; \
-		grep -l 'std/rand' src/core/*.ail; \
+		grep -l '^import std/rand' src/core/*.ail; \
 		exit 1; \
 	else \
 		echo "  ✓ no driver module (src/core/*.ail) reaches std/rand"; \
@@ -425,10 +835,21 @@ world_state:
 #      check fails if it ever starts succeeding, which is what would happen if
 #      someone "unified" the two outcomes behind a catch-all.
 #   3. A structural guard: every terminal return in the driver must go through
-#      c2_finalize. c2_finalize holds the sole `{ result:` record literal, so
-#      more than one means a terminal path has been added that appends no
-#      RunSummary — the exact regression D6.1 exists to prevent, and one that no
-#      per-path test can catch for a path nobody wrote a test for.
+#      c2_finalize. c2_finalize holds the sole terminal record literal, so more
+#      than one means a terminal path has been added that appends no RunSummary
+#      — the exact regression D6.1 exists to prevent, and one that no per-path
+#      test can catch for a path nobody wrote a test for.
+#
+#      WI-A13 stage 2 ANCHORED THIS GUARD, per cluster 7's correction 1. It was
+#      a bare-token `grep -c` that counted comment lines too, so session.ail
+#      carried a standing obligation to circumlocute around its own guard's
+#      pattern in prose — the same landmine that turned `make world_state` red
+#      for two clusters when A10 documented the randomness guard it tripped.
+#      The pattern is now anchored to a line whose record literal is not
+#      preceded by a dash, which no AILANG comment line can satisfy. Verified in
+#      both directions: 1 at HEAD, and 3 against a file with two deliberately
+#      added bypassing terminal returns in both plausible shapes, so the
+#      tightening costs no coverage.
 #   4. The typed reason's wire mapping and result-class unit tests. session.ail
 #      and phase_vocab.ail carry inline tests that no target ran before this
 #      one, including the RunSummary goldens that pin the wire strings.
@@ -444,10 +865,10 @@ terminal_trace:
 	else \
 		echo "  ✓ capability bypass remains a non-zero run (D6.6)"; \
 	fi; \
-	n=$$(grep -c '{ result:' src/core/session.ail); \
+	n=$$(grep -c '^[^-]*{ result:' src/core/session.ail); \
 	if [ "$$n" -ne 1 ]; then \
 		echo "FAIL: $$n terminal record literals in session.ail, expected 1 (c2_finalize). A terminal return is bypassing the finalizer — see D6.1."; \
-		grep -n '{ result:' src/core/session.ail; \
+		grep -n '^[^-]*{ result:' src/core/session.ail; \
 		exit 1; \
 	else \
 		echo "  ✓ all terminal returns route through c2_finalize"; \
@@ -804,9 +1225,9 @@ attribution_table:
 	check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"; \
 	check src/core/tool_phase.ail 286 'is_scratchpad_tool_name' "the mixed guard"; \
 	check src/core/tool_phase.ail 287 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"; \
-	check src/core/session.ail 796 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"; \
-	check src/core/test/stub_step.ail 146 'now()' "live_ports' real clock (declared UNROUTED core)"; \
-	for l in 929 1026 2245 2354; do \
+	check src/core/session.ail 807 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"; \
+	check src/core/test/stub_step.ail 161 'now()' "live_ports' real clock (declared UNROUTED core)"; \
+	for l in 948 1053 2290 2400; do \
 	  check src/core/session.ail $$l 'clock_now' "a routed core clock site"; \
 	done; \
 	check src/core/tool_phase.ail 342 'clock_now' "the FIFTH routed core clock site (D4's table says four)"; \

@@ -1,0 +1,508 @@
+-- D2's execution program: the resolved, replayable artifact.
+--
+-- WI-A13, stage 1. This module holds the TYPES and the PURE STRUCTURAL
+-- VALIDATOR that D2 requires to run before replay. It holds no generator, no
+-- driver, and no replay loop; those are later stages and later modules, so that
+-- this one can be read and mutated without a world in scope.
+--
+-- Stage 2 moved the interaction vocabulary itself — `IdentityBody`,
+-- `CausalIdentity`, `TimedOutcome`, `Interaction` and their derivations — down
+-- into `src/core/dst_interaction`, which imports nothing but std. The reason is
+-- structural and is recorded in that module's header: the port layer has to
+-- name `Interaction` to carry the recorded log, and it cannot import this
+-- module without dragging `ExecutionManifest` and the whole `dst_profile`
+-- closure into the production driver's import graph. Stage 1's design notes 1
+-- and 2 (identity-as-a-sum, ordinal-as-the-duplicate-key) travelled with the
+-- types and are stated there.
+--
+-- One design decision is left here, because it is about the PROGRAM and not
+-- about an interaction:
+--
+-- THE PROGRAM DOES NOT RESTATE THE WORLD'S CURSORS. `InitialWorld` carries
+-- the synthetic environment, the clock epoch, and the normalized message and
+-- policy inputs — but NOT the provider script, the approval queue, or the
+-- tool queue. Those are projections of the interaction list
+-- (stage 3 builds `world_state_of`). If the program carried both, a program
+-- could serve a response that no interaction records, which is the exact
+-- shape of the completeness defect this item exists to prevent.
+
+module src/core/dst_program
+
+import std/list as List (length)
+import std/string as Str (length)
+import std/option (Option, Some, None)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_generator (GeneratorBounds)
+import src/core/dst_interaction (
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  CausalIdentity,
+  StreamChunkRecord,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  TimedOutcome,
+  Interaction,
+  identity_kind,
+  interaction_kind,
+  class_has_deadline,
+  class_may_stream
+)
+
+-- ---------------------------------------------------------------------------
+-- Schema version and the D8 compatibility policy
+-- ---------------------------------------------------------------------------
+
+-- The program schema this build writes and can decode. D8 forbids silently
+-- reinterpreting an old program: a version this build does not know is a
+-- REJECTION carrying a pinned-runner pointer, never a best-effort decode.
+export pure func program_schema_version() -> string { "execution-program/1" }
+
+-- Every schema version this build can decode. A migration extends this list
+-- and keeps the old decode path, or it does not extend it and old programs
+-- fail closed. There is no third option in which the program is read anyway.
+export pure func decodable_schema_versions() -> [string] {
+  [program_schema_version()]
+}
+
+-- ---------------------------------------------------------------------------
+-- The initial world and the generator's declared bounds
+-- ---------------------------------------------------------------------------
+
+-- D2's `initial_world`. See design note 3 in the module header for why the
+-- provider script, approval queue and tool queue are ABSENT: they are
+-- projections of the interaction list, so a response the program serves is
+-- necessarily a response the program records.
+export type InitialWorld = {
+  messages_and_policy: string,
+  synthetic_environment: [{ key: string, value: string }],
+  clock_epoch: int,
+  extension_profile: string
+}
+
+-- D2: "Each generator schema declares hard bounds for interactions, stream
+-- chunks, payload bytes, logical-resource size, and clock advancement.
+-- Exceeding a bound is a generator/harness failure, not an unbounded test run."
+--
+-- Recorded ON the program, not only on the config, so that a replay of an
+-- archived program can state the bounds it was generated under without needing
+-- the config that produced it.
+--
+-- WI-A13 stage 4 MOVED the declaration down into `src/core/dst_generator`, for
+-- the same structural reason stage 2 moved `Interaction` into
+-- `src/core/dst_interaction`: the bounds are consulted at the moment of a
+-- choice, which is inside a port adapter, and `ports.ail` cannot import this
+-- module without dragging the whole `dst_profile` closure into the production
+-- driver's import graph. It is re-exported here so that a reader still finds it
+-- beside the program's other types and so that no existing importer changed.
+export type GeneratorBounds = GeneratorBounds
+
+export type DiscoveryConfig = {
+  schema_version: string,
+  generator_id: string,
+  generator_version: string,
+  seed: int,
+  initial_world: InitialWorld,
+  bounds: GeneratorBounds
+}
+
+-- D2's `ExecutionProgram`, with D8's requirement that the exact execution
+-- manifest travel WITH the program rather than beside it. D11 states the
+-- consequence: "a program promoted without one is not a reproduction unit — it
+-- is a program nobody can state the meaning of." Making it a field rather than
+-- a sidecar is what makes that structurally true.
+export type ExecutionProgram = {
+  schema_version: string,
+  generator_id: string,
+  generator_version: string,
+  seed: int,
+  initial_world: InitialWorld,
+  bounds: GeneratorBounds,
+  manifest: ExecutionManifest,
+  interactions: [Interaction]
+}
+
+-- ---------------------------------------------------------------------------
+-- Structural rejections
+-- ---------------------------------------------------------------------------
+
+-- D2: program decoding and a pure structural validator "reject malformed
+-- schemas, negative time, duplicate interaction identities, impossible static
+-- references, and absent required initial values". Each constructor below is
+-- one of those five, made specific enough to name the offending position.
+export type ProgramRejection
+  = SchemaFieldMissing(string)                  -- field
+  | SchemaVersionUndecodable(string)            -- version seen
+  | InitialValueMissing(string)                 -- field
+  | NegativeTime(int, string, int)              -- ordinal, what, value
+  | DuplicateOrdinal(int)                       -- the repeated ordinal
+  | OrdinalNotDense(int, int)                   -- expected, found
+  | ImpossibleReference(int, string)            -- ordinal, what
+  | IdentityComponentMissing(int, string)       -- ordinal, component
+  | DeadlineDisagreesWithClass(int, string)     -- ordinal, why
+  | StreamOnNonProvider(int)                    -- ordinal
+  | ChunkOffsetsNotMonotone(int)                -- ordinal
+  | OutcomeStatusDisagreesWithFault(int, string) -- ordinal, why
+  | EmptyProgram
+
+export pure func program_rule(r: ProgramRejection) -> string {
+  match r {
+    SchemaFieldMissing(_) => "program-schema-field-missing",
+    SchemaVersionUndecodable(_) => "program-schema-undecodable",
+    InitialValueMissing(_) => "program-initial-value-missing",
+    NegativeTime(_, _, _) => "program-negative-time",
+    DuplicateOrdinal(_) => "program-duplicate-ordinal",
+    OrdinalNotDense(_, _) => "program-ordinal-not-dense",
+    ImpossibleReference(_, _) => "program-impossible-reference",
+    IdentityComponentMissing(_, _) => "program-identity-component-missing",
+    DeadlineDisagreesWithClass(_, _) => "program-deadline-disagrees-with-class",
+    StreamOnNonProvider(_) => "program-stream-on-non-provider",
+    ChunkOffsetsNotMonotone(_) => "program-chunk-offsets-not-monotone",
+    OutcomeStatusDisagreesWithFault(_, _) => "program-outcome-status-disagrees-with-fault",
+    EmptyProgram => "program-empty"
+  }
+}
+
+export pure func program_message(r: ProgramRejection) -> string {
+  match r {
+    SchemaFieldMissing(f) =>
+      "[program-schema-field-missing] the program has no '${f}'; D8 requires the schema version, generator id/family, generator version and seed to travel with every preserved failure, and a blank axis is an unexplainable program",
+    SchemaVersionUndecodable(v) =>
+      "[program-schema-undecodable] this build cannot decode program schema '${v}' and will NOT reinterpret it; D8 forbids silently reinterpreting an old program, so replay it with the pinned runner for that schema version (see decodable_schema_versions())",
+    InitialValueMissing(f) =>
+      "[program-initial-value-missing] the initial world has no '${f}'; D2 requires the validator to reject absent required initial values, because a world that starts undefined replays to whatever the runner happens to default to",
+    NegativeTime(ord, what, v) =>
+      "[program-negative-time] interaction #${ord} records ${what} = ${v}; D4's clock is monotonic and D2 requires a non-negative recorded advance, so negative time is a malformed program rather than a fast run",
+    DuplicateOrdinal(ord) =>
+      "[program-duplicate-ordinal] two interactions carry encounter ordinal ${ord}; the ordinal is the global position and cannot be shared. Note this rule is deliberately blind to the identity BODY: a repeated production call id is representable on purpose, so an invariant can report it as system behaviour instead of the decoder rejecting the artifact (D2)",
+    OrdinalNotDense(expected, found) =>
+      "[program-ordinal-not-dense] expected encounter ordinal ${expected} at this position but found ${found}; ordinals are the global encounter order, so a gap means an interaction was dropped from the program and the log no longer accounts for the execution",
+    ImpossibleReference(ord, what) =>
+      "[program-impossible-reference] interaction #${ord} ${what}; D2 requires the validator to reject impossible static references, and a class id no catalogue defines cannot be counted by D11's class-reached counter",
+    IdentityComponentMissing(ord, c) =>
+      "[program-identity-component-missing] interaction #${ord} has a blank '${c}'; D2 fixes the identity components per class, and a blank one makes two different logical requests compare equal during replay",
+    DeadlineDisagreesWithClass(ord, why) =>
+      "[program-deadline-disagrees-with-class] interaction #${ord} ${why}; D2 gives a deadline to ExpectTool, ExpectApproval and ExpectExtensionEffect and to no other class",
+    StreamOnNonProvider(ord) =>
+      "[program-stream-on-non-provider] interaction #${ord} carries stream chunks but is not a provider interaction; D2 puts ordered chunks on the provider timed outcome only",
+    ChunkOffsetsNotMonotone(ord) =>
+      "[program-chunk-offsets-not-monotone] interaction #${ord} has stream chunks whose virtual offsets decrease; D2 requires non-decreasing offsets, and a decreasing offset would replay chunks in an order the driver never observed",
+    OutcomeStatusDisagreesWithFault(ord, why) =>
+      "[program-outcome-status-disagrees-with-fault] interaction #${ord} ${why}; a fault with no class id is uncountable by D11's class-reached counter and an ok outcome naming one inflates it",
+    EmptyProgram =>
+      "[program-empty] the program records no interactions; an execution that requested nothing is not a reproduction of a run, and a replay of it would assert nothing at all"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The validator
+-- ---------------------------------------------------------------------------
+
+pure func blank(s: string) -> bool { s == "" }
+
+pure func contains_str(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == target then true else contains_str(rest, target)
+  }
+}
+
+pure func contains_int(xs: [int], target: int) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == target then true else contains_int(rest, target)
+  }
+}
+
+pure func require_field(s: string, field: string) -> [ProgramRejection] {
+  if blank(s) then [SchemaFieldMissing(field)] else []
+}
+
+pure func require_initial(s: string, field: string) -> [ProgramRejection] {
+  if blank(s) then [InitialValueMissing(field)] else []
+}
+
+-- Schema envelope. The undecodable-version check is separate from the
+-- blank-field check so that an old program produces D8's pinned-runner pointer
+-- rather than a generic "malformed" message that invites a retry.
+pure func validate_schema(p: ExecutionProgram) -> [ProgramRejection] {
+  require_field(p.schema_version, "schema_version")
+    ++ require_field(p.generator_id, "generator_id")
+    ++ require_field(p.generator_version, "generator_version")
+    ++ (if blank(p.schema_version) || contains_str(decodable_schema_versions(), p.schema_version)
+        then []
+        else [SchemaVersionUndecodable(p.schema_version)])
+}
+
+pure func validate_initial_world(w: InitialWorld) -> [ProgramRejection] {
+  require_initial(w.messages_and_policy, "messages_and_policy")
+    ++ require_initial(w.extension_profile, "extension_profile")
+    ++ (if w.clock_epoch < 0 then [NegativeTime(-1, "initial_world.clock_epoch", w.clock_epoch)] else [])
+}
+
+-- Per-class identity component discipline (D2's per-class identity fields).
+-- The extension-effect call id is exempt: D2 says "call id where the effect has
+-- one", so blank is legitimate there and only there.
+pure func validate_identity(id: CausalIdentity) -> [ProgramRejection] {
+  let o = id.ordinal;
+  match id.body {
+    ProviderIdentity(origin, step, model) =>
+      (if blank(origin) then [IdentityComponentMissing(o, "provider origin")] else [])
+        ++ (if blank(model) then [IdentityComponentMissing(o, "provider model")] else [])
+        ++ (if step < 0 then [NegativeTime(o, "provider step", step)] else []),
+    ToolIdentity(origin, call_id, name) =>
+      (if blank(origin) then [IdentityComponentMissing(o, "tool origin")] else [])
+        ++ (if blank(call_id) then [IdentityComponentMissing(o, "tool call_id")] else [])
+        ++ (if blank(name) then [IdentityComponentMissing(o, "tool name")] else []),
+    ApprovalIdentity(origin, call_id, name) =>
+      (if blank(origin) then [IdentityComponentMissing(o, "approval origin")] else [])
+        ++ (if blank(call_id) then [IdentityComponentMissing(o, "approval call_id")] else [])
+        ++ (if blank(name) then [IdentityComponentMissing(o, "approval name")] else []),
+    ExtensionEffectIdentity(ext_id, class_id, _call_id) =>
+      (if blank(ext_id) then [IdentityComponentMissing(o, "extension_effect ext_id")] else [])
+        ++ (if blank(class_id) then [IdentityComponentMissing(o, "extension_effect class_id")] else []),
+    EnvironmentReadIdentity(key) =>
+      if blank(key) then [IdentityComponentMissing(o, "environment_read key")] else [],
+    RandomDrawIdentity(bounds) =>
+      if blank(bounds) then [IdentityComponentMissing(o, "random_draw bounds")] else [],
+    ClockAdvanceIdentity => []
+  }
+}
+
+pure func chunk_offsets_monotone(cs: [StreamChunkRecord], last: int) -> bool {
+  match cs {
+    [] => true,
+    c :: rest => if c.offset_ms < last then false else chunk_offsets_monotone(rest, c.offset_ms)
+  }
+}
+
+pure func any_chunk_negative(cs: [StreamChunkRecord]) -> bool {
+  match cs {
+    [] => false,
+    c :: rest => if c.offset_ms < 0 then true else any_chunk_negative(rest)
+  }
+}
+
+-- Time, deadlines, streaming and the status/fault pairing, per interaction.
+pure func validate_outcome(i: Interaction, known_class_ids: [string]) -> [ProgramRejection] {
+  let o = i.identity.ordinal;
+  let out = i.outcome;
+  let has_deadline = class_has_deadline(i.identity.body);
+  (if out.advance_ms < 0 then [NegativeTime(o, "advance_ms", out.advance_ms)] else [])
+    ++ (if any_chunk_negative(out.chunks) then [NegativeTime(o, "a stream chunk offset_ms", -1)] else [])
+    ++ (if i.deadline_ms < -1 then [NegativeTime(o, "deadline_ms", i.deadline_ms)] else [])
+    ++ (if has_deadline && i.deadline_ms < 0 then
+          [DeadlineDisagreesWithClass(o, "is a ${interaction_kind(i)} and records no deadline (-1)")]
+        else [])
+    ++ (if not has_deadline && i.deadline_ms != -1 then
+          [DeadlineDisagreesWithClass(o, "is a ${interaction_kind(i)} and records a deadline of ${i.deadline_ms}")]
+        else [])
+    ++ (if List.length(out.chunks) > 0 && not class_may_stream(i.identity.body) then
+          [StreamOnNonProvider(o)] else [])
+    ++ (if not chunk_offsets_monotone(out.chunks, 0) then [ChunkOffsetsNotMonotone(o)] else [])
+    ++ (match out.status {
+          OutcomeFault =>
+            if blank(out.fault_class_id) then
+              [OutcomeStatusDisagreesWithFault(o, "records a fault with no fault_class_id")]
+            else if contains_str(known_class_ids, out.fault_class_id) then []
+            else [ImpossibleReference(o, "names fault class '${out.fault_class_id}', which no catalogue row defines")],
+          OutcomeOk =>
+            if blank(out.fault_class_id) then []
+            else [OutcomeStatusDisagreesWithFault(o, "is an ok outcome naming fault class '${out.fault_class_id}'")],
+          OutcomeMissing =>
+            (if blank(out.fault_class_id) then []
+             else [OutcomeStatusDisagreesWithFault(o, "is a missing outcome naming fault class '${out.fault_class_id}'")])
+              ++ (match i.identity.body {
+                    EnvironmentReadIdentity(_) => [],
+                    -- WI-A13 stage 2 WIDENED this rule to the approval class.
+                    -- D2 names `value_or_missing` for the environment read, and
+                    -- stage 1 read that as "missing is env-only". Stage 2's
+                    -- discovery found the second reading, and an exhausted
+                    -- approval queue is what forced the choice:
+                    --
+                    --   A. missing is ENV-ONLY. An approval read that hits
+                    --      end-of-input must then record OutcomeOk with an
+                    --      empty payload — which makes it indistinguishable
+                    --      from an operator who typed an empty line. A12
+                    --      created `ApprovalInput.eof` precisely to keep those
+                    --      apart ("a recorded world must be able to replay an
+                    --      empty line that the operator actually typed as
+                    --      distinct from a closed channel", ports.ail), and the
+                    --      driver's policy BRANCHES differently on the two. So
+                    --      reading A makes a class of run unreplayable.
+                    --
+                    --   B. missing means THE WORLD HAD NO VALUE TO SERVE, which
+                    --      is equally true of an absent env key and a drained
+                    --      approval queue.
+                    --
+                    -- B is taken. It preserves a distinction production already
+                    -- depends on, and it keeps OutcomeOk meaning one thing.
+                    -- The rule stays CLOSED for every other class: a provider,
+                    -- tool, extension-effect, random-draw or clock interaction
+                    -- with a 'missing' status is still rejected, because none of
+                    -- those has a "the world declined to answer" state that is
+                    -- not already a fault class in A7's catalogue.
+                    ApprovalIdentity(_, _, _) => [],
+                    _ => [OutcomeStatusDisagreesWithFault(o, "is a ${interaction_kind(i)} with a 'missing' status, which D2 defines only for an environment read and (WI-A13) an approval whose queue is exhausted")]
+                  })
+        })
+}
+
+-- An extension effect names a fault class in its IDENTITY as well as possibly
+-- in its outcome, and D2 requires that id to be "the same stable identifier
+-- D3's catalogue and D11's coverage counters use, so a process-failure class
+-- cannot be counted as reached under one name and mapped under another".
+pure func validate_static_references(i: Interaction, known_class_ids: [string]) -> [ProgramRejection] {
+  match i.identity.body {
+    ExtensionEffectIdentity(_, class_id, _) =>
+      if blank(class_id) || contains_str(known_class_ids, class_id) then []
+      else [ImpossibleReference(i.identity.ordinal,
+              "names effect class '${class_id}', which no catalogue row defines; D2 requires the extension-effect class id to be the SAME stable identifier D3's catalogue and D11's counters use")],
+    _ => []
+  }
+}
+
+-- Duplicates. Deliberately blind to the identity body — see design note 2.
+pure func duplicate_ordinals(xs: [Interaction], seen: [int]) -> [ProgramRejection] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      if contains_int(seen, i.identity.ordinal) then
+        [DuplicateOrdinal(i.identity.ordinal)] ++ duplicate_ordinals(rest, seen)
+      else duplicate_ordinals(rest, seen ++ [i.identity.ordinal])
+  }
+}
+
+-- Density. Ordinals are the GLOBAL encounter order, so position n must carry
+-- ordinal n: a gap is an interaction dropped from the program, which is exactly
+-- the completeness defect that a determinism check cannot see.
+pure func dense_ordinals(xs: [Interaction], expected: int) -> [ProgramRejection] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      if i.identity.ordinal == expected then dense_ordinals(rest, expected + 1)
+      else [OrdinalNotDense(expected, i.identity.ordinal)] ++ dense_ordinals(rest, expected + 1)
+  }
+}
+
+pure func validate_interactions(xs: [Interaction], known_class_ids: [string]) -> [ProgramRejection] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      validate_identity(i.identity)
+        ++ validate_outcome(i, known_class_ids)
+        ++ validate_static_references(i, known_class_ids)
+        ++ validate_interactions(rest, known_class_ids)
+  }
+}
+
+-- The whole structural gate, in one call.
+--
+-- `known_class_ids` is an ARGUMENT rather than a call to the catalogue, for the
+-- reason A10 established for its derived sets: a validator that consults the
+-- live catalogue makes its own reference check a tautology under any edit that
+-- changes both together, and it makes this module untestable without one.
+export pure func validate_program(p: ExecutionProgram, known_class_ids: [string]) -> [ProgramRejection] {
+  validate_schema(p)
+    ++ validate_initial_world(p.initial_world)
+    ++ (if List.length(p.interactions) == 0 then [EmptyProgram] else [])
+    ++ duplicate_ordinals(p.interactions, [])
+    ++ dense_ordinals(p.interactions, 0)
+    ++ validate_interactions(p.interactions, known_class_ids)
+}
+
+export pure func program_ok(p: ExecutionProgram, known_class_ids: [string]) -> bool {
+  List.length(validate_program(p, known_class_ids)) == 0
+}
+
+-- ---------------------------------------------------------------------------
+-- Declared bounds (D2)
+-- ---------------------------------------------------------------------------
+
+-- Separate from the structural validator because D2 classifies a bounds
+-- violation differently: "Exceeding a bound is a generator/harness failure, not
+-- an unbounded test run" — a statement about the GENERATOR, while the
+-- structural rules are statements about the artifact. Keeping them apart is
+-- what lets the discovery gate report generator failures as their own count.
+export type BoundViolation = { bound: string, limit: int, actual: int }
+
+export pure func bound_violation_message(v: BoundViolation) -> string {
+  "[generator-bound-exceeded] ${v.bound} limit is ${v.limit} but the program reached ${v.actual}; D2 makes exceeding a declared bound a generator failure, not an unbounded run"
+}
+
+pure func max_chunks(xs: [Interaction], best: int) -> int {
+  match xs {
+    [] => best,
+    i :: rest => {
+      let n = List.length(i.outcome.chunks);
+      max_chunks(rest, if n > best then n else best)
+    }
+  }
+}
+
+pure func max_payload(xs: [Interaction], best: int) -> int {
+  match xs {
+    [] => best,
+    i :: rest => {
+      let n = Str.length(i.outcome.payload);
+      max_payload(rest, if n > best then n else best)
+    }
+  }
+}
+
+pure func max_advance(xs: [Interaction], best: int) -> int {
+  match xs {
+    [] => best,
+    i :: rest => max_advance(rest, if i.outcome.advance_ms > best then i.outcome.advance_ms else best)
+  }
+}
+
+pure func check_bound(name: string, limit: int, actual: int) -> [BoundViolation] {
+  if actual > limit then [{ bound: name, limit: limit, actual: actual }] else []
+}
+
+export pure func validate_bounds(p: ExecutionProgram) -> [BoundViolation] {
+  check_bound("max_interactions", p.bounds.max_interactions, List.length(p.interactions))
+    ++ check_bound("max_chunks_per_interaction", p.bounds.max_chunks_per_interaction, max_chunks(p.interactions, 0))
+    ++ check_bound("max_payload_bytes", p.bounds.max_payload_bytes, max_payload(p.interactions, 0))
+    ++ check_bound("max_clock_advance_ms", p.bounds.max_clock_advance_ms, max_advance(p.interactions, 0))
+}
+
+export pure func within_bounds(p: ExecutionProgram) -> bool {
+  List.length(validate_bounds(p)) == 0
+}
+
+-- ---------------------------------------------------------------------------
+-- Rejection-set query helpers, exported for the acceptance script
+-- ---------------------------------------------------------------------------
+
+export pure func has_program_rule(rs: [ProgramRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if program_rule(r) == rule then true else has_program_rule(rest, rule)
+  }
+}
+
+export pure func first_program_message(rs: [ProgramRejection]) -> Option[string] {
+  match rs {
+    [] => None,
+    r :: _ => Some(program_message(r))
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. The PROGRAM fixtures live in
+-- scripts/dst/execution_program_dst.ail, where a whole program can be mutated
+-- one field at a time. What is tested here is the part with no fixture: the
+-- derivations on the identity itself.
+-- ---------------------------------------------------------------------------
+
+-- D8's fail-closed decode, asserted on the version list rather than on a
+-- fixture: an unknown schema is undecodable, and the CURRENT schema is
+-- decodable. The second half is the one that matters — a decodable list that
+-- omitted the version this build writes would reject every program it produced.
+pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
+  tests [((), true)]
+  {
+    contains_str(decodable_schema_versions(), program_schema_version())
+      && not contains_str(decodable_schema_versions(), "execution-program/0")
+  }

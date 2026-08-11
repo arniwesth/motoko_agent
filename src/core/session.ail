@@ -140,7 +140,7 @@ import src/core/phase_vocab (
   Finalize,
   Fail
 )
-import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, Ported, ScriptedStep, live_ports, scripted_ports, scripted_world_state)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, ScriptedStep, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
@@ -153,9 +153,20 @@ type SessionPolicy = {
   headless: bool
 }
 
+-- WI-A13 stage 2 added `world`. A12 gave the world a way IN (`ScriptedWorld`,
+-- so an assertion could seed a cursor); discovery needs the way OUT, because
+-- the interaction log the ports record rides in the world and nothing else in
+-- this result carries it. Without this field stage 2 is not merely harder, it
+-- is impossible: the recorder would have no reader.
+--
+-- It alters nothing the driver requests. `c2_finalize` is the sole construction
+-- site — the structural guard in `make terminal_trace` counts exactly one
+-- terminal record literal — so this is one field at one place, and every
+-- existing consumer reads `.result` and `.trace` and is untouched.
 export type TracedSessionResult = {
   result: Result[[Message], AIError],
-  trace: LedgerTrace
+  trace: LedgerTrace,
+  world: WorldState
 }
 
 -- Convert Motoko's UI/profile model identifier to the provider API model id
@@ -826,7 +837,15 @@ func ported_provider(rt: ExtRuntime, provider: StepProvider) -> PortedProvider {
     Ported(p) => { ports: p, world: empty_world_state() },
     LiveAI => { ports: live_ports(rt), world: empty_world_state() },
     Scripted(script) => { ports: scripted_ports(), world: scripted_world_state(script) },
-    ScriptedWorld(world) => { ports: scripted_ports(), world: world }
+    ScriptedWorld(world) => { ports: scripted_ports(), world: world },
+    -- WI-A13 stage 2. Same world, recording adapters. `driver_only` discovery
+    -- is the only caller.
+    RecordingWorld(world) => { ports: recording_ports(rt), world: world },
+    -- WI-A13 stage 4. The recording adapters with D2's seeded generator on top:
+    -- the world's script, approval and tool cursors start EMPTY and each
+    -- response is chosen at the request that asks for it. `make seeded_generator`
+    -- is the only caller.
+    GeneratedWorld(world) => { ports: generating_ports(rt), world: world }
   }
 }
 
@@ -1008,8 +1027,9 @@ pure func mk_run_summary(
 -- (the structural guard `make terminal_trace` enforces). Any future read added
 -- BEFORE this one must thread its successor rather than copy this pattern.
 --
--- The guard is a `grep -c` over this file and it counts comment lines too, so
--- naming its pattern in prose turns the gate red. Hence the circumlocution.
+-- The guard is a `grep -c` over this file. WI-A13 stage 2 anchored it so that a
+-- comment line cannot satisfy it, which retired the standing obligation to
+-- circumlocute around the pattern in prose here — see `make terminal_trace`.
 func c2_finalize(
   ports: Ports,
   world: WorldState,
@@ -1023,10 +1043,18 @@ func c2_finalize(
   trace: LedgerTrace,
   result: Result[[Message], AIError]
 ) -> TracedSessionResult ! {IO, Clock, Trace} {
-  let now_ms = ports.clock_now(world).now_ms;
+  -- The successor of this read is now THREADED into the returned world rather
+  -- than discarded. Under the recording adapters this final clock read is an
+  -- interaction like any other, and dropping its successor would drop the log
+  -- entry with it — the run would end having recorded one fewer request than it
+  -- made, which is precisely the under-recording defect discovery exists to
+  -- detect. The comment above this function already required a future read to
+  -- thread its successor; this makes the existing one do so too.
+  let reading = ports.clock_now(world);
+  let now_ms = reading.now_ms;
   let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit());
   let _ = ledger_emit(session_id, summary);
-  { result: result, trace: ledger_append(trace, WireRecord(summary)) }
+  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: reading.next_state }
 }
 
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
@@ -1372,13 +1400,27 @@ pure func parse_persist_retries_budget(raw: string) -> int {
   }
 }
 
--- WI-A12's env class. Four of the driver's six env reads are here, and they are
--- threaded rather than ambient. The successor is discarded at the end because
--- policy init happens once, before the loop, and `scripted_env` is a keyed
--- lookup that returns the world unchanged — but each read still takes the
--- PREVIOUS read's successor, so that when A13 starts recording reads the order
--- is already right and nothing has to be re-threaded.
-func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicy ! {Env} {
+-- WI-A12's env class. Four of the driver's seven env reads are here, and they
+-- are threaded rather than ambient.
+--
+-- WI-A13 stage 2 CHANGED THE RETURN. A12 discarded the successor at the end,
+-- reasoning that policy init happens once and `scripted_env` returns the world
+-- unchanged, and it noted that each read still takes the previous read's
+-- successor "so that when A13 starts recording reads the order is already
+-- right and nothing has to be re-threaded". The ordering was right; the DISCARD
+-- was not. Once a read appends to the world's interaction log the successor is
+-- no longer the same world, and dropping it dropped all four reads — a quarter
+-- of the driver's env surface, silently, on a path the recorder had no way to
+-- report. The completeness assertion is what found it; nothing else could,
+-- because the log was internally consistent and perfectly reproducible without
+-- them.
+--
+-- The successor is therefore returned and threaded by every caller. Behaviour
+-- is unchanged for every non-recording world, where `scripted_env` and
+-- `live_ports`' env closure both return their input.
+export type SessionPolicyInit = { policy: SessionPolicy, next_state: WorldState }
+
+func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicyInit ! {Env} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
   let r_persist = ports.env_get(world, "MOTOKO_PERSIST_RETRIES", "0");
   let r_retry = ports.env_get(r_persist.next_state, "MOTOKO_RETRY_STREAM_ERROR", "1");
@@ -1389,25 +1431,28 @@ func session_policy_init(ports: Ports, world: WorldState, model: string, step_bu
   let provider_base_url = r_base.value;
   let headless = r_headless.value == "1";
   {
-    step: {
-      step_budget: budget_steps,
-      max_cost_millicents: max_cost_millicents,
-      cost_metered: cost_rates.input_per_1m_millicents > 0,
-      persist_retries: persist_retries,
-      retry_stream_errors: retry_stream_errors,
-      require_system_prompt: not headless,
-      model: model,
-      provider_base_url: provider_base_url,
-      checkpoint_enabled: false,
-      checkpoint_pct: 90,
-      compaction: {
-        context_limit: resolve_context_limit(model),
-        elide_tier_pct: 70,
-        elide_hard_tier_pct: 85,
-        emergency_pct: exhaustion_pct()
-      }
+    policy: {
+      step: {
+        step_budget: budget_steps,
+        max_cost_millicents: max_cost_millicents,
+        cost_metered: cost_rates.input_per_1m_millicents > 0,
+        persist_retries: persist_retries,
+        retry_stream_errors: retry_stream_errors,
+        require_system_prompt: not headless,
+        model: model,
+        provider_base_url: provider_base_url,
+        checkpoint_enabled: false,
+        checkpoint_pct: 90,
+        compaction: {
+          context_limit: resolve_context_limit(model),
+          elide_tier_pct: 70,
+          elide_hard_tier_pct: 85,
+          emergency_pct: exhaustion_pct()
+        }
+      },
+      headless: headless
     },
-    headless: headless
+    next_state: r_headless.next_state
   }
 }
 
@@ -2270,8 +2315,8 @@ export func run_v2_session_traced(
   -- WI-A12: the provider is normalised FIRST so policy init can read the env
   -- through its ports instead of ambiently.
   let pp = ported_provider(rt, provider);
-  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
+  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, init.policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, { pp | world: init.next_state })
 }
 
 export func run_v2_session_traced_with_persist_retries(
@@ -2291,7 +2336,8 @@ export func run_v2_session_traced_with_persist_retries(
   provider: StepProvider
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let pp = ported_provider(rt, provider);
-  let base = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  let base = init.policy;
   let policy: SessionPolicy = {
     step: {
       step_budget: base.step.step_budget,
@@ -2378,8 +2424,8 @@ export func run_v2(
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let messages = msgs_to_messages(initial_msgs);
   let pp = ported_provider(rt, provider);
-  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
+  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, init.policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, { pp | world: init.next_state })
 }
 
 -- Run loop_v2 starting from an existing [Message] history (instead of the
@@ -2402,8 +2448,8 @@ export func run_v2_from_messages(
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let pp = ported_provider(rt, provider);
-  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
+  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, init.policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, { pp | world: init.next_state })
 }
 
 -- Read a JSON-shaped string field from a decoded Json object, returning
@@ -2541,8 +2587,8 @@ export func conversation_loop_v2(
   session_id: string
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let live_provider = ported_provider(rt, provider);
-  let policy = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
-  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, zero_runtime_status_counts())
+  let init = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
+  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, { live_provider | world: init.next_state }, session_id, zero_runtime_status_counts())
 }
 
 -- M8 combined entry point: runs the initial task via run_v2, then enters
@@ -2568,17 +2614,19 @@ export func run_v2_with_conversation(
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let initial_messages = msgs_to_messages(initial_msgs);
   let live_provider = ported_provider(rt, provider);
-  let policy = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
+  let init = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
+  let policy = init.policy;
+  let started_provider = { live_provider | world: init.next_state };
   -- Ordered after `ported_provider` because WI-A12 made `derive_session_id`
   -- read the world clock through the port instead of ambient `now()`, so it
   -- needs the normalised provider. The successor is discarded: this id labels
   -- the outer conversation loop, and each traced run below derives its own from
   -- its own world. That is pre-existing behaviour, not a cursor being dropped.
-  let session_id = derive_session_id(live_provider.ports, live_provider.world).id;
-  let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, live_provider);
+  let session_id = derive_session_id(started_provider.ports, started_provider.world).id;
+  let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
   let initial_counts = runtime_status_counts(initial_traced.trace);
   match initial_traced.result {
-    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts),
+    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts),
     Err(e) => {
       let _ = ledger_emit(session_id, ErrorEvent({
         source: "agent_loop_v2",
