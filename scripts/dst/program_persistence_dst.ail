@@ -585,6 +585,15 @@ func scenario_redaction_reports_its_trajectory_cost() -> bool ! {IO} {
 pure func specimen_fault_class() -> string { "ToolFailed" }
 
 pure func specimen_manifest() -> ExecutionManifest {
+  -- WI-B4 REVERTED ITS OWN EDIT HERE, and the gate is why. This is the FROZEN
+  -- v1 specimen: a historical artifact that a later build must decode to the
+  -- same program, not a live claim about the current toolchain. WI-B4's sweep of
+  -- the 14 stale `ailang 0.26.0` manifest strings rewrote this one too, and
+  -- `program_persistence` went red with exactly the right complaint — "the
+  -- frozen v1 specimen decodes to a DIFFERENT program: manifest.toolchain
+  -- ('ailang 0.33.0 (pinned)' vs 'ailang 0.26.0 (pinned)') — this build silently
+  -- reinterprets an old artifact, which is what D8 forbids". It is pinned to
+  -- v0.26.0 forever. Do not "update" it with the others.
   { source_revision: "rev-aa11",
     toolchain: "ailang 0.26.0 (pinned)",
     extension_packages: [{ package_id: "pkg.alpha", version: "1.2.3" },

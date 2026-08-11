@@ -1,8 +1,25 @@
 # AILANG: `ailang test`'s cluster harness fails a passing test NON-DETERMINISTICALLY with `record has no field: <name>`
 
-**Status:** **Filed upstream 2026-08-04 — ticket `fb_2ad074d754cd2c25`, category `bug`.** Reproduced
-against the pin, **non-deterministic**, workaround applied. Not minimised to a standalone module —
-see "What did not reproduce".
+**Status:** **DOES NOT REPRODUCE on AILANG v0.33.0 (`ae36986`) — measured at WI-B4, 2026-08-04.**
+Filed upstream 2026-08-04 as ticket `fb_2ad074d754cd2c25`, category `bug`; reproduced against the
+v0.26.0 pin, **non-deterministic**, workaround applied. Not minimised to a standalone module — see
+"What did not reproduce".
+
+**The v0.33.0 measurement, and it is the same experiment as the two below.** WI-B2a cleared
+`stub_step.live_ports`, which had blocked the probe module `src/core/dst_invariants.ail` since the
+repin; WI-B2b deliberately deferred the retest wanting a clean run. Re-created identically — the same
+one-line test with the same body appended to `dst_invariants.ail` — and run ten times:
+**0 failures in 10**, against 6-in-10 on v0.26.0 measured twice independently. Each run reported
+`9 tests: 9 passed` with `b4_probe_done_event_is_still_classified_logical_test_1` named and green,
+so the probe RAN rather than being absent — checked, because absent and passing are the same
+observation and this project has been caught by that difference four times. Source restored;
+`dst_invariants.ail` is byte-identical to HEAD.
+
+**Do not close it on this evidence alone.** 0-in-10 against a 60% base rate is strong (p ≈ 0.0001
+under the old rate) but the defect was never minimised and its trigger was never understood, so
+"fixed" and "perturbed out of reach by an unrelated change between v0.26.0 and v0.33.0" are not
+distinguishable from here. The honest status is *not reproducing on the current pin*, and the
+workaround comment in `Makefile` should stay until upstream says which it is.
 
 **Independently re-reproduced before filing, at the same rate.** The workaround had removed the
 trigger from the tree, so a reviewer re-created it: appended a one-line test with the same body to

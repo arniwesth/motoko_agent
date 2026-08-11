@@ -1345,6 +1345,22 @@ world_state:
 #      both directions: 1 at HEAD, and 3 against a file with two deliberately
 #      added bypassing terminal returns in both plausible shapes, so the
 #      tightening costs no coverage.
+#
+#      WI-B4 TIGHTENED IT A SECOND TIME, and for a different species. The
+#      pattern is a PROXY for "a TracedSessionResult literal", and WI-B2b's
+#      world token introduced a second record that also opens with `{ result:`
+#      and is not one: `ExtAiStepResult` (its declaration, and the `ai_step`
+#      bridge that builds one). The guard counted 3 and named a bypassing
+#      terminal return that does not exist.
+#
+#      The discriminator is a FIELD, not a spelling: `TracedSessionResult` is
+#      `{ result, trace, world }` and has no `next_state` field, while every
+#      `{ result: … }` record B2b added has one. So lines carrying `next_state:`
+#      — with the colon, which `world: reading.next_state` does not have — are
+#      provably not terminal records and are excluded. This is a fidelity fix
+#      rather than a silencing: it narrows on a property the terminal record
+#      CANNOT have. Verified in both directions again, with the same two
+#      plausible bypassing shapes: 1 at HEAD, 3 with them added.
 #   4. The typed reason's wire mapping and result-class unit tests. session.ail
 #      and phase_vocab.ail carry inline tests that no target ran before this
 #      one, including the RunSummary goldens that pin the wire strings.
@@ -1360,10 +1376,10 @@ terminal_trace:
 	else \
 		echo "  ✓ capability bypass remains a non-zero run (D6.6)"; \
 	fi; \
-	n=$$(grep -c '^[^-]*{ result:' src/core/session.ail); \
+	n=$$(grep '^[^-]*{ result:' src/core/session.ail | grep -vc 'next_state:'); \
 	if [ "$$n" -ne 1 ]; then \
 		echo "FAIL: $$n terminal record literals in session.ail, expected 1 (c2_finalize). A terminal return is bypassing the finalizer — see D6.1."; \
-		grep -n '^[^-]*{ result:' src/core/session.ail; \
+		grep -n '^[^-]*{ result:' src/core/session.ail | grep -v 'next_state:'; \
 		exit 1; \
 	else \
 		echo "  ✓ all terminal returns route through c2_finalize"; \
@@ -1702,31 +1718,19 @@ effect_inventory_selftest:
 predicate_anchors:
 	@python3 tools/predicate-anchors/check.py
 
+.PHONY: anchors
+# A5's ten attribution anchors, alone and without compiling anything. Split out
+# at WI-B4 so a mechanical-edit loop can afford to run it every round: for the
+# whole of Milestone B these anchors were only checked by `attribution_table`,
+# deep inside `make dst`, which exited 2 before reaching it — and nine of the
+# ten drifted unnoticed. `attribution_table` calls this, so there is one copy.
+anchors:
+	@tools/predicate-anchors/anchors.sh
+
 .PHONY: attribution_table
 attribution_table:
 	@ailang run --caps IO --entry main scripts/dst/attribution_table_dst.ail < /dev/null
-	@fail=0; \
-	check() { \
-	  if sed -n "$$2p" "$$1" | grep -q -- "$$3"; then \
-	    echo "  ✓ $$1:$$2 still $$4"; \
-	  else \
-	    echo "  ✗ $$1:$$2 no longer $$4 — the attribution table describes a site that moved"; \
-	    echo "      expected to find: $$3"; \
-	    echo "      actual line:      $$(sed -n "$$2p" "$$1")"; \
-	    fail=1; \
-	  fi; \
-	}; \
-	echo "attribution anchors:"; \
-	check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"; \
-	check src/core/tool_phase.ail 286 'is_scratchpad_tool_name' "the mixed guard"; \
-	check src/core/tool_phase.ail 287 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"; \
-	check src/core/session.ail 807 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"; \
-	check src/core/test/stub_step.ail 161 'now()' "live_ports' real clock (declared UNROUTED core)"; \
-	for l in 948 1053 2290 2400; do \
-	  check src/core/session.ail $$l 'clock_now' "a routed core clock site"; \
-	done; \
-	check src/core/tool_phase.ail 342 'clock_now' "the FIFTH routed core clock site (D4's table says four)"; \
-	[ "$$fail" -eq 0 ] || exit 1
+	@$(MAKE) --no-print-directory anchors
 	@ailang test src/core/dst_attribution_table.ail > /dev/null && echo "  ✓ src/core/dst_attribution_table.ail"
 
 .PHONY: ext_call_inventory ext_call_inventory_selftest

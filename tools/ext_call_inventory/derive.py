@@ -649,12 +649,44 @@ def self_test(repo: Path, membership: dict, ext_fields: list[str]) -> int:
     for m in sorted(missing):
         fails.append(f"{m}: declared in expected.json but the fixture file is gone")
 
+    # WI-B4's POSITIVE CONTROL for the BRIDGE, which is a different thing from
+    # `control_resolved.ail`. That fixture proves the CALL-SITE matcher still
+    # resolves a typed path; it says nothing about whether `bridge_map` still
+    # follows `ext_ports_of`'s closures down to a core `Ports` seam. That is the
+    # half that fails OPEN: a parsing slip in `body_after` or in the one-level
+    # call-forwarding regex returns `None`, every field becomes `unrouted`, and
+    # `unrouted` is not a milder `member` -- it means the field bypasses the
+    # world protocol entirely and leaves the gated set. WI-B2b hit exactly this
+    # twice in one item, from a nested paren in an argument list and from an
+    # anonymous record return type, and each time it read like a clean pass.
+    #
+    # Pinning `state` alone is not enough, because a slip that resolved a field
+    # to the WRONG core seam keeps its state and moves nothing. The pin
+    # therefore carries `seam` as well, and `seam: null` is a legitimate pinned
+    # value only for a field that is genuinely unrouted (`clock_now`, per S2).
     for f, want in expected["membership"].items():
-        got = membership.get(f, {}).get("state")
-        if got != want:
-            fails.append(f"membership {f}: expected {want}, derived {got}")
+        if isinstance(want, str):          # pre-B4 shape: state only
+            want = {"state": want, "seam": "<unpinned>"}
+        got_state = membership.get(f, {}).get("state")
+        got_seam = membership.get(f, {}).get("seam")
+        if got_state != want["state"]:
+            fails.append(f"membership {f}: expected {want['state']}, derived {got_state}")
+        elif want["seam"] != "<unpinned>" and got_seam != want["seam"]:
+            fails.append(f"membership {f}: state {got_state} agrees but the BRIDGE SEAM moved -- "
+                         f"expected Ports.{want['seam']}, derived "
+                         f"{('Ports.' + got_seam) if got_seam else 'none (unrouted)'}")
         else:
-            print(f"  ok  membership {f:<12} {want}")
+            print(f"  ok  membership {f:<12} {want['state']:<11} "
+                  f"seam={('Ports.' + got_seam) if got_seam else 'none'}")
+
+    # And the control that makes the three pinned seams falsifiable: if the
+    # bridge resolves NOTHING, every membership line above would still have to
+    # be individually wrong to notice. One assertion catches the whole class.
+    resolved_seams = [f for f, m in membership.items() if m.get("seam")]
+    if not resolved_seams:
+        fails.append("BRIDGE POSITIVE CONTROL: not one ExtPorts field resolved to a core "
+                     f"Ports seam through {BRIDGE_FUNC}. That is the fail-open answer -- a "
+                     "parsing slip, not an empty bridge.")
 
     print(f"\nself-test: {len(fails)} failure(s)")
     for f in fails:

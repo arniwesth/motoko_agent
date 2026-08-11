@@ -261,6 +261,30 @@ export type PreStepDecision
 -- `{ decision: <its decision>, next_state: ctx.world }`. Returning a DIFFERENT
 -- world than the one it was given, without having called a world-threading
 -- port, is the F6 defect this whole protocol exists to prevent.
+-- WI-B4 MEASURED A HOLE IN THE CLOSED-ROW GUARANTEE, and it is recorded here
+-- because this is the file whose rows the guarantee is about.
+--
+-- WI-B2a's argument, which WI-B2b re-confirmed and which this plan leaned on to
+-- excuse 123 sites from mutation testing, is: a closed row admits exactly one
+-- width -- an implementation must EQUAL its ABI field's row, not be a subset or
+-- a superset -- so a lockstep site has no band in which two answers type-check.
+-- That holds for a DIRECT implementation. It does NOT hold through a
+-- FUNCTION-TYPED PARAMETER.
+--
+-- Reproduced at HEAD: `ext/runtime.ail:545`'s
+-- `chain_base_hook(id, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {...})` assigns
+-- `pre` straight into `on_pre_step`, whose row below is closed and includes
+-- `Trace`. Drop `Trace` from that PARAMETER's row and `ailang check` on the file
+-- is green and `make check_core` is green -- 52/52. Two widths type-check, and
+-- the narrower one is silent. WI-B4's mutation loop over the wave's 139 widened
+-- function rows found seven sites of exactly this shape and NO other over-wide
+-- row, so the hole is not hypothetical: it is where every finding landed.
+--
+-- All seven are deliberately held at the FULL row. Do not "tidy" them narrower:
+-- the wide row is the one that matches this ABI, and the compiler will not tell
+-- you when it stops doing so. Relatedly, D5 already records that a declared row
+-- does not bound performed effects through function-valued record fields at all
+-- (`fb_74f53de3ae65854c`); this is the same seam seen from the declaration side.
 export type PreStepOutcome = { decision: PreStepDecision, next_state: ExtWorld }
 export type ToolHandleOutcome = { decision: ToolHandleDecision, next_state: ExtWorld }
 export type ResponseInterceptOutcome = { decision: ResponseInterceptDecision, next_state: ExtWorld }

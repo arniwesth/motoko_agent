@@ -10,7 +10,8 @@ import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
 import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead, ToolInvocation, ToolExecution, ToolCompleted)
-import src/core/test/stub_step (StepProvider, Ported)
+import src/core/ext_world (token_to_world, world_to_token, dropped_successor, world_advanced, world_interaction_count)
+import src/core/test/stub_step (StepProvider, Ported, recording_ports, scripted_world_state, prose_step, empty_rt)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (
@@ -31,7 +32,7 @@ import src/core/phase_vocab (
   ErrorEvent,
   RunSummary
 )
-import pkg/sunholo/motoko_ext_abi/types (ExtWorld, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
   ExtRegistry,
   ExtensionHooks,
@@ -778,19 +779,29 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
     history_slice: [],
     state_key: "k",
     ports: {
-      ai_step: func(world: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} { { result: {
+      -- S12: this shim PERFORMS a provider call, so it must return the world
+      -- `model_step` advanced. It previously handed `empty_world_state()` in and
+      -- returned the token it was given — the exact defect
+      -- `dst_fault_catalogue.NoReachableBranch` described at the real seam.
+      ai_step: func(world: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
         let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
-        match ports.model_step(empty_world_state(), model, msgs_to_messages(msgs), on_chunk).result {
-          Ok(r) => Ok(r.message.content),
-          Err(e) => Err(e.message)
+        let w0 = token_to_world(world);
+        let exchange = ports.model_step(w0, model, msgs_to_messages(msgs), on_chunk);
+        {
+          result: match exchange.result {
+            Ok(r) => Ok(r.message.content),
+            Err(e) => Err(e.message)
+          },
+          next_state: world_to_token(exchange.next_state)
         }
-      }, next_state: world } },
+      },
       proc_exec: fixed_ext_exec,
       clock_now: fixed_ext_clock,
       env_get: fixed_ext_env
     },
     artifacts: artifacts,
-    telemetry: zero_token_telemetry()
+    telemetry: zero_token_telemetry(),
+    world: empty_ext_world()
   }
 }
 
@@ -849,7 +860,7 @@ func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Pro
     min_gap_steps: 3,
     hard_override_pct: 95
   };
-  match compact_with_ai(direct_ctx(100, summary_ports("DIRECT-SUMMARY"), empty_ext_artifacts()), input, cfg) {
+  match compact_with_ai(direct_ctx(100, summary_ports("DIRECT-SUMMARY"), empty_ext_artifacts()), input, cfg).decision {
     PassThrough => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=PassThrough"] }),
     PassThroughObserved(code, _) => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=${code}"] }),
     Compacted(out, _, _) => {
@@ -876,12 +887,12 @@ func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, 
     min_gap_steps: 3,
     hard_override_pct: 95
   };
-  match compact_with_ai(direct_ctx(100, summary_ports("CACHED-SUMMARY-A"), empty_ext_artifacts()), input, cfg) {
+  match compact_with_ai(direct_ctx(100, summary_ports("CACHED-SUMMARY-A"), empty_ext_artifacts()), input, cfg).decision {
     PassThrough => Err({ failed_invariant: "first cache run compacts", trace: ["decision=PassThrough"] }),
     PassThroughObserved(code, _) => Err({ failed_invariant: "first cache run compacts", trace: ["decision=${code}"] }),
     Compacted(out1, _, artifacts) => {
       if not contains_summary_msg(out1, "CACHED-SUMMARY-A") then Err({ failed_invariant: "first run records cached summary", trace: [] })
-      else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts, "direct cache second task", 12), input, cfg) {
+      else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts, "direct cache second task", 12), input, cfg).decision {
         PassThrough => Err({ failed_invariant: "second cache run compacts", trace: ["decision=PassThrough"] }),
         PassThroughObserved(code, _) => Err({ failed_invariant: "second cache run compacts", trace: ["decision=${code}"] }),
         Compacted(out2, _, _) => {
@@ -909,7 +920,7 @@ func scenario_hostile_summary_preserves_control_capsule() -> Result[(), Scenario
     min_gap_steps: 3,
     hard_override_pct: 95
   };
-  match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("What would you like to work on?"), empty_ext_artifacts(), task, 48), input, cfg) {
+  match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("What would you like to work on?"), empty_ext_artifacts(), task, 48), input, cfg).decision {
     PassThrough => Err({ failed_invariant: "hostile summary compact_with_ai compacts", trace: ["decision=PassThrough"] }),
     PassThroughObserved(code, _) => Err({ failed_invariant: "hostile summary compact_with_ai compacts", trace: ["decision=${code}"] }),
     Compacted(out, _, _) => {
@@ -938,10 +949,10 @@ func scenario_terminal_observations() -> Result[(), ScenarioFailure] ! {AI, FS, 
     model: qwen_model, threshold_pct: 1, keep_recent: 4, keep_recent_tokens: 300,
     min_relief_pct: 5, rate_limit_enabled: false, min_gap_steps: 3, hard_override_pct: 95
   };
-  let no_prefix = compact_with_ai(direct_ctx(10, summary_ports("unused"), empty_ext_artifacts()), [abi_msg("user", repeat_block(4))], { base | keep_recent_tokens: 100000 });
-  let insufficient = compact_with_ai(direct_ctx(100, summary_ports("unused"), empty_ext_artifacts()), input, { base | min_relief_pct: 1000 });
-  let failed = compact_with_ai(direct_ctx(100, summary_ports(""), empty_ext_artifacts()), input, base);
-  let not_relieving = compact_with_ai(direct_ctx(100, summary_ports(repeat_block(200)), empty_ext_artifacts()), input, base);
+  let no_prefix = compact_with_ai(direct_ctx(10, summary_ports("unused"), empty_ext_artifacts()), [abi_msg("user", repeat_block(4))], { base | keep_recent_tokens: 100000 }).decision;
+  let insufficient = compact_with_ai(direct_ctx(100, summary_ports("unused"), empty_ext_artifacts()), input, { base | min_relief_pct: 1000 }).decision;
+  let failed = compact_with_ai(direct_ctx(100, summary_ports(""), empty_ext_artifacts()), input, base).decision;
+  let not_relieving = compact_with_ai(direct_ctx(100, summary_ports(repeat_block(200)), empty_ext_artifacts()), input, base).decision;
   ok_or_failure(
     decision_code_is(no_prefix, "compaction_ai.no_foldable_prefix")
       && decision_code_is(insufficient, "compaction_ai.insufficient_relief")
@@ -980,6 +991,68 @@ func seal_side_exhaustion_scenario() -> Scenario {
   { id: "compaction.structural_seal_side_exhaustion", seed: "fixed", run: scenario_seal_side_exhaustion }
 }
 
+-- ---------------------------------------------------------------------------
+-- S12's executable instrument, on the ONE hook in the tree that calls ai_step
+-- ---------------------------------------------------------------------------
+--
+-- WI-B2b found the same defect twice inside `compact_with_ai`: a re-wrap that
+-- discarded the world the summarizer advanced, and failure branches returning
+-- the ENTERED world after attempts had been made and script entries consumed.
+-- `next_state: ctx.world` type-checks everywhere and passed every test in the
+-- tree, so B2b shipped a comment and said plainly that a comment is weaker than
+-- a check. This is the check.
+--
+-- It needs a RECORDING provider, and that is the whole reason it lives here
+-- rather than beside the other direct-ctx scenarios: `summary_ports` above
+-- returns `next_state: state` unchanged, so under it EVERY hook looks like it
+-- dropped its successor and the assertion would be a false positive on correct
+-- code. `stub_step.recording_ports` appends an interaction to `WorldState.log`
+-- on every model step, and `ext_world.world_json` round-trips that log through
+-- the token -- which is the counter WI-B2b believed the token did not carry,
+-- and the reason this could be built at all.
+--
+-- BOTH directions are asserted, because either alone is satisfiable by a
+-- degenerate check: the hook that CALLS the summarizer must advance the world,
+-- and the hook that short-circuits below threshold must NOT (S12: an identity
+-- transition is the correct answer for a component that did nothing).
+func recording_direct_ctx(limit: int, artifacts: Json, w: WorldState)
+  -> ExtCtx ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  { direct_ctx_with_task_step(limit, recording_ports(empty_rt()), artifacts, "s12", 0)
+    | world: world_to_token(w) }
+}
+
+func scenario_s12_successor_is_not_dropped() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let cfg: CompactionAiConfig = {
+    model: qwen_model, threshold_pct: 1, keep_recent: 4, keep_recent_tokens: 300,
+    min_relief_pct: 5, rate_limit_enabled: false, min_gap_steps: 3, hard_override_pct: 95
+  };
+  let w = scripted_world_state([prose_step("a summary of the earlier turns")]);
+
+  -- (a) OVER threshold: the summarizer is called, so the world MUST advance.
+  let entered_hot = world_to_token(w);
+  let hot = compact_with_ai(recording_direct_ctx(100, empty_ext_artifacts(), w), direct_msgs(), cfg);
+  let hot_ok = not dropped_successor(entered_hot, hot.next_state, true);
+
+  -- (b) UNDER threshold: nothing is called, so the identity transition is
+  --     CORRECT and must not be reported as a defect.
+  let entered_cold = world_to_token(w);
+  let cold = compact_with_ai(recording_direct_ctx(1000000, empty_ext_artifacts(), w),
+                             [abi_msg("user", "short")], cfg);
+  let cold_ok = not dropped_successor(entered_cold, cold.next_state, false)
+                  && not world_advanced(entered_cold, cold.next_state);
+
+  if hot_ok && cold_ok then Ok(())
+  else Err({ failed_invariant: "a hook that performed a provider call returns the world it advanced (S12)",
+             trace: ["hot_advanced=${show(world_advanced(entered_hot, hot.next_state))}",
+                     "hot_log_in=${show(world_interaction_count(entered_hot))}",
+                     "hot_log_out=${show(world_interaction_count(hot.next_state))}",
+                     "cold_advanced=${show(world_advanced(entered_cold, cold.next_state))}"] })
+}
+
+func s12_successor_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_successor_is_not_dropped", seed: "fixed", run: scenario_s12_successor_is_not_dropped }
+}
+
 export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let scenarios = [
     multiple_compactions_scenario(),
@@ -989,7 +1062,8 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     hostile_summary_scenario(),
     terminal_observations_scenario(),
     seal_side_exhaustion_scenario(),
-    strict_provider_orphaned_toolcall_scenario()
+    strict_provider_orphaned_toolcall_scenario(),
+    s12_successor_scenario()
   ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then println("long_qwen_compaction_dst PASS count=${show(length(scenarios))}")

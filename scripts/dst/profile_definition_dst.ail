@@ -102,7 +102,7 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 287 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 289 }, effect: "Process",
           routed: false, note: "" }]
 }
 
@@ -144,10 +144,10 @@ pure func clean() -> ProfileDefinition {
     attribution_ref: { source_revision: id.source_revision, content_hash: id.content_hash },
     omitted_extensions: [{ extension_id: "compaction_ai", reason: "calls the classifier-2 field ai_step" }],
     unrouted_reachable_sites: [
-      { site_key: "src/core/session.ail:807",
+      { site_key: "src/core/session.ail:851",
         instrument: "make world_state (Clock poison pair)",
         why_unroutable: "ExtPorts.clock_now is zero-argument; plan rule S2" },
-      { site_key: "src/core/test/stub_step.ail:161",
+      { site_key: "src/core/test/stub_step.ail:163",
         instrument: "make world_state (Clock poison pair)",
         why_unroutable: "live_ports' clock adapter; a deterministic run uses the scripted adapter" }
     ],
@@ -158,21 +158,23 @@ pure func clean() -> ProfileDefinition {
 pure func clean_manifest() -> ExecutionManifest {
   {
     source_revision: "HEAD",
-    toolchain: "ailang 0.26.0",
+    toolchain: "ailang 0.33.0",
     extension_packages: [],
     abi_version: "4.0",
     profile_id: "fixture_clean",
     profile_version: "1",
     event_vocabulary_version: "event-vocabulary/1",
     normalized_configuration: "{}",
-    classifier_2_set: ["ai_step", "env_get", "proc_exec"],
+    -- WI-B4: `ai_step` LEFT this set at WI-B2b (widened to return AiStepOutcome,
+    -- which carries next_state). 3 -> 2, zero member call sites tree-wide.
+    classifier_2_set: ["env_get", "proc_exec"],
     unrouted_fields: ["clock_now"],
     scan_roots: ["src", "packages"],
     scan_root_commit: "HEAD",
     profile_rules_version: "profile-rules/1",
     coverage_rules_version: "coverage-rules/1",
     attribution_rules_version: "attribution-rules/1",
-    fault_catalogue_version: "fault-catalogue/1"
+    fault_catalogue_version: "fault-catalogue/2"
   }
 }
 
@@ -402,7 +404,7 @@ func routed_claim_is_computed() -> bool ! {IO} {
 
 func exclusion_check() -> bool ! {IO} {
   let meta: ReplayMetadata =
-    { source_revision: "HEAD", toolchain_version: "ailang 0.26.0",
+    { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: "fixture_clean", profile_version: "1",
       event_vocabulary_version: "event-vocabulary/1" };
   let d = with_disclosure("gated", without(all_ids_rec(all_hook_slots()), "on_tool_handle"), ["on_tool_handle"]);
@@ -536,8 +538,8 @@ export func main() -> () ! {IO} {
                                    { clean() | unrouted_reachable_sites: [] });
   let no_instr = assert_rejected("a declared unrouted site with NO INSTRUMENT", "unrouted-site-without-instrument",
                                  { clean() | unrouted_reachable_sites: [
-                                     { site_key: "src/core/session.ail:807", instrument: "", why_unroutable: "S2" },
-                                     { site_key: "src/core/test/stub_step.ail:161",
+                                     { site_key: "src/core/session.ail:851", instrument: "", why_unroutable: "S2" },
+                                     { site_key: "src/core/test/stub_step.ail:163",
                                        instrument: "make world_state", why_unroutable: "live adapter" }] });
   let stale_decl = assert_rejected("a declaration for a site that is no longer reachable-and-unrouted", "declared-site-not-reachable",
                                    { clean() | unrouted_reachable_sites:

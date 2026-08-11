@@ -201,7 +201,7 @@ func decision_artifacts(d: PreStepDecision) -> Json {
 export func compaction_occurred(hooks: ExtensionHooks) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let segment = compaction_segment();
   let ctx = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-  match hooks.on_pre_step(ctx, segment) {
+  match hooks.on_pre_step(ctx, segment).decision {
     Compacted(_, _, _) => true,
     PassThrough => false,
     PassThroughObserved(_, _) => false
@@ -232,7 +232,7 @@ export func scenario_system_prefix_preserved() -> Scenario ! {AI, Clock, Env, FS
     run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
       let segment = compaction_segment();
       let ctx = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-      let out = decision_msgs(segment, hooks.on_pre_step(ctx, segment));
+      let out = decision_msgs(segment, hooks.on_pre_step(ctx, segment).decision);
       ok_or_failure(no_system_in_output(out), "conformance.compactor.system_prefix_preserved", "no_system_in_output", segment, out)
     }
   }
@@ -244,7 +244,7 @@ export func scenario_tool_pairing_preserved() -> Scenario ! {AI, Clock, Env, FS,
     run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
       let segment = compaction_segment();
       let ctx = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-      let out = decision_msgs(segment, hooks.on_pre_step(ctx, segment));
+      let out = decision_msgs(segment, hooks.on_pre_step(ctx, segment).decision);
       if not pairing_preserved(segment, out) then Err(failure("conformance.compactor.tool_pairing_preserved", "pairing_preserved", segment, out))
       else ok_or_failure(ids_preserved(segment, out), "conformance.compactor.tool_pairing_preserved", "ids_preserved", segment, out)
     }
@@ -258,8 +258,8 @@ export func scenario_deterministic_replay() -> Scenario ! {AI, Clock, Env, FS, I
       let segment = compaction_segment();
       let ctx1 = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
       let ctx2 = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-      let out1 = decision_msgs(segment, hooks.on_pre_step(ctx1, segment));
-      let out2 = decision_msgs(segment, hooks.on_pre_step(ctx2, segment));
+      let out1 = decision_msgs(segment, hooks.on_pre_step(ctx1, segment).decision);
+      let out2 = decision_msgs(segment, hooks.on_pre_step(ctx2, segment).decision);
       ok_or_failure(same_msgs(out1, out2), "conformance.compactor.deterministic_replay", "deterministic_replay", segment, out2)
     }
   }
@@ -271,10 +271,10 @@ export func scenario_artifact_cache_effective() -> Scenario ! {AI, Clock, Env, F
     run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
       let segment = compaction_segment();
       let ctx1 = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-      let d1 = hooks.on_pre_step(ctx1, segment);
+      let d1 = hooks.on_pre_step(ctx1, segment).decision;
       let out1 = decision_msgs(segment, d1);
       let ctx2 = mk_conformance_ctx(segment, decision_artifacts(d1), poison_ports());
-      let out2 = decision_msgs(segment, hooks.on_pre_step(ctx2, segment));
+      let out2 = decision_msgs(segment, hooks.on_pre_step(ctx2, segment).decision);
       ok_or_failure(same_msgs(out1, out2), "conformance.compactor.artifact_cache_effective", "artifact_cache_effective", segment, out2)
     }
   }

@@ -9,16 +9,20 @@ import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx,
   ExtensionHooks,
   FinalizeDecision,
+  FinalizeOutcome,
   Msg,
   NoDecision,
   PassThrough,
   PreStepDecision,
+  PreStepOutcome,
   Compacted,
   PromptPatch,
   ResponseInterceptDecision,
+  ResponseInterceptOutcome,
   NoIntercept,
   ToolCallEnvelope,
   ToolHandleDecision,
+  ToolHandleOutcome,
   Delegate,
   ToolPolicyDecision,
   Allow
@@ -36,19 +40,22 @@ func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Allow
 }
 
-func delegate_tool(_ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-  Delegate
+-- S12: no port call, so the identity transition is the correct answer.
+func delegate_tool(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  { decision: Delegate, next_state: ctx.world }
 }
 
-func no_intercept(_ctx: ExtCtx, _response: string)
-  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  NoIntercept
+-- S12: no port call, so the identity transition is the correct answer.
+func no_intercept(ctx: ExtCtx, _response: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  { decision: NoIntercept, next_state: ctx.world }
 }
 
-func no_solver_decision(_ctx: ExtCtx, _candidate: string)
-  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  NoDecision
+-- S12: no port call, so the identity transition is the correct answer.
+func no_solver_decision(ctx: ExtCtx, _candidate: string)
+  -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  { decision: NoDecision, next_state: ctx.world }
 }
 
 func system_msg() -> Msg {
@@ -75,23 +82,35 @@ func drop_first_tool_result(msgs: [Msg]) -> [Msg] {
   }
 }
 
-func prefix_pre_step(_ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
-  Compacted([system_msg()] ++ msgs, "reject fixture: system injection", jo([]))
+-- S12: this hook calls no port, so returning the world it was given is the
+-- CORRECT identity transition rather than a dropped successor.
+func prefix_pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  { decision: Compacted([system_msg()] ++ msgs, "reject fixture: system injection", jo([])),
+    next_state: ctx.world }
 }
 
-func pair_pre_step(_ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
-  Compacted(drop_first_tool_result(msgs), "reject fixture: severed tool pair", jo([]))
+-- S12: as above — no port call, so the identity transition is correct.
+func pair_pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  { decision: Compacted(drop_first_tool_result(msgs), "reject fixture: severed tool pair", jo([])),
+    next_state: ctx.world }
 }
 
+-- One of the tree's only two extension callers of `ai_step` (the other is
+-- `compaction_ai.summarize_attempt`), which is why THIS row carries `Trace`.
+-- S12: it PERFORMS a provider call, so it must return `step.next_state` and
+-- never `ctx.world` — the latter type-checks identically and replays the
+-- consumed script entry.
 func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let summary = match ctx.ports.ai_step(ctx.model, msgs) {
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let step = ctx.ports.ai_step(ctx.world, ctx.model, msgs);
+  let summary = match step.result {
     Ok(content) => content,
     Err(e) => "ERR ${e}"
   };
-  Compacted([assistant_summary(summary), first_msg(msgs)], "reject fixture: no cache", jo([]))
+  { decision: Compacted([assistant_summary(summary), first_msg(msgs)], "reject fixture: no cache", jo([])),
+    next_state: step.next_state }
 }
 
 func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {

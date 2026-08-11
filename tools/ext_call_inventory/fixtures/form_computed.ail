@@ -14,13 +14,13 @@ module tools/ext_call_inventory/fixtures/form_computed
 -- anyway, so that if computed field access ever lands the case already has a
 -- home and an expectation.
 
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtPorts, Msg)
+import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, ExtCtx, ExtPorts, ExtWorld, Msg)
 
 export func pick(a: ExtPorts, b: ExtPorts, use_a: bool) -> ExtPorts {
   if use_a then a else b
 }
 
-export func summarize(a: ExtPorts, b: ExtPorts, use_a: bool, model: string, msgs: [Msg])
-  -> Result[string, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
-  pick(a, b, use_a).ai_step(model, msgs)
+export func summarize(a: ExtPorts, b: ExtPorts, use_a: bool, w: ExtWorld, model: string, msgs: [Msg])
+  -> AiStepOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  pick(a, b, use_a).ai_step(w, model, msgs)
 }
