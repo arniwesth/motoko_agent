@@ -28,7 +28,6 @@ module src/core/session
 import std/ai (step, Message, ToolCall, ToolSchema, AIError, StepResult, StreamChunk, ContentDelta, ThinkingDelta, Usage)
 import std/io (println, readLine)
 import std/clock (now)
-import std/env (getEnvOr)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
@@ -140,13 +139,13 @@ import src/core/phase_vocab (
   Finalize,
   Fail
 )
-import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, Ported, ScriptedStep, live_ports, scripted_ports, scripted_provider_state)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, Ported, ScriptedStep, live_ports, scripted_ports, scripted_world_state)
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, ProviderState, empty_provider_state)
+import src/core/ports (ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state)
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -352,11 +351,17 @@ type C2LoopState = {
   ext_artifacts: Json,
   telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
   provider: Ports,
-  -- D1's interim home for the provider cursor: ONE explicit field, threaded by
-  -- the driver. Not a closure captured inside the Ports value, not a provider
-  -- ADT payload, and never re-derived from message history. `world_state`
-  -- subsumes this field when it lands (WI-A12) and deletes it in the same change.
-  provider_state: ProviderState,
+  -- D1's `world_state`: ONE explicit field, threaded by the driver, the sole
+  -- home for every effect cursor in the run. Not a closure captured inside the
+  -- Ports value, not a provider ADT payload, and never re-derived from message
+  -- history. WI-A12 landed this by renaming WI-A2's interim `provider_state`
+  -- field, which is how D1's "subsumed and deleted in the same change" reads in
+  -- practice: there is no moment where two homes exist.
+  --
+  -- Every subsequent effect class A12 threads — the clock, approval, env reads,
+  -- runtime randomness, the typed tool contract — adds a field to WorldState
+  -- and consumes it through a port. None of them adds a field HERE.
+  world_state: WorldState,
   pending_tool_calls: [ToolCall],
   pending_tool_context: [Message],
   pending_tool_prefix: [Message],
@@ -603,7 +608,15 @@ func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
   }
 }
 
-func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, prior_counts: RuntimeStatusCounts) -> C2LoopState {
+-- WI-A12's clock class made `world` an explicit parameter rather than reading
+-- `provider.world` here. That is not ceremony: the entry point performs two
+-- clock reads (the session id and `started_at_ms`) BEFORE the loop begins, and
+-- taking the initial world from `provider.world` would silently discard both
+-- their successors, starting the loop from an un-advanced clock. That variant
+-- type-checks cleanly and its only symptom is `duration_ms: 0` — which is why
+-- `world_state_probe` asserts the clock advances rather than only that it is
+-- reproducible. A frozen clock is perfectly reproducible.
+func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, world: WorldState, prior_counts: RuntimeStatusCounts) -> C2LoopState {
   {
     msgs: history,
     step_idx: 0,
@@ -611,7 +624,7 @@ func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, 
     ext_artifacts: jo([]),
     telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
     provider: provider.ports,
-    provider_state: provider.state,
+    world_state: world,
     pending_tool_calls: [],
     pending_tool_context: [],
     pending_tool_prefix: [],
@@ -628,7 +641,7 @@ func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, 
 }
 
 func c2_initial_state(history: [Message], provider: PortedProvider) -> C2LoopState {
-  c2_initial_state_with_counts(history, provider, zero_runtime_status_counts())
+  c2_initial_state_with_counts(history, provider, provider.world, zero_runtime_status_counts())
 }
 
 -- Serialize the exact [Message] payload a provider rejected, so a
@@ -686,23 +699,100 @@ func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Resu
   -- cursor fix that says so. Any conformant interim profile must exclude every
   -- hook registered by an extension that calls this. Widening ExtPorts.ai_step
   -- belongs to the ABI major the repin forces (ADR-001 D1, Milestone B).
-  match p.model_step(empty_provider_state(), provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk).result {
+  match p.model_step(empty_world_state(), provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk).result {
     Ok(result) => Ok(result.message.content),
     Err(e) => Err("${e.code}: ${e.message}")
   }
 }
 
-func ext_ports_of(p: Ports, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+-- The extension-side clock stays UN-ROUTED, deliberately, and this comment is
+-- the whole reason why.
+--
+-- WI-A12 widened `Ports.clock_now` to be state-threaded. `ExtPorts.clock_now`
+-- is `() -> int` and widening it is the Milestone B ABI major (D1), out of
+-- A12's scope by the plan's own boundary — the eight `motoko-ext-compose` clock
+-- sites and this seam belong to WI-C5.
+--
+-- Bridging the two would need a `() -> int` closure capturing the world, and on
+-- pinned AILANG v0.26.0 that CANNOT BE WRITTEN: zero-argument lambdas do not
+-- parse in expression position (`func() ->` lexes `()` as the unit token, and
+-- `func ( ) ->` builds a one-parameter function of unit — "arity mismatch:
+-- 0 vs 1"), and partial application is not supported either ("cannot unify
+-- type constructor int with TFunc2"). Only the top-level declaration form
+-- `func f() -> T` is zero-arity, and a top-level function captures nothing.
+-- Both were measured on the pin, not assumed.
+--
+-- So the choice was between two un-routed options, and the deciding question is
+-- which one FAILS LOUDLY if someone adds the first caller before C5:
+--
+--   * a frozen constant / world snapshot — silently wrong, the exact shape of
+--     cluster 1's pinned cursor, and invisible to every gate; or
+--   * the ambient read below — which makes a deterministic run with `Clock`
+--     withheld DIE the moment a caller appears, turning the world_state poison
+--     probe red and naming the problem.
+--
+-- The ambient read is chosen for that reason. It is also exactly the pre-A12
+-- behaviour of this seam, so it changes nothing observable today:
+-- `ExtPorts.clock_now` has ZERO call sites repo-wide, and the only
+-- constructions are the `noop_clock_now` stubs in the conformance harness and
+-- the progress-contract guard. This is the one residual ambient clock read
+-- reachable from the driver's call graph, it is guarded rather than hidden, and
+-- WI-C5 removes it. It is NOT one of P3's four routed driver sites.
+-- Project a typed tool outcome onto the un-widened `ExtPorts.proc_exec` string
+-- return. Faults are RENDERED rather than dropped: an extension handed "" when
+-- a tool actually failed is the silent-wrong shape this whole item exists to
+-- remove, even on a seam A12 does not own.
+pure func tool_outcome_text(o: ToolOutcome) -> string {
+  match o {
+    ToolCompleted(c) => c.content,
+    ToolFailed(f) => encode(jo([kv("error", jb(true)), kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))])),
+    ToolCorrelationMismatch(m) => encode(jo([kv("error", jb(true)), kv("code", js("ToolCorrelationMismatch")), kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))])),
+    ToolDeadlineExceeded(d) => encode(jo([kv("error", jb(true)), kv("code", js("ToolDeadlineExceeded")), kv("tool_call_id", js(d.tool_call_id)), kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))), kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))]))
+  }
+}
+
+pure func decode_or_empty(raw: string) -> Json {
+  match decode(raw) { Ok(j) => j, Err(_) => jo([]) }
+}
+
+func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
   let ai_step = func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
     ext_ai_step(p, model, base_url, msgs)
   };
+  let env_get = func(key: string, fallback: string) -> string ! {Env} {
+    p.env_get(world, key, fallback).value
+  };
+  -- `ExtPorts.proc_exec` is two-argument, so like `env_get` it CAN capture the
+  -- world. It projects the typed outcome back down to a string because that is
+  -- the un-widened ABI shape (WI-C5 owns widening it), and the fault variants
+  -- are rendered rather than dropped so an extension is not told "" when a tool
+  -- actually failed. Note this seam previously forwarded `fake_tool`, which
+  -- returned "" unconditionally — it was a stub, so any output at all is an
+  -- improvement rather than a regression.
+  let proc_exec = func(name: string, args: string) -> string ! {IO, Process, FS} {
+    let inv: ToolInvocation = {
+      call: { id: "", tool: name, arguments: decode_or_empty(args) },
+      workdir: ".",
+      timeout_ms: 0,
+      started_at_ms: 0
+    };
+    tool_outcome_text(p.tool_exec(world, inv).outcome)
+  };
   {
     ai_step: ai_step,
-    proc_exec: p.tool_exec,
-    clock_now: p.clock_now,
-    env_get: p.env_get
+    proc_exec: proc_exec,
+    clock_now: ext_unrouted_clock,
+    -- Unlike the clock, this one IS routed: `env_get` is two-argument, so a
+    -- closure capturing the world can be written. The clock's `() -> int` shape
+    -- cannot be, which is the whole of the difference between them — see above.
+    env_get: env_get
   }
 }
+
+-- See `ext_ports_of`. Un-routed by scope, ambient by choice so that a caller
+-- appearing before WI-C5 fails loudly under the Clock poison probe instead of
+-- silently reading a frozen value.
+func ext_unrouted_clock() -> int ! {Clock} { now() }
 
 
 
@@ -720,18 +810,22 @@ pure func ext_token_telemetry(t: { last_input_tokens: int, last_output_tokens: i
 -- StepProvider remains the *entry-point argument* type — callers still pass
 -- LiveAI or Scripted(script); it just does not survive into loop state.
 --
--- WI-A2: it now returns the initial provider state alongside the Ports. The
--- script rides in that state rather than being baked into a closure, which is
--- what lets the driver own the cursor. `history` is no longer read — the
--- scripted adapter used to derive its position from it, and that is exactly the
--- defect (F6) this change removes — but the parameter stays because it is part
--- of the normaliser's signature at six call sites and D1 keeps this seam stable
--- until `world_state` replaces it.
-func ported_provider(rt: ExtRuntime, _history: [Message], provider: StepProvider) -> PortedProvider {
+-- WI-A2: it now returns the initial world alongside the Ports. The script rides
+-- in that world rather than being baked into a closure, which is what lets the
+-- driver own the cursor.
+--
+-- WI-A12 deleted the `history` parameter. It existed solely to compute the
+-- `base_assistant_count` that A2 retired — the derived index that WAS the F6
+-- defect — and A2 kept it only because D1 holds this seam stable until
+-- `world_state` replaces it. This is that replacement, so the parameter goes
+-- with it (cluster 1, C5). Six call sites, all of which were passing a message
+-- list nothing read.
+func ported_provider(rt: ExtRuntime, provider: StepProvider) -> PortedProvider {
   match provider {
-    Ported(p) => { ports: p, state: empty_provider_state() },
-    LiveAI => { ports: live_ports(rt), state: empty_provider_state() },
-    Scripted(script) => { ports: scripted_ports(), state: scripted_provider_state(script) }
+    Ported(p) => { ports: p, world: empty_world_state() },
+    LiveAI => { ports: live_ports(rt), world: empty_world_state() },
+    Scripted(script) => { ports: scripted_ports(), world: scripted_world_state(script) },
+    ScriptedWorld(world) => { ports: scripted_ports(), world: world }
   }
 }
 
@@ -817,13 +911,23 @@ func append_stream_delta(session_id: string, step_idx: int, stream_id: string, c
 }
 
 -- Derive a session_id from MOTOKO_SESSION_ID env var (set by the TS wrapper
--- to match the JSONL filename) or fall back to a now()-derived id. The
+-- to match the JSONL filename) or fall back to a clock-derived id. The
 -- wrapper-set form is preferred so the JSONL session_id matches the
 -- filename consumers grep for.
-func derive_session_id() -> string ! {Env, Clock} {
-  let env_id = getEnvOr("MOTOKO_SESSION_ID", "");
-  if env_id != "" then env_id
-  else "session_${show(now())}"
+--
+-- WI-A12's clock class: the fallback reads the world clock through the port
+-- rather than ambient `now()`, and returns its successor. Returning the
+-- successor matters even though the env-var branch never advances the clock —
+-- the two branches must be interchangeable from the caller's side, and a
+-- read-shaped function that sometimes swallows its successor is how a cursor
+-- silently stops advancing.
+func derive_session_id(ports: Ports, world: WorldState) -> { id: string, next_state: WorldState } ! {Env, Clock} {
+  let env_id = ports.env_get(world, "MOTOKO_SESSION_ID", "");
+  if env_id.value != "" then { id: env_id.value, next_state: env_id.next_state }
+  else {
+    let reading = ports.clock_now(env_id.next_state);
+    { id: "session_${show(reading.now_ms)}", next_state: reading.next_state }
+  }
 }
 
 -- Build the standard kv-list emitted on every per-step event that has
@@ -894,7 +998,20 @@ pure func mk_run_summary(
 -- Centralizing it is the point: a new terminal path cannot update one channel
 -- and silently miss the other, because there is only one channel to call.
 -- The RunSummary is appended last, so it is the final record of the trace.
+-- WI-A12's clock class: `ports`/`world` replace the ambient `now()` below. This
+-- is the fourth and last driver clock site, and the only one inside the loop.
+--
+-- The successor world is DISCARDED here, uniquely in the driver. That is sound
+-- only because this is the terminal read — nothing observes the world after a
+-- terminal return, since c2_finalize holds the sole terminal record literal
+-- (the structural guard `make terminal_trace` enforces). Any future read added
+-- BEFORE this one must thread its successor rather than copy this pattern.
+--
+-- The guard is a `grep -c` over this file and it counts comment lines too, so
+-- naming its pattern in prose turns the gate red. Hence the circumlocution.
 func c2_finalize(
+  ports: Ports,
+  world: WorldState,
   session_id: string,
   model: string,
   totals: RuntimeLoopTotals,
@@ -905,7 +1022,7 @@ func c2_finalize(
   trace: LedgerTrace,
   result: Result[[Message], AIError]
 ) -> TracedSessionResult ! {IO, Clock, Trace} {
-  let now_ms = now();
+  let now_ms = ports.clock_now(world).now_ms;
   let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit());
   let _ = ledger_emit(session_id, summary);
   { result: result, trace: ledger_append(trace, WireRecord(summary)) }
@@ -1254,12 +1371,22 @@ pure func parse_persist_retries_budget(raw: string) -> int {
   }
 }
 
-func session_policy_init(model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicy ! {Env} {
+-- WI-A12's env class. Four of the driver's six env reads are here, and they are
+-- threaded rather than ambient. The successor is discarded at the end because
+-- policy init happens once, before the loop, and `scripted_env` is a keyed
+-- lookup that returns the world unchanged — but each read still takes the
+-- PREVIOUS read's successor, so that when A13 starts recording reads the order
+-- is already right and nothing has to be re-threaded.
+func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicy ! {Env} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-  let persist_retries = parse_persist_retries_budget(getEnvOr("MOTOKO_PERSIST_RETRIES", "0"));
-  let retry_stream_errors = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
-  let provider_base_url = getEnvOr("OPENAI_BASE_URL", "");
-  let headless = getEnvOr("MOTOKO_HEADLESS", "") == "1";
+  let r_persist = ports.env_get(world, "MOTOKO_PERSIST_RETRIES", "0");
+  let r_retry = ports.env_get(r_persist.next_state, "MOTOKO_RETRY_STREAM_ERROR", "1");
+  let r_base = ports.env_get(r_retry.next_state, "OPENAI_BASE_URL", "");
+  let r_headless = ports.env_get(r_base.next_state, "MOTOKO_HEADLESS", "");
+  let persist_retries = parse_persist_retries_budget(r_persist.value);
+  let retry_stream_errors = r_retry.value != "0";
+  let provider_base_url = r_base.value;
+  let headless = r_headless.value == "1";
   {
     step: {
       step_budget: budget_steps,
@@ -1359,6 +1486,8 @@ pure func decision_fail_reason(code: string, message: string) -> TerminationReas
 }
 
 func c2_fail(
+  ports: Ports,
+  world: WorldState,
   session_id: string,
   model: string,
   totals: RuntimeLoopTotals,
@@ -1379,7 +1508,7 @@ func c2_fail(
     }))
   else ();
   let result: Result[[Message], AIError] = Err({ code: code, message: message, retryable: retryable });
-  c2_finalize(session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace, result)
+  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace, result)
 }
 
 pure func c2_pending_context(st: C2LoopState) -> [Message] {
@@ -1426,7 +1555,7 @@ func c2_finish_tool_batch(
 	    ext_artifacts: st.ext_artifacts,
 	    telemetry: st.telemetry,
 	    provider: st.provider,
-	    provider_state: st.provider_state,
+	    world_state: st.world_state,
     pending_tool_calls: [],
     pending_tool_context: [],
     pending_tool_prefix: [],
@@ -1472,7 +1601,7 @@ func c2_continue_tool_batch(
 	        ext_artifacts: st.ext_artifacts,
 	        telemetry: st.telemetry,
 	        provider: st.provider,
-	        provider_state: st.provider_state,
+	        world_state: st.world_state,
         pending_tool_calls: c2_tool_plan_calls(req.remaining),
         pending_tool_context: st.pending_tool_context,
         pending_tool_prefix: st.pending_tool_prefix,
@@ -1508,7 +1637,7 @@ func c2_after_dp7(
 	  ext_artifacts: Json,
 	  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
 	  st_provider: Ports,
-	  st_provider_state: ProviderState,
+	  st_world_state: WorldState,
   prior_counts: RuntimeStatusCounts,
   session_id: string,
   started_at_ms: int,
@@ -1527,7 +1656,7 @@ func c2_after_dp7(
 	        ext_artifacts: ext_artifacts,
 	        telemetry: telemetry,
 	        provider: st_provider,
-	        provider_state: st_provider_state,
+	        world_state: st_world_state,
         pending_tool_calls: [],
         pending_tool_context: [],
         pending_tool_prefix: [],
@@ -1551,7 +1680,7 @@ func c2_after_dp7(
 	        ext_artifacts: ext_artifacts,
 	        telemetry: telemetry,
 	        provider: st_provider,
-	        provider_state: st_provider_state,
+	        world_state: st_world_state,
         pending_tool_calls: [],
         pending_tool_context: [],
         pending_tool_prefix: [],
@@ -1592,7 +1721,7 @@ func c2_loop(
     -- enumeration missed. It now finalizes like every other.
     Err(reason) => {
       let result: Result[[Message], AIError] = Err({ code: "InvalidHistory", message: reason, retryable: false });
-      c2_finalize(session_id, model, st.totals, st.step_idx, TermInvalidHistory, reason, started_at_ms, st.trace, result)
+      c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInvalidHistory, reason, started_at_ms, st.trace, result)
     },
     Ok(step_state) => {
       let decision = decide(step_state, policy.step);
@@ -1600,7 +1729,7 @@ func c2_loop(
       match decision {
         -- Terminal: budget, max steps, compaction exhaustion or internal,
         -- discriminated by decision_fail_reason.
-        Fail(info) => c2_fail(session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision),
+        Fail(info) => c2_fail(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision),
         Finalize(info) => {
           let done_step = c2_done_step(st.step_idx);
           let empty_event = EmptyStopFinalize({
@@ -1619,7 +1748,7 @@ func c2_loop(
           -- as it did before; the DoneEvent is projected only and is not a
           -- second terminal record (D6.3), so the appended RunSummary remains
           -- the final record of the returned trace.
-          let finalized = c2_finalize(session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_after_empty_floor, Ok(st.msgs));
+          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_after_empty_floor, Ok(st.msgs));
           let _ = ledger_emit(session_id, DoneEvent({
             step: done_step,
             output: info.output,
@@ -1637,7 +1766,7 @@ func c2_loop(
 	            ext_artifacts: st.ext_artifacts,
 	            telemetry: st.telemetry,
 	            provider: st.provider,
-	            provider_state: st.provider_state,
+	            world_state: st.world_state,
             pending_tool_calls: [],
             pending_tool_context: [],
             pending_tool_prefix: [],
@@ -1663,7 +1792,7 @@ func c2_loop(
 	            ext_artifacts: cp.state.ext_artifacts,
 	            telemetry: cp.state.telemetry,
 	            provider: st.provider,
-	            provider_state: st.provider_state,
+	            world_state: st.world_state,
             pending_tool_calls: st.pending_tool_calls,
             pending_tool_context: st.pending_tool_context,
             pending_tool_prefix: st.pending_tool_prefix,
@@ -1686,13 +1815,26 @@ func c2_loop(
             None => {
               let msg = "approval requested without pending approval state";
               let result: Result[[Message], AIError] = Err({ code: "Internal", message: msg, retryable: false });
-              c2_finalize(session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, result)
             },
             Some(req) => {
-              let raw = readLine();
-              let resolution = resolve_approval(raw, req.default_allow, raw == "");
-              let tool_step_idx = c2_done_step(st.step_idx);
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), resolve_context_limit(model), ext_ports_of(st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
+              -- WI-A12's approval class. The operator's input comes from the
+              -- world through the port; `resolve_approval` stays here because
+              -- it is pure policy, not an effect. `input.eof` replaces the old
+              -- `raw == ""` inference — behaviour-identical for the live
+              -- adapter, which reports eof exactly when readLine returns "".
+              let input = st.provider.approval_read(st.world_state, req);
+              let resolution = resolve_approval(input.raw, req.default_allow, input.eof);
+              -- `post` carries the advanced approval cursor and is what every
+              -- continuation below uses. Deliberately NOT written as a shadowing
+              -- `let st = ...`: that compiles, but it makes "which `st`" a
+              -- question of line order, and a later edit adding a use above this
+              -- point would silently read the pre-approval world. Passing `st`
+              -- here instead of `post` is the freeze this class's assertion
+              -- catches — the queue would never advance.
+              let post: C2LoopState = { st | world_state: input.next_state };
+              let tool_step_idx = c2_done_step(post.step_idx);
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), resolve_context_limit(model), ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry);
               match resolution {
                 ApprovalDenied(reason) => {
                   let _ = ledger_emit(session_id, NativeToolDenied({
@@ -1703,11 +1845,14 @@ func c2_loop(
                     reason: reason
                   }));
                   let denial_msg = policy_denied_message(req.call, reason);
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [denial_msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, trace_with_decision, req, post.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
-                  let msg = execute_allowed_tool_call(rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [msg])
+                  let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
+                  -- `after` carries BOTH advanced cursors: the approval queue
+                  -- (from `post`) and the tool queue (from this execution).
+                  let after: C2LoopState = { post | world_state: executed.next_state };
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, after, trace_with_decision, req, after.accumulated_tool_msgs ++ [executed.msg])
                 }
               }
             }
@@ -1719,7 +1864,7 @@ func c2_loop(
           let calls = c2_tool_plan_calls(plan.entries);
           let request_id = "step-${show(tool_step_idx)}";
           let ctx_msgs = c2_pending_context(st);
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_of(st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let _ = if emit_calls then
             ledger_emit(session_id, NativeToolCalls({
@@ -1731,9 +1876,12 @@ func c2_loop(
           else ();
           let runtime_status_content = encode(runtime_status_json(st, policy, tool_step_idx));
           let runtime_builtin = \call. runtime_status_tool_message(call, runtime_status_content);
-          match dispatch_tool_entries_with_builtin(rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event), runtime_builtin) {
-            ToolDispatchDone(tool_msgs) =>
-              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, tool_step_idx, stream_id, tool_msgs),
+          match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event), runtime_builtin) {
+            -- `done.world`, not `st.world_state`. The batch may have executed
+            -- several tools and each one advanced the cursor; taking it off `st`
+            -- type-checks and rewinds the world to before the batch.
+            ToolDispatchDone(done) =>
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, { st | world_state: done.world }, trace_with_decision, tool_step_idx, stream_id, done.msgs),
             ToolDispatchPending(pending) => {
               let next_state: C2LoopState = {
                 msgs: st.msgs,
@@ -1742,7 +1890,10 @@ func c2_loop(
 	                ext_artifacts: st.ext_artifacts,
 	                telemetry: st.telemetry,
 	                provider: st.provider,
-	                provider_state: st.provider_state,
+	                -- `pending.world`: tools already executed in this batch
+	                -- before the approval interrupted it, and their cursor
+	                -- advances must survive the suspension.
+	                world_state: pending.world,
                 pending_tool_calls: [pending.request.call],
                 pending_tool_context: st.pending_tool_context,
                 pending_tool_prefix: st.pending_tool_prefix,
@@ -1767,7 +1918,7 @@ func c2_loop(
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
           let ext_context_limit = if context_limit - pinned_tokens < 0 then 0 else context_limit - pinned_tokens;
-          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
@@ -1780,14 +1931,14 @@ func c2_loop(
               let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
-              c2_finalize(session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), result)
             },
             -- Terminal: compaction exhausted.
             Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
-              c2_finalize(session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), result)
             },
             Ok(payload) => {
               let compacted_msgs = payload_messages(payload);
@@ -1806,7 +1957,7 @@ func c2_loop(
                 model: model
               });
               let _ = ledger_emit(session_id, prepared_event);
-              let exchange = dispatch_step(st.provider, st.provider_state, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
+              let exchange = dispatch_step(st.provider, st.world_state, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
               -- exchange.emissions rides along but has no driver consumer yet:
               -- live_ports returns [] until the recorded-stream API lands, and
               -- projecting the log into the ledger is WI-A12's work. WI-A1 is
@@ -1815,7 +1966,8 @@ func c2_loop(
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
                   let _ = ledger_emit(session_id, end_event);
-                  let _ = if not e.retryable && getEnvOr("MOTOKO_CAPTURE_FAILED_PAYLOAD", "") != "" then capture_failing_payload(e, compacted_msgs) else ();
+                  -- WI-A12's env class: the sixth and last driver env read.
+                  let _ = if not e.retryable && st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", "").value != "" then capture_failing_payload(e, compacted_msgs) else ();
                   if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
                     let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
                     let _ = ledger_emit(session_id, retry_event);
@@ -1826,7 +1978,7 @@ func c2_loop(
 	                      ext_artifacts: chain.artifacts,
 	                      telemetry: st.telemetry,
 	                      provider: st.provider,
-	                      provider_state: exchange.next_state,
+	                      world_state: exchange.next_state,
                       pending_tool_calls: [],
                       pending_tool_context: [],
                       pending_tool_prefix: [],
@@ -1843,7 +1995,7 @@ func c2_loop(
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                   } else {
                     -- Terminal: unretried provider/stream failure.
-                    c2_finalize(session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), Err(e))
+                    c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), Err(e))
                   }
                 },
                 Ok(result) => {
@@ -1858,7 +2010,7 @@ func c2_loop(
                   let applied = apply_state_delta(step_state, phase.delta);
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, policy.step.provider_base_url), chain.artifacts, applied.telemetry);
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry);
                   let trace_after_model = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), phase.events);
                   match dispatch_response_intercept(rt, post_ctx, result.message.content) {
                     InterceptHandled(envelope) => {
@@ -1878,7 +2030,7 @@ func c2_loop(
 	                        ext_artifacts: chain.artifacts,
 	                        telemetry: applied.telemetry,
 	                        provider: st.provider,
-	                        provider_state: exchange.next_state,
+	                        world_state: exchange.next_state,
                         pending_tool_calls: [],
                         pending_tool_context: [],
                         pending_tool_prefix: [],
@@ -1911,7 +2063,7 @@ func c2_loop(
 	                          ext_artifacts: chain.artifacts,
 	                          telemetry: applied.telemetry,
 	                          provider: st.provider,
-	                          provider_state: exchange.next_state,
+	                          world_state: exchange.next_state,
                           pending_tool_calls: applied.pending_tool_calls,
                           pending_tool_context: msgs_with_assistant,
                           pending_tool_prefix: msgs_with_assistant,
@@ -1946,7 +2098,7 @@ func c2_loop(
 	                              ext_artifacts: chain.artifacts,
 	                              telemetry: applied.telemetry,
 	                              provider: st.provider,
-	                              provider_state: exchange.next_state,
+	                              world_state: exchange.next_state,
                               pending_tool_calls: [synth_call],
                               pending_tool_context: msgs_with_assistant,
                               pending_tool_prefix: st.msgs ++ [augmented_assistant_msg],
@@ -1976,7 +2128,7 @@ func c2_loop(
 	                                  ext_artifacts: chain.artifacts,
 	                                  telemetry: applied.telemetry,
 	                                  provider: st.provider,
-	                                  provider_state: exchange.next_state,
+	                                  world_state: exchange.next_state,
                                   pending_tool_calls: [],
                                   pending_tool_context: [],
                                   pending_tool_prefix: [],
@@ -2007,7 +2159,7 @@ func c2_loop(
 	                                    ext_artifacts: chain.artifacts,
 	                                    telemetry: applied.telemetry,
 	                                    provider: st.provider,
-	                                    provider_state: exchange.next_state,
+	                                    world_state: exchange.next_state,
                                     pending_tool_calls: [],
                                     pending_tool_context: [],
                                     pending_tool_prefix: [],
@@ -2075,11 +2227,18 @@ func run_v2_from_messages_traced_with_policy_and_counts(
   provider: PortedProvider,
   prior_counts: RuntimeStatusCounts
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let session_id = derive_session_id();
-  let started_at_ms = now();
+  -- WI-A12's clock class. Two of the four driver clock sites are here, both
+  -- BEFORE the loop starts, and both successors must reach the loop's world:
+  -- `started.next_state` is what `c2_initial_state_with_counts` receives, not
+  -- `provider.world`. Taking the latter type-checks and silently discards both
+  -- reads, leaving the loop on an un-advanced clock.
+  let derived = derive_session_id(provider.ports, provider.world);
+  let started = provider.ports.clock_now(derived.next_state);
+  let session_id = derived.id;
+  let started_at_ms = started.now_ms;
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, provider, prior_counts));
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts));
   Trace.spanEnd(session_span);
   result
 }
@@ -2099,8 +2258,11 @@ export func run_v2_session_traced(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, ported_provider(rt, history, provider))
+  -- WI-A12: the provider is normalised FIRST so policy init can read the env
+  -- through its ports instead of ambiently.
+  let pp = ported_provider(rt, provider);
+  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 export func run_v2_session_traced_with_persist_retries(
@@ -2119,7 +2281,8 @@ export func run_v2_session_traced_with_persist_retries(
   persist_retries: int,
   provider: StepProvider
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let base = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  let pp = ported_provider(rt, provider);
+  let base = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
   let policy: SessionPolicy = {
     step: {
       step_budget: base.step.step_budget,
@@ -2136,7 +2299,7 @@ export func run_v2_session_traced_with_persist_retries(
     },
     headless: base.headless
   };
-  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, ported_provider(rt, history, provider))
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 func run_v2_from_messages_with_policy(
@@ -2173,11 +2336,18 @@ func run_v2_from_messages_with_policy_and_counts(
   provider: PortedProvider,
   prior_counts: RuntimeStatusCounts
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let session_id = derive_session_id();
-  let started_at_ms = now();
+  -- WI-A12's clock class. Two of the four driver clock sites are here, both
+  -- BEFORE the loop starts, and both successors must reach the loop's world:
+  -- `started.next_state` is what `c2_initial_state_with_counts` receives, not
+  -- `provider.world`. Taking the latter type-checks and silently discards both
+  -- reads, leaving the loop on an un-advanced clock.
+  let derived = derive_session_id(provider.ports, provider.world);
+  let started = provider.ports.clock_now(derived.next_state);
+  let session_id = derived.id;
+  let started_at_ms = started.now_ms;
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, provider, prior_counts)).result;
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts)).result;
   Trace.spanEnd(session_span);
   result
 }
@@ -2198,8 +2368,9 @@ export func run_v2(
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let messages = msgs_to_messages(initial_msgs);
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, ported_provider(rt, messages, provider))
+  let pp = ported_provider(rt, provider);
+  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 -- Run loop_v2 starting from an existing [Message] history (instead of the
@@ -2221,8 +2392,9 @@ export func run_v2_from_messages(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, ported_provider(rt, history, provider))
+  let pp = ported_provider(rt, provider);
+  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 -- Read a JSON-shaped string field from a decoded Json object, returning
@@ -2281,6 +2453,14 @@ func conversation_loop_v2_with_policy(
   -- on 2026-05-08 (msg_20260508_102147_4f9aa71d).
   if policy.headless then ()
   else {
+  -- NOT routed by WI-A12, deliberately. This read is the interactive
+  -- conversation REPL asking for the next USER TURN — it is not approval input,
+  -- and it sits ABOVE `run_v2_session_traced`, outside the traced driver surface
+  -- D1 scopes `world_state` to. A deterministic run drives the traced entry
+  -- point directly and never reaches this loop, which is why withholding a
+  -- capability here changes nothing the poison pair observes. Routing the
+  -- conversation turn belongs with whatever makes multi-turn sessions
+  -- replayable, not with A12.
   let raw = readLine();
   if raw == "" then ()
   else match decode(raw) {
@@ -2351,8 +2531,8 @@ export func conversation_loop_v2(
   provider: StepProvider,
   session_id: string
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  let live_provider = ported_provider(rt, history, provider);
+  let live_provider = ported_provider(rt, provider);
+  let policy = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
   conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, zero_runtime_status_counts())
 }
 
@@ -2378,9 +2558,14 @@ export func run_v2_with_conversation(
   provider: StepProvider
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let initial_messages = msgs_to_messages(initial_msgs);
-  let session_id = derive_session_id();
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  let live_provider = ported_provider(rt, initial_messages, provider);
+  let live_provider = ported_provider(rt, provider);
+  let policy = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
+  -- Ordered after `ported_provider` because WI-A12 made `derive_session_id`
+  -- read the world clock through the port instead of ambient `now()`, so it
+  -- needs the normalised provider. The successor is discarded: this id labels
+  -- the outer conversation loop, and each traced run below derives its own from
+  -- its own world. That is pre-existing behaviour, not a cursor being dropped.
+  let session_id = derive_session_id(live_provider.ports, live_provider.world).id;
   let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, live_provider);
   let initial_counts = runtime_status_counts(initial_traced.trace);
   match initial_traced.result {
@@ -2590,7 +2775,7 @@ pure func test_runtime_status_includes_prior_conversation_counts() -> bool
       ext_artifacts: jo([]),
       telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
       provider: scripted_ports(),
-      provider_state: empty_provider_state(),
+      world_state: empty_world_state(),
       pending_tool_calls: [],
       pending_tool_context: [],
       pending_tool_prefix: [],
@@ -2641,7 +2826,7 @@ pure func test_runtime_status_reports_actual_context_window() -> bool
       ext_artifacts: jo([]),
       telemetry: { last_input_tokens: 500, last_output_tokens: 20, last_estimated_input_tokens: 0 },
       provider: scripted_ports(),
-      provider_state: empty_provider_state(),
+      world_state: empty_world_state(),
       pending_tool_calls: [],
       pending_tool_context: [],
       pending_tool_prefix: [],

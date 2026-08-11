@@ -35,10 +35,10 @@ disagree, the plan wins and this note is stale.
 |---|---|---|---|---|
 | 1 | **A1 + P6 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **DONE 2026-08-02** — `e59acaa`, `4ad2c7a`, `6dd1bbe`. Report: `NOTE-cluster-1-execution-report-and-plan-corrections.md` |
 | 2 | **A4 + A5 + A11** | `tools/`, Python; scans the tree, edits none of it | — | Safe to write now |
-| 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | Safe to write now |
+| 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | **Handoff written**: `HANDOFF-execute-a6-a7-a8-artifacts-and-validators.md`. On the critical path twice (A13 needs A7's ids; A10 needs all three). First new-artifact work — the sizing rate is *not* assumed to transfer |
 | 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
 | 5 | **A10** | profile/manifest machinery | 2 and 3 | Wait |
-| 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **Handoff written**: `HANDOFF-execute-a12-world-state-threading.md`. Critical path. Carries both clusters' silent-wrong findings; assertion must cover trace completeness, not just cursor advancement |
+| 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
 | 7 | **A13** | discovery/replay | 3, 4, 5, 6 | Wait |
 | 8 | **A14 + A15** | invariants, latency pair, corpora, CI | 7 | Wait |
 
@@ -75,6 +75,15 @@ four things it cannot:
 1. **Current grounding** — a table of the anchors the cluster will touch, re-verified at HEAD, gated
    behind `git diff --stat <last-known-good>..HEAD -- src packages scripts` with the instruction to
    re-measure everything if it is non-empty.
+
+   **The anchor table is itself a source of defects, and cluster 6 proved it.** The A12 handoff's
+   table named *three* dispatch carry sites; there are **six**, and **cluster 1's report had said six
+   all along** — the handoff lost three in transcription from the report it was built on. It changed
+   nothing only because the class turned out to be a uniform rename; a session hand-threading from
+   that list would have frozen three sites, which is precisely the defect cluster 1 filed,
+   reintroduced by the artifact meant to prevent it. **Derive every count in the table from a command
+   you run while writing it, paste the command, and never carry a number across from prose** —
+   including prose you wrote yourself.
 2. **The rule the session will break by accident** — every cluster has one. Cluster 1's is that A1
    and A2 are two commits because one is behaviour-preserving and the other is not. Find the
    equivalent before writing: it is usually a distinction the plan states once and a builder would

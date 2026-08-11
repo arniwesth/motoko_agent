@@ -9,7 +9,7 @@ import std/result (Result, Ok, Err)
 import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, ProviderState, empty_provider_state, ports_shape_probe)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead, ToolInvocation, ToolExecution, ToolCompleted)
 import src/core/test/stub_step (StepProvider, Ported)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -163,16 +163,42 @@ func routed_step(max_tools: int, model: string, msgs: [Message], _on_chunk: (Str
   }
 }
 
-func fixed_clock() -> int ! {Clock} { 123456789 }
-func fixed_env(_key: string, fallback: string) -> string ! {Env} { fallback }
-func fixed_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
+-- WI-A12 made `Ports.clock_now` state-threaded. This fixture pinned a constant
+-- epoch, and the state-threaded equivalent of a constant is a world whose clock
+-- does not advance — so it returns the reading WITHOUT a successor advance,
+-- preserving this fixture's behaviour exactly. It is a fixture, not a driver
+-- adapter, and nothing here asserts on elapsed time.
+func fixed_clock(state: WorldState) -> ClockReading ! {Clock} {
+  { now_ms: 123456789, next_state: state }
+}
+
+-- The same constant for `ExtPorts.clock_now`, which is `() -> int` and is NOT
+-- widened by A12 — the extension-side clock belongs to WI-C5.
+func fixed_ext_clock() -> int ! {Clock} { 123456789 }
+-- WI-A12 made `Ports.env_get` state-threaded; this fixture always served the
+-- caller's fallback, so the threaded form does the same and returns the world
+-- unchanged. `fixed_ext_env` is the un-widened `ExtPorts` shape (WI-C5's).
+func fixed_env(state: WorldState, _key: string, fallback: string) -> EnvRead ! {Env} {
+  { value: fallback, next_state: state }
+}
+
+func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback }
+-- WI-A12 widened `Ports.tool_exec` to the typed contract. This fixture served
+-- an empty string; the typed equivalent is an empty completion for the id that
+-- was actually asked about, with the world unchanged. `fixed_ext_exec` is the
+-- un-widened `ExtPorts.proc_exec` shape (WI-C5's).
+func fixed_exec(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  { outcome: ToolCompleted({ tool_call_id: inv.call.id, content: "" }), next_state: state }
+}
+
+func fixed_ext_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 func runtime_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
   long_runtime()
 }
 
 func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
-  let model_step = func(state: ProviderState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
     { emissions: [], result: routed_step(max_tools, model, msgs, on_chunk), next_state: state }
   };
@@ -242,7 +268,7 @@ func routed_step_strict(_model: string, msgs: [Message], _on_chunk: (StreamChunk
 }
 
 func strict_ports() -> Ports ! {AI, IO, Trace} {
-  let model_step = func(state: ProviderState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
     { emissions: [], result: routed_step_strict(model, msgs, on_chunk), next_state: state }
   };
@@ -739,14 +765,14 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
     ports: {
       ai_step: func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
         let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
-        match ports.model_step(empty_provider_state(), model, msgs, on_chunk).result {
+        match ports.model_step(empty_world_state(), model, msgs, on_chunk).result {
           Ok(r) => Ok(r.message.content),
           Err(e) => Err(e.message)
         }
       },
-      proc_exec: fixed_exec,
-      clock_now: fixed_clock,
-      env_get: fixed_env
+      proc_exec: fixed_ext_exec,
+      clock_now: fixed_ext_clock,
+      env_get: fixed_ext_env
     },
     artifacts: artifacts,
     telemetry: zero_token_telemetry()
@@ -758,7 +784,7 @@ func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx {
 }
 
 func summary_ports(summary: string) -> Ports ! {AI, IO, Trace} {
-  let model_step = func(state: ProviderState, _model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: WorldState, _model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
     { emissions: [], result: Ok(step_result(summary, [], "stop")), next_state: state }
   };
