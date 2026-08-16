@@ -79,19 +79,19 @@ remarkable_branch:
 #
 #   make pr BASE=develop REMOTE=sunholo PR_FLAGS=--dry-run
 # ---------------------------------------------------------------------------
-PR := bun tools/pr/pr.ts
+PR_CLI := bun tools/pr/pr.ts
 BASE ?= main
 REMOTE ?= origin
 
 .PHONY: pr pr_draft pr_whoami
 pr_draft:
-	@$(PR) draft --base "$(BASE)" --remote "$(REMOTE)" $(PR_FLAGS)
+	@$(PR_CLI) draft --base "$(BASE)" --remote "$(REMOTE)" $(PR_FLAGS)
 
 pr:
-	@$(PR) create --base "$(BASE)" --remote "$(REMOTE)" $(PR_FLAGS)
+	@$(PR_CLI) create --base "$(BASE)" --remote "$(REMOTE)" $(PR_FLAGS)
 
 pr_whoami:
-	@$(PR) whoami $(PR_FLAGS)
+	@$(PR_CLI) whoami $(PR_FLAGS)
 
 # Fetch PR comments from every GitHub remote into the gitignored cache, then
 # append a `pending` record for each one not seen before. Acts as the BOT
@@ -114,38 +114,50 @@ pr_sync:
 # rank, dismissal and response here is supplied by whoever runs it, and
 # `pr_respond` will not publish without POST=1.
 #
+# Every target below takes ONE of these, whichever you have to hand -- they all
+# resolve to the same comment, and the resolution is printed before anything acts:
+#
+#   PR=76                                             the PR number
+#   FILE=.agent/github/prs/origin-76/response-*.md    the artifact path (tab-completes)
+#   ID=5021529142                                     the comment id itself
+#
+# A PR holding more than one comment refuses and lists them rather than guessing.
+#
 #   make pr_queue                                     # what needs attention
-#   make pr_show ID=5257958760                        # the full comment
-#   make pr_set ID=... PR_FLAGS="--status ranked --rank high"
-#   make pr_set ID=... PR_FLAGS='--status dismissed --reason "superseded by #154"'
-#   make pr_respond ID=...                            # preview
-#   make pr_respond ID=... POST=1                     # publish, as the bot
+#   make pr_show PR=76                                # the full comment
+#   make pr_set PR=76 PR_FLAGS="--status ranked --rank high"
+#   make pr_set PR=76 PR_FLAGS='--status dismissed --reason "superseded by #154"'
+#   make pr_review PR=76                              # comment + reply in one file
+#   make pr_respond PR=76                             # preview
+#   make pr_respond PR=76 POST=1                      # publish, as the bot
 PR_LOOP := bun tools/pr/loop.ts
+# Whichever of PR= / FILE= / ID= was given; loop.ts resolves the form.
+PR_TARGET = $(or $(ID),$(FILE),$(PR))
 
 .PHONY: pr_queue pr_show pr_set pr_review pr_respond
 pr_queue:
 	@$(PR_LOOP) queue $(PR_FLAGS)
 
 pr_show:
-	@test -n "$(ID)" || { echo "usage: make pr_show ID=<comment_id>"; exit 1; }
-	@$(PR_LOOP) show "$(ID)" $(PR_FLAGS)
+	@test -n "$(PR_TARGET)" || { echo "usage: make pr_show PR=<n> | FILE=<path> | ID=<comment_id>"; exit 1; }
+	@$(PR_LOOP) show "$(PR_TARGET)" $(PR_FLAGS)
 
 pr_set:
-	@test -n "$(ID)" || { echo "usage: make pr_set ID=<comment_id> PR_FLAGS=\"--status ranked --rank high\""; exit 1; }
-	@$(PR_LOOP) set "$(ID)" $(PR_FLAGS)
+	@test -n "$(PR_TARGET)" || { echo "usage: make pr_set PR=<n> PR_FLAGS=\"--status ranked --rank high\""; exit 1; }
+	@$(PR_LOOP) set "$(PR_TARGET)" $(PR_FLAGS)
 
 pr_review:
-	@test -n "$(ID)" || { echo "usage: make pr_review ID=<comment_id>"; exit 1; }
-	@$(PR_LOOP) review "$(ID)" $(PR_FLAGS)
+	@test -n "$(PR_TARGET)" || { echo "usage: make pr_review PR=<n> | FILE=<path> | ID=<comment_id>"; exit 1; }
+	@$(PR_LOOP) review "$(PR_TARGET)" $(PR_FLAGS)
 
 # POST must be exactly 1. `$(if $(POST),...)` tests non-empty, not truth, so
 # POST=0 and POST=no both published -- a gate that reads as "off" and fires.
 pr_respond:
-	@test -n "$(ID)" || { echo "usage: make pr_respond ID=<comment_id> [POST=1]"; exit 1; }
+	@test -n "$(PR_TARGET)" || { echo "usage: make pr_respond PR=<n> [POST=1]"; exit 1; }
 	@if [ -n "$(POST)" ] && [ "$(POST)" != "1" ]; then \
 		echo "pr_respond: POST must be exactly 1 to publish (got '$(POST)'). Omit POST to preview."; exit 1; \
 	fi
-	@$(PR_LOOP) respond "$(ID)" $(if $(filter 1,$(POST)),--post) $(PR_FLAGS)
+	@$(PR_LOOP) respond "$(PR_TARGET)" $(if $(filter 1,$(POST)),--post) $(PR_FLAGS)
 
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:

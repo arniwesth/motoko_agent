@@ -128,6 +128,67 @@ function locate(commentId: string, opts: Options): Located {
   return hits[0];
 }
 
+/**
+ * Resolve whatever the caller had to hand into a comment id.
+ *
+ * The comment id is the right *key* — judgment is per-comment, and D6 makes the
+ * tuple authoritative — but it is a terrible *handle*: ten opaque digits, all
+ * alike, retyped across set/review/respond. So accept the things a person
+ * actually has in front of them and resolve to the key:
+ *
+ *   .agent/github/prs/origin-76/response-5021529142.md   a path (tab-completes)
+ *   origin-76                                            a PR directory
+ *   76                                                   a PR number
+ *   5021529142                                           the comment id itself
+ *
+ * PR numbers and comment ids are told apart by width: GitHub comment ids are
+ * nine or ten digits, PR numbers here are four at most. The resolution is always
+ * printed before anything acts on it, because a handle that guesses must never
+ * guess silently.
+ */
+function resolveTarget(raw: string, opts: Options): string {
+  const say = (id: string, how: string) => {
+    if (how) console.log(`pr-loop: ${raw} → comment ${id} (${how})`);
+    return id;
+  };
+
+  // A path to a response artifact — the filename carries the inbound id.
+  if (raw.includes("/") || raw.endsWith(".md")) {
+    const m = raw.match(/response-(\d+)\.md$/);
+    if (!m) die(`${raw} is not a response-<comment_id>.md path`);
+    if (!existsSync(raw)) die(`${raw} does not exist`);
+    return say(m[1], "from the artifact filename");
+  }
+
+  // A bare comment id: long enough that it cannot be a PR number.
+  if (/^\d{7,}$/.test(raw)) return raw;
+
+  // `origin-76` or `76` — a PR, which is unambiguous only if it holds one record.
+  const asDir = raw.match(/^(.+)-(\d+)$/);
+  const scoped: Options = asDir
+    ? { ...opts, remote: asDir[1], pr: Number(asDir[2]) }
+    : /^\d{1,6}$/.test(raw)
+      ? { ...opts, pr: Number(raw) }
+      : die(`cannot resolve '${raw}' — pass a comment id, a PR number, or a response-<id>.md path`);
+
+  const found: { id: string; where: string; status: string }[] = [];
+  for (const d of prDirs(scoped)) {
+    const statePath = join(d.dir, "state.yaml");
+    if (!existsSync(statePath)) continue;
+    for (const rec of readState(statePath)) {
+      const id = get(rec, "comment_id");
+      if (id) found.push({ id, where: `${d.alias}-${d.number}`, status: get(rec, "status") ?? "?" });
+    }
+  }
+  if (found.length === 0) die(`no records under '${raw}' — run \`make pr_sync\`, or check the number`);
+  if (found.length > 1) {
+    console.error(`pr-loop: '${raw}' holds ${found.length} comments — name one:`);
+    for (const f of found) console.error(`  ${f.id}  [${f.status}]  ${f.where}`);
+    process.exit(1);
+  }
+  return say(found[0].id, `the only comment on ${found[0].where}`);
+}
+
 /** Cached facts for a comment. Absent cache is a prompt to sync, not an error. */
 function cached(alias: string, n: number, commentId: string): { user: string; updated_at: string; body: string; url: string } | null {
   for (const file of ["issue-comments.json", "review-comments.json"]) {
@@ -196,7 +257,8 @@ function cmdQueue(opts: Options): void {
   );
 }
 
-function cmdShow(commentId: string, opts: Options): void {
+function cmdShow(target: string, opts: Options): void {
+  const commentId = resolveTarget(target, opts);
   const found = locate(commentId, opts);
   const c = cached(found.alias, found.pr, commentId);
   console.log(`# ${found.alias}-${found.pr}  comment ${commentId}`);
@@ -212,7 +274,8 @@ function cmdShow(commentId: string, opts: Options): void {
 // set — the judgment write path
 // ---------------------------------------------------------------------------
 
-function cmdSet(commentId: string, opts: Options): void {
+function cmdSet(target: string, opts: Options): void {
+  const commentId = resolveTarget(target, opts);
   const found = locate(commentId, opts);
   const { rec } = found;
 
@@ -254,7 +317,8 @@ function cmdSet(commentId: string, opts: Options): void {
 // respond — author -> publish -> write back the key (D4)
 // ---------------------------------------------------------------------------
 
-function cmdRespond(commentId: string, opts: Options): void {
+function cmdRespond(target: string, opts: Options): void {
+  const commentId = resolveTarget(target, opts);
   const found = locate(commentId, opts);
   const { rec } = found;
 
@@ -289,10 +353,10 @@ function cmdRespond(commentId: string, opts: Options): void {
     }
     console.log(`\nRESPONSE — ${rel(artifact)}, ${body.split("\n").length} lines, ${body.length} chars`);
     console.log(`${rule}\n${body}\n${rule}`);
-    console.log(`\npr-loop: nothing posted. Review options:`);
-    console.log(`  open ${rel(artifact)}                    edit it directly`);
-    console.log(`  make pr_review ID=${commentId}            write a side-by-side review file`);
-    console.log(`  make pr_respond ID=${commentId} POST=1    publish, as the bot`);
+    console.log(`\npr-loop: nothing posted. Next:`);
+    console.log(`  open ${rel(artifact)}`);
+    console.log(`  make pr_review  FILE=${rel(artifact)}`);
+    console.log(`  make pr_respond FILE=${rel(artifact)} POST=1`);
     return;
   }
 
@@ -322,7 +386,8 @@ function cmdRespond(commentId: string, opts: Options): void {
 }
 
 /** Write comment + drafted reply to one file, for reading somewhere other than a terminal. */
-function cmdReview(commentId: string, opts: Options): void {
+function cmdReview(target: string, opts: Options): void {
+  const commentId = resolveTarget(target, opts);
   const found = locate(commentId, opts);
   const inbound = cached(found.alias, found.pr, commentId);
   const artifact = opts.artifact ?? join(prDir(found.alias, found.pr), `response-${commentId}.md`);

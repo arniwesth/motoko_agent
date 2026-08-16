@@ -36,8 +36,12 @@ make pr_queue       # what needs attention
 ### 2. Read the comment in full
 
 ```bash
-make pr_show ID=<comment_id>
+make pr_show PR=76        # or FILE=<response path>, or ID=<comment_id>
 ```
+
+Every `pr_*` target takes whichever of `PR=` / `FILE=` / `ID=` you have to hand. They resolve to
+the same comment and print what they resolved to. A PR holding more than one comment refuses and
+lists them rather than guessing — never disambiguate by picking one at random.
 
 Never rank from the one-line preview. Read the whole comment and enough of the PR to know what it
 is claiming.
@@ -45,7 +49,7 @@ is claiming.
 ### 3. Rank
 
 ```bash
-make pr_set ID=<comment_id> PR_FLAGS="--status ranked --rank high"
+make pr_set PR=76 PR_FLAGS="--status ranked --rank high"
 ```
 
 `high` / `medium` / `low`. Rank by **what it would cost to be wrong**, not by how much work the
@@ -66,7 +70,7 @@ is why the response could concede one leg while dismissing three.
 Record that you did it:
 
 ```bash
-make pr_set ID=<comment_id> PR_FLAGS="--status claim-tested"
+make pr_set PR=76 PR_FLAGS="--status claim-tested"
 ```
 
 ### 5. Decide
@@ -75,7 +79,7 @@ make pr_set ID=<comment_id> PR_FLAGS="--status claim-tested"
 that is what stops a later session re-opening it:
 
 ```bash
-make pr_set ID=<comment_id> PR_FLAGS='--status dismissed --reason "superseded by #154"'
+make pr_set PR=76 PR_FLAGS='--status dismissed --reason "superseded by #154"'
 ```
 
 **Respond** when it deserves a reply. Author the artifact first, at
@@ -88,11 +92,12 @@ explicit about what you are *not* accepting and why.
 Then preview, get the user's approval, and only then post:
 
 ```bash
-make pr_respond ID=<comment_id>            # prints what would be posted; posts nothing
-make pr_respond ID=<comment_id> POST=1     # publishes as the bot, writes the key back
+make pr_review  PR=76        # comment + drafted reply in one file, for reading elsewhere
+make pr_respond PR=76        # prints the comment, then the full reply; posts nothing
+make pr_respond PR=76 POST=1 # publishes as the bot, writes the key back
 ```
 
-**Always show the user the preview and get an explicit go-ahead before `POST=1`.** It publishes
+**Always show the user the preview and get an explicit go-ahead before `POST=1`.** `POST` must be exactly `1`; anything else is refused rather than silently treated as off. It publishes
 under the machine account to a repo other people read; it is not undoable from here.
 
 ### 6. Stale records
@@ -101,7 +106,7 @@ A `stale` flag means the comment was edited after it was last seen. The disposit
 never rewinds one. Diff what the cache holds against the current text, then either re-affirm:
 
 ```bash
-make pr_set ID=<comment_id> PR_FLAGS=--affirm    # clears stale, bumps seen_updated_at
+make pr_set PR=76 PR_FLAGS=--affirm    # clears stale, bumps seen_updated_at
 ```
 
 or, if the edit genuinely changed the claim, re-rank and work it again.
