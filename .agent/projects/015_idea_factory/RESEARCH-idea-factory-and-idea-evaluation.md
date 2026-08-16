@@ -15,6 +15,8 @@ Relates to:
   ("measure movement, not comfort") — the divergence evidence behind §4
 - `.agent/meta-decisions/compare-speculated-end-state-to-actual.md` — the prediction-settlement
   discipline behind §3.5
+- `NOTE-idea-creation-and-combination.md` — generation operators and combination
+  schema that §2's join rule under-specified; does not reopen §3–§5
 
 ---
 
@@ -97,6 +99,10 @@ the rhyme: 012's pull-driven adoption is "join registered debt × changelog delt
 **an idea is a join between a recorded weakness and a newly available capability** — applied
 at different layers (research direction vs source diff). The factory's generation step and
 MGM's comparative operators differ in granularity, not in kind.
+
+That join is one operator, not the generation step. Import/blend, inversion, dual,
+residual, unification, and layer are also in the corpus; combination well-typedness
+and the mapping-table schema are in `NOTE-idea-creation-and-combination.md`.
 
 **Degree 2 does not replace degrees 0–1; it nests inside them.** Even a running 014-style loop
 only automates mutation *within* an epoch and a frozen mutation surface. Deciding to change
