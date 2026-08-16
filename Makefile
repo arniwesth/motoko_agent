@@ -10,8 +10,54 @@ claude:
 	clear
 	claude --dangerously-skip-permissions --model claude-opus-5
 
+install_codex:
+	curl -fsSL https://chatgpt.com/codex/install.sh | sh	
+
+install_claude:
+	curl -fsSL https://claude.ai/install.sh | bash
+
 prune:
 	docker system prune -a
+
+# ---------------------------------------------------------------------------
+# reMarkable 2 publishing (tools/rmsend): md -> pdf/epub -> cloud -> tablet.
+#
+# These targets are a thin front for the tool; `bun tools/rmsend/rmsend.ts
+# --help` documents every flag, and RM_FLAGS forwards any of them.
+#
+# One-time setup in a fresh container:
+#   make remarkable_install      # rmapi + pandoc + typst into ~/.local/bin
+#   make remarkable_login        # paste the 8-char code from my.remarkable.com
+#
+# The device token lands in .remarkable/rmapi.conf (gitignored, inside the
+# bind-mounted workspace) so a container rebuild does NOT re-pair.
+#
+# Send:
+#   make remarkable FILE=notes.md
+#   make remarkable FILE=notes.md DIR=/Motoko/Research FORMAT=epub
+#   make remarkable FILE=.agent/research RM_FLAGS=--toc     # a whole directory
+#   make remarkable_branch                                  # this branch's docs
+# ---------------------------------------------------------------------------
+RMSEND := bun tools/rmsend/rmsend.ts
+DIR ?= /Motoko
+FORMAT ?= pdf
+
+.PHONY: remarkable_install remarkable_login remarkable remarkable_ls remarkable_branch
+remarkable_install:
+	@$(RMSEND) install $(RM_FLAGS)
+
+remarkable_login:
+	@$(RMSEND) login
+
+remarkable:
+	@test -n "$(FILE)" || { echo "usage: make remarkable FILE=path/to/notes.md [DIR=/Motoko] [FORMAT=pdf|epub]"; exit 1; }
+	@$(RMSEND) send --dir "$(DIR)" --format "$(FORMAT)" $(RM_FLAGS) $(FILE)
+
+remarkable_ls:
+	@$(RMSEND) ls $(DIR)
+
+remarkable_branch:
+	@$(RMSEND) branch --dir "$(DIR)" --format "$(FORMAT)" $(RM_FLAGS)
 
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
