@@ -59,6 +59,40 @@ remarkable_ls:
 remarkable_branch:
 	@$(RMSEND) branch --dir "$(DIR)" --format "$(FORMAT)" $(RM_FLAGS)
 
+# ---------------------------------------------------------------------------
+# GitHub PR ops (tools/pr): template -> staged body -> gh pr create -> number
+# written back into .agent/github/prs/<remote>-<n>/body.md.
+#
+# The artifact on disk is the source of truth; GitHub is transport. See
+# .agent/projects/016_github_ops/ADR-001-github-pr-ops-pipeline.md D4.
+#
+#   make pr_draft     # stage a body, with Changes and Governing docs filled in
+#   <edit it>         # Summary, Predicted outcome and Test evidence are yours
+#   make pr           # publish and write the number back
+#
+# `make pr` drafts first if you skipped pr_draft, and refuses to publish while
+# any <!-- TODO --> field is unfilled. It is safe to re-run: it adopts the PR
+# already open for the branch rather than opening a second one.
+#
+# Identity: these act as YOU, via `gh auth login` (ADR-001 D1 — a human decided
+# to open the PR). `make pr_whoami` reports which account that resolves to.
+#
+#   make pr BASE=develop REMOTE=sunholo PR_FLAGS=--dry-run
+# ---------------------------------------------------------------------------
+PR := bun tools/pr/pr.ts
+BASE ?= main
+REMOTE ?= origin
+
+.PHONY: pr pr_draft pr_whoami
+pr_draft:
+	@$(PR) draft --base "$(BASE)" --remote "$(REMOTE)" $(PR_FLAGS)
+
+pr:
+	@$(PR) create --base "$(BASE)" --remote "$(REMOTE)" $(PR_FLAGS)
+
+pr_whoami:
+	@$(PR) whoami $(PR_FLAGS)
+
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
 	@set -eu; \
