@@ -109,6 +109,35 @@ PR_SYNC := bun tools/pr/sync.ts
 pr_sync:
 	@$(PR_SYNC) $(if $(filter-out origin,$(REMOTE)),--remote "$(REMOTE)") $(PR_FLAGS)
 
+# Work the queue pr_sync fills. This is the ONLY thing that changes a judgment
+# (ADR-001 D3); sync may only add facts. Automation stays at degree 1 -- every
+# rank, dismissal and response here is supplied by whoever runs it, and
+# `pr_respond` will not publish without POST=1.
+#
+#   make pr_queue                                     # what needs attention
+#   make pr_show ID=5257958760                        # the full comment
+#   make pr_set ID=... PR_FLAGS="--status ranked --rank high"
+#   make pr_set ID=... PR_FLAGS='--status dismissed --reason "superseded by #154"'
+#   make pr_respond ID=...                            # preview
+#   make pr_respond ID=... POST=1                     # publish, as the bot
+PR_LOOP := bun tools/pr/loop.ts
+
+.PHONY: pr_queue pr_show pr_set pr_respond
+pr_queue:
+	@$(PR_LOOP) queue $(PR_FLAGS)
+
+pr_show:
+	@test -n "$(ID)" || { echo "usage: make pr_show ID=<comment_id>"; exit 1; }
+	@$(PR_LOOP) show "$(ID)" $(PR_FLAGS)
+
+pr_set:
+	@test -n "$(ID)" || { echo "usage: make pr_set ID=<comment_id> PR_FLAGS=\"--status ranked --rank high\""; exit 1; }
+	@$(PR_LOOP) set "$(ID)" $(PR_FLAGS)
+
+pr_respond:
+	@test -n "$(ID)" || { echo "usage: make pr_respond ID=<comment_id> [POST=1]"; exit 1; }
+	@$(PR_LOOP) respond "$(ID)" $(if $(POST),--post) $(PR_FLAGS)
+
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
 	@set -eu; \
