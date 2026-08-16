@@ -3,9 +3,10 @@
 Date: 2026-08-15
 Status: Research — **design closed 2026-08-16.** §1 is measured at 2026-08-15 HEAD; §2–§4
 are the design; all forks (§5.1–§5.5) and questions (§6.1–§6.5) are closed with decisions
-recorded in place. Next artifact: `ADR-001-github-pr-ops-pipeline.md`, authored from
-`HANDOFF-write-adr-github-pr-ops.md` (same directory); implementation handoff and PLAN
-follow the ADR, per
+recorded in place. The decisions are now synthesized in `ADR-001-github-pr-ops-pipeline.md`
+(landed 2026-08-16, Accepted, authored from `HANDOFF-write-adr-github-pr-ops.md` — same
+directory); this doc keeps the measured baseline, the option tables, and *how* each fork
+closed. Next artifacts: the implementation handoff and PLAN, per
 `../../meta-decisions/author-each-artifact-in-the-session-whose-assets-it-consumes.md`.
 Relates to:
 - `../008_docs_system/NOTE-docs-system-design-discussion.md` — the frontmatter/keying schema

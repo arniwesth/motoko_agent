@@ -21,8 +21,8 @@ Relates to:
   Everything around that judgment was hand-run and left no durable trace. That gap is the
   motivation for D2–D4.
 - `../008_docs_system/NOTE-docs-system-design-discussion.md` — **open dependency** (fork 2). The
-  state and PR-body frontmatter defined here are instances of that fork; 016 is its third
-  consumer.
+  D3 state schema and D4 PR-body frontmatter defined here are two more instances of that fork,
+  after 015's kill/prediction fields.
 - `../015_idea_factory/RESEARCH-idea-factory-and-idea-evaluation.md` — §3.1 provenance joins
   (a reviewer comment is recorded evidence of a weakness), §3.5 predictions (the PR is where a
   prediction is naturally stated and later settled), §5 one-ledger (the processed-state store is
@@ -58,7 +58,7 @@ Compressed from the recorded comparisons; the full tables are in the RESEARCH do
 
 **Identity (RESEARCH §2.5, fork §5.5).** Three candidates. *The operator's PAT* is zero-setup but
 makes every automated action indistinguishable from a human decision, so GitHub's history can
-never be reconciled with the §2.3 ledger — rejected on that alone. *A GitHub App* (`motoko[bot]`)
+never be reconciled with the state record (D3) — rejected on that alone. *A GitHub App* (`motoko[bot]`)
 offers short-lived installation tokens, fine-grained permissions, a first-class `[bot]` badge,
 and is the prerequisite for a hosted multi-repo bot — but Apps have **no ambient rights**: with
 no installation in the `sunholo` org, no App token can touch the upstream repo, which is exactly
@@ -67,13 +67,13 @@ can be a requested reviewer and own a fork, and costs an email, 2FA, and a colla
 at the price of a classic PAT, since fine-grained PATs cannot write outside their resource-owner
 grant.
 
-**Storage home (forks §5.2–§5.4).** `.github/` is GitHub's platform-config namespace, where
+**Storage home (RESEARCH forks §5.2–§5.4).** `.github/` is GitHub's platform-config namespace, where
 tooling assigns meaning to filenames — the wrong home for Motoko's working record. Status quo
 `.agent/prs/` is already the *de facto* home but its name is narrower than the designed scope and
 its 13 files carry no convention to inherit. `.agent/github/` is a fresh tree whose name admits
 the follow-ons (issues, CI) that are already designed.
 
-**Staleness on an edited comment (§6 Q2).** Auto-revert (an edited comment returns to `pending`)
+**Staleness on an edited comment (RESEARCH §6 Q2).** Auto-revert (an edited comment returns to `pending`)
 is simple and never leaves a stale judgment standing — but most edits are typo fixes, and it
 erases the fact that judgment was rendered at all. Flag-for-triage keeps the disposition and adds
 a `stale: true` marker for the loop to adjudicate.
@@ -126,18 +126,38 @@ across sessions by ordinary pulls, greppable, reviewable in a diff. The pairing 
 
 > **Sync only adds facts; only the loop changes judgments.**
 
-A state record keys on the cache's own ids and carries the disposition:
+Each record keys on the cache's own ids and carries the disposition. One `state.yaml` per PR
+directory holds a list of them — per-comment, because claims live at comment level (the PR #97
+headroom claim was one comment among four), grouped per PR for diff locality:
 
 ```yaml
-repo: sunholo-voight-kampff/motoko_agent
-pr: 97
-comment_id: 2331456789        # absent for PR-level dispositions
-status: pending | ranked | claim-tested | responded | dismissed
-rank: high | medium | low
-reason: superseded by #154    # mandatory when dismissed
-artifact: ../../prs/2026-08-13-pr-97-compaction-response.md
-seen_updated_at: 2026-08-13T09:12:00Z
+# .agent/github/prs/sunholo-97/state.yaml
+- repo: sunholo-voight-kampff/motoko_agent
+  pr: 97
+  comment_id: 2331456789        # absent for PR-level dispositions
+  status: dismissed
+  rank: high
+  reason: superseded by #154    # mandatory when dismissed
+  artifact: .agent/prs/2026-08-13-pr-97-compaction-response.md   # repo-root-relative
+  seen_updated_at: 2026-08-13T09:12:00Z
+- repo: sunholo-voight-kampff/motoko_agent
+  pr: 97
+  comment_id: 2331456812
+  status: pending
 ```
+
+`status` ranges over `pending | ranked | claim-tested | responded | dismissed` and `rank` over
+`high | medium | low`; both, and the field set generally, are provisional pending 008 fork 2.
+
+Every record repeats the full `(repo, pr, comment_id)` tuple even though the directory implies the
+first two — D6's keying rule is what makes a record portable and greppable on its own, and the
+redundancy is checkable against the directory name rather than trusted.
+
+`artifact` paths are **repo-root-relative**, not relative to the state file. RESEARCH §2.3
+sketched this field as `../../prs/…` before the dir-per-PR layout closed; at the layout this ADR
+adopts, that string resolves inside `.agent/github/prs/` rather than to the legacy tree — and the
+first record WI-4 writes points at exactly such a legacy file. Root-relative removes the
+depth-coupling entirely.
 
 **Dismissals carry reasons** (015 §6 Q1 applied to comments): `dismissed` without a `reason` is
 an invalid record. This is what makes the processed-set auditable and stops a later session from
@@ -160,6 +180,20 @@ The write-back is what makes the whole system mechanical rather than heroic: wit
 between the git tree and GitHub, state cannot be linked to artifacts except by a human
 remembering.
 
+D2 and D4 interact in one place that constrains the driver: the directory key `<alias>-<n>`
+**does not exist until the PR does**. So the driver stages the body outside its final home,
+creates the PR, and then finalizes the directory as part of the same write-back step that records
+the number. A crash between publish and write-back leaves a real PR with no local record — the
+driver must therefore be re-runnable against an already-created PR, adopting it rather than
+creating a second one.
+
+The template's fields are load-bearing rather than cosmetic: **Summary**, **Changes**,
+**Governing docs** (links into `.agent/projects/` — 008's cross-linking applied at the PR
+boundary), **Predicted outcome** (015 §3.5: the PR states what landing it should change and how
+that will be checked), **Test evidence**. Governing-docs and Predicted-outcome are the fields
+that make a PR joinable to the ledger; dropping them for brevity would reduce this to an ordinary
+PR template.
+
 The driver template — not `.github/PULL_REQUEST_TEMPLATE.md` — is the source of truth, because
 `gh pr create` applies web templates only interactively and a web template cannot be
 machine-filled. The `.github/` file is a mirrored fallback for the human web path.
@@ -171,21 +205,25 @@ per-commit, not edited in place). Both are excluded from iteration one solely to
 to a second API surface on day one — a failing workflow run is otherwise exactly the kind of
 rankable, testable claim this pipeline exists to process.
 
-**D6 — Records key on `(repo, pr, comment_id)` in frontmatter; filenames carry a remote alias for
-humans.** The frontmatter tuple is authoritative and spells out the alias→slug mapping, so nothing
-depends on local remote names. The `origin-97` / `sunholo-97` filename prefix exists purely so a
-human grepping the tree never confuses colliding PR numbers across the two repos.
+**D6 — Records key on `(repo, pr, comment_id)`; the remote alias appears in path names for
+humans only.** The tuple is authoritative wherever a record lives — the YAML body of a
+`state.yaml`, the frontmatter of a `body.md` or response artifact — and it carries the full
+`owner/repo` slug, so **nothing depends on local remote names**: a clone that calls `sunholo`
+something else still resolves every record correctly. The `origin-97` / `sunholo-97` **directory**
+name exists purely so a human grepping the tree never confuses colliding PR numbers across the two
+repos. (RESEARCH §6 Q3 says "filename prefix" because it was written before the dir-per-PR layout
+closed in §5.2; the alias moved up to the directory, the purpose is unchanged.)
 
 ---
 
 ## Consequences
 
 **The schema is provisional until 008 fork 2 closes.** D3's state fields and D4's PR-body
-frontmatter are both instances of that fork. 016 must not close it unilaterally — but 016 is now
-its **third** consumer waiting (after 015's kill/prediction fields), which is itself evidence for
-closing 008 soon. Implementation proceeds on minimal YAML, flagged provisional, and **one
-conforming migration is expected** when 008 lands. Budget for it; do not treat the schema as
-settled.
+frontmatter are both instances of that fork, and 016 must not close it unilaterally. The fork now
+blocks concrete work in two projects — 015's kill/prediction fields came first — which is itself
+evidence for closing 008 soon. Implementation proceeds on minimal YAML, flagged provisional, and
+**one conforming migration is expected** when 008 lands. Budget for it; do not treat the schema
+as settled.
 
 **Operator prerequisite blocks all implementation.** The machine account — email, 2FA,
 collaborator invite on `origin`, classic PAT into `GH_TOKEN` — is operator-only work that cannot
@@ -199,12 +237,13 @@ operator's. Anyone tightening credentials later should change the *identity mech
 path), not the PAT type.
 
 **Provenance becomes machine-checkable.** Because pipeline actions carry the bot's identity,
-GitHub's history and the §2.3 ledger can be reconciled — which is precisely what the operator's
-PAT would have made unrecoverable. This is the property being bought; it is worth the setup.
+GitHub's history and the D3 state record can be reconciled — which is precisely what the
+operator's PAT would have made unrecoverable. This is the property being bought, and it is what
+justifies the WI-0 setup cost.
 
 **GitHub review becomes an intake channel of the idea factory.** A reviewer comment is recorded
 evidence of a weakness with provenance attached — what 015 §3.1 wants ideas to join against — and
-the processed-state store is **a view of the shared ledger**, not a fourth store. PR #97 already
+the processed-state store is **a view of the shared ledger**, not a third invented format. PR #97 already
 shows the full shape: one comment thread produced a tested claim, a kill (close as superseded),
 and a new queued idea (output headroom). Accordingly the health metric is **not** how complete
 the store is, but that **comments flow through it** — see the prediction in the appendix.
@@ -212,6 +251,10 @@ the store is, but that **comments flow through it** — see the prediction in th
 **Automation stays at degree 1.** Grounding is mechanized (fetch, key, record); selection and
 judgment stay in-session. Auto-ranking and auto-posting without review are explicitly out of
 scope until the manual-with-mechanized-bookkeeping loop has produced data to justify them.
+
+**The sync is not coupled to code-graph on day one.** The 008 `docs` profile can index the state
+tree later, exactly like any other `.agent/` artifact; making the sync write an index is a
+separate, deferrable decision and must not become a hidden prerequisite of WI-3.
 
 **A one-file directory and a frozen legacy tree are accepted costs.** Both are consequences of
 choosing one naming scheme and refusing a migration of 13 files that carry no convention worth
@@ -226,13 +269,22 @@ below needs expanding into testable form there.
 
 - **WI-0** (operator-only, blocks everything): machine account + 2FA, collaborator invite on
   `origin`, classic PAT (`public_repo`) into `GH_TOKEN`.
-- **WI-1**: `gh` CLI + `GH_TOKEN` passthrough in **all** devcontainer variants; the operator's
-  interactive `gh auth` must be unaffected.
+- **WI-1**: `gh` CLI in the devcontainer + bot-credential passthrough; the operator's interactive
+  `gh auth` must be unaffected. The token is supplied from the host environment and never
+  committed — where the operator keeps it on the host is out of scope, but "somewhere in the repo"
+  is not an option. **The credential must not be passed through as `GH_TOKEN` itself**: `gh`
+  prefers `GH_TOKEN`/`GITHUB_TOKEN` over stored `gh auth` credentials, so a global export would
+  make the operator's own `make pr` run as the bot and silently invert D1. Pass it under a distinct
+  name and map it to `GH_TOKEN` only in the subprocess environment of pipeline commands. (Both
+  devcontainer variants share `.devcontainer/docker-compose.yml`, so this is one line in one file;
+  `.devcontainer/otel/` is not a variant. Grounding in
+  `HANDOFF-implement-github-ops-wi0-wi2.md`.)
 - **WI-2**: PR template (Summary / Changes / Governing docs / Predicted outcome / Test evidence)
   + creation driver with number write-back; `.github/PULL_REQUEST_TEMPLATE.md` mirror.
 - **WI-3**: `make pr-sync` + state writer, landed **together** (a cache with no state is a slower
-  web UI; state with no cache has nothing to key against); idempotent; stale-flags without
-  reverting judgments.
+  web UI; state with no cache has nothing to key against), with the `.agent/github/cache/`
+  `.gitignore` entry in the same change — D3's invariant is only real once the cache cannot be
+  committed. Idempotent; stale-flags without reverting judgments.
 - **WI-4**: backfill — register open PRs' comments as `pending`; the PR #97 response becomes the
   first `responded` entry, referencing the frozen legacy file in place.
 - **WI-5** (follow-on): the rank/test/respond loop skill, posting as the bot.
