@@ -73,6 +73,32 @@ function die(msg: string): never {
 type Identity = "operator" | "bot";
 
 /**
+ * The bot credential arrives by one of two channels: the container environment
+ * (docker-compose passes MOTOKO_BOT_GH_TOKEN through from the host) or the
+ * gitignored repo-root .env, which is where this repo already keeps its keys.
+ *
+ * .env is read explicitly rather than left to Bun's automatic loading. That
+ * loading is real but implicit — it depends on the runtime and on the process's
+ * working directory — and a credential lookup that silently stops working when
+ * a caller runs from a subdirectory is exactly the failure this pipeline cannot
+ * afford. The environment wins where both are set.
+ */
+function botToken(): string | null {
+  const fromEnv = process.env.MOTOKO_BOT_GH_TOKEN;
+  if (fromEnv) return fromEnv;
+
+  const dotenv = join(REPO_ROOT, ".env");
+  if (!existsSync(dotenv)) return null;
+  for (const line of readFileSync(dotenv, "utf8").split("\n")) {
+    const m = line.match(/^\s*(?:export\s+)?MOTOKO_BOT_GH_TOKEN\s*=\s*(.*)$/);
+    if (!m) continue;
+    const value = m[1].trim().replace(/^(['"])(.*)\1$/, "$2");
+    if (value) return value;
+  }
+  return null;
+}
+
+/**
  * gh resolves GH_TOKEN/GITHUB_TOKEN ahead of the credentials stored by
  * `gh auth login`, and reports nothing when it does. So the identity a command
  * acts under is decided here, explicitly, rather than inherited by accident.
@@ -82,9 +108,18 @@ function ghEnv(identity: Identity): NodeJS.ProcessEnv {
   delete env.GH_TOKEN;
   delete env.GITHUB_TOKEN;
   if (identity === "bot") {
-    const token = process.env.MOTOKO_BOT_GH_TOKEN;
+    const token = botToken();
     if (!token) {
-      die("MOTOKO_BOT_GH_TOKEN is not set — export it on the host, see .devcontainer/README.md");
+      die("MOTOKO_BOT_GH_TOKEN not found in the environment or repo-root .env — see .devcontainer/README.md");
+    }
+    if (token.startsWith("github_pat_")) {
+      // ADR-001 Consequences: a fine-grained PAT cannot write outside its
+      // resource-owner grant, so it is not a valid hardening for this design —
+      // it silently breaks the upstream participation D1 was chosen to enable.
+      console.error(
+        "pr: warning — MOTOKO_BOT_GH_TOKEN is a fine-grained PAT. Reads work, but " +
+          "posting to either remote returns 403. ADR-001 WI-0 asks for a classic PAT with public_repo.",
+      );
     }
     env.GH_TOKEN = token;
   }

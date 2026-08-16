@@ -31,10 +31,17 @@ out as the machine user.
 
 - **You**: run `gh auth login` once inside the container. The credential lands in
   `~/.config/gh/`, which does not survive a rebuild, so expect to redo it.
-- **The bot**: export `MOTOKO_BOT_GH_TOKEN` on the *host* (your shell profile,
-  or a host secret manager — anywhere but this repo) before starting the
-  container. `.devcontainer/docker-compose.yml` passes it through, and both
-  profiles share that file, so this is one setting for both.
+- **The bot**: set `MOTOKO_BOT_GH_TOKEN` by either channel — export it on the
+  *host* before starting the container, which
+  `.devcontainer/docker-compose.yml` passes through for both profiles, or put
+  it in the gitignored repo-root `.env` alongside the other keys. Tools read
+  the environment first and fall back to `.env`.
+
+  It must be a **classic** PAT (`ghp_…`) with `public_repo`. A fine-grained PAT
+  (`github_pat_…`) can read but returns `403 Resource not accessible by
+  personal access token` on every write, including to this repo — see ADR-001's
+  Consequences, which rules it out for exactly that reason. The bot must also
+  have *accepted* its collaborator invitation; a pending invite grants nothing.
 
 Do not name that variable `GH_TOKEN` or `GITHUB_TOKEN`. `gh` prefers either over
 your stored login and reports nothing, so every `gh` command you ran by hand
