@@ -52,6 +52,7 @@ import {
   set,
 } from "./state.ts";
 import {
+  CACHE_DIR,
   cacheDir,
   die,
   ghJson,
@@ -253,6 +254,8 @@ function syncPr(alias: string, slug: string, n: number, ours: Set<string>, opts:
 // ---------------------------------------------------------------------------
 
 function cmdSync(opts: Options): void {
+  // Recorded once so `pr-loop list` can say what its ages are relative to.
+  const stampedAt = new Date().toISOString();
   const login = reportIdentity("bot");
   console.log(`pr-sync: acting as ${login} (bot)${opts.dryRun ? " — dry run, writing nothing" : ""}`);
 
@@ -296,6 +299,8 @@ function cmdSync(opts: Options): void {
       }
     }
   }
+
+  if (!opts.dryRun) writeFileMkdir(join(CACHE_DIR, ".synced"), `${stampedAt}\n`);
 
   console.log(
     `pr-sync: ${totals.prs} PR${totals.prs === 1 ? "" : "s"}, ${totals.added} new record${totals.added === 1 ? "" : "s"}, ` +

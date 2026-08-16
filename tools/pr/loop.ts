@@ -21,6 +21,7 @@
  * own, and `respond` will not publish without `--post`.
  *
  * Usage:
+ *   pr-loop list [--stale 30]                     Every cached PR: age, ticket, queue
  *   pr-loop queue [--remote origin] [--pr 97]   What needs attention
  *   pr-loop show <comment_id>                   Full comment text from the cache
  *   pr-loop set <comment_id> --status ranked --rank high
@@ -48,6 +49,7 @@ import { join } from "node:path";
 
 import { type Record, get, readState, renderState, set } from "./state.ts";
 import {
+  CACHE_DIR,
   PRS_DIR,
   cacheDir,
   die,
@@ -57,6 +59,7 @@ import {
   reportIdentity,
   setProgramName,
   splitDocument,
+  ticketFromBranch,
   usageFrom,
   writeFileMkdir,
 } from "./lib.ts";
@@ -73,6 +76,7 @@ interface Options {
   rank: string | null;
   reason: string | null;
   artifact: string | null;
+  staleDays: number | null;
   affirm: boolean;
   post: boolean;
   force: boolean;
@@ -421,13 +425,81 @@ function cmdReview(target: string, opts: Options): void {
 }
 
 // ---------------------------------------------------------------------------
+// list — PR lifecycle, as a derived view
+// ---------------------------------------------------------------------------
+
+/**
+ * Every cached PR with its age, its Linear ticket and its queue state.
+ *
+ * A *view*, not a store: everything here is recomputed from `pr.json` and the
+ * state records on each run, so it invents no schema and cannot drift. That is
+ * deliberate — 015 §5 records three proposals already converging on one ledger
+ * and warns they should not be built three times; a fourth store for PR
+ * lifecycle would be exactly that. Linear stays the tracker. This answers the
+ * narrower question the tracker cannot: which PRs have review nobody has dealt
+ * with, and which have gone quiet.
+ */
+function cmdList(opts: Options): void {
+  const now = Date.parse(readFileSync(join(CACHE_DIR, ".synced"), "utf8").trim());
+  const rows: { n: number; alias: string; state: string; days: number; who: string; ticket: string; queue: string }[] = [];
+
+  for (const name of existsSync(CACHE_DIR) ? readdirSync(CACHE_DIR) : []) {
+    const m = name.match(/^(.+)-(\d+)$/);
+    const prJson = join(CACHE_DIR, name, "pr.json");
+    if (!m || !existsSync(prJson)) continue;
+    const pr = JSON.parse(readFileSync(prJson, "utf8")) as {
+      state: string; draft?: boolean; user?: { login?: string }; head?: { ref?: string }; updated_at?: string;
+    };
+
+    const statePath = join(PRS_DIR, name, "state.yaml");
+    const records = existsSync(statePath) ? readState(statePath) : [];
+    const open = records.filter((r) => get(r, "status") === "pending" || get(r, "stale") === "true").length;
+    const done = records.length - open;
+
+    rows.push({
+      n: Number(m[2]),
+      alias: m[1],
+      state: pr.draft ? "draft" : pr.state,
+      days: Math.floor((now - Date.parse(pr.updated_at ?? "")) / 86_400_000),
+      who: pr.user?.login ?? "?",
+      ticket: ticketFromBranch(pr.head?.ref ?? "") ?? "",
+      queue: open ? `${open} open` : done ? `${done} done` : "",
+    });
+  }
+
+  const stale = opts.staleDays;
+  const shown = rows
+    .filter((r) => (opts.remote ? r.alias === opts.remote : true))
+    .filter((r) => (stale === null ? true : r.days >= stale))
+    .sort((a, b) => b.days - a.days);
+
+  if (shown.length === 0) {
+    console.log("pr-loop: nothing to show — run `make pr_sync` first");
+    return;
+  }
+  console.log("   PR  state  quiet  author                 ticket   queue");
+  for (const r of shown) {
+    console.log(
+      `${String(r.n).padStart(5)}  ${r.state.padEnd(5)}  ${(r.days + "d").padStart(5)}  ` +
+        `${r.who.padEnd(21)}  ${r.ticket.padEnd(7)}  ${r.queue}`,
+    );
+  }
+  const needing = shown.filter((r) => r.queue.endsWith("open")).length;
+  console.log(
+    `\npr-loop: ${shown.length} PR${shown.length === 1 ? "" : "s"}` +
+      (needing ? `, ${needing} with review nobody has dealt with` : ", none with outstanding review") +
+      `. Ages are from the last \`make pr_sync\`.`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
 
 function main(argv: string[]): void {
   const opts: Options = {
     remote: null, pr: null, status: null, rank: null,
-    reason: null, artifact: null, affirm: false, post: false, force: false,
+    reason: null, artifact: null, staleDays: null, affirm: false, post: false, force: false,
   };
   const positional: string[] = [];
 
@@ -440,6 +512,7 @@ function main(argv: string[]): void {
       case "--rank": opts.rank = argv[++i] ?? die("--rank needs a value"); break;
       case "--reason": opts.reason = argv[++i] ?? die("--reason needs a value"); break;
       case "--artifact": opts.artifact = argv[++i] ?? die("--artifact needs a value"); break;
+      case "--stale": opts.staleDays = Number(argv[++i] ?? die("--stale needs a number of days")); break;
       case "--affirm": opts.affirm = true; break;
       case "--post": opts.post = true; break;
       case "--force": opts.force = true; break;
@@ -453,11 +526,12 @@ function main(argv: string[]): void {
   const [cmd, arg] = positional;
   switch (cmd ?? "queue") {
     case "queue": cmdQueue(opts); break;
+    case "list": cmdList(opts); break;
     case "show": cmdShow(arg ?? die("show needs a comment id"), opts); break;
     case "set": cmdSet(arg ?? die("set needs a comment id"), opts); break;
     case "respond": cmdRespond(arg ?? die("respond needs a comment id"), opts); break;
     case "review": cmdReview(arg ?? die("review needs a comment id"), opts); break;
-    default: die(`unknown command: ${cmd} (try queue, show, set, review, respond)`);
+    default: die(`unknown command: ${cmd} (try list, queue, show, set, review, respond)`);
   }
 }
 

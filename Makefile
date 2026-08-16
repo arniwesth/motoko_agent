@@ -123,6 +123,8 @@ pr_sync:
 #
 # A PR holding more than one comment refuses and lists them rather than guessing.
 #
+#   make pr_list                                      # every PR: age, ticket, queue
+#   make pr_list PR_FLAGS="--stale 60"                # quiet for 60+ days
 #   make pr_queue                                     # what needs attention
 #   make pr_show PR=76                                # the full comment
 #   make pr_set PR=76 PR_FLAGS="--status ranked --rank high"
@@ -134,7 +136,10 @@ PR_LOOP := bun tools/pr/loop.ts
 # Whichever of PR= / FILE= / ID= was given; loop.ts resolves the form.
 PR_TARGET = $(or $(ID),$(FILE),$(PR))
 
-.PHONY: pr_queue pr_show pr_set pr_review pr_respond
+.PHONY: pr_list pr_queue pr_show pr_set pr_review pr_respond
+pr_list:
+	@$(PR_LOOP) list $(PR_FLAGS)
+
 pr_queue:
 	@$(PR_LOOP) queue $(PR_FLAGS)
 
