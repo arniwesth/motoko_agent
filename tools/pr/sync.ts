@@ -24,6 +24,8 @@
  *   --remote <name>   Only this remote (default: every GitHub remote — D5)
  *   --pr <n>          Only this PR number; requires --remote
  *   --state <s>       open (default) or all
+ *   --ours <login>    Extra login to treat as ours, repeatable (default: origin's
+ *                     owner and the bot — see ourLogins)
  *   --dry-run         Fetch and report; write neither cache nor state
  *   --quiet           Only print PRs where something changed
  *
@@ -64,6 +66,7 @@ interface Options {
   state: "open" | "all";
   dryRun: boolean;
   quiet: boolean;
+  ours: string[];
 }
 
 /** The comment kinds that can support the staleness rule. See the header. */
@@ -133,7 +136,8 @@ const STATE_HEADER = [
   "# rank/test/respond loop owns every judgment field.",
   "#",
   "# Sync only adds facts; only the loop changes judgments (ADR-001 D3).",
-  "# `dismissed` requires a `reason`. Schema is provisional pending 008 fork 2.",
+  "# `dismissed` requires a `reason`; `responded` requires both `artifact` and",
+  "# `response_comment_id`. Schema is provisional pending 008 fork 2.",
   "# Notes belong in a record's `reason:`, not in comments here — this file is",
   "# rewritten in place and free-standing comments do not survive.",
   "",
@@ -187,7 +191,34 @@ interface RawComment {
   user?: { login?: string };
 }
 
-function fetchComments(slug: string, n: number): { comments: Comment[]; raw: Map<string, unknown> } {
+/**
+ * Our own writing is not an inbound claim, and queueing it for triage is how a
+ * queue stops being worked (C5: 7 of 11 records were ours before this).
+ *
+ * "Ours" is the **owner of `origin`** plus the bot. `origin` is the operator's
+ * own fork under this project's topology (D1, D5), so its owner is the operator
+ * by construction — derivable, no login list to keep current.
+ *
+ * Note what this deliberately is NOT: "the PR's author". That heuristic looks
+ * equivalent and is not. `sunholo-voight-kampff` both authors PRs on this fork
+ * and reviews them, so keying on PR authorship drops the inbound review on #97
+ * — the one record this whole project is motivated by — while keeping our own
+ * response as a pending claim. Measured, not reasoned: it inverted 6 of 11.
+ *
+ * Nothing is lost either way; the cache still holds every comment, and D3 puts
+ * facts there anyway.
+ */
+function ourLogins(botLogin: string, extra: string[]): Set<string> {
+  const ours = new Set<string>([botLogin, ...extra].filter(Boolean));
+  const origin = githubRemotes().find((r) => r.name === "origin");
+  if (origin) ours.add(origin.slug.split("/")[0]);
+  return ours;
+}
+
+function fetchComments(
+  slug: string,
+  n: number,
+): { comments: Comment[]; raw: Map<string, unknown> } {
   const issue = paginate<RawComment>(`repos/${slug}/issues/${n}/comments?per_page=100`);
   const review = paginate<RawComment>(`repos/${slug}/pulls/${n}/comments?per_page=100`);
   const reviews = paginate<unknown>(`repos/${slug}/pulls/${n}/reviews?per_page=100`);
@@ -219,6 +250,7 @@ interface Result {
   added: number;
   staled: number;
   reviewsSkipped: number;
+  oursSkipped: number;
   warnings: string[];
 }
 
@@ -232,18 +264,29 @@ function auditRecord(rec: Record, slug: string, n: number, where: string, warnin
   if (get(rec, "status") === "dismissed" && !get(rec, "reason")) {
     warnings.push(`${where}: comment ${id} is dismissed with no reason — invalid per D3`);
   }
+  // D4: `responded` requires *both* the artifact link and the posted-comment
+  // key. One without the other is a half-recorded response — the artifact with
+  // no key cannot be reconciled against GitHub, the key with no artifact has
+  // no authored source. See C4.
+  if (get(rec, "status") === "responded") {
+    const missing = ["artifact", "response_comment_id"].filter((f) => !get(rec, f));
+    if (missing.length) {
+      warnings.push(`${where}: comment ${id} is responded but missing ${missing.join(" and ")} — invalid per D4`);
+    }
+  }
   const recRepo = get(rec, "repo");
   if (recRepo && recRepo !== slug) warnings.push(`${where}: comment ${id} claims repo ${recRepo}, directory says ${slug}`);
   const recPr = get(rec, "pr");
   if (recPr && recPr !== String(n)) warnings.push(`${where}: comment ${id} claims pr ${recPr}, directory says ${n}`);
 }
 
-function syncPr(alias: string, slug: string, n: number, opts: Options): Result {
+function syncPr(alias: string, slug: string, n: number, ours: Set<string>, opts: Options): Result {
   const { comments, raw } = fetchComments(slug, n);
   const result: Result = {
     added: 0,
     staled: 0,
     reviewsSkipped: (raw.get("reviews.json") as unknown[]).filter(Boolean).length,
+    oursSkipped: 0,
     warnings: [],
   };
 
@@ -257,6 +300,10 @@ function syncPr(alias: string, slug: string, n: number, opts: Options): Result {
   for (const rec of records) auditRecord(rec, slug, n, where, result.warnings);
 
   for (const c of comments) {
+    if (ours.has(c.user)) {
+      result.oursSkipped++;
+      continue;
+    }
     const existing = records.find(
       (r) => get(r, "comment_id") === String(c.id) && (get(r, "kind") ?? "issue_comment") === c.kind,
     );
@@ -299,11 +346,14 @@ function cmdSync(opts: Options): void {
   const login = reportIdentity("bot");
   console.log(`pr-sync: acting as ${login} (bot)${opts.dryRun ? " — dry run, writing nothing" : ""}`);
 
+  const ours = ourLogins(login, opts.ours);
+  console.log(`pr-sync: treating as ours (not queued): ${[...ours].sort().join(", ")}`);
+
   const remotes = opts.remote ? [{ name: opts.remote, slug: repoSlug(opts.remote) }] : githubRemotes();
   if (remotes.length === 0) die("no GitHub remotes found");
   if (opts.pr !== null && !opts.remote) die("--pr requires --remote, since PR numbers collide across remotes");
 
-  const totals = { prs: 0, added: 0, staled: 0, reviewsSkipped: 0 };
+  const totals = { prs: 0, added: 0, staled: 0, reviewsSkipped: 0, oursSkipped: 0 };
   const warnings: string[] = [];
 
   for (const { name, slug } of remotes) {
@@ -321,11 +371,12 @@ function cmdSync(opts: Options): void {
     console.log(`pr-sync: ${slug} (${name}) — ${numbers.length} ${opts.state} PR${numbers.length === 1 ? "" : "s"}`);
 
     for (const n of numbers) {
-      const r = syncPr(name, slug, n, opts);
+      const r = syncPr(name, slug, n, ours, opts);
       totals.prs++;
       totals.added += r.added;
       totals.staled += r.staled;
       totals.reviewsSkipped += r.reviewsSkipped;
+      totals.oursSkipped += r.oursSkipped;
       warnings.push(...r.warnings);
       const changed = r.added || r.staled;
       if (changed || !opts.quiet) {
@@ -340,6 +391,12 @@ function cmdSync(opts: Options): void {
     `pr-sync: ${totals.prs} PR${totals.prs === 1 ? "" : "s"}, ${totals.added} new record${totals.added === 1 ? "" : "s"}, ` +
       `${totals.staled} newly stale`,
   );
+  if (totals.oursSkipped) {
+    console.log(
+      `pr-sync: ${totals.oursSkipped} comment${totals.oursSkipped === 1 ? "" : "s"} authored by us ` +
+        `left out of the queue as ours — cached, not inbound claims (C5).`,
+    );
+  }
   if (totals.reviewsSkipped) {
     console.log(
       `pr-sync: ${totals.reviewsSkipped} review bodies cached but not recorded — GitHub exposes no updated_at ` +
@@ -354,7 +411,7 @@ function cmdSync(opts: Options): void {
 // ---------------------------------------------------------------------------
 
 function main(argv: string[]): void {
-  const opts: Options = { remote: null, pr: null, state: "open", dryRun: false, quiet: false };
+  const opts: Options = { remote: null, pr: null, state: "open", dryRun: false, quiet: false, ours: [] };
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -367,6 +424,7 @@ function main(argv: string[]): void {
         opts.state = v;
         break;
       }
+      case "--ours": opts.ours.push(argv[++i] ?? die("--ours needs a login")); break;
       case "--dry-run": opts.dryRun = true; break;
       case "--quiet": opts.quiet = true; break;
       case "--help": case "-h": console.log(usageFrom(import.meta.url)); return;
