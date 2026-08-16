@@ -93,6 +93,22 @@ pr:
 pr_whoami:
 	@$(PR) whoami $(PR_FLAGS)
 
+# Fetch PR comments from every GitHub remote into the gitignored cache, then
+# append a `pending` record for each one not seen before. Acts as the BOT
+# (ADR-001 D1: the sync is an action the pipeline produces). It only adds
+# facts -- it never rewrites a status, rank, reason or artifact link, and an
+# edited comment is flagged `stale: true` alongside its disposition rather
+# than reverting it. Safe to re-run; a run that finds nothing new is a no-op.
+#
+#   make pr_sync                                  # both remotes, open PRs
+#   make pr_sync PR_FLAGS="--dry-run"             # fetch and report only
+#   make pr_sync REMOTE=sunholo PR_FLAGS="--pr 3 --state all"
+PR_SYNC := bun tools/pr/sync.ts
+
+.PHONY: pr_sync
+pr_sync:
+	@$(PR_SYNC) $(if $(filter-out origin,$(REMOTE)),--remote "$(REMOTE)") $(PR_FLAGS)
+
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
 	@set -eu; \

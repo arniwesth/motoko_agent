@@ -35,7 +35,7 @@
  * guarantee that: gh silently prefers those over your stored login, so an
  * inherited one would publish your PR under the bot's name. The bot credential
  * arrives as MOTOKO_BOT_GH_TOKEN and is mapped into GH_TOKEN only where bot
- * agency is correct — `whoami --as-bot` today, the WI-3 sync later.
+ * agency is correct — `whoami --as-bot` here, and `pr-sync` next door.
  */
 
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";

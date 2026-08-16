@@ -70,3 +70,9 @@ tools/code-graph/**/.ailang/
 __marimo__
 deepseek-harness/
 .pnpm-store/
+
+# GitHub PR ops cache (.agent/github/): raw API JSON, immutable and regenerable
+# by `make pr_sync`. Deleting it must lose nothing, and committing it would
+# break the invariant that separates it from the git-versioned state records
+# next door — see ADR-001 D3 in .agent/projects/016_github_ops/.
+.agent/github/cache/
