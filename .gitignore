@@ -76,3 +76,9 @@ deepseek-harness/
 # break the invariant that separates it from the git-versioned state records
 # next door — see ADR-001 D3 in .agent/projects/016_github_ops/.
 .agent/github/cache/
+
+# Generated review renderings and in-flight posting buffers from `pr-loop`.
+# Both are derived from the cache plus the authored response artifact, so they
+# are regenerable and must not be committed alongside the versioned records.
+.agent/github/prs/*/review-*.md
+.agent/github/prs/*/.response-*.posting.md

@@ -26,6 +26,7 @@
  *   pr-loop set <comment_id> --status ranked --rank high
  *   pr-loop set <comment_id> --status dismissed --reason "superseded by #154"
  *   pr-loop set <comment_id> --affirm           Re-affirm a stale record
+ *   pr-loop review <comment_id>                  Write comment + reply to one file
  *   pr-loop respond <comment_id> [--artifact p] [--post]
  *
  * Options:
@@ -275,12 +276,26 @@ function cmdRespond(commentId: string, opts: Options): void {
   const slug = get(rec, "repo") ?? die("record has no repo");
 
   if (!opts.post) {
+    // This output *is* the review gate, so it shows the whole body — never an
+    // excerpt, which would ask someone to approve text they have not seen — and
+    // the comment being answered above it. A reply read without the thing it
+    // replies to cannot actually be judged.
+    const rule = "─".repeat(72);
+    const inbound = cached(found.alias, found.pr, commentId);
     console.log(`pr-loop: would post as the bot to ${slug}#${found.pr}, replying to comment ${commentId}`);
-    console.log(`pr-loop: body from ${rel(artifact)} (${body.split("\n").length} lines)\n`);
-    console.log(body.split("\n").slice(0, 12).join("\n"));
-    console.log(`\npr-loop: nothing posted — re-run with --post once this has been reviewed.`);
+    if (inbound) {
+      console.log(`\nIN REPLY TO — ${inbound.user}, ${inbound.updated_at.slice(0, 10)}`);
+      console.log(`${inbound.url}\n${rule}\n${inbound.body.trim()}\n${rule}`);
+    }
+    console.log(`\nRESPONSE — ${rel(artifact)}, ${body.split("\n").length} lines, ${body.length} chars`);
+    console.log(`${rule}\n${body}\n${rule}`);
+    console.log(`\npr-loop: nothing posted. Review options:`);
+    console.log(`  open ${rel(artifact)}                    edit it directly`);
+    console.log(`  make pr_review ID=${commentId}            write a side-by-side review file`);
+    console.log(`  make pr_respond ID=${commentId} POST=1    publish, as the bot`);
     return;
   }
+
 
   const login = reportIdentity("bot");
   console.log(`pr-loop: posting as ${login} (bot) to ${slug}#${found.pr}`);
@@ -304,6 +319,40 @@ function cmdRespond(commentId: string, opts: Options): void {
   writeRecords(found.statePath, found.records);
 
   console.log(`pr-loop: posted comment ${responseId}; recorded in ${rel(found.statePath)}`);
+}
+
+/** Write comment + drafted reply to one file, for reading somewhere other than a terminal. */
+function cmdReview(commentId: string, opts: Options): void {
+  const found = locate(commentId, opts);
+  const inbound = cached(found.alias, found.pr, commentId);
+  const artifact = opts.artifact ?? join(prDir(found.alias, found.pr), `response-${commentId}.md`);
+  if (!existsSync(artifact)) die(`no response artifact at ${rel(artifact)} — author it first`);
+  const body = splitDocument(readFileSync(artifact, "utf8")).body.trim();
+
+  const out = join(prDir(found.alias, found.pr), `review-${commentId}.md`);
+  writeFileMkdir(
+    out,
+    [
+      `# Review: reply to ${get(found.rec, "repo")}#${found.pr}, comment ${commentId}`,
+      ``,
+      `Nothing is posted until \`make pr_respond ID=${commentId} POST=1\`. This file is a`,
+      `read-only rendering — edit \`${rel(artifact)}\` to change the reply.`,
+      ``,
+      `## The comment being answered`,
+      ``,
+      inbound ? `**${inbound.user}** · ${inbound.updated_at.slice(0, 10)} · <${inbound.url}>` : `(not cached)`,
+      ``,
+      inbound ? inbound.body.trim() : ``,
+      ``,
+      `## The drafted reply`,
+      ``,
+      `Posts as the **bot**, not as you.`,
+      ``,
+      body,
+      ``,
+    ].join("\n"),
+  );
+  console.log(`pr-loop: wrote ${rel(out)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +391,8 @@ function main(argv: string[]): void {
     case "show": cmdShow(arg ?? die("show needs a comment id"), opts); break;
     case "set": cmdSet(arg ?? die("set needs a comment id"), opts); break;
     case "respond": cmdRespond(arg ?? die("respond needs a comment id"), opts); break;
-    default: die(`unknown command: ${cmd} (try queue, show, set, respond)`);
+    case "review": cmdReview(arg ?? die("review needs a comment id"), opts); break;
+    default: die(`unknown command: ${cmd} (try queue, show, set, review, respond)`);
   }
 }
 

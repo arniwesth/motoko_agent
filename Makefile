@@ -122,7 +122,7 @@ pr_sync:
 #   make pr_respond ID=... POST=1                     # publish, as the bot
 PR_LOOP := bun tools/pr/loop.ts
 
-.PHONY: pr_queue pr_show pr_set pr_respond
+.PHONY: pr_queue pr_show pr_set pr_review pr_respond
 pr_queue:
 	@$(PR_LOOP) queue $(PR_FLAGS)
 
@@ -133,6 +133,10 @@ pr_show:
 pr_set:
 	@test -n "$(ID)" || { echo "usage: make pr_set ID=<comment_id> PR_FLAGS=\"--status ranked --rank high\""; exit 1; }
 	@$(PR_LOOP) set "$(ID)" $(PR_FLAGS)
+
+pr_review:
+	@test -n "$(ID)" || { echo "usage: make pr_review ID=<comment_id>"; exit 1; }
+	@$(PR_LOOP) review "$(ID)" $(PR_FLAGS)
 
 pr_respond:
 	@test -n "$(ID)" || { echo "usage: make pr_respond ID=<comment_id> [POST=1]"; exit 1; }
