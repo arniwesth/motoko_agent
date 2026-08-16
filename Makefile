@@ -138,9 +138,14 @@ pr_review:
 	@test -n "$(ID)" || { echo "usage: make pr_review ID=<comment_id>"; exit 1; }
 	@$(PR_LOOP) review "$(ID)" $(PR_FLAGS)
 
+# POST must be exactly 1. `$(if $(POST),...)` tests non-empty, not truth, so
+# POST=0 and POST=no both published -- a gate that reads as "off" and fires.
 pr_respond:
 	@test -n "$(ID)" || { echo "usage: make pr_respond ID=<comment_id> [POST=1]"; exit 1; }
-	@$(PR_LOOP) respond "$(ID)" $(if $(POST),--post) $(PR_FLAGS)
+	@if [ -n "$(POST)" ] && [ "$(POST)" != "1" ]; then \
+		echo "pr_respond: POST must be exactly 1 to publish (got '$(POST)'). Omit POST to preview."; exit 1; \
+	fi
+	@$(PR_LOOP) respond "$(ID)" $(if $(filter 1,$(POST)),--post) $(PR_FLAGS)
 
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
