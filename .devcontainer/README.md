@@ -22,6 +22,31 @@ sibling sidecar. Both services must be in the same Compose project for
 - `4317`: OTLP gRPC
 - `4318`: OTLP HTTP
 
+## GitHub Credentials
+
+Two identities are in play, and they must not collapse into one. Per
+`.agent/projects/016_github_ops/ADR-001-github-pr-ops-pipeline.md` D1, identity
+follows agency: what you decide goes out as you, what the pipeline produces goes
+out as the machine user.
+
+- **You**: run `gh auth login` once inside the container. The credential lands in
+  `~/.config/gh/`, which does not survive a rebuild, so expect to redo it.
+- **The bot**: export `MOTOKO_BOT_GH_TOKEN` on the *host* (your shell profile,
+  or a host secret manager — anywhere but this repo) before starting the
+  container. `.devcontainer/docker-compose.yml` passes it through, and both
+  profiles share that file, so this is one setting for both.
+
+Do not name that variable `GH_TOKEN` or `GITHUB_TOKEN`. `gh` prefers either over
+your stored login and reports nothing, so every `gh` command you ran by hand
+would silently act as the bot. Pipeline commands map it into `GH_TOKEN` only in
+the subprocess environment they spawn.
+
+Check which account a command will act as with:
+
+```bash
+gh api user --jq .login
+```
+
 ## Start Observability Sidecars
 
 ClickStack and the Motoko log collector start when VS Code rebuilds/reopens the
