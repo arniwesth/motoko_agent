@@ -25,9 +25,9 @@ sibling sidecar. Both services must be in the same Compose project for
 ## GitHub Credentials
 
 Two identities are in play, and they must not collapse into one. Per
-`.agent/projects/016_github_ops/ADR-001-github-pr-ops-pipeline.md` D1, identity
-follows agency: what you decide goes out as you, what the pipeline produces goes
-out as the machine user.
+`.agent/projects/016_github_ops/ADR-001-github-pr-ops-pipeline.md` D1 as amended
+by C9, identity follows mechanism: anything the pipeline emits — PRs included —
+goes out as the machine user, and anything done by hand in the web UI is you.
 
 - **You**: run `gh auth login` once inside the container. The credential lands in
   `~/.config/gh/`, which does not survive a rebuild, so expect to redo it.

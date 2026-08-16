@@ -126,7 +126,7 @@ comment record is a disposition, not a claim tracker.
   which only posting produces.
 - Re-open a comment already `dismissed` with a reason without saying why the reason no longer
   holds.
-- Respond as the operator. Responses are pipeline output and go out as the bot; `make pr` is the
-  only thing that acts as the operator.
+- Reach for `--as-operator`. Everything the pipeline emits goes out as the bot, PRs included
+  (ADR-001 C9); acting as the human is the exception, not a preference.
 - Post twice. `pr_respond` refuses when `response_comment_id` is already set; if you find yourself
   reaching for `--force`, something upstream is wrong.

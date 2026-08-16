@@ -17,28 +17,33 @@ Design record: [`.agent/projects/016_github_ops/ADR-001-github-pr-ops-pipeline.m
 Read its **Corrections** section before changing anything — several obvious-looking moves are
 wrong there for measured reasons.
 
-## Two identities, and why they must not merge
+## Two identities
 
 | Acting as | Who | Credential |
 |---|---|---|
-| `pr` | **you** | `gh auth login` |
-| `pr-sync`, `pr-loop respond` | **the bot** (`motoko-agent`) | `MOTOKO_BOT_GH_TOKEN` |
+| `pr`, `pr-sync`, `pr-loop respond` | **the bot** (`motoko-agent`) | `MOTOKO_BOT_GH_TOKEN` |
+| `pr --as-operator` | **you** | `gh auth login` |
 
-The rule is *identity follows agency*: what a human decides goes out under the human's name, what
-the pipeline produces goes out under the bot's. Routing your own PRs through the bot would corrupt
-review semantics — CODEOWNERS, review requests, self-approval.
+The rule is *identity follows mechanism*: **anything the pipeline emits is the bot; anything done
+by hand in the web UI is you.** One rule, readable off a PR's author field without knowing which
+command produced it.
 
-**This is easy to break by accident.** `gh` prefers `GH_TOKEN`/`GITHUB_TOKEN` from the environment
-over the credentials `gh auth login` stored, and says nothing when it does. Exporting the bot token
-under either name would make *your* `make pr` publish as the bot, with no error to notice. So the
-token travels under a distinct name and is mapped into `GH_TOKEN` only inside the subprocess of a
-command that should act as the bot. `pr` goes further and strips `GH_TOKEN`/`GITHUB_TOKEN` from
-gh's environment outright, so it acts as you even if a token is ambient.
+Note what this does not cover. The branch is pushed with git's credentials and commits keep their
+own authorship, so a PR reads as *"motoko-agent wants to merge N commits"* over commits authored by
+whoever wrote them. And because both halves now carry the bot's name, identity no longer tells you
+whether a human decided something — that has to come from the state record.
 
-Check which account anything will act as:
+**Identity is never inherited.** `gh` prefers `GH_TOKEN`/`GITHUB_TOKEN` from the environment over
+the credentials `gh auth login` stored, and says nothing when it does — so an ambient token would
+silently decide who acts, in either direction. The bot credential therefore travels under a
+distinct name and is mapped into `GH_TOKEN` only inside the subprocess of the command that wants
+it; `--as-operator` strips both so it acts as you even if one is set.
+
+Every command prints which account it resolved to before it writes anything, and you can ask
+directly:
 
 ```sh
-make pr_whoami                  # → arniwesth
+make pr_whoami                   # → arniwesth
 make pr_whoami PR_FLAGS=--as-bot # → motoko-agent
 ```
 
@@ -78,7 +83,7 @@ GitHub — the recovery path for a crash between publishing and writing back.
 |---|---|---|
 | `BASE` | `main` | Base branch, and the diff base |
 | `REMOTE` | `origin` | Which remote to open against |
-| `PR_FLAGS` | — | Passed through, e.g. `--dry-run`, `--title`, `--force` |
+| `PR_FLAGS` | — | Passed through, e.g. `--dry-run`, `--title`, `--force`, `--as-operator` |
 
 `.github/PULL_REQUEST_TEMPLATE.md` mirrors the same five sections for PRs opened by hand in the web
 UI. The driver's template is the source of truth — `gh pr create` applies a web template only

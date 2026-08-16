@@ -38,8 +38,7 @@ Relates to:
 Recorded 2026-08-16, after WI-0–WI-3 landed. C1–C3 and C8 are **factual**: this document described
 the world incorrectly and the body below has been fixed in place. C4–C7 were **open questions**
 implementation surfaced that this ADR never decided; the operator closed them the same day, and
-each now records its resolution. All eight remain provisional against 008 fork 2, which is
-still open.
+each now records its resolution. C9 is a later operator decision that supersedes part of D1.
 
 **C1 — PR #97 is on `origin`, not `sunholo`. (Fixed inline: D2, D3, Consequences, WI-4.)**
 `sunholo-voight-kampff/motoko_agent` has exactly three PRs, #1–#3. The worked example this whole
@@ -145,6 +144,31 @@ the audit trail that stops a comment being re-litigated. `pr-sync`'s emitter quo
 this reason; hand-written records get no such protection, which is an argument for the loop writing
 them rather than a human.
 
+**C9 — PR creation moved to the bot; the rule is now identity follows *mechanism*. (Operator
+decision, 2026-08-16. Supersedes the agency clause of D1.)**
+D1 split identity by who *decided* an action: `make pr` went out as the operator, sync and
+responses as the bot. Every PR the tooling opens now goes out as the machine user instead, and the
+rule becomes: **anything the pipeline emits is the bot; anything done by hand in the web UI is
+you.** One rule, checkable from a PR's author field alone, with no need to know which command
+produced it.
+
+D1's stated objection was that routing human-authored PRs through the bot corrupts review
+semantics — CODEOWNERS, review requests, self-approval. Measured against this repo that argument
+partly inverts: GitHub blocks approving your own PR, so an operator-authored PR in a
+single-operator repo can never carry a recorded approval, while a bot-authored one can. The
+objection retains force only where CODEOWNERS routing depends on the human being the author.
+
+What is genuinely lost is the property D1 bought: identity no longer distinguishes
+human-decided from pipeline-produced, because both are the bot. That signal now has to come from
+the state record rather than from GitHub's author field. Worth knowing before reading a bot author
+as evidence that nobody looked at something.
+
+Not changed, and visible on every PR: the branch is pushed with git's credentials and commits keep
+their own authorship, so a PR reads as *"motoko-agent wants to merge N commits"* over commits
+authored by whoever wrote them. `--as-operator` reverts a single run.
+
+All remain provisional against 008 fork 2, which is still open.
+
 ---
 
 ## Context / the question
@@ -199,7 +223,9 @@ a `stale: true` marker for the loop to adjudicate.
 ## Decision
 
 **D1 — The pipeline acts as a dedicated machine-user account, not as the operator and not as a
-GitHub App.** The governing rule is **identity follows agency**: actions a human decides on (the
+GitHub App.** *(The agency rule below is superseded by C9: identity now follows **mechanism**, and
+`make pr` opens PRs as the bot. The machine-user choice, and everything under "The machine user
+beat the App", stands unchanged.)* The governing rule was **identity follows agency**: actions a human decides on (the
 operator running `make pr`) go out as the operator via ordinary `gh auth`; actions the pipeline
 produces (sync, agent-drafted responses once approved for posting) go out as the pipeline
 identity. Routing human-authored PRs through the bot would corrupt review semantics — CODEOWNERS,

@@ -28,14 +28,19 @@
  *   --title <text>     PR title (default: derived from the branch name)
  *   --force            Publish even with unfilled <!-- TODO --> placeholders
  *   --dry-run          Print what would be published; touch nothing on GitHub
+ *   --as-operator      Open the PR as you rather than as the bot
  *
- * Identity (ADR-001 D1 — identity follows agency): a human decides to open a
- * PR, so this tool always acts as the *operator*, via the credential stored by
- * `gh auth login`. It strips GH_TOKEN/GITHUB_TOKEN from gh's environment to
- * guarantee that: gh silently prefers those over your stored login, so an
- * inherited one would publish your PR under the bot's name. The bot credential
- * arrives as MOTOKO_BOT_GH_TOKEN and is mapped into GH_TOKEN only where bot
- * agency is correct — `whoami --as-bot` here, and `pr-sync` next door.
+ * Identity (ADR-001 D1 as amended by C9 — identity follows *mechanism*): every
+ * PR this tool opens goes out as the machine user, because it is pipeline
+ * output regardless of who decided to run it. Anything opened by hand in the
+ * web UI is the operator. One rule, checkable from the author field alone.
+ *
+ * `--as-operator` reverts to the credential stored by `gh auth login` for the
+ * cases the bot cannot cover.
+ *
+ * Note what this does NOT change: the branch is pushed with git's credentials
+ * and the commits keep their own authorship, so a PR reads as "motoko-agent
+ * wants to merge N commits" over commits authored by whoever wrote them.
  */
 
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -62,6 +67,13 @@ import {
   writeFileMkdir,
 } from "./lib.ts";
 
+/**
+ * Who this tool acts as. C9 moved PR creation to the bot; `--as-operator`
+ * is the escape hatch, and every command prints what it resolved to before
+ * writing anything.
+ */
+let AGENCY: Identity = "bot";
+
 /** Unfilled template fields carry this marker; `create` refuses to publish them. */
 const TODO = "<!-- TODO";
 
@@ -72,6 +84,7 @@ interface Options {
   force: boolean;
   dryRun: boolean;
   asBot: boolean;
+  asOperator: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +257,7 @@ function findExistingPr(slug: string, branch: string): { number: number; url: st
     "--state", "all",
     "--json", "number,url,state",
     "--limit", "10",
-  ]);
+  ], AGENCY);
   if (!r.ok) die(`gh pr list failed:\n${r.stderr}`);
   const prs = JSON.parse(r.stdout || "[]") as { number: number; url: string; state: string }[];
   if (prs.length === 0) return null;
@@ -268,7 +281,7 @@ function finalize(staged: string | null, remote: string, slug: string, branch: s
   } else {
     // Crash recovery: the PR exists but nothing was staged locally. GitHub is
     // transport, so the body can be pulled back to reconstruct the artifact.
-    const r = gh(["pr", "view", String(number), "--repo", slug, "--json", "body,title"]);
+    const r = gh(["pr", "view", String(number), "--repo", slug, "--json", "body,title"], AGENCY);
     if (!r.ok) die(`gh pr view failed:\n${r.stderr}`);
     const view = JSON.parse(r.stdout) as { body: string; title: string };
     body = view.body ?? "";
@@ -307,8 +320,8 @@ function cmdCreate(opts: Options): void {
   // body fails in milliseconds rather than after two API round trips.
   if (existsSync(stagingPath(branch))) checkStagedFields(stagingPath(branch), opts);
 
-  const login = reportIdentity("operator");
-  console.log(`pr: acting as ${login} (operator) on ${slug}`);
+  const login = reportIdentity(AGENCY);
+  console.log(`pr: acting as ${login} (${AGENCY}) on ${slug}`);
 
   // Adopt before creating. D4: a crash between publish and write-back leaves a
   // real PR with no local record, and a second PR is not a recoverable state.
@@ -348,7 +361,7 @@ function cmdCreate(opts: Options): void {
     "--head", branch,
     "--title", title,
     "--body-file", bodyFile,
-  ]);
+  ], AGENCY);
   rmSync(bodyFile, { force: true });
   if (!created.ok) die(`gh pr create failed:\n${created.stderr}`);
 
@@ -370,7 +383,7 @@ function usage(): void {
 }
 
 function main(argv: string[]): void {
-  const opts: Options = { base: "main", remote: "origin", title: null, force: false, dryRun: false, asBot: false };
+  const opts: Options = { base: "main", remote: "origin", title: null, force: false, dryRun: false, asBot: false, asOperator: false };
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -382,12 +395,15 @@ function main(argv: string[]): void {
       case "--force": opts.force = true; break;
       case "--dry-run": opts.dryRun = true; break;
       case "--as-bot": opts.asBot = true; break;
+      case "--as-operator": opts.asOperator = true; break;
       case "--help": case "-h": usage(); return;
       default:
         if (a.startsWith("-")) die(`unknown option: ${a}`);
         positional.push(a);
     }
   }
+
+  if (opts.asOperator) AGENCY = "operator";
 
   switch (positional[0] ?? "create") {
     case "draft": cmdDraft(opts); break;
