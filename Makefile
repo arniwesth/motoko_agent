@@ -296,6 +296,26 @@ stream_parity:
 ledger_parity:
 	./scripts/dst/run_ledger_parity_wire.sh
 
+# The gate for motoko_agent#160. Two tiers, both using a deliberately LOW
+# `--max-recursion-depth` as the instrument, because AILANG has no depth counter
+# to read and no tail-call elimination: anything on the driver's per-step path
+# that traverses accumulated state costs a frame per record and turns the
+# maximum length of a session into a function of the ceiling.
+#
+# Tier 0 is a unit probe over 8,192 constructed records — precise and drift-free,
+# guards one function. Tier 1 runs the REAL driver out of process at pinned
+# per-seed ceilings — general, catches any new traversal, but the pins move when
+# per-step frame cost legitimately changes. The script's header carries the pin
+# table, the measured fault-present depths that justify the headroom, and the
+# rule that bumping a pin is a deliberate act with a recorded reason.
+#
+# SHOWN TO FIRE, which is the house caveat this project puts on every guard:
+# against the pre-fix driver all four rows go red; against HEAD all four are
+# green. That is a measurement of a real regression, not a hypothetical.
+.PHONY: depth_canary
+depth_canary:
+	./scripts/dst/run_depth_canary.sh
+
 phase_c_l1: compaction_dst
 	ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
 	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
@@ -393,7 +413,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   ext_ambient_inventory ext_call_inventory ext_call_inventory_selftest \
   conformance stream_parity latency_pair test_coverage_selftest \
   execution_program attribution_table profile_coverage compose_live_exec \
-  ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors
+  ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary
 
 # corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
 #

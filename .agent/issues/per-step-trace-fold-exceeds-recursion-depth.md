@@ -62,8 +62,29 @@ landing on the same floor is what you expect if both removed the same traversal 
 the trace did not. The default export path is unchanged — `run_export_trace.sh --seed 7` still writes
 79 records — and `driver_only_dst`, `invariants_dst`, `discovery_dst` pass.
 
-What is still absent is a **gate**: this is a measurement anyone can now repeat, not something CI
-runs. That remains the argument for `PLAN-resource-growth-relation.md`.
+**Gated** — `make depth_canary` (`scripts/dst/run_depth_canary.sh`), in `DST_TARGETS`. Two tiers,
+both using a deliberately low `--max-recursion-depth` as the instrument:
+
+- **Tier 0**, `scripts/dst/recursion_depth_probe.ail` — calls the real
+  `session.runtime_status_counts` (exported for this one caller) over 8 192 constructed records at
+  a ceiling of 200. Precise, milliseconds, cannot drift; guards one function. The trace is built by
+  **doubling** on frame-free `++`, so the setup costs ~13 frames rather than 8 192 and cannot
+  dominate the measurement.
+- **Tier 1** — the real driver out of process at pinned per-seed ceilings (7→70, 11→104, 23→90;
+  floors 58/87/75 plus ~20%). General: catches *any* new O(|trace|) traversal on the driver path,
+  not just a regression of this one. Record counts are pinned too, because `export_trace` prints
+  refusals and exits **zero** — without that assertion a misconfigured harness would pass.
+
+**Shown to fire**, which is this project's standing caveat on any guard: against the pre-fix driver
+all four rows go red (tier 0 aborts at 200; seeds 7/11/23 exceed their ceilings at 86/153/114);
+against HEAD all four are green. That is a measurement of a real regression, not a hypothetical.
+
+Neither tier is sufficient alone — tier 0 is narrow, tier 1 is a pin whose floor (~2.4 frames per
+decision plus ~23) moves when `c2_loop`'s per-step cost legitimately changes. They cover each
+other's weakness. What is still not built is ADR-002's full relation — slope of depth against
+records with trajectory length held fixed — which needs a records-per-step lever the generator does
+not have (`max_chunks_per_interaction` clamps a draw hardcoded to `0, 3`). That remains
+`PLAN-resource-growth-relation.md`'s work.
 
 ## GitHub
 

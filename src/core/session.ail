@@ -515,7 +515,14 @@ pure func is_compaction_ai_ext_id(ext_id: string) -> bool {
 -- `.agent/projects/011_improve_test_axises/RESEARCH-test-axes-beyond-dst.md`
 -- plans to expand contract coverage, and this is one function it can no longer
 -- reach.
-pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
+-- EXPORTED FOR ONE CALLER, and it is a gate rather than a feature:
+-- `scripts/dst/recursion_depth_probe.ail` calls this over a deliberately large
+-- trace at a deliberately low recursion ceiling, so that a future rewrite back
+-- to hand-written recursion fails loudly instead of shipping. The export exists
+-- because the probe must exercise THIS function and not a copy of it — a
+-- replicated fold would pass while production regressed, which is the exact
+-- shape of gate this project refuses.
+export pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
   List.foldl(runtime_status_count_one, zero_runtime_status_counts(), trace.records)
 }
 
