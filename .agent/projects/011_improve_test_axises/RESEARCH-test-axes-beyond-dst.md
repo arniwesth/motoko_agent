@@ -9,6 +9,8 @@ Relates to:
 - `.agent/research/DST/motoko-dst-generalized-system.md` (2026-06 "DST Plus Fuzzing" sketch, §290–320)
 - `design_docs/planned/m-motoko-z3-contracts.md` (the unexecuted Z3 plan)
 - AILANG docs MCP: `guides/testing.md` (native `property` + shrinking), `reference/implementation-status.md` (verification component status)
+- `.agent/issues/per-step-trace-fold-exceeds-recursion-depth.md` (2026-08-17 — the first production
+  fault measured against this survey; motivates §3.9, added after the original date)
 
 ---
 
@@ -232,6 +234,79 @@ simulated ones) turns the DST oracle into runtime telemetry — the standard Fou
 move. No new invariant code; only a reporting path. Fits the "evals are not regression
 oracles" philosophy since it asserts ledger well-formedness, never model quality.
 
+### 3.9 Resource-growth properties and a declared long-run profile (added 2026-08-17)
+
+**Added after the original survey, and unlike every other subsection it is written against a
+fault that actually happened rather than against a gap someone reasoned toward.** That is its
+whole value: the axis it names was not on the 2026-08-13 list, and would not have been derived
+from the DRAFT's self-diagnosed gaps either.
+
+The case: `.agent/issues/per-step-trace-fold-exceeds-recursion-depth.md` — a live session aborted
+with `RT_REC_003` because the driver re-folds its whole accumulated `LedgerTrace` once per tool
+step, and the trace had reached ~9 900 records. Four reasons none of the twelve families could
+see it, each independently sufficient (the issue record carries the measurements):
+
+1. **Wrong fault class.** All twelve families (`dst_invariants.ail:219-233`) are correctness
+   relations over a trace — pairing, parity, monotonicity, agreement, replay equality. This is a
+   *resource* property: per-step work that is O(accumulated state). The killing trace is
+   perfectly well-formed and merely large. `BoundedProgress` is bounded *retry*, not bounded
+   state.
+2. **The declared bounds cap the exact axis, ~30× below the threshold.**
+   `dst_generator.ail:600-601` draws `bounded_draw(…, 0, 3, "max_chunks_per_interaction", …)`;
+   profiles declare 4 (`canary_bounds`) or 1, `max_interactions` 64–96. Ceiling ~288 stream
+   deltas per program; production produced 8 678 from 63 steps. **Not a sampling gap** — D2 says
+   the generator never exceeds a bound, it takes the bounded alternative and records a generator
+   failure, and `HarnessHygiene` requires those to be zero. More seeds cannot drift toward the
+   failing scale; the ceiling is structural.
+3. **The harness shares the fault's own budget.** DST runs in the same `ailang run` process at
+   the same 10 000-frame default, so a program at that scale aborts *the harness* — a process
+   exit, not a violation — and the harness's own ambient depth moves the threshold between
+   suites, so it would not be a stable repro even then.
+4. **§3.2 does not reach it.** ddmin minimizes a failing program; this fault exists only at
+   maximum scale, so the minimal reproducer is the whole program. Worth stating plainly because
+   shrinking is this project's adopted decision and the instinct will be to reach for it.
+
+**Two proposals, separable:**
+
+**(a) A declared long-run / soak profile.** A `GeneratorBounds` with
+`max_chunks_per_interaction` in the hundreds and a larger `max_interactions`, run rarely
+(nightly, alongside §3.2's ddmin job). Explicitly *not* a bump to the existing bounds — D2's
+"exceeding a bound is a generator/harness failure, not an unbounded test run" is deliberate and
+should stay true of the default profiles. The point of a second profile is that the large scale
+is *declared*, so it stays inside D2 rather than working around it.
+
+**(b) A thirteenth family: resource growth.** Not directly checkable from a trace, since "no
+per-step operation is O(|trace|)" is a property of the code, not of the run. The checkable proxy:
+assert observed `trace.records` against `decision_budget × a declared per-step record ceiling`.
+That converts "the trace grows with token volume rather than with work done" from a live crash
+into a red row, and it is cheap — the counts are already in `ExecutionUnderTest`.
+
+**Constraint that shapes (b), and the reason this belongs in the project rather than only in the
+issue record:** the obvious remedy for the production fault — stop appending stream deltas to the
+trace — is **forbidden by an existing family**. `StreamParityCount` (`dst_invariants.ail:432`)
+requires every projected stream emission to reach the returned trace; D6.4 names streams as the
+one class where a shared append/project transition is impossible and discharges the obligation
+with exactly that parity check, and the WI-C3 header at `:100-121` records that appending them is
+what made the check non-vacuous on a real run. So the trace is *required* to scale with token
+volume, and any resource family has to be stated as a bound on per-step *work*, never as a bound
+on trace size. A family that capped record count would contradict D6.4 outright.
+
+**House caveats.** Both hold, and (b) needs the first one said out loud: a green resource family
+proves the ceiling was not crossed on the trajectories run — **not** that no O(|state|) per-step
+work exists, which is the same "reachability is not oracle strength" caution §3.3 exists to
+answer. On the second: many stream chunks is a legitimate outcome at the typed provider boundary,
+not a test-only in-code branch, so (a) raises a declared bound and injects nothing.
+
+**Relation to §3.8.** Production-ledger monitoring is the one axis where this scale actually
+occurs, and it is where the real trace came from. It would still not have fired, for reason 1 —
+which is the useful thing to notice: §3.8 supplies the *data* for a resource family, and (b)
+supplies the family §3.8 would need to be more than a well-formedness check on bigger inputs. The
+two are worth more together than separately.
+
+**Cost.** (a) is a bounds literal and a make target. (b) is one `InvariantFamily` variant, one
+violation constructor, and a field on `ExecutionUnderTest` — the smallest new family in the set,
+because it needs no new observation. Both are strictly smaller than §3.1–§3.3.
+
 ## 4. Explicitly rejected
 
 - **Golden/snapshot tests** — the ledger oracle + counting-as-oracle + pinned digests
@@ -253,3 +328,9 @@ oracles" philosophy since it asserts ledger well-formedness, never model quality
 5. Which axes deserve WI-numbered execution plans vs staying research — proposal: §3.1 and
    §3.2 go to PLAN documents first; §3.3 needs a small operator-feasibility spike before
    planning.
+6. Resource growth: is the per-step-work bound expressible as an invariant at all, or is it
+   properly a Z3 contract (§3.1) over the fold sites — and does the soak profile belong in the
+   nightly §3.2 job or on its own cadence? (§3.9)
+7. The ranking above predates §3.9 and is not re-scored here. §3.9 is the only entry motivated
+   by a fault that reached production rather than by survey, which is an argument for weight the
+   original leverage-per-effort axis did not measure. Worth settling before the next PLAN.
