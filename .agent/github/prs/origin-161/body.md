@@ -17,40 +17,13 @@ AILANG v0.33.0 eliminates no tail calls, and the trace had reached ~9,865 record
 hunks — fold with `List.foldl` (stdlib traversals are frame-free) and compute the payload lazily
 under a name guard — plus a gate so it cannot come back silently.
 
-**Base is `main_dst`, so this PR carries 48 commits; 22 of them are the #160 work.** The other 26
-are the github-ops pipeline (`tools/pr`) and the agentcli extension, already reviewed on their own
-branches. The `.agent/` documents are the larger half of the diff by line count and are the record
-of how the fix was reached — an ADR that was wrong three times, the spike that found it, and the
-closeout of the generator work that followed.
+Stacked on #162 (`mot-98`), so the diff is exactly this work. The `.agent/` documents are the
+larger half of it by line count and are the record of how the fix was reached: an ADR that was
+wrong three times, the spike that found it, and the closeout of the generator work that followed.
 
 ## Changes
 
-- Added projects and research ideas
-- Added tool for sending docs to reMarkable
-- Updated .gitignore
-- Adde Obsidian MCP
-- Added default VS code extensions
-- Added more docs
-- Updated docs
-- WI-1a: install the GitHub CLI in the container
-- WI-1b: pass the bot credential through under a non-GH_TOKEN name
-- WI-2: PR template, creation driver with number write-back, and the mirror
-- WI-1b follow-up: resolve the bot credential explicitly, and flag a PAT that cannot write
-- Extract tools/pr/lib.ts ahead of WI-3
-- WI-3: pr-sync and the state writer, with the cache gitignore
-- ADR-001: corrections C1-C8 from implementing WI-0..WI-3
-- WI-4: freeze .agent/prs/, backfill open PRs, first responded record
-- Record PR #157, driver-created
-- Extract tools/pr/state.ts ahead of WI-5
-- WI-5: the rank/test/respond loop -- pr-loop plus a skill to drive it
-- pr-loop: make the review gate actually reviewable
-- Makefile: POST=0 no longer publishes
-- pr-loop: take a PR number or an artifact path, not just the comment id
-- Add tools/pr/README.md
-- Record the response to origin#76 comment 5021529142
-- C9: PRs are created by the bot; identity follows mechanism
-- pr-loop list: PR lifecycle as a derived view, not a new store
-- Added agentcli extension v1
+
 - Record #160: a per-step fold over the whole trace, and the axis that missed it
 - ADR-002: resource growth as a metamorphic relation, not a budget
 - ADR-002 review: the property was wrong, and the instrument could not decide it
@@ -73,13 +46,14 @@ closeout of the generator work that followed.
 - Close out cluster A: the implementation record and a corrected work ratio
 - WI-5: write Corrections 9-12 back into ADR-002, and retire three stale claims
 - Re-anchor the five session.ail clock sites after #160, and re-issue three profiles
+- Record PR #161, driver-created
 
-94 files changed.
+43 files changed.
 
 ## Governing docs
 
+
 - `.agent/projects/009_motoko_dst_execution/NOTE-stale-plan-status-markers.md`
-- `.agent/projects/011_improve_test_axises/ADR-001-adopt-program-shrinking.md`
 - `.agent/projects/011_improve_test_axises/ADR-002-resource-growth-as-a-metamorphic-relation.md`
 - `.agent/projects/011_improve_test_axises/HANDOFF-declare-the-chunk-draw-range.md`
 - `.agent/projects/011_improve_test_axises/HANDOFF-write-resource-growth-relation-plan.md`
@@ -90,19 +64,10 @@ closeout of the generator work that followed.
 - `.agent/projects/011_improve_test_axises/PLAN-resource-growth-relation.md`
 - `.agent/projects/011_improve_test_axises/PLAN-spike-resource-growth-feasibility.md`
 - `.agent/projects/011_improve_test_axises/RESEARCH-test-axes-beyond-dst.md`
-- `.agent/projects/012_continuous_ailang_adoption/RESEARCH-continuous-ailang-feature-adoption.md`
-- `.agent/projects/013_core_architecture_for_dst/RESEARCH-core-architecture-for-dst.md`
-- `.agent/projects/014_comparative_self_evolution/RESEARCH-godel-machine-lineage-for-motoko.md`
-- `.agent/projects/015_idea_factory/NOTE-idea-creation-and-combination.md`
-- `.agent/projects/015_idea_factory/RESEARCH-idea-factory-and-idea-evaluation.md`
-- `.agent/projects/015_idea_factory/RESEARCH-idea-generation-and-combination-operators.md`
-- `.agent/projects/016_github_ops/ADR-001-github-pr-ops-pipeline.md`
-- `.agent/projects/016_github_ops/HANDOFF-implement-github-ops-wi0-wi2.md`
-- `.agent/projects/016_github_ops/HANDOFF-write-adr-github-pr-ops.md`
-- `.agent/projects/016_github_ops/RESEARCH-github-pr-ops-pipeline.md`
 - `.agent/projects/017_extension_handling/RESEARCH-extension-abi-evolution.md`
 
 ## Predicted outcome
+
 
 - **Long sessions stop aborting at ~10,000 trace records.** Checked by `make depth_canary`, which
   measures the real driver's peak recursion depth out of process at pinned per-seed ceilings, and
@@ -117,6 +82,7 @@ closeout of the generator work that followed.
   (37.5% of seeds never reach the tool arm). `PLAN-resource-growth-relation.md` WI-2/WI-3 own both.
 
 ## Test evidence
+
 
 ```
 ailang check src/core/session.ail        ✓ No errors found
