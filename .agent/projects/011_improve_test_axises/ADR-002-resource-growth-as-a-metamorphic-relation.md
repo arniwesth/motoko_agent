@@ -1,7 +1,10 @@
-# ADR-002: How should DST detect unbounded per-step work over accumulated state?
+# ADR-002: How should DST detect recursion depth that scales with accumulated state?
 
 **Status:** Proposed
 **Date:** 2026-08-17
+**Revised:** 2026-08-17 after review — see *Corrections*. The mechanism survived; the
+property it checks was stated too narrowly and the scope requirement was missing, which
+would have made the first implementation red on a healthy system.
 
 Relates to:
 - `RESEARCH-test-axes-beyond-dst.md` §3.9 — the axis this ADR decides. **This ADR
@@ -28,8 +31,13 @@ A live session aborted with `RT_REC_003` because the driver re-folds its whole a
 `LedgerTrace` once per tool step. None of the twelve invariant families could have caught
 it, for four independent reasons recorded in the issue. The question this ADR settles is
 narrower than "add a family": **by what mechanism can a deterministic simulation observe
-that per-step work grows with accumulated state, given that the work itself leaves no
-trace record?**
+that a run's recursion depth scales with accumulated state, given that the traversal leaves
+no trace record?**
+
+The question was first written as "per-step work grows with accumulated state". Review
+showed that is the wrong property — narrower than what matters and, worse, not decidable by
+any instrument this ADR could find. See *The property is "no depth that scales with
+accumulated state"* under the Decision.
 
 Three constraints bound the answer, and each one kills an obvious design:
 
@@ -84,7 +92,44 @@ The relation:
 
 > For two runs of the same generator differing **only** in `max_chunks_per_interaction`
 > (records produced per step), with `max_interactions` (trajectory length) held fixed,
-> peak recursion depth must not grow proportionally to the record volume.
+> the peak recursion depth **of the production driver path** must not grow proportionally
+> to the record volume.
+
+### The property is "no depth that scales with accumulated state", not "no per-step fold"
+
+This distinction is the whole correctness of the design and the first draft got it wrong.
+
+**Peak depth cannot distinguish "folds accumulated state every step" from "folds it once at
+the end".** Both reach the same maximum. Measured — a *correct* driver whose finished trace
+is then walked once, versus the faulty driver, trajectory fixed at 50 steps:
+
+| configuration | per=5 | per=10 | per=20 | per=40 | growth |
+|---|---|---|---|---|---|
+| correct driver, nothing else | 73 | 73 | 73 | 98 | 1.3× |
+| **correct driver + one end-of-run fold** | **268** | **512** | **1025** | **2025** | **7.6×** |
+| faulty driver (per-step fold) | 317 | 561 | 1074 | 2074 | 6.5× |
+
+Rows 2 and 3 are indistinguishable. So a relation phrased as "per-step work must be O(1) in
+accumulated state" is not decidable by this instrument, and an implementation of the first
+draft would have gone red on a correct driver.
+
+**The resolution is that row 2 is not a false positive.** Any recursion whose depth scales
+with accumulated state is a hard cap on session length — whether it runs once or every step,
+it aborts the run at the same size. A single end-of-run fold over a 10 000-record trace is
+exactly as fatal as a per-step one. So the property worth checking is the broader and simpler
+one, and this instrument decides it exactly.
+
+**What that costs is a scope requirement, and it is mandatory rather than an optimization.**
+Row 2's fold is real: `dst_invariants.evaluate()` walks the trace through `count_variant` and
+`count_decisions` (`dst_invariants.ail:1198-1215`), both non-tail-recursive over records. That
+is test-only code, and its depth is not a production property. **The measured process must
+therefore run the driver and serialize its trace, with invariant evaluation in a separate
+process that is not measured.** Measuring a combined driver-plus-checker run reports the
+checker.
+
+That phase separation already exists and does not need building: `scripts/dst/export_trace.ail`
+and `run_export_trace.sh` are the D9 ledger-trace exporter, one profile and one seed per
+invocation, writing the trace out. The work is a flag on an existing runner, not a new one.
 
 ### Why this is the right measurement, in numbers
 
@@ -109,12 +154,13 @@ length, and getting this backwards produces a check that is red on everything.
 
 ### What this buys, beyond detecting the fault
 
-- **Out-of-process by construction.** The ceiling is a CLI flag on a subprocess, so the
-  observer never shares the observed run's frame budget. Constraint 3 dissolves rather
-  than being worked around, and `HarnessFailureKind`'s documented property survives
-  untouched — the abort is classified by the parent from exit status and a stable
-  `RT_REC_003` marker on stderr (measured: exit 1 on abort, exit 0 otherwise), not by a
-  runner that has to outlive its own death.
+- **Out-of-process by construction, and the scope requirement comes free with it.** The
+  ceiling is a CLI flag on a subprocess, so the observer never shares the observed run's
+  frame budget: constraint 3 dissolves rather than being worked around, and
+  `HarnessFailureKind`'s documented property survives untouched. The abort is classified by
+  the parent from exit status plus the `RT_REC_003` stderr marker, not by a runner that has
+  to outlive its own death. The same subprocess boundary is what keeps invariant evaluation
+  out of the measurement — one mechanism, two obligations.
 - **Cheap.** Bisection over ~12 subprocess runs, each of which is a normal DST run
   (`driver_only_dst` completes in 0.46 s). Seconds, not a soak.
 - **D2 is respected exactly as written**, and this is the part worth stating plainly:
@@ -155,17 +201,31 @@ not a problem for this one.
 ## Consequences
 
 **Costs:**
-- A new out-of-process runner in the shell, alongside `run_stream_parity_wire.sh` and
-  `run_ledger_parity_wire.sh`. That is a third shell gate; the project has been
-  deliberate about keeping these few.
+- The scope requirement is load-bearing, not hygiene. A measurement that accidentally
+  includes invariant evaluation reports the checker and is red on a healthy driver. Whoever
+  implements this must be able to state which process is being bisected and why.
 - The relation needs a tolerance, and a tolerance is a tuned number. The measured
   separation is ~20×, so a factor of 2–3 sits far from both populations — but the
-  `good` column's 73 → 98 shows the floor is not exactly flat: a step's own records are
+  correct driver's 73 → 98 shows the floor is not exactly flat: a step's own records are
   legitimately walked once, which is a per-step constant, not accumulation. The tolerance
   must be stated as "constant factor plus per-step allowance", never as "flat".
-- Bisection assumes monotonicity in the ceiling — that a run passing at depth *d* passes at
-  every *d′ > d*. True for a deterministic run, and worth asserting rather than assuming,
-  since a flaky world would make the bisection meaningless rather than merely noisy.
+- Shell-gate count is unchanged: this extends `run_export_trace.sh` rather than adding a
+  fourth script alongside it and the two wire gates. The first draft costed a new runner
+  here and was wrong.
+
+**Verified rather than assumed** (all measured 2026-08-17 against AILANG v0.33.0 `ae36986`):
+- **Bisection is valid.** Monotonicity in the ceiling — a run passing at depth *d* passes at
+  every *d′ > d* — was scanned linearly over depths 190–230 on a faulty-driver program:
+  exactly one transition, no oscillation. A flaky world would still make the bisection
+  meaningless rather than merely noisy, so determinism remains a precondition.
+- **`++` is frame-free.** Descending 300 frames and then appending to a 300-element list
+  completes at a ceiling of 350, so list concatenation costs no interpreter frames. This
+  matters twice: `ledger_append` (`phase_vocab.ail:604`) is *not* a second instance of the
+  fault, and the incremental-counts fix for #160 is therefore viable rather than merely
+  moving the cost.
+- **Abort is classifiable.** Exit 1 on abort, exit 0 otherwise, with a stable `RT_REC_003`
+  marker on stderr. Note exit 1 alone is *not* sufficient — an ordinary invariant failure
+  exits 1 too — so the marker is required, not a convenience.
 
 **Enables:**
 - A resource axis that is cheap enough for CI rather than nightly-only.
@@ -180,3 +240,46 @@ there is headroom to exploit); whether §3.9(a)'s soak profile still has indepen
 for non-recursion resources; and the Z3 route (option 3), which remains the right long-term
 home if §3.1 ever reaches the needed expressiveness. None of these are blocked by this
 decision.
+
+## Corrections
+
+Read this before changing the design. Each entry is something the first draft asserted
+without measuring, and that measurement then contradicted. They are kept because in every
+case the wrong version is the one a reader will re-derive.
+
+**1. "Per-step work" was the wrong property, and no instrument here decides it.** The first
+draft's relation was "per-step work must be O(1) in accumulated state". Peak recursion depth
+cannot see the difference between folding accumulated state every step and folding it once
+at the end — both reach the same maximum, measured at 6.5× versus 7.6× growth on the same
+input scaling. An implementation of that draft would have been red on a correct driver whose
+trace is evaluated by the invariant suite. The property is the broader one: *no recursion
+depth that scales with accumulated state, anywhere in the production path*. That is worth
+having on its own terms — a single end-of-run fold over a 10 000-record trace aborts the run
+just as surely as a per-step one.
+
+**2. The measurement must exclude invariant evaluation, and this is not an optimization.**
+`dst_invariants.evaluate()` walks the trace non-tail-recursively (`count_variant`,
+`count_decisions`, `dst_invariants.ail:1198-1215`). Bisecting a combined driver-plus-checker
+process measures the checker. The first draft did not scope the measurement at all.
+
+**3. The out-of-process runner already exists.** The first draft costed it as "a new
+out-of-process runner… a third shell gate". `scripts/dst/export_trace.ail` +
+`run_export_trace.sh` is the D9 ledger-trace exporter — one profile, one seed, trace written
+out — which is precisely the driver-phase-only process the design needs. This is a flag on an
+existing runner.
+
+**4. Two assumptions held, and were assumptions until they were checked.** Bisection
+monotonicity: scanned linearly over depths 190–230, exactly one transition, no oscillation.
+`++` frame cost: zero, so `ledger_append` is not a second instance of the fault and #160's
+incremental-counts fix is viable rather than merely relocating the cost. Neither was
+measured in the first draft; had `++` cost frames, the fix for #160 would have been wrong
+too.
+
+**5. Not an ADR correction, but found in the same review and recorded here because it
+travels with the analysis:** the response posted to motoko_agent#160 claimed `st.emissions`
+is "folded in `c2_finalize` at termination", and concluded a large session "may not be able
+to terminate cleanly either". Both are wrong. `c2_finalize` passes emissions through
+unchanged (`session.ail:1480`), and nothing in the production path folds them — the only
+fold is `stream_parity_findings`, which is DST-side. The claim never reached the issue
+record; it exists only in the posted comment, which now carries a correction. Recorded here
+because a wrong claim that was published is worth more scrutiny than one that was not.
