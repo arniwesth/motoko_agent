@@ -624,7 +624,14 @@ export pure func choose_provider(
   let d_tool = draw(d_term.state, "${salt}|tool", 3);
   let tool_name = match d_tool.value { 0 => "T", 1 => "BashExec", _ => "Read" };
   let d_arg = draw_between(d_tool.state, "${salt}|arg", 0, 999);
-  let d_chunks = bounded_draw(d_arg.state, "${salt}|chunks", 0, 3,
+  -- WI-1 REPLACED THE LITERAL `3` HERE WITH THE DECLARED RANGE, and the reason
+  -- this is not a re-pin is provable by reading rather than by sweeping:
+  -- `draw_between(g, s, 0, hi)` consumes exactly one `draw(g, s, hi - lo + 1)`
+  -- whatever `hi` is, so at `hi == 3` — which every profile in the tree declares —
+  -- the stream, the draw count and the drawn value are the same three numbers they
+  -- were when the 3 was a literal. The bound below is still the DECLARED LIMIT and
+  -- still a different quantity; see `GeneratorBounds`.
+  let d_chunks = bounded_draw(d_arg.state, "${salt}|chunks", 0, g.bounds.chunk_draw_hi,
                               "max_chunks_per_interaction", g.bounds.max_chunks_per_interaction);
   let d_in = draw_between(d_chunks.state, "${salt}|in", 10, 400);
   let d_out = draw_between(d_in.state, "${salt}|out", 5, 300);
