@@ -137,6 +137,113 @@ implementation — the measurement harness looks like the gate.
   document its own author believed finished; budget for a third correction pass rather than
   treating a green spike as a finish line.
 
+## Appendix — method
+
+Session-local technique, written down because it is cheap to transfer and expensive to
+rediscover. None of it is a decision; all of it is how the numbers get produced.
+
+### Measuring peak recursion depth
+
+There is no depth counter to read. The measurement is indirect: **bisect the lowest
+`--max-recursion-depth` at which the run still completes.** That value *is* the peak depth,
+to within the bisection tolerance.
+
+```sh
+# Call ailang DIRECTLY, not run_export_trace.sh — see both traps below.
+# Its config arrives through the environment, exactly as the wrapper sets it.
+export CG_EXPORT_SEED=7 CG_EXPORT_PROFILE=driver_only CG_OUT_DIR=/tmp/spike-out
+export CG_AILANG_VERSION="$(ailang --version | head -1)" CG_MOTOKO_COMMIT="$(git rev-parse HEAD)"
+
+try_depth() {                        # THE FLAG MUST PRECEDE THE .ail PATH
+  ailang run --max-recursion-depth "$1" \
+    --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+    --ai-stub --entry main scripts/dst/export_trace.ail < /dev/null >/dev/null 2>&1
+}
+
+minviable() {                        # usage: minviable <lo> <hi>
+  lo=$1; hi=$2
+  while [ $((hi - lo)) -gt 32 ]; do
+    mid=$(( (lo + hi) / 2 ))
+    if try_depth "$mid"; then hi=$mid; else lo=$mid; fi
+  done
+  echo "$hi"
+}
+```
+
+~12 iterations for a range of 1…200 000. Narrow the range once the first point is known;
+the remaining scale points land nearby.
+
+**Verified end to end**, twice: against a synthetic program of known depth (reports 1074 where
+1074 is correct), and against the real target above, which at `driver_only` seed 7 and HEAD
+`9e30172` reports a peak depth of **98**.
+
+That 98 is a calibration datum, **not a Q1 answer** — one seed, one unvaried bound, and the
+question is about the *slope*, not a point. It is recorded because it sharpens Q1 rather than
+settling it: 98 is small, and the fault is present in the tree at that commit, so either
+`driver_only` accumulates very few records or the `RunTools` arm carrying `session.ail:2470` is
+rarely reached. Both are the Q1 falsification path, already named. **Start by varying the bound
+and looking at the slope**; do not read a low floor as a verdict, in either direction.
+
+> **Trap 1 — do not bisect through `run_export_trace.sh`.** Its quiet path is
+> `ailang run … | grep -v '^{'`, so `$?` is **grep's** status, not the runtime's. A run that
+> aborted at the ceiling reports whatever grep felt about the filtered stream. The wrapper is
+> for humans; the bisection calls `ailang` directly and reproduces the wrapper's environment
+> (`CG_EXPORT_*`, `--ai-stub`, `< /dev/null`) itself. Caps are copied from the wrapper
+> verbatim — note it does **not** pass `Rand`.
+
+> **Trap 2, and it fails in the worst possible direction.** `ailang run` takes runtime flags
+> **before** the `.ail` path; anything after it is a program argument. A misplaced
+> `--max-recursion-depth` is **silently ignored** — exit 0 at every ceiling — so the bisection
+> converges to its floor and reports a small, flat curve. That is *exactly the shape a healthy
+> driver produces*, so the failure looks like a clean green Q1 falsification rather than like a
+> broken harness. The first draft of this appendix had the bug; it was caught only by running
+> the snippet against a program whose depth was already known. **Do that before trusting any
+> number here** — one known-depth calibration run, every time the command line changes.
+
+### Classifying the abort
+
+Exit 1 is **not** sufficient — an ordinary invariant failure exits 1 too. Require both:
+
+```sh
+"$@" --max-recursion-depth "$d" >/dev/null 2>err.txt; rc=$?
+[ "$rc" -ne 0 ] && grep -q 'RT_REC_003' err.txt   # this run hit the ceiling
+```
+
+A non-zero exit *without* the marker means the run failed for an unrelated reason and the
+bisection is measuring nothing. Fail loudly rather than folding it into the `else` branch.
+
+### The confounder, which bit this analysis twice
+
+**Peak depth is a maximum over the whole process, so the deepest thing in it wins — and it is
+usually not the thing you are measuring.** Both instances are recorded in ADR-002's
+*Corrections*: first a list-building helper dominated a probe; then `dst_invariants.evaluate`
+dominated a combined driver-plus-checker run and produced the faulty driver's exact signature
+on a correct one.
+
+Two consequences for this spike:
+
+1. **Bisect the `export_trace` process alone.** It imports no `dst_invariants` (verified), so
+   the driver phase is checker-free. Do not bisect a `make` target that also evaluates
+   invariants; it will measure the checker.
+2. **Attribute the floor before trusting the curve.** At the smallest bound, the reported
+   depth should be explainable — roughly trajectory length plus per-step constants. If the
+   floor is already large and flat, something unrelated is dominating and the curve above it
+   is masked. That is Q5, and it is diagnosed by this check rather than by inspection.
+
+### Reporting
+
+Growth factor is `depth(largest bound) / depth(smallest bound)`, with trajectory length fixed
+across the row. Report the whole row, not the ratio alone — a ratio hides a raised floor.
+
+| condition | bound=b₁ | b₂ | b₃ | growth |
+|---|---|---|---|---|
+| fault present (HEAD) | | | | |
+| fault removed (#160 fix applied) | | | | |
+
+Synthetic baselines to compare against: **1.3×** for a driver with no accumulation fold,
+**6.5×** for one with a per-step fold, over an 8× input scaling. These are the numbers this
+spike exists to replace.
+
 ## Disposal
 
 What dies with the branch: all of the code, including the #160 fix applied to it.
