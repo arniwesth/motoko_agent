@@ -2,8 +2,10 @@
 
 **Status:** Proposed
 **Date:** 2026-08-17
-**Revised:** 2026-08-17 twice — once after review, once after execution. See *Corrections*.
-The mechanism has survived both; every number and two of its three key statements have not.
+**Revised:** 2026-08-17 three times — after review, after the spike, and after WI-1 landed the
+lever. See *Corrections*; there are twelve, and 6–12 came from running rather than from reading.
+The mechanism has survived all three. Its numbers have been superseded twice and its central
+robustness claim once.
 Review found the property stated too narrowly and the scope requirement missing;
 the spike (`NOTE-spike-findings-resource-growth.md`) found the scope requirement still too
 wide to work, the statistic wrong for the range available, and every figure here synthetic by
@@ -41,20 +43,25 @@ ceiling measures a program's peak recursion depth directly. Then compare two run
 
 > Same generator, `max_interactions` (trajectory length) **fixed**, records-per-step
 > **varied** — the peak recursion depth of a **phase strictly narrower than the export
-> process** must have a **slope** of zero frames per accumulated record.
+> process** must have a **slope**, in frames per accumulated record, below a declared
+> threshold. (Originally "of zero"; see Correction 9.)
 
-**Why it works,** measured on the real driver (`driver_only`, spike findings, three seeds):
+**Why it works,** measured on the real driver (`driver_only`), and **superseded once already** —
+the lever the first measurement was taken through was 1.25× wide, and WI-1 has since widened it
+to 1.65–1.82×. At the wider lever:
 
 | statistic | fault present | fault removed |
 |---|---|---|
-| growth **ratio** over the available 1.25× range | 1.06–1.18× | 1.00× |
-| **slope**, frames per accumulated record | 0.75–0.90 | **exactly 0.00** |
+| growth **ratio** | 1.52–1.62× | 1.02–1.11× |
+| **slope**, frames per accumulated record | ≈ 0.8 (→ 1) | **0.027–0.146**, not zero |
 
-The separation is not a wide margin — it is *qualitative*, linear versus identically flat.
-That is why the relation is stated on the slope: over the range the generator actually
-offers, a ratio tolerance of "2–3×" is green on every faulty seed measured.
+The slope is still the honest statistic — no ratio tolerance sits far from both populations at
+either lever — but **the separation is a ratio, not a floor.** The healthy driver's peak depth is
+Θ(records *per step*) because every per-step list in this codebase is walked by hand-written
+recursion; the fault's is Θ(*total* records). The discriminator is the step count. Correction 9
+carries the mechanism; it invalidated this section's original claim that no tolerance was needed.
 
-**Four things that are easy to get backwards, and all four were, at first:**
+**Five things that are easy to get backwards, and all five were, at first:**
 
 1. **Vary records-per-step, not steps.** Both drivers are linear in *steps* — `c2_loop` is
    itself non-tail-optimized — so scaling the trajectory is red on everything. Holding steps
@@ -69,9 +76,15 @@ offers, a ratio tolerance of "2–3×" is green on every faulty seed measured.
    and through the whole export process a faulty and a fixed driver both report **86**. The
    two rows this relation exists to separate are the two rows that instrument cannot tell
    apart.
-4. **Use the slope, not the ratio** — and do not add a "per-step allowance". On the real
-   driver with steps held fixed the healthy floor is *identically* flat; the drift that
-   earlier drafts budgeted for was an artefact of the synthetic probe.
+4. **Use the slope, not the ratio** — but it needs a **threshold**, and this point said the
+   opposite twice before measurement caught it. The healthy floor is identically flat only
+   through the old draw range; past it the slope rises to 0.027–0.146. "Zero" is not
+   implementable at any lever wide enough to be worth building (Correction 9).
+5. **Tier 0 cannot be retired, and the full relation does not subsume it.** Measured: with
+   #160's fold regressed and its name guard left in place, the end-to-end tier is **green on all
+   three seeds** and only the unit probe fires — no generated world requests
+   `MotokoRuntimeStatus`, so the guarded traversal is unreachable on the `driver_only` path
+   (Correction 10).
 
 **Cost.** ~17 subprocess runs per scale point at 0.46 s each (tolerance 1) — CI-cheap, not a
 nightly soak. `run_export_trace.sh` is the nearest existing runner but **cannot be used as-is**:
@@ -84,7 +97,9 @@ so `HarnessFailureKind` keeps its "observable while still running" property (D6.
 **Lands in §3.6's metamorphic family**, not as a thirteenth whole-execution family —
 `ExecutionUnderTest` describes one run and cannot express a relation between two.
 
-**Not implemented.** Read *Corrections* before changing the design.
+**Partly implemented.** The lever, the measurement seam, the harness and an interim gate exist;
+the relation does not. Read *Corrections* before changing the design — there are twelve, and
+6–12 came from execution rather than from reading.
 
 ## Context
 
@@ -153,8 +168,8 @@ The relation:
 
 > For two or more runs of the same generator differing **only** in records-produced-per-step,
 > with `max_interactions` (trajectory length) held fixed, the peak recursion depth of **a
-> measured phase strictly narrower than the export process** must have a **slope of zero
-> frames per accumulated record**.
+> measured phase strictly narrower than the export process** must have a **slope, in frames
+> per accumulated record, below a declared threshold**.
 
 Three words in that sentence are load-bearing and each was wrong in an earlier draft:
 **slope** (not growth ratio — Correction 7), **strictly narrower than the export** (not "the
@@ -316,12 +331,18 @@ not a problem for this one.
   quiet path pipes through `grep`, so `$?` is grep's, and its serializer is the masking
   traversal. The bisection calls `ailang` directly and reproduces the wrapper's environment.
 
-**No tolerance is needed, which is not what earlier drafts expected.** They argued a tolerance
-"must be stated as 'constant factor plus per-step allowance', never as 'flat'", from a synthetic
-healthy driver that drifted 73 → 98. On the real driver with steps held fixed there is no drift:
-the healthy slope is *identically* 0.00 at every point on every seed, because a step's own
-records are walked inside the step and never re-walked. The allowance was an artefact of the
-probe. A slope threshold anywhere in (0, 0.75) decides it.
+**A tolerance IS needed, and this paragraph has now been wrong in both directions.** The first
+draft demanded "constant factor plus per-step allowance" from a synthetic probe's own drift. The
+second — this one, until WI-1 landed — replaced it with "identically 0.00 at every point on every
+seed", which was true of every measurement then available and is a property of the **lever**, not
+of the driver. Past the old draw range the healthy slope rises to 0.027–0.146 frames/record,
+because `stream_chunk_events` (`session.ail:1336`) walks one step's chunks by hand-written
+recursion and every per-step list in this codebase is built the same way. A threshold is required;
+Correction 9 has the mechanism and WI-3 owns the number.
+
+The general shape survives and is worth stating as the thing that did not move: healthy peak depth
+is Θ(records **per step**), the fault's is Θ(**total** records), and the step count is the
+discriminator.
 
 **Verified rather than assumed** (all measured 2026-08-17 against AILANG v0.33.0 `ae36986`):
 - **Bisection is valid.** Monotonicity in the ceiling — a run passing at depth *d* passes at
@@ -445,11 +466,68 @@ measured over an 8× input scaling; the real lever gives **1.25×**. `bounded_dr
 are byte-identical. I quoted that call site early in the analysis and read the bound as the scale
 knob without reading what it bounds.
 
+> **Closed by WI-1, 2026-08-17.** The range is now declared as `GeneratorBounds.chunk_draw_hi`,
+> defaulted to 3, and driven by `CG_EXPORT_CHUNK_DRAW_HI` — route B, which moved **no digest** and
+> cost a program-schema bump rather than the `generator_version` bump route A would have owed.
+> Achieved range **1.65×–1.82×**. The two quantities stay separate on purpose: the draw range and
+> the declared bound are not one knob, and `canary_bounds_tight` deliberately keeps a limit below
+> its range so the clamp keeps firing into a pinned digest. See
+> `NOTE-declare-the-chunk-draw-range-closeout.md`.
+
 **What the spike confirmed, recorded because a correction list reads as failure otherwise:** the
 fault is real and visible on `driver_only` (Q1), the mechanism fires on it and is silent on the
 fixed driver (Q3), and removing `runtime_status_counts` alone takes the slope to exactly zero
 (Q4) — so #160's fix list is complete for the paths `driver_only` walks, and Q4's falsification
 branch did not fire.
+
+### From WI-1 (`PLAN-resource-growth-relation.md` §2, `NOTE-chunk-draw-lever-calibration.md`, 2026-08-17)
+
+Written back by WI-5. Corrections 9 and 10 were re-verified here before acceptance — 9 by reading
+`stream_chunk_events` (`session.ail:1336`), 10 by regressing the fold with the name guard left in
+place and running the shipped gate.
+
+**9. The healthy slope is zero only at a lever too narrow to be worth building.** This ADR argued,
+twice and emphatically, that no tolerance was needed because the healthy slope is "identically 0.00
+at every point on every seed" and the separation is therefore "qualitative, flat versus linear".
+**That was a property of the 1.25× lever, not of the driver.** Past the old draw range the healthy
+slope rises to 0.027–0.146 frames/record on seeds 7/11/23.
+
+The mechanism is structural, not a defect: `stream_chunk_events` (`session.ail:1336`) walks *one
+step's* chunk list by hand-written non-tail recursion, and every per-step list in this codebase is
+built the same way — so **every records-per-step lever here costs frames proportional to
+records-per-step.** Healthy peak depth is Θ(records per step); the fault's is Θ(total records) =
+Θ(steps × records per step). **The discriminator is the step count, and the separation is a ratio,
+not a floor.** WI-3 owns the threshold.
+
+**10. The relation does not subsume the unit probe, and tier 0 cannot be retired.** Regress #160's
+fold and leave the fix's *name guard* in place, then run `make depth_canary`: tier 0 fires and
+**tier 1 is green on all three seeds**. The generator draws tool names from `{"T", "BashExec",
+"Read"}` (`dst_generator.ail:625`) and no generated world ever requests `MotokoRuntimeStatus`, so
+the guarded traversal is unreachable on the `driver_only` path.
+
+Tier 1 is not defective — it guards the class this ADR claims for it, any *unguarded* O(|trace|)
+traversal, and it was shown to fire against the pre-fix driver where the call was eager. What is
+wrong is this ADR's implicit reading that the full relation would supersede the probe. **It does
+not, and the probe is the only thing in the tree guarding that specific function** — which it can
+do only because it calls the real export rather than a copy.
+
+Two consequences. WI-4's "what replaces what" is answered for tier 0: nothing does. And any future
+measurement of the fault-present column must un-do **both** halves of the #160 fix; un-doing the
+fold alone measures nothing. Note the shape: **the laziness half of a fix silently narrowed the
+reach of the gate built for it**, which no reading of either change would have surfaced.
+
+**11. A vacuous seed is the modal case, not an anecdote.** This ADR records seed 3 as one seed with
+zero tool batches. Over seeds 1–40: **15 never execute the tool-dispatch arm at all** and 21 reach
+it at most once. A single-seed gate is vacuously green better than one time in three. The shipped
+canary's 7/11/23 sit at 4/8/6 batches — the top third, a selection, which is why *Consequences*
+calls it a mitigation. The base rate makes WI-2's choice for it: a precondition **and** a seed set,
+not either.
+
+**12. A wider lever does not rescue the ratio.** The obvious hope, recorded because it is obvious.
+At the full widened range the ratio is 1.52–1.62× faulty against 1.02–1.11× healthy — still no
+tolerance sits far from both populations. The slope stays the honest statistic, and now for a
+second reason Correction 7 could not give: the slope has a derivable expected value (≈ 1/steps
+healthy, ≈ 1 faulty) and the ratio has none.
 
 ### Elsewhere
 
