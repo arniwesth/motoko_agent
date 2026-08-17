@@ -83,8 +83,10 @@ Neither tier is sufficient alone — tier 0 is narrow, tier 1 is a pin whose flo
 decision plus ~23) moves when `c2_loop`'s per-step cost legitimately changes. They cover each
 other's weakness. What is still not built is ADR-002's full relation — slope of depth against
 records with trajectory length held fixed — which needs a records-per-step lever the generator does
-not have (`max_chunks_per_interaction` clamps a draw hardcoded to `0, 3`). That remains
-`PLAN-resource-growth-relation.md`'s work.
+not have (`max_chunks_per_interaction` clamps a draw hardcoded to `0, 3`). That work is scoped but
+**not yet planned** — see
+`.agent/projects/011_improve_test_axises/HANDOFF-write-resource-growth-relation-plan.md`, which
+commissions the plan.
 
 ## GitHub
 

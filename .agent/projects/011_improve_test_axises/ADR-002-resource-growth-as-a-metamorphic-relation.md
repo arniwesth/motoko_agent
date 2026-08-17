@@ -232,8 +232,9 @@ length, and getting this backwards produces a check that is red on everything.
 clamps a draw hardcoded to `0, 3` (`dst_generator.ail:598`, `bounded_draw` at `:429`), so
 raising it above 3 is a no-op — traces at c=4, 8, 16, 32 are byte-identical. Records move only
 63 → 79. A wider lever means changing that draw range in core, which moves every pinned canary
-digest walking the chunk path; `PLAN-resource-growth-relation.md` must budget it rather than
-assume the knob scales.
+digest walking the chunk path. **A plan for the full relation — not yet written; see
+`HANDOFF-write-resource-growth-relation-plan.md`** — must budget that change rather than assume
+the knob scales.
 
 ### What this buys, beyond detecting the fault
 
@@ -291,8 +292,10 @@ not a problem for this one.
 - **A seed with no tool batches makes the relation vacuously green.** Seed 3 terminates after
   2 decisions with zero tool batches, never executes `session.ail:2470`, and is flat at 28 in
   both conditions. Tool-arm coverage is a property of the seed, not the profile. The gate must
-  either assert a minimum tool-batch count as a precondition or run a seed set —
-  `PLAN-resource-growth-relation.md` decides which.
+  either assert a minimum tool-batch count as a precondition or run a seed set. **Undecided**;
+  the plan named in `HANDOFF-write-resource-growth-relation-plan.md` owns the choice. The tier-1
+  canary shipped in `scripts/dst/run_depth_canary.sh` sidesteps it by running three seeds that
+  all reach the arm, which is a mitigation rather than an answer.
 - **The lever is narrow and widening it is core work.** 1.25× of record range today; more means
   changing `dst_generator.ail:598`'s hardcoded `0, 3` draw and re-pinning every canary digest
   that walks it.
@@ -334,6 +337,25 @@ there is headroom to exploit); whether §3.9(a)'s soak profile still has indepen
 for non-recursion resources; and the Z3 route (option 3), which remains the right long-term
 home if §3.1 ever reaches the needed expressiveness. None of these are blocked by this
 decision.
+
+### Partially built, 2026-08-17 — what this ADR no longer has to carry
+
+Three things it named as future work exist, which shrinks the plan it points at:
+
+- **The measurement seam.** `CG_EXPORT_PHASE=driver` in `scripts/dst/export_trace.ail` — the
+  driver phase, without the serializer that Correction 6 found masking the signal.
+- **The out-of-process harness and a gate.** `make depth_canary`
+  (`scripts/dst/run_depth_canary.sh`), in `DST_TARGETS`. Two tiers: a unit probe over 8 192
+  constructed records, and the real driver at pinned per-seed ceilings. Shown to fire against the
+  pre-fix driver on all four rows.
+- **A fix to verify against.** #160 landed and the driver phase measured 86/153/114 → 58/87/75 on
+  seeds 7/11/23, matching the spike's independently-derived floor exactly.
+
+**What remains is the relation itself**, and only one thing blocks it: the record volume cannot be
+scaled while trajectory length is held fixed, because `dst_generator.ail:598`'s draw range is a
+literal. The shipped gate is a **pinned approximation** — general, but its floor moves with
+`c2_loop`'s per-step cost — and replacing pins with a slope is what a plan for the full relation is
+for. See `HANDOFF-write-resource-growth-relation-plan.md`.
 
 ## Corrections
 
