@@ -82,11 +82,15 @@ against HEAD all four are green. That is a measurement of a real regression, not
 Neither tier is sufficient alone — tier 0 is narrow, tier 1 is a pin whose floor (~2.4 frames per
 decision plus ~23) moves when `c2_loop`'s per-step cost legitimately changes. They cover each
 other's weakness. What is still not built is ADR-002's full relation — slope of depth against
-records with trajectory length held fixed — which needs a records-per-step lever the generator does
-not have (`max_chunks_per_interaction` clamps a draw hardcoded to `0, 3`). That work is scoped but
-**not yet planned** — see
-`.agent/projects/011_improve_test_axises/HANDOFF-write-resource-growth-relation-plan.md`, which
-commissions the plan.
+records with trajectory length held fixed. **The lever it was waiting on now exists.** It needed a
+records-per-step knob the generator did not have, because `max_chunks_per_interaction` clamped a
+draw hardcoded to `0, 3`; `PLAN-resource-growth-relation.md`'s WI-1 declared that range as
+`GeneratorBounds.chunk_draw_hi` and gave `export_trace` a `CG_EXPORT_CHUNK_DRAW_HI` seam over it,
+measured at 1.65×/1.71×/1.82× records on seeds 7/11/23 with step, provider-call and tool-batch
+counts constant. The relation itself — the statistic, its threshold and the demonstration that it
+fires — is WI-3 and is **planned but not built**; see
+`.agent/projects/011_improve_test_axises/PLAN-resource-growth-relation.md`. Until it is green,
+`run_depth_canary.sh` remains the only gate on this issue and does not retire.
 
 ## GitHub
 
@@ -269,9 +273,12 @@ Nothing in the set expresses growth or complexity. The nearest name, `BoundedPro
 large.
 
 **2. The generator's declared bounds cap the exact axis, ~30× below the threshold.**
-`dst_generator.ail:600-601` draws stream chunks as `bounded_draw(…, 0, 3,
-"max_chunks_per_interaction", …)`; declared profiles set that bound to 4 (`canary_bounds`,
-`:908-913`) or 1, with `max_interactions` 64–96. Ceiling: **~288 stream deltas per program**.
+`dst_generator.ail`'s `choose_provider` drew stream chunks as `bounded_draw(…, 0, 3,
+"max_chunks_per_interaction", …)`; declared profiles set that bound to 4 (`canary_bounds`) or 1,
+with `max_interactions` 64–96. Ceiling: **~288 stream deltas per program**.
+*(WI-1 replaced the literal `3` with the declared `chunk_draw_hi`, so the range is now a knob rather
+than a constant. The paragraph below still holds and is the reason it had to become one: the ceiling
+moves only where a profile declares that it moves, and no amount of seed-churning crosses it.)*
 Production produced **8 678 from 63 steps** — ~138 per interaction.
 
 This is not a sampling gap more seeds would close. Per D2 the generator *never* exceeds a declared

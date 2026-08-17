@@ -68,9 +68,16 @@
 #   ADR-002-resource-growth-as-a-metamorphic-relation.md (the relation this
 #   approximates), NOTE-spike-findings-resource-growth.md (the measurements).
 # The ADR's full relation — slope of depth against records with trajectory
-# length held fixed — is NOT what this runs: it needs a records-per-step lever
-# the generator does not have (max_chunks_per_interaction clamps a draw
-# hardcoded to 0,3). This is the buildable approximation; tier 2 waits on that.
+# length held fixed — is NOT what this runs. It needed a records-per-step lever
+# the generator did not have, and WI-1 built it: the chunk draw's range is now
+# declared as GeneratorBounds.chunk_draw_hi, and export_trace's
+# CG_EXPORT_CHUNK_DRAW_HI sweeps it — measured 1.65x/1.71x/1.82x records on seeds
+# 7/11/23 with step, provider-call and tool-batch counts constant. This is still
+# the buildable approximation and tier 2 now waits only on WI-3, which owns the
+# slope, its threshold and the "shown to fire" demonstration. Until WI-3 is green
+# THIS SCRIPT IS THE ONLY THING GUARDING #160, so it does not retire early. The
+# pins below are measured at the DEFAULT lever and the knob is off by default —
+# a widened run reports a record count and writes nothing.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

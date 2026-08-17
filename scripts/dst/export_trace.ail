@@ -102,23 +102,43 @@ pure func supported_profile() -> string { driver_only_id() }
 
 pure func generator_version() -> string { "1" }
 
-pure func bounds() -> GeneratorBounds {
+-- THE RECORDS-PER-STEP LEVER, AND IT IS OFF BY DEFAULT.
+--
+-- `chunk_draw_hi` is the only field here that is not a literal, and `default_chunk_draw_hi()`
+-- is what `corpus_pr_dst.ail:301-309` declares — so at the default this function is
+-- byte-identical to the wiring it is kept in step with, and the exported trace,
+-- `make depth_canary`'s three pinned record counts and every digest downstream are
+-- unmoved. `main` supplies the default unless `CG_EXPORT_CHUNK_DRAW_HI` says
+-- otherwise; see `chunk_draw_hi_of_env`.
+--
+-- `max_chunks_per_interaction` RISES WITH THE RANGE and that is not a second knob.
+-- `bounded_draw` clamps a draw that exceeds the declared limit and records a
+-- `BoundFailure`, `GeneratorBoundFailure` maps to `HarnessHygiene`
+-- (`dst_invariants.ail:369`), and that family requires zero — so a range wider than
+-- the declared limit would report every run as a generator failure AND cap the
+-- record count at the limit, which is the two ways it could ruin the measurement at
+-- once. The plan states the rule: widening the draw without raising the declared
+-- bound in the same place is a D2 violation, not a re-pin. At the default the
+-- expression yields 4, unchanged.
+pure func default_chunk_draw_hi() -> int { 3 }
+
+pure func bounds_at(chunk_draw_hi: int) -> GeneratorBounds {
   { max_interactions: 96,
-    max_chunks_per_interaction: 4,
+    max_chunks_per_interaction: if chunk_draw_hi > 4 then chunk_draw_hi else 4,
     max_payload_bytes: 512,
     max_resource_size: 8,
     max_clock_advance_ms: 2000,
-    chunk_draw_hi: 3 }
+    chunk_draw_hi: chunk_draw_hi }
 }
 
-pure func generated_world_at(version: string, seed: int) -> WorldState {
-  let g = generator_state(supported_profile(), version, seed, bounds());
+pure func generated_world_at(version: string, seed: int, chunk_draw_hi: int) -> WorldState {
+  let g = generator_state(supported_profile(), version, seed, bounds_at(chunk_draw_hi));
   let e = choose_environment(g, "initial_world");
   { empty_world_state() | gen: e.state, env: e.entries }
 }
 
-pure func generated_world(seed: int) -> WorldState {
-  generated_world_at(generator_version(), seed)
+pure func generated_world(seed: int, chunk_draw_hi: int) -> WorldState {
+  generated_world_at(generator_version(), seed, chunk_draw_hi)
 }
 
 -- ============================================================================
@@ -290,6 +310,15 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let seed_text = getEnvOr("CG_EXPORT_SEED", "");
   let ailang_version = getEnvOr("CG_AILANG_VERSION", "unknown");
   let motoko_commit = getEnvOr("CG_MOTOKO_COMMIT", "unknown");
+  -- CG_EXPORT_CHUNK_DRAW_HI — THE RECORDS-PER-STEP LEVER, unset by default and
+  -- unparseable-means-default, so a typo cannot silently produce a narrower run
+  -- than the one that was asked for: `widened` below is what decides, and it is
+  -- false whenever the value is not a number.
+  let chunk_draw_hi = match stringToInt(getEnvOr("CG_EXPORT_CHUNK_DRAW_HI", "")) {
+    Some(n) => if n < 0 then default_chunk_draw_hi() else n,
+    None => default_chunk_draw_hi()
+  };
+  let widened = chunk_draw_hi != default_chunk_draw_hi();
 
   if profile != supported_profile() then
     println("export_trace: REFUSED profile '${profile}'. Only '${supported_profile()}' has a verified seed-run shape (plan Gap 7). Adding another profile is a wiring decision to be argued, not a silent fork.")
@@ -298,7 +327,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
       None =>
         println("export_trace: CG_EXPORT_SEED must be an integer, got '${seed_text}'. Run through scripts/dst/run_export_trace.sh."),
       Some(seed) => {
-        let run = run_generated("ext_export", generated_world(seed));
+        let run = run_generated("ext_export", generated_world(seed, chunk_draw_hi));
         -- Build the DstResult exactly as dst_execution.result_of does (that
         -- function is script-private there, so the shape is replicated). The
         -- match below is not ceremony: it is what makes the partial-trace path
@@ -332,8 +361,19 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
         -- exactly as long as it took to write this comment. See
         -- `.agent/projects/011_improve_test_axises/ADR-002-resource-growth-as-a-metamorphic-relation.md`
         -- Correction 6.
+        --
+        -- CG_EXPORT_CHUNK_DRAW_HI RIDES THIS SEAM AND ONLY THIS SEAM. The lever
+        -- appears in the phase line so a bisection harness records what it swept,
+        -- and a WIDENED run refuses to write a document at all: the file format is
+        -- overlay trace v1 and its header records the rig, the profile and the
+        -- generator version but has no field for a bounds override, so a written
+        -- artifact would be a silent fork of the rig — the thing this file's header
+        -- says is "a wiring decision to be argued, not a silent fork". Widening the
+        -- exported artifact is that argument, and it is not this item's.
         if getEnvOr("CG_EXPORT_PHASE", "") == "driver" then
-          println("export_trace: phase=driver — ${show(List.length(parts.trace.records))} records, run_complete=${show(parts.complete)}")
+          println("export_trace: phase=driver — ${show(List.length(parts.trace.records))} records, run_complete=${show(parts.complete)}, chunk_draw_hi=${show(chunk_draw_hi)}")
+        else if widened then
+          println("export_trace: REFUSED — CG_EXPORT_CHUNK_DRAW_HI=${show(chunk_draw_hi)} widens the generator's chunk draw past the declared default of ${show(default_chunk_draw_hi())}, and the overlay trace v1 header has no field to record a bounds override in. It is a MEASUREMENT SEAM: run it with CG_EXPORT_PHASE=driver, which reports a record count and writes nothing. Exporting a trace at a non-default lever would fork the rig silently, which the header of this file refuses by name.")
         else {
         let text = document(seed, profile, parts.complete, parts.kind, parts.trace,
                             ailang_version, motoko_commit);
