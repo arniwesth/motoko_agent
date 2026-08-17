@@ -236,6 +236,16 @@ oracles" philosophy since it asserts ledger well-formedness, never model quality
 
 ### 3.9 Resource-growth properties and a declared long-run profile (added 2026-08-17)
 
+> **Both proposals below are SUPERSEDED by `ADR-002-resource-growth-as-a-metamorphic-relation.md`
+> (2026-08-17).** The axis survives; the mechanism does not. (a) needs a raised declared bound to
+> stay legal under D2 and produces an unattributed process exit; (b) caps trace size, which D6.4
+> forbids, and measures the wrong quantity in both directions. ADR-002 keeps the workload inside
+> existing bounds and scales the *resource* down instead — bisecting the minimum viable
+> `--max-recursion-depth` of an out-of-process run, across a pair of runs differing only in
+> records-per-step. Measured separation between a known-good and known-bad driver: 1.3× versus
+> 6.5× over an 8× input. This section is kept as written because the reasoning that produced two
+> wrong mechanisms from a correct axis is the useful part.
+
 **Added after the original survey, and unlike every other subsection it is written against a
 fault that actually happened rather than against a gap someone reasoned toward.** That is its
 whole value: the axis it names was not on the 2026-08-13 list, and would not have been derived
@@ -328,9 +338,14 @@ because it needs no new observation. Both are strictly smaller than §3.1–§3.
 5. Which axes deserve WI-numbered execution plans vs staying research — proposal: §3.1 and
    §3.2 go to PLAN documents first; §3.3 needs a small operator-feasibility spike before
    planning.
-6. Resource growth: is the per-step-work bound expressible as an invariant at all, or is it
+6. ~~Resource growth: is the per-step-work bound expressible as an invariant at all, or is it
    properly a Z3 contract (§3.1) over the fold sites — and does the soak profile belong in the
-   nightly §3.2 job or on its own cadence? (§3.9)
+   nightly §3.2 job or on its own cadence?~~ **Answered by ADR-002**: not expressible over a
+   single execution (the quantity is a *read* and the trace records *appends*), and not a Z3
+   contract today — it needs a reachability predicate over an effectful call graph that §3.1
+   neither has nor plans. It is a metamorphic relation over a pair of runs, so it lands in §3.6.
+   The soak-cadence half of the question dissolved with the soak profile. Z3 stays the right
+   long-term home if §3.1 ever reaches that expressiveness. (§3.9)
 7. The ranking above predates §3.9 and is not re-scored here. §3.9 is the only entry motivated
    by a fault that reached production rather than by survey, which is an argument for weight the
    original leverage-per-effort axis did not measure. Worth settling before the next PLAN.
