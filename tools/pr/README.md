@@ -21,8 +21,8 @@ wrong there for measured reasons.
 
 | Acting as | Who | Credential |
 |---|---|---|
-| `pr`, `pr-sync`, `pr-loop respond` | **the bot** (`motoko-agent`) | `MOTOKO_BOT_GH_TOKEN` |
-| `pr --as-operator` | **you** | `gh auth login` |
+| `pr`, `pr-sync`, `pr-loop respond`, `issue` | **the bot** (`motoko-agent`) | `MOTOKO_BOT_GH_TOKEN` |
+| `pr --as-operator`, `issue --as-operator` | **you** | `gh auth login` |
 
 The rule is *identity follows mechanism*: **anything the pipeline emits is the bot; anything done
 by hand in the web UI is you.** One rule, readable off a PR's author field without knowing which
@@ -45,6 +45,7 @@ directly:
 ```sh
 make pr_whoami                   # → arniwesth
 make pr_whoami PR_FLAGS=--as-bot # → motoko-agent
+make issue_whoami PR_FLAGS=--as-bot  # → motoko-agent (dedicated to issues/drafts)
 ```
 
 ## Setup
@@ -59,6 +60,7 @@ make pr_whoami PR_FLAGS=--as-bot # → motoko-agent
 The bot token must be a **classic** PAT (`ghp_…`) with `public_repo`, and the bot must have
 *accepted* its collaborator invitation. A fine-grained PAT (`github_pat_…`) reads fine and returns
 `403 Resource not accessible by personal access token` on every write; `pr` warns if it sees one.
+`issue` shares the same token check via `lib.ts`.
 
 ## Creating a PR
 
@@ -88,6 +90,32 @@ GitHub — the recovery path for a crash between publishing and writing back.
 `.github/PULL_REQUEST_TEMPLATE.md` mirrors the same five sections for PRs opened by hand in the web
 UI. The driver's template is the source of truth — `gh pr create` applies a web template only
 interactively, and a web template cannot be machine-filled. Change one, change both.
+
+## Creating an issue
+
+```sh
+make issue_draft --title="Step budget wipes history"
+$EDITOR .agent/github/staging/issues/step-budget-wipes-history/body.md
+make issue                       # publish (as motoko-agent), write the number back
+```
+
+`issue` is the slimline of `pr` (see tools/pr/issues.ts, ADR-001 D5): the file on disk is the
+source of truth, GitHub is transport, and the returned issue number is written back into the
+frontmatter's `issue:` field. **Summary**, **Context** and **Expected** fill the same
+load-bearing gate as a PR's five fields, and `issue` refuses to publish while any `<!-- TODO -->`
+remains. `issue` acts as the **bot** unless `--as-operator`, and is re-runnable: it adopts an
+existing issue whose title matches (issues have no branch to adopt by, so title is the
+recovery key) instead of opening a duplicate.
+
+An issue has no branch or diff, so `draft` takes the title explicitly
+(`make issue_draft --title="…"`); `create` recovers a crash by reusing whatever body is already
+staged. Final records land in `.agent/github/issues/<remote>-<n>/body.md`.
+
+| Variable | Default | |
+|---|---|---|
+| `REMOTE` | `origin` | Which remote to file against |
+| `TITLE` | — | Issue title (required for `issue_draft`) |
+| `PR_FLAGS` | — | Passed through, e.g. `--dry-run`, `--force`, `--as-operator` |
 
 ## Syncing comments
 
@@ -165,6 +193,9 @@ is how the ADR's own example lost a reason.
       body.md                  # authored PR body, number in frontmatter
       state.yaml               # per-comment records
       response-5257958760.md   # response artifacts, named by inbound comment id
+  issues/
+    origin-164/
+      body.md                  # authored issue body, number in frontmatter
 ```
 
 A record:
@@ -193,6 +224,7 @@ The schema is **provisional** pending fork 2 of `008_docs_system`; expect one co
 | | |
 |---|---|
 | `pr.ts` | PR creation, as you |
+| `issues.ts` | Issue creation, as the bot (ADR-001 D5) |
 | `sync.ts` | comment fetch + state append, as the bot |
 | `loop.ts` | rank / dismiss / respond, the judgment write path |
 | `lib.ts` | identity, `gh`/`git` wrappers, paths, frontmatter |

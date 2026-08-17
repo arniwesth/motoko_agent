@@ -93,6 +93,29 @@ pr:
 pr_whoami:
 	@$(PR_CLI) whoami $(PR_FLAGS)
 
+# File an issue as the bot, mirroring `pr` (ADR-001 C9 / D5). The draft in
+# .agent/github/staging/issues/<slug>/body.md is the source of truth, GitHub is
+# transport, and the issue number is written back into frontmatter on publish.
+#
+#   make issue_draft --title="Step budget wipes history"   # stage a body
+#   make issue                                        # publish (as motoko-agent)
+#   make issue --title="…"                             # draft-if-needed + publish
+#   make issue PR_FLAGS="--dry-run"                   # preview, write nothing
+#   make issue_whoami PR_FLAGS=--as-bot               # → motoko-agent
+#   make issue REMOTE=sunholo PR_FLAGS=--as-operator  # bot cannot push to sunholo
+ISSUE_CLI := bun tools/pr/issues.ts
+
+.PHONY: issue issue_draft issue_whoami
+issue_draft:
+	@test -n "$(TITLE)" || { echo "usage: make issue_draft --title=\"what breaks and why\""; exit 1; }
+	@$(ISSUE_CLI) draft --remote "$(REMOTE)" --title "$(TITLE)" $(PR_FLAGS)
+
+issue:
+	@$(ISSUE_CLI) create --remote "$(REMOTE)" $(if $(TITLE),--title "$(TITLE)") $(PR_FLAGS)
+
+issue_whoami:
+	@$(ISSUE_CLI) whoami $(PR_FLAGS)
+
 # Fetch PR comments from every GitHub remote into the gitignored cache, then
 # append a `pending` record for each one not seen before. Acts as the BOT
 # (ADR-001 D1: the sync is an action the pipeline produces). It only adds
