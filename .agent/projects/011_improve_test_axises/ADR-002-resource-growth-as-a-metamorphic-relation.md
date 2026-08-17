@@ -2,9 +2,12 @@
 
 **Status:** Proposed
 **Date:** 2026-08-17
-**Revised:** 2026-08-17 after review — see *Corrections*. The mechanism survived; the
-property it checks was stated too narrowly and the scope requirement was missing, which
-would have made the first implementation red on a healthy system.
+**Revised:** 2026-08-17 twice — once after review, once after execution. See *Corrections*.
+The mechanism has survived both; every number and two of its three key statements have not.
+Review found the property stated too narrowly and the scope requirement missing;
+the spike (`NOTE-spike-findings-resource-growth.md`) found the scope requirement still too
+wide to work, the statistic wrong for the range available, and every figure here synthetic by
+a factor of six. **All measurements in this document are now from the real driver.**
 
 Relates to:
 - `RESEARCH-test-axes-beyond-dst.md` §3.9 — the axis this ADR decides. **This ADR
@@ -36,18 +39,22 @@ property whose quantity — how many times the driver *walked* the trace — is 
 does.** `--max-recursion-depth` is settable *downward*, so bisecting the minimum viable
 ceiling measures a program's peak recursion depth directly. Then compare two runs:
 
-> Same generator, `max_interactions` (trajectory length) **fixed**,
-> `max_chunks_per_interaction` (records per step) **varied** — the peak recursion depth of
-> the production driver path must not grow proportionally with the record volume.
+> Same generator, `max_interactions` (trajectory length) **fixed**, records-per-step
+> **varied** — the peak recursion depth of a **phase strictly narrower than the export
+> process** must have a **slope** of zero frames per accumulated record.
 
-**Why it works,** measured on a known-good and a known-bad driver over an 8× input scaling:
+**Why it works,** measured on the real driver (`driver_only`, spike findings, three seeds):
 
-| driver | per=5 | per=10 | per=20 | per=40 | growth |
-|---|---|---|---|---|---|
-| counters carried forward | 73 | 73 | 73 | 98 | **1.3×** |
-| per-step fold over accumulated state | 317 | 561 | 1074 | 2074 | **6.5×** |
+| statistic | fault present | fault removed |
+|---|---|---|
+| growth **ratio** over the available 1.25× range | 1.06–1.18× | 1.00× |
+| **slope**, frames per accumulated record | 0.75–0.90 | **exactly 0.00** |
 
-**Three things that are easy to get backwards, and all three were, at first:**
+The separation is not a wide margin — it is *qualitative*, linear versus identically flat.
+That is why the relation is stated on the slope: over the range the generator actually
+offers, a ratio tolerance of "2–3×" is green on every faulty seed measured.
+
+**Four things that are easy to get backwards, and all four were, at first:**
 
 1. **Vary records-per-step, not steps.** Both drivers are linear in *steps* — `c2_loop` is
    itself non-tail-optimized — so scaling the trajectory is red on everything. Holding steps
@@ -56,12 +63,19 @@ ceiling measures a program's peak recursion depth directly. Then compare two run
    fold".** Peak depth cannot tell a per-step fold from one end-of-run fold. That is fine,
    because both are equally fatal — but it means the narrower property is undecidable here
    and the broader one is what gets checked.
-3. **Measure the driver alone.** `dst_invariants.evaluate()` walks the trace
-   non-tail-recursively, so a combined driver-plus-checker run measures the checker and goes
-   red on a healthy system. Invariant evaluation must sit in a separate process.
+3. **Measure a phase narrower than the export, not just "the driver without the checker".**
+   Excluding `dst_invariants.evaluate()` is necessary and *not sufficient*:
+   `export_trace.ail:237`'s `record_lines` recurses once per record from inside the exporter,
+   and through the whole export process a faulty and a fixed driver both report **86**. The
+   two rows this relation exists to separate are the two rows that instrument cannot tell
+   apart.
+4. **Use the slope, not the ratio** — and do not add a "per-step allowance". On the real
+   driver with steps held fixed the healthy floor is *identically* flat; the drift that
+   earlier drafts budgeted for was an artefact of the synthetic probe.
 
-**Cost.** ~12 subprocess runs per scale point at 0.46 s each — CI-cheap, not a nightly soak.
-The out-of-process runner already exists (`run_export_trace.sh`); this is a flag on it.
+**Cost.** ~17 subprocess runs per scale point at 0.46 s each (tolerance 1) — CI-cheap, not a
+nightly soak. `run_export_trace.sh` is the nearest existing runner but **cannot be used as-is**:
+its quiet path pipes through `grep`, and its serializer is the masking traversal in (3).
 
 **Constraints respected, all three by construction:** no declared bound is raised (D2), no
 trace size is capped (D6.4), and the observer never shares the observed run's frame budget,
@@ -137,10 +151,16 @@ bisecting the minimum viable `--max-recursion-depth` of an out-of-process run.**
 
 The relation:
 
-> For two runs of the same generator differing **only** in `max_chunks_per_interaction`
-> (records produced per step), with `max_interactions` (trajectory length) held fixed,
-> the peak recursion depth **of the production driver path** must not grow proportionally
-> to the record volume.
+> For two or more runs of the same generator differing **only** in records-produced-per-step,
+> with `max_interactions` (trajectory length) held fixed, the peak recursion depth of **a
+> measured phase strictly narrower than the export process** must have a **slope of zero
+> frames per accumulated record**.
+
+Three words in that sentence are load-bearing and each was wrong in an earlier draft:
+**slope** (not growth ratio — Correction 7), **strictly narrower than the export** (not "the
+driver phase", which still contains the exporter's serializer — Correction 6), and
+**records-produced-per-step** rather than `max_chunks_per_interaction`, which is a clamp on a
+draw hardcoded to `0, 3` and cannot scale the volume on its own (Correction 8).
 
 ### The property is "no depth that scales with accumulated state", not "no per-step fold"
 
@@ -169,35 +189,51 @@ one, and this instrument decides it exactly.
 **What that costs is a scope requirement, and it is mandatory rather than an optimization.**
 Row 2's fold is real: `dst_invariants.evaluate()` walks the trace through `count_variant` and
 `count_decisions` (`dst_invariants.ail:1198-1215`), both non-tail-recursive over records. That
-is test-only code, and its depth is not a production property. **The measured process must
-therefore run the driver and serialize its trace, with invariant evaluation in a separate
-process that is not measured.** Measuring a combined driver-plus-checker run reports the
-checker.
+is test-only code, and its depth is not a production property.
 
-That phase separation already exists and does not need building: `scripts/dst/export_trace.ail`
-and `run_export_trace.sh` are the D9 ledger-trace exporter, one profile and one seed per
-invocation, writing the trace out. The work is a flag on an existing runner, not a new one.
+**Excluding the checker is necessary and not sufficient**, which the spike established the
+hard way — see Correction 6. `export_trace.ail:237`'s `record_lines` recurses once per record
+from inside the exporter, so the export process masks the signal completely: at the top of the
+range a faulty and a fixed driver both report **86**. **The measured phase must therefore be
+strictly narrower than the export** — run the driver, touch the trace only through frame-free
+operations, and serialize elsewhere or not at all.
+
+`scripts/dst/export_trace.ail` remains the right host for that phase, but it needs an ablation
+seam rather than a flag, and `run_export_trace.sh` cannot be the harness: its quiet path pipes
+through `grep`, so `$?` is grep's.
 
 ### Why this is the right measurement, in numbers
 
-Two drivers over identical synthetic workloads — one carrying its counters forward, one
-re-deriving them by folding accumulated state each step. Trajectory length fixed at 50
-steps; per-step record volume scaled 8×. The figure is the minimum `--max-recursion-depth`
-at which the run completes, found by bisection:
+Measured on the real driver, `driver_only`, by the spike
+(`NOTE-spike-findings-resource-growth.md`). Trajectory length held fixed — verified, not
+assumed: decision, provider-call and tool-batch counts are constant across each sweep and only
+`StreamDelta` volume moves. Seed 7, records 63 → 79, driver phase only:
 
-| driver | per=5 | per=10 | per=20 | per=40 | growth over 8× input |
-|---|---|---|---|---|---|
-| counters carried forward | 73 | 73 | 73 | 98 | **1.3×** |
-| per-step fold over accumulated state | 317 | 561 | 1074 | 2074 | **6.5×** |
+| condition | 63 | 69 | 74 | 79 | slope | ratio |
+|---|---|---|---|---|---|---|
+| fault present | 73 | 78 | 82 | 86 | **0.81 frames/record** | 1.18× |
+| fault removed | 58 | 58 | 58 | 58 | **0.00** | 1.00× |
 
-The faulty driver's depth tracks the input almost exactly. The healthy one is flat. The
-separation is roughly 20× at the largest scale and widens with it, so the threshold does
-not need to be tuned finely.
+Across seeds 7/11/23 the faulty slope is 0.75–0.90 and the fixed slope is **exactly 0.00** at
+every point. The flat floor is attributed: 28/58/75/87 frames at 2/15/21/26 decisions ≈ 2.4
+frames per step plus a ~23-frame constant, which is `c2_loop`'s known linearity in steps.
+
+**The separation is qualitative, not wide.** As a ratio it is 1.06–1.18× against 1.00× — no
+"2–3× tolerance far from both populations" exists, and a ratio-based gate would be green on
+every faulty seed measured. As a slope it is linear against identically flat, and any threshold
+in (0, 0.75) decides it.
 
 **Vary records-per-step, not steps.** Scaling the trajectory length instead is *not* a
 discriminator: both drivers are linear in steps, because `c2_loop` is itself
 non-tail-optimized. Holding steps fixed is what isolates accumulated state from loop
 length, and getting this backwards produces a check that is red on everything.
+
+**The available range is 1.25×, and widening it is core work.** `max_chunks_per_interaction`
+clamps a draw hardcoded to `0, 3` (`dst_generator.ail:598`, `bounded_draw` at `:429`), so
+raising it above 3 is a no-op — traces at c=4, 8, 16, 32 are byte-identical. Records move only
+63 → 79. A wider lever means changing that draw range in core, which moves every pinned canary
+digest walking the chunk path; `PLAN-resource-growth-relation.md` must budget it rather than
+assume the knob scales.
 
 ### What this buys, beyond detecting the fault
 
@@ -248,17 +284,28 @@ not a problem for this one.
 ## Consequences
 
 **Costs:**
-- The scope requirement is load-bearing, not hygiene. A measurement that accidentally
-  includes invariant evaluation reports the checker and is red on a healthy driver. Whoever
-  implements this must be able to state which process is being bisected and why.
-- The relation needs a tolerance, and a tolerance is a tuned number. The measured
-  separation is ~20×, so a factor of 2–3 sits far from both populations — but the
-  correct driver's 73 → 98 shows the floor is not exactly flat: a step's own records are
-  legitimately walked once, which is a per-step constant, not accumulation. The tolerance
-  must be stated as "constant factor plus per-step allowance", never as "flat".
-- Shell-gate count is unchanged: this extends `run_export_trace.sh` rather than adding a
-  fourth script alongside it and the two wire gates. The first draft costed a new runner
-  here and was wrong.
+- The scope requirement is load-bearing, not hygiene, and it is **narrower than "exclude the
+  checker"**: the exporter's own serializer masks the signal from inside the process this ADR
+  originally named. Whoever implements this must be able to state which *phase* is measured
+  and demonstrate — not assert — that nothing in it traverses accumulated state.
+- **A seed with no tool batches makes the relation vacuously green.** Seed 3 terminates after
+  2 decisions with zero tool batches, never executes `session.ail:2470`, and is flat at 28 in
+  both conditions. Tool-arm coverage is a property of the seed, not the profile. The gate must
+  either assert a minimum tool-batch count as a precondition or run a seed set —
+  `PLAN-resource-growth-relation.md` decides which.
+- **The lever is narrow and widening it is core work.** 1.25× of record range today; more means
+  changing `dst_generator.ail:598`'s hardcoded `0, 3` draw and re-pinning every canary digest
+  that walks it.
+- Shell-gate count is unchanged, but `run_export_trace.sh` **cannot be the harness** — its
+  quiet path pipes through `grep`, so `$?` is grep's, and its serializer is the masking
+  traversal. The bisection calls `ailang` directly and reproduces the wrapper's environment.
+
+**No tolerance is needed, which is not what earlier drafts expected.** They argued a tolerance
+"must be stated as 'constant factor plus per-step allowance', never as 'flat'", from a synthetic
+healthy driver that drifted 73 → 98. On the real driver with steps held fixed there is no drift:
+the healthy slope is *identically* 0.00 at every point on every seed, because a step's own
+records are walked inside the step and never re-walked. The allowance was an artefact of the
+probe. A slope threshold anywhere in (0, 0.75) decides it.
 
 **Verified rather than assumed** (all measured 2026-08-17 against AILANG v0.33.0 `ae36986`):
 - **Bisection is valid.** Monotonicity in the ceiling — a run passing at depth *d* passes at
@@ -321,6 +368,51 @@ monotonicity: scanned linearly over depths 190–230, exactly one transition, no
 incremental-counts fix is viable rather than merely relocating the cost. Neither was
 measured in the first draft; had `++` cost frames, the fix for #160 would have been wrong
 too.
+
+### From the spike (`NOTE-spike-findings-resource-growth.md`, 2026-08-17)
+
+Corrections 1–5 came from reading. These came from running, and all three verified
+independently before being accepted here.
+
+**6. The measured phase must be strictly narrower than the export process, not merely
+checker-free.** Correction 2 excluded `dst_invariants.evaluate()` and then named
+`export_trace` as the process to bisect — but `export_trace.ail:232-237`'s `record_lines`
+recurses once per record from inside it. Through the whole export, a faulty and a fixed driver
+both report **86** at the top of the range: the two rows this relation exists to separate are
+the two the specified instrument cannot tell apart.
+
+**This is the third instance of the same confounder**, and the pattern is worth more than the
+fix. Twice I found a maximum-wins masking traversal, corrected the specific source, and did not
+go looking for the class. Worse, I *verified the recipe end-to-end* against this very process,
+got a number, and never asked whether the number was the driver or the serializer. A verified
+instrument is not a validated one.
+
+Corollary the spike measured and it is a trap: **rewriting `record_lines` with an accumulator
+does not fix it.** With no TCO a tail call costs a frame identically — accumulator recursion over
+400 elements costs 401 frames, and the rewrite left the curve rising with the same slope. Only
+stdlib builtins are frame-free. "Make it tail-recursive" is not a remedy for anything here.
+
+**7. The relation is on the slope, not the growth ratio, and needs no per-step allowance.**
+Over the range the generator actually offers, the faulty population is 1.06–1.18× against a
+healthy 1.00×; the "2–3× tolerance far from both populations" this ADR contemplated does not
+exist, and a ratio gate is green on every faulty seed. As a slope it is 0.75–0.90 frames/record
+against **exactly 0.00**. The *Consequences* claim that a "per-step allowance" is mandatory was
+derived from the synthetic probe's own list-building helper and is false on the real driver.
+
+**8. `max_chunks_per_interaction` is a clamp, not a scale.** Every synthetic number here was
+measured over an 8× input scaling; the real lever gives **1.25×**. `bounded_draw`
+(`dst_generator.ail:429`) draws from a hardcoded `0, 3` at the call site (`:598`) and clamps
+*downward*, so the bound is a ceiling on a draw that never exceeds 3 — traces at c=4, 8, 16, 32
+are byte-identical. I quoted that call site early in the analysis and read the bound as the scale
+knob without reading what it bounds.
+
+**What the spike confirmed, recorded because a correction list reads as failure otherwise:** the
+fault is real and visible on `driver_only` (Q1), the mechanism fires on it and is silent on the
+fixed driver (Q3), and removing `runtime_status_counts` alone takes the slope to exactly zero
+(Q4) — so #160's fix list is complete for the paths `driver_only` walks, and Q4's falsification
+branch did not fire.
+
+### Elsewhere
 
 **5. Not an ADR correction, but found in the same review and recorded here because it
 travels with the analysis:** the response posted to motoko_agent#160 claimed `st.emissions`

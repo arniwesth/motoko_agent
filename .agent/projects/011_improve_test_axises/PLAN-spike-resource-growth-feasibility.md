@@ -1,6 +1,8 @@
 # Plan: throwaway spike — does the resource-growth relation hold on the real driver?
 
-Status: Proposed. Date: 2026-08-17.
+Status: **Executed 2026-08-17** on `spike/011-resource-growth-feasibility` (forked from `c320269`,
+never merged). Findings: `NOTE-spike-findings-resource-growth.md` — Q1/Q3/Q4 confirm, Q2 and Q5
+falsify, and three corrections are owed to ADR-002. Date: 2026-08-17.
 
 **This is not the implementation plan.** `ADR-002-resource-growth-as-a-metamorphic-relation.md`
 decides a mechanism; a later `PLAN-resource-growth-relation.md` will sequence its construction.
@@ -173,16 +175,26 @@ minviable() {                        # usage: minviable <lo> <hi>
 ~12 iterations for a range of 1…200 000. Narrow the range once the first point is known;
 the remaining scale points land nearby.
 
+**Use tolerance 1, not 32.** The loop above returns `hi`, so a tolerance of 32 overestimates by
+up to 32. Tightening it costs ~5 more subprocess runs (~2 s) and makes the number quotable.
+
 **Verified end to end**, twice: against a synthetic program of known depth (reports 1074 where
 1074 is correct), and against the real target above, which at `driver_only` seed 7 and HEAD
-`9e30172` reports a peak depth of **98**.
+`9e30172` reports a peak depth of **86**.
 
-That 98 is a calibration datum, **not a Q1 answer** — one seed, one unvaried bound, and the
-question is about the *slope*, not a point. It is recorded because it sharpens Q1 rather than
-settling it: 98 is small, and the fault is present in the tree at that commit, so either
-`driver_only` accumulates very few records or the `RunTools` arm carrying `session.ail:2470` is
-rarely reached. Both are the Q1 falsification path, already named. **Start by varying the bound
-and looking at the slope**; do not read a low floor as a verdict, in either direction.
+> **Corrected 2026-08-17 (spike, and re-verified when adjudicating it).** This appendix
+> originally said **98** with tolerance 32 — an overestimate returned as `hi`, not a different
+> measurement. The true value at tolerance 1 is **86**. Nothing downstream changed, but the
+> number had already been quoted, which is the argument for the tighter tolerance.
+
+That 86 is a calibration datum, **not a Q1 answer** — one seed, one unvaried bound, and the
+question is about the *slope*, not a point. Do not read a low floor as a verdict in either
+direction; start by varying the bound and looking at the slope.
+
+> **And it was itself masked.** The spike established that this number measures the *exporter's
+> serializer*, not the driver: `export_trace.ail:237`'s `record_lines` costs one frame per
+> record, and through the whole export a faulty and a fixed driver both report 86. Bisecting
+> the export process cannot decide the relation. See ADR-002 Correction 6.
 
 > **Trap 1 — do not bisect through `run_export_trace.sh`.** Its quiet path is
 > `ailang run … | grep -v '^{'`, so `$?` is **grep's** status, not the runtime's. A run that
