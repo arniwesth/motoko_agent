@@ -232,9 +232,20 @@ length, and getting this backwards produces a check that is red on everything.
 clamps a draw hardcoded to `0, 3` (`dst_generator.ail:598`, `bounded_draw` at `:429`), so
 raising it above 3 is a no-op — traces at c=4, 8, 16, 32 are byte-identical. Records move only
 63 → 79. A wider lever means changing that draw range in core, which moves every pinned canary
-digest walking the chunk path. **A plan for the full relation — not yet written; see
-`HANDOFF-write-resource-growth-relation-plan.md`** — must budget that change rather than assume
-the knob scales.
+digest walking the chunk path. **A plan for the full relation must budget that change rather than
+assume the knob scales.**
+
+> **Status, 2026-08-17 — the plan is written and the lever is built.**
+> `PLAN-resource-growth-relation.md` exists (commissioned by
+> `HANDOFF-write-resource-growth-relation-plan.md`) and priced this paragraph's change as its §1:
+> widening the literal is a D8 compatibility event costing six pinned digests, an 11-member corpus
+> re-selection and a `generator_version` bump. Its WI-1 took **route B** instead — declare the
+> range as `GeneratorBounds.chunk_draw_hi`, defaulted to 3 — which is now landed and **moved no
+> digest at all**, verified by a full sweep with the canary green at both pinned versions. So the
+> sentence above is right about route A and does not generalise: a wider lever cost a
+> program-schema version bump, not a generator one. Range achieved: **1.65×–1.82×** records with
+> the trajectory held fixed. See `NOTE-chunk-draw-lever-calibration.md`, and Corrections 9–12 in
+> the plan's §2, which WI-5 owes this section.
 
 ### What this buys, beyond detecting the fault
 
@@ -292,8 +303,10 @@ not a problem for this one.
 - **A seed with no tool batches makes the relation vacuously green.** Seed 3 terminates after
   2 decisions with zero tool batches, never executes `session.ail:2470`, and is flat at 28 in
   both conditions. Tool-arm coverage is a property of the seed, not the profile. The gate must
-  either assert a minimum tool-batch count as a precondition or run a seed set. **Undecided**;
-  the plan named in `HANDOFF-write-resource-growth-relation-plan.md` owns the choice. The tier-1
+  either assert a minimum tool-batch count as a precondition or run a seed set. **Decided by
+  `PLAN-resource-growth-relation.md`'s Correction 11 and its WI-2: BOTH, not either — a 37.5%
+  vacuity base rate over seeds 1–40 makes them complements rather than alternatives. Not yet
+  built.** The tier-1
   canary shipped in `scripts/dst/run_depth_canary.sh` sidesteps it by running three seeds that
   all reach the arm, which is a mitigation rather than an answer.
 - **The lever is narrow and widening it is core work.** 1.25× of record range today; more means
@@ -351,11 +364,15 @@ Three things it named as future work exist, which shrinks the plan it points at:
 - **A fix to verify against.** #160 landed and the driver phase measured 86/153/114 → 58/87/75 on
   seeds 7/11/23, matching the spike's independently-derived floor exactly.
 
-**What remains is the relation itself**, and only one thing blocks it: the record volume cannot be
-scaled while trajectory length is held fixed, because `dst_generator.ail:598`'s draw range is a
-literal. The shipped gate is a **pinned approximation** — general, but its floor moves with
-`c2_loop`'s per-step cost — and replacing pins with a slope is what a plan for the full relation is
-for. See `HANDOFF-write-resource-growth-relation-plan.md`.
+**What remains is the relation itself.** One thing used to block it — the record volume could not be
+scaled while trajectory length was held fixed, because the chunk draw's range was a literal in
+`dst_generator.ail`'s `choose_provider`. **That block is cleared as of 2026-08-17:** WI-1 declared
+the range as `GeneratorBounds.chunk_draw_hi` and gave `export_trace` a `CG_EXPORT_CHUNK_DRAW_HI`
+seam over it, measured at 1.65×–1.82× records with steps, provider calls and tool batches constant
+(`NOTE-chunk-draw-lever-calibration.md`). The shipped gate is still a **pinned approximation** —
+general, but its floor moves with `c2_loop`'s per-step cost — and replacing pins with a slope is
+WI-3 of `PLAN-resource-growth-relation.md`, which is planned and not built. Until it is green,
+`run_depth_canary.sh` is the only gate on motoko_agent#160.
 
 ## Corrections
 
