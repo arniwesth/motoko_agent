@@ -96,7 +96,26 @@ import src/core/dst_interaction (
 --                             it is that a default is admissible exactly when
 --                             the old version's own semantics fixed the value,
 --                             and refusal is required when they did not.
-export pure func program_schema_version() -> string { "execution-program/2" }
+--
+-- WI-1 MOVED THIS TO `execution-program/3`, and ONE payload travels with the
+-- move: `GeneratorBounds.chunk_draw_hi`, the chunk-count draw's range, declared
+-- so that record volume becomes a lever the relation in
+-- `.agent/projects/011_improve_test_axises/ADR-002-resource-growth-as-a-metamorphic-relation.md`
+-- can vary. `dst_persistence` writes the bounds as a POSITIONAL line, so a sixth
+-- field is a schema change whether or not any value changed.
+--
+--   `GeneratorBounds.chunk_draw_hi`  ABSENT before v3, and absence decodes to
+--                             **3**, written explicitly. This is a DEFAULT and it
+--                             is admissible by the rule stated above rather than
+--                             by convenience: at v1 and v2 the range was a
+--                             literal `0, 3` at `choose_provider`'s call site, so
+--                             the old versions' own semantics FIXED the value at
+--                             3 for every program they ever wrote. Contrast
+--                             `int_at`'s own default of 0, which would be a
+--                             different program — one that never draws chunks —
+--                             and would type-check. `project` therefore does not
+--                             let `int_at` answer this; see `chunk_draw_hi_of`.
+export pure func program_schema_version() -> string { "execution-program/3" }
 
 -- Every schema version this build can decode. A migration extends this list
 -- and keeps the old decode path, or it does not extend it and old programs
@@ -116,7 +135,7 @@ export pure func program_schema_version() -> string { "execution-program/2" }
 -- is the first; `test_current_schema_is_decodable_and_an_unknown_one_is_not`
 -- pins the relationship between them.
 export pure func decodable_schema_versions() -> [string] {
-  ["execution-program/1", program_schema_version()]
+  ["execution-program/1", "execution-program/2", program_schema_version()]
 }
 
 -- ---------------------------------------------------------------------------
@@ -662,9 +681,13 @@ pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
       && not contains_str(decodable_schema_versions(), "execution-program/0")
       -- WI-D22: the predecessor stays decodable across the bump.
       && contains_str(decodable_schema_versions(), "execution-program/1")
-      && List.length(decodable_schema_versions()) == 2
-      -- And the bump actually happened: this build does not WRITE v1.
-      && program_schema_version() == "execution-program/2"
+      -- WI-1: and so does ITS successor. Both are named rather than counted for
+      -- the reason the list is written out oldest-first — a second bump that kept
+      -- the length at two by dropping v1 would satisfy a count.
+      && contains_str(decodable_schema_versions(), "execution-program/2")
+      && List.length(decodable_schema_versions()) == 3
+      -- And the bump actually happened: this build does not WRITE v2.
+      && program_schema_version() == "execution-program/3"
   }
 
 -- WI-D21. THE `ExtPorts.proc_exec` BRIDGE BUILDS AN INVOCATION THIS VALIDATOR

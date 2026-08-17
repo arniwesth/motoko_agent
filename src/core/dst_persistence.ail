@@ -348,7 +348,11 @@ export pure func required_header_tags() -> [{ tag: string, arity: int }] {
    { tag: "world.messages_and_policy", arity: 1 },
    { tag: "world.clock_epoch", arity: 1 },
    { tag: "world.extension_profile", arity: 1 },
-   { tag: "bounds", arity: 5 },
+   -- SIX at execution-program/3, five before it. This entry is the only one in
+   -- either table whose arity depends on the schema version, which is why
+   -- `required_header_tags_at` exists and why the decoder takes the table from it
+   -- rather than from here. See `bounds_arity_at`.
+   { tag: "bounds", arity: 6 },
    { tag: "manifest.source_revision", arity: 1 },
    { tag: "manifest.toolchain", arity: 1 },
    { tag: "manifest.abi_version", arity: 1 },
@@ -380,7 +384,51 @@ export pure func repeatable_header_tags() -> [{ tag: string, arity: int }] {
    { tag: "manifest.scan_root", arity: 1 }]
 }
 
--- Tags whose single field must parse as an integer.
+-- ---------------------------------------------------------------------------
+-- The one tag whose shape depends on the version — WI-1
+-- ---------------------------------------------------------------------------
+
+-- Whether a given schema version's `bounds` line carries `chunk_draw_hi`.
+--
+-- Written as the versions that LACK the field rather than the ones that have it,
+-- because that set is closed forever: v1 and v2 are frozen bytes and no future
+-- version can join them. A v4 therefore inherits `true` without anyone having to
+-- remember to add it, and a version that genuinely dropped the field would have
+-- to say so here explicitly.
+export pure func version_has_chunk_draw_hi(version: string) -> bool {
+  not (version == "execution-program/1" || version == "execution-program/2")
+}
+
+-- What `chunk_draw_hi` MEANT in an artifact written before the field existed.
+--
+-- Three, not `int_at`'s zero, and the difference is a different program rather
+-- than a rounder number: at v1 and v2 `choose_provider` drew the chunk count from
+-- a literal `0, 3`, so those versions' own semantics fixed this at 3 for every
+-- program they wrote, while 0 would claim the program never draws chunks at all.
+-- `dst_program.program_schema_version`'s header states the rule this obeys.
+export pure func chunk_draw_hi_before_v3() -> int { 3 }
+
+export pure func bounds_arity_at(version: string) -> int {
+  if version_has_chunk_draw_hi(version) then 6 else 5
+}
+
+pure func with_bounds_arity(ts: [{ tag: string, arity: int }], n: int) -> [{ tag: string, arity: int }] {
+  match ts {
+    [] => [],
+    t :: rest =>
+      ({ t | arity: if t.tag == "bounds" then n else t.arity }) :: with_bounds_arity(rest, n)
+  }
+}
+
+-- The required-tag table AS A GIVEN VERSION DECLARES IT. Built from
+-- `required_header_tags()` rather than duplicating it: the manifest entries have
+-- exactly one home, which is what the Makefile's arity guard counts.
+export pure func required_header_tags_at(version: string) -> [{ tag: string, arity: int }] {
+  with_bounds_arity(required_header_tags(), bounds_arity_at(version))
+}
+
+-- Tags whose single field must parse as an integer. `bounds` is not here: it
+-- carries several, and `check_bounds_line` checks them by arity instead.
 export pure func integer_header_tags() -> [string] {
   ["seed", "world.clock_epoch"]
 }
@@ -510,7 +558,16 @@ export pure func encode_body(p: ExecutionProgram) -> string {
       -- two repeatable initial-world sections sit together, so a reader diffing
       -- an artifact finds the whole world in one block.
       ++ file_lines(w.files)
-      ++ ["bounds\t${b.max_interactions}\t${b.max_chunks_per_interaction}\t${b.max_payload_bytes}\t${b.max_resource_size}\t${b.max_clock_advance_ms}",
+      -- WI-1 APPENDED `chunk_draw_hi` AT THE END rather than beside
+      -- `max_chunks_per_interaction`, where a reader looking for it would put it.
+      -- This line is positional and `project` reads it BY INDEX, so the readable
+      -- placement shifts every later index and a v2 artifact then decodes
+      -- `max_payload_bytes` as `chunk_draw_hi`, `max_resource_size` as
+      -- `max_payload_bytes`, and so on — with nothing complaining, because
+      -- `int_at` answers 0 for whatever it cannot find. Append-only is the rule
+      -- for this line; the record's field order in `GeneratorBounds` matches it
+      -- so that the two cannot be read as disagreeing.
+      ++ ["bounds\t${b.max_interactions}\t${b.max_chunks_per_interaction}\t${b.max_payload_bytes}\t${b.max_resource_size}\t${b.max_clock_advance_ms}\t${b.chunk_draw_hi}",
           line1("manifest.source_revision", m.source_revision),
           line1("manifest.toolchain", m.toolchain),
           line1("manifest.abi_version", m.abi_version),
@@ -659,11 +716,19 @@ pure func unescape_all(fs: [string]) -> Option[[string]] {
 -- Parse one line into a tag and its unescaped fields, or a refusal. Arity is
 -- checked HERE, against the schema's declared table, so a truncated line never
 -- reaches the projection as a blank field.
-pure func parse_line(no: int, raw: string) -> { line: [Line], refusals: [DecodeRefusal] } {
+-- `req` is the required-tag table AS THE ARTIFACT'S OWN VERSION DECLARES IT, not
+-- as this build writes it: `bounds` carries five fields at v1/v2 and six at v3,
+-- so a table taken from `required_header_tags()` would refuse every frozen v2
+-- specimen with `WrongArity`. It is passed in rather than derived per line
+-- because this function is called once per line and rebuilding the table here
+-- would put nineteen frames inside each of them.
+pure func parse_line(
+  req: [{ tag: string, arity: int }], no: int, raw: string
+) -> { line: [Line], refusals: [DecodeRefusal] } {
   let parts = Str.split(raw, "\t");
   let tag = head_or(parts, "");
   let fields = drop_first(parts);
-  let want = match arity_of(required_header_tags(), tag) {
+  let want = match arity_of(req, tag) {
     Some(n) => Some(n),
     None => match arity_of(repeatable_header_tags(), tag) {
       Some(n) => Some(n),
@@ -686,12 +751,14 @@ pure func drop_first(xs: [string]) -> [string] {
   match xs { [] => [], _ :: rest => rest }
 }
 
-pure func parse_lines(no: int, raws: [string]) -> { lines: [Line], refusals: [DecodeRefusal] } {
+pure func parse_lines(
+  req: [{ tag: string, arity: int }], no: int, raws: [string]
+) -> { lines: [Line], refusals: [DecodeRefusal] } {
   match raws {
     [] => { lines: [], refusals: [] },
     r :: rest => {
-      let one = parse_line(no, r);
-      let tail = parse_lines(no + 1, rest);
+      let one = parse_line(req, no, r);
+      let tail = parse_lines(req, no + 1, rest);
       { lines: one.line ++ tail.lines, refusals: one.refusals ++ tail.refusals }
     }
   }
@@ -745,12 +812,15 @@ pure func check_integers(ls: [Line], ts: [string]) -> [DecodeRefusal] {
   }
 }
 
--- `bounds` carries five integers on one line and the arity check has already
--- confirmed there are five fields; this confirms each is a number.
-pure func check_bounds_line(ls: [Line]) -> [DecodeRefusal] {
+-- `bounds` carries five integers on one line — six at execution-program/3 — and
+-- the arity check has already confirmed there are that many fields; this confirms
+-- each is a number. The count comes from the ARTIFACT'S version for the same
+-- reason `parse_line`'s table does: reading six from a v2 line would report the
+-- absent sixth field as `NotAnInteger` rather than as the default it is.
+pure func check_bounds_line(version: string, ls: [Line]) -> [DecodeRefusal] {
   match find_tag(ls, "bounds") {
     [] => [],
-    l :: _ => int_fields_of(l, 0, 5)
+    l :: _ => int_fields_of(l, 0, bounds_arity_at(version))
   }
 }
 
@@ -1063,15 +1133,18 @@ pure func contains_str(xs: [string], t: string) -> bool {
 pure func decode_body(version: string, body: string) -> ProgramDecode {
   -- Line numbers start at 3 so a refusal points at the line a reader will find
   -- in the file: 1 is the schema version, 2 is the digest.
-  let parsed = parse_lines(3, Str.split(body, "\n"));
+  -- The table the ARTIFACT'S version declares, computed once and threaded down.
+  -- See `required_header_tags_at`.
+  let req = required_header_tags_at(version);
+  let parsed = parse_lines(req, 3, Str.split(body, "\n"));
   match parsed.refusals {
     r :: rs => ProgramDecodeRefused([r] ++ rs),
     [] => {
       let hs = header_lines(parsed.lines);
       let bs = body_lines(parsed.lines);
-      let structural = check_required(hs, required_header_tags())
+      let structural = check_required(hs, req)
                          ++ check_integers(hs, integer_header_tags())
-                         ++ check_bounds_line(hs)
+                         ++ check_bounds_line(version, hs)
                          ++ check_file_entries(hs);
       match structural {
         r :: rs => ProgramDecodeRefused([r] ++ rs),
@@ -1085,6 +1158,20 @@ pure func decode_body(version: string, body: string) -> ProgramDecode {
       }
     }
   }
+}
+
+-- WI-1's SIXTH BOUNDS FIELD, AND THE ONE PLACE `int_at` IS NOT ALLOWED TO ANSWER.
+--
+-- `int_at` returns 0 for a field it cannot find (see its definition), so writing
+-- this as `int_at(hs, "bounds", 5)` would decode every v1 and v2 artifact to
+-- `chunk_draw_hi: 0` — "this program never draws chunks" — which is a legal-looking
+-- program that is not the one the bytes recorded, and which nothing downstream
+-- would complain about. The version decides, and the pre-v3 answer is stated as a
+-- named constant so that it reads as a migration decision rather than as a
+-- literal. `scenario_the_frozen_v2_specimen_still_decodes` asserts the 3.
+pure func chunk_draw_hi_of(version: string, hs: [Line]) -> int {
+  if version_has_chunk_draw_hi(version) then int_at(hs, "bounds", 5)
+  else chunk_draw_hi_before_v3()
 }
 
 pure func project(version: string, hs: [Line], xs: [Interaction]) -> ExecutionProgram {
@@ -1114,7 +1201,8 @@ pure func project(version: string, hs: [Line], xs: [Interaction]) -> ExecutionPr
       max_chunks_per_interaction: int_at(hs, "bounds", 1),
       max_payload_bytes: int_at(hs, "bounds", 2),
       max_resource_size: int_at(hs, "bounds", 3),
-      max_clock_advance_ms: int_at(hs, "bounds", 4)
+      max_clock_advance_ms: int_at(hs, "bounds", 4),
+      chunk_draw_hi: chunk_draw_hi_of(version, hs)
     },
     manifest: {
       source_revision: str_at(hs, "manifest.source_revision", 0),
@@ -1403,7 +1491,8 @@ pure func stub_program(id: string, version: string, seed: int) -> ExecutionProgr
     initial_world: { messages_and_policy: "", synthetic_environment: [], files: [],
                      clock_epoch: 0, extension_profile: "" },
     bounds: { max_interactions: 0, max_chunks_per_interaction: 0,
-              max_payload_bytes: 0, max_resource_size: 0, max_clock_advance_ms: 0 },
+              max_payload_bytes: 0, max_resource_size: 0, max_clock_advance_ms: 0,
+              chunk_draw_hi: 3 },
     manifest: { source_revision: "", toolchain: "", extension_packages: [],
                 abi_version: "", profile_id: "", profile_version: "",
                 event_vocabulary_version: "", normalized_configuration: "",

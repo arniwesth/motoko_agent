@@ -684,9 +684,31 @@ pure func specimen_world() -> InitialWorld {
   { frozen_v1_world() | files: post_v1_files() }
 }
 
+-- WI-1 ADDED `chunk_draw_hi: 20`, AND 20 RATHER THAN 3 IS THE POINT. Every field
+-- in this record holds a distinct value — `specimen_ints` asserts it — because a
+-- codec whose encoder writes one field and whose decoder reads another
+-- round-trips perfectly when the two are equal. 20 is the gap in the 18/19/21/22
+-- run, so it collides with nothing here and with neither the seed (23) nor the
+-- clock epoch (17).
+--
+-- These are NOT the bounds the frozen v1 and v2 bytes hold. Those predate the
+-- field; see `bounds_before_v3`.
 pure func specimen_bounds() -> GeneratorBounds {
   { max_interactions: 18, max_chunks_per_interaction: 19, max_payload_bytes: 4096,
-    max_resource_size: 21, max_clock_advance_ms: 22 }
+    max_resource_size: 21, max_clock_advance_ms: 22, chunk_draw_hi: 20 }
+}
+
+-- What the pre-v3 frozen bytes' `bounds` line MEANS when this build reads it.
+--
+-- WI-D22 SPLIT `frozen_v1_world` FROM `specimen_world` FOR EXACTLY THIS REASON
+-- ONE LAYER UP, and the reason is not a preference: a field added after a freeze
+-- CANNOT BE IN THE FROZEN BYTES. The v1 and v2 bounds lines carry five fields,
+-- and `dst_persistence.chunk_draw_hi_of` decodes the absent sixth to 3 — the value
+-- those versions' own `choose_provider` drew from. So the frozen programs declare
+-- 3 and the live specimen declares 20, and the two frozen-bytes rows take the
+-- bounds that match their own bytes.
+pure func bounds_before_v3() -> GeneratorBounds {
+  { specimen_bounds() | chunk_draw_hi: 3 }
 }
 
 -- Eight interactions: the seven identity classes THAT EXISTED WHEN THE BYTES
@@ -831,15 +853,42 @@ pure func encoded_specimen() -> string {
 -- wrong the artifact was. `project` now carries the version the BYTES declared,
 -- so this record has to declare v1 to match, and a build that started
 -- reinterpreting v1 bytes as v2 would be named by that row.
+-- WI-1 ADDED THE `bounds` OVERRIDE, for the reason the `schema_version` one is
+-- here: `chunk_draw_hi` arrived at execution-program/3 and the v1 bytes carry a
+-- five-field bounds line, so what those bytes MEAN is `bounds_before_v3()`. Left
+-- inheriting `specimen_bounds()` this record would claim the v1 artifact declared
+-- a draw range of 20, and the row below would report — correctly — that this build
+-- decodes an old artifact to a different program.
 pure func frozen_v1_program() -> ExecutionProgram {
   { specimen_program() |
     schema_version: "execution-program/1",
     initial_world: frozen_v1_world(),
+    bounds: bounds_before_v3(),
     interactions: frozen_v1_interactions() }
 }
 
 pure func encoded_frozen_v1() -> string {
   match encode_artifact(frozen_v1_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
+}
+
+-- What the frozen v2 bytes hold: `specimen_program()` entire — the v2 freeze was
+-- taken at the full eleven interactions — with the two facts the bytes carry that
+-- this build no longer writes. WI-1's `bounds` override is the substantive one; see
+-- `bounds_before_v3`.
+pure func frozen_v2_program() -> ExecutionProgram {
+  { specimen_program() |
+    schema_version: "execution-program/2",
+    bounds: bounds_before_v3() }
+}
+
+-- The same shape as `encoded_frozen_v1`, and it will not match the v2 file: this
+-- build stamps `program_schema_version()` on every artifact it encodes and writes
+-- a six-field bounds line, so the v2 bytes are now unreproducible by construction.
+-- The comparison is kept rather than deleted because "this build can no longer
+-- write these bytes" is a claim worth printing at every version that predates the
+-- encoder — it is the same ⓘ the v1 row has carried since WI-D22.
+pure func encoded_frozen_v2() -> string {
+  match encode_artifact(frozen_v2_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
 }
 
 -- WI-D22'S FROZEN v2 BYTES, AND WHAT THEY CLOSE.
@@ -864,6 +913,27 @@ pure func encoded_frozen_v1() -> string {
 --
 -- THE v1 BYTES ARE NOT REGENERATED and must never be. Both fixtures are checked,
 -- against different programs, by two rows that cannot be satisfied by one file.
+--
+-- WI-1 MADE THAT TWO INTO THREE, AND MOVED WHAT THE v2 ROW ASSERTS.
+--
+-- `chunk_draw_hi` appended a sixth field to the `bounds` line, so this build
+-- writes execution-program/3 and CANNOT reproduce the v2 bytes. The comment below
+-- said byte identity was asserted for v2 and merely informed about for v1 because
+-- "the v2 bytes were frozen BY this encoder" — that sentence stopped being true at
+-- this bump, and the asymmetry it justifies moves with it rather than being
+-- deleted. So: v1 and v2 are both artifacts that PREDATE the current encoder, both
+-- are checked for decoding to the program their own bytes hold, and both report a
+-- byte difference as the permitted backward-compatible change it now is. The
+-- strict "the encoder still produces these exact bytes" assertion moves to v3,
+-- which was frozen BY this encoder and where the only two readings of a mismatch
+-- are still an unversioned encoding change or a regenerated file.
+--
+-- The v3 bytes were produced once, by a throwaway outside the tree, and the row
+-- that reads them asserts they equal `encoded_specimen()` — so the file is checked
+-- against the encoder rather than trusted. That is the same discipline WI-D22 used
+-- for these bytes and stage 5 uses for its canary pins.
+pure func v3_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v3.artifact" }
+
 pure func v2_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v2.artifact" }
 
 pure func v1_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v1.artifact" }
@@ -900,6 +970,10 @@ pure func program_diff(a: ExecutionProgram, b: ExecutionProgram) -> [string] {
     ++ di("bounds.max_payload_bytes", ab.max_payload_bytes, bb.max_payload_bytes)
     ++ di("bounds.max_resource_size", ab.max_resource_size, bb.max_resource_size)
     ++ di("bounds.max_clock_advance_ms", ab.max_clock_advance_ms, bb.max_clock_advance_ms)
+    -- WI-1. The draw range, not a sixth limit — and it is compared here rather
+    -- than trusted because it is the one bounds field whose decoded value depends
+    -- on the artifact's schema version.
+    ++ di("bounds.chunk_draw_hi", ab.chunk_draw_hi, bb.chunk_draw_hi)
     ++ d("manifest.source_revision", am.source_revision, bm.source_revision)
     ++ d("manifest.toolchain", am.toolchain, bm.toolchain)
     ++ d("manifest.abi_version", am.abi_version, bm.abi_version)
@@ -1161,7 +1235,7 @@ pure func specimen_ints() -> [int] {
   let b = specimen_bounds();
   [specimen_program().seed, specimen_world().clock_epoch,
    b.max_interactions, b.max_chunks_per_interaction, b.max_payload_bytes,
-   b.max_resource_size, b.max_clock_advance_ms]
+   b.max_resource_size, b.max_clock_advance_ms, b.chunk_draw_hi]
 }
 
 pure func file_paths(xs: [{ path: string, node: FsNode }]) -> [string] {
@@ -1294,17 +1368,28 @@ func scenario_the_frozen_v1_specimen_still_decodes() -> bool ! {IO, FS} {
   }
 }
 
--- WI-D22. THE SAME ROW FOR v2, AND THE ACCOUNTING IT CLOSES.
+-- WI-D22. THE SAME ROW FOR v2, AND WHAT WI-1 MOVED IN IT.
 --
--- Byte-for-byte identity is asserted here and only INFORMED about for v1, and
--- the asymmetry is deliberate rather than a copy that drifted. The v1 bytes
--- predate the current encoder, so "the encoder still produces them" is a fact
--- about history that a permitted backward-compatible change can falsify. The v2
--- bytes were frozen BY this encoder, so if they stop matching it, either the
--- encoding changed without a version moving — which is the thing this whole
--- module exists to catch — or the file was regenerated, which is the response
--- that is not available. There is no third reading, so it is a failure and not
--- an ⓘ.
+-- WI-D22 asserted byte-for-byte identity here and only INFORMED about it for v1,
+-- because "the v1 bytes predate the current encoder, so 'the encoder still
+-- produces them' is a fact about history that a permitted backward-compatible
+-- change can falsify. The v2 bytes were frozen BY this encoder." WI-1's bump to
+-- execution-program/3 made the second sentence false: this build appends
+-- `chunk_draw_hi` to the `bounds` line and writes a /3 header, so it can no longer
+-- produce these bytes, and the difference is a permitted backward-compatible
+-- change of exactly the kind the v1 row already reports as ⓘ.
+--
+-- So the assertion MOVED rather than being dropped: `scenario_the_frozen_v3_...`
+-- carries it, against bytes this encoder did produce. Weakening this row without
+-- putting the assertion somewhere is how a compatibility gate becomes prose, and
+-- the check that the pair is complete is that the strict row is now the one at the
+-- version `program_schema_version()` returns.
+--
+-- WHAT THIS ROW STILL ASSERTS, and it is the half that matters more: that a v2
+-- artifact decodes to THE PROGRAM ITS OWN BYTES HOLD. `bounds_before_v3()` is that
+-- program's bounds, and the explicit `chunk_draw_hi == 3` row below is the
+-- migration decision executed rather than described — `int_at` would have answered
+-- 0 here, and 0 is a program that never draws chunks.
 --
 -- And the count is asserted, because that is the debt: ZERO identity classes may
 -- be round-tripped-but-not-frozen once this row passes. `kinds_absent` is run
@@ -1315,12 +1400,62 @@ func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
   match FS.readFileResult(v2_fixture_path()) {
     Err(e) => { let _ = println("  ✗ the frozen v2 specimen could not be read (${e}); WI-D17's two-tier compatibility surface is still open and nothing says so"); false },
     Ok(bytes) => {
-      let matches_encoder = bytes == encoded_specimen();
+      let matches_encoder = bytes == encoded_frozen_v2();
       match decode_artifact(bytes) {
         ProgramDecodeRefused(rs) => {
           let _ = println("  ✗ THE FROZEN v2 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          let _ = println("      This build changed the encoding and dropped v2's decode path, or removed");
+          let _ = println("      'execution-program/2' from decodable_schema_versions(). Restore the decode");
+          let _ = println("      path and bump to execution-program/4. Do NOT regenerate this file.");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(frozen_v2_program(), back);
+          let ok = List.length(diff) == 0;
+          let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
+          let none_unfrozen = List.length(unfrozen) == 0;
+          -- WI-1. The migration's one substantive claim, asserted on real historical
+          -- bytes rather than on a hand-built record: a five-field bounds line
+          -- decodes its absent sixth field to the value v2 MEANT.
+          let ok_default = back.bounds.chunk_draw_hi == 3;
+          let _ = if ok then println("  ✓ the frozen v2 specimen decodes to the program its own bytes hold, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v2 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if ok_default then println("    ✓ its five-field bounds line decodes to chunk_draw_hi = 3 — v2's own semantics, not int_at's 0, which would be a program that never draws chunks")
+                  else println("    ✗ the v2 bounds line decoded to chunk_draw_hi = ${show(back.bounds.chunk_draw_hi)}, and 3 is what v2 MEANT: choose_provider drew from a literal 0,3 at that version. A 0 here is int_at answering a migration question — see dst_persistence.chunk_draw_hi_of");
+          let _ = if matches_encoder then println("    ✓ this build can still write these exact bytes")
+                  else println("    ⓘ the current encoder produces different bytes from the frozen v2 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v3 row, at the version this build writes");
+          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen — WI-D17's two-tier compatibility surface is CLOSED (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes)")
+                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are still frozen by nothing: ${join_keys(unfrozen)} — a class added after this freeze reopens WI-D17 §7b's two-tier surface, and the fix is a further schema version, not an edit to these bytes");
+          ok && ok_default && none_unfrozen
+        }
+      }
+    }
+  }
+}
+
+-- WI-1'S FROZEN v3 BYTES, AND WHY THEY ARE NOT A CONVENIENCE.
+--
+-- This carries the assertion the v2 row can no longer make: that the encoder in
+-- this tree produces these exact bytes. Both readings of a mismatch here are
+-- defects — an encoding change that did not move `program_schema_version()`, or a
+-- regenerated fixture — so it is a `✗` and not an `ⓘ`, exactly as the v2 row was
+-- before the bump moved it.
+--
+-- It is also what makes the pair non-vacuous in the other direction. The v2 row
+-- proves this build reads bytes it cannot write; this one proves it writes the
+-- bytes it reads. Neither alone catches an encoder and decoder that drifted
+-- together, which is the failure this module exists for and the reason there is no
+-- regeneration target for any of these four files.
+func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
+  match FS.readFileResult(v3_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen v3 specimen could not be read (${e}); nothing then asserts that this build's encoder produces the bytes it claims to"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_specimen();
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN v3 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
           let _ = println("      This build changed the encoding without moving program_schema_version().");
-          let _ = println("      Add a decode path and bump to execution-program/3. Do NOT regenerate this file.");
+          let _ = println("      Add a decode path and bump to execution-program/4. Do NOT regenerate this file.");
           false
         },
         ProgramDecoded(back) => {
@@ -1328,12 +1463,12 @@ func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
           let ok = List.length(diff) == 0;
           let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
           let none_unfrozen = List.length(unfrozen) == 0;
-          let _ = if ok then println("  ✓ the frozen v2 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
-                  else println("  ✗ the frozen v2 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if ok then println("  ✓ the frozen v3 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v3 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
           let _ = if matches_encoder then println("    ✓ the current encoder still produces those exact bytes")
-                  else println("    ✗ the current encoder no longer produces the frozen v2 bytes; unlike v1 these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/3 rather than regenerating the file");
-          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen — WI-D17's two-tier compatibility surface is CLOSED (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes)")
-                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are still frozen by nothing: ${join_keys(unfrozen)} — a class added after this freeze reopens WI-D17 §7b's two-tier surface, and the fix is a further schema version, not an edit to these bytes");
+                  else println("    ✗ the current encoder no longer produces the frozen v3 bytes; these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/4 rather than regenerating the file");
+          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes at the version this build writes)")
+                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are frozen by nothing: ${join_keys(unfrozen)} — the fix is a further schema version, not an edit to these bytes");
           ok && matches_encoder && none_unfrozen
         }
       }
@@ -1410,7 +1545,12 @@ func scenario_decode_mutants() -> bool ! {IO} {
           bytes: duplicate_line(good, "manifest.abi_version") },
         { rule: "artifact-wrong-arity",
           label: "a line truncated to fewer fields than its tag declares",
-          bytes: retag(good, "bounds\t18\t19\t4096\t21\t22", "bounds\t18\t19\t4096\t21") },
+          -- WI-1: six fields at execution-program/3, truncated to five. FIVE and
+          -- not four, deliberately: five is exactly what a v2 bounds line holds,
+          -- so this row asserts that the arity check reads the ARTIFACT'S version
+          -- rather than accepting any historically-valid width. `good` declares /3,
+          -- so five fields is short there and is a refusal.
+          bytes: retag(good, "bounds\t18\t19\t4096\t21\t22\t20", "bounds\t18\t19\t4096\t21\t22") },
         { rule: "artifact-not-an-integer",
           label: "an integer field holding text",
           bytes: retag(good, "seed\t23", "seed\ttwenty-three") },
@@ -1660,6 +1800,7 @@ export func main() -> () ! {IO, FS} {
   let k = scenario_deterministic_and_diffable();
   let l = scenario_the_frozen_v1_specimen_still_decodes();
   let l2 = scenario_the_frozen_v2_specimen_still_decodes();
+  let l3 = scenario_the_frozen_v3_specimen_still_decodes();
   let m = scenario_an_unknown_schema_fails_closed();
   let _ = println("  decode mutation rows — one corruption at a time");
   let n = scenario_decode_mutants();
@@ -1669,7 +1810,7 @@ export func main() -> () ! {IO, FS} {
   let q = scenario_the_store_round_trips_and_refuses_a_collision();
   let _ = println("  regression replay over the frozen program");
   let r = scenario_regression_replay_consumes_the_frozen_program();
-  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && m && n && o && q && r
+  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && l3 && m && n && o && q && r
   then println("program_persistence_dst PASS")
   else {
     let _ = println("program_persistence_dst FAIL");

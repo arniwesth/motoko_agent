@@ -463,7 +463,8 @@ pure func bounds_json(b: GeneratorBounds) -> Json {
     kv("max_chunks_per_interaction", jint(b.max_chunks_per_interaction)),
     kv("max_payload_bytes", jint(b.max_payload_bytes)),
     kv("max_resource_size", jint(b.max_resource_size)),
-    kv("max_clock_advance_ms", jint(b.max_clock_advance_ms))
+    kv("max_clock_advance_ms", jint(b.max_clock_advance_ms)),
+    kv("chunk_draw_hi", jint(b.chunk_draw_hi))
   ])
 }
 
@@ -472,7 +473,15 @@ pure func bounds_of(j: Json) -> GeneratorBounds {
     max_chunks_per_interaction: int_field(j, "max_chunks_per_interaction", 0),
     max_payload_bytes: int_field(j, "max_payload_bytes", 0),
     max_resource_size: int_field(j, "max_resource_size", 0),
-    max_clock_advance_ms: int_field(j, "max_clock_advance_ms", 0) }
+    max_clock_advance_ms: int_field(j, "max_clock_advance_ms", 0),
+    -- THREE, and it is the only default in this record that is not zero. A token
+    -- written by a build that predates the field carries no `chunk_draw_hi`, and
+    -- what that build MEANT is 3 — the literal its `choose_provider` drew from.
+    -- Zero would be a generator that draws no chunks, which is a different world
+    -- handed to an extension. Same decision as `dst_persistence.chunk_draw_hi_of`,
+    -- made on the same grounds; the fields above it are limits, where zero is the
+    -- tightest value and an absent limit legitimately reads as no headroom.
+    chunk_draw_hi: int_field(j, "chunk_draw_hi", 3) }
 }
 
 pure func generator_json(g: GeneratorState) -> Json {
@@ -694,7 +703,7 @@ pure func codec_fixture_world() -> WorldState {
            approvals_closed: true,
            bounds: { max_interactions: 41, max_chunks_per_interaction: 43,
                      max_payload_bytes: 47, max_resource_size: 53,
-                     max_clock_advance_ms: 59 },
+                     max_clock_advance_ms: 59, chunk_draw_hi: 71 },
            failures: [{ bound: "max_payload_bytes", limit: 61, requested: 67 }] } }
 }
 
@@ -846,6 +855,11 @@ pure func test_the_world_token_round_trips_the_log_and_the_generator() -> bool
         && g.bounds.max_payload_bytes == 47
         && g.bounds.max_resource_size == 53
         && g.bounds.max_clock_advance_ms == 59
+        -- 71, a value no other field in this fixture holds: the round trip must
+        -- distinguish the draw RANGE from the five limits beside it, and a codec
+        -- that wrote one and read the other would round-trip perfectly if any two
+        -- were equal.
+        && g.bounds.chunk_draw_hi == 71
         && (match g.failures {
               [] => false,
               f :: _ => f.bound == "max_payload_bytes" && f.limit == 61 && f.requested == 67
