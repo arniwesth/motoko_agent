@@ -25,6 +25,53 @@ Relates to:
 
 ---
 
+## TL;DR
+
+**Problem.** A production session aborted at `RT_REC_003` because the driver folds its whole
+accumulated ledger once per step, and AILANG has no TCO. Twelve invariant families could not
+have caught it: they check correctness relations over a trace, and this is a resource
+property whose quantity — how many times the driver *walked* the trace — is not in the trace.
+
+**Decision.** Don't grow the workload until it breaks; **shrink the resource until it
+does.** `--max-recursion-depth` is settable *downward*, so bisecting the minimum viable
+ceiling measures a program's peak recursion depth directly. Then compare two runs:
+
+> Same generator, `max_interactions` (trajectory length) **fixed**,
+> `max_chunks_per_interaction` (records per step) **varied** — the peak recursion depth of
+> the production driver path must not grow proportionally with the record volume.
+
+**Why it works,** measured on a known-good and a known-bad driver over an 8× input scaling:
+
+| driver | per=5 | per=10 | per=20 | per=40 | growth |
+|---|---|---|---|---|---|
+| counters carried forward | 73 | 73 | 73 | 98 | **1.3×** |
+| per-step fold over accumulated state | 317 | 561 | 1074 | 2074 | **6.5×** |
+
+**Three things that are easy to get backwards, and all three were, at first:**
+
+1. **Vary records-per-step, not steps.** Both drivers are linear in *steps* — `c2_loop` is
+   itself non-tail-optimized — so scaling the trajectory is red on everything. Holding steps
+   fixed is what isolates accumulated state from loop length.
+2. **The property is "no depth that scales with accumulated state", not "no per-step
+   fold".** Peak depth cannot tell a per-step fold from one end-of-run fold. That is fine,
+   because both are equally fatal — but it means the narrower property is undecidable here
+   and the broader one is what gets checked.
+3. **Measure the driver alone.** `dst_invariants.evaluate()` walks the trace
+   non-tail-recursively, so a combined driver-plus-checker run measures the checker and goes
+   red on a healthy system. Invariant evaluation must sit in a separate process.
+
+**Cost.** ~12 subprocess runs per scale point at 0.46 s each — CI-cheap, not a nightly soak.
+The out-of-process runner already exists (`run_export_trace.sh`); this is a flag on it.
+
+**Constraints respected, all three by construction:** no declared bound is raised (D2), no
+trace size is capped (D6.4), and the observer never shares the observed run's frame budget,
+so `HarnessFailureKind` keeps its "observable while still running" property (D6.6/D6.7).
+
+**Lands in §3.6's metamorphic family**, not as a thirteenth whole-execution family —
+`ExecutionUnderTest` describes one run and cannot express a relation between two.
+
+**Not implemented.** Read *Corrections* before changing the design.
+
 ## Context
 
 A live session aborted with `RT_REC_003` because the driver re-folds its whole accumulated
