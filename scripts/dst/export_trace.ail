@@ -309,6 +309,31 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
           RunFailed(hf)    => { trace: hf.partial_ledger_trace, complete: false,
                                 kind: harness_failure_kind_name(hf.kind) }
         };
+        -- CG_EXPORT_PHASE=driver — THE MEASUREMENT SEAM. Runs the driver and
+        -- stops, reporting only a length. It exists because this exporter is
+        -- the only place a real driver run can be observed out of process, and
+        -- because `document()` below CANNOT be inside anything that measures
+        -- recursion depth: `record_lines` costs one frame per record, so the
+        -- whole-export depth is the serializer's, not the driver's. Measured
+        -- 2026-08-17 — with the fault of motoko_agent#160 present the driver
+        -- phase reports 73→86 over 63→79 records and the full export reports
+        -- 70→86; the two are indistinguishable at the top of the range, which
+        -- is exactly the discrimination this seam restores.
+        --
+        -- IT IS NOT A FEATURE AND WRITES NOTHING. The default path is
+        -- untouched, so a normal export cannot take it by accident, and nothing
+        -- downstream reads its output — it is read by a human or a bisection
+        -- harness watching the process exit status.
+        --
+        -- WHY IT IS HERE RATHER THAN IN A THROWAWAY BRANCH: the spike that
+        -- established the above built this seam, measured with it, and disposed
+        -- of it by guardrail, which left #160's fix unverifiable end to end for
+        -- exactly as long as it took to write this comment. See
+        -- `.agent/projects/011_improve_test_axises/ADR-002-resource-growth-as-a-metamorphic-relation.md`
+        -- Correction 6.
+        if getEnvOr("CG_EXPORT_PHASE", "") == "driver" then
+          println("export_trace: phase=driver — ${show(List.length(parts.trace.records))} records, run_complete=${show(parts.complete)}")
+        else {
         let text = document(seed, profile, parts.complete, parts.kind, parts.trace,
                             ailang_version, motoko_commit);
         let dir = trace_dir(out_root, profile);
@@ -322,6 +347,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
             println("export_trace: wrote ${path} — ${show(List.length(parts.trace.records))} records, run_complete=${show(parts.complete)}"),
           Err(msg) =>
             println("export_trace: FAILED writing ${path}: ${msg}")
+        }
         }
       }
     }

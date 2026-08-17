@@ -40,11 +40,30 @@ the spike (`.agent/projects/011_improve_test_axises/NOTE-spike-findings-resource
 already established that removing this traversal takes the depth-vs-records slope to **exactly
 0.00**, and that it is the **only** O(|accumulated state|) traversal on the driver path.
 
-**Not verified end to end, and this is the honest gap.** The instrument that would re-measure the
-slope on the real driver — the spike's `SPIKE_PHASE` ablation — was disposed of with its branch by
-guardrail, and bisecting the whole export process cannot see the difference (the exporter's own
-serializer masks it at 86). So nothing today would catch this regressing. That is the argument for
-`PLAN-resource-growth-relation.md`.
+**Verified end to end, in the DST world.** The first version of this section said it could not be —
+wrongly. Bisecting the *whole export* indeed cannot see the difference (the exporter's serializer
+masks it: 86 either way), but that is a missing seam, not a limit of DST. `CG_EXPORT_PHASE=driver`
+now restores the ablation the spike built and disposed of — five lines in
+`scripts/dst/export_trace.ail`, writing nothing and off by default.
+
+With it, the driver phase measured out of process at tolerance 1, same seeds, same traces:
+
+| seed | records | before the fix | after | spike's independently-measured floor |
+|---|---|---|---|---|
+| 7  | 79  | 86  | **58** | 58 |
+| 11 | 126 | 153 | **87** | 87 |
+| 23 | 96  | 114 | **75** | 75 |
+
+**Exact agreement on all three, to the frame**, against a spike that removed the traversal a
+different way (`let counts = st.prior_counts;`, which undercounts). Two unrelated implementations
+landing on the same floor is what you expect if both removed the same traversal and nothing else.
+
+**Like-for-like**: record counts are identical in both conditions (79/126/96), so the depth moved and
+the trace did not. The default export path is unchanged — `run_export_trace.sh --seed 7` still writes
+79 records — and `driver_only_dst`, `invariants_dst`, `discovery_dst` pass.
+
+What is still absent is a **gate**: this is a measurement anyone can now repeat, not something CI
+runs. That remains the argument for `PLAN-resource-growth-relation.md`.
 
 ## GitHub
 
