@@ -2,7 +2,49 @@
 
 ## Status
 
-open — diagnosed 2026-08-17, not yet fixed.
+**Fixed 2026-08-17** on `arniwesth/mot-99-fix-max-recursion-depth-10000-exceeded`. Two changes in
+`src/core/session.ail`, both smaller than what the *Fix* section below prescribed — read
+*What actually landed* before that section, which is kept for its reasoning and is superseded on
+the mechanism. Item 3 (`--max-recursion-depth` from the TUI) remains **open** and is deliberately
+not part of this fix.
+
+## What actually landed, and why it is not fix 2
+
+**The fault is recursion DEPTH, and AILANG's stdlib traversals are frame-free.** That single fact —
+measured, and recorded in [`ailang-no-tail-call-optimization.md`](ailang-no-tail-call-optimization.md)
+— makes the fix one function rather than a state-threading refactor:
+
+1. **`runtime_status_counts` now folds with `List.foldl`** instead of hand-written recursion.
+   `runtime_status_counts_rec` is gone; its per-record body survives unchanged as
+   `runtime_status_count_one`. A `foldl` over 300 elements at a 300-frame descent completes at a
+   ceiling of 350 — zero frames — where the hand-written version cost exactly one frame per record.
+2. **The call site is lazy and name-guarded.** `encode(runtime_status_json(…))` moved inside the
+   `runtime_builtin` lambda, under `call.name == "MotokoRuntimeStatus"`, so a batch that does not
+   ask for the status no longer computes it. The predicate is duplicated with the one inside
+   `runtime_status_tool_message` on purpose; the comment at the site says why removing either is a
+   silent regression.
+
+**Why not fix 2 (incremental counts).** It removes the O(|trace|) *time* as well, which `foldl` does
+not — but it adds a field to a record every arm of `c2_loop` constructs, and a counter maintained at
+the three sites that append counted records drifts silently the first time a fourth site appends
+one. The fold keeps the count **derived from the trace**, which is correct by construction; and the
+time cost it leaves is microseconds at the scale that killed the run, now paid only by batches that
+actually call `MotokoRuntimeStatus`. The depth — the thing that aborts a session — is gone either
+way.
+
+**Evidence.** `ailang check` clean; all 23 `session.ail` inline tests pass, including the three that
+assert `runtime_status` count correctness (`test_runtime_status_includes_prior_conversation_counts`,
+`…_reports_actual_context_window`, `…_counts_generated_compaction_ai_id`); `make check_core` 57/57;
+`driver_only_dst`, `invariants_dst`, `discovery_dst`, `execution_program_dst` all pass. Independently,
+the spike (`.agent/projects/011_improve_test_axises/NOTE-spike-findings-resource-growth.md`) had
+already established that removing this traversal takes the depth-vs-records slope to **exactly
+0.00**, and that it is the **only** O(|accumulated state|) traversal on the driver path.
+
+**Not verified end to end, and this is the honest gap.** The instrument that would re-measure the
+slope on the real driver — the spike's `SPIKE_PHASE` ablation — was disposed of with its branch by
+guardrail, and bisecting the whole export process cannot see the difference (the exporter's own
+serializer masks it at 86). So nothing today would catch this regressing. That is the argument for
+`PLAN-resource-growth-relation.md`.
 
 ## GitHub
 
