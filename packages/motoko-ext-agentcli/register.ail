@@ -1,0 +1,58 @@
+module sunholo/motoko_ext_agentcli/register
+
+import std/env (getEnvOr)
+import std/string (stringToInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_agentcli/providers (Provider, all_providers)
+import pkg/sunholo/motoko_ext_agentcli/agentcli (AgentCliConfig, make_hooks)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None    => fallback
+  }
+}
+
+-- THE PERMISSION BYPASS IS THE DEFAULT (Arni, 2026-08-16: "codex --yolo should
+-- be default"), and it now applies to every provider in the table:
+-- `--dangerously-bypass-approvals-and-sandbox` for codex,
+-- `--dangerously-skip-permissions` for claude.
+--
+-- WHAT IT MEANS, stated once because the default carries it: the delegate runs
+-- unsandboxed with no approval prompts, in motoko's own working directory — the
+-- tree motoko is itself editing. Two agents, one worktree, and afterwards the
+-- delegate's writes are indistinguishable from motoko's. Both CLIs describe
+-- their flag as dangerous and intended for externally sandboxed environments,
+-- which this dev container is.
+--
+-- TO PUT THE SANDBOX BACK for one provider, set its variable to empty:
+--   CODEX_EXTRA_FLAGS=  CLAUDE_EXTRA_FLAGS=  motoko …
+-- One knob per provider rather than a parsed list, so whatever is set reads like
+-- the decision it is at the call site that sets it.
+func flags_of(raw: string) -> [string] {
+  if raw == "" then [] else [raw]
+}
+
+func resolve(ps: [Provider]) -> [Provider] ! {Env} {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let resolved = { p |
+        model: getEnvOr(p.model_env, p.model),
+        extra_flags: flags_of(getEnvOr(p.flags_env, p.default_flags))
+      };
+      resolved :: resolve(rest)
+    }
+  }
+}
+
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, IO, Process} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let cfg: AgentCliConfig = {
+    providers: resolve(all_providers()),
+    lock_path: "${profile_dir}/agentcli-exec.lock",
+    max_output_chars: parse_int_or(getEnvOr("AGENTCLI_MAX_OUTPUT_CHARS", "8000"), 8000)
+  };
+  make_hooks(cfg)
+}
