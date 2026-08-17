@@ -258,6 +258,50 @@ of progress, and it is invisible if you only ever look at the current round.
   aggregate gate red across two clusters, hidden by `--keep-going`; report a gate's **exit status**,
   not a scan of its output.
 
+## A third instance, and the first where rule 2 was followed and paid out
+
+Project 011, `ADR-002-resource-growth-as-a-metamorphic-relation.md`, 2026-08-17. A detector for
+a resource property — recursion depth that scales with accumulated state — specified in an ADR
+after a production abort (`.agent/issues/per-step-trace-fold-exceeds-recursion-depth.md`).
+Recorded here because the earlier instances are all divergence; this one is what the discipline
+looks like when it is **obeyed**, and the payoff is measurable.
+
+The sequence was one prose draft, one adversarial review, then a build — a throwaway spike
+(`011/PLAN-spike-resource-growth-feasibility.md` → `NOTE-spike-findings-resource-growth.md`)
+whose only purpose was to run the specified detector once.
+
+| pass | mechanism | corrections found |
+|---|---|---|
+| authoring | prose | — |
+| review | prose + targeted probes | 2 majors |
+| **execution** | the smallest working version | **3 more**, one of them blinding |
+
+**The three execution findings were not findable by reading, and one was invisible by
+construction.** The specified instrument bisected a process that contained its own masking
+traversal, so a faulty and a fixed driver both reported the same number: the two rows the
+detector existed to separate were the two it could not tell apart. Prose review had already
+found — correctly — that a *different* masking traversal had to be excluded. It was fixed
+specifically, and the class was not swept. The third instance was inside the very process the
+correction went on to name.
+
+**Two sharpenings this instance adds to the existing rules:**
+
+- **Rule 2's tell has a second half.** The doc says a specification rewritten twice and still
+  unsound "is in the wrong artifact". True here — but note *how* it was still unsound: the
+  second draft was rewritten by a review that found the right *class* of defect and applied it
+  as a point fix. **When review identifies a class, the correction is a sweep, not a patch**;
+  a class-shaped finding disposed of at one site is a propagation failure of the kind §"Propagation
+  failure" describes, one level up — propagating a *fix* rather than a *claim*.
+- **Verified is not validated.** The authoring session ran its own recipe end to end against the
+  real target, got a number, and shipped it as evidence the instrument worked. The number was
+  real; it was measuring the wrong thing. **An instrument that runs is not thereby an instrument
+  that discriminates** — the check that matters is running it against a known-good *and* a
+  known-bad input and requiring different answers, which is rule 3's pairing applied to the
+  detector itself.
+
+The cost of obedience was hours, against a specified-but-unbuilt detector that would have gone
+into a PLAN and then into a gate that was green on the known-bad system.
+
 ## Honest note on authorship
 
 The correcting side of the 009 loop — me — was a major contributor to the divergence, not a neutral
