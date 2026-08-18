@@ -17,7 +17,8 @@ import std/string (repeat, stringToInt)
 import src/core/compaction (
   estimate_tokens_messages,
   usage_percent_with_limit,
-  exhaustion_pct
+  exhaustion_pct,
+  output_token_allowance
 )
 import src/core/phase_vocab (
   CallModel,
@@ -176,18 +177,19 @@ func run_seal_boundary(seed: int) -> bool ! {IO, Rand} {
   let msgs = generated_msgs(n_systems, n_tail, content_len);
   let split = split_for_compaction(msgs);
   let chain = segment_messages(split.segment);
-  let limit = (estimate_tokens_messages(msgs) * 100) / pct;
+  let input_limit = (estimate_tokens_messages(msgs) * 100) / pct;
+  let raw_limit = output_token_allowance() + input_limit;
   let payload = split.pinned ++ chain;
-  let usage = usage_percent_with_limit(payload, limit);
+  let usage = usage_percent_with_limit(payload, input_limit);
   let prefix_chars = system_prefix_chars(split.pinned);
   let trace = [
-    "param n_systems=${show(n_systems)} n_tail=${show(n_tail)} content_len=${show(content_len)} require_system_prompt=${show(require_system_prompt)} pct=${show(pct)} limit=${show(limit)} usage=${show(usage)} prefix_chars=${show(prefix_chars)}"
+    "param n_systems=${show(n_systems)} n_tail=${show(n_tail)} content_len=${show(content_len)} require_system_prompt=${show(require_system_prompt)} pct=${show(pct)} input_limit=${show(input_limit)} raw_limit=${show(raw_limit)} usage=${show(usage)} prefix_chars=${show(prefix_chars)}"
   ];
   let result = seal_compacted_payload(
     split,
     chain,
     "phase-c-model",
-    limit,
+    raw_limit,
     require_system_prompt
   );
   let checked =
