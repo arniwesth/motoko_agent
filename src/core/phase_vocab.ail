@@ -14,7 +14,7 @@ import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (contains, substring, replaceMany)
 import std/string as Str (length)
-import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, calibrated_tokens_anchored, calibrated_usage_percent_anchored)
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, output_token_allowance, effective_input_limit, calibrated_tokens_anchored, calibrated_usage_percent_anchored)
 import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
 import src/core/types (Msg)
 import pkg/sunholo/motoko_ext_abi/types (DiagnosticField)
@@ -142,12 +142,12 @@ export pure func segment_messages(segment: CompactableSegment) -> [Message] {
 
 export type SealError = SealExhausted(string) | SealSystemPromptEmpty(string)
 
-export pure func seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message], model: string, limit: int, require_system_prompt: bool) -> Result[ProviderPayload, SealError] {
+export pure func seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message], model: string, raw_context_limit: int, require_system_prompt: bool) -> Result[ProviderPayload, SealError] {
   let payload_msgs = split.pinned ++ chain_msgs;
   if require_system_prompt && system_prefix_chars(split.pinned) == 0 then
     Err(SealSystemPromptEmpty("system prompt required but system prefix is 0 chars"))
   else {
-    let pct = usage_percent_with_limit(payload_msgs, limit);
+    let pct = usage_percent_with_limit(payload_msgs, effective_input_limit(raw_context_limit));
     if pct >= exhaustion_pct() then
       Err(SealExhausted("compaction_exhausted: context at ${show(pct)}% of ${model} limit after compactor chain"))
     else Ok(MkPayload(payload_msgs))
@@ -1060,7 +1060,7 @@ pure func test_seal_compacted_payload_exhausts_with_live_reason() -> bool
   tests [((), true)]
   {
     let split = split_for_compaction([]);
-    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 10, false) {
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", output_token_allowance() + 10, false) {
       Err(SealExhausted(reason)) => reason == "compaction_exhausted: context at 100% of test-model limit after compactor chain",
       Err(_) => false,
       Ok(_) => false
@@ -1072,6 +1072,16 @@ pure func test_seal_compacted_payload_fail_open_limit_zero() -> bool
   {
     let split = split_for_compaction([]);
     match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 0, false) {
+      Ok(_) => true,
+      Err(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_fail_open_when_allowance_consumes_window() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([]);
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 32768, false) {
       Ok(_) => true,
       Err(_) => false
     }

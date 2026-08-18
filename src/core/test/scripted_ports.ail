@@ -12,7 +12,7 @@ import std/result (Result, Ok, Err)
 import std/trace as Trace
 import src/core/ports (ScriptedStep, ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ProviderExchange, WorldState, ports_shape_probe, virtual_clock)
 import src/core/phase_vocab (ApprovalRequest, ExecNative)
-import src/core/test/stub_step (StepProvider, Scripted, ScriptedWorld, LiveAI, Ported, scripted_to_step_result, scripted_world_state)
+import src/core/test/stub_step (StepProvider, Scripted, ScriptedWorld, LiveAI, Ported, scripted_to_step_result, scripted_world_state, bounded_scripted_ports, scripted_provider_input_tokens)
 import src/core/config (CostRates, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/session as Session
@@ -209,4 +209,62 @@ pure func test_fake_ports_constructs_record() -> bool
   {
     let _ = jo([]);
     true
+  }
+
+func bounded_exchange(context_window: int, max_output_tokens: int, content: string) -> ProviderExchange ! {AI, IO, Trace} {
+  let ports = bounded_scripted_ports({
+    context_window: context_window,
+    max_output_tokens: max_output_tokens
+  });
+  let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
+  ports.model_step(
+    scripted_world_state([scripted_step()]),
+    "bounded-test-model",
+    [{ role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }],
+    on_chunk
+  )
+}
+
+func test_bounded_scripted_ports_accepts_exact_boundary_and_consumes_step() -> bool ! {AI, IO, Trace}
+  tests [((), true)]
+  {
+    let content = "abcdefghijklmnopqrstuvwx"; -- 24 chars = 6 tokens.
+    let exchange = bounded_exchange(10, 4, content);
+    scripted_provider_input_tokens([{ role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }]) == 6
+      && match exchange.result {
+        Ok(_) => List.length(exchange.next_state.script) == 0,
+        Err(_) => false
+      }
+  }
+
+func test_bounded_scripted_ports_rejects_overflow_without_consuming_step() -> bool ! {AI, IO, Trace}
+  tests [((), true)]
+  {
+    let exchange = bounded_exchange(10, 4, "abcdefghijklmnopqrstuvwxyzab"); -- 28 chars = 7 tokens.
+    match exchange.result {
+      Err(e) => e.code == "E_PROVIDER_CONTEXT_LENGTH"
+        && not e.retryable
+        && List.length(exchange.next_state.script) == 1,
+      Ok(_) => false
+    }
+  }
+
+func test_bounded_scripted_ports_zero_window_is_unbounded() -> bool ! {AI, IO, Trace}
+  tests [((), true)]
+  {
+    let exchange = bounded_exchange(0, 4, "abcdefghijklmnopqrstuvwxyzab");
+    match exchange.result {
+      Ok(_) => List.length(exchange.next_state.script) == 0,
+      Err(_) => false
+    }
+  }
+
+func test_bounded_scripted_ports_negative_allowance_fails_open() -> bool ! {AI, IO, Trace}
+  tests [((), true)]
+  {
+    let exchange = bounded_exchange(10, -1, "abcdefghijklmnopqrstuvwxyzab");
+    match exchange.result {
+      Ok(_) => List.length(exchange.next_state.script) == 0,
+      Err(_) => false
+    }
   }
