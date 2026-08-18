@@ -22,6 +22,38 @@ sibling sidecar. Both services must be in the same Compose project for
 - `4317`: OTLP gRPC
 - `4318`: OTLP HTTP
 
+## GitHub Credentials
+
+Two identities are in play, and they must not collapse into one. Per
+`.agent/projects/016_github_ops/ADR-001-github-pr-ops-pipeline.md` D1 as amended
+by C9, identity follows mechanism: anything the pipeline emits — PRs included —
+goes out as the machine user, and anything done by hand in the web UI is you.
+
+- **You**: run `gh auth login` once inside the container. The credential lands in
+  `~/.config/gh/`, which does not survive a rebuild, so expect to redo it.
+- **The bot**: set `MOTOKO_BOT_GH_TOKEN` by either channel — export it on the
+  *host* before starting the container, which
+  `.devcontainer/docker-compose.yml` passes through for both profiles, or put
+  it in the gitignored repo-root `.env` alongside the other keys. Tools read
+  the environment first and fall back to `.env`.
+
+  It must be a **classic** PAT (`ghp_…`) with `public_repo`. A fine-grained PAT
+  (`github_pat_…`) can read but returns `403 Resource not accessible by
+  personal access token` on every write, including to this repo — see ADR-001's
+  Consequences, which rules it out for exactly that reason. The bot must also
+  have *accepted* its collaborator invitation; a pending invite grants nothing.
+
+Do not name that variable `GH_TOKEN` or `GITHUB_TOKEN`. `gh` prefers either over
+your stored login and reports nothing, so every `gh` command you ran by hand
+would silently act as the bot. Pipeline commands map it into `GH_TOKEN` only in
+the subprocess environment they spawn.
+
+Check which account a command will act as with:
+
+```bash
+gh api user --jq .login
+```
+
 ## Start Observability Sidecars
 
 ClickStack and the Motoko log collector start when VS Code rebuilds/reopens the

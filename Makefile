@@ -59,6 +59,111 @@ remarkable_ls:
 remarkable_branch:
 	@$(RMSEND) branch --dir "$(DIR)" --format "$(FORMAT)" $(RM_FLAGS)
 
+# ---------------------------------------------------------------------------
+# GitHub PR ops (tools/pr): template -> staged body -> gh pr create -> number
+# written back into .agent/github/prs/<remote>-<n>/body.md.
+#
+# The artifact on disk is the source of truth; GitHub is transport. See
+# .agent/projects/016_github_ops/ADR-001-github-pr-ops-pipeline.md D4.
+#
+#   make pr_draft     # stage a body, with Changes and Governing docs filled in
+#   <edit it>         # Summary, Predicted outcome and Test evidence are yours
+#   make pr           # publish and write the number back
+#
+# `make pr` drafts first if you skipped pr_draft, and refuses to publish while
+# any <!-- TODO --> field is unfilled. It is safe to re-run: it adopts the PR
+# already open for the branch rather than opening a second one.
+#
+# Identity: these act as YOU, via `gh auth login` (ADR-001 D1 — a human decided
+# to open the PR). `make pr_whoami` reports which account that resolves to.
+#
+#   make pr BASE=develop REMOTE=sunholo PR_FLAGS=--dry-run
+# ---------------------------------------------------------------------------
+PR_CLI := bun tools/pr/pr.ts
+BASE ?= main
+REMOTE ?= origin
+
+.PHONY: pr pr_draft pr_whoami
+pr_draft:
+	@$(PR_CLI) draft --base "$(BASE)" --remote "$(REMOTE)" $(PR_FLAGS)
+
+pr:
+	@$(PR_CLI) create --base "$(BASE)" --remote "$(REMOTE)" $(PR_FLAGS)
+
+pr_whoami:
+	@$(PR_CLI) whoami $(PR_FLAGS)
+
+# Fetch PR comments from every GitHub remote into the gitignored cache, then
+# append a `pending` record for each one not seen before. Acts as the BOT
+# (ADR-001 D1: the sync is an action the pipeline produces). It only adds
+# facts -- it never rewrites a status, rank, reason or artifact link, and an
+# edited comment is flagged `stale: true` alongside its disposition rather
+# than reverting it. Safe to re-run; a run that finds nothing new is a no-op.
+#
+#   make pr_sync                                  # both remotes, open PRs
+#   make pr_sync PR_FLAGS="--dry-run"             # fetch and report only
+#   make pr_sync REMOTE=sunholo PR_FLAGS="--pr 3 --state all"
+PR_SYNC := bun tools/pr/sync.ts
+
+.PHONY: pr_sync
+pr_sync:
+	@$(PR_SYNC) $(if $(filter-out origin,$(REMOTE)),--remote "$(REMOTE)") $(PR_FLAGS)
+
+# Work the queue pr_sync fills. This is the ONLY thing that changes a judgment
+# (ADR-001 D3); sync may only add facts. Automation stays at degree 1 -- every
+# rank, dismissal and response here is supplied by whoever runs it, and
+# `pr_respond` will not publish without POST=1.
+#
+# Every target below takes ONE of these, whichever you have to hand -- they all
+# resolve to the same comment, and the resolution is printed before anything acts:
+#
+#   PR=76                                             the PR number
+#   FILE=.agent/github/prs/origin-76/response-*.md    the artifact path (tab-completes)
+#   ID=5021529142                                     the comment id itself
+#
+# A PR holding more than one comment refuses and lists them rather than guessing.
+#
+#   make pr_list                                      # every PR: age, ticket, queue
+#   make pr_list PR_FLAGS="--stale 60"                # quiet for 60+ days
+#   make pr_queue                                     # what needs attention
+#   make pr_show PR=76                                # the full comment
+#   make pr_set PR=76 PR_FLAGS="--status ranked --rank high"
+#   make pr_set PR=76 PR_FLAGS='--status dismissed --reason "superseded by #154"'
+#   make pr_review PR=76                              # comment + reply in one file
+#   make pr_respond PR=76                             # preview
+#   make pr_respond PR=76 POST=1                      # publish, as the bot
+PR_LOOP := bun tools/pr/loop.ts
+# Whichever of PR= / FILE= / ID= was given; loop.ts resolves the form.
+PR_TARGET = $(or $(ID),$(FILE),$(PR))
+
+.PHONY: pr_list pr_queue pr_show pr_set pr_review pr_respond
+pr_list:
+	@$(PR_LOOP) list $(PR_FLAGS)
+
+pr_queue:
+	@$(PR_LOOP) queue $(PR_FLAGS)
+
+pr_show:
+	@test -n "$(PR_TARGET)" || { echo "usage: make pr_show PR=<n> | FILE=<path> | ID=<comment_id>"; exit 1; }
+	@$(PR_LOOP) show "$(PR_TARGET)" $(PR_FLAGS)
+
+pr_set:
+	@test -n "$(PR_TARGET)" || { echo "usage: make pr_set PR=<n> PR_FLAGS=\"--status ranked --rank high\""; exit 1; }
+	@$(PR_LOOP) set "$(PR_TARGET)" $(PR_FLAGS)
+
+pr_review:
+	@test -n "$(PR_TARGET)" || { echo "usage: make pr_review PR=<n> | FILE=<path> | ID=<comment_id>"; exit 1; }
+	@$(PR_LOOP) review "$(PR_TARGET)" $(PR_FLAGS)
+
+# POST must be exactly 1. `$(if $(POST),...)` tests non-empty, not truth, so
+# POST=0 and POST=no both published -- a gate that reads as "off" and fires.
+pr_respond:
+	@test -n "$(PR_TARGET)" || { echo "usage: make pr_respond PR=<n> [POST=1]"; exit 1; }
+	@if [ -n "$(POST)" ] && [ "$(POST)" != "1" ]; then \
+		echo "pr_respond: POST must be exactly 1 to publish (got '$(POST)'). Omit POST to preview."; exit 1; \
+	fi
+	@$(PR_LOOP) respond "$(PR_TARGET)" $(if $(filter 1,$(POST)),--post) $(PR_FLAGS)
+
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
 	@set -eu; \

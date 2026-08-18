@@ -15,3 +15,11 @@ services:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
       OBSIDIAN_MCP_TOKEN: ${OBSIDIAN_MCP_TOKEN:-}
+      # The 016_github_ops machine-user PAT. Deliberately NOT named GH_TOKEN:
+      # `gh` prefers GH_TOKEN/GITHUB_TOKEN over the credentials stored by
+      # `gh auth login` and says nothing about it, so exporting it under that
+      # name would make the operator's own `make pr` run as the bot and
+      # silently invert ADR-001 D1 (identity follows agency). Under this name
+      # it is inert for ordinary gh use; pipeline commands map it into
+      # GH_TOKEN in the subprocess environment they spawn, and nowhere else.
+      MOTOKO_BOT_GH_TOKEN: ${MOTOKO_BOT_GH_TOKEN:-}
