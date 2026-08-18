@@ -206,7 +206,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- moves an anchor this profile's acceptance fixture pins. The fixture pins
 -- `ext/runtime.ail:199` and `tool_phase.ail:318`, so this file joins the
 -- nine-file form WI-D24 measured, not the five-file one WI-D25 measured.
-export pure func compose_profile_version() -> string { "1" }
+export pure func compose_profile_version() -> string { "2" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -219,7 +219,13 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- carry the same pair and the full re-issue history behind it. This file has
     -- no history to record because it has never been re-issued; what it records
     -- instead is that it now shares theirs.
-    content_hash: "sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc" }
+    -- #160: re-recorded with both predecessors', from
+    -- sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc
+    -- — this file's FIRST re-issue, and it cost nothing but this comment, which
+    -- is what WI-D27 predicted when it wrote that a third profile widens every
+    -- future re-baseline. An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55" }
 }
 
 -- ---------------------------------------------------------------------------

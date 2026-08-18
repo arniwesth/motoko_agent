@@ -202,7 +202,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- there is it goes at the TOP of this block with its date, per plan rule S15 —
 -- re-dating a claim in place is how a sentence becomes a false statement about
 -- history, and this file will carry claims that move.
-export pure func no_ops_version() -> string { "9" }
+export pure func no_ops_version() -> string { "10" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -250,7 +250,13 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- WI-D16 recorded that one, from
     -- sha256:ccfc1e3401635ae59326da4052621d934875bdedd0a05552dd7dc1e41a64b210.
     -- An anchor re-measurement, not a table correction — see `no_ops_version`.
-    content_hash: "sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc" }
+    -- #160: re-recorded with `driver_only`'s, from
+    -- sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc.
+    -- All five session anchors moved, +37 and +54, pushed by comment blocks
+    -- rather than by code. An anchor re-measurement, not a table correction —
+    -- the routed clock set is unchanged. See `driver_only_attribution_ref`,
+    -- which carries the full account.
+    content_hash: "sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55" }
 }
 
 -- ---------------------------------------------------------------------------

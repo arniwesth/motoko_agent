@@ -29,7 +29,7 @@ import std/ai (step, Message, ToolCall, ToolSchema, AIError, StepResult, StreamC
 import std/io (println, readLine)
 import std/clock (now)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
-import std/list as List (length)
+import std/list as List (length, foldl)
 import std/result (Result, Ok, Err)
 import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
@@ -434,11 +434,38 @@ pure func zero_runtime_status_counts() -> RuntimeStatusCounts {
   }
 }
 
-pure func runtime_status_counts_rec(records: [LedgerRecord], counts: RuntimeStatusCounts) -> RuntimeStatusCounts {
-  match records {
-    [] => counts,
-    r :: rest => {
-      let next = match r {
+-- THE FOLD IS `foldl` AND NOT HAND-WRITTEN RECURSION, and that is the whole of
+-- the fix for motoko_agent#160. The hand-written version cost ONE INTERPRETER
+-- FRAME PER TRACE RECORD, and `runtime_status_json` calls it once per tool
+-- batch over a trace that only grows — so a long session died at
+-- `RT_REC_003: max recursion depth 10000 exceeded` mid-run, at ~9 865 records,
+-- in code containing no unbounded recursion.
+--
+-- WHY A FRAME AT ALL: AILANG v0.33.0 does not eliminate tail calls, so depth
+-- over a list is the list's length whether the call is in tail position or not.
+-- Measured, and recorded with the upstream half in
+-- `.agent/issues/ailang-no-tail-call-optimization.md`.
+--
+-- WHY `foldl` FIXES IT rather than merely moving the cost: stdlib traversals
+-- are frame-FREE. Measured the same way — a 300-frame descent followed by a
+-- `foldl` over 300 elements completes at a ceiling of 350, as do `++`,
+-- `List.map`, `Str.join` and `std/json.encode`. Depth in this codebase comes
+-- only from recursion we write ourselves.
+--
+-- WHAT THIS DOES NOT DO, stated so the next reader does not assume it: the
+-- traversal is still O(|trace|) in TIME on every batch that reaches it. That is
+-- microseconds at the scale that killed the run, and it is not the fault. The
+-- call site is now lazy as well (see `runtime_builtin` below), so the common
+-- batch does not pay it at all.
+--
+-- REJECTED: threading an incremental `RuntimeStatusCounts` through
+-- `C2LoopState`. It removes the time cost too, but it adds a field to a record
+-- every arm of `c2_loop` constructs, and a counter maintained at the three
+-- sites that append counted records drifts silently the first time a fourth
+-- site appends one. This keeps the count derived from the trace — correct by
+-- construction, which is the property that was never in question.
+pure func runtime_status_count_one(counts: RuntimeStatusCounts, r: LedgerRecord) -> RuntimeStatusCounts {
+  match r {
         WireRecord(event) => match event {
           ProviderCallPrepared(_) => {
             provider_calls_started: counts.provider_calls_started + 1,
@@ -475,9 +502,6 @@ pure func runtime_status_counts_rec(records: [LedgerRecord], counts: RuntimeStat
           _ => counts
         },
         _ => counts
-      };
-      runtime_status_counts_rec(rest, next)
-    }
   }
 }
 
@@ -485,8 +509,21 @@ pure func is_compaction_ai_ext_id(ext_id: string) -> bool {
   ext_id == "compaction_ai" || startsWith(ext_id, "compaction_ai#")
 }
 
-pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
-  runtime_status_counts_rec(trace.records, zero_runtime_status_counts())
+-- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order), the
+-- same trade `compaction.estimate_tokens_messages` makes and for the same
+-- reason. Named rather than silent because §3.1 of
+-- `.agent/projects/011_improve_test_axises/RESEARCH-test-axes-beyond-dst.md`
+-- plans to expand contract coverage, and this is one function it can no longer
+-- reach.
+-- EXPORTED FOR ONE CALLER, and it is a gate rather than a feature:
+-- `scripts/dst/recursion_depth_probe.ail` calls this over a deliberately large
+-- trace at a deliberately low recursion ceiling, so that a future rewrite back
+-- to hand-written recursion fails loudly instead of shipping. The export exists
+-- because the probe must exercise THIS function and not a copy of it — a
+-- replicated fold would pass while production regressed, which is the exact
+-- shape of gate this project refuses.
+export pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
+  List.foldl(runtime_status_count_one, zero_runtime_status_counts(), trace.records)
 }
 
 pure func runtime_status_counts_add(a: RuntimeStatusCounts, b: RuntimeStatusCounts) -> RuntimeStatusCounts {
@@ -2467,8 +2504,25 @@ func c2_loop(
           let trace_with_calls =
             if emit_calls then ledger_append(trace_with_decision, WireRecord(calls_event))
             else trace_with_decision;
-          let runtime_status_content = encode(runtime_status_json(st, policy, tool_step_idx));
-          let runtime_builtin = \call. runtime_status_tool_message(call, runtime_status_content);
+          -- COMPUTED INSIDE THE LAMBDA, AND UNDER THE NAME GUARD. This was a
+          -- `let` above the dispatch, so every tool batch in every session paid
+          -- a full `runtime_status_json` — an O(|trace|) fold and a JSON encode
+          -- — and then discarded it, because the value is only ever read when
+          -- the batch contains a `MotokoRuntimeStatus` call. It was the second
+          -- half of motoko_agent#160: the fold's DEPTH is fixed at its
+          -- definition, this fixes who pays for it.
+          --
+          -- THE PREDICATE IS DUPLICATED ON PURPOSE. `runtime_status_tool_message`
+          -- keeps its own `call.name` check so it stays correct called from
+          -- anywhere; this one exists to keep the ARGUMENT from being evaluated,
+          -- which AILANG's strict application would otherwise do at every call
+          -- in the batch. Deleting either one is a silent regression: dropping
+          -- this guard restores the cost, dropping the inner one makes the
+          -- helper wrong for every other caller.
+          let runtime_builtin = \call.
+            if call.name == "MotokoRuntimeStatus" then
+              runtime_status_tool_message(call, encode(runtime_status_json(st, policy, tool_step_idx)))
+            else None;
           match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, [], \event. ledger_emit(session_id, event), runtime_builtin) {
             -- `done.world`, not `st.world_state`. The batch may have executed
             -- several tools and each one advanced the cursor; taking it off `st`

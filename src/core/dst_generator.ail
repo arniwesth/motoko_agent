@@ -284,12 +284,34 @@ export pure func first_seed_message(fs: [SeedFinding]) -> string {
 -- Declared here rather than in `dst_program` because the bounds are consulted
 -- AT THE MOMENT OF A CHOICE — inside a port adapter, below `dst_program` in the
 -- import graph. See the module header.
+-- `chunk_draw_hi` IS NOT A SIXTH LIMIT AND MUST NOT BE COLLAPSED INTO THE FIFTH.
+-- It is the top of the RANGE the chunk-count choice is drawn from — the number
+-- that was a literal `3` at `choose_provider`'s `bounded_draw` until
+-- `.agent/projects/011_improve_test_axises/PLAN-resource-growth-relation.md`'s
+-- WI-1 declared it — while `max_chunks_per_interaction` is the DECLARED LIMIT that
+-- draw is checked against. Two quantities, and the gap between them is the whole
+-- reason `bounded_draw` exists:
+--
+--   `bounded_draw` records a `BoundFailure` only when the drawn value EXCEEDS
+--   the limit. `canary_bounds_tight` declares `max_chunks_per_interaction: 1`
+--   against a 0..3 draw precisely so that clamp fires, and `canary_walk` folds
+--   `failures_text` into the pinned digest. Make the range equal the limit and
+--   the chunk clamp can never fire again: the failures text loses its entries,
+--   D2's bound-failure path stops being certified by the artifact built to
+--   certify it, and the canary goes green the moment someone re-pins. A "tidy-up"
+--   that merges these two fields deletes a pinned path and looks like a
+--   simplification while doing it.
+--
+-- APPENDED, not inserted where it reads best, and that is also load-bearing:
+-- `dst_persistence` writes these five — now six — as a POSITIONAL tab-separated
+-- line and reads them back BY INDEX. See `encode_body` and `project`.
 export type GeneratorBounds = {
   max_interactions: int,
   max_chunks_per_interaction: int,
   max_payload_bytes: int,
   max_resource_size: int,
-  max_clock_advance_ms: int
+  max_clock_advance_ms: int,
+  chunk_draw_hi: int
 }
 
 -- A bound the generator was asked to exceed and did not.
@@ -387,8 +409,13 @@ export pure func generator_state(
 -- to `WorldState` behaviour-preserving for every existing target.
 export pure func no_generator() -> GeneratorState {
   generator_state("", "", 0,
+    -- `chunk_draw_hi: 3` AND NOT 0, alone among these zeros. Every other field
+    -- is a limit and zero is the tightest one; the draw range is not a limit, and
+    -- a 0 here would silently stop the chunk clamp firing on an uninstalled
+    -- generator that reached `choose_provider` anyway — a behaviour change, not a
+    -- default. 3 is what the literal at the call site drew before it was declared.
     { max_interactions: 0, max_chunks_per_interaction: 0, max_payload_bytes: 0,
-      max_resource_size: 0, max_clock_advance_ms: 0 })
+      max_resource_size: 0, max_clock_advance_ms: 0, chunk_draw_hi: 3 })
 }
 
 export pure func generator_installed(g: GeneratorState) -> bool { g.id != "" }
@@ -597,7 +624,14 @@ export pure func choose_provider(
   let d_tool = draw(d_term.state, "${salt}|tool", 3);
   let tool_name = match d_tool.value { 0 => "T", 1 => "BashExec", _ => "Read" };
   let d_arg = draw_between(d_tool.state, "${salt}|arg", 0, 999);
-  let d_chunks = bounded_draw(d_arg.state, "${salt}|chunks", 0, 3,
+  -- WI-1 REPLACED THE LITERAL `3` HERE WITH THE DECLARED RANGE, and the reason
+  -- this is not a re-pin is provable by reading rather than by sweeping:
+  -- `draw_between(g, s, 0, hi)` consumes exactly one `draw(g, s, hi - lo + 1)`
+  -- whatever `hi` is, so at `hi == 3` — which every profile in the tree declares —
+  -- the stream, the draw count and the drawn value are the same three numbers they
+  -- were when the 3 was a literal. The bound below is still the DECLARED LIMIT and
+  -- still a different quantity; see `GeneratorBounds`.
+  let d_chunks = bounded_draw(d_arg.state, "${salt}|chunks", 0, g.bounds.chunk_draw_hi,
                               "max_chunks_per_interaction", g.bounds.max_chunks_per_interaction);
   let d_in = draw_between(d_chunks.state, "${salt}|in", 10, 400);
   let d_out = draw_between(d_in.state, "${salt}|out", 5, 300);
@@ -915,7 +949,8 @@ export pure func canary_bounds() -> GeneratorBounds {
     -- 2000ms ceiling is unreachable and the clock bound would be pinned in name
     -- only. This is a canary, not a scenario: a limit no draw can reach is a
     -- branch the digest cannot certify.
-    max_clock_advance_ms: 20 }
+    max_clock_advance_ms: 20,
+    chunk_draw_hi: 3 }
 }
 
 -- Every limit tight enough to bind: the interaction budget is spent at the
@@ -933,7 +968,14 @@ export pure func canary_bounds_tight() -> GeneratorBounds {
     max_chunks_per_interaction: 1,
     max_payload_bytes: 8,
     max_resource_size: 1,
-    max_clock_advance_ms: 5 }
+    max_clock_advance_ms: 5,
+    -- THE ONE FIELD IN THIS RECORD THAT IS NOT TIGHTENED, and it is what makes
+    -- the tightening of the field above it observable. `bounded_draw` records a
+    -- failure only when the draw exceeds the limit, so a 0..3 range against a
+    -- limit of 1 is what fires the chunk clamp; a `chunk_draw_hi: 1` here would
+    -- leave every other row of this record binding and this one silently
+    -- unreachable. See `GeneratorBounds`.
+    chunk_draw_hi: 3 }
 }
 
 -- One pinned observation of the seed-to-choices mapping.
@@ -1335,7 +1377,7 @@ pure func test_a_single_row_asserts_nothing_and_says_so() -> bool
 
 pure func test_bounds() -> GeneratorBounds {
   { max_interactions: 64, max_chunks_per_interaction: 4, max_payload_bytes: 256,
-    max_resource_size: 8, max_clock_advance_ms: 1000 }
+    max_resource_size: 8, max_clock_advance_ms: 1000, chunk_draw_hi: 3 }
 }
 
 -- A Lehmer generator absorbs at 0, and `seed: 0` is the literal every program

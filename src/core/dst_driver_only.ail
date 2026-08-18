@@ -509,7 +509,7 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "22" }
+export pure func driver_only_version() -> string { "23" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -658,7 +658,24 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- sha256:affd24637c63ee5aaa102815487bc8083f86413f20d3e5a05ec3ba741f9736bb,
     -- and v8 at WI-D2 was
     -- sha256:ff487d030bd98320790a29342faee0cfae621cd5fea02ce4d1f9b91316b402f7.
-    content_hash: "sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc" }
+    -- RE-RECORDED FOR #160 FOR v23, TENTH time, from
+    -- sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc.
+    -- ALL FIVE session anchors moved and this is the eleven-file form, not
+    -- WI-D25's five: `1111 -> 1148`, `1370 -> 1407`, `1476 -> 1513` (+37) and
+    -- `2942 -> 2996`, `3052 -> 3106` (+54).
+    --
+    -- THE CAUSE IS A COMMENT, which is new in this pair's history and is the
+    -- part worth recording. #160's functional diff is four hunks in
+    -- `runtime_status_counts` and `runtime_builtin`; what moved the anchors is
+    -- the ~37 lines of comment above the first and ~17 above the second. Thirty
+    -- lines of prose above an anchor cost exactly what thirty lines of code do.
+    --
+    -- NOT A TABLE CORRECTION. An anchor re-measurement: the routed clock set is
+    -- unchanged — six sites before, six after, `clock_now(` text identical
+    -- character-for-character against `git show ce9b599:` — so no site was
+    -- added, removed, re-argued or re-routed and the D4 judgement has the same
+    -- answer it had before.
+    content_hash: "sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55" }
 }
 
 -- ---------------------------------------------------------------------------

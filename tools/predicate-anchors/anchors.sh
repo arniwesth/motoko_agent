@@ -236,12 +236,41 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # widens the cascade with no anchor moving at all. An item whose deliverable is a
 # profile must price this exactly as a routing item does.
 #
+# #160 RE-BASELINED THE FIVE session.ail ANCHORS A SIXTH TIME, and it is the
+# first re-issue in this file's history caused by a COMMENT, not by a routing
+# change. `1111 -> 1148`, `1370 -> 1407`, `1476 -> 1513` (all +37) and
+# `2942 -> 2996`, `3052 -> 3106` (both +54). The two offsets are the two
+# insertions the #160 fix made above them: ~37 lines of comment at
+# `runtime_status_counts`, then ~17 more at `runtime_builtin` inside `c2_loop`'s
+# RunTools arm, which sits between `:1513` and the two
+# `provider.ports.clock_now` sites.
+#
+# THE D4 JUDGEMENT THE HEADER DEMANDS WAS MADE AND IS TRIVIAL HERE, which is
+# stated rather than assumed because the header is right that it usually is not:
+# the set of routed clock sites did not change. `grep -o 'clock_now(.*'` over
+# `git show ce9b599:src/core/session.ail` and over HEAD is IDENTICAL, six sites
+# and six, so no site was added, removed, re-argued or re-routed. All five
+# anchored expressions were compared character-for-character and are byte-
+# identical: pure offset drift, and "which site is 'the' attributed one" has the
+# same answer it had before.
+#
+# ALL FIVE MOVED, so this is the ELEVEN-file form and not WI-D25's five: `:1513`
+# is the anchor `attribution_table_dst.ail` pins, and the rule above says the
+# width is the set of files that PIN the anchors that moved. Derived by the
+# widened grep at the item, not read off the edited file.
+#
+# THE CAUSE IS WORTH RECORDING BECAUSE IT IS CHEAP TO REPEAT: a fix whose
+# functional diff is four hunks re-issued three profiles, because thirty lines
+# of comment above an anchor cost exactly what thirty lines of code do. That is
+# not an argument against the comments — they carry the measurement the fix
+# rests on — but an item that budgets "one function" should budget this too.
+
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1111 1370 1476 2942 3052; do
+for l in 1148 1407 1513 2996 3106; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

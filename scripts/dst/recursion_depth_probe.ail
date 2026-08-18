@@ -1,0 +1,77 @@
+-- scripts/dst/recursion_depth_probe.ail
+--
+-- THE GATE FOR motoko_agent#160, at the unit level. It asserts one property:
+--
+--   deriving MotokoRuntimeStatus's counters from a trace must cost ZERO
+--   interpreter frames, however long the trace is.
+--
+-- WHY THAT IS THE PROPERTY AND NOT "IT IS FAST". AILANG v0.33.0 does not
+-- eliminate tail calls (`.agent/issues/ailang-no-tail-call-optimization.md`), so
+-- hand-written recursion over a list costs one frame per element whether or not
+-- the call is in tail position. `runtime_status_json` runs this derivation once
+-- per tool batch over a trace that only grows, so a frame-per-record fold makes
+-- the maximum length of a session a function of the recursion ceiling. That is
+-- not a slow path; it is a hard cap that aborts a live run mid-session with
+-- `RT_REC_003`, which is what happened at ~9 865 records.
+--
+-- HOW IT DECIDES. Run at a LOW `--max-recursion-depth` over a trace far longer
+-- than that ceiling. Frame-free traversal completes; a frame-per-record one
+-- aborts. There is no counter to read, so the ceiling is the instrument — see
+-- `scripts/dst/run_depth_canary.sh`, which supplies it.
+--
+-- WHY IT IMPORTS THE REAL FUNCTION. `session.runtime_status_counts` is exported
+-- for this caller alone. A replicated fold here would pass while production
+-- regressed, which is the failure mode that makes a gate worse than no gate.
+--
+-- WHY THE TRACE IS BUILT BY DOUBLING. Building 8 192 records with ordinary
+-- recursion would itself cost 8 192 frames and the probe would abort on its own
+-- setup, measuring nothing. `++` is frame-free (measured), so repeated doubling
+-- builds the list in ~13 frames of depth. The setup must not dominate the
+-- measurement — the confounder that ADR-002's review and spike both caught, and
+-- the reason this comment exists.
+
+module scripts/dst/recursion_depth_probe
+
+import std/io (println)
+import std/list as List (length)
+import src/core/phase_vocab (
+  LedgerRecord, LedgerTrace, WireRecord, ProviderCallPrepared
+)
+import src/core/session (runtime_status_counts)
+
+-- One counted record. `ProviderCallPrepared` is chosen because
+-- `runtime_status_count_one` actually counts it — a record the fold skips would
+-- pass a broken fold that short-circuits.
+pure func one_record() -> LedgerRecord {
+  WireRecord(ProviderCallPrepared({
+    step: 0,
+    msg_count: 2,
+    estimated_input_tokens: 3,
+    system_prefix_count: 1,
+    system_prefix_chars: 3,
+    system_prefix_digest: "sha256:sys",
+    payload_digest: "sha256:payload",
+    model: "m"
+  }))
+}
+
+-- Depth here is the number of DOUBLINGS, not the length. See the header.
+pure func grow_to(n: int, xs: [LedgerRecord]) -> [LedgerRecord] {
+  if List.length(xs) >= n then xs else grow_to(n, xs ++ xs)
+}
+
+pure func target_records() -> int { 8192 }
+
+export func main() -> () ! {IO} {
+  let records = grow_to(target_records(), [one_record()]);
+  let trace: LedgerTrace = { records: records };
+  let counts = runtime_status_counts(trace);
+  let n = List.length(records);
+  -- The count is asserted as well as the depth. A fold that returns zero
+  -- without traversing would be frame-free and useless, and this probe would
+  -- certify it.
+  if counts.provider_calls_started == n then
+    println("recursion_depth_probe: PASS — ${show(n)} records counted, frame-free")
+  else
+    println("recursion_depth_probe: FAIL — counted ${show(counts.provider_calls_started)} of ${show(n)} records")
+}
