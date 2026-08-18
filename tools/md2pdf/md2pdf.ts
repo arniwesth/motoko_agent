@@ -10,6 +10,7 @@
  *
  * Options:
  *   --engine <name>        TeX engine: xelatex (default), lualatex, pdflatex
+ *   --paper <name>         Page size: letter (default), a4, a5, a6, b5, legal, executive
  *   --margin <size>        Page margin (default: 1in). Any LaTeX length: 2cm, 15mm…
  *   --font-size <pt>       Font size in pt (default: 11)
  *   --mainfont <name>      Main font name, passed to fontspec (xelatex/lualatex only)
@@ -42,10 +43,14 @@ import { tmpdir } from "node:os";
 type Engine = "xelatex" | "lualatex" | "pdflatex";
 const VALID_ENGINES: Engine[] = ["xelatex", "lualatex", "pdflatex"];
 
+// Sizes pandoc's LaTeX template understands as `<name>paper` geometry options.
+const VALID_PAPERS = ["letter", "legal", "executive", "a4", "a5", "a6", "b5"];
+
 interface Args {
   input: string;        // resolved absolute path
   output: string;       // resolved absolute path
   engine: Engine;
+  paper: string;        // resolved: always set (from flag, style preset, or default)
   margin: string;       // resolved: always set (from flag, style preset, or default)
   fontSize: number;     // resolved: always set
   mainfont: string | null;
@@ -86,6 +91,7 @@ function buildPandocFlags(a: Args): string[] {
   const flags: string[] = [
     a.input,
     "--pdf-engine", a.engine,
+    "-V", `papersize=${a.paper}`,
     "-V", `geometry:margin=${a.margin}`,
     "-V", `fontsize=${a.fontSize}pt`,
   ];
@@ -204,6 +210,7 @@ Usage: md2pdf <input.md> [output.pdf] [options]
   output.pdf             Destination PDF. Defaults to <input>.pdf in the same directory.
 
   --engine <name>        TeX engine: xelatex (default), lualatex, pdflatex
+  --paper <name>         Page size: ${VALID_PAPERS.join(", ")} (default: letter)
   --margin <size>        Page margin passed to the geometry package (default: 1in)
   --font-size <pt>       Base font size in pt (default: 11)
   --mainfont <name>      Main font for fontspec (xelatex/lualatex only)
@@ -218,6 +225,7 @@ Usage: md2pdf <input.md> [output.pdf] [options]
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
   let engine: Engine = "xelatex";
+  let paper: string | null = null;
   let margin: string | null = null;
   let fontSize: number | null = null;
   let mainfont: string | null = null;
@@ -245,6 +253,13 @@ function parseArgs(argv: string[]): Args {
         if (!(VALID_ENGINES as string[]).includes(val))
           die(`--engine must be one of: ${VALID_ENGINES.join(", ")}`);
         engine = val as Engine;
+        break;
+      }
+      case "--paper": {
+        const val = next().toLowerCase();
+        if (!VALID_PAPERS.includes(val))
+          die(`--paper must be one of: ${VALID_PAPERS.join(", ")}`);
+        paper = val;
         break;
       }
       case "--margin":
@@ -322,7 +337,9 @@ function parseArgs(argv: string[]): Args {
     if (fontSize === null)    fontSize = preset.fontSize;
   }
 
-  // Apply defaults for anything still unset.
+  // Apply defaults for anything still unset. "letter" preserves the page size
+  // LaTeX produced before --paper existed.
+  if (paper === null)    paper = "letter";
   if (margin === null)   margin = "1in";
   if (fontSize === null) fontSize = 11;
 
@@ -343,7 +360,7 @@ function parseArgs(argv: string[]): Args {
     }
   }
 
-  return { input, output, engine, margin: margin!, fontSize: fontSize!, mainfont, template, luaFilters, mermaidTheme, keepTex, open };
+  return { input, output, engine, paper: paper!, margin: margin!, fontSize: fontSize!, mainfont, template, luaFilters, mermaidTheme, keepTex, open };
 }
 
 // ---------------------------------------------------------------------------
