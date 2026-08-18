@@ -19,13 +19,14 @@ import pkg/sunholo/motoko_ext_scratchpad/register (register_with_config as regis
 import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_config as register_compaction_structural)
 import pkg/sunholo/motoko_ext_empty_stop_guard/register (register_with_config as register_empty_stop_guard)
 import pkg/sunholo/motoko_ext_progress_contract_guard/register (register_with_config as register_progress_contract_guard)
+import pkg/sunholo/motoko_ext_agentcli/register (register_with_config as register_agentcli)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistry)
 import std/string (split, trim)
 import std/option (Option, Some, None)
 
-func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace}{
+func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   if name == "test_dummy" then Some(register_test_dummy(cfg))
   else if name == "omnigraph" then Some(register_omnigraph(cfg))
   else if name == "context_mode" then Some(register_context_mode(cfg))
@@ -41,6 +42,7 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] ! {AI, 
   else if name == "compaction_structural" then Some(register_compaction_structural(cfg))
   else if name == "empty_stop_guard" then Some(register_empty_stop_guard(cfg))
   else if name == "progress_contract_guard" then Some(register_progress_contract_guard(cfg))
+  else if name == "agentcli" then Some(register_agentcli(cfg))
   else None
 }
 

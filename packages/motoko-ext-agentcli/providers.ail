@@ -1,0 +1,126 @@
+module sunholo/motoko_ext_agentcli/providers
+
+-- THE PROVIDER TABLE. One mechanism, N descriptors.
+--
+-- Everything that differs between delegated CLI agents lives here as DATA, and
+-- `agentcli.ail` reads it. The split is lopsided on purpose: dispatch, locking,
+-- truncation, envelope construction and the no-fabricated-dollars rule are the
+-- same for every provider, while what varies is an argv template, a default
+-- model, a permission flag, and — the one that actually bites — WHICH STREAM
+-- CARRIES THE FAILURE.
+--
+-- `failure_on_stdout` IS MEASURED PER PROVIDER, NOT ASSUMED. Both directions
+-- were run on 2026-08-16 with a deliberately bad `--model`:
+--
+--   codex  → stdout NDJSON `{"type":"error", …}` + `{"type":"turn.failed"}`;
+--            stderr holds only "Reading additional input from stdin...", which
+--            it prints on EVERY run including successes.
+--   claude → stderr `[claude-code:unrecognized_model] {"model":…}`; stdout
+--            holds the structured envelope with `"is_error":true` but no reason.
+--
+-- They are exact mirrors of each other. A shared decoder written to either
+-- one's convention silently reports the wrong text for the other, which is
+-- the failure this field exists to prevent. Adding a provider means measuring
+-- it, not guessing it.
+
+export type Provider = {
+  id: string,
+  tool: string,
+  bin: string,
+  base_args: [string],
+  model_flag: string,
+  model: string,
+  model_env: string,
+  -- The permission/sandbox bypass. Defaulted ON per Arni 2026-08-16
+  -- ("codex --yolo should be default"); see `register.ail` for what that means
+  -- and how to take it back.
+  extra_flags: [string],
+  flags_env: string,
+  default_flags: string,
+  failure_on_stdout: bool,
+  -- Only OpenAI states a concurrency rule ("only one machine or serialized job
+  -- stream will use a given auth.json copy"), so only codex takes the lock.
+  -- Anthropic documents no equivalent; its constraint is the weekly cap, which
+  -- a lock does not help with.
+  needs_lock: bool,
+  description: string
+}
+
+export func codex_provider() -> Provider {
+  {
+    id: "codex",
+    tool: "CodexExec",
+    bin: "codex",
+    base_args: ["exec", "--json", "--skip-git-repo-check"],
+    model_flag: "--model",
+    model: "gpt-5.6-sol",
+    model_env: "CODEX_MODEL",
+    extra_flags: [],
+    flags_env: "CODEX_EXTRA_FLAGS",
+    -- `--yolo` is codex's alias for this and works today, but it is absent from
+    -- `codex exec --help`. The documented spelling is used so an alias rename
+    -- cannot silently put the sandbox back on.
+    default_flags: "--dangerously-bypass-approvals-and-sandbox",
+    failure_on_stdout: true,
+    needs_lock: true,
+    description: "Delegate a self-contained coding task to the OpenAI Codex CLI (gpt-5.6-sol, ChatGPT-plan quota). Runs its own agent loop and returns an NDJSON transcript. It shares none of this conversation's context, so the prompt must stand alone."
+  }
+}
+
+-- `-p` WITHOUT `--bare`, AND THE OMISSION IS LOAD-BEARING. Claude Code's docs
+-- call `--bare` "the recommended mode for scripted and SDK calls" and say it
+-- "will become the default for -p in a future release" — but bare mode does NOT
+-- read `CLAUDE_CODE_OAUTH_TOKEN` and does not use the subscription login. Adding
+-- it, or accepting that future default silently, moves this lane off plan quota
+-- and onto a metered key. Pin `-p` explicitly and re-check on Claude Code
+-- upgrades.
+export func claude_provider() -> Provider {
+  {
+    id: "claude",
+    tool: "ClaudeExec",
+    bin: "claude",
+    base_args: ["-p", "--output-format", "json"],
+    model_flag: "--model",
+    -- Empty = let the account's own default apply. `argv_for` omits the flag
+    -- entirely rather than passing "", which `claude` reads as a model name.
+    model: "",
+    model_env: "CLAUDE_MODEL",
+    extra_flags: [],
+    flags_env: "CLAUDE_EXTRA_FLAGS",
+    default_flags: "--dangerously-skip-permissions",
+    failure_on_stdout: false,
+    needs_lock: false,
+    description: "Delegate a self-contained coding task to the Claude Code CLI (Claude subscription quota). Runs its own agent loop and returns a JSON result. It shares none of this conversation's context, so the prompt must stand alone."
+  }
+}
+
+export func all_providers() -> [Provider] { [codex_provider(), claude_provider()] }
+
+export func tool_names(ps: [Provider]) -> [string] {
+  match ps {
+    [] => [],
+    p :: rest => p.tool :: tool_names(rest)
+  }
+}
+
+-- Dispatch by TOOL NAME rather than by a `provider` argument. The model picks a
+-- tool far more reliably than it fills in an enum, and a wrong enum value here
+-- would bill the wrong account silently. `ExtensionHooks.provided_tools` is a
+-- list precisely so one extension can offer several.
+export func provider_for_tool(ps: [Provider], name: string) -> [Provider] {
+  match ps {
+    [] => [],
+    p :: rest => if p.tool == name then [p] else provider_for_tool(rest, name)
+  }
+}
+
+export func argv_for(p: Provider, model: string, prompt: string) -> [string] {
+  let model_part = if model == "" then [] else [p.model_flag, model];
+  p.base_args ++ model_part ++ p.extra_flags ++ [prompt]
+}
+
+-- Which text names the reason a run failed. See `failure_on_stdout` above.
+export func failure_text(p: Provider, out: string, err: string) -> string {
+  if p.failure_on_stdout then (if out != "" then out else err)
+  else (if err != "" then err else out)
+}
