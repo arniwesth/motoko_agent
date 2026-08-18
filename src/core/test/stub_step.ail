@@ -43,7 +43,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   PreStepDecision, PassThrough
 )
 import src/core/types (Msg)
-
 -- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
 -- `WorldState` can carry it without either the port module or the driver
 -- closing an LDR002 module cycle. It WAS re-exported here, as `export type
@@ -68,14 +67,6 @@ import src/core/types (Msg)
 -- that runs today changes behaviour; the interaction log is empty in every
 -- world but this one.
 export type StepProvider = LiveAI | Scripted([ScriptedStep]) | ScriptedWorld(WorldState) | RecordingWorld(WorldState) | GeneratedWorld(WorldState) | Ported(Ports) -- GeneratedWorld: WI-A13 stage 4, explained at `generating_ports` below
-
--- Opt-in provider capacity for deterministic integration tests. This belongs
--- to the provider adapter rather than ScriptedStep: a context window constrains
--- every request to an endpoint, while a scripted step describes one response.
-export type ScriptedProviderCapacity = {
-  context_window: int,
-  max_output_tokens: int
-}
 
 -- Convert a ScriptedStep to the StepResult shape loop_v2 expects.
 export pure func scripted_to_step_result(s: ScriptedStep) -> StepResult {
@@ -318,6 +309,14 @@ export func scripted_ports() -> Ports ! {IO, Trace} {
   -- why a scripted run completes with `Clock` withheld while `live_ports` dies
   -- — the poison pair `make world_state` asserts exactly that.
   ports_shape_probe(model_step)
+}
+
+-- Opt-in provider capacity for deterministic integration tests. This belongs
+-- to the provider adapter rather than ScriptedStep: a context window constrains
+-- every request to an endpoint, while a scripted step describes one response.
+export type ScriptedProviderCapacity = {
+  context_window: int,
+  max_output_tokens: int
 }
 
 -- A provider-side request estimate kept deliberately separate from core's

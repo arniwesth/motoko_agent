@@ -2603,19 +2603,16 @@ func c2_loop(
           -- the thread produced identical worlds. `world_state_probe`'s
           -- `consuming_pre_step_2`/`_3` are the first bindings that do not, and their
           -- two seal-terminal rows go red against the reverted argument.
-          -- Keep the catalogue value raw for telemetry and post-step hooks.
-          -- Only the request-sizing surfaces use the output-reserved budget.
-          let raw_context_limit = policy.step.compaction.context_limit;
-          let input_limit = effective_input_limit(raw_context_limit);
+          let context_limit = policy.step.compaction.context_limit;
           let split = split_for_compaction(st.msgs);
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
-          let ext_context_limit = if input_limit - pinned_tokens < 0 then 0 else input_limit - pinned_tokens;
+          let ext_context_limit = if effective_input_limit(context_limit) - pinned_tokens < 0 then 0 else effective_input_limit(context_limit) - pinned_tokens;
           let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
-          match seal_compacted_payload(split, msgs_to_messages(chain.msgs), model, raw_context_limit, policy.step.require_system_prompt) {
+          match seal_compacted_payload(split, msgs_to_messages(chain.msgs), model, context_limit, policy.step.require_system_prompt) {
             -- Terminal: the seal could not produce a usable system prompt.
             -- Reachable, and absent from the ADR's enumeration of termination
             -- reasons; it maps to the "error" wire string like the other
@@ -2754,7 +2751,7 @@ func c2_loop(
                   let applied = apply_state_delta(step_state, phase.delta);
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, raw_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
                   let trace_after_model = c2_trace_wire_events(ledger_append(trace_after_call, WireRecord(end_event)), phase.events);
                   -- WI-B2b. Bound rather than matched inline, because the
                   -- successor has to outlive the match: `intercepted.next_state`
