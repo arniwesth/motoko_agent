@@ -36,6 +36,7 @@ import src/core/phase_vocab (
 import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
 import src/core/step_machine (decide)
 import src/core/hook_phase (stage_record)
+import src/core/compaction (output_token_allowance)
 import src/core/ext/runtime (PreStepStage, StageApplied, StageRejected, StagePassed)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 
@@ -246,7 +247,7 @@ func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure]
 func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure]
   ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let split = split_for_compaction([]);
-  match seal_compacted_payload(split, [msg("user", "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 10, false) {
+  match seal_compacted_payload(split, [msg("user", "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", output_token_allowance() + 10, false) {
     Err(SealExhausted(_)) => Ok(()),
     Err(SealSystemPromptEmpty(_)) => Err({
       failed_invariant: "oversized payload rejected with SealExhausted",
