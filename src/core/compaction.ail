@@ -29,11 +29,11 @@ export pure func usage_percent_with_limit(msgs: [Message], limit: int) -> int {
 
 export pure func exhaustion_pct() -> int { 95 }
 
--- Maximum completion allowance requested at the provider boundary. Provider
--- context windows are shared by request and response tokens, so compaction
--- must size the request against the remainder rather than the raw catalogue
--- window. Keep this value in one place: both the extension-facing working
--- limit and the final payload seal depend on the same reservation.
+-- Output allowance assumed at the provider boundary. This mirrors AILANG's
+-- current model-registry invariant: configured request budgets do not exceed 65536.
+-- std/ai does not expose the resolved per-call budget, so this is external coupling.
+-- Keep this value in one place: both the extension-facing working limit and the
+-- final payload seal depend on the same reservation.
 export pure func output_token_allowance() -> int { 65536 }
 
 -- Input budget derived from a provider's raw shared context window. Unknown

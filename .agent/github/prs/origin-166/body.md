@@ -8,10 +8,16 @@ title: "MOT-100: reserve provider output headroom"
 
 ## Summary
 
-Fixes #165 by reserving the provider's 65,536-token output allowance when deriving the usable
-input budget. The effective budget is applied consistently to pre-step compaction and the final
-payload seal, while the raw catalog context window remains available for telemetry and unknown or
-undersized catalog limits retain the existing fail-open behavior.
+Fixes #165 by reserving the 65,536-token upper bound imposed by AILANG's current model-registry
+policy when deriving the usable input budget. The effective budget is applied consistently to
+pre-step compaction and the final payload seal, while the raw catalog context window remains
+available for telemetry and unknown or undersized catalog limits retain the existing fail-open
+behavior.
+
+`std/ai` does not currently expose the resolved per-call output budget to Motoko, so the 65,536
+reservation mirrors that external AILANG invariant. Models configured below the ceiling are
+conservatively over-reserved; if AILANG permits a request budget above it, the resolved budget must
+be plumbed into the compaction policy to preserve the admission guarantee.
 
 The regression coverage includes the exact 262,144/65,536 boundary, all three real-driver arms,
 and an opt-in bounded scripted provider that independently rejects requests whose estimated input
@@ -28,8 +34,8 @@ plus output allowance exceeds its configured context window.
 - [Issue #165](https://github.com/arniwesth/motoko_agent/issues/165) defines the scoped policy,
   boundary case, raw-telemetry requirement, and fail-open controls.
 - [Issue #31](https://github.com/arniwesth/motoko_agent/issues/31) is the related upstream
-  large-tool-result problem; this PR supplies downstream admission safety but does not add
-  tool-result truncation or recovery.
+  large-tool-result problem; this PR supplies downstream admission safety for AILANG's current
+  output budgets of at most 65,536 tokens, but does not add tool-result truncation or recovery.
 
 ## Predicted outcome
 
