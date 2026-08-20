@@ -67,8 +67,13 @@ shells out to the `ailang microrag` CLI.
   which gives SimHash + FTS5 + cosine for free) or a vector DB of choice.
 - Keep it an **extension**, not core. It is optional behaviour with an external dependency,
   which is what the extension ABI is for; core should not grow another effect ceiling for it.
-- Do not reintroduce `SharedIndex` to `[extensions]`/`[effects] max` — see #159 for what that
-  costs, and note that the effect's in-memory backend makes it the wrong tool regardless.
+- Do not add `SharedIndex` to `[extensions] effects` — that is the row stamped on the generated
+  registry, and widening it breaks every consumer (see #159). Note that `SharedIndex` *is*
+  legitimately in `[effects] max` and must stay: the ceiling is checked against every non-`pkg/`
+  module the project loads, the stdlib included, and `std/sem` declares
+  `! {SharedMem, SharedIndex}` on `store_frame_ns` (:466). `motoko-ext-context-mode` imports
+  `std/sem`, so the ceiling has to cover it even though nothing here performs it. The two keys
+  are not interchangeable — that is the whole point of the split.
 
 ## Seam left in place
 

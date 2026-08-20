@@ -53,13 +53,21 @@ registry_import = "pkg/sunholo/motoko_ext_abi/types.ExtRegistry"
 output          = "src/core/ext/registry_generated.ail"
 # The row stamped on the generated dispatch functions: the union of the
 # registered packages' register_with_config rows — what `resolve` actually
-# performs. Distinct from [effects] max below, which is the project ceiling.
-# See #159: generating from the ceiling over-declares and breaks every
-# consumer of the generated file.
+# performs. Deliberately NARROWER than [effects] max below, which must also
+# cover effects that imported modules merely *declare*. See #159: generating
+# the registry row from the ceiling over-declares and breaks every consumer
+# of the generated file.
 effects         = ["AI", "Clock", "Env", "FS", "IO", "Net", "Process", "Rand", "SharedMem", "Stream", "Trace"]
 
 [effects]
-max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "Rand", "Trace"]
+# The ceiling is checked against every non-`pkg/` module the project loads —
+# which includes the stdlib. `motoko-ext-context-mode` imports std/sem, and
+# std/sem declares `! {SharedMem, SharedIndex}` on store_frame_ns (:466), so
+# SharedIndex must stay here even though nothing in this repo performs it.
+# Dropping it fails as `effect ceiling violation in package local/motoko_agent`
+# on every extension. It is kept out of the generated registry row via
+# [extensions] effects above.
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex", "Rand", "Trace"]
 
 # OpenRouter provider for streaming (M-AI-PROVIDER-CONFIG, v0.15.0+).
 # All "openrouter/<model>" strings the agent accepts route through this block;
