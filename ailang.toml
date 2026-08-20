@@ -51,9 +51,15 @@ config_import   = "src/core/config.RuntimeConfig"
 hooks_import    = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
 registry_import = "pkg/sunholo/motoko_ext_abi/types.ExtRegistry"
 output          = "src/core/ext/registry_generated.ail"
+# The row stamped on the generated dispatch functions: the union of the
+# registered packages' register_with_config rows — what `resolve` actually
+# performs. Distinct from [effects] max below, which is the project ceiling.
+# See #159: generating from the ceiling over-declares and breaks every
+# consumer of the generated file.
+effects         = ["AI", "Clock", "Env", "FS", "IO", "Net", "Process", "Rand", "SharedMem", "Stream", "Trace"]
 
 [effects]
-max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex", "Rand", "Trace"]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "Rand", "Trace"]
 
 # OpenRouter provider for streaming (M-AI-PROVIDER-CONFIG, v0.15.0+).
 # All "openrouter/<model>" strings the agent accepts route through this block;

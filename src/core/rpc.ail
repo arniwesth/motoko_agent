@@ -21,8 +21,7 @@ import std/list   (foldl)
 import std/string (length)
 import std/fs     (readFile, fileExists)
 import src/core/types  (Msg, version)
-import src/core/prompts (with_cache_hint, with_agents_context)
-import src/core/cache   (get_hint)
+import src/core/prompts (with_agents_context)
 import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config, CostRates)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime)
 import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, dispatch_build_system_prompt, dispatch_budget_plan)
@@ -206,7 +205,6 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     kv("loaded_extensions", ja(json_string_values(loaded_extension_names(ext_runtime))))
   ])));
 
-  let hint = get_hint(task);
   let system_md_path = cfg.agent.system_prompt;
   let raw_system =
     if system_md_path == "" then ""
@@ -221,7 +219,6 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   let budget = compute_budget_plan(ext_runtime, task, model, cwd, hybrid_enabled, 0, settings);
   let remaining = budget.total;
   let system_with_agents = with_agents_context(raw_system, cwd);
-  let system_with_hint = with_cache_hint(system_with_agents, hint);
   -- WI-D3, and see `compute_budget_plan` for why the reader is the ambient one.
   let context_limit = resolve_context_limit(ambient_context_reader(), empty_world_state(), model).value;
   let system_ctx = {
@@ -242,7 +239,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
 	    artifacts: empty_ext_artifacts(),
 	    telemetry: zero_token_telemetry(), world: empty_ext_world()
 	  };
-  let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_hint);
+  let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_agents);
 
   let init: [Msg] = [
     { role: "system", content: system, tool_calls: [], tool_call_id: "" },
