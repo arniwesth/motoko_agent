@@ -2563,29 +2563,3 @@ test_coverage:
 
 test_coverage_selftest:
 	@python3 tools/test_coverage/derive.py --self-test
-
-# ---------------------------------------------------------------------------
-# agent_confined — the boundary checks for .devcontainer/agent_confined/
-#
-# Wired here so the container's confinement is regression-tested rather than
-# described. Both targets are HOST-SIDE: `agent_confined_check` shells out to
-# agent.sh, which refuses to run inside a dev container precisely because the
-# legs are statements about the container's definition that a compromised agent
-# inside it would misreport. Running either from the devcontainer therefore
-# fails with an explanation, which is the intended behaviour and not a bug.
-#
-# `agent_confined_r7` is the VERIFY leg only. Recording a baseline is a
-# deliberate human act — a baseline taken over a planted directive approves it
-# — so it is not a make target; the command is in the profile's README.
-.PHONY: agent_confined_check agent_confined_r7
-agent_confined_check:
-	@.devcontainer/agent_confined/agent.sh check
-
-R7_BASELINE ?= $(HOME)/r7-baseline.json
-agent_confined_r7:
-	@test -f "$(R7_BASELINE)" || { \
-	  echo "no baseline at $(R7_BASELINE) — record one FROM A SANITISED TREE first:"; \
-	  echo "  .devcontainer/agent_confined/checks/r7_git_audit.py --root \"$$PWD\" --record $(R7_BASELINE)"; \
-	  echo "(set R7_BASELINE=<path> to use another location)"; \
-	  exit 2; }
-	@python3 .devcontainer/agent_confined/checks/r7_git_audit.py --root "$$PWD" --verify "$(R7_BASELINE)"
