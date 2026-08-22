@@ -68,6 +68,18 @@ what makes it safe project-wide rather than only inside the confined image.
 
 **It loads.** Confirmed live in the session that wrote this PR, immediately after the file landed.
 
+**codex sees it too — but only for this container's lifetime.** `claude` reads the project copy this
+PR adds; **codex reads only `$CODEX_HOME/skills`** (per its own bundled `skill-installer`: *"Install
+Codex skills into `$CODEX_HOME/skills`"*), which lives in the image and is discarded by every
+rebuild. Installed there by hand for now and verified live — the codex agent in `w1:p6` answers
+*"herdr — Control Herdr, a terminal multiplexer for coding agents"*, picked up without a restart.
+
+**Owed, and host-side:** a Dockerfile line symlinking `~/.codex/skills/herdr` at the file this PR
+adds, so one reviewed copy serves both agents. Tested rather than assumed — codex resolves a skill
+through a symlink. The exact stanza and the four rejected alternatives are on
+[MOT-114](https://linear.app/motoko-agent/issue/MOT-114/add-herdrs-own-skill-to-claudeskills-so-delegates-can-drive).
+It cannot be in this PR: `.devcontainer/**` is mounted read-only here (ADR-001 D11).
+
 **R7 detects it, as predicted.** Verified against the pre-change baseline:
 
 ```
