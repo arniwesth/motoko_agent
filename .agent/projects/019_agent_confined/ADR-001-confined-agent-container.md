@@ -1,8 +1,10 @@
 # ADR-001: What container does the agent live in, what is absent from it, and who does it act as?
 
 Date: 2026-08-22
-Status: **Accepted.** The profile is built and in daily use; this record is retrospective. Written
-from inside the container it describes, in a herdr pane, as `motoko-agent`.
+Status: **Accepted**, and **fully grounded** — both acceptance runs completed 2026-08-22, the
+container-side halves from inside and the host-side halves by the operator (C1). Every residual is
+closed or deferred with a reason. The profile is built and in daily use; this record is
+retrospective. Written from inside the container it describes, in a herdr pane, as `motoko-agent`.
 Grounded at: branch `arniwesth/mot-102-formalize-agent_confined-adr-acceptance-sweep-residuals`,
 base `43228a57f5651d5ed22d6b0b8d6bbca76095fc99` on `arniwesth/mot-101-agentcli`
 
@@ -527,6 +529,39 @@ result over **six** files, the extra one being `code-graph/lib/slicito/.git/conf
 `branch=3`, `hooks_extra=0`) — a clean clone of a public upstream with no unpushed commits. Both runs
 passed; the deletion changed the inventory, not the verdict.
 
+### The authoritative baseline, recorded on the host
+
+Recorded and verified by the operator from a host shell on 2026-08-22, to `~/r7-baseline.json`:
+
+```
+recorded 5 git configuration files under <repo>
+  .emsdk/.git/config                      non-branch=7    branch=3     hooks_extra=0
+  .git/config                             non-branch=11   branch=509   hooks_extra=0
+  ailang/.git/config                      non-branch=11   branch=12    hooks_extra=0
+  deepseek-harness/.git/config            non-branch=7    branch=3     hooks_extra=3
+  deepseek-harness/.git/config.worktree   non-branch=3    branch=0     hooks_extra=3
+  f-3 .vscode                             files=5
+  f-4 .devcontainer                       files=18
+  f-4 .gitmodules                         files=0
+  f-4 harness config                      files=7
+baseline written to ~/r7-baseline.json
+
+R7 f-1..f-4 PASS: 5 configuration files, hooks and frozen content match the baseline
+```
+
+**`branch=509` here against `branch=506` in the in-container run, and the difference is the point.**
+The three extra entries are this ADR's own branch: `branch.<n>.remote`, `branch.<n>.merge` and a
+`vscode-merge-base`, written by creating and tracking
+`arniwesth/mot-102-formalize-agent_confined-adr-acceptance-sweep-residuals`. Zero shape violations in
+either run. **This is the clearest available demonstration that f-1(2) is a typed expectation rather
+than a snapshot** — ordinary work moved the count by three and the audit did not blink, which is
+exactly the property that makes it something you can leave switched on. A snapshot-equality check
+would have false-failed on a branch being created, and the README's rule — *do not loosen a clause
+because it fails* — only survives if the clauses do not false-fail in the first place.
+
+Every other count is byte-identical across the container and host runs, including all four frozen
+content sets.
+
 **Attestation of the three non-sample hooks**, per the audit's own instruction to read the
 `hooks_extra` counts rather than trust the file: `deepseek-harness/.git/hooks/{pre-commit,
 pre-merge-commit,pre-push}` are lefthook shims — `#!/bin/sh` followed by a `LEFTHOOK_VERBOSE` guard —
@@ -554,10 +589,20 @@ that reason, and `2` means *not verified*, never *pass*.
 **C2 — The R7 baseline has a home problem, and it is a consequence of D3.** The baseline must live
 outside the repository (it is the thing the repository is checked against) and it must persist. The
 confined container's `$HOME` satisfies neither: nothing mounts `/home/motoko`, so a baseline recorded
-there dies with the next `agent.sh build`. The documented location is the host's `~/r7-baseline.json`.
-**And it must be recorded from a sanitised tree** — a baseline taken over a planted directive approves
-it for ever — which means not while the implementation is uncommitted, since `.mcp.json`, `Makefile`
-and `.devcontainer/**` are all in the f-4 frozen set and are all currently modified. MOT-105.
+there dies with the next `agent.sh build`. **Recorded on the host at `~/r7-baseline.json`, 2026-08-22,
+and `--verify` passes against it** (MOT-105, closed).
+
+Two gates had to clear first, and both are worth stating because they recur every time it is
+re-recorded. **The tree must be sanitised** — a baseline taken over a planted directive approves it
+for ever — so it could not be taken while `.mcp.json`, `Makefile` and `.devcontainer/**`, all in the
+f-4 frozen set, were uncommitted. **And the inventory must be settled**: recording before
+`code-graph/` was deleted would have frozen six configuration files and false-failed immediately
+afterwards.
+
+**Re-record after any approved change** under `.devcontainer/**`, `.vscode/**`, `.claude/**`,
+`.mcp.json`, `AGENTS.md` or `.agent/tools/**`, noting why in the change. Editing this profile changes
+that inventory every time — which means D11's host-shell carve-out and this re-recording obligation
+are the same piece of work, and are best done together.
 
 **C3 — D8 makes routine work fail in a surprising way.** A `git checkout` between branches whose
 content differs under `.devcontainer`, `.vscode` or `.git/hooks` fails part-way with `EROFS`,
@@ -643,7 +688,7 @@ apply to any future browser.
 
 | # | residual | disposition | issue |
 |---|---|---|---|
-| 1 | No R7 baseline recorded | **Deferred, with reason.** Round-trip proven from here; the authoritative baseline is host-side (C1) and must wait for a sanitised tree (C2). Location and commands documented. | MOT-105 |
+| 1 | No R7 baseline recorded | **Closed.** Recorded on the host at `~/r7-baseline.json` from a sanitised, post-deletion tree; `--verify` PASSes against it. Command and location documented in C2. | MOT-105 |
 | 2 | `OBSIDIAN_MCP_TOKEN` granted to a container that cannot reach the server | **Deferred, premise falsified.** The container *can* address the host; the token was not removed on a false rationale. The real scope question is stated for an owner decision. | MOT-106 |
 | 3 | `agent.sh check` has never passed end-to-end | **Run end-to-end and recorded** (MOT-104, closed): all ten host legs pass, container legs 2–5 pass, container results identical across both runs. **Still not a clean sweep**, and deferred with a reason: leg 6 fails and cannot pass on OrbStack, which is a defect in the leg rather than in the profile (C7) and a behaviour change this pass is fenced out of. | MOT-104, MOT-107 |
 | 4 | The operator's profile is unhardened | **Recorded as a standing accepted risk** (D10b, C8). Deliberately not fixed. | MOT-108 |
