@@ -33,6 +33,11 @@ export function die(msg: string): never {
   process.exit(1);
 }
 
+/** A non-fatal aside, prefixed like `die` so the reader can tell which tool spoke. */
+export function note(msg: string): void {
+  console.log(`${programName}: ${msg}`);
+}
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
@@ -40,29 +45,34 @@ export function die(msg: string): never {
 export type Identity = "operator" | "bot";
 
 /**
- * The bot credential arrives by one of two channels: the container environment
- * (docker-compose passes MOTOKO_BOT_GH_TOKEN through from the host) or the
- * gitignored repo-root .env, which is where this repo already keeps its keys.
+ * One variable out of the gitignored repo-root .env, which is where this repo
+ * already keeps its keys.
  *
  * .env is read explicitly rather than left to Bun's automatic loading. That
  * loading is real but implicit — it depends on the runtime and on the process's
  * working directory — and a credential lookup that silently stops working when
  * a caller runs from a subdirectory is exactly the failure this pipeline cannot
- * afford. The environment wins where both are set.
+ * afford.
  */
-export function botToken(): string | null {
-  const fromEnv = process.env.MOTOKO_BOT_GH_TOKEN;
-  if (fromEnv) return fromEnv;
-
+export function fromDotenv(name: string): string | null {
   const dotenv = join(REPO_ROOT, ".env");
   if (!existsSync(dotenv)) return null;
   for (const line of readFileSync(dotenv, "utf8").split("\n")) {
-    const m = line.match(/^\s*(?:export\s+)?MOTOKO_BOT_GH_TOKEN\s*=\s*(.*)$/);
+    const m = line.match(new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=\\s*(.*)$`));
     if (!m) continue;
     const value = m[1].trim().replace(/^(['"])(.*)\1$/, "$2");
     if (value) return value;
   }
   return null;
+}
+
+/**
+ * The bot credential arrives by one of two channels: the container environment
+ * (docker-compose passes MOTOKO_BOT_GH_TOKEN through from the host) or .env.
+ * The environment wins where both are set.
+ */
+export function botToken(): string | null {
+  return process.env.MOTOKO_BOT_GH_TOKEN || fromDotenv("MOTOKO_BOT_GH_TOKEN");
 }
 
 /**
