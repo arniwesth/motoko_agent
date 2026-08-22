@@ -1,0 +1,171 @@
+# agent_confined — the agent's compose stack.
+#
+# Started and driven from a HOST shell, never by VS Code:
+#   docker compose --env-file .env -f .devcontainer/agent_confined/docker-compose.yml up -d
+#   docker compose --env-file .env -f .devcontainer/agent_confined/docker-compose.yml \
+#       exec -u motoko -w /workspaces/motoko_agent agent herdr
+#
+# There is deliberately no devcontainer.json beside this file. Read README.md before adding one — the whole
+# profile rests on that absence, and checks/r9-container.sh leg 1 asserts it.
+#
+# This profile is ADDITIVE. `.devcontainer/default` is untouched: you keep "Reopen in Container" exactly as
+# before, with its sudo and its VS Code attach, and this is a second container on the same working tree.
+
+# Pinning the project name here rather than relying on `-p` keeps every invocation in the same project and
+# namespaces the network and volume names away from the operator's stack. If your Compose rejects the
+# underscore, use agent-confined (Compose documents [a-z0-9][a-z0-9_-]*).
+name: motoko_agent_confined
+
+services:
+  agent:
+    build:
+      # The repository root, because .devcontainer/agent_confined/Dockerfile copies the tree and runs
+      # scripts/install-prerequisites.sh against it — the same context .devcontainer/docker-compose.yml uses,
+      # and the same root .dockerignore applies.
+      context: ../..
+      dockerfile: .devcontainer/agent_confined/Dockerfile
+      args:
+        # NONE of these have defaults, and that is the design. A `latest` baked into the Dockerfile does not
+        # track latest: the instruction text never changes, so Docker reuses the cached layer and the image
+        # keeps whatever was current the day it was first built, indefinitely and invisibly. agent.sh
+        # resolves each one on the HOST — herdr from https://herdr.dev/latest.json (version AND sha256), the
+        # three CLIs from the npm registry — so the arg VALUE changes when upstream publishes, which is what
+        # invalidates the layer. Building with plain `docker compose` therefore FAILS here rather than
+        # silently producing an unpinned image; that is the point. Reproduce an old image by exporting the
+        # same values (see `agent.sh help`).
+        HERDR_VERSION: ${HERDR_VERSION:?resolved by agent.sh — build through it, or export it yourself}
+        HERDR_SHA256: ${HERDR_SHA256:?resolved by agent.sh from https://herdr.dev/latest.json}
+        AGENT_BROWSER_VERSION: ${AGENT_BROWSER_VERSION:?resolved by agent.sh from the npm registry}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:?resolved by agent.sh from the npm registry}
+        CODEX_VERSION: ${CODEX_VERSION:?resolved by agent.sh from the npm registry}
+        OMP_VERSION: ${OMP_VERSION:?resolved by agent.sh from the npm registry}
+
+    # Own tag. Sharing the operator profile's image name would rebuild that image out from under it.
+    image: motoko_agent_confined/dev:1.0
+
+    command: sleep infinity
+    working_dir: /workspaces/motoko_agent
+
+    # Neutralises a NOPASSWD sudoers drop-in per service. This image ships none — the Dockerfile purges sudo
+    # and asserts its absence — so here it is defence in depth against a future image edit rather than the
+    # only control.
+    security_opt:
+      - no-new-privileges:true
+
+    volumes:
+      # The shared working tree. This is ONE HOST DIRECTORY: isolating a compose service does not isolate
+      # .git/config, .agent/ or .env. checks/r7_git_audit.py is what covers that channel; README's
+      # "What is deliberately not absent" states its full strength.
+      - ../..:/workspaces/motoko_agent
+
+      # Frozen paths. Every source below exists in the tree (verified 2026-08-22) — a missing source would be
+      # created empty by create_host_path and would mount over nothing, which is the failure r9 leg 1 checks
+      # for by asserting both existence AND the `:ro` flag.
+      #
+      # .git/hooks is defence in depth, not a boundary: `core.hooksPath` in the agent-writable .git/config
+      # redirects hook lookup anywhere, which is why the r7 audit asserts that key rather than trusting this
+      # mount. Nested gitdirs (ailang/, .emsdk/, deepseek-harness/, code-graph/lib/slicito/) are NOT frozen —
+      # they are separate repositories whose hooks only run when git is invoked inside them; the r7 audit
+      # covers all six configuration files and their hook inventories instead.
+      - ../../.git/hooks:/workspaces/motoko_agent/.git/hooks:ro
+      - ../../.vscode:/workspaces/motoko_agent/.vscode:ro
+      - ../../.devcontainer:/workspaces/motoko_agent/.devcontainer:ro
+
+      # OPERATIONAL CONSEQUENCE of the three above, worth knowing before it bites: a `git checkout` or branch
+      # switch whose content differs under those paths fails part-way with EROFS. Every edit to this
+      # directory — including this file — is made from the operator's container or the host, never from
+      # inside the agent's.
+
+    environment:
+      # A CURATED list, not the whole .env. It mirrors .devcontainer/docker-compose.yml's list plus the two
+      # Bedrock variables omp needs, and agent.sh passes `--env-file <repo>/.env` so these interpolate from
+      # the repository-root file.
+      #
+      # BE CLEAR ABOUT WHAT THIS BUYS: very little on its own. src/tui/src/index.ts:150-204 loads
+      # /workspaces/motoko_agent/.env itself at startup, and that file is on the bind mount above — so the
+      # agent holds every secret the file carries whatever this list says. Curating it keeps the confined
+      # container no more exposed than the operator's, and keeps a *delegate* process that does not read .env
+      # (codex, claude) to the keys named here. It is not a boundary. Closing that one properly means not
+      # mounting .env, which means motoko cannot read it either.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      OBSIDIAN_MCP_TOKEN: ${OBSIDIAN_MCP_TOKEN:-}
+      # Linear, and the one key here whose consumer is NOT Motoko. Motoko has no Linear access
+      # at all (022 measures why: its MCP surface cannot reach a remote server without the
+      # bridge, and no Linear extension exists). What DOES consume it is a `claude` delegate
+      # running in this container: `.mcp.json` is project-scoped and on the bind mount, so a
+      # delegate picks up the `linear` server and acts with write access as this key's OWNER.
+      # That is 022's F-1 — whose account an autonomous agent acts as — reached through the
+      # delegate rather than by decision. Granted deliberately on 2026-08-22; revisit when F-1
+      # is answered, and remove this line if the answer is a bot seat rather than the operator.
+      LINEAR_API_KEY: ${LINEAR_API_KEY:-}
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      AWS_REGION: ${AWS_REGION:-}
+      # The 016_github_ops machine-user PAT. Deliberately NOT named GH_TOKEN/GITHUB_TOKEN: `gh` prefers those
+      # over the credentials stored by `gh auth login` and says nothing about it, so exporting it under that
+      # name would make the operator's own `make pr` run as the bot and silently invert ADR-001 D1 (identity
+      # follows agency). Pipeline commands map it into GH_TOKEN in the subprocess environment they spawn.
+      MOTOKO_BOT_GH_TOKEN: ${MOTOKO_BOT_GH_TOKEN:-}
+      # ...AND, IN THIS PROFILE ONLY, the same value under the name `gh` actually reads.
+      #
+      # That looks like a direct violation of the rule above, and it is not — the rule protects the
+      # OPERATOR'S OWN `gh` in a container they share with the agent. There is no operator `gh` here.
+      # Nothing but the agent runs in this container, and 016 ADR-001 D1/C9 says what its identity is:
+      # anything a mechanism emits is the bot. So the correct configuration is for every GitHub action
+      # from this container to be `motoko-agent` BY CONSTRUCTION, which is what this line does — and it
+      # is the same conclusion the profile this was adapted from reached for its own agent identity.
+      #
+      # Consequences, both intended: `gh auth status`, `gh api`, `gh pr` and the .agent/github pipeline
+      # all work with no interactive login (which is just as well — ~/.config/gh does not survive a
+      # rebuild, and the agent cannot answer a device-flow prompt). And every delegate spawned in a
+      # pane inherits it, so a codex or claude delegate also acts as the bot rather than as nobody.
+      #
+      # checks/r9-container.sh leg 4 asserts this rather than its opposite: in the OPERATOR's container
+      # GH_TOKEN must be unset, here it must be set AND resolve to motoko-agent.
+      GH_TOKEN: ${MOTOKO_BOT_GH_TOKEN:-}
+
+    # Deliberately absent, each for a reason:
+    #
+    #   * devcontainer.json / VS Code attach — attach injects a credential.helper into /etc/gitconfig AND
+    #     ~/.gitconfig pointing at the remote-containers helper, and exports SSH_AUTH_SOCK,
+    #     REMOTE_CONTAINERS_IPC and VSCODE_IPC_HOOK_CLI. Measured in the operator's container on 2026-08-22:
+    #     all of that is live there, and the forwarded ssh-agent answered as a CONDUIT (0 identities). That
+    #     finding is the reason this profile exists.
+    #   * /var/run/docker.sock and the docker CLI — `docker run -v /:/host` is host root.
+    #   * extra_hosts host.docker.internal:host-gateway — present in .devcontainer/docker-compose.yml:9-10
+    #     and deliberately dropped here. READ THE NEXT PARAGRAPH BEFORE COUNTING THIS AS A CONTROL.
+    #
+    #     WHAT IT ACTUALLY REMOVES IS THE NAME, NOT THE ROUTE (measured 2026-08-22, corrected from an
+    #     earlier version of this comment that claimed otherwise). `extra_hosts` writes an /etc/hosts
+    #     entry; it does not create or withdraw reachability. In the operator's container the name
+    #     resolves to 0.250.250.254 — OrbStack's dedicated host address, NOT the default gateway
+    #     (192.168.107.1) — and connecting to it returns "Connection refused" rather than a timeout,
+    #     which means packets reach the host and are actively rejected. The address is routable. A
+    #     process in THIS container can therefore very likely still reach the host by IP; only the
+    #     convenient hostname is gone. Untested here specifically, because this profile's network has
+    #     never been up — see HISTORY.md 2026-08-22 for what that leaves owed.
+    #
+    #     The named cost stands: the obsidian MCP server in .mcp.json (http://host.docker.internal:27200/mcp)
+    #     will not connect from here, because it is addressed by name. The ailang-docs and linear MCP
+    #     servers are public https and are unaffected.
+    #   * an external network join. The source profile joined the operator's stack to share its ClickHouse;
+    #     motoko has no such dependency, so this stack is standalone and the whole network-discovery
+    #     machinery is gone from agent.sh with it. The container still has ordinary outbound access — the
+    #     model APIs, the npm registry and github.com all work.
+    #   * host credential mounts (~/.config/gcloud, ~/.ssh, ~/.claude). Any of them would hand the operator's
+    #     host credentials straight back to the agent.
+    #
+    # NOT ABSENT, and you may want it: nothing mounts /home/motoko, so a `claude` or `codex` subscription
+    # login does not survive `agent.sh stop` or `agent.sh build`. That is a security property — a rebuilt
+    # container has no credential until you give it one — but if you are logging in rather than using the API
+    # keys above, it is a chore every rebuild. The opt-in is these four lines plus a top-level
+    # `volumes: {agent_home_claude: {}, agent_home_codex: {}}`:
+    #
+    #   - agent_home_claude:/home/motoko/.claude
+    #   - agent_home_codex:/home/motoko/.codex
+    #
+    # Nobody has taken that decision; it is written out here so that taking it is one edit and not a design
+    # session.

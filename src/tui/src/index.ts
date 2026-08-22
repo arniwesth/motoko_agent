@@ -26,6 +26,7 @@ import { startEnvServer } from "./env-server.js";
 import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
+import { initHerdrReporter, reportSessionPath } from "./herdr-agent-state.js";
 import { activeProfile } from "./config.js";
 import { resolveRuntimeModel } from "./models.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
@@ -806,6 +807,13 @@ async function main(): Promise<void> {
   // prompt instead of exiting the TUI.
   let errorOccurred = false;
 
+  // Announce Motoko to herdr, if this process was launched in a herdr pane. Everything about this
+  // is a no-op outside one — see herdr-agent-state.ts — so it is unconditional here rather than
+  // hidden behind a flag that would then need testing in both positions. It also registers the
+  // exit hooks that give the lifecycle authority back, which is why it runs before anything can
+  // call process.exit.
+  initHerdrReporter();
+
   if (!isTTY) {
     // Non-TTY: prompt for task first, then run with PlainLogger.
     const task =
@@ -815,6 +823,7 @@ async function main(): Promise<void> {
     const ui = jsonlOutput ? new JsonlLogger() : new PlainLogger();
     const logger = new SessionLogger(projectRoot, pkgVersion);
     sessionLogger = logger;
+    reportSessionPath(logger.filePath);
     logger.logUserInput(task);
     ui.onModelChange = (newModel) => {
       process.env.MODEL = newModel;
@@ -870,6 +879,7 @@ async function main(): Promise<void> {
     errorOccurred = false;
     const logger = new SessionLogger(projectRoot, pkgVersion);
     sessionLogger = logger;
+    reportSessionPath(logger.filePath);
     if (logPrompt) logger.logUserInput(task);
     runtimeProcess = new RuntimeProcess(
       task,

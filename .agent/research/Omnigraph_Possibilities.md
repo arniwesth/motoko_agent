@@ -33,7 +33,7 @@ Rule of thumb: **if a fact is likely to be rediscovered later, record it as a ty
 
 ## 2. Architectural drift detection
 
-Right now the graph has `idc-backtesting-engine DependsOn idc-trading-engine`. Nothing enforces that the *actual C# code* still has that dependency. The interesting move: **turn the graph into the ground truth and make the code prove it.**
+Right now the graph has one component `DependsOn` another. Nothing enforces that the *actual code* still has that dependency. The interesting move: **turn the graph into the ground truth and make the code prove it.**
 
 A nightly (or CI) job:
 
@@ -74,7 +74,7 @@ This is the property the PoC barely used but is the most interesting. Branches a
 
 This is what whiteboards and Miro try to be but can't. A whiteboard can't be queried. A Miro diagram doesn't know that components are typed. A branch in Omnigraph is a **testable, diffable, queryable architecture alternative**. The cost of exploring a direction is a branch; the cost of abandoning it is `omnigraph_branch action=delete`.
 
-For research in particular: the backtesting-frameworks research done on 2026-04-22 — each framework could have been a branch that *added itself as if adopted*, redrawing edges to show the component structure under that choice. We didn't do that, but we could have. "What does the system look like if we use NautilusTrader?" → look at branch `adopt/nautilus-trader`. Commit the one that wins.
+For research in particular: a framework-comparison study — each candidate could have been a branch that *added itself as if adopted*, redrawing edges to show the component structure under that choice. We didn't do that, but we could have. "What does the system look like if we adopt this one?" → look at branch `adopt/<candidate>`. Commit the one that wins.
 
 ---
 
@@ -142,6 +142,6 @@ Meta-observation: **the tool's value scales with how many different things you'r
 
 ## The far edge
 
-The most interesting possibility is that the graph becomes the *thing* the agent operates on, and the code is a *projection* of the graph. Today the graph describes the code. Reverse that: the graph describes the *design*, and code generation (agent-driven) projects design into source files. A decision to change `backtest-pluggable-fill-models` isn't "write some code" — it's "update the node, the agent figures out which files need to change, opens a PR."
+The most interesting possibility is that the graph becomes the *thing* the agent operates on, and the code is a *projection* of the graph. Today the graph describes the code. Reverse that: the graph describes the *design*, and code generation (agent-driven) projects design into source files. A decision to change a component's design isn't "write some code" — it's "update the node, the agent figures out which files need to change, opens a PR."
 
 Far enough out to be speculation. But the substrate for it is already here.

@@ -43,6 +43,7 @@ import type {
 } from "./scratchpad/frames.js";
 import { type ScratchpadSegment, scratchpadImageCapabilityLabel, scratchpadImageExitSequence, makeImageSegment } from "./scratchpad/image-segment.js";
 import { execSync } from "child_process";
+import { reportRunState as reportRunStateToHerdr } from "./herdr-agent-state.js";
 // NOTE: The ASCII-art banner is printed unconditionally in main() before the 
 // TUI starts here — ANSI escapes in Text children corrupt the layout system.
 
@@ -2269,6 +2270,12 @@ export class AgentUI {
     const nextIsTools = next === "tools_wait" || next === "tools_run";
     if (nextIsTools && !prevWasTools) this.runStateHintsShown.delete("tools");
     this.addActivity(`state -> ${next}`);
+    // Mirror the transition to herdr, when Motoko is running in a herdr pane. Inert otherwise, and
+    // fire-and-forget when not: see herdr-agent-state.ts. This is the only place a TRANSITION is
+    // reported, because setRunState is the only place waitState changes — which is what makes the
+    // sidebar's view and the status line's view the same fact rather than two that can drift.
+    // (initHerdrReporter also reports an initial idle at startup, before any transition exists.)
+    reportRunStateToHerdr(next);
   }
 
   private maybeEmitSlowHint(): void {

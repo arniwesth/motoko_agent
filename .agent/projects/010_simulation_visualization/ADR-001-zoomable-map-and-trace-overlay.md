@@ -50,7 +50,7 @@ Assets this project builds on, all existing:
 
 - **Project 002 (`ailang-graph`)** — the substrate. This ADR adds *projections* (`layout`, `edges_agg`, `activity`) beside its CSVs and extends `cgq.py`; it does not fork or replace the extractor. ADR-002's approximation-honesty discipline (approximate results labeled, never laundered into facts) is inherited and extended to pixels (D4).
 - **Project 009 (DST, ADR-001)** — this project is a **consumer** of the ledger-trace surface (recorded by project 007, carried by 009/D6). Nothing here writes to or versions the vocabulary. The one deferred idea that would (driver-emitted subject tags) is explicitly out of scope until it can be argued as a vocabulary amendment on its own merits. All references to 009's decisions in this document are qualified `009/Dn`; bare `Dn` always means a decision of *this* ADR.
-- **Root `/code-graph/` (C# original)** — history/reference only; still targets `src/Zeus.csproj`; nothing built on it.
+- **Root `/code-graph/` (C# original)** — history/reference only; still targets the C# project it was written for, not this one; nothing built on it.
 - **`omnigraph/`, `concept_edges`** — out of scope. Noted as far-future convergence (project memory and code in one space).
 
 ## Decisions
