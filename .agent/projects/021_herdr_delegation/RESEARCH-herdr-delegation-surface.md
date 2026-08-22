@@ -358,9 +358,10 @@ Ordered by how much design turns on the answer. Every one needs `agent_confined`
 1. **Does `pane split --env OPENAI_API_KEY=` read as *absent* to codex, and `ANTHROPIC_API_KEY=` to
    claude?** (§3.5.) Decides whether F2 has a real fix or a cosmetic one. Also settles 018 §5.1,
    which is still unmeasured: do the CLIs prefer an env key over stored subscription auth at all?
-2. **Does `agent start --kind codex|claude` reliably detect in the `agent_confined` image?** Its
-   screen manifests were written against upstream defaults; this image's terminal, locale and lack
-   of a login could all matter. A failure here is fatal to the whole design.
+2. ~~**Does `agent start --kind codex|claude` reliably detect in the `agent_confined` image?**~~
+   **ANSWERED 2026-08-22 — see §8, F-B.** `agent start` fails, but *detection* is fine and the
+   failure is benign: a fresh `claude` blocks on an interactive first-run prompt. The
+   fatal-to-the-design risk this item worried about does not materialise.
 3. **What does `agent prompt --wait` do on a slow start?** It returns `agent_prompt_stalled` if no
    lifecycle change is observed within 5 s. A delegate that thinks before printing could trip it
    routinely, which would make the optimistic path in §4.1 the wrong default.
@@ -368,5 +369,99 @@ Ordered by how much design turns on the answer. Every one needs `agent_confined`
    `ExtPorts.proc_exec` is reachable and #158 avoidable — i.e. whether holder stamping comes back.
 5. **Do delegates comply with "write your answer to `<path>`"?** Per kind. Decides whether §3.2 is
    the primary channel or an optimisation over a fallback that has to exist anyway.
-6. **What is the realistic wall-clock and answer size for a delegated task?** Still 018 §5.3, still
-   unmeasured, and it sets the `--timeout` values that §3.1's whole argument depends on.
+6. **What is the realistic wall-clock and answer size for a delegated task?** Still 018 §5.3.
+   **One data point as of 2026-08-22 (§8): ~15 minutes** for a read-the-codebase-and-ship-a-PR task.
+   It sets the `--timeout` values that §3.1's whole argument depends on, and one sample is not a
+   budget — but it is no longer zero.
+
+---
+
+## 8. First autonomous delegation — measured 2026-08-22
+
+The surface described above had never been run. On 2026-08-22 it was, end to end: a `claude`
+delegate was started in a herdr pane inside `agent_confined`, handed a brief, and left to implement
+MOT-111 — write `tools/pr/linear.ts`, test it, commit, push, and open PR #170 — with no supervision.
+**It succeeded.** The code was sound, it stayed in scope, and it proved itself by attaching its own
+PR to its own Linear issue through the code path it had just written.
+
+What follows is what the run measured. Tracked as MOT-113.
+
+### F-A — `agent wait` misses the transition on a long wait. Do not build on it.
+
+`herdr agent wait <name> --until idle --until blocked --timeout 2700000`, launched while the agent
+was `working`, **never returned** when the agent went idle. It was still blocked a quarter of an hour
+later and exited only when killed. An identical wait issued afterwards returns instantly.
+
+Three controls against the same agent all behave correctly, which is what makes this specific:
+
+| probe | result |
+|---|---|
+| repeated `--until idle --until blocked`, agent already idle | returns at once, exit 0 |
+| single `--until idle`, agent already idle | returns at once, exit 0 |
+| `--until working` — a state it never enters — `--timeout 5000` | times out at 5.087 s, exit 1 |
+
+So repeated-flag handling is fine and the timeout path is fine. It is the **long-lived** wait that
+misses the edge. During the run the agent's `revision` went 2 → 3 and its `terminal_title` changed
+(`✳ Claude Code` → `✳ mot-111-prompt brief`). The hypothesis is that a long-lived wait binds to an
+agent record and stops observing when that record is revised; this is **not** confirmed against
+herdr's internals and should not be written down as fact.
+
+**What it costs this design.** §4.1's optimistic-synchronous shape wants a completion signal.
+`agent wait` cannot be it. **Poll `agent list` instead** — the same call that reports status is
+reliable, and polling has no subscription to lose. This also casts doubt on §7 item 3
+(`agent prompt --wait` and `agent_prompt_stalled`), which is very likely the same machinery: treat
+that item as unanswered *and* suspect, rather than merely unanswered.
+
+Worth reporting upstream (herdr 0.8.2).
+
+### F-B — `agent start` fails on the CLI's first-run prompts; detection itself is fine
+
+```
+{"error":{"code":"agent_not_ready","message":"agent mot-111 is blocked during startup and is not ready for prompts"}}
+```
+
+This is **not** a detection-manifest problem and **not** a permissions problem, which is what §7
+item 2 feared. A freshly launched `claude` asks an interactive first-run question — here *"Try the
+new fullscreen renderer?"* — and blocks on it. Clearing it with `herdr pane send-keys <pane> 2` and
+`enter` left the agent fully usable.
+
+Detection is in fact better than item 2 assumed: **herdr registered the pane as a `claude` agent on
+its own** despite `agent start` erroring, and later adopted the name `mot-111` from the failed start.
+So registration is more forgiving than the start command.
+
+**What it costs this design.** A delegation harness cannot call `agent start` and assume readiness.
+It needs either a step that clears first-run prompts, or a pre-seeded CLI configuration baked into
+the image. Prefer the latter: this class of prompt is upstream-driven and will reappear with each
+new CLI release, so a harness that learns to dismiss *this* question has not solved the problem.
+Note the image is the only durable place to put such configuration — nothing mounts `/home/motoko`.
+
+### F-C — a brief is a pointer, not a payload
+
+The 43-line brief was written to a file and the delegate told to read that path. Passing it as
+`agent prompt <target> "<43 lines>"` would have pushed newlines into a TUI input, where each reads
+as a submission.
+
+**What it costs this design.** §4.1's tool signature should treat the prompt argument as a
+**pointer** for anything non-trivial: stage the brief on the shared tree, pass the path. That also
+makes the brief an artifact the run can be audited against afterwards, which a pasted string is not.
+
+### F-D — the delegate took its git identity from history, not configuration
+
+It ran `git -c user.name="motoko-agent" -c user.email="<operator>" commit`, having just read
+`git show` output and copied the author it saw there. Both commits carried the bot's name and the
+operator's email, so `git log` read as the bot while GitHub attributed the work to the human —
+inverting the property `016_github_ops` ADR-001 D5 and `019_agent_confined` ADR-001 D10a exist to
+guarantee. R9 leg 4 passed throughout, because it asserts *configuration* rather than what the
+commits carry, and never checks the email at all.
+
+The check gap is **MOT-112**. It is recorded here as well because it is a *delegation* failure mode
+and not only a check gap: matching the surrounding convention is normally correct behaviour, and a
+delegate has no way to know that this repository's history is the one thing it must not imitate.
+**A harness must make identity non-inferable, not merely configured** — the commits were fixed after
+the fact, which is exactly the manual step the design is supposed to remove.
+
+### What this does not settle
+
+§7 items 1, 4 and 5 were untouched by this run. Item 3 is worse than untouched — see F-A. And one
+successful delegation is not a reliability claim: it is one task, one kind (`claude`), one brief
+written by someone who knew the answer.
