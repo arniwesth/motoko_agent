@@ -4,12 +4,17 @@
  * `pr` already writes `ticket: MOT-<n>` into the record's frontmatter, but that
  * only makes the link findable from the git tree. The other direction — standing
  * on the issue and seeing the PR — was done by hand, and forgotten, which is how
- * #168 was noticed unlinked. Linear's native GitHub integration is installed and
- * does not fire for this repo (measured 2026-08-22 on #168: a genuine PR
- * description edit moved `updated_at` and produced no linkback and no change to
- * the issue), and diagnosing further needs `admin:repo_hook`, which the bot
- * deliberately does not hold. So the link is made in the pipeline, where it does
- * not depend on an App installation or on branch-name matching.
+ * #168 was noticed unlinked.
+ *
+ * Linear's native GitHub integration is installed, and what it does is *not*
+ * dependable. Measured 2026-08-22, both directions: on #168 a genuine PR
+ * description edit moved the PR's `updated_at` and produced no linkback and no
+ * change to MOT-102; on #170, minutes later, the integration attached the PR to
+ * MOT-111 on its own within seconds of creation. Diagnosing why it fires for one
+ * and not the other needs `admin:repo_hook`, which the bot deliberately does not
+ * hold. An intermittent link is the same problem as no link: nobody can tell,
+ * from the issue, whether the absence means anything. So the link is also made
+ * here, where it depends on nothing but the branch name.
  *
  * Two rules govern everything here:
  *
@@ -18,10 +23,13 @@
  * worse than one that published unlinked. Every failure path logs one line and
  * returns.
  *
- * **Everything is idempotent.** `attachmentLinkURL` errors rather than no-ops on
- * a URL already attached to the issue, so the existing attachments are read
- * first and a match short-circuits. That is what makes re-running `make pr`
- * safe, and it also lets a run that failed to link retry on the next one.
+ * **Everything is idempotent, including against the integration.**
+ * `attachmentLinkURL` errors rather than no-ops on a URL already attached to the
+ * issue, so the existing attachments are read first and a match short-circuits —
+ * and because the App can attach in the gap between that read and the write, the
+ * duplicate error is treated as success rather than as a failure. Re-running
+ * `make pr` therefore neither duplicates the link nor gives up on retrying one
+ * an earlier run lost.
  *
  * Design record: .agent/projects/022_linear_integration/ (option B — GraphQL
  * directly, rather than through Linear's MCP server, because this is one
@@ -53,7 +61,8 @@ function linearKey(): string | null {
 }
 
 /**
- * One GraphQL round trip, or null on any failure.
+ * One GraphQL round trip. Exactly one of `data` and `error` is set; the caller
+ * decides what to say, because one caller has an error it does not mind.
  *
  * The key goes to curl through a stdin config rather than argv, where `ps` would
  * show it to every process on the box. The request body rides in a temp file for
@@ -65,12 +74,15 @@ function linearKey(): string | null {
  * least as often as it uses a status code, so the body is parsed either way and
  * `--fail` is deliberately absent.
  */
-function graphql(key: string, query: string, variables: Record<string, unknown>): any | null {
+function graphql(
+  key: string,
+  query: string,
+  variables: Record<string, unknown>,
+): { data: any | null; error: string | null } {
   // A key carrying a quote or a backslash would break out of the config line
   // and mangle the request in a way whose error message names neither cause.
   if (/["\\\r\n]/.test(key)) {
-    note("linear: LINEAR_API_KEY contains a quote or backslash — refusing to build a curl config from it");
-    return null;
+    return { data: null, error: "LINEAR_API_KEY contains a quote or backslash — refusing to build a curl config from it" };
   }
 
   const dir = mkdtempSync(join(tmpdir(), "pr-linear-"));
@@ -90,18 +102,15 @@ function graphql(key: string, query: string, variables: Record<string, unknown>)
       { encoding: "utf8", input: `header = "Authorization: ${key}"\n` },
     );
     if (r.error || r.status !== 0) {
-      note(`linear: curl failed (${(r.stderr ?? "").trim() || r.error?.message || `exit ${r.status}`})`);
-      return null;
+      return { data: null, error: `curl failed (${(r.stderr ?? "").trim() || r.error?.message || `exit ${r.status}`})` };
     }
     const parsed = JSON.parse(r.stdout || "null");
     if (parsed?.errors?.length) {
-      note(`linear: ${parsed.errors[0].message ?? "GraphQL error"}`);
-      return null;
+      return { data: null, error: parsed.errors[0].message ?? "GraphQL error" };
     }
-    return parsed?.data ?? null;
+    return { data: parsed?.data ?? null, error: null };
   } catch (e) {
-    note(`linear: ${(e as Error).message}`);
-    return null;
+    return { data: null, error: (e as Error).message };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -133,9 +142,9 @@ export function attachToIssue(ticket: string | null, url: string, title: string)
   const existing = graphql(key, "query($id: String!) { issue(id: $id) { attachments { nodes { url } } } }", {
     id: ticket,
   });
-  const nodes: { url: string }[] | null = existing?.issue?.attachments?.nodes ?? null;
+  const nodes: { url: string }[] | null = existing.data?.issue?.attachments?.nodes ?? null;
   if (!nodes) {
-    note(`linear: could not read ${ticket} — not linked to ${url}`);
+    note(`linear: could not read ${ticket} (${existing.error ?? "no issue in the response"}) — not linked to ${url}`);
     return;
   }
   if (nodes.some((n) => sameUrl(n.url ?? "", url))) {
@@ -149,9 +158,17 @@ export function attachToIssue(ticket: string | null, url: string, title: string)
       "{ attachmentLinkURL(issueId: $issueId, url: $url, title: $title) { success } }",
     { issueId: ticket, url, title },
   );
-  if (!created?.attachmentLinkURL?.success) {
-    note(`linear: ${ticket} not linked to ${url}`);
+  if (created.data?.attachmentLinkURL?.success) {
+    note(`linear: linked ${url} to ${ticket}`);
     return;
   }
-  note(`linear: linked ${url} to ${ticket}`);
+  // The read above narrows the duplicate case but cannot close it: measured on
+  // #170, Linear's own GitHub integration attached the PR in the seconds between
+  // the read and the write. The duplicate error is therefore the authoritative
+  // "already linked", not a failure — whoever created it, the link exists.
+  if (created.error && /duplicate/i.test(created.error)) {
+    note(`linear: ${ticket} already links ${url} (attached by something else while this ran)`);
+    return;
+  }
+  note(`linear: ${ticket} not linked to ${url}${created.error ? ` (${created.error})` : ""}`);
 }

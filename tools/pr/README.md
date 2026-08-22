@@ -86,17 +86,22 @@ GitHub — the recovery path for a crash between publishing and writing back.
 
 It also **attaches the PR to its Linear issue** when the branch carries a `mot-<n>` segment, so the
 link exists in both directions: `ticket:` in the frontmatter finds the issue from the tree, and a
-link attachment on the issue finds the PR from Linear. This is done in the pipeline rather than left
-to Linear's GitHub integration, which is installed and does not fire for this repo (measured
-2026-08-22 on #168: a genuine description edit produced no linkback), and whose diagnosis needs
-`admin:repo_hook` — a scope the bot deliberately does not hold.
+link attachment on the issue finds the PR from Linear.
+
+This is done in the pipeline rather than left to Linear's GitHub integration, which is installed and
+**intermittent**. Measured 2026-08-22: on #168 a genuine description edit produced no linkback and
+no change to MOT-102, and minutes later on #170 the integration attached the PR to MOT-111 by itself
+within seconds. Diagnosing the difference needs `admin:repo_hook`, a scope the bot deliberately does
+not hold — and an intermittent link is the same problem as no link, because nobody can tell from the
+issue whether the absence means anything.
 
 The link is **best-effort and never fatal**. A missing `LINEAR_API_KEY`, a branch with no ticket, an
 unreachable API or a GraphQL error each log one line and let the publish stand; a PR that failed to
 publish because a tracker was down would be strictly worse than one that published unlinked. It is
-also idempotent both ways — the issue's existing attachments are read first, because Linear's
-`attachmentLinkURL` errors rather than no-ops on a duplicate — so re-running `make pr` neither
-duplicates the link nor skips retrying one an earlier run lost.
+also idempotent, including against the integration: the issue's existing attachments are read first
+(Linear's `attachmentLinkURL` errors rather than no-ops on a duplicate), and because the App can
+attach in the gap between that read and the write, a duplicate error is read as success. Re-running
+`make pr` neither duplicates the link nor skips retrying one an earlier run lost.
 
 `LINEAR_API_KEY` is read from the environment first and then from the repo-root `.env`, like the bot
 token. Unlike GitHub, it is a **personal** key: attachments read as its owner, not as `motoko-agent`.
