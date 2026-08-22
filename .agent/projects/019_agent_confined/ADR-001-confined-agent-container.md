@@ -34,8 +34,11 @@ Grounding verified 2026-08-22, from inside the running `agent_confined` containe
    `hooks_extra=3` on `deepseek-harness` alone. It was **six** until `code-graph/` was deleted on
    operator decision the same day (C9); the sixth was `code-graph/lib/slicito/.git/config`, and its
    removal returns the count to the five an earlier survey recorded.
-4. **The host-side legs are NOT verified.** `agent.sh` refuses to run inside a container by design
-   (`agent.sh:154`), so `agent.sh check` could not be driven from here. Tracked as MOT-104.
+4. **The host-side legs are verified**, by the operator from a host shell on 2026-08-22 —
+   `agent.sh check` driven end to end through the wrapper, against the running service. All ten
+   host-side assertions pass, including leg 1. `agent.sh` refuses to run inside a container by
+   design (`agent.sh:154`), so this half could not be produced from inside; see C1. Full paste
+   below.
 5. `versions.env` reads `HERDR_VERSION=0.8.2`, `AGENT_BROWSER_VERSION=0.34.0`,
    `CLAUDE_CODE_VERSION=2.1.239`, `CODEX_VERSION=0.149.0`, `OMP_VERSION=17.4.2`, resolved
    2026-08-22, with both herdr sha256s recorded.
@@ -405,9 +408,36 @@ misreport. This ADR is a live instance — see C1.
 
 ## Grounding: the R9 run
 
-`checks/r9-container.sh --in-container`, run 2026-08-22 in a herdr pane inside `agent_confined`.
-**This is the first time these legs have ever run inside this profile**; previously they had been run
-only in the operator's devcontainer, where they correctly fail.
+Two runs, both 2026-08-22. The container-side legs were run first from inside a herdr pane
+(`checks/r9-container.sh --in-container`) — **the first time they had ever run inside this
+profile**, previously having been run only in the operator's devcontainer, where they correctly
+fail. The operator then drove the full sweep through the wrapper from a host shell
+(`agent.sh check`), which runs the host-side legs and re-invokes the container-side legs inside the
+service. **The container-side results were identical across both runs.**
+
+### Host-side legs — `agent.sh check`, from a host shell
+
+```
+R9 (host-side legs)  repo=/Users/<operator>/Projects2/private/motoko_agent
+  PASS  leg1: no devcontainer.json in the agent_confined profile
+  PASS  leg1: no .devcontainer/*/devcontainer.json references the profile
+  PASS  mounts: bind source exists — .git/hooks
+  PASS  mounts: .git/hooks declared :ro
+  PASS  mounts: bind source exists — .vscode
+  PASS  mounts: .vscode declared :ro
+  PASS  mounts: bind source exists — .devcontainer
+  PASS  mounts: .devcontainer declared :ro
+  PASS  pins: versions.env present (7 pinned values)
+  PASS  env: <repo>/.env present (compose interpolates the environment block from it)
+```
+
+**Leg 1 is the one that matters most** (D1): the profile carries no `devcontainer.json`, and no other
+profile's `devcontainer.json` references its service. Without that, legs 3 and 4 would describe a
+habit rather than a configuration. The three `:ro` declarations are confirmed here as read *from the
+compose file*, which complements the independent confirmation from inside the container by `mount`
+and a failed write (Grounding item 1) — the definition and the running reality agree.
+
+### Container-side legs
 
 ```
 R9 (container-side legs)
@@ -459,12 +489,16 @@ EXIT=1
 **Every assertion D1–D5 makes about this container is confirmed.** The one failure is leg 6, and it
 is a defect in the leg rather than in the profile — see C7 and MOT-107.
 
-**The host-side legs are not in this paste and are owed** (MOT-104): `agent.sh` refuses to run inside
-a container, so the wrapper could not be driven from here. What is unverified is leg 1 (no
-`devcontainer.json`, no profile references it), the bind-source existence and `:ro` declarations as
-read *from the compose file*, and the presence of `versions.env` and `.env`. Note that the `:ro`
-flags themselves were confirmed independently, from the inside, by `mount` and a failed write
-(Grounding item 1).
+**Acceptance criterion 2 is met by the host run**: the sweep was driven end to end through the
+wrapper, with the container-side legs attempted rather than skipped — not the vacuous exit-2 the
+`R9 INCOMPLETE` status exists to report. The only failure in either half is leg 6.
+
+**One cosmetic wrinkle in the wrapper, worth knowing before someone reads it as two failures.** The
+host run prints `R9 FAIL — 1 leg(s)` **twice**: once from the container-side invocation's own
+`main()`, and once from the host wrapper, which folds the child's exit status into its own `fails`
+counter and then prints its own summary. One failing leg, reported twice. Not chased here — this
+pass does not change behaviour — but it belongs with MOT-107, since anyone fixing leg 6 will be
+looking at exactly this output.
 
 ## Grounding: the R7 run
 
@@ -504,13 +538,18 @@ gitdir reports `hooks_extra=0`.
 ## Consequences
 
 **C1 — This ADR cannot fully ground itself, and that is D11 working correctly.** The container-side
-legs above were run by the agent, inside the container they describe. The host-side legs and the
-authoritative R7 baseline are assigned to a human on the host precisely because an agent inside a
-container is the wrong party to attest to that container's definition. Two acceptance items are
-therefore open by construction rather than by neglect: MOT-104 (the `agent.sh check` host run) and
-MOT-105 (the R7 baseline). The ADR is honest about this rather than pasting an exit-2 and calling it
-a pass — `checks/r9-container.sh` exits `2` and prints `R9 INCOMPLETE` for exactly this reason, and
-`2` means *not verified*, never *pass*.
+legs were run by the agent, inside the container they describe; an agent is the wrong party to
+attest to its own confinement, so the host-side legs and the authoritative R7 baseline are assigned
+to a human on the host. **The host run has since been supplied** (MOT-104, closed), and it is worth
+noting what that added rather than merely duplicated: leg 1 — the absence of a `devcontainer.json`,
+which D1 rests on — is *only* assertable from outside, and the `:ro` declarations were confirmed as
+written in the compose file rather than merely as observed at runtime. The definition and the
+running reality agree.
+
+**One acceptance item remains open by construction**: MOT-105, the R7 baseline, which must be
+recorded on the host from a sanitised tree (C2). The ADR states this rather than pasting an exit-2
+and calling it a pass — `checks/r9-container.sh` exits `2` and prints `R9 INCOMPLETE` for exactly
+that reason, and `2` means *not verified*, never *pass*.
 
 **C2 — The R7 baseline has a home problem, and it is a consequence of D3.** The baseline must live
 outside the repository (it is the thing the repository is checked against) and it must persist. The
@@ -606,7 +645,7 @@ apply to any future browser.
 |---|---|---|---|
 | 1 | No R7 baseline recorded | **Deferred, with reason.** Round-trip proven from here; the authoritative baseline is host-side (C1) and must wait for a sanitised tree (C2). Location and commands documented. | MOT-105 |
 | 2 | `OBSIDIAN_MCP_TOKEN` granted to a container that cannot reach the server | **Deferred, premise falsified.** The container *can* address the host; the token was not removed on a false rationale. The real scope question is stated for an owner decision. | MOT-106 |
-| 3 | `agent.sh check` has never passed end-to-end | **Partly closed.** Container legs run and recorded for the first time; legs 2–5 pass. Leg 6 fails and cannot pass on OrbStack (C7). Host legs owed. | MOT-107, MOT-104 |
+| 3 | `agent.sh check` has never passed end-to-end | **Run end-to-end and recorded** (MOT-104, closed): all ten host legs pass, container legs 2–5 pass, container results identical across both runs. **Still not a clean sweep**, and deferred with a reason: leg 6 fails and cannot pass on OrbStack, which is a defect in the leg rather than in the profile (C7) and a behaviour change this pass is fenced out of. | MOT-104, MOT-107 |
 | 4 | The operator's profile is unhardened | **Recorded as a standing accepted risk** (D10b, C8). Deliberately not fixed. | MOT-108 |
 | 5a | Delete untracked `code-graph/` | **Closed — done.** Operator approved 2026-08-22; deleted after verifying it was distinct from the tracked `tools/code-graph/` and held no unpushed work. R7 inventory is now five files (C9). | MOT-109 |
 | 5b | Rewrite pushed git history | **Closed — declined.** Operator decided against; the cost to `.agent/github/` and to both remotes is not worth scrubbing a name the working tree no longer carries (C9). | MOT-110 |
