@@ -411,7 +411,9 @@ this record claimed four of them and was wrong about two (see *Corrections* C2):
 `--agent motoko` sets herdr's *kind label*, not an addressable *name*; the name is a separate field
 that `agent rename` sets. After `herdr agent rename w1:p5 motoko`, `agent get motoko` resolves and
 the name-targeted forms work — but `agent prompt` and `agent send-keys` still refuse, because they
-are reserved for agents herdr itself started. Input to a Motoko pane goes through the pane surface
+are reserved for agents herdr itself started. Making the reporter call `agent rename` would deliver
+the name-targeted forms; it is **MOT-120** rather than a line of code here, because herdr requires
+the name to be unique among live agents and two Motokos is precisely what 018 and 021 are for. Input to a Motoko pane goes through the pane surface
 (`pane send-text` + `pane send-keys enter`), which is what the measurements above used.
 
 ---
@@ -467,3 +469,6 @@ as `motoko-agent`; that is `../022_linear_integration/` F-1 and is not solved he
 - **MOT-118** — candidate: link the two copies of the herdr-environment gate (TS host / AILANG
   extension). Blocked on `../021_herdr_delegation/` landing.
 - **MOT-119** — candidate: display tokens via `pane report-metadata`. Argued against by D2.
+- **MOT-120** — candidate: call `agent rename` so the name-targeted forms work, as C2's claim
+  originally assumed. Held back on a naming question: herdr requires the name to be unique among
+  live agents, and two Motokos is exactly what 018 and 021 are building towards.
