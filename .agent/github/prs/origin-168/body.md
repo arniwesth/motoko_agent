@@ -27,7 +27,23 @@ the operator profile's compose changes.
 No behaviour is changed by the ADR itself. Where the record made a decision look wrong, that is
 written into Consequences and filed as an issue rather than fixed here — see MOT-106 and MOT-107.
 
-Linear: **MOT-102** (parent), sub-issues **MOT-103**–**MOT-110**.
+## Linear
+
+Parent: **[MOT-102 — Formalize agent_confined — ADR, acceptance sweep, residuals](https://linear.app/motoko-agent/issue/MOT-102/formalize-agent-confined-adr-acceptance-sweep-residuals)**
+
+| issue | deliverable | state |
+|---|---|---|
+| [MOT-103](https://linear.app/motoko-agent/issue/MOT-103/write-adr-001-confined-agent-containermd) | Write ADR-001 | Done |
+| [MOT-104](https://linear.app/motoko-agent/issue/MOT-104/record-the-r9-r7-acceptance-run-in-the-adr-grounding-block) | Record the R9 + R7 acceptance run | Done |
+| [MOT-105](https://linear.app/motoko-agent/issue/MOT-105/residual-1-record-an-r7-baseline-outside-the-repo-from-a-sanitised) | Residual 1 — R7 baseline outside the repo | Done |
+| [MOT-106](https://linear.app/motoko-agent/issue/MOT-106/residual-2-obsidian-mcp-token-the-stated-premise-for-removing-it-is) | Residual 2 — `OBSIDIAN_MCP_TOKEN`, premise falsified | **open — needs an owner decision** |
+| [MOT-107](https://linear.app/motoko-agent/issue/MOT-107/residual-3-r9-leg-6-cannot-pass-on-orbstack-agentsh-check-has-never) | Residual 3 — R9 leg 6 cannot pass on OrbStack | **open — needs an owner decision** |
+| [MOT-108](https://linear.app/motoko-agent/issue/MOT-108/residual-4-the-operators-devcontainer-stays-unhardened-as-a-standing) | Residual 4 — devcontainer unhardened, standing risk | **open — accepted, recorded** |
+| [MOT-109](https://linear.app/motoko-agent/issue/MOT-109/residual-5a-blocked-on-operator-delete-the-untracked-code-graph) | Residual 5a — delete `code-graph/` | Done |
+| [MOT-110](https://linear.app/motoko-agent/issue/MOT-110/residual-5b-blocked-on-operator-rewrite-pushed-git-history-to-scrub) | Residual 5b — rewrite pushed history | Declined |
+
+The three open ones are deferred **with a reason** and are decisions for the owner, not outstanding
+work on this PR. Both fixes they imply are host-side edits under `.devcontainer/**` (ADR-001 D11).
 
 ## Changes
 
