@@ -3,28 +3,41 @@ repo: arniwesth/motoko_agent
 pr: 168
 branch: arniwesth/mot-102-formalize-agent_confined-adr-acceptance-sweep-residuals
 ticket: MOT-102
-title: "MOT-102: ADR-001 for the confined agent container"
+title: "MOT-102: the agent_confined container profile, and ADR-001 for it"
 ---
 
 ## Summary
 
-Writes the decision record for `.devcontainer/agent_confined/`, which has been in daily use without
-one. Every "why" lived either in a comment at the point of decision or in a chronological
-`HISTORY.md`, and neither states a decision *as a decision* — with its alternatives and its
-consequences. This adds D1–D11 and C1–C10, leaves the measurements in `HISTORY.md` where they
-belong, and records the disposition of every outstanding residual.
+Carries **the `agent_confined` container profile and the decision record for it, together** — a
+second container on the working tree that VS Code cannot attach to, plus the ADR stating why each
+absence is there.
 
-Documentation only: no behaviour changes, and `git status` shows nothing under `.devcontainer/**`.
-Where the record made a decision look wrong, that is written into Consequences and filed as an
-issue rather than fixed in this pass.
+The profile has been in daily use without a record. Every "why" lived either in a comment at the
+point of decision or in a chronological `HISTORY.md`, and neither states a decision *as a decision*,
+with its alternatives and its consequences. ADR-001 adds D1–D11 and C1–C10, leaves the measurements
+in `HISTORY.md` where they belong, and records the disposition of every residual.
+
+**The profile arrived here from #169** (`chore(devcontainer): move agent_confined out to MOT-102`).
+Reviewing the boundary in one PR and the reasoning for it in another was the wrong split. No history
+was rewritten to do it: #169 got a new commit removing those paths, this branch merged that commit
+and kept its own tree, so nothing already pushed changed underneath anyone. #169 keeps the rest of
+that work — the herdr agent-state reporter, the 018/020/021/022 records, the `linear` MCP entry and
+the operator profile's compose changes.
+
+No behaviour is changed by the ADR itself. Where the record made a decision look wrong, that is
+written into Consequences and filed as an issue rather than fixed here — see MOT-106 and MOT-107.
 
 Linear: **MOT-102** (parent), sub-issues **MOT-103**–**MOT-110**.
 
 ## Changes
 
-- docs(019): ADR-001 for the confined agent container
+- `feat`: the `agent_confined` profile — `Dockerfile`, `docker-compose.yml`, `agent.sh`, `herdr.toml`, `versions.env`, and the `checks/` sweep (R9 container legs, R7 git-configuration audit, socket probe)
+- `docs`: `README.md` and `HISTORY.md` for the profile; the pointer to it from `.devcontainer/README.md`
+- `docs(019)`: ADR-001, then the host-side R9 run and the authoritative R7 baseline folded into its grounding blocks
+- `build`: `agent_confined_check` and `agent_confined_r7` Makefile targets
+- `chore(github)`: the PR state record
 
-1 file changed.
+16 files changed.
 
 ## Governing docs
 
