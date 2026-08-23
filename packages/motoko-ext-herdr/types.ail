@@ -337,7 +337,9 @@ export pure func known_kind(k: string) -> bool
 -- unprompted — which is the whole finding.
 --
 -- TO RESTORE THE PREVIOUS BEHAVIOUR: HERDR_ALLOWED_KINDS=claude,codex
-export pure func default_allowed_kinds() -> string { "claude" }
+export pure func default_allowed_kinds() -> string
+  tests [((), "claude")]
+  { "claude" }
 
 -- Membership without splitting: comma-fence both sides so `claude` cannot match
 -- inside a hypothetical `claude-next`. Spaces are stripped so a human-written
@@ -394,7 +396,9 @@ export pure func grants_relaxation(kind: string) -> bool
 export pure func kind_default_args(k: string) -> [string]
   { if k == "codex" then ["-s", "danger-full-access", "-a", "never"] else [] }
 
-export pure func default_kind() -> string { "claude" }
+export pure func default_kind() -> string
+  tests [((), "claude")]
+  { "claude" }
 
 -- ---------------------------------------------------------------------------
 -- argv builders
@@ -682,7 +686,12 @@ export pure func code_hint(code: string) -> string
 -- The seventh vocabulary: a spawn that never reached a process. 018 F1
 -- collapsed all seven of these into one sentence about PATH; only ONE of them
 -- is about PATH.
-export pure func process_error_text(e: ProcessError) -> string {
+-- ONE SENTENCE PER CONSTRUCTOR, AND THE TESTS ARE THE POINT. 018 F1's defect
+-- was collapsing all seven of these into a single PATH-flavoured sentence; only
+-- ONE of them is about PATH. Pinning each arm is what stops that regressing
+-- quietly, and acceptance criterion 6 rests on exactly this distinctness.
+export pure func process_error_text(e: ProcessError) -> string
+  {
   match e {
     NotFound(cmd) =>
       "`${cmd}` was not found. HERDR_BIN_PATH should point at the running server's own binary; if it is unset this extension should not have registered at all.",
@@ -700,6 +709,62 @@ export pure func process_error_text(e: ProcessError) -> string {
       "The herdr CLI was killed by signal ${signame} before it could answer."
   }
 }
+
+-- TEST SEAMS, one per constructor, and they are not decoration.
+--
+-- `tests [...]` lifts each case into a synthetic module that does NOT inherit
+-- this file's imports (the same limitation `src/core/prompts_test.ail` documents
+-- for its own wrappers), so an ADT constructor cannot be a test INPUT —
+-- `NotFound(...)` in a tests block fails with "undefined variable: NotFound".
+-- Wrappers taking primitives move the construction into the real module, where
+-- the import is in scope.
+--
+-- Worth the verbosity because 018 F1's defect was collapsing all seven arms into
+-- one PATH-flavoured sentence when only ONE of them is about PATH. Pinning each
+-- arm is what stops that regressing quietly, and acceptance criterion 6 rests on
+-- these being distinct.
+pure func pe_not_found(cmd: string) -> string
+  tests [("/usr/local/bin/herdr", "`/usr/local/bin/herdr` was not found. HERDR_BIN_PATH should point at the running server's own binary; if it is unset this extension should not have registered at all.")]
+  { process_error_text(NotFound(cmd)) }
+
+pure func pe_not_allowed(cmd: string) -> string
+  tests [("/usr/local/bin/herdr", "`/usr/local/bin/herdr` is not in the process allowlist. Motoko was started with `--process-allowlist` and herdr is not on it.")]
+  { process_error_text(NotAllowed(cmd)) }
+
+pure func pe_permission_denied(cmd: string) -> string
+  tests [("/usr/local/bin/herdr", "`/usr/local/bin/herdr` exists but is not executable by this user.")]
+  { process_error_text(PermissionDenied(cmd)) }
+
+pure func pe_timeout(ms: int) -> string
+  tests [(30000, "The herdr CLI itself did not return within 30000ms. Every call this extension makes is a short one, so this points at the herdr server being wedged rather than at the delegate.")]
+  { process_error_text(Timeout(ms)) }
+
+pure func pe_output_limit(n: int) -> string
+  tests [(10485760, "The herdr CLI produced more than 10485760 bytes. Answers travel in a file, so this points at `agent read` over a very large scrollback.")]
+  { process_error_text(OutputLimitExceeded(n)) }
+
+pure func pe_spawn_failed(msg: string) -> string
+  tests [("no such file or directory", "The herdr CLI could not be spawned: no such file or directory")]
+  { process_error_text(SpawnFailed(msg)) }
+
+pure func pe_abnormal_exit(sig: int, name: string) -> string
+  tests [((9, "SIGKILL"), "The herdr CLI was killed by signal SIGKILL before it could answer.")]
+  { process_error_text(AbnormalExit(sig, name)) }
+
+-- The distinctness assertion itself: seven constructors, seven different
+-- sentences. This is what criterion 6 asks for, asserted rather than eyeballed.
+pure func pe_all_distinct() -> bool
+  tests [((), true)]
+  {
+    let a = pe_not_found("x");
+    let b = pe_not_allowed("x");
+    let c = pe_permission_denied("x");
+    let d = pe_timeout(1);
+    let e = pe_output_limit(1);
+    let f = pe_spawn_failed("x");
+    let g = pe_abnormal_exit(9, "X");
+    a != b && b != c && c != d && d != e && e != f && f != g && a != g && a != d && b != e
+  }
 
 -- ---------------------------------------------------------------------------
 -- Readiness — see correction 3 in the header
@@ -850,11 +915,15 @@ export pure func is_settled(status: string) -> bool
 -- That is 021 §7 item 4 answered affirmatively, and the holder stamping comes
 -- back with it.
 
-export pure func bash_exec_tool() -> string { "BashExec" }
+export pure func bash_exec_tool() -> string
+  tests [((), "BashExec")]
+  { "BashExec" }
 
-export pure func bash_exec_args(cmd: string, argv: [string]) -> string {
-  encode(jo([kv("cmd", js(cmd)), kv("args", ja(strings_to_json(argv)))]))
-}
+export pure func bash_exec_args(cmd: string, argv: [string]) -> string
+  tests [
+    (("herdr", ["agent", "get", "x"]), "{\"cmd\":\"herdr\",\"args\":[\"agent\",\"get\",\"x\"]}")
+  ]
+  { encode(jo([kv("cmd", js(cmd)), kv("args", ja(strings_to_json(argv)))])) }
 
 func strings_to_json(xs: [string]) -> [Json] {
   match xs {
