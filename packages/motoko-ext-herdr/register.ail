@@ -64,6 +64,12 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Clock, Env, FS, I
     -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
     -- generous.
     start_timeout_ms: parse_int_or(getEnvOr("HERDR_START_TIMEOUT_MS", "20000"), 20000),
+    -- Same 30s wall, same reasoning, and measured with the same caveat: a
+    -- herdr `--timeout` is not a hard wall-clock bound (a 4000ms wait returned
+    -- at 4201ms; M3 saw a 25s bound overrun to 28.3s), so 20000 leaves ~10s of
+    -- margin rather than cutting it fine. One blocking call at this bound
+    -- replaces roughly twenty busy-polls at M6's median.
+    check_wait_ms: parse_int_or(getEnvOr("HERDR_CHECK_WAIT_MS", "20000"), 20000),
     max_output_chars: parse_int_or(getEnvOr("HERDR_MAX_OUTPUT_CHARS", "16000"), 16000)
   };
 

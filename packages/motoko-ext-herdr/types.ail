@@ -262,6 +262,48 @@ export pure func argv_start(name: string, kind: string, pane: string, timeout_ms
 export pure func argv_prompt(target: string, text: string) -> [string]
   { ["agent", "prompt", target, text] }
 
+-- BLOCK SERVER-SIDE INSTEAD OF MAKING THE MODEL BUSY-POLL.
+--
+-- WHY THIS EXISTS, measured on a real run 2026-08-23: an 11-second delegation
+-- cost TEN DelegateCheck steps. `agent get` returns in 4ms and a model has no
+-- way to sleep, so the poll loop runs exactly as fast as the model can emit the
+-- next tool call. The rate is model-dependent — a fast model polls more often, a
+-- slow one polls fewer times but no less wastefully — and nothing in the
+-- extension paced it. Against M6's median of 23.1s that is ~23 steps of a 100
+-- step budget spent watching, before any real work happens.
+--
+-- WHAT MAKES THIS SAFE, measured rather than assumed:
+--   already settled  -> returns in 6ms, exit 0. A wait costs nothing once the
+--                       answer has landed, so it needs no "is it done yet" guard.
+--   still working    -> exit 1, {"error":{"code":"timeout", ...}}. That is the
+--                       poll interval elapsing, NOT a failure, and it is the one
+--                       code `do_check` must not treat as one.
+--   agent gone       -> exit 1, agent_not_found, in 2ms. A delegate whose pane
+--                       was already reaped does not block for the whole bound.
+--
+-- NO `--until`. herdr's documented default for `agent wait` matches idle, done
+-- OR blocked, which is exactly the set this wants: `blocked` is a first-class
+-- outcome here (an attended codex reaches it in 9.8s per approval), and waiting
+-- only for idle/done would burn the full bound on a delegate that is sitting on
+-- an approval prompt someone needs to answer.
+export pure func argv_wait(target: string, timeout_ms: int) -> [string]
+  { ["agent", "wait", target, "--timeout", intToStr(timeout_ms)] }
+
+export pure func argv_wait_str(target: string, timeout_ms: int) -> string
+  tests [(("mot-dlg-7", 20000), "agent wait mot-dlg-7 --timeout 20000")]
+  { show_argv(argv_wait(target, timeout_ms)) }
+
+-- The whole point of the branch: `timeout` from a wait means STILL WORKING.
+-- Every other non-zero outcome is a real failure and must keep its own message.
+export pure func wait_elapsed(exit_code: int, stderr: string) -> bool
+  tests [
+    ((1, "{\"error\":{\"code\":\"timeout\",\"message\":\"timed out waiting for agent status\"},\"id\":\"cli:agent:wait\"}"), true),
+    ((1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"agent target x not found\"}}"), false),
+    ((0, ""), false),
+    ((2, "herdr agent commands:"), false)
+  ]
+  { if exit_code == 0 then false else failure_code(exit_code, stderr) == "timeout" }
+
 export pure func argv_get(target: string) -> [string]
   { ["agent", "get", target] }
 

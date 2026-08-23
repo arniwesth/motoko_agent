@@ -39,6 +39,7 @@ import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
   known_kind, default_kind, path_is_safe, path_within, argv_is_safe, show_argv,
   argv_split, argv_start, argv_prompt, argv_get, argv_explain, argv_close,
+  argv_wait, wait_elapsed,
   failure_code, failure_message, explain_says_ready,
   split_pane_id, agent_status_of, agent_pane_of, is_settled,
   bash_exec_tool, bash_exec_args, bash_field, bash_exit
@@ -50,6 +51,10 @@ export type HerdrConfig = {
   work_dir: string,
   kind: string,
   start_timeout_ms: int,
+  -- How long DelegateCheck blocks server-side before answering "still working".
+  -- See `types.argv_wait` for why blocking is the default and not an option the
+  -- model has to remember to ask for.
+  check_wait_ms: int,
   max_output_chars: int
 }
 
@@ -241,7 +246,25 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   else if owns_name(name) == false then
     { result: err_result(call.id, "DelegateCheck", "`${name}` was not started by this extension. Only handles returned by Delegate can be checked, and nothing else in the session will be touched."), next_state: ctx.world }
   else {
-    let g = run_herdr(cfg, p, ctx.world, argv_get(name));
+    -- WAIT FIRST, SERVER-SIDE. Without this the model busy-polls: `agent get`
+    -- returns in 4ms, a model cannot sleep, so the loop runs at whatever rate
+    -- the model can emit tool calls. Measured on a real run: ten DelegateCheck
+    -- steps for an eleven-second delegation.
+    --
+    -- It is unconditional rather than a parameter. The observed failure IS a
+    -- model failing to pace itself, so a knob it has to remember to set would
+    -- reproduce the bug exactly.
+    let w = run_herdr(cfg, p, ctx.world, argv_wait(name, cfg.check_wait_ms));
+    -- `timeout` here is the poll interval elapsing, not a failure. Everything
+    -- else non-zero — agent_not_found above all — keeps its own message.
+    if w.code != 0 && wait_elapsed(w.code, w.err) == false then
+      { result: err_result(call.id, "DelegateCheck", explain_failure("Waiting on delegate `${name}`", argv_wait(name, cfg.check_wait_ms), w)), next_state: w.next_state }
+    else {
+    -- AND THEN CHECK ANYWAY. The wait settles on the AGENT going idle, which is
+    -- not the same event as the answer file landing — P2-3 measured a delegate
+    -- reaching a clean `done` having written nothing. Wait-then-check, never
+    -- wait-instead-of-check.
+    let g = run_herdr(cfg, p, w.next_state, argv_get(name));
     if g.code != 0 then
       { result: err_result(call.id, "DelegateCheck", explain_failure("Reading delegate `${name}`", argv_get(name), g)), next_state: g.next_state }
     else {
@@ -286,10 +309,11 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
       else
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
-            stdout: "Delegate `${name}` is still `${status}` in pane ${pane}. No answer yet. Check again shortly — a typical task takes 20-30s in total.",
+            stdout: "Delegate `${name}` is still `${status}` in pane ${pane}. No answer yet — this call already waited server-side for it, so check again rather than assuming it is stuck.",
             stderr: "", metadata: meta(name, pane)
           },
           next_state: rd.next_state }
+    }
     }
   }
 }
