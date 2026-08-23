@@ -136,6 +136,49 @@ written nothing.
 
 **Re-measured on the identical task: 11 steps → 2.** One `Delegate`, one `DelegateCheck`.
 
+## Kind selection is operator policy, not a model token
+
+Second finding from operator testing: a delegation ran **codex** with `HERDR_DELEGATE_KIND` unset
+and `default_kind()` returning claude. The *model* passed `kind: "codex"`, and the only trace was the
+pane label.
+
+**This is a defect against a decision this PR already claims, not a new policy.** P2-7 records the
+owner's decision as shipping codex's `-s danger-full-access -a never` *"opt-in, named, and attached
+to its evidence"* — and the section below repeats "opt-in and commented". It wasn't: the schema
+advertised codex and `Delegate` resolved `arg_str(arguments, "kind", cfg.kind)`, so a model could
+take the privileged kind unilaterally. **Opt-in a model can take on its own is opt-out.**
+
+Not a claim that codex is dangerous — P2-7's parity argument stands and is not reopened. Motoko's own
+`BashExec` can do anything a full-access codex can, so no new capability enters the system. What
+changes is *who decides* and whether it is legible. One real asymmetry sits under it: claude runs
+under an auto-mode classifier that can still decline; `-a never` removes the approval path entirely.
+
+`HERDR_ALLOWED_KINDS` now gates it, **defaulting to `claude` alone**. Measured, no task favours codex
+here — ~1.3× slower unattended *and* it is the one needing the relaxation — so a model picking it
+chooses slower and more permissive for no nameable benefit. A `claude,codex` default would not have
+fixed the finding, since the model could still select codex unprompted.
+
+**To restore the previous behaviour: `HERDR_ALLOWED_KINDS=claude,codex`.**
+
+Three things follow. The schema now names the *allowed* set, so the model isn't invited to pick what
+it cannot have. `known_kind`'s 22 kinds no longer leak through to `agent start` — `gemini` used to
+spend a pane and a start timeout to learn something already known. And the grant is legible in the
+**transcript**, not just the pane label: a relaxed delegate reports *"…which the operator has
+permitted to run with its sandbox and approval prompts disabled"*.
+
+### A defect found by testing the opt-in instead of assuming it
+
+With `HERDR_ALLOWED_KINDS=claude,codex` the refusal **still fired**. `buildChildEnv` forwards a
+*named* list, and the earlier fix named only the three gate variables — so every operator knob this
+extension reads was unreachable (`ALLOWED_KINDS`, `DELEGATE_KIND`, `DELEGATE_DIR`,
+`START_TIMEOUT_MS`, `CHECK_WAIT_MS`, `MAX_OUTPUT_CHARS`). It now forwards the `HERDR_` **prefix**:
+herdr injects that family into the pane and the extension reads that family, so the family is the
+unit. Enumerating members of a family that grows was the fragility, not the allowlist.
+
+Measured on all three paths: model asks for codex under default policy → refused in 1 step, **no pane
+and no start timeout spent**. Operator permits codex → runs, 2 steps, correct answer, privilege note
+in the transcript. Default claude → unchanged, 2 steps, correct answer, no note.
+
 ## Owner decision recorded
 
 `codex` cannot run unattended in this container: its sandbox is bubblewrap, bubblewrap needs
