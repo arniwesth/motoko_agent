@@ -228,6 +228,33 @@ in effect here — the sandbox half is already a no-op — but legible). It ship
 argv, opt-in and commented. **`claude` remains the default**: unattended with no relaxation at all,
 and ~1.3× faster. Scope of the grant is written out in MEASUREMENTS §P2-7.
 
+## Why a 020 commit is riding along
+
+`a8320ea` is a **cherry-pick of the code half of `f338d9b`** (020 / PR #173), and it is here
+deliberately rather than by accident.
+
+The defect: herdr accepts a `report-agent` only when `--seq` is strictly greater than the last it
+accepted for that `(pane, source)`, and that high-water mark survives both `release-agent` and the
+reporting process exiting. A counter starting at 1 in each new process is therefore dropped for the
+whole of a *second* Motoko run in the same pane — silently, because herdr rejects server-side and
+the CLI still exits 0. The operator hit it twice while testing this package.
+
+`#173` fixes it, but **it is a sibling of this branch, not an ancestor** — both are cut from mot-102,
+so nothing #173 does reaches here, and it sits six PRs deep in the stack. Waiting was not a plan for
+anyone running Motoko on this branch today.
+
+Verified before keeping it: two files, both `src/tui/src/herdr-agent-state.*`; **no** 020 ADR content
+(that record stays with #173, so the eventual rebase is not made worse); the resulting
+`herdr-agent-state.ts` is byte-identical to `f338d9b`'s apart from this branch's own MOT-118 comment
+block, and the test file is byte-identical. `tsc` clean, herdr suites 17 passing.
+
+Verified *behaviourally*, which matters more than that it merged: three consecutive Motoko runs in
+one pane, with `state_change_seq` advancing **207 → 209** on the third — so the repeat run's reports
+are accepted rather than dropped, and the row is live rather than stale.
+
+**At rebase time: drop `a8320ea`.** Once mot-102 carries `f338d9b`, this is patch-identical to its
+code half and git will usually spot it. Also noted in the commit message.
+
 ## Things a reviewer should push back on if they disagree
 
 - **The spine landed as two commits, not three.** `Delegate` and `DelegateCheck` cannot be split
