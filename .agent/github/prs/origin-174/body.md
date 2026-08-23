@@ -179,6 +179,46 @@ Measured on all three paths: model asks for codex under default policy → refus
 and no start timeout spent**. Operator permits codex → runs, 2 steps, correct answer, privilege note
 in the transcript. Default claude → unchanged, 2 steps, correct answer, no note.
 
+## Elapsed time, which the polling fix silently removed
+
+Third finding, and unlike the other two it is a **side effect of a fix rather than something that
+predated it**. Before the server-side wait, ten polls made elapsed time obvious as a by-product of
+the waste. After it, one call returns with an answer and the model cannot tell whether it waited
+200 ms or 20 s. In a head-to-head both checks were dispatched together and returned together, fusing
+the two kinds into one figure; Motoko reported *"no meaningful difference in time-to-answer"*, which
+was false and which it had no instrument to disprove.
+
+The fix was still right — two steps instead of eleven is the better trade. What it removed was an
+observability nothing replaced.
+
+**The measurement point is the whole design, and the obvious choice is worse than nothing.**
+`now − start` at the *end* of the handler would have reported claude 26.3 s and codex 22.3 s on that
+run — **inverting** the true 15.7 s / 18.9 s, because both results return at the later wait's
+boundary. Timestamping immediately after the wait *returns* recovers the true figures, whether
+concurrent tool calls run sequentially or in parallel.
+
+**The handle is the only start time available.** `herdr agent get` carries no timestamp — sixteen
+fields, none time-like — and herdr is the state store by design. Parsing a name is normally a poor
+dependency; it's acceptable here because `delegate_name` and `start_ms_of` are adjacent in one module
+and pinned by a round-trip test, so changing the format without changing the parser fails the build.
+
+**What the number is**, stated precisely because the obvious reading is slightly wrong: handle
+creation → delegate *settling*, spanning pane split, `agent start`, the readiness gate, the work, and
+the wind-down after the answer is written. It is **not** the answer file's mtime, which is
+unreachable (`path_stat` returns a kind, no timestamp). Verified against ground truth — reported
+14.5 s/23.0 s where files landed at 12.7 s/19.0 s, so the lag is ~1.8 s and ~4.0 s. The ratio survives
+(1.59 vs 1.50 true) and the ordering never wobbles, which is what comparing kinds needs.
+
+It also distinguishes **exact from bounded**: if the wait blocked, the figure is real; if it returned
+at once, the message says *"at most … an upper bound"* rather than asserting a runtime it cannot know.
+
+`Delegate` now reports its own setup cost too — *"Starting it took 4.0s"* — which is what made two
+`Delegate` calls in one step land 3.9 s apart with nothing saying why. Timing is in metadata as well
+as prose (`started_ms`, `elapsed_ms`, `waited_ms`, `elapsed_is_exact`).
+
+**Re-measured on the same head-to-head shape:** the model now concludes *"claude finished first at
+14.5s, codex took 23.0s"* instead of "no meaningful difference".
+
 ## Owner decision recorded
 
 `codex` cannot run unattended in this container: its sandbox is bubblewrap, bubblewrap needs
