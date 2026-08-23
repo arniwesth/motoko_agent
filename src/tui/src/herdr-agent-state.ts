@@ -124,9 +124,11 @@ export function readHerdrEnvironment(env: NodeJS.ProcessEnv): HerdrEnvironment |
  * The argv for one `pane report-agent` call.
  *
  * `seq` is not decoration. Reports are fire-and-forget child processes, so two transitions close
- * together can reach the server out of order; herdr ignores a report whose sequence is lower than
- * one it has already accepted from the same source. Without it, a fast working -> idle pair can
- * leave the sidebar showing `working` for ever.
+ * together can reach the server out of order; herdr accepts a report only when its sequence is
+ * strictly greater than the last it accepted from the same source on this pane. Without it, a fast
+ * working -> idle pair can leave the sidebar showing `working` for ever.
+ *
+ * The same rule is why the counter is seeded rather than started at zero — see `seq`.
  */
 export function buildReportArgs(
   paneId: string,
@@ -187,8 +189,29 @@ export function buildReleaseArgs(paneId: string, seq: number): string[] {
 // --------------------------------------------------------------------------------------------
 
 let active: HerdrEnvironment | null = null;
+
+/**
+ * The sequence number of the last report.
+ *
+ * IT IS SEEDED FROM THE WALL CLOCK, AND THAT IS THE WHOLE POINT. herdr accepts a report only when
+ * its `--seq` is strictly greater than the last one it accepted from the same source on the same
+ * pane, and — measured 2026-08-22 against herdr v0.8.2, see ADR-001's measurement M6 — that
+ * high-water mark survives both `release-agent` and the exit of the process that set it. A counter
+ * that restarts at 1 in every new process is therefore silently ignored for the whole of a second
+ * run in the same pane: Motoko starts, reports `idle` at seq 1, herdr drops it as stale, and no row
+ * ever appears. The failure is invisible from inside Motoko, because a rejected report is rejected
+ * by the server rather than surfaced to the caller.
+ *
+ * Milliseconds since the epoch fixes it without any state to keep: a run cannot emit more reports
+ * than it lasts milliseconds, so the next process's seed always outranks the previous run's last
+ * report. A clock that steps backwards (NTP) would reintroduce the defect for the width of the
+ * step; that is accepted, because the alternative is persisting a counter per pane.
+ */
 let seq = 0;
 let released = false;
+
+/** The clock the seed comes from. A seam, so the restart property can be tested deterministically. */
+let now: () => number = () => Date.now();
 
 /** Test seam: the last argv each helper would have spawned, when capture is installed. */
 let spawnHook: ((args: string[]) => void) | null = null;
@@ -198,11 +221,17 @@ export function __setSpawnHookForTests(hook: ((args: string[]) => void) | null):
   spawnHook = hook;
 }
 
+/** Test seam: replaces the seed clock. Pass null to restore `Date.now`. */
+export function __setClockForTests(clock: (() => number) | null): void {
+  now = clock ?? (() => Date.now());
+}
+
 /** Resets module state between tests. Not called in production. */
 export function __resetForTests(): void {
   active = null;
   seq = 0;
   released = false;
+  now = () => Date.now();
 }
 
 function fire(args: string[]): void {
@@ -237,6 +266,10 @@ function fire(args: string[]): void {
 export function initHerdrReporter(env: NodeJS.ProcessEnv = process.env): boolean {
   active = readHerdrEnvironment(env);
   if (!active) return false;
+
+  // Seed before the first report — see `seq`. Without this, a Motoko restarted in a pane that has
+  // already hosted one is invisible to herdr for its entire run.
+  seq = now();
 
   reportRunState("idle");
 
