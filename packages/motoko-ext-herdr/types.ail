@@ -32,7 +32,7 @@ module sunholo/motoko_ext_herdr/types
 --      them — a healthy agent has a populated `matched_rule` and a null
 --      `fallback_reason`. `explain_says_ready` is that test.
 
-import std/string (length, substring, contains, intToStr, join, replace, stringToInt)
+import std/string (length, substring, contains, intToStr, join, replace, stringToInt, find)
 import std/json (Json, decode, encode, get, asString, asNumber, jo, ja, js, kv)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -171,6 +171,7 @@ export pure func owns_name(name: string) -> bool
 export pure func start_ms_of(name: string) -> int
   tests [
     ("mot-dlg-1787475025027", 1787475025027),
+    ("mot-dlg-1787475025027@w1:pA", 1787475025027),
     ("mot-dlg-0", 0),
     ("dlg-codex-a", 0),
     ("herdr-021", 0),
@@ -178,11 +179,12 @@ export pure func start_ms_of(name: string) -> int
     ("mot-dlg-notanumber", 0)
   ]
   {
+    let bare = handle_name(name);
     let p = name_prefix();
     let n = length(p);
-    if length(name) <= n then 0
-    else if substring(name, 0, n) != p then 0
-    else match stringToInt(substring(name, n, length(name))) {
+    if length(bare) <= n then 0
+    else if substring(bare, 0, n) != p then 0
+    else match stringToInt(substring(bare, n, length(bare))) {
       Some(v) => v,
       None    => 0
     }
@@ -293,7 +295,7 @@ export pure func wrapper_is_token_free(task: string, answer: string) -> bool
 export pure func known_kind(k: string) -> bool
   tests [
     ("claude", true), ("codex", true), ("gemini", true), ("omp", true),
-    ("motoko", false), ("", false), ("Claude", false)
+    ("motoko", true), ("", false), ("Claude", false)
   ]
   {
     k == "pi" || k == "claude" || k == "codex" || k == "gemini" || k == "cursor"
@@ -302,6 +304,10 @@ export pure func known_kind(k: string) -> bool
       || k == "kiro" || k == "droid" || k == "amp" || k == "grok"
       || k == "hermes" || k == "kilo" || k == "qodercli" || k == "qwen"
       || k == "maki"
+      -- Not one of herdr's 22 and never will be, but it IS a kind this
+      -- extension can run — through a different lifecycle. `known_kind` gates
+      -- "is this a thing at all"; `kind_allowed` gates operator policy.
+      || k == "motoko"
   }
 
 -- WHICH KINDS THE MODEL MAY CHOOSE. Operator policy, not model choice.
@@ -411,10 +417,11 @@ export pure func default_kind() -> string
 -- `pane split --cwd`), the wrap never fires and `req.args` survives. That
 -- recovers the WI-D24 holder stamping 018 §2.4 had to give up.
 
-export pure func argv_split(cwd: string) -> [string]
+export pure func argv_split(cwd: string, depth_env: string) -> [string]
   {
     ["pane", "split", "--current", "--direction", "right", "--cwd", cwd,
-     "--no-focus", "--env", "ANTHROPIC_API_KEY=", "--env", "OPENAI_API_KEY="]
+     "--no-focus", "--env", "ANTHROPIC_API_KEY=", "--env", "OPENAI_API_KEY=",
+     "--env", depth_env]
   }
 
 -- `--timeout` MUST be passed and MUST be below Motoko's 30s process wall.
@@ -495,9 +502,9 @@ export pure func show_argv(xs: [string]) -> string
   tests [([], ""), (["agent", "get", "x"], "agent get x")]
   { join(" ", xs) }
 
-export pure func argv_split_str(cwd: string) -> string
-  tests [("/w/m", "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY=")]
-  { show_argv(argv_split(cwd)) }
+export pure func argv_split_str(cwd: string, depth_env: string) -> string
+  tests [(("/w/m", "HERDR_DELEGATE_DEPTH=1"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1")]
+  { show_argv(argv_split(cwd, depth_env)) }
 
 export pure func argv_start_str(name: string, kind: string, pane: string, timeout_ms: int) -> string
   tests [
@@ -555,6 +562,205 @@ export pure func argv_is_safe(xs: [string]) -> bool
     (["agent", "prompt", "x", "Refactor `parse` and run make test && make lint"], false)
   ]
   { any_shell_tokens(xs) == false }
+
+-- ---------------------------------------------------------------------------
+-- Motoko as a delegate — a second lifecycle, not a 23rd kind
+-- ---------------------------------------------------------------------------
+--
+-- `agent start --kind` takes a fixed list of 22 baked into the herdr binary and
+-- `motoko` is not on it and cannot be (020 ADR-001 option B, closed). Motoko
+-- does not need it: it is a lifecycle AUTHORITY (020 D1), so it announces
+-- itself, and a live row appears ~0.8s after `pane run` against 3.9s for
+-- `agent start --kind claude`. It is the fastest delegate available.
+--
+-- Three of six lifecycle steps differ, which is why this is a branch and not a
+-- table entry: the task arrives as argv rather than through `agent prompt`
+-- (which refuses reported agents), completion is the ANSWER FILE rather than
+-- the agent state, and reaping is an explicit close rather than a settle.
+export pure func motoko_kind() -> string
+  tests [((), "motoko")]
+  { "motoko" }
+
+export pure func is_motoko(kind: string) -> bool
+  tests [("motoko", true), ("claude", false), ("codex", false), ("", false)]
+  { kind == motoko_kind() }
+
+-- SINGLE-QUOTE SAFETY, WHICH IS A DIFFERENT PROBLEM FROM #158 AND NEEDS ITS OWN
+-- PREDICATE. `argv_is_safe` protects a herdr argv from the tool runtime's shell
+-- wrap dropping `req.args`. A `pane run` payload is the opposite situation: it
+-- is MEANT to reach a shell, so the eight-token test would refuse a perfectly
+-- correct command. Widening `argv_is_safe` to allow it would disable the #158
+-- guard everywhere, which is why this is separate.
+--
+-- The rule that actually applies is exact and provable rather than heuristic:
+-- inside POSIX single quotes EVERY character is literal except `'` itself. So a
+-- payload wrapped in single quotes is safe if and only if it contains no single
+-- quote. Nothing else needs checking, and nothing less would do.
+export pure func single_quote_safe(s: string) -> bool
+  tests [
+    ("./scripts/run-agent.sh", true),
+    ("Read the task in /tmp/a.md and carry it out.", true),
+    ("a | b && c; $(d) `e` > f", true),
+    ("don't", false),
+    ("'", false),
+    ("", true)
+  ]
+  { contains(s, "'") == false }
+
+-- The task text Motoko receives as argv[2]. It tells the delegate to stop,
+-- which it will not reliably do (measured: `working` 18s+ after the answer
+-- landed) — reaping does not depend on it, but asking costs nothing.
+export pure func motoko_task_text(task: string, answer: string) -> string
+  tests [
+    (("/tmp/m/task-a.md", "/tmp/m/answer-a.md"),
+     "Read the task described in /tmp/m/task-a.md and carry it out. Write your final answer as Markdown to /tmp/m/answer-a.md, then stop.")
+  ]
+  { "Read the task described in ${task} and carry it out. Write your final answer as Markdown to ${answer}, then stop." }
+
+export pure func motoko_run_payload(script: string, task: string, answer: string) -> string
+  tests [
+    (("./scripts/run-agent.sh", "/tmp/m/task-a.md", "/tmp/m/answer-a.md"),
+     "./scripts/run-agent.sh 'Read the task described in /tmp/m/task-a.md and carry it out. Write your final answer as Markdown to /tmp/m/answer-a.md, then stop.'")
+  ]
+  { "${script} '${motoko_task_text(task, answer)}'" }
+
+-- Checked on the PARTS, not the assembled payload — the payload contains the
+-- quotes on purpose, so asserting the whole string is quote-free is both wrong
+-- and always false. What must hold is that nothing interpolated INTO it can
+-- close the quoting: the script path, and the task text (which carries the two
+-- file paths).
+export pure func motoko_payload_is_safe(script: string, task: string, answer: string) -> bool
+  tests [
+    (("./scripts/run-agent.sh", "/tmp/m/task-a.md", "/tmp/m/answer-a.md"), true),
+    (("./run'x.sh", "/tmp/m/task-a.md", "/tmp/m/answer-a.md"), false),
+    (("./scripts/run-agent.sh", "/tmp/m/don't.md", "/tmp/m/answer-a.md"), false),
+    (("./scripts/run-agent.sh", "/tmp/m/task-a.md", "/tmp/m/it's.md"), false)
+  ]
+  {
+    single_quote_safe(script) && single_quote_safe(motoko_task_text(task, answer))
+  }
+
+export pure func argv_pane_run(pane: string, payload: string) -> [string]
+  { ["pane", "run", pane, payload] }
+
+export pure func argv_pane_run_str(pane: string, payload: string) -> string
+  tests [(("w1:pA", "./x.sh 'hi'"), "pane run w1:pA ./x.sh 'hi'")]
+  { show_argv(argv_pane_run(pane, payload)) }
+
+-- `agent rename` is what lets a self-reported agent join the existing handle
+-- model. Measured: a `motoko` row renamed to `mot-dlg-selftest` becomes
+-- addressable by that name, so `agent get`, `owns_name`'s prefix ownership and
+-- self-exclusion all keep working with no new state. Without it every motoko
+-- delegate reports the label `motoko` and `agent list` cannot tell them apart,
+-- which is MOT-120 — this sidesteps MOT-120 rather than waiting for it.
+-- THE HANDLE CARRIES THE PANE FOR A MOTOKO DELEGATE, and `agent rename` — which
+-- this design originally reached for — turns out to be unusable at spawn time.
+--
+-- Rename DOES work on a self-reported agent (measured: a `motoko` row renamed
+-- to `mot-dlg-selftest` becomes addressable by that name). What defeats it is
+-- timing: the row appears ~0.8s AFTER `pane run` returns, and `agent wait` does
+-- not block for an agent that does not exist yet — it fails immediately with
+-- `agent_not_found` in 2ms (measured). With no sleep primitive on `ExtPorts`
+-- there is nothing to wait on, so at `Delegate` time there is no agent to
+-- rename.
+--
+-- Carrying the pane in the handle solves the same three problems with no extra
+-- call and no race: ownership stays provable by the `mot-dlg-` prefix, the pane
+-- is addressable for `agent get`, and the start time is still recoverable. It
+-- also doubles as the discriminator telling `DelegateCheck` which lifecycle to
+-- use, so nothing has to inspect the agent label.
+--
+-- `argv_rename` is kept because it is the answer to MOT-120 for anything that
+-- CAN wait for the row, and because deleting a measured-working primitive to
+-- save four lines would lose the finding.
+export pure func motoko_handle(seed: int, pane: string) -> string
+  tests [((1787475025027, "w1:pA"), "mot-dlg-1787475025027@w1:pA")]
+  { "${delegate_name(seed)}@${pane}" }
+
+export pure func handle_is_motoko(handle: string) -> bool
+  tests [
+    ("mot-dlg-1787475025027@w1:pA", true),
+    ("mot-dlg-1787475025027", false),
+    ("", false)
+  ]
+  { contains(handle, "@") }
+
+export pure func handle_pane(handle: string) -> string
+  tests [
+    ("mot-dlg-1787475025027@w1:pA", "w1:pA"),
+    ("mot-dlg-1787475025027", ""),
+    ("", "")
+  ]
+  {
+    let i = find(handle, "@");
+    if i < 0 then "" else substring(handle, i + 1, length(handle))
+  }
+
+-- The part before any `@`, so one handle shape serves both lifecycles.
+export pure func handle_name(handle: string) -> string
+  tests [
+    ("mot-dlg-1787475025027@w1:pA", "mot-dlg-1787475025027"),
+    ("mot-dlg-1787475025027", "mot-dlg-1787475025027")
+  ]
+  {
+    let i = find(handle, "@");
+    if i < 0 then handle else substring(handle, 0, i)
+  }
+
+export pure func argv_rename(pane: string, name: string) -> [string]
+  { ["agent", "rename", pane, name] }
+
+export pure func argv_rename_str(pane: string, name: string) -> string
+  tests [(("w1:pA", "mot-dlg-7"), "agent rename w1:pA mot-dlg-7")]
+  { show_argv(argv_rename(pane, name)) }
+
+export pure func argv_wait_until(target: string, state: string, timeout_ms: int) -> [string]
+  { ["agent", "wait", target, "--until", state, "--timeout", intToStr(timeout_ms)] }
+
+export pure func argv_wait_until_str(target: string, state: string, timeout_ms: int) -> string
+  tests [(("mot-dlg-7", "working", 8000), "agent wait mot-dlg-7 --until working --timeout 8000")]
+  { show_argv(argv_wait_until(target, state, timeout_ms)) }
+
+-- ---------------------------------------------------------------------------
+-- Recursion depth
+-- ---------------------------------------------------------------------------
+--
+-- RECURSION IS LIVE AND DEFAULTS TO OFF. A motoko delegate loads this same
+-- extension — measured, its status line reads `ext: … herdr` — so it can
+-- delegate in turn. Unbounded that is a tree of LLM agent loops at `max_steps`
+-- 100 each with no budget propagation between parent and child, and nothing in
+-- the design would notice one happening.
+--
+-- The counter travels in the pane environment, which works only because PR
+-- #174 made `buildChildEnv` forward the whole HERDR_ prefix rather than three
+-- named variables. Depth 0 is the operator's own Motoko; a delegate is spawned
+-- at depth 1; at the default limit of 1 that delegate cannot spawn anything.
+--
+-- IT ALSO BOUNDS THE ORPHAN STORY, which is the reason it is not merely a cost
+-- control. §5.1's orphan is a coding agent; a motoko orphan is an orchestrator.
+-- At the depth limit an orphaned motoko delegate cannot spawn, so it is exactly
+-- as inert as an orphaned claude — it burns more quota, but it cannot multiply.
+export pure func default_max_depth() -> int
+  tests [((), 1)]
+  { 1 }
+
+export pure func depth_allows(current: int, max_depth: int) -> bool
+  tests [
+    ((0, 1), true),
+    ((1, 1), false),
+    ((2, 1), false),
+    ((0, 0), false),
+    ((1, 2), true)
+  ]
+  { current < max_depth }
+
+export pure func next_depth(current: int) -> int
+  tests [(0, 1), (1, 2)]
+  { current + 1 }
+
+export pure func argv_env_depth(current: int) -> string
+  tests [(0, "HERDR_DELEGATE_DEPTH=1"), (1, "HERDR_DELEGATE_DEPTH=2")]
+  { "HERDR_DELEGATE_DEPTH=${intToStr(next_depth(current))}" }
 
 -- ---------------------------------------------------------------------------
 -- Error decoding — five shapes, not two

@@ -41,6 +41,10 @@ import pkg/sunholo/motoko_ext_herdr/types (
   path_is_safe, path_within, argv_is_safe, show_argv,
   argv_split, argv_start, argv_prompt, argv_get, argv_explain, argv_close,
   argv_wait, wait_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
+  is_motoko, motoko_kind, motoko_run_payload, motoko_payload_is_safe,
+  argv_pane_run, argv_wait_until, motoko_handle, handle_is_motoko,
+  handle_pane, handle_name,
+  depth_allows, next_depth, argv_env_depth,
   failure_code, failure_message, explain_says_ready,
   split_pane_id, agent_status_of, agent_pane_of, is_settled,
   bash_exec_tool, bash_exec_args, bash_field, bash_exit
@@ -54,6 +58,12 @@ export type HerdrConfig = {
   -- Operator policy: which kinds the MODEL may select. See
   -- `types.kind_allowed` for why this exists and why it defaults to claude.
   allowed_kinds: string,
+  -- Recursion control. `depth` is this Motoko's own depth (0 for the
+  -- operator's); `max_depth` is how deep delegation may go. See
+  -- `types.depth_allows`.
+  depth: int,
+  max_depth: int,
+  motoko_script: string,
   start_timeout_ms: int,
   -- How long DelegateCheck blocks server-side before answering "still working".
   -- See `types.argv_wait` for why blocking is the default and not an option the
@@ -186,6 +196,14 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   -- OPERATOR POLICY, CHECKED BEFORE ANYTHING IS SPENT. Refusing here rather
   -- than at `agent start` also saves a pane and a start timeout for a kind that
   -- was never going to be permitted.
+  -- RECURSION GATE, BEFORE ANYTHING IS SPENT. Checked for every kind, not just
+  -- motoko: the default limit of 1 means the operator's Motoko may delegate and
+  -- a delegate may not, which is what "recursion default-off" means. It also
+  -- bounds the orphan story — an orphaned delegate at the limit cannot spawn.
+  else if depth_allows(cfg.depth, cfg.max_depth) == false then
+    { result: err_result(call.id, "Delegate",
+        "Delegation is not permitted at this depth. This Motoko is itself a delegate (depth ${show(cfg.depth)}) and the limit is ${show(cfg.max_depth)}, so it must do the work itself rather than delegating further. The operator can raise HERDR_MAX_DELEGATE_DEPTH; recursion is off by default because a tree of agent loops has no budget propagation and nothing would notice it growing."),
+      next_state: ctx.world }
   else if kind_allowed(cfg.allowed_kinds, kind) == false then
     { result: err_result(call.id, "Delegate",
         "`${kind}` is a kind herdr knows, but the operator has not permitted it here. Permitted: ${cfg.allowed_kinds}. This is an operator decision, not something to work around — `${kind}` may require relaxed permissions or be unverified in this container. Use a permitted kind, or ask the operator to widen HERDR_ALLOWED_KINDS."),
@@ -215,10 +233,49 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
       if wrote.ok == false then
         { result: err_result(call.id, "Delegate", "Could not write the task file `${task}`: ${wrote.error}"), next_state: wrote.next_state }
       else {
-        let sp = run_herdr(cfg, p, wrote.next_state, argv_split(cwd));
+        let sp = run_herdr(cfg, p, wrote.next_state, argv_split(cwd, argv_env_depth(cfg.depth)));
         let pane = split_pane_id(sp.out);
         if sp.code != 0 || pane == "" then
-          { result: err_result(call.id, "Delegate", explain_failure("Splitting a pane for the delegate", argv_split(cwd), sp)), next_state: sp.next_state }
+          { result: err_result(call.id, "Delegate", explain_failure("Splitting a pane for the delegate", argv_split(cwd, argv_env_depth(cfg.depth)), sp)), next_state: sp.next_state }
+        else if is_motoko(kind) then {
+          -- MOTOKO IS A SECOND LIFECYCLE, NOT A KIND. `agent start --kind` takes
+          -- a fixed list of 22 and motoko is not on it (020 ADR-001 option B).
+          -- It does not need it: Motoko is a lifecycle AUTHORITY (020 D1) and
+          -- announces itself, ~0.8s after `pane run` against 3.9s for
+          -- `agent start --kind claude`.
+          --
+          -- The task arrives as argv[2]. `agent prompt` refuses reported agents
+          -- ("not an active named agent") and `pane send-text` is screen-driving
+          -- that the handoff forbids, so argv is the only channel — and it is a
+          -- better one, since it needs no readiness gate at all.
+          if motoko_payload_is_safe(cfg.motoko_script, task, answer) == false then {
+            let cleaned = run_herdr(cfg, p, sp.next_state, argv_close(pane));
+            { result: err_result(call.id, "Delegate", "The delegate paths or script path contain a single quote, which would break the shell quoting of the `pane run` payload. Refused rather than sent."), next_state: cleaned.next_state }
+          }
+          else {
+            let payload = motoko_run_payload(cfg.motoko_script, task, answer);
+            let rn = run_herdr(cfg, p, sp.next_state, argv_pane_run(pane, payload));
+            if rn.code != 0 then {
+              let cleaned = run_herdr(cfg, p, rn.next_state, argv_close(pane));
+              { result: err_result(call.id, "Delegate", explain_failure("Starting a motoko delegate", argv_pane_run(pane, payload), rn)), next_state: cleaned.next_state }
+            }
+            else {
+              -- THE HANDLE CARRIES THE PANE. The row does not exist yet — it
+              -- appears ~0.8s from now — and `agent wait` will not block for an
+              -- agent that does not exist (measured: agent_not_found in 2ms), so
+              -- there is nothing to rename and nothing to gate on. See
+              -- `types.motoko_handle`.
+              let t = p.clock_now(rn.next_state);
+              let h = motoko_handle(clock.now_ms, pane);
+              { result: {
+                  tool_call_id: call.id, tool: "Delegate", exit_code: 0,
+                  stdout: "Delegate `${h}` is running motoko in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.",
+                  stderr: "", metadata: meta_kind(h, pane, motoko_kind())
+                },
+                next_state: t.next_state }
+            }
+          }
+        }
         else {
           let st = run_herdr(cfg, p, sp.next_state, argv_start(name, kind, pane, cfg.start_timeout_ms));
           if st.code != 0 then {
@@ -278,6 +335,72 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
 -- DelegateCheck
 -- ---------------------------------------------------------------------------
 
+-- THE COMPLETION GATE FOR A MOTOKO DELEGATE IS THE ANSWER FILE, FULL STOP.
+--
+-- Motoko reports `idle` AT STARTUP — 020 D2's deliberate initial report, which
+-- exists so the row appears before the first task. Measured: `motoko idle` 869ms
+-- after `pane run`, with the task not begun. Run through the normal path that
+-- would hit `is_settled("idle")`, take the settled branch, find no answer file
+-- and report P2-3's "finished but never wrote" against a delegate that has not
+-- started. So the agent state is never consulted for completion here; it is used
+-- only to pick which transition to wait on.
+--
+-- It also does not stop after answering (measured: `working` 18s+ later), so
+-- reaping is an explicit close once the file lands, not a wait for a settle that
+-- never comes.
+func do_check_motoko(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope, handle: string)
+  -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let pane = handle_pane(handle);
+  let answer = answer_path(cfg.work_dir, handle_name(handle));
+  let t0 = p.clock_now(ctx.world);
+
+  -- The file first, always. If it is there the delegate is done regardless of
+  -- what its state says, and nothing else needs asking.
+  let early = p.file_read(t0.next_state, answer);
+  if early.present && early.content != "" then {
+    let closed = run_herdr(cfg, p, early.next_state, argv_close(pane));
+    { result: {
+        tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+        stdout: "Delegate `${handle}` finished.${elapsed_note(handle, t0.now_ms, 999999)}\n\n${truncate(early.content, cfg.max_output_chars)}",
+        stderr: "", metadata: meta_timed(handle, pane, t0.now_ms, 999999)
+      },
+      next_state: closed.next_state }
+  }
+  else {
+    let g = run_herdr(cfg, p, early.next_state, argv_get(pane));
+    if g.code != 0 then
+      { result: err_result(call.id, "DelegateCheck", explain_failure("Reading motoko delegate in pane `${pane}`", argv_get(pane), g)), next_state: g.next_state }
+    else {
+      -- Which transition to wait on. `working` means it is doing the task, so
+      -- wait for it to go idle. Anything else means it has not begun (the
+      -- startup idle), so wait for it to START. Both are bounded.
+      let status = agent_status_of(g.out);
+      let target = if status == "working" then "idle" else "working";
+      let w = run_herdr(cfg, p, g.next_state, argv_wait_until(pane, target, cfg.check_wait_ms));
+      let t1 = p.clock_now(w.next_state);
+      let waited = t1.now_ms - t0.now_ms;
+      let rd = p.file_read(t1.next_state, answer);
+      if rd.present && rd.content != "" then {
+        let closed = run_herdr(cfg, p, rd.next_state, argv_close(pane));
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${handle}` finished.${elapsed_note(handle, t1.now_ms, waited)}\n\n${truncate(rd.content, cfg.max_output_chars)}",
+            stderr: "", metadata: meta_timed(handle, pane, t1.now_ms, waited)
+          },
+          next_state: closed.next_state }
+      }
+      else
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${handle}` has not written its answer yet (state `${agent_status_of(g.out)}`, waited ${format_ms(waited)} for a transition to `${target}`). A motoko delegate reports idle at startup, so its state is not a completion signal — only the answer file is. Check again.",
+            stderr: "", metadata: meta_timed(handle, pane, t1.now_ms, waited)
+          },
+          next_state: rd.next_state }
+    }
+  }
+}
+
 func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
@@ -291,6 +414,7 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   -- enough to justify touching something.
   else if owns_name(name) == false then
     { result: err_result(call.id, "DelegateCheck", "`${name}` was not started by this extension. Only handles returned by Delegate can be checked, and nothing else in the session will be touched."), next_state: ctx.world }
+  else if handle_is_motoko(name) then do_check_motoko(cfg, ctx, call, name)
   else {
     -- WAIT FIRST, SERVER-SIDE. Without this the model busy-polls: `agent get`
     -- returns in 4ms, a model cannot sleep, so the loop runs at whatever rate
