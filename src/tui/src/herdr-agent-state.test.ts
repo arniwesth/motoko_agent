@@ -12,6 +12,7 @@ import {
   reportRunState,
   reportSessionPath,
   __resetForTests,
+  __setClockForTests,
   __setSpawnHookForTests,
   type MotokoRunState,
 } from "./herdr-agent-state.js";
@@ -138,5 +139,50 @@ describe("reporter lifecycle", () => {
     releaseHerdrReporter();
     releaseHerdrReporter();
     expect(fired.filter((a) => a[1] === "release-agent")).toHaveLength(1);
+  });
+
+  // The regression these three guard is invisible in production: herdr rejects a stale report on
+  // the server, so Motoko cannot tell a dropped report from an accepted one. Measured against
+  // herdr v0.8.2 (ADR-001, M6): the last accepted sequence for a (pane, source) survives both
+  // `release-agent` and the reporting process's exit, so a second run in the same pane that starts
+  // counting at 1 is ignored for its entire life.
+  const seqsOf = (args: string[][]): number[] =>
+    args.map((a) => Number(a[a.indexOf("--seq") + 1]));
+
+  it("seeds the sequence from the clock at init", () => {
+    __setClockForTests(() => 1_787_000_000_000);
+    initHerdrReporter(IN_HERDR);
+    // The seed itself is never sent: the first report is seed + 1.
+    expect(seqsOf(fired)).toEqual([1_787_000_000_001]);
+  });
+
+  it("makes a restart in the same pane outrank the run before it", () => {
+    __setClockForTests(() => 1_787_000_000_000);
+    initHerdrReporter(IN_HERDR);
+    reportRunState("thinking");
+    reportRunState("idle");
+    releaseHerdrReporter();
+    const first = seqsOf(fired);
+
+    // A second Motoko in the same pane, one second later. Its very first report must outrank the
+    // previous run's release, or herdr never shows a row for it at all.
+    __resetForTests();
+    fired = [];
+    __setSpawnHookForTests((args) => fired.push(args));
+    __setClockForTests(() => 1_787_000_001_000);
+    initHerdrReporter(IN_HERDR);
+
+    expect(seqsOf(fired)[0]).toBeGreaterThan(Math.max(...first));
+  });
+
+  it("sends the sequence as a plain integer", () => {
+    // Date.now() is integral, but a seed that ever arrived as "1.787e+12" or "1787000000000.5"
+    // would be rejected by the server and, again, rejected silently.
+    __setClockForTests(() => 1_787_000_000_000);
+    initHerdrReporter(IN_HERDR);
+    reportSessionPath("/tmp/s.jsonl");
+    for (const args of fired) {
+      expect(args[args.indexOf("--seq") + 1]).toMatch(/^[0-9]+$/);
+    }
   });
 });
