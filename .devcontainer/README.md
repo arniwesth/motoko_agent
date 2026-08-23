@@ -6,6 +6,20 @@ This repo provides two VS Code devcontainer profiles:
 - `.devcontainer/observability/devcontainer.json`: starts `app`, ClickStack,
   and the Motoko log collector sidecar.
 
+…and one profile that is **not** a devcontainer, and must not become one:
+
+- `.devcontainer/agent_confined/`: a compose service the agent lives in, driven
+  from a host shell with `agent_confined/agent.sh`, running
+  [herdr](https://herdr.dev) as its session layer. It has **no
+  `devcontainer.json` on purpose** — VS Code attach is the mechanism that
+  forwards the operator's GitHub OAuth session and ssh-agent socket into the
+  agent's UID, which is measurably live in the two profiles above. It therefore
+  never appears in the *Reopen in Container* picker. It is additive: nothing in
+  this file changes because of it. Read
+  [`agent_confined/README.md`](./agent_confined/README.md) before touching it,
+  and note that `.devcontainer/**` is mounted **read-only** inside it — so
+  edits to this directory are made from your own container or the host.
+
 The default profile is intentionally lightweight and matches the main branch
 shape. Use the observability profile when you want Motoko logs or traces shipped
 to ClickStack/HyperDX.
