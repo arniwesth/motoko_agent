@@ -77,6 +77,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         unzip \
         ncurses-bin \
         ncurses-term \
+        bash-completion \
         less \
     && rm -rf /var/lib/apt/lists/*
 

@@ -41,12 +41,18 @@
  * Note what this does NOT change: the branch is pushed with git's credentials
  * and the commits keep their own authorship, so a PR reads as "motoko-agent
  * wants to merge N commits" over commits authored by whoever wrote them.
+ *
+ * Both publishing paths end in `finalize()`, which also attaches the PR to the
+ * Linear issue the branch names — see tools/pr/linear.ts for why that is done
+ * here rather than left to Linear's GitHub integration. It is best-effort by
+ * construction: nothing about it can fail a publish.
  */
 
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 
+import { attachToIssue } from "./linear.ts";
 import {
   type Identity,
   REPO_ROOT,
@@ -266,10 +272,29 @@ function findExistingPr(slug: string, branch: string): { number: number; url: st
   return prs.find((p) => p.state === "OPEN") ?? prs[0];
 }
 
+/** The `title:` out of an existing record, or null when it cannot be read. */
+function recordTitle(path: string): string | null {
+  try {
+    const doc = splitDocument(readFileSync(path, "utf8"));
+    const raw = doc.frontmatter ? readFrontmatterField(doc.frontmatter, "title") : null;
+    return raw ? (JSON.parse(raw) as string) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Move the staged body into its final home and record the number. This is the write-back. */
 function finalize(staged: string | null, remote: string, slug: string, branch: string, number: number): string {
   const dest = finalPath(remote, number);
-  if (existsSync(dest)) return dest;
+  const url = `https://github.com/${slug}/pull/${number}`;
+
+  if (existsSync(dest)) {
+    // The record is already written; the tracker link may not be, because it is
+    // best-effort and a previous run may have lost it to a missing key or a
+    // network failure. Both sides are idempotent, so retry rather than assume.
+    attachToIssue(ticketFromBranch(branch), url, `#${number} ${recordTitle(dest) ?? titleFromBranch(branch)}`);
+    return dest;
+  }
 
   let body: string;
   let title: string;
@@ -295,6 +320,10 @@ function finalize(staged: string | null, remote: string, slug: string, branch: s
     rmSync(dirname(staged), { recursive: true, force: true });
     if (existsSync(STAGING_DIR) && readdirSync(STAGING_DIR).length === 0) rmSync(STAGING_DIR, { recursive: true });
   }
+
+  // Last, and never fatal: the frontmatter makes the PR findable from the git
+  // tree, this makes it findable from the issue. See tools/pr/linear.ts.
+  attachToIssue(fm.ticket, url, `#${number} ${title}`);
   return dest;
 }
 

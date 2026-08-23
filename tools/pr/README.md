@@ -5,6 +5,7 @@ what was decided about each one.
 
 ```
                     ┌─ pr ──────> gh pr create ──> PR number written back
+                    │                └─────────> Linear attachment on MOT-<n>
    .agent/github/ <─┼─ pr-sync ─< comments fetched into a disposable cache
                     └─ pr-loop ─> gh pr comment ──> comment id written back
 ```
@@ -56,6 +57,8 @@ make issue_whoami PR_FLAGS=--as-bot  # → motoko-agent (dedicated to issues/dra
 2. `MOTOKO_BOT_GH_TOKEN` — either exported on the host, which
    `.devcontainer/docker-compose.yml` passes through, or in the gitignored repo-root `.env`.
    Tools read the environment first and fall back to `.env`.
+3. `LINEAR_API_KEY` — same two channels, and **optional**: without it `pr` publishes exactly as
+   before and says once that it did not link the PR to its issue.
 
 The bot token must be a **classic** PAT (`ghp_…`) with `public_repo`, and the bot must have
 *accepted* its collaborator invitation. A fine-grained PAT (`github_pat_…`) reads fine and returns
@@ -80,6 +83,31 @@ ordinary PR template.
 `make pr` drafts first if you skipped it, and is safe to re-run: it **adopts** the PR already open
 for the branch instead of opening a second. If the local record is missing it reconstructs it from
 GitHub — the recovery path for a crash between publishing and writing back.
+
+It also **attaches the PR to its Linear issue** when the branch carries a `mot-<n>` segment, so the
+link exists in both directions: `ticket:` in the frontmatter finds the issue from the tree, and a
+link attachment on the issue finds the PR from Linear.
+
+This is done in the pipeline rather than left to Linear's GitHub integration, which is installed and
+**intermittent**. Measured 2026-08-22: on #168 a genuine description edit produced no linkback and
+no change to MOT-102, and minutes later on #170 the integration attached the PR to MOT-111 by itself
+within seconds. Diagnosing the difference needs `admin:repo_hook`, a scope the bot deliberately does
+not hold — and an intermittent link is the same problem as no link, because nobody can tell from the
+issue whether the absence means anything.
+
+The link is **best-effort and never fatal**. A missing `LINEAR_API_KEY`, a branch with no ticket, an
+unreachable API or a GraphQL error each log one line and let the publish stand; a PR that failed to
+publish because a tracker was down would be strictly worse than one that published unlinked. It is
+also idempotent, including against the integration: the issue's existing attachments are read first
+(Linear's `attachmentLinkURL` errors rather than no-ops on a duplicate), and because the App can
+attach in the gap between that read and the write, a duplicate error is read as success. Re-running
+`make pr` neither duplicates the link nor skips retrying one an earlier run lost.
+
+`LINEAR_API_KEY` is read from the environment first and then from the repo-root `.env`, like the bot
+token. Unlike GitHub, it is a **personal** key: attachments read as its owner, not as `motoko-agent`.
+That is the open question in
+[`.agent/projects/022_linear_integration/`](../../.agent/projects/022_linear_integration/RESEARCH-linear-integration.md)
+§4, not something this driver decides.
 
 | Variable | Default | |
 |---|---|---|
@@ -227,6 +255,7 @@ The schema is **provisional** pending fork 2 of `008_docs_system`; expect one co
 | `issues.ts` | Issue creation, as the bot (ADR-001 D5) |
 | `sync.ts` | comment fetch + state append, as the bot |
 | `loop.ts` | rank / dismiss / respond, the judgment write path |
+| `linear.ts` | the best-effort PR → Linear issue link, called from `pr.ts` |
 | `lib.ts` | identity, `gh`/`git` wrappers, paths, frontmatter |
 | `state.ts` | the `state.yaml` reader/writer |
 
@@ -243,7 +272,8 @@ what to do with a comment that makes several claims with different fates.
 - **No test harness.** Neither `tools/` nor `.agent/tools/` has one, and this tool did not invent
   one. `gh` and `git` are reached through single chokepoints in `lib.ts`, so injecting a fake
   binary via `PATH` would cover adoption, crash recovery and the identity split without touching
-  GitHub. That is the shape a real check should take.
+  GitHub. That is the shape a real check should take — and `linear.ts` reaches the network through
+  one `curl` call for the same reason, so the same fake-binary trick covers it.
 - **A response is always an issue comment.** Replying inline to a review comment needs a different
   endpoint and a `response_kind` field; neither exists yet.
 - **One response per comment.** `response_comment_id` is a scalar. A second reply to the same
