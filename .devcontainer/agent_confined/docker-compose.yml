@@ -46,6 +46,24 @@ services:
     command: sleep infinity
     working_dir: /workspaces/motoko_agent
 
+    # EGRESS BOUNDARY. This service is on an `internal: true` network ONLY, so Docker/OrbStack installs NO
+    # gateway and NO NAT for it: the agent has no route to any private network the host may be attached to
+    # (VPN / mesh-overlay / LAN — 100.64.0.0/10, RFC1918, link-local), to the container host
+    # (0.250.250.0/24), or to the public internet. Its single exit is the egress-proxy sidecar below,
+    # reached by name over this network. This is also what makes the container's NET_RAW harmless — raw
+    # sockets have nowhere to go. checks/r9-container.sh leg 7 asserts the boundary. To roll back: delete
+    # this key (the service returns to the project default network with full egress) and the egress-proxy
+    # service + networks block.
+    networks:
+      - confined_internal
+
+    # Without this, `agent.sh`'s ensure_up (which only checks whether the AGENT service is running) can
+    # leave the proxy behind and the agent comes up with no exit at all. service_started, not
+    # service_healthy, on purpose: a broken proxy must not lock the operator out of the container.
+    depends_on:
+      egress-proxy:
+        condition: service_started
+
     # Neutralises a NOPASSWD sudoers drop-in per service. This image ships none — the Dockerfile purges sudo
     # and asserts its absence — so here it is defence in depth against a future image edit rather than the
     # only control.
@@ -127,6 +145,20 @@ services:
       # GH_TOKEN must be unset, here it must be set AND resolve to motoko-agent.
       GH_TOKEN: ${MOTOKO_BOT_GH_TOKEN:-}
 
+      # EGRESS PROXY wiring. With the agent on the internal-only network above, its ONLY path off-box is
+      # this proxy. Every proxy-aware client (git, gh, npm, bun, node, curl, and the codex/claude
+      # delegates) honours these. A client that ignores them has no direct route either, so it fails
+      # closed rather than leaking — which is the safe direction. NO_PROXY keeps intra-stack traffic and
+      # loopback off the proxy. The proxy currently forwards to ALL PUBLIC hosts and denies only private
+      # ranges (full GitHub/public egress is intentionally still open — see egress-proxy below); tighten
+      # to a strict allowlist there when ready, no change needed here.
+      HTTP_PROXY: http://egress-proxy:3128
+      HTTPS_PROXY: http://egress-proxy:3128
+      http_proxy: http://egress-proxy:3128
+      https_proxy: http://egress-proxy:3128
+      NO_PROXY: localhost,127.0.0.1,::1,egress-proxy
+      no_proxy: localhost,127.0.0.1,::1,egress-proxy
+
     # Deliberately absent, each for a reason:
     #
     #   * devcontainer.json / VS Code attach — attach injects a credential.helper into /etc/gitconfig AND
@@ -146,7 +178,8 @@ services:
     #     which means packets reach the host and are actively rejected. The address is routable. A
     #     process in THIS container can therefore very likely still reach the host by IP; only the
     #     convenient hostname is gone. Untested here specifically, because this profile's network has
-    #     never been up — see HISTORY.md 2026-08-22 for what that leaves owed.
+    #     never been up — the 2026-08-22 entry in the local-only measurement log has what that leaves
+    #     owed (README, *Where the measurement record lives*).
     #
     #     The named cost stands: the obsidian MCP server in .mcp.json (http://host.docker.internal:27200/mcp)
     #     will not connect from here, because it is addressed by name. The ailang-docs and linear MCP
@@ -169,3 +202,74 @@ services:
     #
     # Nobody has taken that decision; it is written out here so that taking it is one edit and not a design
     # session.
+
+  # ----------------------------------------------------------------------------------------------------------
+  # egress-proxy — the agent's SINGLE exit to the outside.
+  #
+  # The agent service is on `confined_internal` only (internal: true → no gateway, no NAT). This sidecar is
+  # the one container dual-homed onto both that internal network AND `confined_egress` (a normal, routed
+  # network), so it is the only path off-box. It is a forward proxy: the agent's HTTP(S)_PROXY points here,
+  # clients issue `CONNECT host:443`, and the proxy allows/denies by the destination it is about to reach —
+  # it never decrypts (no CA, no token exposure).
+  #
+  # CURRENT POLICY (see squid.conf): forward to ALL PUBLIC hosts, DENY every private/reserved range. That
+  # deliberately keeps full GitHub + public egress open for now; the ONLY thing removed is reachability of
+  # any private network the host may be attached to (VPN / mesh-overlay / LAN) and of the container host
+  # itself. To tighten to a strict allowlist later, edit squid.conf alone.
+  #
+  # PINNED BY DIGEST, same discipline as HERDR_SHA256, because this container sits on the egress path.
+  # The digest is the multi-arch INDEX for what was tagged `ubuntu/squid:6.6-24.04_edge` on 2026-08-23
+  # (amd64, arm64/v8, ppc64le, s390x), so it resolves on any of them. Re-resolve with:
+  #     docker buildx imagetools inspect ubuntu/squid:6.6-24.04_edge
+  #
+  # The tag is worth distrusting on its own: `6.6-24.04_edge` currently ships squid **6.14**, because the
+  # `_edge` tags are rebuilt with whatever the Ubuntu pocket holds. The version in the tag is a label, not
+  # a pin — which is the whole argument for the digest.
+  egress-proxy:
+    image: ubuntu/squid@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
+    # ARGUMENTS ONLY — no leading "squid". The image's ENTRYPOINT is its own `entrypoint.sh`, which tails
+    # /var/log/squid/*.log to stdout and then runs `/usr/sbin/squid "$@"`; whatever is written here is
+    # appended to THAT, not executed. (Its own CMD is `-f /etc/squid/squid.conf -NYC`.) A leading `squid`
+    # word reaches the binary as a stray positional argument.
+    command: ["-N", "-f", "/etc/squid/squid.conf"]
+    networks:
+      - confined_internal
+      - confined_egress
+    volumes:
+      # squid.conf lives beside this file; it is mounted read-only into the proxy.
+      - ./squid.conf:/etc/squid/squid.conf:ro
+    read_only: true
+    # ONLY /run is a tmpfs, and the two squid directories are DELIBERATELY not.
+    #
+    # A Docker tmpfs is created ROOT-OWNED. squid drops privileges to `proxy` (uid 13) and then opens its
+    # access log; on a root-owned directory that open fails, and an access log squid cannot open is FATAL
+    # — measured on 6.14 for both the default `daemon:` writer and `stdio:`. `restart: unless-stopped`
+    # then makes it a crash loop, the container leaves Docker's embedded DNS, and every client in the
+    # agent sees a HANG rather than a dead proxy. That is exactly what happened here.
+    #
+    # The image already ships /var/log/squid and /var/spool/squid owned by uid 13 AND declares both as
+    # VOLUMEs, so leaving them alone gives squid writable, correctly-owned anonymous volumes. Do not
+    # "tidy" them back into the tmpfs list. /run is fine as a tmpfs: nothing there needs the proxy user
+    # (and squid.conf sets `pid_filename none` anyway). /run, not /var/run — the latter is a symlink to it.
+    tmpfs:
+      - /run
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    # Makes a dead proxy visible in `docker compose ps` instead of only as a client-side timeout. bash is
+    # in the image; /bin/sh there is dash and has no /dev/tcp.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3128"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+# Two networks make the boundary. `confined_internal` has NO route to anything but its own members —
+# that is the wall. `confined_egress` is an ordinary routed network that ONLY the proxy joins, so the
+# proxy is the only container that can reach the outside. Deleting both (and the agent's `networks:` key
+# and the egress-proxy service) restores the previous full-egress behaviour.
+networks:
+  confined_internal:
+    internal: true
+  confined_egress: {}

@@ -80,6 +80,15 @@ REPO_ROOT="$(cd "${HERE}/../.." && pwd)"
 COMPOSE_FILE="${HERE}/docker-compose.yml"
 VERSIONS_FILE="${HERE}/versions.env"
 SERVICE="agent"
+# The agent image is BUILT here and never pushed anywhere, so a missing local image is not a pull away from
+# being fixed. Named here so ensure_up can say that, instead of letting compose fall through to a registry
+# and report "pull access denied … repository does not exist" — which reads like a credentials problem and
+# is not one. `docker system prune -a` (make prune) is the usual way it goes missing.
+IMAGE="motoko_agent_confined/dev:1.0"
+# The proxy sidecar is the agent's ONLY route off-box (docker-compose.yml, egress boundary). It is named
+# here because "is the stack up" has to mean both containers: an agent running beside a dead proxy looks
+# healthy and fails every network call with a timeout that reads like a broken internet connection.
+EGRESS_SERVICE="egress-proxy"
 CONTAINER_USER="motoko"
 WORKDIR="/workspaces/motoko_agent"
 SESSION="${AGENT_HERDR_SESSION:-}"
@@ -293,6 +302,14 @@ compose() { "${COMPOSE[@]}" "$@"; }
 
 running() { compose ps --status running --services 2>/dev/null | grep -qx "$SERVICE"; }
 
+# Both halves, in one `compose ps` call. Used by ensure_up so that a crash-looping proxy is repaired by the
+# next `agent.sh` instead of being invisible until every tool in the container starts timing out.
+stack_running() {
+  local svcs
+  svcs="$(compose ps --status running --services 2>/dev/null)"
+  grep -qx "$SERVICE" <<<"$svcs" && grep -qx "$EGRESS_SERVICE" <<<"$svcs"
+}
+
 # `attach` and `shell` hand the terminal to herdr/bash, so `docker compose exec` allocates a TTY — and it
 # REFUSES to do that when stdin is a pipe, with a message about attaching stdin to a TTY-enabled container
 # that says nothing about what you typed.
@@ -304,7 +321,13 @@ Docker refuses to allocate a TTY in that case. For a non-interactive run, use:
 }
 
 ensure_up() {
-  if running; then return; fi
+  if stack_running; then return; fi
+  docker image inspect "$IMAGE" >/dev/null 2>&1 || die "the image ${IMAGE} is not present locally.
+It is built from this profile's Dockerfile and never pushed, so compose cannot pull it — that is what a
+\"pull access denied … repository does not exist\" message here means. A \`docker system prune -a\`
+(\`make prune\`) removes it once the containers are down. Rebuild it at the versions pinned in
+versions.env — nothing is re-resolved, so this reproduces the same harness:
+  $(basename "$0") build"
   echo "starting agent_confined  (herdr ${HERDR_VERSION}, claude ${CLAUDE_CODE_VERSION}, codex ${CODEX_VERSION}, omp ${OMP_VERSION})" >&2
   echo "the first run builds the image; expect several minutes" >&2
   compose up -d
