@@ -61,7 +61,7 @@ Both were invisible to `ailang check` and both are fixed here.
 
 ## Verification
 
-- **107 inline `tests [...]`** in `types.ail`, all green. Every pure function carries them (018 F8).
+- **157 inline `tests [...]`** in `types.ail`, all green (018 F8) — see criterion 5 above for the two indirections.
 - **The gate, both ways** — `make verify_herdr_gate`: 0 tools with the variables stripped, 2 inside
   a pane. The empty leg runs everywhere; the in-pane leg is skipped elsewhere rather than failed.
 - **End to end in an `agent_confined` pane**, default profile,
@@ -73,6 +73,43 @@ Both were invisible to `ailang check` and both are fixed here.
 - `make check_core` 56/56, `make test` green.
 - **`make dst`** — see below. It was *not* run before this PR was first opened; that was a mistake,
   and running it found real work.
+
+## Acceptance criteria, walked
+
+The handoff lists nine. Two are met with caveats and both are stated rather than dropped.
+
+| # | criterion | status | where |
+|---|---|---|---|
+| 1 | `MEASUREMENTS-*.md` answers all six of 021 §7, or says why not | **met** | `MEASUREMENTS-2026-08-22.md` — six answered, plus Part 2 taking the codex halves once it was authenticated mid-session |
+| 2 | In the operator's devcontainer the extension loads and advertises **no tools** | **met, with a caveat** | see below |
+| 3 | In an `agent_confined` pane, `Delegate`'s answer reaches the model | **met** | multiple live runs, both kinds, through the answer file; last one *"The delegate answered: 17 × 23 = 391."* |
+| 4 | A delegate outliving its call is discoverable via `DelegateCheck`, state from `herdr agent get` not a lock file | **met** | `Delegate` returns immediately by design; `DelegateCheck` uses `agent wait` + `agent get`. There is no lock file in the package |
+| 5 | Every pure function carries inline `tests [...]`; tests green | **met, via two documented indirections** | 157 inline tests. See below |
+| 6 | One `ProcessError` and one herdr JSON error each produce a distinct, accurate message | **met** | both demonstrated live, and now *asserted in-tree*: seven per-constructor tests plus `pe_all_distinct`, and `failure_message` tests for the herdr vocabulary |
+| 7 | Linear issues for the spine, correctly blocked, identifiers recorded in the tree | **met** | MOT-121 parent, MOT-122–125 spine, MOT-126 for the 019 findings; table in `MEASUREMENTS-2026-08-22.md` |
+| 8 | `agent.sh check` passes; no unintended changes under `.devcontainer/**` | **met, with a caveat** | see below |
+| 9 | Every commit authored `motoko-agent`; PR opened by the bot | **met** | 17/17 commits; PR author `motoko-agent` |
+
+**Criterion 2's caveat.** Demonstrated by `make verify_herdr_gate` with all three variables stripped —
+which is precisely the operator devcontainer's condition, and the gate returns **0 tools**. It has
+**not** been run inside that container, because the handoff requires this work happen in
+`agent_confined`. The condition is the operative one and the test is in CI via `check_core`, but the
+literal environment has not been visited.
+
+**Criterion 5's indirections**, both forced by `tests [...]` and both documented in the code. It
+evaluates *literal* expected values only, so the eight list-returning argv builders are pinned by
+their `_str` projections instead. And it lifts each case into a synthetic module without the file's
+imports, so an ADT constructor cannot be a test *input* — `process_error_text` is therefore pinned by
+seven primitive-taking wrappers. Both are the pattern `src/core/prompts_test.ail` established.
+
+**Criterion 8's caveat, and it is the honest gap.** `agent.sh check` reports **R9 PASS** — but only
+with the leg6 fix applied, which is **uncommitted on the operator's host and belongs to MOT-126, not
+this PR**. Without it, leg6 fails claiming `extra_hosts` was added back; measured, it was not — the
+name is supplied by Docker's embedded resolver under OrbStack and is absent from `/etc/hosts`, which
+is the only thing `extra_hosts` writes. Pre-existing, unrelated to this branch, diagnosed with a
+patch on MOT-126. Separately, `git status` shows
+`.devcontainer/agent_confined/{Dockerfile,herdr.toml}` modified: that is the read-only-mount artefact
+(`touch` on those paths fails with EROFS), and **nothing under `.devcontainer/**` is staged here**.
 
 ## What the DST sweep said
 
