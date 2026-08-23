@@ -103,6 +103,39 @@ Two things the sweep says about itself, deliberately left alone: `test_coverage`
 `test_coverage_selftest` are on `DST_KNOWN_RED` and both now **pass**, and the summary asks for them
 to be dropped. Not this branch's list to edit.
 
+## Busy-polling, found on the first real run and fixed here
+
+The operator ran the happy path and it worked — correct answer, no pane leaked, tree clean — but an
+**11-second delegation cost ten `DelegateCheck` steps**, one per second, each returning the same
+"still working".
+
+Checked rather than assumed: `DelegateCheck` only called `agent get`, which returns in **4 ms**, and
+a model cannot sleep — so the loop ran as fast as the model could emit tool calls. The *rate* is
+model-dependent; the *behaviour* is not. Against M6's median of 23.1 s that is ~23 steps of a
+100-step budget spent watching, ~90 for the worst case measured, doubled per concurrent delegate,
+with history growing quadratically.
+
+`DelegateCheck` now blocks server-side first — `herdr agent wait <name> --timeout 20000`. Four
+measurements say it is safe:
+
+| case | measured |
+|---|---|
+| already settled | 6 ms, exit 0 — a wait costs nothing once the answer landed |
+| still working | exit 1, code `timeout`, 4201 ms for a 4000 ms bound |
+| agent reaped | exit 1, `agent_not_found`, **2 ms** — a collected delegate does not block |
+| settles mid-wait | exit 0 the moment it does (13.3 s of a 25 s bound) |
+
+So `timeout` is the one non-zero code that must **not** be an error — and `types.ail` already
+carried the right sentence for it, reachable until now only from `Delegate`'s old `--wait` path.
+
+Two things deliberately not done the easy way. The wait is **unconditional, not a parameter**: the
+observed failure *is* a model failing to pace itself, so a knob it must remember to set would
+reproduce the bug. And it is **wait-then-check, never wait-instead-of-check**, because the wait
+settles on the *agent* going idle and P2-3 measured a delegate reaching a clean `done` having
+written nothing.
+
+**Re-measured on the identical task: 11 steps → 2.** One `Delegate`, one `DelegateCheck`.
+
 ## Owner decision recorded
 
 `codex` cannot run unattended in this container: its sandbox is bubblewrap, bubblewrap needs
