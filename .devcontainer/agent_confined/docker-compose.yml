@@ -72,9 +72,23 @@ services:
 
     volumes:
       # The shared working tree. This is ONE HOST DIRECTORY: isolating a compose service does not isolate
-      # .git/config, .agent/ or .env. checks/r7_git_audit.py is what covers that channel; README's
+      # .git/config or .agent/. checks/r7_git_audit.py is what covers the git-config channel; README's
       # "What is deliberately not absent" states its full strength.
       - ../..:/workspaces/motoko_agent
+
+      # SECRET-FILE MASK. The mount above would bring the repo-root .env — 11 real secrets (model keys, the
+      # bot PAT, Linear, Bedrock, obsidian, Fireworks/DeepInfra/HF) — into the container as a READABLE file.
+      # That is the one door the curated `environment:` block below cannot close: the block bounds what a
+      # process INHERITS, not what it can `cat`, so without this a delegate or any agent-run script reads
+      # every secret straight off disk regardless of the block. Overlaying /dev/null makes .env read as
+      # EMPTY here. Nothing breaks: the only in-container reader is motoko's allow-listed loader
+      # (src/tui/src/index.ts), which then finds nothing in the file and takes its keys from the environment
+      # instead — and the block below already delivers the ones this profile needs (telemetry, hence
+      # CLICKSTACK_INGESTION_KEY, is not wired here). Host side is untouched: agent.sh's
+      # `--env-file <repo>/.env` reads the REAL file on the host at launch to interpolate the block, which
+      # is what actually delivers the secrets. .env is gitignored, so masking it adds no git noise, and it
+      # is nested under the repo mount exactly as the :ro frozen paths below are.
+      - /dev/null:/workspaces/motoko_agent/.env:ro
 
       # Frozen paths. Every source below exists in the tree (verified 2026-08-22) — a missing source would be
       # created empty by create_host_path and would mount over nothing, which is the failure r9 leg 1 checks
@@ -99,12 +113,19 @@ services:
       # Bedrock variables omp needs, and agent.sh passes `--env-file <repo>/.env` so these interpolate from
       # the repository-root file.
       #
-      # BE CLEAR ABOUT WHAT THIS BUYS: very little on its own. src/tui/src/index.ts:150-204 loads
-      # /workspaces/motoko_agent/.env itself at startup, and that file is on the bind mount above — so the
-      # agent holds every secret the file carries whatever this list says. Curating it keeps the confined
-      # container no more exposed than the operator's, and keeps a *delegate* process that does not read .env
-      # (codex, claude) to the keys named here. It is not a boundary. Closing that one properly means not
-      # mounting .env, which means motoko cannot read it either.
+      # WHAT THIS LIST IS, AND IS NOT. It bounds what a *delegate* (codex, claude) inherits via the
+      # environment — those processes do not read .env, so the environment is their whole world. It is NOT
+      # what stops the agent reading secrets off disk: two separate things do that now.
+      #   1. motoko's own loader (src/tui/src/index.ts:150-208) is ALLOW-LISTED — it copies only
+      #      ANTHROPIC/OPENAI/OPENROUTER/GOOGLE/EXA_API_KEY, CLICKSTACK_INGESTION_KEY and
+      #      OTEL_EXPORTER_OTLP_HEADERS out of .env and ignores every other key. (An earlier version of this
+      #      comment claimed it "holds every secret the file carries" — it does not, and never did once the
+      #      allow-list existed.)
+      #   2. the SECRET-FILE MASK in the volumes block above makes .env read EMPTY in the container, so no
+      #      process — delegate, motoko, or arbitrary agent-run script — can `cat` the raw file at all.
+      # With those two, this list's job is just to DELIVER the keys the container legitimately needs, via the
+      # environment, since the file is now empty here. agent.sh passes `--env-file <repo>/.env`, so each
+      # ${VAR} interpolates from the repo-root file on the HOST at launch.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
