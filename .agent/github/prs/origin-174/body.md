@@ -71,6 +71,37 @@ Both were invisible to `ailang check` and both are fixed here.
   *"The delegate answered: 17 × 23 = 391."* Six steps; the delegate pane was reaped on collection.
 - **Both error vocabularies demonstrated** producing distinct, accurate messages.
 - `make check_core` 56/56, `make test` green.
+- **`make dst`** — see below. It was *not* run before this PR was first opened; that was a mistake,
+  and running it found real work.
+
+## What the DST sweep said
+
+`make dst` reported five failures. **None were caused by this branch** — verified by running each in
+a worktree at the base commit rather than inferring it — but **four were made worse by it**, in
+precisely the way the framework exists to catch.
+
+`agentcli` had been added to `[extensions]` without being declared in the profiles that enumerate the
+installable set, so the base was already failing with *"extension(s) `['agentcli']` … appear in
+neither this profile's install list nor its omissions"* and *"expected 15, got 16"*. `herdr` repeated
+the omission and took it to 17. `driver_plus_compose` states the principle: **"an extension in
+neither is a decision INHERITED rather than taken (WI-D7)."** So declaring it was an obligation.
+
+Both are now declared, and the shared barrier reason survives on a **measurement**:
+`make ext_ambient_inventory` classifies both AMBIENT. `herdr` carries 1 ambient source and 5
+`ExtPorts` field calls — the one source is `std/env.getEnvOr` in the gate, which §4.4 requires, and
+it is the lowest ambient count of any AMBIENT extension.
+
+**Hook scope independently confirms the design claim above.** `agentcli` derives **HOOK-AMBIENT** —
+its argv carries a model-authored prompt, so #158 forced ambient `exec` on it — while `herdr` derives
+neither ambient nor port-mediated at hook scope. The expectation files are pinned in both directions,
+so that is asserted, not tolerated.
+
+**Sweep now: 5 failures → 1.** The remainder, `declared_vs_performed`, is byte-identical at base and
+on this branch (41 passed, 5 FAILED) and is untouched here.
+
+Two things the sweep says about itself, deliberately left alone: `test_coverage` and
+`test_coverage_selftest` are on `DST_KNOWN_RED` and both now **pass**, and the summary asks for them
+to be dropped. Not this branch's list to edit.
 
 ## Owner decision recorded
 
@@ -107,6 +138,8 @@ and ~1.3× faster. Scope of the grant is written out in MEASUREMENTS §P2-7.
   container. `agent.sh check` itself is host-only by design and needs an operator run.
 - The TUI Jest suite has 15 pre-existing failing suites / 1 failing test, identical before and after
   this branch. This PR adds one suite and two passing tests.
+- `make dst` still exits 2 on `declared_vs_performed`, which is red at base with the identical
+  counts. Triaging it is a D5/017 question about barrier slots, not this branch's.
 
 ## Linear
 
