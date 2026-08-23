@@ -56,6 +56,7 @@ import std/json (Json, jo, kv, js)
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
 import src/core/config (CostRates, VerificationConfig)
+import src/core/compaction (output_token_allowance)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (
@@ -869,10 +870,10 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- reason and in the same shape: a value the world supplies, a behaviour that
   -- branches on it, and a control proving the branches differ.
   --
-  -- The discriminator is the profile's `agent.context_limit`. Seeded at 1 token
-  -- it makes any history oversized, so compaction fires and exhausts and the run
-  -- seals; absent, the limit resolves to 0 ("unknown") and compaction is skipped
-  -- entirely:
+  -- The discriminator is the profile's `agent.context_limit`. Seeded one token
+  -- above the output allowance, it leaves a one-token effective input window,
+  -- so compaction fires and exhausts and the run seals; absent, the limit
+  -- resolves to 0 ("unknown") and compaction is skipped entirely:
   --
   --   files seeded -> compaction exhausted -> finish_reason "compaction_exhausted"
   --   files empty  -> limit 0, no compaction -> the scripted terminator, "stop"
@@ -887,7 +888,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     empty_world_state() |
     script: [prose_step("done")],
     files: [{ path: ".motoko/config/default/config.json",
-              node: FsFile("{\"agent\":{\"context_limit\":1}}") }]
+              node: FsFile("{\"agent\":{\"context_limit\":${show(output_token_allowance() + 1)}}}") }]
   };
   let no_files_world: WorldState = { empty_world_state() | script: [prose_step("done")] };
   let with_files = run_world(approval_rt("probe_files_s"), 4, files_world);
@@ -953,7 +954,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     empty_world_state() |
     script: seal_ex_script,
     files: [{ path: ".motoko/config/default/config.json",
-              node: FsFile("{\"agent\":{\"context_limit\":1}}") }]
+              node: FsFile("{\"agent\":{\"context_limit\":${show(output_token_allowance() + 1)}}}") }]
   };
   let seal_ex = run_world_history(rt_with(consuming_pre_step_3, "probe_seal_ex"), 4, seal_ex_world, history());
   let seal_ex_ctl = run_world_history(rt_with(passthrough_pre_step, "probe_seal_ex_c"), 4, seal_ex_world, history());
@@ -963,7 +964,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let _ = println("seal: CompactionExhausted finish=${fin_ex} script left=${show(left_ex)} of 5 (control ${show(left_ex_ctl)})");
   let ok_ex_reached = check("seal(CompactionExhausted): the run took the seal terminal",
                             fin_ex == "compaction_exhausted",
-                            "finish_reason=${fin_ex}, expected compaction_exhausted — the world seeds agent.context_limit 1 so any history exhausts");
+                            "finish_reason=${fin_ex}, expected compaction_exhausted — the world seeds a one-token effective input window so any history exhausts");
   let ok_ex_thread = check("seal(CompactionExhausted): the terminal world carries the pre-step chain's successor",
                            left_ex == 2,
                            "the hook consumed 3 of 5 scripted steps, so the terminal world must hold 2 — got ${show(left_ex)}. 5 means the successor was dropped");

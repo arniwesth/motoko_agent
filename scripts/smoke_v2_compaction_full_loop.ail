@@ -35,8 +35,9 @@ import src/core/ports (ScriptedStep, WorldState, empty_world_state)
 -- importing the port layer.
 import src/core/fs_node (FsNode, FsFile)
 
--- test/tiny model has context_limit_for = 100 tokens = ~400 chars
--- under the (length+3)/4 token estimator. Crossing thresholds:
+-- test/tiny has a synthetic raw window of 65,636 tokens: after the 65,536
+-- provider-output allowance, its working input budget is 100 tokens = ~400
+-- chars under the (length+3)/4 token estimator. Crossing thresholds:
 --   < 70% : <  280 chars total content
 --   70-85%:  280-340 chars
 --   85-95%:  340-380 chars
@@ -80,7 +81,7 @@ func build_tools(count: int, chars_each: int, idx: int, acc: [Message]) -> [Mess
 }
 
 func multi_tool_history() -> [Message] {
-  -- 12 * 50k chars = ~150k estimated tokens against the 200k Sonnet window:
+  -- 12 * 50k chars = ~150k estimated tokens against the 200k Sonnet input budget:
   -- tier 1 (75%), and the first two tool messages are outside keep_last=10.
   [parity_system_message()] ++ build_tools(12, 50000, 0, [mk_user("multi")])
 }
@@ -100,9 +101,9 @@ func structural_rt() -> ExtRuntime ! {Env, FS} {
 
 -- WI-D4. THE CATALOGUE THIS SUITE RUNS ON, DECLARED RATHER THAN INHERITED.
 --
--- `test/tiny`'s 100-token limit is what makes every assertion below mean
--- something — the header's "100 tokens = ~400 chars" arithmetic is the whole
--- fixture. Until WI-D3 that number came from the CHECKOUT's
+-- `test/tiny`'s 100-token working input budget is what makes every assertion
+-- below mean something — the header's "100 tokens = ~400 chars" arithmetic is
+-- the whole fixture. Until WI-D3 its raw limit came from the CHECKOUT's
 -- `.motoko/model-catalog.json` through an ambient read, so a scripted run's
 -- compaction behaviour depended on a file no scenario declared.
 --
@@ -133,7 +134,7 @@ func catalog_world(script: [ScriptedStep]) -> WorldState {
     -- `FsDir`, so that an empty directory is representable and does not read as
     -- an absent path. See that field for the representation argument.
     files: [{ path: ".motoko/model-catalog.json",
-              node: FsFile("{\"context_limits\":{\"test/tiny\":100,\"anthropic/claude-sonnet-4-6\":200000}}") }] }
+              node: FsFile("{\"context_limits\":{\"test/tiny\":65636,\"anthropic/claude-sonnet-4-6\":265536}}") }] }
 }
 
 -- 1. Light history (10 chars total = ~2% usage). Compaction passthrough.

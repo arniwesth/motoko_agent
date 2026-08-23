@@ -21,6 +21,7 @@ import src/core/phase_vocab (ApprovalRequest)
 import std/list as List (length)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
+import std/string (length as string_length)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
@@ -42,7 +43,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   PreStepDecision, PassThrough
 )
 import src/core/types (Msg)
-
 -- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
 -- `WorldState` can carry it without either the port module or the driver
 -- closing an LDR002 module cycle. It WAS re-exported here, as `export type
@@ -309,6 +309,59 @@ export func scripted_ports() -> Ports ! {IO, Trace} {
   -- why a scripted run completes with `Clock` withheld while `live_ports` dies
   -- — the poison pair `make world_state` asserts exactly that.
   ports_shape_probe(model_step)
+}
+
+-- Opt-in provider capacity for deterministic integration tests. This belongs
+-- to the provider adapter rather than ScriptedStep: a context window constrains
+-- every request to an endpoint, while a scripted step describes one response.
+export type ScriptedProviderCapacity = {
+  context_window: int,
+  max_output_tokens: int
+}
+
+-- A provider-side request estimate kept deliberately separate from core's
+-- compaction estimator. The deterministic char/4 model makes exact boundary
+-- fixtures cheap while ensuring the adapter can still falsify driver policy
+-- instead of invoking the policy function under test.
+pure func scripted_provider_content_chars(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => string_length(m.content) + scripted_provider_content_chars(rest)
+  }
+}
+
+export pure func scripted_provider_input_tokens(msgs: [Message]) -> int {
+  (scripted_provider_content_chars(msgs) + 3) / 4
+}
+
+export pure func scripted_provider_over_capacity(capacity: ScriptedProviderCapacity, msgs: [Message]) -> bool {
+  capacity.context_window > 0
+    && capacity.max_output_tokens >= 0
+    && scripted_provider_input_tokens(msgs) + capacity.max_output_tokens > capacity.context_window
+}
+
+-- Shared-window provider wrapper for deterministic tests. A derived capacity
+-- rejection has no emissions and does not consume state.script: the base
+-- provider never served that response, and a repeated identical request must
+-- deterministically reject again. Accepted and disabled/malformed-capacity
+-- requests delegate to scripted_ports unchanged.
+export func bounded_scripted_ports(capacity: ScriptedProviderCapacity) -> Ports ! {AI, IO, Trace} {
+  let base = scripted_ports();
+  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> ProviderExchange ! {AI, IO, Trace} {
+      if scripted_provider_over_capacity(capacity, msgs) then {
+        emissions: [],
+        result: Err({
+          code: "E_PROVIDER_CONTEXT_LENGTH",
+          message: "scripted provider: input plus max output tokens exceeds context window",
+          retryable: false
+        }),
+        next_state: state
+      }
+      else base.model_step(state, model, msgs, on_chunk)
+    };
+  { base | model_step: model_step }
 }
 
 -- WI-A13 stage 2: the recording provider, and the recording adapter set.

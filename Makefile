@@ -2100,7 +2100,7 @@ smoke_driver:
 		fi; \
 	done; \
 	if ailang test src/core/test/scripted_ports.ail > /dev/null 2>&1; then \
-		echo "  ✓ src/core/test/scripted_ports.ail (6 unit tests)"; \
+		echo "  ✓ src/core/test/scripted_ports.ail (10 unit tests)"; \
 	else \
 		echo "  ✗ src/core/test/scripted_ports.ail"; \
 		ailang test src/core/test/scripted_ports.ail 2>&1 | tail -15; \

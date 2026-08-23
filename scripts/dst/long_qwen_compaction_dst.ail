@@ -9,9 +9,10 @@ import std/result (Result, Ok, Err)
 import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit)
 import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead, FileRead, ToolInvocation, ToolExecution, ToolCompleted)
 import src/core/ext_world (token_to_world, world_to_token, dropped_successor, world_advanced, world_interaction_count)
-import src/core/test/stub_step (StepProvider, Ported, recording_ports, scripted_world_state, prose_step, empty_rt)
+import src/core/test/stub_step (StepProvider, Ported, recording_ports, scripted_ports, bounded_scripted_ports, scripted_provider_input_tokens, scripted_world_state, prose_step, empty_rt)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (
@@ -30,7 +31,12 @@ import src/core/phase_vocab (
   ProviderResult,
   CompactionExhausted,
   ErrorEvent,
-  RunSummary
+  RunSummary,
+  SealExhausted,
+  SealSystemPromptEmpty,
+  payload_messages,
+  seal_compacted_payload,
+  split_for_compaction
 )
 import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
@@ -53,7 +59,8 @@ import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutco
   Handled,
   NoIntercept,
   NoDecision,
-  Msg
+  Msg,
+  DiagnosticField
 )
 import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
 import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
@@ -126,6 +133,97 @@ func filler_block() -> string {
 
 func repeat_block(n: int) -> string {
   if n <= 0 then "" else "${filler_block()}${repeat_block(n - 1)}"
+}
+
+-- Issue #165's fixture needs strings near one MiB, but std/string.repeat is
+-- recursive in AILANG v0.33.0 and reaches the interpreter's depth ceiling at
+-- that size. Doubling gives the fixture logarithmic construction depth while
+-- keeping the measured char/4 token counts exact.
+func headroom_megabyte_block() -> string {
+  let x1 = "u";
+  let x2 = "${x1}${x1}";
+  let x4 = "${x2}${x2}";
+  let x8 = "${x4}${x4}";
+  let x16 = "${x8}${x8}";
+  let x32 = "${x16}${x16}";
+  let x64 = "${x32}${x32}";
+  let x128 = "${x64}${x64}";
+  let x256 = "${x128}${x128}";
+  let x512 = "${x256}${x256}";
+  let x1024 = "${x512}${x512}";
+  let x2048 = "${x1024}${x1024}";
+  let x4096 = "${x2048}${x2048}";
+  let x8192 = "${x4096}${x4096}";
+  let x16384 = "${x8192}${x8192}";
+  let x32768 = "${x16384}${x16384}";
+  let x65536 = "${x32768}${x32768}";
+  let x131072 = "${x65536}${x65536}";
+  let x262144 = "${x131072}${x131072}";
+  let x524288 = "${x262144}${x262144}";
+  "${x524288}${x524288}"
+}
+
+func headroom_block(n: int) -> string {
+  substring(headroom_megabyte_block(), 0, n)
+}
+
+func headroom_raw_limit() -> int { 262144 }
+func headroom_output_allowance() -> int { 65536 }
+func headroom_expected_effective_segment_limit() -> int { 196288 }
+
+func headroom_call(id: string) -> ToolCall {
+  { id: id, name: "HeadroomFixture", arguments: "{}" }
+}
+
+-- Before structural compaction this segment is exactly 208,980 char/4 tokens.
+-- Only the older of the two tool messages can move. The floor tier rewrites it
+-- to 26 tokens, yielding a 207,239-token repinned payload: 79% of 262,144 and
+-- only 54,905 tokens of response headroom.
+func headroom_segment() -> [Msg] {
+  [
+    abi_msg("user", headroom_block(827496)),
+    abi_assistant("", [headroom_call("headroom-old"), headroom_call("headroom-recent")]),
+    abi_tool("headroom-old", headroom_block(8348)),
+    abi_tool("headroom-recent", headroom_block(76))
+  ]
+}
+
+func headroom_history() -> [Message] {
+  [msg("system", headroom_block(1280))] ++ msgs_to_messages(headroom_segment())
+}
+
+func headroom_small_history() -> [Message] {
+  [msg("system", headroom_block(1280)), msg("user", "small control")]
+}
+
+func headroom_raw_overflow_history() -> [Message] {
+  [msg("system", headroom_block(1280)), msg("user", headroom_block(1048576))]
+}
+
+func headroom_fail_open_history() -> [Message] {
+  [msg("system", "s"), msg("user", headroom_block(200000))]
+}
+
+func headroom_direct_ctx(limit: int, msgs: [Msg]) -> ExtCtx {
+  {
+    task: "issue-165",
+    step: 0,
+    model: qwen_model,
+    context_limit: limit,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: budget(),
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: msgs,
+    state_key: "issue-165",
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(),
+    world: empty_ext_world()
+  }
 }
 
 func long_stdout(current: string, next: string) -> string {
@@ -224,13 +322,14 @@ func qwen_catalog_path() -> string { "scripts/fixtures/qwen36-small-model-catalo
 -- and the two scenarios that need a small limit stop reaching their invariants.
 --
 -- The value is the one `scripts/fixtures/qwen36-small-model-catalog.json`
--- carries, so the suite's behaviour is unchanged and only its INPUT moved — off
--- the host and into the world, where a reader can see it. The path is the one
--- the driver COMPUTES from `fixed_env`'s answer, not one this fixture asserts.
+-- carries: a synthetic raw 66,736-token window whose 65,536-token provider
+-- output allowance leaves the suite's original 1,200-token working budget.
+-- The path is the one the driver COMPUTES from `fixed_env`'s answer, not one
+-- this fixture asserts.
 func fixed_file(state: WorldState, path: string) -> FileRead ! {FS} {
   let here = path == qwen_catalog_path();
   let content =
-    if here then "{\"context_limits\":{\"openrouter/qwen/qwen3.6-35b-a3b\":1200}}"
+    if here then "{\"context_limits\":{\"openrouter/qwen/qwen3.6-35b-a3b\":66736}}"
     else "";
   { present: here, content: content, next_state: state }
 }
@@ -301,6 +400,47 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
     -- reason: this fixture installs no extension, so no site in it reaches the
     -- seam, and the deterministic default is the honest binding.
     ext_effect_exec: base.ext_effect_exec
+  }
+}
+
+func headroom_catalog_path() -> string { "issue-165-model-catalog.json" }
+
+func headroom_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  let value = if key == "MOTOKO_MODELS_FILE" then headroom_catalog_path() else fallback;
+  { value: value, next_state: state }
+}
+
+func headroom_file(raw_limit: int, state: WorldState, path: string) -> FileRead ! {FS} {
+  let here = path == headroom_catalog_path();
+  let content =
+    if here then "{\"context_limits\":{\"${qwen_model}\":${show(raw_limit)}}}"
+    else "";
+  { present: here, content: content, next_state: state }
+}
+
+-- A terminal scripted provider for the headroom cases. When capacity
+-- enforcement is enabled it behaves like a shared-window provider: the
+-- request is rejected if input plus the configured maximum response cannot
+-- fit. The main-call invariant remains stronger — an unsafe request must be
+-- stopped BEFORE this port is reached — so ProviderCallPrepared and
+-- ProviderResult remain forbidden evidence for the unsafe driver arms.
+--
+-- `enforce_capacity` is explicit because raw-limit 0 and reserve-exceeds-limit
+-- are Motoko fail-open policy fixtures, not physically meaningful provider
+-- configurations. Those controls use an unbounded provider deliberately.
+func headroom_ports(raw_limit: int, enforce_capacity: bool) -> Ports ! {AI, FS, IO, Trace} {
+  let base =
+    if enforce_capacity then bounded_scripted_ports({
+      context_window: raw_limit,
+      max_output_tokens: headroom_output_allowance()
+    })
+    else scripted_ports();
+  {
+    base |
+    clock_now: fixed_clock,
+    env_get: headroom_env,
+    file_read: \state path. headroom_file(raw_limit, state, path),
+    tool_exec: fixed_exec
   }
 }
 
@@ -505,6 +645,51 @@ func structural_only_runtime() -> ExtRuntime {
   { registry: reg, strict_mode: false, verification: v }
 }
 
+func headroom_budget_probe_hook() -> ExtensionHooks {
+  {
+    id: "headroom_budget_probe",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ . { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    on_pre_step: \ctx _. {
+      decision: PassThroughObserved("headroom.context_limit", [
+        { key: "context_limit", value: show(ctx.context_limit) }
+      ]),
+      next_state: ctx.world
+    } ! {AI, IO, Trace},
+    on_tool_policy: \_ _ . Allow,
+    on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  }
+}
+
+func headroom_runtime() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let reg: ExtRegistry = { hooks: [headroom_budget_probe_hook(), structural_hook()] };
+  { registry: reg, strict_mode: false, verification: v }
+}
+
+func run_headroom_case(raw_limit: int, history: [Message], rt: ExtRuntime, enforce_provider_capacity: bool) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    rt,
+    "issue 165 output headroom dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    history,
+    ".",
+    4,
+    false,
+    0,
+    no_rates(),
+    Ported(headroom_ports(raw_limit, enforce_provider_capacity))
+  )
+}
+
 func initial_history() -> [Message] {
   [
     msg("system", "deterministic long qwen compaction dst system prompt"),
@@ -627,6 +812,45 @@ func has_exhausted_or_system_empty(records: [LedgerRecord]) -> bool {
         _ => false
       };
       here || has_exhausted_or_system_empty(rest)
+    }
+  }
+}
+
+func run_is_ok(result: TracedSessionResult) -> bool {
+  match result.result { Ok(_) => true, Err(_) => false }
+}
+
+func run_is_context_exhausted(result: TracedSessionResult) -> bool {
+  match result.result {
+    Err(e) => e.code == "ContextExhausted" && contains(e.message, "compaction_exhausted"),
+    Ok(_) => false
+  }
+}
+
+func diagnostic_has_limit(fields: [DiagnosticField], expected: int) -> bool {
+  match fields {
+    [] => false,
+    f :: rest =>
+      if f.key == "context_limit" && f.value == show(expected) then true
+      else diagnostic_has_limit(rest, expected)
+  }
+}
+
+func observed_headroom_limit(records: [LedgerRecord], expected: int) -> bool {
+  match records {
+    [] => false,
+    r :: rest => {
+      let here = match r {
+        CompactionStageRecord(s) =>
+          if s.ext_id != "headroom_budget_probe" then false
+          else match s.outcome {
+            TraceStageObserved(code, fields) =>
+              code == "headroom.context_limit" && diagnostic_has_limit(fields, expected),
+            _ => false
+          },
+        _ => false
+      };
+      here || observed_headroom_limit(rest, expected)
     }
   }
 }
@@ -796,6 +1020,142 @@ func scenario_seal_side_exhaustion() -> Result[(), ScenarioFailure] ! {AI, FS, P
       if contains(e.message, "compaction_exhausted") && has_exhausted_or_system_empty(records) then Ok(())
       else Err({ failed_invariant: "CompactionExhausted event and error are emitted", trace: ["${e.code}: ${e.message}"] ++ projection_records(records) })
   }
+}
+
+-- Issue #165, Layer 1: reproduce the exact seal boundary and prove the strict
+-- provider oracle on both sides of the shared window. The oracle is deliberately
+-- independent of `usage_percent_with_limit`: a payload is unsafe when input plus
+-- the declared output allowance exceeds the raw shared window, even if the
+-- existing input-only percentage is below 95.
+func scenario_output_headroom_exact_boundary() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let raw_limit = headroom_raw_limit();
+  let allowance = headroom_output_allowance();
+  let provider = headroom_ports(raw_limit, true);
+  let discard_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
+  let boundary_msgs = [msg("user", headroom_block((raw_limit - allowance) * 4))];
+  let over_boundary_msgs = [msg("user", headroom_block(((raw_limit - allowance) * 4) + 4))];
+  let boundary_exchange = provider.model_step(empty_world_state(), qwen_model, boundary_msgs, discard_chunk);
+  let over_boundary_exchange = provider.model_step(empty_world_state(), qwen_model, over_boundary_msgs, discard_chunk);
+  let provider_accepts_boundary = match boundary_exchange.result { Ok(_) => true, Err(_) => false };
+  let provider_rejects_over_boundary = match over_boundary_exchange.result {
+    Err(e) => e.code == "E_PROVIDER_CONTEXT_LENGTH" && not e.retryable,
+    Ok(_) => false
+  };
+  let provider_contract =
+    scripted_provider_input_tokens(boundary_msgs) + allowance == raw_limit
+      && scripted_provider_input_tokens(over_boundary_msgs) + allowance == raw_limit + 1
+      && provider_accepts_boundary
+      && provider_rejects_over_boundary;
+  let original = headroom_segment();
+  let split = split_for_compaction(headroom_history());
+  let pinned_tokens = estimate_tokens_messages(split.pinned);
+  let ext_limit = raw_limit - pinned_tokens;
+  let decision = compact_for_pre_step(headroom_direct_ctx(ext_limit, original), original);
+  let chain = match decision {
+    PassThrough => original,
+    Compacted(out, _, _) => out,
+    PassThroughObserved(_, _) => original
+  };
+  let ladder = match decision {
+    PassThrough => "PassThrough",
+    Compacted(_, note, _) => note,
+    PassThroughObserved(code, _) => "Observed:${code}"
+  };
+  let candidate = split.pinned ++ msgs_to_messages(chain);
+  let segment_tokens = estimate_tokens_messages(msgs_to_messages(original));
+  let input_tokens = estimate_tokens_messages(candidate);
+  let raw_pct = usage_percent_with_limit(candidate, raw_limit);
+  let headroom = raw_limit - input_tokens;
+  let unsafe = input_tokens + allowance > raw_limit;
+  let sealed = seal_compacted_payload(split, msgs_to_messages(chain), qwen_model, raw_limit, true);
+  let rejected = match sealed {
+    Err(SealExhausted(_)) => true,
+    Err(SealSystemPromptEmpty(_)) => false,
+    Ok(_) => false
+  };
+  let exact_fixture =
+    pinned_tokens == 320
+      && ext_limit == 261824
+      && segment_tokens == 208980
+      && ladder == "structural: tier=floor keep_last=1"
+      && input_tokens == 207239
+      && raw_pct == 79
+      && headroom == 54905
+      && unsafe;
+  ok_or_failure(provider_contract && exact_fixture && rejected,
+    "unsafe 262144/65536 payload is rejected after the structural floor",
+    [
+      "provider_boundary_accepts=${show(provider_accepts_boundary)} provider_over_boundary_rejects=${show(provider_rejects_over_boundary)}",
+      "pinned_tokens=${show(pinned_tokens)} ext_limit=${show(ext_limit)} segment_tokens=${show(segment_tokens)}",
+      "ladder=${ladder}",
+      "input_tokens=${show(input_tokens)} raw_pct=${show(raw_pct)} headroom=${show(headroom)} allowance=${show(allowance)} unsafe=${show(unsafe)}",
+      "seal_rejected=${show(rejected)}"
+    ])
+}
+
+-- Issue #165, Layer 2: the real CallModel arm must hand the pre-step chain the
+-- output-reserved segment budget and must refuse the unsafe reconstructed
+-- payload before ProviderCallPrepared. Arms B and C are two-sided controls:
+-- B proves the scripted provider path is live; C proves the existing raw
+-- exhaustion terminal is live.
+func scenario_output_headroom_real_driver_three_arms() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let arm_a = run_headroom_case(headroom_raw_limit(), headroom_history(), headroom_runtime(), true);
+  let arm_b = run_headroom_case(headroom_raw_limit(), headroom_small_history(), structural_only_runtime(), true);
+  let arm_c = run_headroom_case(headroom_raw_limit(), headroom_raw_overflow_history(), structural_only_runtime(), true);
+  let a_records = arm_a.trace.records;
+  let b_records = arm_b.trace.records;
+  let c_records = arm_c.trace.records;
+  let a_ok =
+    run_is_context_exhausted(arm_a)
+      && has_exhausted_or_system_empty(a_records)
+      && prepared_count(a_records) == 0
+      && provider_result_count(a_records) == 0
+      && observed_headroom_limit(a_records, headroom_expected_effective_segment_limit());
+  let b_ok =
+    run_is_ok(arm_b)
+      && prepared_count(b_records) == 1
+      && provider_result_count(b_records) == 1
+      && not has_exhausted_or_system_empty(b_records);
+  let c_ok =
+    run_is_context_exhausted(arm_c)
+      && has_exhausted_or_system_empty(c_records)
+      && prepared_count(c_records) == 0
+      && provider_result_count(c_records) == 0;
+  ok_or_failure(a_ok && b_ok && c_ok,
+    "real driver shares one output-reserved budget across pre-step and seal",
+    [
+      "arm=A expected=ContextExhausted observed_limit=${show(observed_headroom_limit(a_records, headroom_expected_effective_segment_limit()))} prepared=${show(prepared_count(a_records))} provider_results=${show(provider_result_count(a_records))} result_ok=${show(run_is_ok(arm_a))}",
+      "arm=B expected=provider_success prepared=${show(prepared_count(b_records))} provider_results=${show(provider_result_count(b_records))} result_ok=${show(run_is_ok(arm_b))}",
+      "arm=C expected=raw_exhaustion prepared=${show(prepared_count(c_records))} provider_results=${show(provider_result_count(c_records))} exhausted=${show(run_is_context_exhausted(arm_c))}"
+    ])
+}
+
+-- Unknown and reserve-exceeds-limit are explicit fail-open policy, not a
+-- side effect of division by zero. Both arms use a payload above the small raw
+-- limit. The unknown arm is today's control; the small-limit arm is the
+-- regression that distinguishes an explicit zero effective budget from the
+-- current raw-limit seal.
+func scenario_output_headroom_unknown_and_small_fail_open() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let unknown = run_headroom_case(0, headroom_fail_open_history(), headroom_runtime(), false);
+  let small = run_headroom_case(32768, headroom_fail_open_history(), headroom_runtime(), false);
+  let unknown_records = unknown.trace.records;
+  let small_records = small.trace.records;
+  let unknown_ok =
+    run_is_ok(unknown)
+      && prepared_count(unknown_records) == 1
+      && provider_result_count(unknown_records) == 1
+      && observed_headroom_limit(unknown_records, 0);
+  let small_ok =
+    run_is_ok(small)
+      && prepared_count(small_records) == 1
+      && provider_result_count(small_records) == 1
+      && observed_headroom_limit(small_records, 0);
+  ok_or_failure(unknown_ok && small_ok,
+    "unknown and reserve-exceeding limits fail open at both stages",
+    [
+      "unknown result_ok=${show(run_is_ok(unknown))} observed_zero=${show(observed_headroom_limit(unknown_records, 0))} prepared=${show(prepared_count(unknown_records))} provider_results=${show(provider_result_count(unknown_records))}",
+      "small raw_limit=32768 allowance=${show(headroom_output_allowance())} result_ok=${show(run_is_ok(small))} observed_zero=${show(observed_headroom_limit(small_records, 0))} prepared=${show(prepared_count(small_records))} provider_results=${show(provider_result_count(small_records))}"
+    ])
 }
 
 func same_string_list(a: [string], b: [string]) -> bool {
@@ -1090,6 +1450,18 @@ func seal_side_exhaustion_scenario() -> Scenario {
   { id: "compaction.structural_seal_side_exhaustion", seed: "fixed", run: scenario_seal_side_exhaustion }
 }
 
+func output_headroom_exact_boundary_scenario() -> Scenario {
+  { id: "compaction.output_headroom_exact_262144_65536", seed: "fixed", run: scenario_output_headroom_exact_boundary }
+}
+
+func output_headroom_real_driver_three_arms_scenario() -> Scenario {
+  { id: "compaction.output_headroom_real_driver_three_arms", seed: "fixed", run: scenario_output_headroom_real_driver_three_arms }
+}
+
+func output_headroom_fail_open_scenario() -> Scenario {
+  { id: "compaction.output_headroom_unknown_and_small_fail_open", seed: "fixed", run: scenario_output_headroom_unknown_and_small_fail_open }
+}
+
 -- ---------------------------------------------------------------------------
 -- S12's executable instrument, on the ONE hook in the tree that calls ai_step
 -- ---------------------------------------------------------------------------
@@ -1161,6 +1533,9 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     hostile_summary_scenario(),
     terminal_observations_scenario(),
     seal_side_exhaustion_scenario(),
+    output_headroom_exact_boundary_scenario(),
+    output_headroom_real_driver_three_arms_scenario(),
+    output_headroom_fail_open_scenario(),
     strict_provider_orphaned_toolcall_scenario(),
     s12_successor_scenario()
   ];

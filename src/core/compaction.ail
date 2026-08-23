@@ -29,6 +29,37 @@ export pure func usage_percent_with_limit(msgs: [Message], limit: int) -> int {
 
 export pure func exhaustion_pct() -> int { 95 }
 
+-- Output allowance assumed at the provider boundary. This mirrors AILANG's
+-- current model-registry invariant: configured request budgets do not exceed 65536.
+-- std/ai does not expose the resolved per-call budget, so this is external coupling.
+-- Keep this value in one place: both the extension-facing working limit and the
+-- final payload seal depend on the same reservation.
+export pure func output_token_allowance() -> int { 65536 }
+
+-- Input budget derived from a provider's raw shared context window. Unknown
+-- limits and windows no larger than the completion allowance fail open as 0;
+-- callers already define 0 as "limit unavailable/disabled" and must not turn
+-- synthetic or malformed catalogue entries into reject-everything policies.
+export pure func effective_input_limit(raw_context_limit: int) -> int {
+  if raw_context_limit <= output_token_allowance() then 0
+  else raw_context_limit - output_token_allowance()
+}
+
+pure func effective_input_limit_reserves_provider_output() -> bool
+  tests [((), true)]
+  {
+    effective_input_limit(262144) == 196608
+      && effective_input_limit(65537) == 1
+  }
+
+pure func effective_input_limit_fails_open_for_unknown_or_small_windows() -> bool
+  tests [((), true)]
+  {
+    effective_input_limit(0) == 0
+      && effective_input_limit(32768) == 0
+      && effective_input_limit(65536) == 0
+  }
+
 -- Density of the actual tokenizer relative to char/4, in permille. char/4
 -- assumes 4 chars/token; real mixed code+prose runs ~3.25 chars/token, so real
 -- content tokens are ~1.235x the char/4 estimate. Only applied to the content
