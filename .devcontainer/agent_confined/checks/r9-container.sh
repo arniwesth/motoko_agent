@@ -228,10 +228,24 @@ in_container() {
   # 192.168.65.254 — Docker Desktop's host address, which has no reason to exist under OrbStack. The
   # defensible reading is "egress to these addresses is not blocked", and the useful signal is a change
   # over time, not the absolute result. Do not upgrade this to a pass/fail on that basis.
-  if getent hosts host.docker.internal >/dev/null 2>&1; then
-    fail "leg6: host.docker.internal RESOLVES — extra_hosts was added back (see docker-compose.yml)"
+  # WHAT extra_hosts ACTUALLY DOES is write /etc/hosts, so that is what this asserts.
+  #
+  # It used to use `getent`, which consults the hosts file AND DNS — and under OrbStack the container
+  # runtime's embedded resolver (127.0.0.11) answers for host.docker.internal whether or not
+  # extra_hosts is set. Measured 2026-08-23 inside agent_confined: no uncommented extra_hosts in this
+  # profile's compose (at HEAD or in the tree), no entry in /etc/hosts, and `getent` still returned
+  # 0.250.250.254. The leg therefore failed permanently while blaming a compose change that had not
+  # happened.
+  #
+  # This also strengthens README's "extra_hosts is a name, not a boundary" correction: under OrbStack,
+  # dropping extra_hosts does not even remove the NAME, let alone the route.
+  if grep -qE '(^|[[:space:]])host\.docker\.internal([[:space:]]|$)' /etc/hosts; then
+    fail "leg6: host.docker.internal is in /etc/hosts — extra_hosts was added back (see docker-compose.yml)"
   else
-    pass "leg6: host.docker.internal does not resolve (the name is absent; see the probe below)"
+    pass "leg6: no extra_hosts entry for host.docker.internal in /etc/hosts"
+    if getent hosts host.docker.internal >/dev/null 2>&1; then
+      info "leg6: the name still RESOLVES, via the container runtime's DNS rather than extra_hosts — expected under OrbStack, and not something this profile can withdraw"
+    fi
   fi
   local addr probe
   for addr in 0.250.250.254 192.168.65.254 "$(awk 'NR>1 && $2=="00000000" {print $3; exit}' /proc/net/route         | sed 's/../0x& /g' | awk '{printf "%d.%d.%d.%d", $4, $3, $2, $1}')"; do
