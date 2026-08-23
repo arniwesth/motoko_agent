@@ -27,7 +27,7 @@ import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/option (Some, None)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
-import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_kind, default_allowed_kinds)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_kind, default_allowed_kinds, default_max_depth)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, tool_names)
 
 func parse_int_or(s: string, fallback: int) -> int {
@@ -64,6 +64,17 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Clock, Env, FS, I
     -- can take unilaterally is opt-out — see `types.kind_allowed`.
     -- Previous behaviour: HERDR_ALLOWED_KINDS=claude,codex
     allowed_kinds: getEnvOr("HERDR_ALLOWED_KINDS", default_allowed_kinds()),
+    -- RECURSION IS OFF BY DEFAULT. `depth` is this Motoko's own: unset means 0,
+    -- the operator's own session. A delegate is spawned with
+    -- HERDR_DELEGATE_DEPTH=1 on its pane, which reaches its extension only
+    -- because buildChildEnv forwards the whole HERDR_ prefix. At the default
+    -- max of 1 a delegate cannot delegate — see `types.depth_allows` for why
+    -- that bounds the orphan story and not just the cost.
+    depth: parse_int_or(getEnvOr("HERDR_DELEGATE_DEPTH", "0"), 0),
+    max_depth: parse_int_or(getEnvOr("HERDR_MAX_DELEGATE_DEPTH", ""), default_max_depth()),
+    -- How a motoko delegate is launched. Relative to the pane's cwd, which is
+    -- the delegate's working directory.
+    motoko_script: getEnvOr("HERDR_MOTOKO_SCRIPT", "./scripts/run-agent.sh"),
     -- BELOW MOTOKO'S 30s PROCESS WALL BY CONSTRUCTION. herdr's own default for
     -- `agent start --timeout` is 30000 — exactly Motoko's — so leaving this
     -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
