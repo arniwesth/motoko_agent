@@ -1,0 +1,67 @@
+module sunholo/motoko_ext_herdr/register
+
+-- THE GATE. This extension is inert outside a herdr pane, and this file is the
+-- only place that decides it.
+--
+-- 020 D4 requires that anything touching herdr be inert outside it, and 021
+-- §4.4 says how: `register_with_config` runs with `{Env, FS, IO, Process}` and
+-- `provided_tools` is COMPUTED rather than literal, so the package can return
+-- no tools at all rather than offering tools that fail at call time. The
+-- failure mode being avoided is a quiet one — outside a pane every `herdr` call
+-- fails, and a tool that is advertised and then errors costs the model a turn
+-- and teaches it nothing.
+--
+-- The devcontainer most readers will run this in is exactly that case, so the
+-- silent-and-empty path is the common one, not the exceptional one.
+--
+-- THIS IS THE SECOND COPY OF THE DETECTION RULE, and it cannot be the only one.
+-- `readHerdrEnvironment` in `src/tui/src/herdr-agent-state.ts` is the first: it
+-- makes Motoko VISIBLE to herdr as an agent, this one makes Motoko DRIVE herdr
+-- to run others. Same three variables, same rule, necessarily duplicated across
+-- a TypeScript/AILANG boundary that nothing links. If herdr ever changes what
+-- it injects into a pane process, BOTH have to move. Tracked as MOT-118; the
+-- rule itself lives in `types.herdr_env_ready` so that at least this side has
+-- one definition and a test.
+
+import std/env (getEnvOr)
+import std/string (stringToInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_kind)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, tool_names)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None    => fallback
+  }
+}
+
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Clock, Env, FS, IO, Process} {
+  let herdr_env = getEnvOr("HERDR_ENV", "");
+  -- PREFER THE INJECTED PATH OVER A `PATH` LOOKUP. HERDR_BIN_PATH is an
+  -- absolute path to the RUNNING server's own binary; a self-updated `herdr` in
+  -- ~/.local/bin could otherwise shadow it and talk to a different socket.
+  let bin_path  = getEnvOr("HERDR_BIN_PATH", "");
+  let pane_id   = getEnvOr("HERDR_PANE_ID", "");
+
+  let cfg: HerdrConfig = {
+    bin: bin_path,
+    own_pane: pane_id,
+    -- Answers and tasks live outside the working tree by default, so a delegate
+    -- never dirties `git status` merely by answering.
+    work_dir: getEnvOr("HERDR_DELEGATE_DIR", "/tmp/motoko-herdr-delegates"),
+    kind: getEnvOr("HERDR_DELEGATE_KIND", default_kind()),
+    -- BELOW MOTOKO'S 30s PROCESS WALL BY CONSTRUCTION. herdr's own default for
+    -- `agent start --timeout` is 30000 — exactly Motoko's — so leaving this
+    -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
+    -- generous.
+    start_timeout_ms: parse_int_or(getEnvOr("HERDR_START_TIMEOUT_MS", "20000"), 20000),
+    max_output_chars: parse_int_or(getEnvOr("HERDR_MAX_OUTPUT_CHARS", "16000"), 16000)
+  };
+
+  -- The whole gate. Empty tools is a silent, correct no-op; it is not an error
+  -- and must not be reported as one.
+  let tools = if herdr_env_ready(herdr_env, bin_path, pane_id) then tool_names() else [];
+  make_hooks(cfg, tools)
+}

@@ -1,0 +1,89 @@
+-- scripts/verify_herdr_gate.ail
+--
+-- Runtime proof of the ONE property `motoko-ext-herdr` must have and cannot
+-- get from `ailang check`: it advertises **no tools at all** when herdr is
+-- absent, and both tools when herdr is present.
+--
+-- WHY THIS NEEDS ITS OWN SCRIPT rather than an inline `tests [...]` block.
+-- `types.herdr_env_ready` is pure and is already tested five ways, but the
+-- property that matters is the one a step further out — that
+-- `register_with_config` turns a false gate into an EMPTY `provided_tools`
+-- list rather than into a populated one whose tools fail at call time. That
+-- crosses `std/env`, so it is a run, not a pure test.
+--
+-- The failure mode being guarded is quiet, which is exactly why it needs a
+-- loud check: outside a herdr pane every `herdr` invocation fails, and a tool
+-- that is advertised and then errors costs the model a turn and teaches it
+-- nothing. The operator's own devcontainer is that case, so the empty path is
+-- the common one.
+--
+-- Usage — the gate is read from the process environment, so drive it by
+-- setting or stripping the variables:
+--
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --ai-stub --entry main scripts/verify_herdr_gate.ail -- expect-tools
+--
+--   env -u HERDR_ENV ailang run … -- expect-empty
+--
+-- Exit code is 0 when the observed tool list matches the expectation and the
+-- process is left to crash loudly otherwise, so a shell loop can gate on it.
+--
+-- Wrapping driver: make verify_herdr_gate
+module scripts/verify_herdr_gate
+
+import std/io (println, exit)
+import std/env (getArgs, getEnvOr)
+import std/list as L (length)
+import std/option (Option, Some, None)
+import src/core/config (load_config_from_cli)
+import src/core/ext/registry_generated (parse_core_ext_order)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtRegistry)
+
+func tools_of(hooks: [ExtensionHooks]) -> [string] {
+  match hooks {
+    [] => [],
+    h :: _ => h.provided_tools
+  }
+}
+
+func describe_env() -> string ! {Env} {
+  let e = getEnvOr("HERDR_ENV", "<unset>");
+  let b = getEnvOr("HERDR_BIN_PATH", "<unset>");
+  let p = getEnvOr("HERDR_PANE_ID", "<unset>");
+  "HERDR_ENV=${e} HERDR_BIN_PATH=${b} HERDR_PANE_ID=${p}"
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let args = getArgs();
+  let cfg = load_config_from_cli([]);
+  let registry = parse_core_ext_order("herdr", cfg);
+  let tools = tools_of(registry.hooks);
+  let n = L.length(tools);
+  let env = describe_env();
+
+  match args {
+    ["expect-empty"] =>
+      if n == 0 then {
+        println("OK: herdr advertises no tools outside a herdr pane (${env})");
+        ()
+      } else {
+        println("FAIL: herdr advertised ${show(n)} tool(s) with the gate closed (${env})");
+        -- Exit non-zero rather than return: a wrong answer here is the quiet
+        -- failure the whole gate exists to prevent, so it must not exit 0.
+        exit(1)
+      },
+    ["expect-tools"] =>
+      if n == 2 then {
+        println("OK: herdr advertises ${show(n)} tools inside a herdr pane (${env})");
+        ()
+      } else {
+        println("FAIL: herdr advertised ${show(n)} tool(s) with the gate open (${env})");
+        exit(1)
+      },
+    _ => {
+      println("usage: verify_herdr_gate <expect-empty|expect-tools>");
+      println("  observed ${show(n)} tool(s); ${env}");
+      ()
+    }
+  }
+}

@@ -20,6 +20,7 @@ import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_conf
 import pkg/sunholo/motoko_ext_empty_stop_guard/register (register_with_config as register_empty_stop_guard)
 import pkg/sunholo/motoko_ext_progress_contract_guard/register (register_with_config as register_progress_contract_guard)
 import pkg/sunholo/motoko_ext_agentcli/register (register_with_config as register_agentcli)
+import pkg/sunholo/motoko_ext_herdr/register (register_with_config as register_herdr)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistry)
@@ -43,6 +44,7 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] ! {AI, 
   else if name == "empty_stop_guard" then Some(register_empty_stop_guard(cfg))
   else if name == "progress_contract_guard" then Some(register_progress_contract_guard(cfg))
   else if name == "agentcli" then Some(register_agentcli(cfg))
+  else if name == "herdr" then Some(register_herdr(cfg))
   else None
 }
 

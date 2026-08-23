@@ -1,0 +1,342 @@
+module sunholo/motoko_ext_herdr/herdr
+
+-- DELEGATION AS AN ADDRESSABLE SESSION. Two tools that hand a bounded sub-task
+-- to a coding agent running in its own herdr pane, and then let the model come
+-- back for the answer.
+--
+-- WHY TWO TOOLS AND NOT ONE, and why neither of them waits. 021 §4.1 proposed
+-- an "optimistic-synchronous" `Delegate` that waits up to 25s so that a fast
+-- task completes in a single call. Measured against a running herdr that is the
+-- wrong default: the median delegated task takes 23.1s, the worst case measured
+-- was 91.2s, and HALF of realistic tasks exceed the 25s bound — while
+-- `agent get` costs 4ms and submitting a prompt without `--wait` costs 3-5ms.
+-- A coin-flip is not a fast path: half of all delegations would spend ~25s of
+-- Motoko's 30s process budget and STILL return a handle. So `Delegate` submits
+-- and returns immediately, and `DelegateCheck` is cheap enough to call often.
+-- The model decides when to come back, which is what an agent loop is for.
+--
+-- WHY `on_tool_handle`. It is one of only two ABI slots carrying the whole
+-- `{IO, Process, FS}` row, and the other one runs after the model has produced
+-- text. No new ABI slot is added; 017 prices one at 16 packages.
+--
+-- THIS EXTENSION IS INERT OUTSIDE A HERDR PANE, and that is enforced in
+-- `register.ail` by returning empty `provided_tools` rather than here by
+-- failing at call time. A tool that is offered and then errors costs the model
+-- a turn and teaches it nothing.
+
+import std/option (Option, Some, None)
+import std/string (length, substring, contains)
+import std/json (Json, jo, kv, js, get, asString)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  ExtCtx, ExtensionHooks, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  PassThrough, PreStepDecision, Msg, ToolSchema,
+  ToolCallEnvelope, ToolResultEnvelope
+)
+import pkg/sunholo/motoko_ext_herdr/types (
+  delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
+  known_kind, default_kind, path_is_safe, argv_is_safe, show_argv,
+  argv_split, argv_start, argv_prompt, argv_get, argv_explain, argv_close,
+  failure_code, failure_message, explain_says_ready,
+  split_pane_id, agent_status_of, agent_pane_of, is_settled,
+  bash_exec_tool, bash_exec_args, bash_field, bash_exit
+)
+
+export type HerdrConfig = {
+  bin: string,
+  own_pane: string,
+  work_dir: string,
+  kind: string,
+  start_timeout_ms: int,
+  max_output_chars: int
+}
+
+export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
+
+func delegate_params() -> string {
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"Agent kind to run: claude (default, runs unattended) or codex. Others herdr knows are accepted but unverified in this image.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":[\"prompt\"]}"
+}
+
+func check_params() -> string {
+  "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"The delegate handle returned by Delegate.\"}},\"required\":[\"name\"]}"
+}
+
+export func describe_tools() -> [ToolSchema] {
+  [
+    { name: "Delegate",
+      description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. Poll with DelegateCheck — a typical task takes 20-30s and some take over a minute.",
+      parameters: delegate_params() },
+    { name: "DelegateCheck",
+      description: "Fetch a delegate's current state and its answer if it has landed. Cheap; call it as often as you like.",
+      parameters: check_params() }
+  ]
+}
+
+func meta(name: string, pane: string) -> Json {
+  jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file"))])
+}
+
+func err_result(call_id: string, tool: string, msg: string) -> ToolResultEnvelope {
+  { tool_call_id: call_id, tool: tool, exit_code: 1, stdout: "", stderr: msg,
+    metadata: jo([]) }
+}
+
+func truncate(s: string, limit: int) -> string {
+  if length(s) > limit then substring(s, 0, limit) else s
+}
+
+func arg_str(args: Json, key: string, fallback: string) -> string {
+  match get(args, key) {
+    None => fallback,
+    Some(v) => match asString(v) {
+      Some(s) => if s == "" then fallback else s,
+      None => fallback
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- One herdr call
+-- ---------------------------------------------------------------------------
+
+type HerdrRun = { out: string, err: string, code: int, next_state: ExtWorld }
+
+-- Routed through `ExtPorts.proc_exec`, which is reachable here because the argv
+-- is token-free by construction — see the note in `types.ail`. The guard is not
+-- decoration: if a caller ever manages to get a shell token into an argv
+-- element, sending it would silently drop every argument and run bare `herdr`,
+-- so the call is refused with an explanation instead.
+func run_herdr(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, argv: [string]) -> HerdrRun ! {IO, Process, FS} {
+  if argv_is_safe(argv) == false then
+    { out: "", err: "refused: the herdr argv contained a shell metacharacter and would have been mangled by motoko_agent#158 (`${show_argv(argv)}`)",
+      code: 1, next_state: w }
+  else {
+    let r = p.proc_exec(w, bash_exec_tool(), bash_exec_args(cfg.bin, argv));
+    { out: bash_field(r.output, "stdout"),
+      err: bash_field(r.output, "stderr"),
+      code: bash_exit(r.output),
+      next_state: r.next_state }
+  }
+}
+
+-- The one place both error vocabularies meet. `code == -1` is the tool
+-- runtime's envelope failing to decode, which is neither a herdr error nor a
+-- ProcessError and must not be dressed up as either.
+func explain_failure(step: string, argv: [string], run: HerdrRun) -> string {
+  if run.code == -1 then
+    "${step}: the tool runtime returned no readable result for `herdr ${show_argv(argv)}`. No subprocess outcome is available, so this is not a delegate failure."
+  else
+    "${step} failed (herdr exit ${show(run.code)}, code `${failure_code(run.code, run.err)}`). ${failure_message(run.code, run.err)}"
+}
+
+-- ---------------------------------------------------------------------------
+-- Delegate
+-- ---------------------------------------------------------------------------
+
+func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+  -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let prompt = arg_str(call.arguments, "prompt", "");
+  let kind = arg_str(call.arguments, "kind", cfg.kind);
+  let cwd = arg_str(call.arguments, "cwd", ctx.workdir);
+
+  if prompt == "" then
+    { result: err_result(call.id, "Delegate", "Delegate requires a non-empty `prompt`."), next_state: ctx.world }
+  else if known_kind(kind) == false then
+    { result: err_result(call.id, "Delegate", "`${kind}` is not an agent kind herdr knows. Use `claude` (default) or `codex`."), next_state: ctx.world }
+  else if path_is_safe(cwd) == false then
+    { result: err_result(call.id, "Delegate", "The working directory `${cwd}` contains a shell metacharacter and cannot be passed safely."), next_state: ctx.world }
+  else {
+    -- The name is seeded from the clock so it is unique among live agents and
+    -- monotonic across runs in the same pane.
+    let clock = p.clock_now(ctx.world);
+    let name = delegate_name(clock.now_ms);
+    let task = task_path(cfg.work_dir, name);
+    let answer = answer_path(cfg.work_dir, name);
+
+    if path_is_safe(task) == false || path_is_safe(answer) == false then
+      { result: err_result(call.id, "Delegate", "The delegate work directory `${cfg.work_dir}` contains a shell metacharacter; set HERDR_DELEGATE_DIR to a plain path."), next_state: clock.next_state }
+    else {
+      let dir = p.dir_make(clock.next_state, cfg.work_dir);
+      -- THE MODEL-AUTHORED PROMPT NEVER TOUCHES ARGV. This write is the whole
+      -- reason #158 is avoidable here.
+      let wrote = p.file_write(dir.next_state, task, prompt);
+      if wrote.ok == false then
+        { result: err_result(call.id, "Delegate", "Could not write the task file `${task}`: ${wrote.error}"), next_state: wrote.next_state }
+      else {
+        let sp = run_herdr(cfg, p, wrote.next_state, argv_split(cwd));
+        let pane = split_pane_id(sp.out);
+        if sp.code != 0 || pane == "" then
+          { result: err_result(call.id, "Delegate", explain_failure("Splitting a pane for the delegate", argv_split(cwd), sp)), next_state: sp.next_state }
+        else {
+          let st = run_herdr(cfg, p, sp.next_state, argv_start(name, kind, pane, cfg.start_timeout_ms));
+          if st.code != 0 then {
+            -- Do not leak the pane we just made. This is the narrowest orphan
+            -- rule that works and it is deliberately not a sweep: it closes the
+            -- one pane this call created, by id.
+            let cleaned = run_herdr(cfg, p, st.next_state, argv_close(pane));
+            { result: err_result(call.id, "Delegate", explain_failure("Starting a `${kind}` delegate", argv_start(name, kind, pane, cfg.start_timeout_ms), st)), next_state: cleaned.next_state }
+          }
+          else {
+            -- READINESS GATE. herdr reports `interactive_ready: true` for
+            -- agents that are not usable — measured on an unauthenticated codex
+            -- and on a claude stuck at its API-key modal. Prompting one of
+            -- those is not harmless: in testing it pressed Enter on codex's
+            -- sign-in menu and started an OAuth device flow.
+            let ex = run_herdr(cfg, p, st.next_state, argv_explain(pane));
+            if explain_says_ready(ex.out) == false then {
+              let cleaned = run_herdr(cfg, p, ex.next_state, argv_close(pane));
+              { result: err_result(call.id, "Delegate",
+                  "A `${kind}` agent started in pane ${pane} but is not at a usable prompt — herdr matched no screen rule for it, which in this image means it is sitting on a sign-in screen or a modal. The pane has been closed. Check that `${kind}` is authenticated in this container."),
+                next_state: cleaned.next_state }
+            }
+            else {
+              -- NO `--wait`. See the header.
+              let text = task_wrapper_prompt(task, answer);
+              let pr = run_herdr(cfg, p, ex.next_state, argv_prompt(name, text));
+              if pr.code != 0 then {
+                let cleaned = run_herdr(cfg, p, pr.next_state, argv_close(pane));
+                { result: err_result(call.id, "Delegate", explain_failure("Submitting the task to the delegate", argv_prompt(name, text), pr)), next_state: cleaned.next_state }
+              }
+              else
+                { result: {
+                    tool_call_id: call.id,
+                    tool: "Delegate",
+                    exit_code: 0,
+                    stdout: "Delegate `${name}` is running `${kind}` in pane ${pane}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.",
+                    stderr: "",
+                    metadata: meta(name, pane)
+                  },
+                  next_state: pr.next_state }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- DelegateCheck
+-- ---------------------------------------------------------------------------
+
+func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+  -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS} {
+  let p = ctx.ports;
+  let name = arg_str(call.arguments, "name", "");
+
+  if name == "" then
+    { result: err_result(call.id, "DelegateCheck", "DelegateCheck requires the `name` returned by Delegate."), next_state: ctx.world }
+  -- POSITIVE OWNERSHIP, not self-exclusion. `agent list` in this workspace
+  -- returns Motoko's own row AND any agent the operator started by hand;
+  -- during Phase A it returned an operator-owned codex pane. "Not me" is not
+  -- enough to justify touching something.
+  else if owns_name(name) == false then
+    { result: err_result(call.id, "DelegateCheck", "`${name}` was not started by this extension. Only handles returned by Delegate can be checked, and nothing else in the session will be touched."), next_state: ctx.world }
+  else {
+    let g = run_herdr(cfg, p, ctx.world, argv_get(name));
+    if g.code != 0 then
+      { result: err_result(call.id, "DelegateCheck", explain_failure("Reading delegate `${name}`", argv_get(name), g)), next_state: g.next_state }
+    else {
+      let status = agent_status_of(g.out);
+      let pane = agent_pane_of(g.out);
+      let answer = answer_path(cfg.work_dir, name);
+      let rd = p.file_read(g.next_state, answer);
+
+      -- THE ANSWER FILE IS THE EVIDENCE, THE REPLY IS NOT. Measured three
+      -- times: a delegate settles at a clean `done`, replies with exactly the
+      -- path it was asked for, and has written nothing. Reporting that as
+      -- success is the failure mode this branch exists to prevent.
+      if rd.present && rd.content != "" then {
+        let closed = run_herdr(cfg, p, rd.next_state, argv_close(pane));
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: truncate(rd.content, cfg.max_output_chars),
+            stderr: "", metadata: meta(name, pane)
+          },
+          next_state: closed.next_state }
+      }
+      else if status == "blocked" then
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${name}` is BLOCKED in pane ${pane}, waiting for someone to answer a prompt on its screen. It will not progress until that is answered. It has not been closed.",
+            stderr: "", metadata: meta(name, pane)
+          },
+          next_state: rd.next_state }
+      else if is_settled(status) then {
+        -- Settled with no answer file. Close the pane — it is finished and
+        -- would otherwise be an unattended agent outliving its caller — and
+        -- name the failure honestly.
+        let closed = run_herdr(cfg, p, rd.next_state, argv_close(pane));
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 1,
+            stdout: "",
+            stderr: "Delegate `${name}` finished (state `${status}`) but never wrote its answer file `${answer}`. The delegate may have replied with the path without writing it, which is a known failure of unsandboxed delegates in this container. Nothing was produced; re-delegate, or run the task directly.",
+            metadata: meta(name, pane)
+          },
+          next_state: closed.next_state }
+      }
+      else
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${name}` is still `${status}` in pane ${pane}. No answer yet. Check again shortly — a typical task takes 20-30s in total.",
+            stderr: "", metadata: meta(name, pane)
+          },
+          next_state: rd.next_state }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Hooks
+-- ---------------------------------------------------------------------------
+
+export func on_tool_handle(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, Clock} {
+  if call.tool == "Delegate" then {
+    let r = do_delegate(cfg, ctx, call);
+    { decision: Handled(r.result), next_state: r.next_state }
+  }
+  else if call.tool == "DelegateCheck" then {
+    let r = do_check(cfg, ctx, call);
+    { decision: Handled(r.result), next_state: r.next_state }
+  }
+  else { decision: Delegate, next_state: ctx.world }
+}
+
+func no_budget_patch() -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+export func make_hooks(cfg: HerdrConfig, tools: [string]) -> ExtensionHooks ! {IO, Process, FS, Clock} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
+    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+      on_tool_handle(cfg, ctx, call)
+    };
+  let describe = func(_u: ()) -> [ToolSchema] {
+    match tools { [] => [], _ => describe_tools() }
+  };
+  {
+    id: "herdr",
+    -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this record only
+    -- carries the decision, so the two can never disagree.
+    provided_tools: tools,
+    on_describe_tools: describe,
+    on_build_system_prompt: \_ctx . { prepend: [], append: [] },
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() },
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+      { decision: PassThrough, next_state: ctx.world }
+    },
+    on_tool_policy: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion },
+    on_tool_handle: handle,
+    on_response_intercept: func(ctx: ExtCtx, _t: string)
+      -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+      { decision: NoIntercept, next_state: ctx.world }
+    },
+    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} {
+      { decision: NoDecision, next_state: ctx.world }
+    }
+  }
+}

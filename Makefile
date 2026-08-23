@@ -2136,7 +2136,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions
+check_core: verify_extensions verify_herdr_gate
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2160,6 +2160,27 @@ check_core: verify_extensions
 # Process-per-extension isolation means a panic in one extension doesn't
 # mask the status of the others. Set MOTOKO_CONFIG=<profile> to probe a
 # different profile (default: current MOTOKO_CONFIG or "default").
+# The one property motoko-ext-herdr must have and cannot get from a type check:
+# it advertises NO tools when herdr is absent. The empty leg runs everywhere —
+# with the three variables stripped, which is the operator's devcontainer — and
+# is the one that matters, because a tool advertised outside a pane fails at
+# call time and teaches the model nothing. The populated leg is only meaningful
+# inside a pane, so it is skipped elsewhere rather than failed.
+HERDR_GATE_CAPS = Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream
+
+verify_herdr_gate:
+	@env -u HERDR_ENV -u HERDR_BIN_PATH -u HERDR_PANE_ID \
+		ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_herdr_gate.ail -- expect-empty 2>/dev/null | grep -E '^(OK|FAIL)' \
+		|| (echo "verify_herdr_gate: the gate leaked tools outside a herdr pane" && exit 1)
+	@if [ "$$HERDR_ENV" = "1" ]; then \
+		ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		  scripts/verify_herdr_gate.ail -- expect-tools 2>/dev/null | grep -E '^(OK|FAIL)' \
+		  || (echo "verify_herdr_gate: the gate did not advertise its tools inside a herdr pane" && exit 1); \
+	else \
+		echo "  (skipping the in-pane leg: not running under herdr)"; \
+	fi
+
 verify_extensions:
 	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \
 	cfg=".motoko/config/$$profile/config.json"; \
