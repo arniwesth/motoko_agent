@@ -346,6 +346,26 @@ export function buildChildEnv(
     MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
       process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
   };
+  // The herdr pane environment, forwarded only when it is actually present.
+  //
+  // WHY THIS IS NEEDED AT ALL, because the obvious reading of 021 §4.4 is
+  // wrong: `motoko-ext-herdr` gates itself on HERDR_ENV / HERDR_BIN_PATH /
+  // HERDR_PANE_ID read through `std/env` inside `register_with_config`. But
+  // that runs in the AILANG runtime, which is a GRANDCHILD of the pane — the
+  // pane starts this TUI, and this function decides what the TUI's own child
+  // sees. `buildChildEnv` is an explicit allowlist, so without these three
+  // lines the variables are dropped, the gate correctly closes, and the
+  // extension silently advertises no tools INSIDE a herdr pane. Measured
+  // 2026-08-23: the extension loaded and offered nothing, and the model
+  // reported that Delegate did not exist.
+  //
+  // Copied rather than blanket-forwarded: the allowlist is the design, and
+  // widening it wholesale would forward far more than these three.
+  for (const key of ["HERDR_ENV", "HERDR_BIN_PATH", "HERDR_PANE_ID"] as const) {
+    if (process.env[key]) {
+      childEnv[key] = process.env[key];
+    }
+  }
   if (process.env.AILANG_STDLIB_PATH) {
     childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
   }

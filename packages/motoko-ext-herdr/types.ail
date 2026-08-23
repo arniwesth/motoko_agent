@@ -81,6 +81,39 @@ export pure func path_is_safe(p: string) -> bool
   ]
   { if p == "" then false else has_shell_tokens(p) == false }
 
+-- MUST BE INSIDE THE FS SANDBOX, and this is not a tidiness rule.
+--
+-- Motoko's TUI starts the AILANG runtime with `AILANG_FS_SANDBOX` pinned to the
+-- working directory. Measured 2026-08-23: a path outside it does not return an
+-- `Err` that a handler can report — it is a FATAL execution failure
+--   Error: execution failed: path "/tmp/x" escapes sandbox "/workspaces/..."
+-- which kills the whole run. An extension therefore cannot discover this at the
+-- call site and recover; it has to refuse first. That is what this test is for,
+-- and it is why the delegate work directory defaults to a path under the
+-- workdir rather than under /tmp.
+--
+-- Note the asymmetry that makes the answer-file channel work at all: only
+-- MOTOKO is sandboxed. The delegate is a separate process in its own pane and
+-- can write anywhere; the constraint is on the side that READS the file.
+export pure func path_within(root: string, p: string) -> bool
+  tests [
+    (("/w/m", "/w/m"), true),
+    (("/w/m", "/w/m/.motoko/herdr-delegates"), true),
+    (("/w/m", "/w/mother/x"), false),
+    (("/w/m", "/tmp/x"), false),
+    (("/w/m", ""), false),
+    (("", "/w/m"), false)
+  ]
+  {
+    if root == "" || p == "" then false
+    else if p == root then true
+    else {
+      let n = length(root);
+      if length(p) <= n then false
+      else substring(p, 0, n) == root && substring(p, n, n + 1) == "/"
+    }
+  }
+
 -- ---------------------------------------------------------------------------
 -- Delegate naming
 -- ---------------------------------------------------------------------------

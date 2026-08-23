@@ -38,6 +38,7 @@ func parse_int_or(s: string, fallback: int) -> int {
 }
 
 export func register_with_config(_cfg: a) -> ExtensionHooks ! {Clock, Env, FS, IO, Process} {
+  let workdir   = getEnvOr("MOTOKO_WORKDIR", ".");
   let herdr_env = getEnvOr("HERDR_ENV", "");
   -- PREFER THE INJECTED PATH OVER A `PATH` LOOKUP. HERDR_BIN_PATH is an
   -- absolute path to the RUNNING server's own binary; a self-updated `herdr` in
@@ -48,9 +49,15 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Clock, Env, FS, I
   let cfg: HerdrConfig = {
     bin: bin_path,
     own_pane: pane_id,
-    -- Answers and tasks live outside the working tree by default, so a delegate
-    -- never dirties `git status` merely by answering.
-    work_dir: getEnvOr("HERDR_DELEGATE_DIR", "/tmp/motoko-herdr-delegates"),
+    -- INSIDE THE WORKDIR, NOT /tmp. The obvious default is a temp directory —
+    -- it keeps the tree clean and it is what the first draft used. It cannot be
+    -- one: the TUI pins `AILANG_FS_SANDBOX` to the workdir, and a path outside
+    -- it is a FATAL execution failure rather than a recoverable error, so the
+    -- first `dir_make` killed the whole run with no diagnosis. Measured
+    -- 2026-08-23; `types.path_within` is the guard and the commit message has
+    -- the transcript. `.motoko/herdr-delegates/` is gitignored so answering
+    -- still does not dirty `git status`.
+    work_dir: getEnvOr("HERDR_DELEGATE_DIR", "${workdir}/.motoko/herdr-delegates"),
     kind: getEnvOr("HERDR_DELEGATE_KIND", default_kind()),
     -- BELOW MOTOKO'S 30s PROCESS WALL BY CONSTRUCTION. herdr's own default for
     -- `agent start --timeout` is 30000 — exactly Motoko's — so leaving this

@@ -37,7 +37,7 @@ import pkg/sunholo/motoko_ext_abi/types (
 )
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
-  known_kind, default_kind, path_is_safe, argv_is_safe, show_argv,
+  known_kind, default_kind, path_is_safe, path_within, argv_is_safe, show_argv,
   argv_split, argv_start, argv_prompt, argv_get, argv_explain, argv_close,
   failure_code, failure_message, explain_says_ready,
   split_pane_id, agent_status_of, agent_pane_of, is_settled,
@@ -158,6 +158,11 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
 
     if path_is_safe(task) == false || path_is_safe(answer) == false then
       { result: err_result(call.id, "Delegate", "The delegate work directory `${cfg.work_dir}` contains a shell metacharacter; set HERDR_DELEGATE_DIR to a plain path."), next_state: clock.next_state }
+    -- REFUSE BEFORE TOUCHING THE FILESYSTEM. A path outside AILANG_FS_SANDBOX
+    -- is not an error this handler could catch — it terminates the run — so
+    -- the check has to happen before the first `dir_make`, not around it.
+    else if path_within(ctx.workdir, cfg.work_dir) == false then
+      { result: err_result(call.id, "Delegate", "The delegate work directory `${cfg.work_dir}` is outside Motoko's filesystem sandbox (`${ctx.workdir}`). Reading a file there would terminate the run rather than fail, so the call is refused. Set HERDR_DELEGATE_DIR to a path under the working directory."), next_state: clock.next_state }
     else {
       let dir = p.dir_make(clock.next_state, cfg.work_dir);
       -- THE MODEL-AUTHORED PROMPT NEVER TOUCHES ARGV. This write is the whole
