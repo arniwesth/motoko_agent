@@ -18,11 +18,20 @@ services:
 
   clickstack:
     image: clickhouse/clickstack-all-in-one:2.21.0
+    # Bound to 127.0.0.1 on purpose. Telemetry from the `app` service arrives over the compose network
+    # as `clickstack:4318` (see runtime-process.ts / OTEL_EXPORTER_OTLP_ENDPOINT), NOT through these
+    # published ports — so publishing on 0.0.0.0 bought nothing for the dev path and exposed the stack
+    # on every host interface, a VPN or mesh/overlay one included, where 8123 is an UNAUTHENTICATED
+    # ClickHouse
+    # (default user, empty password). Loopback keeps the UI (8081) and a local `clickhouse`/curl against
+    # 18123 working from the developer's own browser and shell, and nothing else can reach them. A
+    # producer running natively on the Mac still reaches 4317/4318 on localhost; only OTHER machines lose
+    # the route, which is the point.
     ports:
-      - "8081:8080"
-      - "18123:8123"
-      - "4317:4317"
-      - "4318:4318"
+      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:18123:8123"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
     volumes:
       - clickstack-db:/data/db
       - clickstack-ch:/var/lib/clickhouse
