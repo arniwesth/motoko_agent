@@ -472,11 +472,11 @@ pure func omit_each(ids: [string], reason: string) -> [OmittedExtension] {
 
 pure func not_installed() -> [OmittedExtension] {
   [{ extension_id: "compaction_ai",
-     reason: "NOT INSTALLED, and it is the sharpest of the fourteen. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. WHAT WI-D27 ADDS: this profile now has a producer that can speak about behaviour rather than rows, so compaction_ai is the extension most likely to be installable in the NEXT profile of this kind — a graded run that dispatches its on_pre_step through ExtPorts.ai_step against a scripted provider would produce exactly the evidence `discovery` reads. That run is not in this item and the omission stands until it exists; naming it here is what stops the possibility from being rediscovered as a surprise." }]
+     reason: "NOT INSTALLED, and it is the sharpest of the sixteen. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. WHAT WI-D27 ADDS: this profile now has a producer that can speak about behaviour rather than rows, so compaction_ai is the extension most likely to be installable in the NEXT profile of this kind — a graded run that dispatches its on_pre_step through ExtPorts.ai_step against a scripted provider would produce exactly the evidence `discovery` reads. That run is not in this item and the omission stands until it exists; naming it here is what stops the possibility from being rediscovered as a surprise." }]
     ++ omit_each(["compaction_structural", "decision_framework", "empty_stop_guard",
                   "progress_contract_guard"], declined_reason())
-    ++ omit_each(["a2a", "ailang_docs", "context_mode", "exa_search", "mcp",
-                  "microrag", "omnigraph", "scratchpad", "test_dummy"], barrier_reason())
+    ++ omit_each(["a2a", "agentcli", "ailang_docs", "context_mode", "exa_search", "herdr",
+                  "mcp", "microrag", "omnigraph", "scratchpad", "test_dummy"], barrier_reason())
 }
 
 -- ---------------------------------------------------------------------------
@@ -816,7 +816,7 @@ pure func test_installed_and_omitted_are_disjoint() -> bool
   {
     let d = driver_plus_compose();
     disjoint(omitted_ids(d.omitted_extensions), installed_extension_ids())
-      && List.length(d.omitted_extensions) == 14
+      && List.length(d.omitted_extensions) == 16
   }
 
 pure func omitted_ids(os: [OmittedExtension]) -> [string] {
