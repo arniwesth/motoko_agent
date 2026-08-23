@@ -28,6 +28,10 @@ manifest_check = false
 # pane is roughly an hour of a chatty agent. 64 MB per pane, for a container that may hold several.
 scrollback_limit_bytes = 67108864
 
+[terminal]
+default_shell = "/bin/bash"
+shell_mode = "non_login"
+
 # NOT SET HERE, on purpose:
 #
 #   * worktrees.directory. herdr's `worktree create` puts checkouts under ~/.herdr/worktrees by default, and
@@ -35,8 +39,6 @@ scrollback_limit_bytes = 67108864
 #     `agent.sh build`, along with any uncommitted work in it. That is left at the default because
 #     "one worktree per delegate" is an open question (RESEARCH §7 F-5), not a decision this file should make
 #     quietly. If you adopt it, point this at a path on the shared tree and gitignore that path.
-#   * terminal.default_shell. $SHELL is bash for this user and /bin/sh is the fallback; naming it here would
-#     be one more thing to keep in step with the image.
 #   * ui.mouse_capture and the scroll keys. herdr's own defaults already give the wheel to the pane
 #     scrollback, which is the exact defect the source profile's tmux.conf spent forty lines fixing. Nothing
 #     to do here — but verify it against motoko's TUI before assuming, since that TUI grabs mouse tracking
