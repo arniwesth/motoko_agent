@@ -703,6 +703,31 @@ verified.
 5. **Multi-delegate concurrency (F-6).** Not attempted; delegates ran at different times, never
    simultaneously against the same tree.
 
+## Linear
+
+Recorded here so the tree and Linear can be reconciled without guesswork. Team **Motoko-agent**
+(prefix `MOT`), the workspace's only team.
+
+| id | deliverable | state |
+|---|---|---|
+| **MOT-121** | parent: `motoko-ext-herdr` | in progress |
+| **MOT-122** | this document — 021 §7 answered | **done** |
+| **MOT-123** | package skeleton, inert outside a pane | blocked by MOT-122 |
+| **MOT-124** | `Delegate`, poll-first | blocked by MOT-123 |
+| **MOT-125** | `DelegateCheck` | blocked by MOT-124 |
+| **MOT-126** | 019 container findings (separate, related to MOT-122) | open |
+| MOT-118 | link the two copies of the herdr-environment gate | closed by this work |
+
+**Attribution:** issues created through the Linear MCP server are authored by the API key's owner
+(Arni Westh Hansen), not `motoko-agent`, because a Linear API key is personal. That is 022 F-1 and
+it stays open; it is noted once here and not worked around.
+
+**MOT-123/124/125 landed as two commits rather than three.** The spine cannot be split at the
+Delegate/DelegateCheck boundary without breaking the handoff's own rule that the extension must not
+advertise a tool it cannot honour: `Delegate` returns a handle only `DelegateCheck` can redeem, so
+shipping either alone advertises exactly that. The second commit is the two end-to-end defects that
+only a real run could find.
+
 ## Housekeeping
 
 `git status` after Phase A shows only `.devcontainer/agent_confined/{Dockerfile,herdr.toml}` and
