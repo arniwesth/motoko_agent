@@ -26,7 +26,7 @@ module sunholo/motoko_ext_herdr/herdr
 
 import std/option (Option, Some, None)
 import std/string (length, substring, contains)
-import std/json (Json, jo, kv, js, get, asString)
+import std/json (Json, jo, kv, js, jnum, jb, get, asString)
 
 import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
@@ -40,7 +40,7 @@ import pkg/sunholo/motoko_ext_herdr/types (
   known_kind, default_kind, kind_allowed, grants_relaxation,
   path_is_safe, path_within, argv_is_safe, show_argv,
   argv_split, argv_start, argv_prompt, argv_get, argv_explain, argv_close,
-  argv_wait, wait_elapsed,
+  argv_wait, wait_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
   failure_code, failure_message, explain_says_ready,
   split_pane_id, agent_status_of, agent_pane_of, is_settled,
   bash_exec_tool, bash_exec_args, bash_field, bash_exit
@@ -96,6 +96,17 @@ func meta_kind(name: string, pane: string, kind: string) -> Json {
   jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file")),
       kv("kind", js(kind)),
       kv("permissions", js(if grants_relaxation(kind) then "relaxed: sandbox and approvals disabled for this kind" else "default: no relaxation"))])
+}
+
+-- Timing in metadata as well as prose: a caller that wants to compare two
+-- delegates should not have to parse a sentence.
+func meta_timed(name: string, pane: string, now_ms: int, waited_ms: int) -> Json {
+  let started = start_ms_of(name);
+  jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file")),
+      kv("started_ms", jnum(_int_to_float(started))),
+      kv("elapsed_ms", jnum(_int_to_float(if started > 0 then now_ms - started else 0))),
+      kv("waited_ms", jnum(_int_to_float(waited_ms))),
+      kv("elapsed_is_exact", jb(elapsed_is_exact(waited_ms)))])
 }
 
 func relaxation_note(kind: string) -> string {
@@ -238,16 +249,23 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
                 let cleaned = run_herdr(cfg, p, pr.next_state, argv_close(pane));
                 { result: err_result(call.id, "Delegate", explain_failure("Submitting the task to the delegate", argv_prompt(name, text), pr)), next_state: cleaned.next_state }
               }
-              else
+              else {
+                -- SETUP IS NOT FREE AND WAS INVISIBLE. `pane split` +
+                -- `agent start` + the readiness gate run sequentially inside
+                -- this one call, and `agent start` alone measured ~3.9s. Two
+                -- Delegate calls in one step were 3.9s apart for exactly this
+                -- reason, and nothing said so.
+                let t = p.clock_now(pr.next_state);
                 { result: {
                     tool_call_id: call.id,
                     tool: "Delegate",
                     exit_code: 0,
-                    stdout: "Delegate `${name}` is running `${kind}` in pane ${pane}${relaxation_note(kind)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.",
+                    stdout: "Delegate `${name}` is running `${kind}` in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.",
                     stderr: "",
                     metadata: meta_kind(name, pane, kind)
                   },
-                  next_state: pr.next_state }
+                  next_state: t.next_state }
+              }
             }
           }
         }
@@ -261,7 +279,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
 -- ---------------------------------------------------------------------------
 
 func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
-  -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS} {
+  -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
   let name = arg_str(call.arguments, "name", "");
 
@@ -282,17 +300,24 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
     -- It is unconditional rather than a parameter. The observed failure IS a
     -- model failing to pace itself, so a knob it has to remember to set would
     -- reproduce the bug exactly.
-    let w = run_herdr(cfg, p, ctx.world, argv_wait(name, cfg.check_wait_ms));
+    -- TIMESTAMPED EITHER SIDE OF THE WAIT, not at the end of the handler. See
+    -- `types.elapsed_note`: the naive reading inverts results when two checks
+    -- are dispatched in one step, which is exactly how the defect was found.
+    let t0 = p.clock_now(ctx.world);
+    let w = run_herdr(cfg, p, t0.next_state, argv_wait(name, cfg.check_wait_ms));
+    let t1 = p.clock_now(w.next_state);
+    let waited = t1.now_ms - t0.now_ms;
+    let took = elapsed_note(name, t1.now_ms, waited);
     -- `timeout` here is the poll interval elapsing, not a failure. Everything
     -- else non-zero — agent_not_found above all — keeps its own message.
     if w.code != 0 && wait_elapsed(w.code, w.err) == false then
-      { result: err_result(call.id, "DelegateCheck", explain_failure("Waiting on delegate `${name}`", argv_wait(name, cfg.check_wait_ms), w)), next_state: w.next_state }
+      { result: err_result(call.id, "DelegateCheck", explain_failure("Waiting on delegate `${name}`", argv_wait(name, cfg.check_wait_ms), w)), next_state: t1.next_state }
     else {
     -- AND THEN CHECK ANYWAY. The wait settles on the AGENT going idle, which is
     -- not the same event as the answer file landing — P2-3 measured a delegate
     -- reaching a clean `done` having written nothing. Wait-then-check, never
     -- wait-instead-of-check.
-    let g = run_herdr(cfg, p, w.next_state, argv_get(name));
+    let g = run_herdr(cfg, p, t1.next_state, argv_get(name));
     if g.code != 0 then
       { result: err_result(call.id, "DelegateCheck", explain_failure("Reading delegate `${name}`", argv_get(name), g)), next_state: g.next_state }
     else {
@@ -309,16 +334,16 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
         let closed = run_herdr(cfg, p, rd.next_state, argv_close(pane));
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
-            stdout: truncate(rd.content, cfg.max_output_chars),
-            stderr: "", metadata: meta(name, pane)
+            stdout: "Delegate `${name}` finished.${took}\n\n${truncate(rd.content, cfg.max_output_chars)}",
+            stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited)
           },
           next_state: closed.next_state }
       }
       else if status == "blocked" then
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
-            stdout: "Delegate `${name}` is BLOCKED in pane ${pane}, waiting for someone to answer a prompt on its screen. It will not progress until that is answered. It has not been closed.",
-            stderr: "", metadata: meta(name, pane)
+            stdout: "Delegate `${name}` is BLOCKED in pane ${pane}, waiting for someone to answer a prompt on its screen. It will not progress until that is answered. It has not been closed.${took}",
+            stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited)
           },
           next_state: rd.next_state }
       else if is_settled(status) then {
@@ -329,16 +354,16 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 1,
             stdout: "",
-            stderr: "Delegate `${name}` finished (state `${status}`) but never wrote its answer file `${answer}`. The delegate may have replied with the path without writing it, which is a known failure of unsandboxed delegates in this container. Nothing was produced; re-delegate, or run the task directly.",
-            metadata: meta(name, pane)
+            stderr: "Delegate `${name}` finished (state `${status}`) but never wrote its answer file `${answer}`.${took} The delegate may have replied with the path without writing it, which is a known failure of unsandboxed delegates in this container. Nothing was produced; re-delegate, or run the task directly.",
+            metadata: meta_timed(name, pane, t1.now_ms, waited)
           },
           next_state: closed.next_state }
       }
       else
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
-            stdout: "Delegate `${name}` is still `${status}` in pane ${pane}. No answer yet — this call already waited server-side for it, so check again rather than assuming it is stuck.",
-            stderr: "", metadata: meta(name, pane)
+            stdout: "Delegate `${name}` is still `${status}` in pane ${pane} after ${format_ms(t1.now_ms - start_ms_of(name))}. No answer yet — this call already waited ${format_ms(waited)} server-side for it, so check again rather than assuming it is stuck.",
+            stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited)
           },
           next_state: rd.next_state }
     }

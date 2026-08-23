@@ -32,7 +32,7 @@ module sunholo/motoko_ext_herdr/types
 --      them — a healthy agent has a populated `matched_rule` and a null
 --      `fallback_reason`. `explain_says_ready` is that test.
 
-import std/string (length, substring, contains, intToStr, join, replace)
+import std/string (length, substring, contains, intToStr, join, replace, stringToInt)
 import std/json (Json, decode, encode, get, asString, asNumber, jo, ja, js, kv)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -150,6 +150,109 @@ export pure func owns_name(name: string) -> bool
     let p = name_prefix();
     let n = length(p);
     if length(name) <= n then false else substring(name, 0, n) == p
+  }
+
+-- THE HANDLE IS THE START TIME, and this is where that becomes load-bearing.
+--
+-- WHY IT HAS TO BE. `herdr agent get` carries no timestamp of any kind
+-- (measured: agent, agent_session, agent_status, cwd, focused, foreground_cwd,
+-- interactive_ready, name, pane_id, revision, state_change_seq, tab_id,
+-- terminal_id, terminal_title, workspace_id — nothing time-like). herdr is the
+-- state store by design, so there is nowhere else to read a start time from
+-- short of inventing state this package deliberately does not keep.
+--
+-- WHY PARSING A NAME IS SAFE HERE, when in general it is not. The usual
+-- objection — convenient until someone changes the format — applies to parsing
+-- a name someone ELSE owns. `delegate_name` and `start_ms_of` are adjacent in
+-- this module and pinned together by a round-trip test, so changing the format
+-- without changing the parser fails the build rather than silently returning
+-- nonsense. That converts the fragility into a caught error, which is the only
+-- honest way to depend on it.
+export pure func start_ms_of(name: string) -> int
+  tests [
+    ("mot-dlg-1787475025027", 1787475025027),
+    ("mot-dlg-0", 0),
+    ("dlg-codex-a", 0),
+    ("herdr-021", 0),
+    ("", 0),
+    ("mot-dlg-notanumber", 0)
+  ]
+  {
+    let p = name_prefix();
+    let n = length(p);
+    if length(name) <= n then 0
+    else if substring(name, 0, n) != p then 0
+    else match stringToInt(substring(name, n, length(name))) {
+      Some(v) => v,
+      None    => 0
+    }
+  }
+
+-- The pin. If the handle format ever changes, this fails.
+export pure func handle_roundtrips(seed: int) -> bool
+  tests [(1787475025027, true), (0, true), (42, true)]
+  { start_ms_of(delegate_name(seed)) == seed }
+
+export pure func format_ms(ms: int) -> string
+  tests [
+    (15731, "15.7s"),
+    (18936, "18.9s"),
+    (900, "0.9s"),
+    (0, "0.0s"),
+    (60000, "60.0s")
+  ]
+  { "${intToStr(ms / 1000)}.${intToStr((ms % 1000) / 100)}s" }
+
+-- WHAT THE NUMBER MEASURES, stated precisely because the obvious reading is
+-- slightly wrong. It is handle-creation to the delegate SETTLING, so it spans
+-- the whole delegation: the pane split, `agent start`, the readiness gate, the
+-- delegate's own work, AND its wind-down after writing the answer. It is NOT
+-- the answer file's mtime, which would be the narrower "when did the answer
+-- exist" figure and is not reachable — `ExtPorts.path_stat` returns a kind and
+-- no timestamp.
+--
+-- Measured against ground truth on a head-to-head: reported 14.5s/23.0s where
+-- the files landed at 12.7s/19.0s, so the settle-after-write lag is ~1.8s for
+-- claude and ~4.0s for codex. The ratio survives (1.59 reported vs 1.50 true)
+-- and the ordering is never in doubt, which is what comparing kinds needs. A
+-- caller wanting "when did the answer exist" must stat the file itself.
+--
+-- WHEN IT IS EXACT AND WHEN IT IS AN UPPER BOUND.
+--
+-- If the wait actually blocked, the delegate was still working when this check
+-- looked, so the moment the wait returned IS the moment it settled and the
+-- elapsed figure is its real runtime. If the wait returned at once, it had
+-- already finished at some unknown earlier point and all that can honestly be
+-- said is "no later than now".
+--
+-- The distinction matters because the naive alternative — now minus start, at
+-- the END of the handler — is not merely imprecise, it INVERTS results. In the
+-- operator's head-to-head the two checks were dispatched together and both
+-- returned at 08:50:51.290: claude (started 25.027, answered 40.757) would have
+-- reported 26.3s and codex (started 28.955, answered 47.891) 22.3s, making the
+-- faster kind look slower. Timestamping at the wait's return gives 15.7s and
+-- 18.9s, which are the true figures, and does so whether the two calls run
+-- sequentially or concurrently.
+export pure func elapsed_is_exact(waited_ms: int) -> bool
+  tests [(0, false), (40, false), (250, false), (251, true), (16384, true)]
+  { waited_ms > 250 }
+
+export pure func elapsed_note(name: string, now_ms: int, waited_ms: int) -> string
+  tests [
+    (("mot-dlg-1787475025027", 1787475040757, 5851),
+     " The whole delegation took 15.7s end to end."),
+    (("mot-dlg-1787475025027", 1787475040757, 3),
+     " The whole delegation took at most 15.7s end to end — it had already finished when this check looked, so that is an upper bound."),
+    (("not-a-handle", 1787475040757, 5851), "")
+  ]
+  {
+    let started = start_ms_of(name);
+    if started <= 0 then ""
+    else {
+      let e = format_ms(now_ms - started);
+      if elapsed_is_exact(waited_ms) then " The whole delegation took ${e} end to end."
+      else " The whole delegation took at most ${e} end to end — it had already finished when this check looked, so that is an upper bound."
+    }
   }
 
 -- ---------------------------------------------------------------------------
