@@ -37,7 +37,8 @@ import pkg/sunholo/motoko_ext_abi/types (
 )
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
-  known_kind, default_kind, path_is_safe, path_within, argv_is_safe, show_argv,
+  known_kind, default_kind, kind_allowed, grants_relaxation,
+  path_is_safe, path_within, argv_is_safe, show_argv,
   argv_split, argv_start, argv_prompt, argv_get, argv_explain, argv_close,
   argv_wait, wait_elapsed,
   failure_code, failure_message, explain_says_ready,
@@ -50,6 +51,9 @@ export type HerdrConfig = {
   own_pane: string,
   work_dir: string,
   kind: string,
+  -- Operator policy: which kinds the MODEL may select. See
+  -- `types.kind_allowed` for why this exists and why it defaults to claude.
+  allowed_kinds: string,
   start_timeout_ms: int,
   -- How long DelegateCheck blocks server-side before answering "still working".
   -- See `types.argv_wait` for why blocking is the default and not an option the
@@ -60,19 +64,22 @@ export type HerdrConfig = {
 
 export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
 
-func delegate_params() -> string {
-  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"Agent kind to run: claude (default, runs unattended) or codex. Others herdr knows are accepted but unverified in this image.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":[\"prompt\"]}"
+-- The schema names the ALLOWED set, not every kind herdr knows. Advertising a
+-- kind the operator has not permitted costs the model a turn to discover it
+-- cannot have it.
+func delegate_params(allowed: string) -> string {
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":[\"prompt\"]}"
 }
 
 func check_params() -> string {
   "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"The delegate handle returned by Delegate.\"}},\"required\":[\"name\"]}"
 }
 
-export func describe_tools() -> [ToolSchema] {
+export func describe_tools(allowed: string) -> [ToolSchema] {
   [
     { name: "Delegate",
       description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. Poll with DelegateCheck — a typical task takes 20-30s and some take over a minute.",
-      parameters: delegate_params() },
+      parameters: delegate_params(allowed) },
     { name: "DelegateCheck",
       description: "Fetch a delegate's current state and its answer if it has landed. Cheap; call it as often as you like.",
       parameters: check_params() }
@@ -81,6 +88,20 @@ export func describe_tools() -> [ToolSchema] {
 
 func meta(name: string, pane: string) -> Json {
   jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file"))])
+}
+
+-- A privileged delegate should be legible in the TRANSCRIPT, not only in the
+-- pane label. The operator found the first one by noticing the pane said codex.
+func meta_kind(name: string, pane: string, kind: string) -> Json {
+  jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file")),
+      kv("kind", js(kind)),
+      kv("permissions", js(if grants_relaxation(kind) then "relaxed: sandbox and approvals disabled for this kind" else "default: no relaxation"))])
+}
+
+func relaxation_note(kind: string) -> string {
+  if grants_relaxation(kind) then
+    ", which the operator has permitted to run with its sandbox and approval prompts disabled"
+  else ""
 }
 
 func err_result(call_id: string, tool: string, msg: string) -> ToolResultEnvelope {
@@ -150,7 +171,14 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   if prompt == "" then
     { result: err_result(call.id, "Delegate", "Delegate requires a non-empty `prompt`."), next_state: ctx.world }
   else if known_kind(kind) == false then
-    { result: err_result(call.id, "Delegate", "`${kind}` is not an agent kind herdr knows. Use `claude` (default) or `codex`."), next_state: ctx.world }
+    { result: err_result(call.id, "Delegate", "`${kind}` is not an agent kind herdr knows at all. The operator permits: ${cfg.allowed_kinds}."), next_state: ctx.world }
+  -- OPERATOR POLICY, CHECKED BEFORE ANYTHING IS SPENT. Refusing here rather
+  -- than at `agent start` also saves a pane and a start timeout for a kind that
+  -- was never going to be permitted.
+  else if kind_allowed(cfg.allowed_kinds, kind) == false then
+    { result: err_result(call.id, "Delegate",
+        "`${kind}` is a kind herdr knows, but the operator has not permitted it here. Permitted: ${cfg.allowed_kinds}. This is an operator decision, not something to work around — `${kind}` may require relaxed permissions or be unverified in this container. Use a permitted kind, or ask the operator to widen HERDR_ALLOWED_KINDS."),
+      next_state: ctx.world }
   else if path_is_safe(cwd) == false then
     { result: err_result(call.id, "Delegate", "The working directory `${cwd}` contains a shell metacharacter and cannot be passed safely."), next_state: ctx.world }
   else {
@@ -215,9 +243,9 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
                     tool_call_id: call.id,
                     tool: "Delegate",
                     exit_code: 0,
-                    stdout: "Delegate `${name}` is running `${kind}` in pane ${pane}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.",
+                    stdout: "Delegate `${name}` is running `${kind}` in pane ${pane}${relaxation_note(kind)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.",
                     stderr: "",
-                    metadata: meta(name, pane)
+                    metadata: meta_kind(name, pane, kind)
                   },
                   next_state: pr.next_state }
             }
@@ -345,7 +373,7 @@ export func make_hooks(cfg: HerdrConfig, tools: [string]) -> ExtensionHooks ! {I
       on_tool_handle(cfg, ctx, call)
     };
   let describe = func(_u: ()) -> [ToolSchema] {
-    match tools { [] => [], _ => describe_tools() }
+    match tools { [] => [], _ => describe_tools(cfg.allowed_kinds) }
   };
   {
     id: "herdr",

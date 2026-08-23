@@ -359,11 +359,21 @@ export function buildChildEnv(
   // 2026-08-23: the extension loaded and offered nothing, and the model
   // reported that Delegate did not exist.
   //
-  // Copied rather than blanket-forwarded: the allowlist is the design, and
-  // widening it wholesale would forward far more than these three.
-  for (const key of ["HERDR_ENV", "HERDR_BIN_PATH", "HERDR_PANE_ID"] as const) {
-    if (process.env[key]) {
-      childEnv[key] = process.env[key];
+  // THE WHOLE HERDR_ PREFIX, not a named list — corrected 2026-08-23 after
+  // enumerating bit twice. The first version forwarded exactly HERDR_ENV,
+  // HERDR_BIN_PATH and HERDR_PANE_ID, which made the gate work and silently
+  // left every one of the extension's operator knobs unreachable:
+  // HERDR_ALLOWED_KINDS, HERDR_DELEGATE_KIND, HERDR_DELEGATE_DIR,
+  // HERDR_START_TIMEOUT_MS, HERDR_CHECK_WAIT_MS, HERDR_MAX_OUTPUT_CHARS. The
+  // operator could set them and nothing happened — measured, with
+  // HERDR_ALLOWED_KINDS=claude,codex still refusing codex.
+  //
+  // A prefix is still bounded: herdr injects HERDR_* into the pane and the
+  // extension reads HERDR_*, so the family is the unit. Enumerating members of
+  // a family that grows is the fragility, not the allowlist itself.
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("HERDR_") && value) {
+      childEnv[key] = value;
     }
   }
   if (process.env.AILANG_STDLIB_PATH) {

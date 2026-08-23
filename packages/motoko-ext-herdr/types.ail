@@ -32,7 +32,7 @@ module sunholo/motoko_ext_herdr/types
 --      them — a healthy agent has a populated `matched_rule` and a null
 --      `fallback_reason`. `explain_says_ready` is that test.
 
-import std/string (length, substring, contains, intToStr, join)
+import std/string (length, substring, contains, intToStr, join, replace)
 import std/json (Json, decode, encode, get, asString, asNumber, jo, ja, js, kv)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -200,6 +200,71 @@ export pure func known_kind(k: string) -> bool
       || k == "hermes" || k == "kilo" || k == "qodercli" || k == "qwen"
       || k == "maki"
   }
+
+-- WHICH KINDS THE MODEL MAY CHOOSE. Operator policy, not model choice.
+--
+-- WHY THIS EXISTS, and it is a defect fix rather than a new policy. P2-7
+-- records the owner's decision as shipping codex's `-s danger-full-access
+-- -a never` "opt-in, named, and attached to its evidence rather than buried in
+-- a default". As first built it was none of those from the operator's side: the
+-- tool schema advertised `codex` to the model, `Delegate` resolved
+-- `arg_str(arguments, "kind", cfg.kind)`, and so a model could select the
+-- privileged kind on its own. Measured on the operator's run 2026-08-23: the
+-- delegate ran codex in pane w2:p7 with HERDR_DELEGATE_KIND unset and
+-- `default_kind()` returning claude — the MODEL passed `kind: "codex"`, and the
+-- only trace was the pane label. Opt-in that a model can take unilaterally is
+-- opt-out.
+--
+-- WHAT IS AND IS NOT BEING CLAIMED. This is not "codex is dangerous". P2-7's
+-- parity argument stands and is not reopened: the claude sessions in this
+-- workspace already run unsandboxed, and Motoko's own BashExec can do anything
+-- a full-access codex can. No new capability enters the system. What changes is
+-- WHO DECIDES and whether the decision is visible — and there is one real
+-- asymmetry underneath it: claude-as-delegate runs under an auto-mode
+-- classifier that can still decline, while `-a never` removes the approval path
+-- entirely, so codex-as-delegate is strictly the more permissive of the two.
+--
+-- WHY claude-ONLY IS THE DEFAULT rather than claude+codex. Measured, there is
+-- no task for which codex is the better choice here: it is ~1.3x slower
+-- unattended (27.6s vs 21.1s on the identical task) AND it is the one that
+-- needs the relaxation, because its sandbox cannot start in this container
+-- (019 FINDINGS F1/F2). A model picking it is choosing slower and more
+-- permissive for no benefit it can name. Defaulting to claude+codex would also
+-- not fix the reported problem, since the model could still select codex
+-- unprompted — which is the whole finding.
+--
+-- TO RESTORE THE PREVIOUS BEHAVIOUR: HERDR_ALLOWED_KINDS=claude,codex
+export pure func default_allowed_kinds() -> string { "claude" }
+
+-- Membership without splitting: comma-fence both sides so `claude` cannot match
+-- inside a hypothetical `claude-next`. Spaces are stripped so a human-written
+-- "claude, codex" behaves. An empty allowlist permits nothing, which is the
+-- correct direction to fail.
+export pure func kind_allowed(allowed: string, kind: string) -> bool
+  tests [
+    (("claude", "claude"), true),
+    (("claude", "codex"), false),
+    (("claude,codex", "codex"), true),
+    (("claude, codex", "codex"), true),
+    (("claude,codex", "gemini"), false),
+    (("", "claude"), false),
+    (("claude", ""), false),
+    (("claude-next", "claude"), false)
+  ]
+  {
+    if kind == "" then false
+    else {
+      let norm = replace(allowed, " ", "");
+      contains(",${norm},", ",${kind},")
+    }
+  }
+
+-- Does choosing this kind relax anything? Used to make the grant legible in the
+-- tool result, so a privileged delegate is visible in the transcript rather
+-- than only in the pane label.
+export pure func grants_relaxation(kind: string) -> bool
+  tests [("claude", false), ("codex", true), ("gemini", false)]
+  { kind_default_args_str(kind) != "" }
 
 -- PER-KIND ARGV, AND THE ONE ENTRY THAT IS AN OWNER DECISION.
 --

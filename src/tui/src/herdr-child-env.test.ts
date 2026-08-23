@@ -19,7 +19,7 @@ import { buildChildEnv } from "./runtime-process.js";
 // 2026-08-23 before the three variables were forwarded.
 
 let workdir: string;
-const KEYS = ["HERDR_ENV", "HERDR_BIN_PATH", "HERDR_PANE_ID"] as const;
+const KEYS = ["HERDR_ENV", "HERDR_BIN_PATH", "HERDR_PANE_ID", "HERDR_ALLOWED_KINDS"] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -46,6 +46,20 @@ describe("buildChildEnv forwards the herdr pane environment", () => {
     expect(childEnv.HERDR_ENV).toBe("1");
     expect(childEnv.HERDR_BIN_PATH).toBe("/usr/local/bin/herdr");
     expect(childEnv.HERDR_PANE_ID).toBe("w1:pA");
+  });
+
+  // The gate variables alone are not enough, and forwarding only those was a
+  // real bug: every operator knob the extension reads is also HERDR_*-prefixed,
+  // so naming three of them left HERDR_ALLOWED_KINDS (and the timeouts, and the
+  // delegate directory) silently unreachable. Measured 2026-08-23 —
+  // HERDR_ALLOWED_KINDS=claude,codex still refused codex.
+  it("carries the operator's config knobs, not just the gate variables", () => {
+    process.env.HERDR_ENV = "1";
+    process.env.HERDR_ALLOWED_KINDS = "claude,codex";
+
+    const childEnv = buildChildEnv(workdir, "someprofile", "", "");
+
+    expect(childEnv.HERDR_ALLOWED_KINDS).toBe("claude,codex");
   });
 
   // Absent, not empty. The extension's gate tests `HERDR_ENV == "1"`, so an

@@ -27,7 +27,7 @@ import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/option (Some, None)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
-import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_kind)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_kind, default_allowed_kinds)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, tool_names)
 
 func parse_int_or(s: string, fallback: int) -> int {
@@ -59,6 +59,11 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Clock, Env, FS, I
     -- still does not dirty `git status`.
     work_dir: getEnvOr("HERDR_DELEGATE_DIR", "${workdir}/.motoko/herdr-delegates"),
     kind: getEnvOr("HERDR_DELEGATE_KIND", default_kind()),
+    -- WHICH KINDS THE MODEL MAY PICK. Operator policy; defaults to claude
+    -- alone. P2-7 recorded codex's relaxed argv as "opt-in", and opt-in a model
+    -- can take unilaterally is opt-out — see `types.kind_allowed`.
+    -- Previous behaviour: HERDR_ALLOWED_KINDS=claude,codex
+    allowed_kinds: getEnvOr("HERDR_ALLOWED_KINDS", default_allowed_kinds()),
     -- BELOW MOTOKO'S 30s PROCESS WALL BY CONSTRUCTION. herdr's own default for
     -- `agent start --timeout` is 30000 — exactly Motoko's — so leaving this
     -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
