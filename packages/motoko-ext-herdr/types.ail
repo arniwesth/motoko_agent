@@ -1,0 +1,967 @@
+module sunholo/motoko_ext_herdr/types
+
+-- PURE CORE of the herdr delegation extension. Everything here is a function of
+-- its arguments, and everything here carries inline `tests [...]` — 018 F8 is an
+-- obligation, and argv construction, name generation, path safety and error
+-- decoding are exactly the parts that are cheap to test and expensive to get
+-- wrong.
+--
+-- WHAT MEASUREMENT CHANGED, because this module encodes three corrections to
+-- 021's design rather than 021's design itself. All three are recorded with
+-- transcripts in `.agent/projects/021_herdr_delegation/MEASUREMENTS-2026-08-22.md`.
+--
+--   1. THE PROMPT TRAVELS IN A FILE. 021 §3.1 proposed avoiding #158 by having
+--      `agent prompt` read its text from a file. herdr v0.8.2 has no such
+--      option — the signature is `agent prompt <TARGET> <TEXT>` and the text is
+--      an argv element. A model-authored prompt carries backticks, `;` and `&&`
+--      as a matter of course, so it trips `shell_tokens_in_process`
+--      (`src/core/tool_runtime.ail:50`), and the wrap at `:888` then rebuilds
+--      from `req.cmd` ALONE and drops `req.args`. Inside a pane the result is
+--      not even a usable error: bare `herdr` hits a nested-herdr guard.
+--      So the prompt goes to a TASK FILE and the argv carries only
+--      `task_wrapper_prompt()` — fixed, extension-authored, token-free.
+--
+--   2. POLL-FIRST, NOT OPTIMISTIC-SYNCHRONOUS. Measured median wall clock for a
+--      delegated task is 23.1s, worst case 91.2s, and half exceed the 25s bound
+--      §4.1 proposed — against `agent get` at 4ms. Nothing here builds a
+--      `--wait` argv for the prompt, and that absence is the design.
+--
+--   3. READINESS IS NOT WHAT herdr'S `interactive_ready` SAYS. Measured twice:
+--      an unauthenticated codex and a claude stuck on an API-key modal both
+--      reported `interactive_ready: true`. `agent explain --json` separates
+--      them — a healthy agent has a populated `matched_rule` and a null
+--      `fallback_reason`. `explain_says_ready` is that test.
+
+import std/string (length, substring, contains, intToStr, join, replace, stringToInt)
+import std/json (Json, decode, encode, get, asString, asNumber, jo, ja, js, kv)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+import std/process (ProcessError, NotAllowed, NotFound, PermissionDenied,
+                    Timeout, OutputLimitExceeded, SpawnFailed, AbnormalExit)
+
+-- ---------------------------------------------------------------------------
+-- Shell-token safety
+-- ---------------------------------------------------------------------------
+
+-- A MIRROR OF `tool_runtime.ail`'s `has_shell_tokens`, deliberately duplicated
+-- rather than imported: this package must be able to answer "would this argv
+-- trip #158?" without depending on core's internals, and the answer has to stay
+-- true even if the two drift. If they ever do drift, the failure is that this
+-- one is too STRICT, which costs an error message rather than a silent
+-- arg-dropping.
+export pure func has_shell_tokens(s: string) -> bool
+  tests [
+    ("/tmp/mot/task-1.md", false),
+    ("plain words and dashes-and_underscores.md", false),
+    ("a | b", true),
+    ("a > b", true),
+    ("a < b", true),
+    ("a && b", true),
+    ("a || b", true),
+    ("a ; b", true),
+    ("a $( b", true),
+    ("run `make test`", true)
+  ]
+  {
+    contains(s, "|") || contains(s, ">") || contains(s, "<")
+      || contains(s, "&&") || contains(s, ";") || contains(s, "$(")
+      || contains(s, "`")
+  }
+
+-- A path is usable only if it can cross argv untouched. Empty is rejected
+-- because an empty answer path would silently become the cwd.
+export pure func path_is_safe(p: string) -> bool
+  tests [
+    ("/workspaces/motoko_agent", true),
+    ("/tmp/mot-herdr/answer-mot-17.md", true),
+    ("", false),
+    ("/tmp/a b", true),
+    ("/tmp/$(whoami)", false),
+    ("/tmp/x`id`", false)
+  ]
+  { if p == "" then false else has_shell_tokens(p) == false }
+
+-- MUST BE INSIDE THE FS SANDBOX, and this is not a tidiness rule.
+--
+-- Motoko's TUI starts the AILANG runtime with `AILANG_FS_SANDBOX` pinned to the
+-- working directory. Measured 2026-08-23: a path outside it does not return an
+-- `Err` that a handler can report — it is a FATAL execution failure
+--   Error: execution failed: path "/tmp/x" escapes sandbox "/workspaces/..."
+-- which kills the whole run. An extension therefore cannot discover this at the
+-- call site and recover; it has to refuse first. That is what this test is for,
+-- and it is why the delegate work directory defaults to a path under the
+-- workdir rather than under /tmp.
+--
+-- Note the asymmetry that makes the answer-file channel work at all: only
+-- MOTOKO is sandboxed. The delegate is a separate process in its own pane and
+-- can write anywhere; the constraint is on the side that READS the file.
+export pure func path_within(root: string, p: string) -> bool
+  tests [
+    (("/w/m", "/w/m"), true),
+    (("/w/m", "/w/m/.motoko/herdr-delegates"), true),
+    (("/w/m", "/w/mother/x"), false),
+    (("/w/m", "/tmp/x"), false),
+    (("/w/m", ""), false),
+    (("", "/w/m"), false)
+  ]
+  {
+    if root == "" || p == "" then false
+    else if p == root then true
+    else {
+      let n = length(root);
+      if length(p) <= n then false
+      else substring(p, 0, n) == root && substring(p, n, n + 1) == "/"
+    }
+  }
+
+-- ---------------------------------------------------------------------------
+-- Delegate naming
+-- ---------------------------------------------------------------------------
+
+-- herdr requires `[a-z][a-z0-9_-]{0,31}` and enforces uniqueness among LIVE
+-- agents. The seed is a millisecond clock reading, which gives monotonicity
+-- within a session and across sessions in the same pane.
+--
+-- THE PREFIX IS LOAD-BEARING, not decoration. It is the only positive proof of
+-- ownership this extension has, and P2-6 of the measurements is why that
+-- matters: during Phase A `agent list` returned a codex pane belonging to the
+-- operator, and any sweep keyed on "looks like a delegate" would have closed
+-- it. `owns_name` is the test a sweep must pass before touching anything.
+export pure func name_prefix() -> string { "mot-dlg-" }
+
+export pure func delegate_name(seed: int) -> string
+  tests [
+    (0, "mot-dlg-0"),
+    (1787427986123, "mot-dlg-1787427986123")
+  ]
+  { "${name_prefix()}${intToStr(seed)}" }
+
+-- Positive ownership. Not "is it not me" — that is necessary and insufficient.
+export pure func owns_name(name: string) -> bool
+  tests [
+    ("mot-dlg-1787427986123", true),
+    ("mot-dlg-0", true),
+    ("dlg-codex-a", false),
+    ("herdr-021", false),
+    ("", false),
+    ("mot-dlg", false)
+  ]
+  {
+    let p = name_prefix();
+    let n = length(p);
+    if length(name) <= n then false else substring(name, 0, n) == p
+  }
+
+-- THE HANDLE IS THE START TIME, and this is where that becomes load-bearing.
+--
+-- WHY IT HAS TO BE. `herdr agent get` carries no timestamp of any kind
+-- (measured: agent, agent_session, agent_status, cwd, focused, foreground_cwd,
+-- interactive_ready, name, pane_id, revision, state_change_seq, tab_id,
+-- terminal_id, terminal_title, workspace_id — nothing time-like). herdr is the
+-- state store by design, so there is nowhere else to read a start time from
+-- short of inventing state this package deliberately does not keep.
+--
+-- WHY PARSING A NAME IS SAFE HERE, when in general it is not. The usual
+-- objection — convenient until someone changes the format — applies to parsing
+-- a name someone ELSE owns. `delegate_name` and `start_ms_of` are adjacent in
+-- this module and pinned together by a round-trip test, so changing the format
+-- without changing the parser fails the build rather than silently returning
+-- nonsense. That converts the fragility into a caught error, which is the only
+-- honest way to depend on it.
+export pure func start_ms_of(name: string) -> int
+  tests [
+    ("mot-dlg-1787475025027", 1787475025027),
+    ("mot-dlg-0", 0),
+    ("dlg-codex-a", 0),
+    ("herdr-021", 0),
+    ("", 0),
+    ("mot-dlg-notanumber", 0)
+  ]
+  {
+    let p = name_prefix();
+    let n = length(p);
+    if length(name) <= n then 0
+    else if substring(name, 0, n) != p then 0
+    else match stringToInt(substring(name, n, length(name))) {
+      Some(v) => v,
+      None    => 0
+    }
+  }
+
+-- The pin. If the handle format ever changes, this fails.
+export pure func handle_roundtrips(seed: int) -> bool
+  tests [(1787475025027, true), (0, true), (42, true)]
+  { start_ms_of(delegate_name(seed)) == seed }
+
+export pure func format_ms(ms: int) -> string
+  tests [
+    (15731, "15.7s"),
+    (18936, "18.9s"),
+    (900, "0.9s"),
+    (0, "0.0s"),
+    (60000, "60.0s")
+  ]
+  { "${intToStr(ms / 1000)}.${intToStr((ms % 1000) / 100)}s" }
+
+-- WHAT THE NUMBER MEASURES, stated precisely because the obvious reading is
+-- slightly wrong. It is handle-creation to the delegate SETTLING, so it spans
+-- the whole delegation: the pane split, `agent start`, the readiness gate, the
+-- delegate's own work, AND its wind-down after writing the answer. It is NOT
+-- the answer file's mtime, which would be the narrower "when did the answer
+-- exist" figure and is not reachable — `ExtPorts.path_stat` returns a kind and
+-- no timestamp.
+--
+-- Measured against ground truth on a head-to-head: reported 14.5s/23.0s where
+-- the files landed at 12.7s/19.0s, so the settle-after-write lag is ~1.8s for
+-- claude and ~4.0s for codex. The ratio survives (1.59 reported vs 1.50 true)
+-- and the ordering is never in doubt, which is what comparing kinds needs. A
+-- caller wanting "when did the answer exist" must stat the file itself.
+--
+-- WHEN IT IS EXACT AND WHEN IT IS AN UPPER BOUND.
+--
+-- If the wait actually blocked, the delegate was still working when this check
+-- looked, so the moment the wait returned IS the moment it settled and the
+-- elapsed figure is its real runtime. If the wait returned at once, it had
+-- already finished at some unknown earlier point and all that can honestly be
+-- said is "no later than now".
+--
+-- The distinction matters because the naive alternative — now minus start, at
+-- the END of the handler — is not merely imprecise, it INVERTS results. In the
+-- operator's head-to-head the two checks were dispatched together and both
+-- returned at 08:50:51.290: claude (started 25.027, answered 40.757) would have
+-- reported 26.3s and codex (started 28.955, answered 47.891) 22.3s, making the
+-- faster kind look slower. Timestamping at the wait's return gives 15.7s and
+-- 18.9s, which are the true figures, and does so whether the two calls run
+-- sequentially or concurrently.
+export pure func elapsed_is_exact(waited_ms: int) -> bool
+  tests [(0, false), (40, false), (250, false), (251, true), (16384, true)]
+  { waited_ms > 250 }
+
+export pure func elapsed_note(name: string, now_ms: int, waited_ms: int) -> string
+  tests [
+    (("mot-dlg-1787475025027", 1787475040757, 5851),
+     " The whole delegation took 15.7s end to end."),
+    (("mot-dlg-1787475025027", 1787475040757, 3),
+     " The whole delegation took at most 15.7s end to end — it had already finished when this check looked, so that is an upper bound."),
+    (("not-a-handle", 1787475040757, 5851), "")
+  ]
+  {
+    let started = start_ms_of(name);
+    if started <= 0 then ""
+    else {
+      let e = format_ms(now_ms - started);
+      if elapsed_is_exact(waited_ms) then " The whole delegation took ${e} end to end."
+      else " The whole delegation took at most ${e} end to end — it had already finished when this check looked, so that is an upper bound."
+    }
+  }
+
+-- ---------------------------------------------------------------------------
+-- The two file channels
+-- ---------------------------------------------------------------------------
+
+export pure func task_path(dir: string, name: string) -> string
+  tests [(("/tmp/mot", "mot-dlg-7"), "/tmp/mot/task-mot-dlg-7.md")]
+  { "${dir}/task-${name}.md" }
+
+export pure func answer_path(dir: string, name: string) -> string
+  tests [(("/tmp/mot", "mot-dlg-7"), "/tmp/mot/answer-mot-dlg-7.md")]
+  { "${dir}/answer-${name}.md" }
+
+-- THE ONLY TEXT THAT CROSSES ARGV. Fixed, extension-authored, and asserted
+-- token-free by its own test — if someone edits this string to contain a
+-- backtick or a semicolon, the test fails rather than #158 firing in
+-- production.
+export pure func task_wrapper_prompt(task: string, answer: string) -> string
+  tests [
+    (("/tmp/m/task-a.md", "/tmp/m/answer-a.md"),
+     "Read the task described in /tmp/m/task-a.md and carry it out. Write your final answer as Markdown to /tmp/m/answer-a.md, then reply with only that file path.")
+  ]
+  {
+    "Read the task described in ${task} and carry it out. Write your final answer as Markdown to ${answer}, then reply with only that file path."
+  }
+
+export pure func wrapper_is_token_free(task: string, answer: string) -> bool
+  tests [(("/tmp/m/task-a.md", "/tmp/m/answer-a.md"), true)]
+  { has_shell_tokens(task_wrapper_prompt(task, answer)) == false }
+
+-- ---------------------------------------------------------------------------
+-- Kinds
+-- ---------------------------------------------------------------------------
+
+-- herdr v0.8.2's kind list. `motoko` is not on it and cannot be — that is 020's
+-- subject, not this package's.
+export pure func known_kind(k: string) -> bool
+  tests [
+    ("claude", true), ("codex", true), ("gemini", true), ("omp", true),
+    ("motoko", false), ("", false), ("Claude", false)
+  ]
+  {
+    k == "pi" || k == "claude" || k == "codex" || k == "gemini" || k == "cursor"
+      || k == "devin" || k == "agy" || k == "cline" || k == "omp"
+      || k == "mastracode" || k == "opencode" || k == "copilot" || k == "kimi"
+      || k == "kiro" || k == "droid" || k == "amp" || k == "grok"
+      || k == "hermes" || k == "kilo" || k == "qodercli" || k == "qwen"
+      || k == "maki"
+  }
+
+-- WHICH KINDS THE MODEL MAY CHOOSE. Operator policy, not model choice.
+--
+-- WHY THIS EXISTS, and it is a defect fix rather than a new policy. P2-7
+-- records the owner's decision as shipping codex's `-s danger-full-access
+-- -a never` "opt-in, named, and attached to its evidence rather than buried in
+-- a default". As first built it was none of those from the operator's side: the
+-- tool schema advertised `codex` to the model, `Delegate` resolved
+-- `arg_str(arguments, "kind", cfg.kind)`, and so a model could select the
+-- privileged kind on its own. Measured on the operator's run 2026-08-23: the
+-- delegate ran codex in pane w2:p7 with HERDR_DELEGATE_KIND unset and
+-- `default_kind()` returning claude — the MODEL passed `kind: "codex"`, and the
+-- only trace was the pane label. Opt-in that a model can take unilaterally is
+-- opt-out.
+--
+-- WHAT IS AND IS NOT BEING CLAIMED. This is not "codex is dangerous". P2-7's
+-- parity argument stands and is not reopened: the claude sessions in this
+-- workspace already run unsandboxed, and Motoko's own BashExec can do anything
+-- a full-access codex can. No new capability enters the system. What changes is
+-- WHO DECIDES and whether the decision is visible — and there is one real
+-- asymmetry underneath it: claude-as-delegate runs under an auto-mode
+-- classifier that can still decline, while `-a never` removes the approval path
+-- entirely, so codex-as-delegate is strictly the more permissive of the two.
+--
+-- WHY claude-ONLY IS THE DEFAULT rather than claude+codex. Measured, there is
+-- no task for which codex is the better choice here: it is ~1.3x slower
+-- unattended (27.6s vs 21.1s on the identical task) AND it is the one that
+-- needs the relaxation, because its sandbox cannot start in this container
+-- (019 FINDINGS F1/F2). A model picking it is choosing slower and more
+-- permissive for no benefit it can name. Defaulting to claude+codex would also
+-- not fix the reported problem, since the model could still select codex
+-- unprompted — which is the whole finding.
+--
+-- TO RESTORE THE PREVIOUS BEHAVIOUR: HERDR_ALLOWED_KINDS=claude,codex
+export pure func default_allowed_kinds() -> string
+  tests [((), "claude")]
+  { "claude" }
+
+-- Membership without splitting: comma-fence both sides so `claude` cannot match
+-- inside a hypothetical `claude-next`. Spaces are stripped so a human-written
+-- "claude, codex" behaves. An empty allowlist permits nothing, which is the
+-- correct direction to fail.
+export pure func kind_allowed(allowed: string, kind: string) -> bool
+  tests [
+    (("claude", "claude"), true),
+    (("claude", "codex"), false),
+    (("claude,codex", "codex"), true),
+    (("claude, codex", "codex"), true),
+    (("claude,codex", "gemini"), false),
+    (("", "claude"), false),
+    (("claude", ""), false),
+    (("claude-next", "claude"), false)
+  ]
+  {
+    if kind == "" then false
+    else {
+      let norm = replace(allowed, " ", "");
+      contains(",${norm},", ",${kind},")
+    }
+  }
+
+-- Does choosing this kind relax anything? Used to make the grant legible in the
+-- tool result, so a privileged delegate is visible in the transcript rather
+-- than only in the pane label.
+export pure func grants_relaxation(kind: string) -> bool
+  tests [("claude", false), ("codex", true), ("gemini", false)]
+  { kind_default_args_str(kind) != "" }
+
+-- PER-KIND ARGV, AND THE ONE ENTRY THAT IS AN OWNER DECISION.
+--
+-- codex gets `-s danger-full-access -a never`. Arni, 2026-08-23, recorded with
+-- its full scope in MEASUREMENTS §P2-7. What it grants, stated here because a
+-- default that grants it must say so at the point it is granted: the delegate
+-- runs with unrestricted read/write over everything the container can reach —
+-- the working tree, `.env`, `~/.claude/.credentials.json`, `~/.codex/auth.json`
+-- — and executes every command without approval.
+--
+-- WHY IT IS NOT OPTIONAL FOR codex IN THIS CONTAINER, measured: codex's sandbox
+-- is bubblewrap, bubblewrap needs unprivileged user namespaces, and the stock
+-- Docker seccomp profile denies `unshare` outright (019 FINDINGS F1). Without
+-- this, codex either asks for approval on every command (5 per trivial task) or,
+-- under `-a never`, fails every command while still reporting success.
+--
+-- WHY IT IS NOT THE `--dangerously-*` FLAG: identical in effect here, because
+-- that flag's sandbox half is already a no-op. Two flags name which control is
+-- relaxed. It is not safer; it is legible.
+--
+-- claude needs nothing: it is unattended-capable in this image with no
+-- relaxation at all, and is ~1.3x faster. It is the default kind for that
+-- reason, not for parity of treatment.
+export pure func kind_default_args(k: string) -> [string]
+  { if k == "codex" then ["-s", "danger-full-access", "-a", "never"] else [] }
+
+export pure func default_kind() -> string
+  tests [((), "claude")]
+  { "claude" }
+
+-- ---------------------------------------------------------------------------
+-- argv builders
+-- ---------------------------------------------------------------------------
+--
+-- Every one of these is asserted token-free by `argv_is_safe`. That is what
+-- makes `ExtPorts.proc_exec` reachable and #158 avoidable, which 021 §7 item 4
+-- asked about and could not answer: with no shell token in any element and
+-- `req.cwd` left None (the working directory travels as an ORDINARY ARGUMENT to
+-- `pane split --cwd`), the wrap never fires and `req.args` survives. That
+-- recovers the WI-D24 holder stamping 018 §2.4 had to give up.
+
+export pure func argv_split(cwd: string) -> [string]
+  {
+    ["pane", "split", "--current", "--direction", "right", "--cwd", cwd,
+     "--no-focus", "--env", "ANTHROPIC_API_KEY=", "--env", "OPENAI_API_KEY="]
+  }
+
+-- `--timeout` MUST be passed and MUST be below Motoko's 30s process wall.
+-- herdr's own default is 30000 — exactly Motoko's — so leaving it off is the
+-- trap 021 §3.1 named.
+export pure func argv_start(name: string, kind: string, pane: string, timeout_ms: int) -> [string]
+  {
+    let base = ["agent", "start", name, "--kind", kind, "--pane", pane,
+                "--timeout", intToStr(timeout_ms)];
+    match kind_default_args(kind) {
+      [] => base,
+      extra => base ++ ["--"] ++ extra
+    }
+  }
+
+-- NO `--wait`. See correction 2 in the header.
+export pure func argv_prompt(target: string, text: string) -> [string]
+  { ["agent", "prompt", target, text] }
+
+-- BLOCK SERVER-SIDE INSTEAD OF MAKING THE MODEL BUSY-POLL.
+--
+-- WHY THIS EXISTS, measured on a real run 2026-08-23: an 11-second delegation
+-- cost TEN DelegateCheck steps. `agent get` returns in 4ms and a model has no
+-- way to sleep, so the poll loop runs exactly as fast as the model can emit the
+-- next tool call. The rate is model-dependent — a fast model polls more often, a
+-- slow one polls fewer times but no less wastefully — and nothing in the
+-- extension paced it. Against M6's median of 23.1s that is ~23 steps of a 100
+-- step budget spent watching, before any real work happens.
+--
+-- WHAT MAKES THIS SAFE, measured rather than assumed:
+--   already settled  -> returns in 6ms, exit 0. A wait costs nothing once the
+--                       answer has landed, so it needs no "is it done yet" guard.
+--   still working    -> exit 1, {"error":{"code":"timeout", ...}}. That is the
+--                       poll interval elapsing, NOT a failure, and it is the one
+--                       code `do_check` must not treat as one.
+--   agent gone       -> exit 1, agent_not_found, in 2ms. A delegate whose pane
+--                       was already reaped does not block for the whole bound.
+--
+-- NO `--until`. herdr's documented default for `agent wait` matches idle, done
+-- OR blocked, which is exactly the set this wants: `blocked` is a first-class
+-- outcome here (an attended codex reaches it in 9.8s per approval), and waiting
+-- only for idle/done would burn the full bound on a delegate that is sitting on
+-- an approval prompt someone needs to answer.
+export pure func argv_wait(target: string, timeout_ms: int) -> [string]
+  { ["agent", "wait", target, "--timeout", intToStr(timeout_ms)] }
+
+export pure func argv_wait_str(target: string, timeout_ms: int) -> string
+  tests [(("mot-dlg-7", 20000), "agent wait mot-dlg-7 --timeout 20000")]
+  { show_argv(argv_wait(target, timeout_ms)) }
+
+-- The whole point of the branch: `timeout` from a wait means STILL WORKING.
+-- Every other non-zero outcome is a real failure and must keep its own message.
+export pure func wait_elapsed(exit_code: int, stderr: string) -> bool
+  tests [
+    ((1, "{\"error\":{\"code\":\"timeout\",\"message\":\"timed out waiting for agent status\"},\"id\":\"cli:agent:wait\"}"), true),
+    ((1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"agent target x not found\"}}"), false),
+    ((0, ""), false),
+    ((2, "herdr agent commands:"), false)
+  ]
+  { if exit_code == 0 then false else failure_code(exit_code, stderr) == "timeout" }
+
+export pure func argv_get(target: string) -> [string]
+  { ["agent", "get", target] }
+
+export pure func argv_explain(pane: string) -> [string]
+  { ["agent", "explain", pane, "--json"] }
+
+export pure func argv_close(pane: string) -> [string]
+  { ["pane", "close", pane] }
+
+-- ARGV RENDERED AS ONE STRING. This is not test scaffolding: the handler quotes
+-- it in diagnostics, so a failure says which call failed rather than which
+-- function failed. It also happens to be the only way the builders above can be
+-- asserted at all — `tests [...]` evaluates LITERAL expected values only, and a
+-- list is not a literal (the same constraint `src/core/prompts_test.ail`
+-- documents for its own wrappers).
+export pure func show_argv(xs: [string]) -> string
+  tests [([], ""), (["agent", "get", "x"], "agent get x")]
+  { join(" ", xs) }
+
+export pure func argv_split_str(cwd: string) -> string
+  tests [("/w/m", "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY=")]
+  { show_argv(argv_split(cwd)) }
+
+export pure func argv_start_str(name: string, kind: string, pane: string, timeout_ms: int) -> string
+  tests [
+    (("mot-dlg-7", "claude", "w1:pA", 20000),
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000"),
+    (("mot-dlg-8", "codex", "w1:pB", 20000),
+     "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never")
+  ]
+  { show_argv(argv_start(name, kind, pane, timeout_ms)) }
+
+export pure func kind_default_args_str(k: string) -> string
+  tests [
+    ("claude", ""),
+    ("codex", "-s danger-full-access -a never"),
+    ("gemini", "")
+  ]
+  { show_argv(kind_default_args(k)) }
+
+export pure func argv_prompt_str(target: string, text: string) -> string
+  tests [(("mot-dlg-7", "Read the task."), "agent prompt mot-dlg-7 Read the task.")]
+  { show_argv(argv_prompt(target, text)) }
+
+export pure func argv_get_str(target: string) -> string
+  tests [("mot-dlg-7", "agent get mot-dlg-7")]
+  { show_argv(argv_get(target)) }
+
+export pure func argv_explain_str(pane: string) -> string
+  tests [("w1:pA", "agent explain w1:pA --json")]
+  { show_argv(argv_explain(pane)) }
+
+export pure func argv_close_str(pane: string) -> string
+  tests [("w1:pA", "pane close w1:pA")]
+  { show_argv(argv_close(pane)) }
+
+export pure func any_shell_tokens(xs: [string]) -> bool
+  tests [
+    ([], false),
+    (["agent", "get", "mot-dlg-7"], false),
+    (["agent", "prompt", "x", "run `make test`"], true)
+  ]
+  {
+    match xs {
+      [] => false,
+      x :: rest => if has_shell_tokens(x) then true else any_shell_tokens(rest)
+    }
+  }
+
+-- The guard the handler runs before every call. If this is ever false the call
+-- is refused with an explanation rather than sent, because sending it would
+-- drop the arguments and run bare `herdr`.
+export pure func argv_is_safe(xs: [string]) -> bool
+  tests [
+    (["pane", "split", "--current", "--cwd", "/w/m"], true),
+    (["agent", "prompt", "x", "Read the task described in /tmp/t.md and carry it out."], true),
+    (["agent", "prompt", "x", "Refactor `parse` and run make test && make lint"], false)
+  ]
+  { any_shell_tokens(xs) == false }
+
+-- ---------------------------------------------------------------------------
+-- Error decoding — five shapes, not two
+-- ---------------------------------------------------------------------------
+--
+-- 021 §5.4 says "two error vocabularies". Measured against a running server
+-- there are five, and a decoder that assumes stdout is always
+-- `{"id":…,"result":…}` is wrong in two further places (`agent read` prints raw
+-- terminal text; `agent explain --json` prints a bare object with no envelope).
+--
+--   exit 2                      -> CLI syntax error, plain-text usage
+--   exit != 0, JSON on stderr   -> herdr's own vocabulary, decode on `.error.code`
+--   exit != 0, "nested herdr"   -> the #158 wrap's signature inside a pane
+--   exit != 0, other plain text -> argument validation, e.g.
+--                                  "--current requires HERDR_PANE_ID"
+--   Err(ProcessError)           -> never reached a process at all
+--
+-- 018 F1's defect — collapsing all of these into one PATH-flavoured sentence —
+-- is what these branches exist to avoid.
+
+export pure func failure_shape(exit_code: int, stderr: string) -> string
+  tests [
+    ((0, ""), "ok"),
+    ((2, "herdr agent commands:"), "cli_syntax"),
+    ((1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}"), "herdr_json"),
+    ((1, "error: nested herdr is disabled by default."), "nested_herdr"),
+    ((1, "--current requires HERDR_PANE_ID"), "plain_text"),
+    ((1, ""), "unknown")
+  ]
+  {
+    if exit_code == 0 then "ok"
+    else if exit_code == 2 then "cli_syntax"
+    else if contains(stderr, "nested herdr") then "nested_herdr"
+    else if contains(stderr, "\"error\"") then "herdr_json"
+    else if stderr == "" then "unknown"
+    else "plain_text"
+  }
+
+func json_error_field(stderr: string, field: string) -> string {
+  match decode(stderr) {
+    Err(_) => "",
+    Ok(obj) => match get(obj, "error") {
+      None => "",
+      Some(e) => match get(e, field) {
+        None => "",
+        Some(v) => match asString(v) { Some(s) => s, None => "" }
+      }
+    }
+  }
+}
+
+-- herdr's `code` is stable and machine-readable; its `message` is prose. Decode
+-- on the code, quote the message.
+export pure func failure_code(exit_code: int, stderr: string) -> string
+  tests [
+    ((0, ""), ""),
+    ((1, "{\"error\":{\"code\":\"agent_prompt_stalled\",\"message\":\"no change\"},\"id\":\"cli:agent:prompt\"}"), "agent_prompt_stalled"),
+    ((1, "{\"error\":{\"code\":\"timeout\",\"message\":\"timed out\"}}"), "timeout"),
+    ((2, "herdr agent commands:"), "cli_syntax"),
+    ((1, "error: nested herdr is disabled by default."), "nested_herdr"),
+    ((1, "--current requires HERDR_PANE_ID"), "herdr_cli_rejected")
+  ]
+  {
+    let shape = failure_shape(exit_code, stderr);
+    if shape == "ok" then ""
+    else if shape == "herdr_json" then {
+      let c = json_error_field(stderr, "code");
+      if c == "" then "herdr_json_undecodable" else c
+    }
+    else if shape == "cli_syntax" then "cli_syntax"
+    else if shape == "nested_herdr" then "nested_herdr"
+    else if shape == "unknown" then "herdr_failed_silently"
+    else "herdr_cli_rejected"
+  }
+
+-- One accurate sentence per shape. Each names what actually happened and what
+-- to do about it; none of them mentions PATH unless PATH is the problem.
+export pure func failure_message(exit_code: int, stderr: string) -> string
+  tests [
+    ((1, "{\"error\":{\"code\":\"agent_prompt_stalled\",\"message\":\"no observed state change within 5000 ms\"}}"),
+     "herdr rejected the call with code `agent_prompt_stalled`: no observed state change within 5000 ms. The delegate accepted input but its state never changed, which in practice means it is not really at an agent prompt — check `agent explain`."),
+    ((2, "herdr agent commands:"),
+     "The herdr CLI rejected the command as malformed (exit 2). This is a bug in this extension's argv construction, not a delegate failure."),
+    ((1, "error: nested herdr is disabled by default."),
+     "The call ran as bare `herdr` with its arguments missing, and hit herdr's nested-herdr guard. This is motoko_agent#158: a shell token in the argv made the tool runtime rebuild the command from `cmd` alone and drop `args`.")
+  ]
+  {
+    let shape = failure_shape(exit_code, stderr);
+    let code = failure_code(exit_code, stderr);
+    if shape == "ok" then ""
+    else if shape == "cli_syntax" then
+      "The herdr CLI rejected the command as malformed (exit 2). This is a bug in this extension's argv construction, not a delegate failure."
+    else if shape == "nested_herdr" then
+      "The call ran as bare `herdr` with its arguments missing, and hit herdr's nested-herdr guard. This is motoko_agent#158: a shell token in the argv made the tool runtime rebuild the command from `cmd` alone and drop `args`."
+    else if shape == "herdr_json" then {
+      let msg = json_error_field(stderr, "message");
+      "herdr rejected the call with code `${code}`: ${msg}.${code_hint(code)}"
+    }
+    else if shape == "unknown" then
+      "The herdr CLI exited ${intToStr(exit_code)} and printed nothing to stderr. No diagnosis is available; this is not a delegate failure."
+    else
+      "The herdr CLI rejected the call (exit ${intToStr(exit_code)}): ${stderr}"
+  }
+
+-- The hints are the measured part. Each says what the code MEANS operationally,
+-- which is the half the prose message leaves out.
+export pure func code_hint(code: string) -> string
+  tests [
+    ("timeout", " The wait elapsed; the delegate is still working. This is a poll interval, not a death — call DelegateCheck again."),
+    ("agent_not_found", " No agent with that name or pane is live. It has been closed, or it was never started."),
+    ("unrecognised_code_xyz", "")
+  ]
+  {
+    if code == "timeout" then
+      " The wait elapsed; the delegate is still working. This is a poll interval, not a death — call DelegateCheck again."
+    else if code == "agent_prompt_stalled" then
+      " The delegate accepted input but its state never changed, which in practice means it is not really at an agent prompt — check `agent explain`."
+    else if code == "agent_not_found" then
+      " No agent with that name or pane is live. It has been closed, or it was never started."
+    else if code == "agent_not_ready" then
+      " The pane holds an agent herdr did not start, so it cannot be prompted. Only agents started with `agent start` are promptable."
+    else if code == "agent_blocked" then
+      " The delegate is waiting on an approval prompt. Answer it in the pane, or send keys to it."
+    else if code == "agent_explain_unavailable" then
+      " herdr has no detected agent label for that pane."
+    else ""
+  }
+
+-- The seventh vocabulary: a spawn that never reached a process. 018 F1
+-- collapsed all seven of these into one sentence about PATH; only ONE of them
+-- is about PATH.
+-- ONE SENTENCE PER CONSTRUCTOR, AND THE TESTS ARE THE POINT. 018 F1's defect
+-- was collapsing all seven of these into a single PATH-flavoured sentence; only
+-- ONE of them is about PATH. Pinning each arm is what stops that regressing
+-- quietly, and acceptance criterion 6 rests on exactly this distinctness.
+export pure func process_error_text(e: ProcessError) -> string
+  {
+  match e {
+    NotFound(cmd) =>
+      "`${cmd}` was not found. HERDR_BIN_PATH should point at the running server's own binary; if it is unset this extension should not have registered at all.",
+    NotAllowed(cmd) =>
+      "`${cmd}` is not in the process allowlist. Motoko was started with `--process-allowlist` and herdr is not on it.",
+    PermissionDenied(cmd) =>
+      "`${cmd}` exists but is not executable by this user.",
+    Timeout(ms) =>
+      "The herdr CLI itself did not return within ${intToStr(ms)}ms. Every call this extension makes is a short one, so this points at the herdr server being wedged rather than at the delegate.",
+    OutputLimitExceeded(n) =>
+      "The herdr CLI produced more than ${intToStr(n)} bytes. Answers travel in a file, so this points at `agent read` over a very large scrollback.",
+    SpawnFailed(msg) =>
+      "The herdr CLI could not be spawned: ${msg}",
+    AbnormalExit(_, signame) =>
+      "The herdr CLI was killed by signal ${signame} before it could answer."
+  }
+}
+
+-- TEST SEAMS, one per constructor, and they are not decoration.
+--
+-- `tests [...]` lifts each case into a synthetic module that does NOT inherit
+-- this file's imports (the same limitation `src/core/prompts_test.ail` documents
+-- for its own wrappers), so an ADT constructor cannot be a test INPUT —
+-- `NotFound(...)` in a tests block fails with "undefined variable: NotFound".
+-- Wrappers taking primitives move the construction into the real module, where
+-- the import is in scope.
+--
+-- Worth the verbosity because 018 F1's defect was collapsing all seven arms into
+-- one PATH-flavoured sentence when only ONE of them is about PATH. Pinning each
+-- arm is what stops that regressing quietly, and acceptance criterion 6 rests on
+-- these being distinct.
+pure func pe_not_found(cmd: string) -> string
+  tests [("/usr/local/bin/herdr", "`/usr/local/bin/herdr` was not found. HERDR_BIN_PATH should point at the running server's own binary; if it is unset this extension should not have registered at all.")]
+  { process_error_text(NotFound(cmd)) }
+
+pure func pe_not_allowed(cmd: string) -> string
+  tests [("/usr/local/bin/herdr", "`/usr/local/bin/herdr` is not in the process allowlist. Motoko was started with `--process-allowlist` and herdr is not on it.")]
+  { process_error_text(NotAllowed(cmd)) }
+
+pure func pe_permission_denied(cmd: string) -> string
+  tests [("/usr/local/bin/herdr", "`/usr/local/bin/herdr` exists but is not executable by this user.")]
+  { process_error_text(PermissionDenied(cmd)) }
+
+pure func pe_timeout(ms: int) -> string
+  tests [(30000, "The herdr CLI itself did not return within 30000ms. Every call this extension makes is a short one, so this points at the herdr server being wedged rather than at the delegate.")]
+  { process_error_text(Timeout(ms)) }
+
+pure func pe_output_limit(n: int) -> string
+  tests [(10485760, "The herdr CLI produced more than 10485760 bytes. Answers travel in a file, so this points at `agent read` over a very large scrollback.")]
+  { process_error_text(OutputLimitExceeded(n)) }
+
+pure func pe_spawn_failed(msg: string) -> string
+  tests [("no such file or directory", "The herdr CLI could not be spawned: no such file or directory")]
+  { process_error_text(SpawnFailed(msg)) }
+
+pure func pe_abnormal_exit(sig: int, name: string) -> string
+  tests [((9, "SIGKILL"), "The herdr CLI was killed by signal SIGKILL before it could answer.")]
+  { process_error_text(AbnormalExit(sig, name)) }
+
+-- The distinctness assertion itself: seven constructors, seven different
+-- sentences. This is what criterion 6 asks for, asserted rather than eyeballed.
+pure func pe_all_distinct() -> bool
+  tests [((), true)]
+  {
+    let a = pe_not_found("x");
+    let b = pe_not_allowed("x");
+    let c = pe_permission_denied("x");
+    let d = pe_timeout(1);
+    let e = pe_output_limit(1);
+    let f = pe_spawn_failed("x");
+    let g = pe_abnormal_exit(9, "X");
+    a != b && b != c && c != d && d != e && e != f && f != g && a != g && a != d && b != e
+  }
+
+-- ---------------------------------------------------------------------------
+-- Readiness — see correction 3 in the header
+-- ---------------------------------------------------------------------------
+
+-- `interactive_ready: true` is returned for agents that are not usable. The
+-- discriminator is `agent explain --json`: a healthy delegate matched a screen
+-- rule; a broken one fell back.
+--
+-- Measured signatures:
+--   healthy claude -> matched_rule {"id":"live_prompt_box",...}, fallback_reason null
+--   healthy codex  -> matched_rule {"id":"osc_title_idle",...},  fallback_reason null
+--   unauth codex   -> matched_rule null, fallback_reason "default_known_agent_idle_fallback"
+--   claude on the
+--   API-key modal  -> matched_rule null, fallback_reason "default_known_agent_idle_fallback"
+--
+-- Test for A match, not for a particular rule or priority: codex's genuine
+-- match is priority 100 against claude's 950.
+export pure func explain_says_ready(stdout: string) -> bool
+  tests [
+    ("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\",\"priority\":950},\"fallback_reason\":null}", true),
+    ("{\"agent\":\"codex\",\"matched_rule\":{\"id\":\"osc_title_idle\",\"priority\":100},\"fallback_reason\":null}", true),
+    ("{\"agent\":\"codex\",\"matched_rule\":null,\"fallback_reason\":\"default_known_agent_idle_fallback\"}", false),
+    ("not json at all", false),
+    ("", false)
+  ]
+  {
+    match decode(stdout) {
+      Err(_) => false,
+      Ok(obj) => match get(obj, "matched_rule") {
+        None => false,
+        Some(r) => match asString(r) {
+          -- A populated matched_rule is an OBJECT, so asString fails on it;
+          -- a JSON null decodes in a way asString also refuses. The
+          -- discriminator that survives both is whether the raw text carries a
+          -- null in that position.
+          _ => contains(stdout, "\"matched_rule\":null") == false
+        }
+      }
+    }
+  }
+
+-- ---------------------------------------------------------------------------
+-- The environment gate
+-- ---------------------------------------------------------------------------
+
+-- ALL THREE ARE REQUIRED, and the third is a correction to 021 §4.4.
+--
+-- §4.4 argued the extension "may not need HERDR_PANE_ID at all" because
+-- `pane split --current` resolves the pane itself. Measured: it does — setting
+-- HERDR_PANE_ID to another pane splits that one instead — but with the variable
+-- UNSET the call fails with the bare plain text `--current requires
+-- HERDR_PANE_ID`, which is error shape 3 and a poor thing to discover at call
+-- time. Requiring it here turns a mid-call plain-text failure into a clean
+-- decision not to register.
+--
+-- HERDR_BIN_PATH is preferred over a PATH lookup because a self-updated `herdr`
+-- in ~/.local/bin could otherwise shadow the running server's own binary.
+--
+-- THIS IS THE SECOND COPY OF THIS RULE. The first is `readHerdrEnvironment` in
+-- `src/tui/src/herdr-agent-state.ts`, which is TypeScript in the TUI host
+-- process and cannot be shared with this one across the language boundary. If
+-- herdr ever changes what it injects into a pane process, BOTH must move.
+-- Tracked as MOT-118.
+export pure func herdr_env_ready(herdr_env: string, bin_path: string, pane_id: string) -> bool
+  tests [
+    (("1", "/usr/local/bin/herdr", "w1:p7"), true),
+    (("", "/usr/local/bin/herdr", "w1:p7"), false),
+    (("1", "", "w1:p7"), false),
+    (("1", "/usr/local/bin/herdr", ""), false),
+    (("0", "/usr/local/bin/herdr", "w1:p7"), false)
+  ]
+  { herdr_env == "1" && bin_path != "" && pane_id != "" }
+
+-- ---------------------------------------------------------------------------
+-- Reading herdr's answers, and the tool runtime's
+-- ---------------------------------------------------------------------------
+--
+-- Successful herdr calls print ONE JSON object on stdout shaped
+-- `{"id":"cli:<group>:<cmd>","result":{...}}`. Two exceptions, both measured
+-- and both relevant here: `agent read` prints raw terminal text, and
+-- `agent explain --json` prints a BARE object with no envelope. The accessors
+-- below therefore reach into `.result` explicitly rather than assuming a
+-- generic shape, and `explain_says_ready` above does not use them at all.
+--
+-- Never predict the `id`; read it out of the answer if you need it.
+
+func nested_string(raw: string, a: string, b: string, c: string) -> string {
+  match decode(raw) {
+    Err(_) => "",
+    Ok(o1) => match get(o1, a) {
+      None => "",
+      Some(v1) => match get(v1, b) {
+        None => "",
+        Some(v2) => match get(v2, c) {
+          None => "",
+          Some(v3) => match asString(v3) { Some(x) => x, None => "" }
+        }
+      }
+    }
+  }
+}
+
+export pure func split_pane_id(stdout: string) -> string
+  tests [
+    ("{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:pA\",\"revision\":0},\"type\":\"pane_info\"}}", "w1:pA"),
+    ("{\"error\":{\"code\":\"x\"}}", ""),
+    ("", "")
+  ]
+  { nested_string(stdout, "result", "pane", "pane_id") }
+
+export pure func agent_status_of(stdout: string) -> string
+  tests [
+    ("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"idle\",\"pane_id\":\"w1:p8\"},\"type\":\"agent_info\"}}", "idle"),
+    ("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"blocked\",\"pane_id\":\"w1:pJ\"}}}", "blocked"),
+    ("", "")
+  ]
+  { nested_string(stdout, "result", "agent", "agent_status") }
+
+export pure func agent_pane_of(stdout: string) -> string
+  tests [
+    ("{\"result\":{\"agent\":{\"agent_status\":\"idle\",\"pane_id\":\"w1:p8\"}}}", "w1:p8"),
+    ("", "")
+  ]
+  { nested_string(stdout, "result", "agent", "pane_id") }
+
+-- A settled delegate. `done` and `idle` were BOTH observed as the resting state
+-- after a completed turn, so accepting only one of them would hang the poll.
+export pure func is_settled(status: string) -> bool
+  tests [
+    ("done", true), ("idle", true),
+    ("working", false), ("blocked", false), ("unknown", false), ("", false)
+  ]
+  { status == "done" || status == "idle" }
+
+-- ---------------------------------------------------------------------------
+-- The routed process port
+-- ---------------------------------------------------------------------------
+--
+-- WHY THE PORT AND NOT AMBIENT `exec`, which is the opposite of the choice
+-- `motoko-ext-agentcli` had to make. agentcli went ambient because one of its
+-- argv elements is a model-authored prompt, which trips #158 and loses
+-- `req.args`; it gave up WI-D24 holder stamping to do so. This package's argv
+-- is token-free BY CONSTRUCTION — the prompt travels in a file and
+-- `argv_is_safe` asserts the rest — and `cwd` travels as an ordinary argument
+-- to `pane split --cwd` rather than as `req.cwd`. Both of #158's triggers are
+-- therefore absent, the wrap never fires, and the routed path is reachable.
+-- That is 021 §7 item 4 answered affirmatively, and the holder stamping comes
+-- back with it.
+
+export pure func bash_exec_tool() -> string
+  tests [((), "BashExec")]
+  { "BashExec" }
+
+export pure func bash_exec_args(cmd: string, argv: [string]) -> string
+  tests [
+    (("herdr", ["agent", "get", "x"]), "{\"cmd\":\"herdr\",\"args\":[\"agent\",\"get\",\"x\"]}")
+  ]
+  { encode(jo([kv("cmd", js(cmd)), kv("args", ja(strings_to_json(argv)))])) }
+
+func strings_to_json(xs: [string]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => js(x) :: strings_to_json(rest)
+  }
+}
+
+export pure func bash_field(output: string, field: string) -> string
+  tests [
+    (("{\"stdout\":\"hello\",\"stderr\":\"\",\"exit_code\":0}", "stdout"), "hello"),
+    (("{\"stdout\":\"\",\"stderr\":\"boom\",\"exit_code\":1}", "stderr"), "boom"),
+    (("not json", "stdout"), "")
+  ]
+  {
+    match decode(output) {
+      Err(_) => "",
+      Ok(o) => match get(o, field) {
+        None => "",
+        Some(v) => match asString(v) { Some(x) => x, None => "" }
+      }
+    }
+  }
+
+-- An undecodable envelope takes -1 rather than 0: "no readable answer" must
+-- land in the failure direction, never the success one.
+export pure func bash_exit(output: string) -> int
+  tests [
+    ("{\"stdout\":\"\",\"stderr\":\"\",\"exit_code\":0}", 0),
+    ("{\"stdout\":\"\",\"stderr\":\"x\",\"exit_code\":2}", 2),
+    ("not json", -1)
+  ]
+  {
+    match decode(output) {
+      Err(_) => -1,
+      Ok(o) => match get(o, "exit_code") {
+        None => -1,
+        Some(v) => match asNumber(v) { Some(n) => _float_to_int(n), None => -1 }
+      }
+    }
+  }

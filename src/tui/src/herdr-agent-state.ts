@@ -108,6 +108,18 @@ export interface HerdrEnvironment {
  *
  * Pure, and takes the environment as an argument, so the "are we inside herdr" decision is
  * testable without touching process.env.
+ *
+ * THERE IS A SECOND COPY OF THIS RULE AND THEY MUST MOVE TOGETHER (MOT-118).
+ * `herdr_env_ready` in `packages/motoko-ext-herdr/types.ail` applies the same three-variable test
+ * in AILANG, inside an extension, so that `motoko-ext-herdr` advertises no tools outside a pane.
+ * The two cannot share an implementation — this one is TypeScript in the TUI host process, that
+ * one is AILANG in the runtime — so if herdr ever changes what it injects, BOTH have to change.
+ *
+ * They also sit on opposite sides of the same boundary, which is worth knowing before editing
+ * either: this copy makes Motoko VISIBLE to herdr as an agent (020); that one lets Motoko DRIVE
+ * herdr to run other agents (021). Note that the AILANG copy only sees these variables because
+ * `buildChildEnv` in `runtime-process.ts` forwards them explicitly — the runtime is a grandchild
+ * of the pane, not a child, and that allowlist is what stands between the two copies.
  */
 export function readHerdrEnvironment(env: NodeJS.ProcessEnv): HerdrEnvironment | null {
   // herdr's guidance is to report only when HERDR_ENV=1, so that an integration is a no-op

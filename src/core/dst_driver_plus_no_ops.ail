@@ -440,7 +440,7 @@ pure func disclosures_of(ids: [string]) -> [DisclosureIds] {
 -- WI-D7's trigger exists to refuse — here at the granularity of the whole
 -- installable set rather than only of the zero-barrier ones.
 pure func barrier_reason() -> string {
-  "NOT INSTALLED, and un-installable in a conformant profile at this revision rather than declined. Three barrier slots stand for it — on_pre_step, on_response_intercept and on_solver_candidate each declare a non-empty ABI effect row and are unconditionally dispatched, so criterion 1 fails on the declared row and D5 forbids installing an extension with any unconditionally-dispatched hook excluded. Criterion 2 is not available either, and that is a MEASUREMENT rather than an absence of one, per D1's rule that a reason records a measurement: classifier 3 (make ext_ambient_inventory) reports this extension AMBIENT — at least one ambient effect source in its transitive module closure — so criterion 2's first clause FAILS on evidence, the barrier count for it is 3 rather than 0, and WI-D13's per-(extension, slot) derivation leaves all three standing. Every one of the ten extensions sharing this reason is AMBIENT at HEAD; the ambient COUNTS differ and the verdict does not, which is why one reason serves them all and no count is restated here (P3). Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: world-MEDIATION of the effects it performs, which is Route B and a port-surface change, and not anything this profile can decide. Re-derived on every run by tools/profile_definition/check_fixtures.py, which prints the standing count per extension, and by check_no_op_profile.py, which fails if a zero-barrier extension appears in this list."
+  "NOT INSTALLED, and un-installable in a conformant profile at this revision rather than declined. Three barrier slots stand for it — on_pre_step, on_response_intercept and on_solver_candidate each declare a non-empty ABI effect row and are unconditionally dispatched, so criterion 1 fails on the declared row and D5 forbids installing an extension with any unconditionally-dispatched hook excluded. Criterion 2 is not available either, and that is a MEASUREMENT rather than an absence of one, per D1's rule that a reason records a measurement: classifier 3 (make ext_ambient_inventory) reports this extension AMBIENT — at least one ambient effect source in its transitive module closure — so criterion 2's first clause FAILS on evidence, the barrier count for it is 3 rather than 0, and WI-D13's per-(extension, slot) derivation leaves all three standing. Every one of the twelve extensions sharing this reason is AMBIENT at HEAD; the ambient COUNTS differ and the verdict does not, which is why one reason serves them all and no count is restated here (P3). Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: world-MEDIATION of the effects it performs, which is Route B and a port-surface change, and not anything this profile can decide. Re-derived on every run by tools/profile_definition/check_fixtures.py, which prints the standing count per extension, and by check_no_op_profile.py, which fails if a zero-barrier extension appears in this list."
 }
 
 pure func omit_each(ids: [string], reason: string) -> [OmittedExtension] {
@@ -456,8 +456,8 @@ pure func omit_each(ids: [string], reason: string) -> [OmittedExtension] {
 pure func not_installed() -> [OmittedExtension] {
   [{ extension_id: "compaction_ai",
      reason: "NOT INSTALLED, and it is the sharpest of the eleven. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. This profile does not install it, and the fact that it installs four OTHER extensions does not weaken the reason: WI-D14 covers no-ops, and compaction_ai is the one extension whose hooks are not no-ops in the direction that would make the coverage mean something." }]
-    ++ omit_each(["a2a", "ailang_docs", "compose", "context_mode", "exa_search", "mcp",
-                  "microrag", "omnigraph", "scratchpad", "test_dummy"], barrier_reason())
+    ++ omit_each(["a2a", "agentcli", "ailang_docs", "compose", "context_mode", "exa_search",
+                  "herdr", "mcp", "microrag", "omnigraph", "scratchpad", "test_dummy"], barrier_reason())
 }
 
 -- ---------------------------------------------------------------------------
@@ -776,7 +776,7 @@ pure func test_installed_and_omitted_are_disjoint() -> bool
   {
     let d = driver_plus_no_ops();
     disjoint(omitted_ids(d.omitted_extensions), installed_extension_ids())
-      && List.length(d.omitted_extensions) == 11
+      && List.length(d.omitted_extensions) == 13
   }
 
 pure func omitted_ids(os: [OmittedExtension]) -> [string] {

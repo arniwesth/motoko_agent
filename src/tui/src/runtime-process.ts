@@ -346,6 +346,36 @@ export function buildChildEnv(
     MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
       process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
   };
+  // The herdr pane environment, forwarded only when it is actually present.
+  //
+  // WHY THIS IS NEEDED AT ALL, because the obvious reading of 021 §4.4 is
+  // wrong: `motoko-ext-herdr` gates itself on HERDR_ENV / HERDR_BIN_PATH /
+  // HERDR_PANE_ID read through `std/env` inside `register_with_config`. But
+  // that runs in the AILANG runtime, which is a GRANDCHILD of the pane — the
+  // pane starts this TUI, and this function decides what the TUI's own child
+  // sees. `buildChildEnv` is an explicit allowlist, so without these three
+  // lines the variables are dropped, the gate correctly closes, and the
+  // extension silently advertises no tools INSIDE a herdr pane. Measured
+  // 2026-08-23: the extension loaded and offered nothing, and the model
+  // reported that Delegate did not exist.
+  //
+  // THE WHOLE HERDR_ PREFIX, not a named list — corrected 2026-08-23 after
+  // enumerating bit twice. The first version forwarded exactly HERDR_ENV,
+  // HERDR_BIN_PATH and HERDR_PANE_ID, which made the gate work and silently
+  // left every one of the extension's operator knobs unreachable:
+  // HERDR_ALLOWED_KINDS, HERDR_DELEGATE_KIND, HERDR_DELEGATE_DIR,
+  // HERDR_START_TIMEOUT_MS, HERDR_CHECK_WAIT_MS, HERDR_MAX_OUTPUT_CHARS. The
+  // operator could set them and nothing happened — measured, with
+  // HERDR_ALLOWED_KINDS=claude,codex still refusing codex.
+  //
+  // A prefix is still bounded: herdr injects HERDR_* into the pane and the
+  // extension reads HERDR_*, so the family is the unit. Enumerating members of
+  // a family that grows is the fragility, not the allowlist itself.
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("HERDR_") && value) {
+      childEnv[key] = value;
+    }
+  }
   if (process.env.AILANG_STDLIB_PATH) {
     childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
   }
