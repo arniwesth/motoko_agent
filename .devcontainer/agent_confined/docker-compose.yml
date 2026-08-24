@@ -70,6 +70,26 @@ services:
     security_opt:
       - no-new-privileges:true
 
+    # RESOURCE LIMITS — host-DoS containment. Without these the container's cgroup ceilings are all
+    # UNLIMITED (measured: memory.max / memory.swap.max / pids.max / cpu.max = max), so a runaway or hostile
+    # process can fork-bomb or exhaust memory and take the HOST down, not just itself — the one gap the
+    # codex audit surfaced that the egress/credential work did not. cgroup v2 is real under OrbStack, so
+    # these are enforced. Values are tunable from .env (agent.sh passes --env-file, which interpolates
+    # ${...}); the defaults are generous for THIS workload — herdr + delegate panes + a Chromium driven by
+    # agent-browser + bun/ailang builds — while still stopping the classic denial-of-service:
+    #   * pids_limit halts a fork bomb (a bomb wants millions; 4096 is far above any real pane/Chromium/build
+    #     tree),
+    #   * mem_limit makes a memory leak OOM-kill inside the CONTAINER instead of the Mac, and
+    #     memswap_limit == mem_limit makes it a HARD ceiling (no swap spill past the limit).
+    # Size AGENT_MEM_LIMIT to leave the Mac headroom — roughly half its RAM is a safe start; raise it on a
+    # large machine, lower it on a 16 GB one. CPU exhaustion only slows the host, so cpus is a soft comfort
+    # limit, not a security control. NOT set here: shm_size — agent-browser's Chromium needs /dev/shm, so
+    # the default stands (noted as a known gap instead).
+    mem_limit: ${AGENT_MEM_LIMIT:-8g}
+    memswap_limit: ${AGENT_MEM_LIMIT:-8g}
+    pids_limit: ${AGENT_PIDS_LIMIT:-4096}
+    cpus: ${AGENT_CPUS:-4}
+
     volumes:
       # The shared working tree. This is ONE HOST DIRECTORY: isolating a compose service does not isolate
       # .git/config or .agent/. checks/r7_git_audit.py is what covers the git-config channel; README's
@@ -100,6 +120,20 @@ services:
       # they are separate repositories whose hooks only run when git is invoked inside them; the r7 audit
       # covers all six configuration files and their hook inventories instead.
       - ../../.git/hooks:/workspaces/motoko_agent/.git/hooks:ro
+
+      # .git/config, SEALED read-only — the strongest shared-tree channel, now prevented rather than only
+      # audited. This file is agent-writable on the shared tree, and its exec-directive family
+      # (core.fsmonitor/pager/hooksPath, filter.*.clean/smudge, [alias] !cmd, [include] path,
+      # remote.*.url = ext::) runs as the OPERATOR, on the HOST, the next time host-side git touches the
+      # repo — outside every container control. Sealing it costs the agent nothing it uses: its git identity
+      # is container-global (/home/motoko/.gitconfig, off this tree), `git commit`/`checkout -b`/`push` do
+      # not write config (measured), and no agent tooling issues `git config`. checks/r7_git_audit.py stays
+      # the control for the NESTED gitdirs (ailang/, .emsdk/, deepseek-harness/) and host-side tampering.
+      # Single-file ro bind caveat: the HOST rewrites this file (VS Code's branch.*.vscode-merge-base), so
+      # the container's view can lag a host write — harmless here (the agent reads only the stable remotes /
+      # core.* and never depends on fresh branch.* tracking). It reads old content, it does not error.
+      - ../../.git/config:/workspaces/motoko_agent/.git/config:ro
+
       - ../../.vscode:/workspaces/motoko_agent/.vscode:ro
       - ../../.devcontainer:/workspaces/motoko_agent/.devcontainer:ro
 
