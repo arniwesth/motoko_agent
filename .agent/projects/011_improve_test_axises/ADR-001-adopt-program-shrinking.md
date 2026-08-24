@@ -17,6 +17,10 @@ Relates to:
 - `../../016_github_ops/ADR-001-github-pr-ops-pipeline.md` — this repo's ADR
   style exemplar (header, Context / Options / Decision / Consequences,
   Cross-references).
+- `../../024_spytial_diagnostic_reporting/ADR-001-addendum-proposal.md` — proposed
+  amendments (2026-08-23, from PLDI 2026's Spytial paper): fixed ddmin iteration
+  order as a stated determinism requirement, and promotion of the discard log into
+  per-step counterfactual annotations in the failure report.
 
 ---
 
