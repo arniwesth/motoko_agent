@@ -957,6 +957,41 @@ export type ExtensionHooks = {
     -> FinalizeOutcome ! {Process}
 }
 
+-- Neutral hooks for record-update construction. Each result is the identity for
+-- its host dispatcher: empty concatenations/patches, no policy opinion, and
+-- pass/delegate/no-intercept/no-decision for the chaining and first-match folds.
+-- World-threading slots preserve the world they receive.
+export pure func default_hooks(id: string) -> ExtensionHooks {
+  {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: \_ctx _plan. {
+      requested_total: None,
+      requested_solver: None,
+      requested_verifier: None
+    },
+    on_pre_step: \ctx _msgs. {
+      decision: PassThrough,
+      next_state: ctx.world
+    } ! {AI, IO, Trace},
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: \ctx _call. {
+      decision: Delegate,
+      next_state: ctx.world
+    } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    on_response_intercept: \ctx _response_text. {
+      decision: NoIntercept,
+      next_state: ctx.world
+    } ! {IO, Process, FS, Clock},
+    on_solver_candidate: \ctx _candidate. {
+      decision: NoDecision,
+      next_state: ctx.world
+    } ! {Process}
+  }
+}
+
 export type ExtRegistry = { hooks: [ExtensionHooks] }
 
 export type ExtRuntime = {

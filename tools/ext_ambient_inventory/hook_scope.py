@@ -81,11 +81,25 @@ SLOTS = (
 
 REGISTER_FUNC = "register_with_config"
 
+#: The ABI's neutral record (`packages/motoko-ext-abi/types.ail`, ADR-001 §1).
+#: A registration written as `{ default_hooks(id) | on_x: f }` binds the seven
+#: un-overridden slots to THIS function's literal, so it is the second place
+#: hook-reachable text can live.  It is resolved through the closure first
+#: (the real tree imports it) and through `ABI_TYPES` second (the fixture
+#: suite's closure is one file); any OTHER update base is a rejection.
+DEFAULT_HOOKS = "default_hooks"
+ABI_TYPES = Path("packages/motoko-ext-abi/types.ail")
+
 #: Rejection shapes this module adds to the parent's five.  Each is a REJECTION.
 HOOK_SHAPES = {
     "hook-record-unresolvable": "`register_with_config`'s tail expression is neither an "
-                                "ExtensionHooks record literal nor a resolvable call that "
-                                "returns one, so the eight bindings cannot be located at all",
+                                "ExtensionHooks record literal, nor a record UPDATE of the "
+                                "ABI's `default_hooks(id)`, nor a resolvable call that "
+                                "returns one, so the eight bindings cannot be located at all. "
+                                "An update whose base is anything but `default_hooks` -- a "
+                                "computed base, a local builder -- is this rejection too: the "
+                                "un-overridden slots would be bound to text this tool has not "
+                                "read, which is fail-open",
     "hook-slot-missing": "the resolved record literal does not bind all eight ABI slots. "
                          "The bindings must TILE the record: a slot this tool cannot see "
                          "is a slot it cannot scan, and scanning seven of eight silently "
@@ -282,6 +296,27 @@ def split_record(body: str) -> dict[str, str]:
     return out
 
 
+def split_update(body: str) -> tuple[str, str] | None:
+    """`{ base | a: x, b: y }` body -> (`base`, `a: x, b: y`), or None if it is
+    a plain literal.  The split is on the first depth-0 `|` that is not `||`,
+    so a lambda body holding `a || b` inside an override does not split."""
+    depth = 0
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch in "{[(":
+            depth += 1
+        elif ch in "}])":
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            if i + 1 < len(body) and body[i + 1] == "|":
+                i += 2
+                continue
+            return body[:i].strip(), body[i + 1:]
+        i += 1
+    return None
+
+
 def func_body(text: str, name: str) -> str | None:
     """The brace-balanced body of `func <name>`, skipping the effect row.
 
@@ -452,8 +487,14 @@ class Scope:
     part of it a hook can reach.
     """
 
-    def __init__(self, ext: str, root: Path, mods: list[Path], repo: Path, resolve):
+    def __init__(self, ext: str, root: Path, mods: list[Path], repo: Path, resolve,
+                 abi_types: Path | None = None):
         self.ext, self.root, self.repo, self.resolve = ext, root.resolve(), repo, resolve
+        #: where `default_hooks` is read from when the closure does not hold it
+        self.abi_types = abi_types if abi_types is not None else repo / ABI_TYPES
+        #: the record-update head, when the record is `{ head | … }`; None for
+        #: a full literal.  Reported so a reader can see WHICH shape resolved.
+        self.update_head: str | None = None
         self.mods = [p.resolve() for p in mods]
         # door 4: interpolation-preserving, NOT the parent's `strip_noise`
         self.texts = {p: keep_interpolations(p.read_text(errors="replace")) for p in self.mods}
@@ -559,7 +600,28 @@ class Scope:
         self.hook_home = home
         self.delegation_hops = hops
         self.producing_locals = set(let_bindings(self.producing_body))
-        fields = split_record(record)
+
+        # THE RECORD-UPDATE HEAD (ADR-001 §1, Q4).  `{ default_hooks(id) | on_x: f }`
+        # binds ONE slot in this file and SEVEN in the ABI's literal.  The seven
+        # are text a hook reaches, so they are bound here to that literal's own
+        # lambdas and walked like any other binding -- and the tiling assertion
+        # below then runs over the MERGED set, so a slot the ABI literal stops
+        # binding still fails closed rather than being scanned around.
+        fields: dict[str, tuple[Path, str]] = {}
+        upd = split_update(record)
+        if upd is not None:
+            head, rest = upd
+            base = self._resolve_update_head(home, head)
+            if base is None:
+                return False
+            base_home, base_fields = base
+            self.update_head = head
+            fields = {k: (base_home, v) for k, v in base_fields.items()}
+            for k, v in split_record(rest).items():
+                fields[k] = (home, v)
+        else:
+            fields = {k: (home, v) for k, v in split_record(record).items()}
+
         missing = [s for s in SLOTS if s not in fields]
         if missing:
             self.rejections.append(Rejection(
@@ -567,12 +629,77 @@ class Scope:
                 f"the resolved record binds {len(fields)} field(s) and is missing "
                 f"{', '.join(missing)} -- the eight bindings do not tile it"))
             return False
-        self.bindings = {s: (home, fields[s]) for s in SLOTS}
+        self.bindings = {s: fields[s] for s in SLOTS}
         return True
+
+    def _resolve_update_head(self, home: Path, head: str
+                             ) -> tuple[Path, dict[str, str]] | None:
+        """`default_hooks(<arg>)`, or a local bound to that call, -> the ABI
+        literal's fields keyed by slot.  Anything else is a rejection: the base
+        of an update is where the un-overridden slots' text lives, and a base
+        this tool has not read is seven slots it cannot scan."""
+        h = head.strip()
+        call = re.fullmatch(rf"({IDENT})\s*\((.*)\)", h, re.S)
+        if call is None and re.fullmatch(IDENT, h):
+            lb = let_bindings(self.producing_body).get(h)
+            if lb is None:
+                self.rejections.append(Rejection(
+                    "hook-record-unresolvable", self._rel(home),
+                    f"record-update base `{h}` is a bare name with no `let` in the "
+                    f"producing body -- a threaded or imported base cannot be scanned"))
+                return None
+            call = re.fullmatch(rf"({IDENT})\s*\((.*)\)", lb.strip(), re.S)
+            if call is None:
+                self.rejections.append(Rejection(
+                    "hook-record-unresolvable", self._rel(home),
+                    f"record-update base `{h}` is bound to `{lb[:50]}`, which is not a "
+                    f"`{DEFAULT_HOOKS}(...)` call"))
+                return None
+        if call is None:
+            self.rejections.append(Rejection(
+                "hook-record-unresolvable", self._rel(home),
+                f"record-update base `{h[:60]}` is a computed expression, not "
+                f"`{DEFAULT_HOOKS}(...)` or a local bound to it"))
+            return None
+        callee = call.group(1)
+        if callee != DEFAULT_HOOKS:
+            self.rejections.append(Rejection(
+                "hook-record-unresolvable", self._rel(home),
+                f"record-update base is `{callee}(...)`, not the ABI's `{DEFAULT_HOOKS}` -- "
+                f"the un-overridden slots would be bound to text this tool has not read"))
+            return None
+        nxt = self._resolve_func(home, DEFAULT_HOOKS)
+        if nxt is None and self.abi_types is not None and self.abi_types.is_file():
+            abi = self.abi_types.resolve()
+            if abi not in self.texts:
+                self.texts[abi] = keep_interpolations(abi.read_text(errors="replace"))
+            b = func_body(self.texts[abi], DEFAULT_HOOKS)
+            if b is not None:
+                nxt = (abi, b)
+        if nxt is None:
+            self.rejections.append(Rejection(
+                "hook-record-unresolvable", self._rel(home),
+                f"`{DEFAULT_HOOKS}` resolves to no declaration in this closure and no ABI "
+                f"module at `{self.abi_types}` -- the seven default slots cannot be read"))
+            return None
+        base_home, body = nxt
+        literal = balanced(tail_expression(body))
+        base_fields = split_record(literal) if literal is not None else {}
+        if literal is None or not self._looks_like_hooks(literal):
+            self.rejections.append(Rejection(
+                "hook-record-unresolvable", self._rel(base_home),
+                f"`{DEFAULT_HOOKS}`'s tail expression is not an ExtensionHooks literal "
+                f"this tool can split"))
+            return None
+        return base_home, base_fields
 
     def _looks_like_hooks(self, record: str | None) -> bool:
         if record is None:
             return False
+        # a record UPDATE is a hooks-record attempt whatever it overrides; its
+        # base is judged by `_resolve_update_head`, which fails closed
+        if split_update(record) is not None:
+            return True
         f = split_record(record)
         return sum(1 for s in SLOTS if s in f) >= 4
 
@@ -877,6 +1004,7 @@ def derive_hook_scope(repo: Path, c3, producer, builtins: dict[str, str],
             "located": located,
             "delegation_hops": sc.delegation_hops,
             "hook_home": sc._rel(sc.hook_home) if sc.hook_home else None,
+            "record_update_head": sc.update_head,
             "slots_bound": sorted(sc.bindings),
             "hook_ambient": ambient,
             "ext_ports_calls": ports,
@@ -974,7 +1102,10 @@ def self_test(repo: Path, c3, producer, builtins: dict[str, str],
             fails.append(f"{name}: fixture present but not declared in expected.json")
             continue
         f = fx / f"{name}.ail"
-        sc = Scope(name, f, [f], fx, trivial_resolve)
+        # the fixture closure is one file, so `default_hooks` is read from the
+        # REAL ABI module: the control for the update head measures the shape
+        # the tree ships, not a copy of it
+        sc = Scope(name, f, [f], fx, trivial_resolve, abi_types=repo / ABI_TYPES)
         located = sc.locate()
         ambient, ports = sc.walk(producer, builtins, ext_fields) if located else ([], [])
         verdict = sc.verdict(ambient)

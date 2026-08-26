@@ -417,8 +417,30 @@ def check_row_7(out):
                 hit = (s, text)
                 break
         if hit is None:
-            fail(f"could not find the ExtensionHooks record for '{ext}' under {dirs[ext]}; row 7's "
-                 "exemption cannot be re-derived, so it is not earned")
+            # ADR-001 Phase A: a registration written as
+            # `{ default_hooks(id) | on_x: f }` binds the two fields this scan
+            # reads in the ABI's literal, not in the package. Admitted ONLY when
+            # the package overrides NEITHER field -- then both facts are the
+            # ABI's, read from `default_hooks`'s own body (not the type
+            # declaration above it, whose `provided_tools: [string]` is a type).
+            # A package that overrides one of the two is a shape this scan
+            # cannot merge and it FAILS, on the same discipline as shapes 2/3.
+            uses_head = any("default_hooks(" in s.read_text() for s in srcs)
+            overrides = any(("provided_tools:" in s.read_text() or "on_tool_handle:" in s.read_text())
+                            for s in srcs)
+            if uses_head and not overrides:
+                abi = REPO / "packages/motoko-ext-abi/types.ail"
+                m = re.search(r"^(?:export\s+)?(?:pure\s+)?func\s+default_hooks\b.*?^\}", abi.read_text(), re.S | re.M)
+                if not m:
+                    fail(f"'{ext}' registers through `default_hooks` but {abi.relative_to(REPO)} holds "
+                         "no readable `default_hooks` body; row 7 cannot be re-derived")
+                hit = (abi, m.group(0))
+                print(f"      '{ext}' binds provided_tools/on_tool_handle through `default_hooks`; "
+                      f"both facts read from the ABI literal in {abi.name}")
+        if hit is None:
+            fail(f"could not find the ExtensionHooks record for '{ext}' under {dirs[ext]} (neither a "
+                 "full literal nor an un-overriding `default_hooks` update); row 7's exemption "
+                 "cannot be re-derived, so it is not earned")
         path, text = hit
 
         pt = re.search(r"provided_tools:\s*(\[[^\]]*\]|\S+)", text)
