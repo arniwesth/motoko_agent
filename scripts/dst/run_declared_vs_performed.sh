@@ -779,6 +779,59 @@ else
 fi
 limcleanup
 
+# THE FOURTH LIMITATION PROBE: CONSUMPTION / MATCH-OUT POSITION (ADR-001 Phase B,
+# B1; decides plan D9). The previous rows all bound a hook at CONSTRUCTION. D9
+# asks the consumer-side of the same hole: once a capability payload is matched
+# out of a sum (`K(f) => f(...)`) and APPLIED under a narrow declared row, does
+# the consumer's row bound what the payload body performs, or is it decorative?
+# ADR-001 §5.4 flagged this unmeasured and marked it a 6.0 blocker unless the
+# dispatcher rows actually bound.
+#
+# MEASURED 2026-08-26 on v0.33.0 (pinned toolchain), isolated so the ONLY Env in
+# the program lives inside the payload (a wider-declared named impl, ADR case E
+# route; build() is rowless so no call leaks Env):
+#   match9_named   a narrow ! {IO} consumer matches K(f) out and applies f
+#                  whose body performs Env                     -> ACCEPTED (DECORATIVE)
+#   consumer_direct the same consumer with Env performed DIRECTLY   -> REJECTED (control proves the instrument is sound)
+# So dispatcher rows are DECORATIVE at consumption: the body of an applied
+# capability is not bounded by the consumer's row. Consequence for B8: the
+# dispatch sites that apply matched-out payloads need body-reading coverage too,
+# not only register_with_config / the registration function.
+write_con() {  # $1 = declarations after the imports
+  cat > "$LIMPROBE" <<EOF
+module scripts/dst/dvp_limitation_probe
+import std/env (getEnvOr)
+import std/io (println)
+$1
+EOF
+}
+
+# D9 main case: only-Env-inside-payload via named impl (case E route).
+write_con 'type C = K((string) -> () ! {IO}) | Noop
+func impl(s: string) -> () ! {Env, IO} { let _ = getEnvOr("PATH","none"); println("effect performed: ${s}") }
+func build() -> C { K(impl) }
+export func consume() -> () ! {IO} {
+  match build() {
+    K(f) => { let _ = f("x"); () },
+    Noop => ()
+  }
+}'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "CONSUMPTION (D9): a narrow ! {IO} consumer that matches a {IO}-rowed capability payload out and applies it is ACCEPTED even though the payload body performs Env -- dispatcher rows are DECORATIVE at consumption. 6.0 dispatch sites need body-reading coverage (B1 consequence)"
+else
+  bad "CONSUMPTION (D9): the narrow consumer REJECTED the matched-out payload -- dispatcher rows DO bound the applied payload on this toolchain. That is GOOD NEWS upstream and flips D9's consequence: reject the 'decorative dispatcher' claim and drop the B8 body-reading coverage requirement if it holds consistently"
+fi
+
+# D9 positive control: the SAME consumer with Env performed directly (not via a
+# payload), proving the narrow row is real and the instrument can detect Env.
+write_con "export func consume() -> () ! {IO} { let _ = getEnvOr("PATH",""); println("direct"); () }"
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  bad "CONSUMPTION (D9) CONTROL: a narrow !{IO} consumer performing Env DIRECTLY was ACCEPTED -- the probe cannot detect Env at all, so the main D9 row above is measuring the checker being absent rather than a consumption-side gap"
+else
+  ok "CONSUMPTION (D9) CONTROL: the same consumer performing Env directly is REJECTED -- so the match-out acceptance above is attributable to the payload being applied, not to the probe or the checker being off"
+fi
+limcleanup
+
 # WHERE THE ENFORCEMENT ACTUALLY LIVES, and it is not where WI-D6 and WI-D7
 # put it. A record-field lambda's row is unchecked, but its body's effects
 # still propagate to the ENCLOSING function — so for the eight extensions that
