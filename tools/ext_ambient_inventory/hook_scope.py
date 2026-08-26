@@ -31,6 +31,17 @@ NINE hold the `ExtensionHooks` record itself, so every inline hook body lives
 there, and SIX go further and declare named top-level hook functions in it.
 Dropping the file drops hook-reachable text for nine of fifteen extensions.
 
+B8 NOTE (ADR-001 Phase B).  The paragraph above was measured over the 5.x
+`ExtensionHooks` RECORD.  After B8 the ABI has no record and no
+`default_hooks`: `register_with_config` returns a literal `[Capability]` list
+(the B2 head), and that is the ONLY registration shape this tool reads.  The
+record head, the `{ default_hooks(id) | ... }` update head and their two
+rejection shapes (`hook-record-unresolvable`, `hook-slot-missing`) were
+removed rather than kept beside the list head; anything that is not a literal
+list reachable through delegation is `capability-list-unresolvable`.  The
+argument stands unchanged: the hook-reachable text still lives in
+`register.ail` for most extensions, now as constructor arguments.
+
 The split is therefore REACHABILITY-granular, computed from the eight bindings
 outward, and every step it cannot resolve is a rejection.
 
@@ -69,26 +80,12 @@ from pathlib import Path
 
 IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 
-#: The eight ABI slots.  Held here rather than derived so that a slot added to
-#: the ABI makes this tool FAIL (tiling assertion) rather than silently scan
-#: seven -- the shape ADR:1317-1337 records as having already cost this project
-#: one correction ("when a count and an enumeration disagree by one, the
-#: enumeration is the claim").
-SLOTS = (
-    "on_describe_tools", "on_build_system_prompt", "on_budget_plan", "on_pre_step",
-    "on_tool_policy", "on_tool_handle", "on_response_intercept", "on_solver_candidate",
-)
-
 REGISTER_FUNC = "register_with_config"
 
-#: The ABI's neutral record (`packages/motoko-ext-abi/types.ail`, ADR-001 §1).
-#: A registration written as `{ default_hooks(id) | on_x: f }` binds the seven
-#: un-overridden slots to THIS function's literal, so it is the second place
-#: hook-reachable text can live.  It is resolved through the closure first
-#: (the real tree imports it) and through `ABI_TYPES` second (the fixture
-#: suite's closure is one file); any OTHER update base is a rejection.
-DEFAULT_HOOKS = "default_hooks"
-ABI_TYPES = Path("packages/motoko-ext-abi/types.ail")
+#: B8: the 5.x `SLOTS` tuple (the eight `ExtensionHooks` fields and the tiling
+#: assertion over them) and the `default_hooks` / `ABI_TYPES` update-head
+#: resolution are gone with the record.  `CAPABILITY_KINDS` below is the
+#: enumeration that now fails closed in their place.
 
 #: THE 6.0 REGISTRATION SHAPE (ADR-001 Phase B, B2): `register_with_config`
 #: returns a LITERAL LIST of capability-constructor applications,
@@ -97,8 +94,9 @@ ABI_TYPES = Path("packages/motoko-ext-abi/types.ail")
 #: `Capability` sketch (answer …9903186 / tmp/017-capability/capability.ail).
 #: Held here rather than derived so that a variant added to the ABI makes this
 #: tool FAIL on it (`capability-list-unresolvable`) rather than silently skip
-#: the atom -- the same discipline as `SLOTS` above.  "Literal lists only": a
-#: list built by an expression is a rejection, and B8 makes that an ABI rule.
+#: the atom -- the discipline the 5.x `SLOTS` tuple carried.  "Literal lists
+#: only": a list built by an expression is a rejection, and B8 makes that an
+#: ABI rule.
 CAPABILITY_KINDS: dict[str, tuple[int, tuple[int, ...]]] = {
     "DescribeTools": (1, (0,)),
     "PromptShaper": (1, (0,)),
@@ -111,28 +109,20 @@ CAPABILITY_KINDS: dict[str, tuple[int, tuple[int, ...]]] = {
 }
 
 #: Rejection shapes this module adds to the parent's five.  Each is a REJECTION.
+#: B8 removed `hook-record-unresolvable` and `hook-slot-missing` with the record.
 HOOK_SHAPES = {
-    "hook-record-unresolvable": "`register_with_config`'s tail expression is neither an "
-                                "ExtensionHooks record literal, nor a record UPDATE of the "
-                                "ABI's `default_hooks(id)`, nor a resolvable call that "
-                                "returns one, so the eight bindings cannot be located at all. "
-                                "An update whose base is anything but `default_hooks` -- a "
-                                "computed base, a local builder -- is this rejection too: the "
-                                "un-overridden slots would be bound to text this tool has not "
-                                "read, which is fail-open",
-    "capability-list-unresolvable": "`register_with_config`'s tail is a LIST (the 6.0 "
-                                    "`[Capability]` shape) that this tool cannot enumerate atom "
-                                    "by atom: an element that is not `Kind(arg, ...)` for a known "
+    "capability-list-unresolvable": "`register_with_config`'s tail (possibly behind delegation "
+                                    "hops such as `make_hooks(cfg)`) is not a LITERAL LIST (the "
+                                    "6.0 `[Capability]` shape) this tool can enumerate atom by "
+                                    "atom: no `register_with_config`, an unresolvable or "
+                                    "over-deep delegation, a tail that is neither a list nor a "
+                                    "call, an element that is not `Kind(arg, ...)` for a known "
                                     "capability constructor, a computed or spread element, a wrong "
                                     "arity, a list built by an expression (`xs ++ ys`, a "
                                     "conditional), or an element count that does not match the "
                                     "atoms emitted. Over a list there is no tiling to assert, so "
                                     "the fail-closed denominator is the element count, and an "
                                     "atom this tool did not read is an atom nothing scanned",
-    "hook-slot-missing": "the resolved record literal does not bind all eight ABI slots. "
-                         "The bindings must TILE the record: a slot this tool cannot see "
-                         "is a slot it cannot scan, and scanning seven of eight silently "
-                         "is the failure the assertion exists to prevent",
     "hook-binding-unresolvable": "a slot is bound to an expression this tool cannot resolve "
                                  "to reachable text -- a computed expression, a value threaded "
                                  "through a parameter, or a delegation past the hop limit",
@@ -303,28 +293,6 @@ def balanced(expr: str, open_ch: str = "{", close_ch: str = "}") -> str | None:
     return None
 
 
-def split_record(body: str) -> dict[str, str]:
-    """`{ a: x, b: y }` body -> `{a: 'x', b: 'y'}`, splitting on depth-0 commas."""
-    parts, depth, cur = [], 0, ""
-    for ch in body:
-        if ch in "{[(":
-            depth += 1
-        elif ch in "}])":
-            depth -= 1
-        if ch == "," and depth == 0:
-            parts.append(cur)
-            cur = ""
-        else:
-            cur += ch
-    parts.append(cur)
-    out: dict[str, str] = {}
-    for p in parts:
-        m = re.match(rf"\s*({IDENT})\s*:\s*(.+)", p, re.S)
-        if m:
-            out[m.group(1)] = m.group(2).strip()
-    return out
-
-
 def split_args(text: str) -> list[str]:
     """Depth-0 comma split of an argument list or list body.  A lambda holding
     commas (`func(ctx: ExtCtx, call: ToolCallEnvelope) -> ...`) splits correctly
@@ -361,27 +329,6 @@ def top_level_commas(text: str) -> int:
         elif ch == "," and depth == 0:
             n += 1
     return n
-
-
-def split_update(body: str) -> tuple[str, str] | None:
-    """`{ base | a: x, b: y }` body -> (`base`, `a: x, b: y`), or None if it is
-    a plain literal.  The split is on the first depth-0 `|` that is not `||`,
-    so a lambda body holding `a || b` inside an override does not split."""
-    depth = 0
-    i = 0
-    while i < len(body):
-        ch = body[i]
-        if ch in "{[(":
-            depth += 1
-        elif ch in "}])":
-            depth -= 1
-        elif ch == "|" and depth == 0:
-            if i + 1 < len(body) and body[i + 1] == "|":
-                i += 2
-                continue
-            return body[:i].strip(), body[i + 1:]
-        i += 1
-    return None
 
 
 def func_body(text: str, name: str) -> str | None:
@@ -554,17 +501,10 @@ class Scope:
     part of it a hook can reach.
     """
 
-    def __init__(self, ext: str, root: Path, mods: list[Path], repo: Path, resolve,
-                 abi_types: Path | None = None):
+    def __init__(self, ext: str, root: Path, mods: list[Path], repo: Path, resolve):
         self.ext, self.root, self.repo, self.resolve = ext, root.resolve(), repo, resolve
-        #: where `default_hooks` is read from when the closure does not hold it
-        self.abi_types = abi_types if abi_types is not None else repo / ABI_TYPES
-        #: the record-update head, when the record is `{ head | … }`; None for
-        #: a full literal.  Reported so a reader can see WHICH shape resolved.
-        self.update_head: str | None = None
-        #: "record" (5.x `ExtensionHooks`, literal or update) or
-        #: "capability-list" (6.0 `[Capability]`); None until located.  Both
-        #: heads coexist until B8 flips the ABI.
+        #: "capability-list" (6.0 `[Capability]`) once located, else None.  The
+        #: 5.x "record" value and the update head went with B8.
         self.registration_shape: str | None = None
         #: the atoms of a capability-list registration, keyed (kind, index)
         #: where `index` counts WITHIN the kind, plus the list `position`.
@@ -613,48 +553,51 @@ class Scope:
         #: per extension so the counterfactual yield is derived from the tool's
         #: own findings rather than asserted beside them.
         self.unresolved_callees: set[str] = set()
-        #: locals of the function that produced the hooks record -- everything an
-        #: inline binding closes over.  Populated by `locate`.
+        #: locals of the function that produced the capability list -- everything
+        #: an inline binding closes over.  Populated by `locate`.
         self.producing_locals: set[str] = set()
         self.producing_body: str = ""
 
-    # -- locating the eight bindings ---------------------------------------
+    # -- locating the bindings ---------------------------------------------
 
     def locate(self) -> bool:
+        """Find the literal `[Capability]` list, through delegation hops, or reject.
+
+        B8: this is the ONLY head.  Every failure to reach a literal list is
+        `capability-list-unresolvable` -- fail closed, never a pass."""
         text = self.texts.get(self.root)
         if text is None:
-            self.rejections.append(Rejection("hook-record-unresolvable", str(self.root),
+            self.rejections.append(Rejection("capability-list-unresolvable", str(self.root),
                                              "the closure root is not a readable module"))
             return False
         body = func_body(text, REGISTER_FUNC)
         if body is None:
-            self.rejections.append(Rejection("hook-record-unresolvable", self._rel(self.root),
+            self.rejections.append(Rejection("capability-list-unresolvable", self._rel(self.root),
                                              f"no `{REGISTER_FUNC}` declaration"))
             return False
 
         home, expr = self.root, tail_expression(body)
         self.registration_text = body[:len(body) - len(expr)] if body.endswith(expr) else body
-        # The body that PRODUCES the record, which is where a slot bound to a
-        # bare name may find its `let`.  It is `register_with_config`'s body only
-        # until the first delegation hop: five of the fifteen extensions return
-        # `make_hooks(cfg)`, and their `handle`/`intercept`/`finalize` locals live
-        # in `make_hooks`.  Looking them up by the REGISTRATION function's name
-        # after a hop finds nothing and rejects a resolvable binding.
+        # The body that PRODUCES the list, which is where a binding to a bare
+        # name may find its `let`.  It is `register_with_config`'s body only
+        # until the first delegation hop: several extensions return
+        # `make_hooks(cfg)`, and their `handle`/`intercept`/`finalize` locals
+        # live in `make_hooks`.  Looking them up by the REGISTRATION function's
+        # name after a hop finds nothing and rejects a resolvable binding.
         self.producing_body = body
         hops = 0
-        record = balanced(expr)
         cap_list = balanced(expr, "[", "]")
-        while cap_list is None and (record is None or not self._looks_like_hooks(record)):
+        while cap_list is None:
             if hops >= MAX_DELEGATION_HOPS:
                 self.rejections.append(Rejection(
-                    "hook-record-unresolvable", self._rel(home),
+                    "capability-list-unresolvable", self._rel(home),
                     f"delegation exceeded {MAX_DELEGATION_HOPS} hops at `{expr[:60]}`"))
                 return False
             m = re.match(rf"({IDENT})\s*\(", expr)
             if not m:
                 # a tail that MENTIONS a capability constructor but is not a
                 # literal list -- `[A(f)] ++ more(cfg)`, `if c then [..] else [..]`
-                # -- is the 6.0 computed-list shape and is named as such
+                # -- is the computed-list shape and is named as such
                 if any(re.search(rf"\b{k}\s*\(", expr) for k in CAPABILITY_KINDS):
                     self.rejections.append(Rejection(
                         "capability-list-unresolvable", self._rel(home),
@@ -662,15 +605,15 @@ class Scope:
                         f"expression rather than writing it as a literal -- literal lists only"))
                     return False
                 self.rejections.append(Rejection(
-                    "hook-record-unresolvable", self._rel(home),
-                    f"tail expression `{expr[:60]}` is neither a record literal nor a call"))
+                    "capability-list-unresolvable", self._rel(home),
+                    f"tail expression `{expr[:60]}` is neither a literal list nor a call"))
                 return False
             nxt = self._resolve_func(home, m.group(1))
             if nxt is None:
                 self.rejections.append(Rejection(
-                    "hook-record-unresolvable", self._rel(home),
-                    f"`{m.group(1)}` returns the hooks record but resolves to no declaration "
-                    f"in this closure"))
+                    "capability-list-unresolvable", self._rel(home),
+                    f"`{m.group(1)}` returns the capability list but resolves to no "
+                    f"declaration in this closure"))
                 return False
             home, fbody = nxt
             # the delegated function may perform registration effects of its own
@@ -678,7 +621,6 @@ class Scope:
             self.registration_text += fbody[:len(fbody) - len(inner)] if fbody.endswith(inner) else fbody
             self.producing_body = fbody
             expr = inner
-            record = balanced(expr)
             cap_list = balanced(expr, "[", "]")
             hops += 1
 
@@ -686,53 +628,20 @@ class Scope:
         self.delegation_hops = hops
         self.producing_locals = set(let_bindings(self.producing_body))
 
-        # THE CAPABILITY LIST (ADR-001 Phase B, B2): the 6.0 shape.  A list of
-        # constructor applications, every function-typed argument a binding.
-        # There is no record to tile; what fails closed instead is the ELEMENT
-        # COUNT, computed independently of the parse.
-        if cap_list is not None:
-            # a balanced `[` at the tail could also be the tail of a record-
-            # bearing expression like `[x].head` -- require the whole tail
-            if not re.fullmatch(r"\[.*\]", expr.strip(), re.S):
-                self.rejections.append(Rejection(
-                    "capability-list-unresolvable", self._rel(home),
-                    f"tail expression `{expr[:60]}` starts a list but does not end it -- "
-                    f"the capability list is not a literal"))
-                return False
-            self.registration_shape = "capability-list"
-            return self._locate_capability_list(home, cap_list)
-        self.registration_shape = "record"
-
-        # THE RECORD-UPDATE HEAD (ADR-001 §1, Q4).  `{ default_hooks(id) | on_x: f }`
-        # binds ONE slot in this file and SEVEN in the ABI's literal.  The seven
-        # are text a hook reaches, so they are bound here to that literal's own
-        # lambdas and walked like any other binding -- and the tiling assertion
-        # below then runs over the MERGED set, so a slot the ABI literal stops
-        # binding still fails closed rather than being scanned around.
-        fields: dict[str, tuple[Path, str]] = {}
-        upd = split_update(record)
-        if upd is not None:
-            head, rest = upd
-            base = self._resolve_update_head(home, head)
-            if base is None:
-                return False
-            base_home, base_fields = base
-            self.update_head = head
-            fields = {k: (base_home, v) for k, v in base_fields.items()}
-            for k, v in split_record(rest).items():
-                fields[k] = (home, v)
-        else:
-            fields = {k: (home, v) for k, v in split_record(record).items()}
-
-        missing = [s for s in SLOTS if s not in fields]
-        if missing:
+        # THE CAPABILITY LIST (ADR-001 Phase B, B2): a list of constructor
+        # applications, every function-typed argument a binding.  There is no
+        # record to tile; what fails closed instead is the ELEMENT COUNT,
+        # computed independently of the parse.
+        # a balanced `[` at the tail could also be the tail of an expression
+        # like `[x].head` -- require the whole tail
+        if not re.fullmatch(r"\[.*\]", expr.strip(), re.S):
             self.rejections.append(Rejection(
-                "hook-slot-missing", self._rel(home),
-                f"the resolved record binds {len(fields)} field(s) and is missing "
-                f"{', '.join(missing)} -- the eight bindings do not tile it"))
+                "capability-list-unresolvable", self._rel(home),
+                f"tail expression `{expr[:60]}` starts a list but does not end it -- "
+                f"the capability list is not a literal"))
             return False
-        self.bindings = {s: fields[s] for s in SLOTS}
-        return True
+        self.registration_shape = "capability-list"
+        return self._locate_capability_list(home, cap_list)
 
     def _locate_capability_list(self, home: Path, body: str) -> bool:
         """`Kind(arg, ...), Kind(arg, ...)` -> atoms + bindings, or a rejection.
@@ -804,77 +713,6 @@ class Scope:
         self.atoms = atoms
         self.bindings = bindings
         return True
-
-    def _resolve_update_head(self, home: Path, head: str
-                             ) -> tuple[Path, dict[str, str]] | None:
-        """`default_hooks(<arg>)`, or a local bound to that call, -> the ABI
-        literal's fields keyed by slot.  Anything else is a rejection: the base
-        of an update is where the un-overridden slots' text lives, and a base
-        this tool has not read is seven slots it cannot scan."""
-        h = head.strip()
-        call = re.fullmatch(rf"({IDENT})\s*\((.*)\)", h, re.S)
-        if call is None and re.fullmatch(IDENT, h):
-            lb = let_bindings(self.producing_body).get(h)
-            if lb is None:
-                self.rejections.append(Rejection(
-                    "hook-record-unresolvable", self._rel(home),
-                    f"record-update base `{h}` is a bare name with no `let` in the "
-                    f"producing body -- a threaded or imported base cannot be scanned"))
-                return None
-            call = re.fullmatch(rf"({IDENT})\s*\((.*)\)", lb.strip(), re.S)
-            if call is None:
-                self.rejections.append(Rejection(
-                    "hook-record-unresolvable", self._rel(home),
-                    f"record-update base `{h}` is bound to `{lb[:50]}`, which is not a "
-                    f"`{DEFAULT_HOOKS}(...)` call"))
-                return None
-        if call is None:
-            self.rejections.append(Rejection(
-                "hook-record-unresolvable", self._rel(home),
-                f"record-update base `{h[:60]}` is a computed expression, not "
-                f"`{DEFAULT_HOOKS}(...)` or a local bound to it"))
-            return None
-        callee = call.group(1)
-        if callee != DEFAULT_HOOKS:
-            self.rejections.append(Rejection(
-                "hook-record-unresolvable", self._rel(home),
-                f"record-update base is `{callee}(...)`, not the ABI's `{DEFAULT_HOOKS}` -- "
-                f"the un-overridden slots would be bound to text this tool has not read"))
-            return None
-        nxt = self._resolve_func(home, DEFAULT_HOOKS)
-        if nxt is None and self.abi_types is not None and self.abi_types.is_file():
-            abi = self.abi_types.resolve()
-            if abi not in self.texts:
-                self.texts[abi] = keep_interpolations(abi.read_text(errors="replace"))
-            b = func_body(self.texts[abi], DEFAULT_HOOKS)
-            if b is not None:
-                nxt = (abi, b)
-        if nxt is None:
-            self.rejections.append(Rejection(
-                "hook-record-unresolvable", self._rel(home),
-                f"`{DEFAULT_HOOKS}` resolves to no declaration in this closure and no ABI "
-                f"module at `{self.abi_types}` -- the seven default slots cannot be read"))
-            return None
-        base_home, body = nxt
-        literal = balanced(tail_expression(body))
-        base_fields = split_record(literal) if literal is not None else {}
-        if literal is None or not self._looks_like_hooks(literal):
-            self.rejections.append(Rejection(
-                "hook-record-unresolvable", self._rel(base_home),
-                f"`{DEFAULT_HOOKS}`'s tail expression is not an ExtensionHooks literal "
-                f"this tool can split"))
-            return None
-        return base_home, base_fields
-
-    def _looks_like_hooks(self, record: str | None) -> bool:
-        if record is None:
-            return False
-        # a record UPDATE is a hooks-record attempt whatever it overrides; its
-        # base is judged by `_resolve_update_head`, which fails closed
-        if split_update(record) is not None:
-            return True
-        f = split_record(record)
-        return sum(1 for s in SLOTS if s in f) >= 4
 
     def _rel(self, p: Path) -> str:
         try:
@@ -1177,7 +1015,6 @@ def derive_hook_scope(repo: Path, c3, producer, builtins: dict[str, str],
             "located": located,
             "delegation_hops": sc.delegation_hops,
             "hook_home": sc._rel(sc.hook_home) if sc.hook_home else None,
-            "record_update_head": sc.update_head,
             "registration_shape": sc.registration_shape,
             "atoms": sc.atoms,
             "atom_count": len(sc.atoms),
@@ -1278,10 +1115,7 @@ def self_test(repo: Path, c3, producer, builtins: dict[str, str],
             fails.append(f"{name}: fixture present but not declared in expected.json")
             continue
         f = fx / f"{name}.ail"
-        # the fixture closure is one file, so `default_hooks` is read from the
-        # REAL ABI module: the control for the update head measures the shape
-        # the tree ships, not a copy of it
-        sc = Scope(name, f, [f], fx, trivial_resolve, abi_types=repo / ABI_TYPES)
+        sc = Scope(name, f, [f], fx, trivial_resolve)
         located = sc.locate()
         ambient, ports = sc.walk(producer, builtins, ext_fields) if located else ([], [])
         verdict = sc.verdict(ambient)
@@ -1352,8 +1186,8 @@ def self_test(repo: Path, c3, producer, builtins: dict[str, str],
 
     # The registration SHAPE over the real tree, pinned per extension: which
     # extensions resolve through the 6.0 list head and how many atoms each
-    # holds.  Empty on the 5.x tree; B8 re-pins it with seventeen entries.  A
-    # pin in both directions, so an extension migrating early is noticed and a
+    # holds.  Empty on the 5.x tree; B8 re-pinned it with seventeen entries by
+    # hand.  A pin in both directions, so an extension migrating early is noticed and a
     # list read short is noticed.
     got_lists = {e: r["atom_count"] for e, r in res.items()
                  if r["registration_shape"] == "capability-list"}

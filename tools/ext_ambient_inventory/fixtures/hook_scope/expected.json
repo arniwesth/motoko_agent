@@ -10,11 +10,13 @@
     "control_hook_reaches_env: same import, same call, different position. If",
     "they ever agree, the tool has stopped measuring the reading.",
     "",
-    "ADR-001 Q4 (the default_hooks minor): the two control_record_update_* fixtures",
-    "and reject_update_head_not_default_hooks cover the `{ base | ... }` head. The",
-    "yield pins below were NOT changed for it: empty_stop_guard was already pinned",
-    "hook_port_mediated, and the selftest was red only because the tree had stopped",
-    "parsing its record [RK C1].",
+    "ADR-001 Q4 (the default_hooks minor) once had three record-update fixtures",
+    "here (control_record_update_*, reject_update_head_not_default_hooks). B8",
+    "removed them with the record head: the ABI no longer has `ExtensionHooks` or",
+    "`default_hooks`, so the record path, `hook-record-unresolvable` and",
+    "`hook-slot-missing` are gone, and every remaining fixture is written in the",
+    "6.0 `[Capability]` list shape (eight atoms, in the canonical order, unless",
+    "the fixture's purpose is the list itself).",
     "",
     "ADR-001 Phase B, B2 (the 6.0 `[Capability]` list head): the four",
     "control_capability_list_* and four reject_capability_list_* fixtures. Every",
@@ -31,47 +33,36 @@
       "registration_only": [
         "std/env.getEnvOr"
       ],
-      "form": "registration reads Env; no hook reaches it (the WI-D6 shape)"
+      "form": "registration reads Env; no hook reaches it (the WI-D6 shape)",
+      "atoms": 8
     },
     "control_hook_reaches_env": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
-      "form": "TWO-SIDED twin of the above: the same call, moved into a hook body"
+      "form": "TWO-SIDED twin of the above: the same call, moved into a hook body",
+      "atoms": 8
     },
     "control_named_hook_in_register": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
-      "form": "the microrag shape -- hook logic in register.ail reaching std/fs"
+      "form": "the microrag shape -- a named ToolProvider handle in register.ail reaching std/fs",
+      "atoms": 8
     },
     "control_ext_ports_call": {
       "verdict": "HOOK-PORT-MEDIATED",
       "shapes": [],
       "registration_only": [],
-      "form": "property 1's positive half: ExtPorts.ai_step is admitted, not rejected"
+      "form": "property 1's positive half: ExtPorts.ai_step is admitted, not rejected",
+      "atoms": 8
     },
     "control_interpolated_call": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
-      "form": "door 4: the effectful call exists only inside a string interpolation"
-    },
-    "reject_record_unresolvable": {
-      "verdict": "HOOK-UNRESOLVED",
-      "shapes": [
-        "hook-record-unresolvable"
-      ],
-      "registration_only": [],
-      "form": "the hooks record comes from a function this closure does not hold"
-    },
-    "reject_slot_missing": {
-      "verdict": "HOOK-UNRESOLVED",
-      "shapes": [
-        "hook-slot-missing"
-      ],
-      "registration_only": [],
-      "form": "seven of eight slots bound -- the bindings do not tile the record"
+      "form": "door 4: the effectful call exists only inside a string interpolation",
+      "atoms": 8
     },
     "reject_binding_unresolvable": {
       "verdict": "HOOK-UNRESOLVED",
@@ -79,7 +70,7 @@
         "hook-binding-unresolvable"
       ],
       "registration_only": [],
-      "form": "a slot bound to a bare name that resolves nowhere"
+      "form": "an atom bound to a bare name that resolves nowhere"
     },
     "reject_unknown_callee": {
       "verdict": "HOOK-UNRESOLVED",
@@ -96,26 +87,6 @@
       ],
       "registration_only": [],
       "form": "a hook APPLIES a value closed over at registration (door 6's corner)"
-    },
-    "control_record_update_head": {
-      "verdict": "HOOK-PORT-MEDIATED",
-      "shapes": [],
-      "registration_only": [],
-      "form": "ADR-001 Q4: `{ default_hooks(id) | on_solver_candidate: f }` -- seven slots read from the ABI literal"
-    },
-    "control_record_update_let_head": {
-      "verdict": "HOOK-PORT-MEDIATED",
-      "shapes": [],
-      "registration_only": [],
-      "form": "the update head as a `let`-bound local; inline and named overrides behind it"
-    },
-    "reject_update_head_not_default_hooks": {
-      "verdict": "HOOK-UNRESOLVED",
-      "shapes": [
-        "hook-record-unresolvable"
-      ],
-      "registration_only": [],
-      "form": "an update whose base is a local builder, not `default_hooks` -- fail closed"
     },
     "control_capability_list_inline": {
       "verdict": "HOOK-PORT-MEDIATED",
@@ -191,8 +162,9 @@
       "being quietly re-admitted.",
       "",
       "`capability_list_atoms` (B2) pins, per extension, which registrations",
-      "resolve through the 6.0 list head and how many atoms each holds. EMPTY on",
-      "the 5.x tree by construction; B8 re-pins it with seventeen entries by hand."
+      "resolve through the 6.0 list head and how many atoms each holds. Empty on",
+      "the 5.x tree by construction; B8 re-pinned it BY HAND with seventeen entries",
+      "of eight atoms each -- every package writes the full canonical list."
     ],
     "extensions": 17,
     "closure_port_mediated": [
@@ -226,6 +198,24 @@
       "progress_contract_guard",
       "test_dummy"
     ],
-    "capability_list_atoms": {}
+    "capability_list_atoms": {
+      "a2a": 8,
+      "agentcli": 8,
+      "ailang_docs": 8,
+      "compaction_ai": 8,
+      "compaction_structural": 8,
+      "compose": 8,
+      "context_mode": 8,
+      "decision_framework": 8,
+      "empty_stop_guard": 8,
+      "exa_search": 8,
+      "herdr": 8,
+      "mcp": 8,
+      "microrag": 8,
+      "omnigraph": 8,
+      "progress_contract_guard": 8,
+      "scratchpad": 8,
+      "test_dummy": 8
+    }
   }
 }
