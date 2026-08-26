@@ -715,6 +715,68 @@ if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
 else
   ok "control for limitation 1: the same body in ARGUMENT position is rejected, so the record-field acceptance is caused by the position"
 fi
+
+# THE THIRD LIMITATION PROBE: RECORD-UPDATE POSITION (ADR-001 Phase A, A4;
+# decides plan D8). The `default_hooks` minor moves every migrated binding from
+# a record LITERAL field to a record UPDATE field, `{ default_hooks(id) | on_x: f }`,
+# and nothing above measured that position. ADR-001's Q3 answer (cases E/G,
+# measured on v0.33.1) said a named override with a WIDER declared row would be
+# accepted into a narrower slot. Both shapes are pinned here to what the PATH
+# `ailang` (v0.33.0, the one `make check_core` uses) actually does, and every row
+# names the ADR expectation beside the observation so a toolchain change reads as
+# "the ADR's case now reproduces" rather than as a mystery.
+#
+# MEASURED 2026-08-26 on v0.33.0, and pinned as observed:
+#   (a) inline lambda declaring the slot's row but PERFORMING Env, enclosing row
+#       admits Env                              -> ACCEPTED   (limitation 1 holds in update position)
+#   (a-control) same lambda, enclosing row narrow -> REJECTED  (the enclosing row is the bound, as in literal position)
+#   (b) named override declared WIDER than the slot -> REJECTED (closed-row unification at the update field; ADR case E does NOT reproduce here)
+#   (b-control) named override at exactly the slot row -> ACCEPTED (so (b)'s rejection is the row's doing)
+# So on this toolchain record-update position is literal position: declared rows
+# unify, bodies of inline lambdas do not. D8's consequence for A5: the env/fs
+# controls, which already sit behind a `control_base() |` head, can stay inline;
+# a literal-to-update migration changes nothing the checker sees.
+write_upd() {  # $1 = declarations after the imports
+  cat > "$LIMPROBE" <<EOF
+module scripts/dst/dvp_limitation_probe
+import std/env (getEnvOr)
+import std/io (println)
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (default_hooks, ExtCtx, ExtensionHooks, Msg, PreStepOutcome, FinalizeOutcome)
+$1
+EOF
+}
+upd_lambda='func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH", ""); { decision: { PassThrough }, next_state: ctx.world } }'
+
+write_upd "export func build() -> ExtensionHooks ! {Env} { { default_hooks(\"p\") | on_pre_step: $upd_lambda } }"
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "UPDATE POSITION (a): an inline lambda that declares the slot row and performs Env is ACCEPTED behind a default_hooks head when the enclosing row admits Env — limitation 1 holds in record-update position (D8: the controls need not move)"
+else
+  bad "UPDATE POSITION (a) CHANGED: an inline lambda's body is now checked against its declared row in record-update position. GOOD NEWS upstream, and it means env_control_hooks/fs_control_hooks (already behind a \`control_base() |\` head) no longer compile as written — re-site them, and re-read D8"
+fi
+
+write_upd "export func build() -> ExtensionHooks { { default_hooks(\"p\") | on_pre_step: $upd_lambda } }"
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  bad "UPDATE POSITION (a-control) was ACCEPTED with a NARROW enclosing row — the inline lambda's Env escaped every row, so (a) above measured the checker being absent, not a positional gap"
+else
+  ok "UPDATE POSITION (a-control): the same lambda is REJECTED once the enclosing row drops Env — in update position, as in literal position, the enclosing function's row is what bounds an inline hook"
+fi
+
+write_upd 'func finalize(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process} { let _ = println("x"); { decision: { NoDecision }, next_state: ctx.world } }
+export func build() -> ExtensionHooks { { default_hooks("p") | on_solver_candidate: finalize } }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  bad "UPDATE POSITION (b): a named override declared ! {IO, Process} was ACCEPTED into the ! {Process} slot — ADR-001 case E now REPRODUCES on this toolchain. The 'closed-row equality admits exactly one width' rows above are false in update position; a wide named override is bounded only by its own row [RC], and the enforcement plane for the default_hooks migration is hook_scope/declared_vs_performed alone"
+else
+  ok "UPDATE POSITION (b): a named override declared ! {IO, Process} is REJECTED at the ! {Process} slot (closed-row unification at the update field). ADR-001 case E (v0.33.1: accepted) does NOT reproduce on v0.33.0 — pinned as observed; this row goes red by design when it does"
+fi
+
+write_upd 'func finalize(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
+export func build() -> ExtensionHooks { { default_hooks("p") | on_solver_candidate: finalize } }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "UPDATE POSITION (b-control): the same named override at exactly the slot row is ACCEPTED, so (b)'s rejection is attributable to the row and not to the update head, the import, or the probe"
+else
+  bad "UPDATE POSITION (b-control) was REJECTED — a clean named override at the slot's own row does not compile behind a default_hooks head, so nothing in this section measures rows and the empty_stop_guard migration itself should not compile either"
+fi
 limcleanup
 
 # WHERE THE ENFORCEMENT ACTUALLY LIVES, and it is not where WI-D6 and WI-D7
