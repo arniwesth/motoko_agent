@@ -7,11 +7,12 @@
 -- §4(b), Q2), and it is enforced ONCE, here, at the single host-owned boundary
 -- that turns a package's registration result into a registry entry -- never in
 -- a dispatcher. This module is HAND-WRITTEN (plan invariant 5: no hand edits to
--- `registry_generated.ail`); the generated `parse_tokens` will CALL
--- `normalize_registration` once the AILANG generator emits that call (D10,
--- upstream, OPEN). Until then nothing in the runtime reaches this module: it is
--- built and DST'd against the LOCAL sketch below so it is green BEFORE the ABI
--- break, and B8 repoints one import.
+-- `registry_generated.ail`); `parse_tokens` CALLS `normalize_registration`
+-- once per resolved extension (D10, WIRED AT B8 -- see the B8 note in the
+-- generated file: the upstream generator does not yet emit the call, so the
+-- generated file carries the edit by hand and says so). Until B8 this module
+-- was built and DST'd against a LOCAL sketch of `Capability`; B8 moved that
+-- declaration into the ABI and this module imports it.
 --
 -- THE RULES, and their status:
 --
@@ -24,15 +25,13 @@
 --                  one atom's own list -- is rejected. First-match over
 --                  overlapping names would be a hidden intra-extension
 --                  precedence.
---   D4 (OPEN)      the fold kinds `PromptShaper`, `BudgetShaper`, `Compactor`
---                  (and the concatenation kind `DescribeTools`, the first-match
---                  kind `ResponseInterceptor`) may repeat in list order = sub-
---                  order / precedence / chain order -- ONLY once the operator
---                  signs off intra-extension ordering and disclosure identity.
---                  Until then N>1 is REJECTED for them too. The gate is the ONE
---                  constant `fold_kind_repeats_allowed` below; flipping D4 is
---                  a one-line change and every fixture that reads it says so.
---   D7 (OPEN)      `register_with_config -> []`. The RECOMMENDED reading is
+--   D4 (SIGNED OFF at B8) the fold kinds `PromptShaper`, `BudgetShaper`,
+--                  `Compactor` (and the concatenation kind `DescribeTools`, the
+--                  first-match kind `ResponseInterceptor`) repeat in list order
+--                  = sub-order / precedence / chain order. The gate is the ONE
+--                  constant `fold_kind_repeats_allowed` below (`true`); every
+--                  fixture that reads it says which reading it measured.
+--   D7 (ADOPTED)   `register_with_config -> []`. The RECOMMENDED reading is
 --                  implemented: the entry is OMITTED from the effective registry
 --                  and NAMED in `omitted_empty`, and the profile layer rejects
 --                  it as `InstalledWithNoCapabilities` (B3). The alternative --
@@ -60,54 +59,34 @@ import std/result (Result, Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx,
   PromptPatch,
-  BudgetPlan,
-  BudgetPatch,
-  Msg,
-  PreStepOutcome,
-  ToolSchema,
   ToolCallEnvelope,
   ToolPolicyDecision,
   ToolHandleOutcome,
-  ResponseInterceptOutcome,
-  FinalizeOutcome
+  Capability,
+  ExtEntry,
+  DescribeTools,
+  PromptShaper,
+  BudgetShaper,
+  Compactor,
+  ToolPolicy,
+  ToolProvider,
+  ResponseInterceptor,
+  SolverJudge
 )
 
--- ============================================================================
--- LOCAL SKETCH of the 6.0 `Capability` sum (answer …9903186, type-checked in
--- tmp/017-capability/capability.ail). B8 moves this declaration to
--- packages/motoko-ext-abi/types.ail and this module imports it instead. The
--- payload rows are copied verbatim from the 5.x slots; they are ABI CLAIMS,
--- enforced by B1/B2/B5, not by the compiler (ADR Q3; B1's probe).
--- ============================================================================
-export type Capability
-  = DescribeTools(() -> [ToolSchema])
-  | PromptShaper((ExtCtx) -> PromptPatch)
-  | BudgetShaper((ExtCtx, BudgetPlan) -> BudgetPatch)
-  | Compactor((ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})
-  | ToolPolicy((ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision)
-  | ToolProvider(
-      [string],
-      (ExtCtx, ToolCallEnvelope)
-        -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}
-    )
-  | ResponseInterceptor(
-      (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}
-    )
-  | SolverJudge((ExtCtx, string) -> FinalizeOutcome ! {Process})
+-- `Capability` (the 6.0 sum, eight kinds) and `ExtEntry` (D5's owner-bearing
+-- `{ id, caps }`) are the ABI's from B8; the local sketch this module carried
+-- through B4..B7 was moved there verbatim.
 
--- The registry entry, D5's RECOMMENDED owner-bearing shape `{ id, caps }`
--- (open; any owner-bearing shape works, a bare `[Capability]` does not).
-export type ExtEntry = { id: string, caps: [Capability] }
 
 -- ============================================================================
 -- THE TWO POLICY CONSTANTS. Each is the whole of an open decision.
 -- ============================================================================
 
--- D4. `false` = the adopted minimum (D3 only): a second atom of ANY kind
--- other than ToolProvider is rejected. `true` = fold/concat/first-match kinds
--- pass through N>1 in list order. FLIP THIS LINE when D4 is signed off; the
+-- D4. SIGNED OFF (B8): `true` = fold/concat/compactor/first-match kinds pass
+-- through N>1 in list order (precedence / sub-order / chain order). The
 -- `registry_multiplicity` fixtures read it and re-label themselves.
-export pure func fold_kind_repeats_allowed() -> bool { false }
+export pure func fold_kind_repeats_allowed() -> bool { true }
 
 -- D7. `true` = the recommended reading: an empty registration is omitted from
 -- the effective registry, by name. `false` = it is a registration rejection.

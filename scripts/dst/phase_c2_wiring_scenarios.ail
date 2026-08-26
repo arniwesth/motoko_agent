@@ -232,12 +232,16 @@ func bad_system_msg() -> Msg {
   { role: "system", content: "bad", tool_calls: [], tool_call_id: "" }
 }
 
-func stage_hook(id: string, mode: string) -> FixtureHooks {
-  let on_pre = func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+func stage_pre(mode: string) -> (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     if mode == "pass" then PassThrough
     else if mode == "apply" then Compacted(msgs, "applied", jo([]))
     else Compacted([bad_system_msg()], "rejected", jo([]))
-  }, next_state: ctx.world } };
+  }, next_state: ctx.world } }
+}
+
+func stage_hook(id: string, mode: string) -> FixtureHooks {
+  let on_pre = stage_pre(mode);
   fixture_hooks(id, {
     tools: [],
     describe: no_describe,
@@ -270,7 +274,7 @@ func guard_hook() -> FixtureHooks {
 func guard_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
-    registry: { hooks: [guard_hook()] },
+    registry: { entries: [guard_hook()] },
     strict_mode: false,
     verification: v
   }
@@ -299,7 +303,7 @@ func pc_guard_hook() -> FixtureHooks {
 func pc_guard_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
-    registry: { hooks: [pc_guard_hook()] },
+    registry: { entries: [pc_guard_hook()] },
     strict_mode: false,
     verification: v
   }
@@ -309,7 +313,7 @@ func pc_guard_rt() -> ExtRuntime {
 func combined_guard_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
-    registry: { hooks: [guard_hook(), pc_guard_hook()] },
+    registry: { entries: [guard_hook(), pc_guard_hook()] },
     strict_mode: false,
     verification: v
   }
@@ -330,26 +334,26 @@ func pc_failure_candidate() -> string {
 func stage_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
-    registry: { hooks: [stage_hook("stage-pass", "pass"), stage_hook("stage-apply", "apply"), stage_hook("stage-reject", "reject")] },
+    registry: { entries: [stage_hook("stage-pass", "pass"), stage_hook("stage-apply", "apply"), stage_hook("stage-reject", "reject")] },
     strict_mode: false,
     verification: v
   }
 }
 
 func pending_rt() -> ExtRuntime {
-  let h = stage_hook("approval-pending", "pass");
+  let h_pre = stage_pre("pass");
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
-    registry: { hooks: [fixture_hooks(h.id, {
-      tools: h.provided_tools,
-      describe: h.on_describe_tools,
-      prompt: h.on_build_system_prompt,
-      budget: h.on_budget_plan,
-      compact: h.on_pre_step,
+    registry: { entries: [fixture_hooks("approval-pending", {
+      tools: [],
+      describe: no_describe,
+      prompt: no_prompt,
+      budget: no_budget,
+      compact: h_pre,
       policy: pending_policy,
-      provide: h.on_tool_handle,
-      intercept: h.on_response_intercept,
-      judge: h.on_solver_candidate
+      provide: no_handle,
+      intercept: no_intercept,
+      judge: no_solver
     })] },
     strict_mode: false,
     verification: v

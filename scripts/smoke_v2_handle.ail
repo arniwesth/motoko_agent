@@ -89,7 +89,7 @@ func mk_handle_hook() -> FixtureHooks {
 export func main() -> () ! {Clock, Env, IO, AI, FS, Net, Process, Rand, SharedMem, Stream} {
   let v: VerificationConfig = { enabled: false, command: "" };
   let rt: ExtRuntime = {
-    registry: { hooks: [mk_handle_hook()] },
+    registry: { entries: [mk_handle_hook()] },
     strict_mode: false,
     verification: v
   };

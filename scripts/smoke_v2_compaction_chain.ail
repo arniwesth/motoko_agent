@@ -137,7 +137,7 @@ func hook_c() -> FixtureHooks {
 
 func chain_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { hooks: [hook_a(), hook_b_bad(), hook_c()] }, strict_mode: false, verification: v }
+  { registry: { entries: [hook_a(), hook_b_bad(), hook_c()] }, strict_mode: false, verification: v }
 }
 
 func stages_ok(stages: [PreStepStage]) -> bool {

@@ -98,7 +98,7 @@ import src/core/tool_contract (ToolCallEnvelope)
 import src/core/ext/runtime as Rt (dispatch_tool_handle)
 
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtRuntime, ExtensionHooks, ToolHandleOutcome
+  ExtCtx, ExtRuntime, ExtEntry, Capability, ToolProvider, ToolHandleOutcome
 )
 
 -- The dispatch predicate, mirrored from `ext/runtime.first_handle`.
@@ -123,9 +123,20 @@ pure func provides_tool(xs: [string], name: string) -> bool {
 -- order and stops at the first hook that both provides the tool and returns
 -- `Handled`. The guard reports the first hook that would be INVOKED, because
 -- that is the one whose dispatch is reached.
+-- B8: the index-within-kind of the FIRST ToolProvider atom of the entry that
+-- advertises `name` (D3: names are disjoint within an extension, so at most
+-- one), or -1. The guard names that atom, `tool_provider[i]`, to the profile.
+pure func providing_atom(caps: [Capability], name: string, i: int) -> int {
+  match caps {
+    [] => -1,
+    ToolProvider(names, _) :: rest => if provides_tool(names, name) then i else providing_atom(rest, name, i + 1),
+    _ :: rest => providing_atom(rest, name, i)
+  }
+}
+
 pure func first_excluded_for_call(
   d: ProfileDefinition,
-  hooks: [ExtensionHooks],
+  hooks: [ExtEntry],
   name: string,
   position: int,
   partial: LedgerTrace,
@@ -134,8 +145,9 @@ pure func first_excluded_for_call(
   match hooks {
     [] => None,
     h :: rest => {
-      if provides_tool(h.provided_tools, name) then
-        match routing_violation_at(d, h.id, "on_tool_handle", position, partial, meta) {
+      let i = providing_atom(h.caps, name, 0);
+      if i >= 0 then
+        match routing_violation_at(d, h.id, "tool_provider[${show(i)}]", position, partial, meta) {
           Some(v) => Some(v),
           None => first_excluded_for_call(d, rest, name, position, partial, meta)
         }
@@ -163,7 +175,7 @@ export func guarded_dispatch_tool_handle(
   partial: LedgerTrace,
   meta: ReplayMetadata
 ) -> Result[ToolHandleOutcome, DstResult] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-  match first_excluded_for_call(d, rt.registry.hooks, call.tool, position, partial, meta) {
+  match first_excluded_for_call(d, rt.registry.entries, call.tool, position, partial, meta) {
     -- Checked BEFORE the fold runs. A guard that dispatched first and inspected
     -- afterwards would have let the excluded hook perform its effects, which is
     -- the whole thing D5 is preventing.

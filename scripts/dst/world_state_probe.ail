@@ -254,7 +254,7 @@ func hooks_with(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Tr
 
 func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks(id, pre)] }, strict_mode: false, verification: v }
 }
 
 -- ---------------------------------------------------------------------------
@@ -698,12 +698,12 @@ func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
 
 func allow_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [hooks_with(id, passthrough_pre_step, allow_policy)] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks_with(id, passthrough_pre_step, allow_policy)] }, strict_mode: false, verification: v }
 }
 
 func approval_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [approval_hooks(id)] }, strict_mode: false, verification: v }
+  { registry: { entries: [approval_hooks(id)] }, strict_mode: false, verification: v }
 }
 
 -- The denial each approval read produced, in order — the approval cursor's

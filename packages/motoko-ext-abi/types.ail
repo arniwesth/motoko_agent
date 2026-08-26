@@ -1,10 +1,11 @@
 -- ABI contract for motoko_agent extension packages.
 --
 -- Every motoko-ext-* package depends on this module and must export:
---   register_with_config(cfg: RuntimeConfig) -> ExtensionHooks ! {}
+--   register_with_config(cfg: RuntimeConfig) -> [Capability] ! {...}   (6.0; was -> ExtensionHooks)
 -- from a module named <package-name>/register.
 --
--- Bumping ExtensionHooks is a major version of motoko-ext-abi.
+-- Bumping `Capability` (a variant added, removed or re-rowed) is a major version
+-- of motoko-ext-abi, exactly as bumping `ExtensionHooks` was through 5.0.
 
 module sunholo/motoko_ext_abi/types
 
@@ -699,11 +700,62 @@ export type ToolHandleOutcome = { decision: ToolHandleDecision, next_state: ExtW
 export type ResponseInterceptOutcome = { decision: ResponseInterceptDecision, next_state: ExtWorld }
 export type FinalizeOutcome = { decision: FinalizeDecision, next_state: ExtWorld }
 
-export type ExtensionHooks = {
-  id: string,
-  provided_tools: [string],
-  on_describe_tools: () -> [ToolSchema],
-  on_build_system_prompt: (ExtCtx) -> PromptPatch,
+-- =========================================================================
+-- 6.0 (ADR-001 Phase B, B8): CAPABILITY REGISTRATION. The 5.x record
+-- `ExtensionHooks` and its `default_hooks` constructor are GONE. An extension
+-- registers a LITERAL LIST of capability atoms:
+--
+--   register_with_config(cfg) -> [Capability]
+--
+-- and the host wraps it into an owner-bearing `ExtEntry { id, caps }` (D5)
+-- through `registry_normalize.normalize_registration` (D3/D4/D7, D10).
+--
+-- THE PAYLOAD ROWS BELOW ARE COMPILER-ENFORCED AT THE CONSTRUCTOR, AND THAT IS
+-- A B8 MEASUREMENT THAT REVERSES ADR Q3's PREMISE FOR THIS TYPE. ADR Q3 and
+-- B1's constructor-argument probe measured a LOCALLY declared sum: there the
+-- payload row bounds nothing (a wide-rowed named function, an unannotated
+-- inline lambda -- both accepted). This sum is IMPORTED by every consumer,
+-- and for an imported sum AILANG v0.33.0 unifies a constructor argument's row
+-- against the payload row as CLOSED rows, exactly as it does a record field:
+-- a named `Compactor` atom declared `! {AI, IO, Trace, Env}` is REJECTED
+-- (`incompatible closed rows: r2 has extra labels [Env]`), an unannotated
+-- inline atom is rejected at the payload row, and an annotated one at its own
+-- annotation. `make declared_vs_performed`'s IMPORTED-SUM rows pin all of it,
+-- two-sided. WHAT SURVIVES is limitation 1: a lambda bound to a LOCAL record
+-- field is not checked against its declared row, and that field can then be
+-- passed as the atom (the `smuggle` row). So the rows are a claim the
+-- compiler enforces at every direct binding, and the derivation plane -- B1
+-- (`make declared_vs_performed`), B2 (`make ext_hook_scope`, which reads
+-- bodies at binding scope) and classifier 3 -- is what covers the smuggle.
+-- Each row is copied VERBATIM from the 5.x slot it replaces, so every
+-- measurement recorded in the prose kept below still names the right width.
+--
+-- REGISTRATION RULE (B2): the list is a LITERAL list of constructor
+-- applications. A computed tail, a spread, a conditional element or a
+-- delegated `make_caps(cfg)` that the reader cannot follow is
+-- `capability-list-unresolvable` and the extension is not certifiable.
+--
+-- KIND -> 5.x SLOT (the migration table; dispatch semantics unchanged):
+--   DescribeTools        on_describe_tools        concatenated
+--   PromptShaper         on_build_system_prompt   fold, registry order
+--   BudgetShaper         on_budget_plan           fold, last-Some-wins
+--   Compactor            on_pre_step              validated chain
+--   ToolPolicy           on_tool_policy           priority merge (one vote)
+--   ToolProvider         provided_tools + on_tool_handle   first-match over
+--                                                 the advertised names
+--   ResponseInterceptor  on_response_intercept    first-intercept
+--   SolverJudge          on_solver_candidate      priority merge (one vote)
+--
+-- ATOM IDENTITY is (kind, index-within-kind) in list order (B3/B6); the
+-- holder stamp `"${name}#${idx}"` (A3) stays per EXTENSION and never carries
+-- it. Multiplicity within one extension is the host's policy at the
+-- registration boundary (D3 decided, D4 signed off at B8), never a dispatcher's.
+--
+-- THE 5.x ROW NOTES ARE KEPT VERBATIM BELOW, per plan rule S15: every sentence
+-- was true of the record row it annotated and each now applies to the payload
+-- of the kind that replaced that row (table above). "This row" reads as "this
+-- payload row".
+-- =========================================================================
   -- WI-D6 NARROWED THIS ROW, and it is the row that blocked every install in
   -- the tree from the ABI's first version until 2026-08-06.
   --
@@ -756,7 +808,6 @@ export type ExtensionHooks = {
   -- `driver_only` still installs nothing and its own coverage is still zero.
   -- WI-C5's `compose`-bearing profile is NOT discharged by this — compose
   -- stands at three barriers and needs Route B.
-  on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch,
   -- WI-B2a: `+ Trace`, and it is the SECOND and last row this item changed.
   -- It is a CONSEQUENCE of `ExtPorts.ai_step` above, not an independent finding:
   -- `Trace` reaches the extension surface only through `ai_step`, and the only
@@ -879,10 +930,6 @@ export type ExtensionHooks = {
   -- them; `make profile_definition` goes red if a zero-barrier extension is
   -- left unnamed there.
   -- =========================================================================
-  on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace},
-  on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
-  on_tool_handle: (ExtCtx, ToolCallEnvelope)
-    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
   -- WI-D7 NARROWED THIS ROW from nine effects to four, and the narrowing is
   -- to a MEASUREMENT rather than to zero.
   --
@@ -924,8 +971,6 @@ export type ExtensionHooks = {
   -- fifteen extensions, and CLEARED for four of them on classifier 3's
   -- measurement. See the block above `on_pre_step`, which carries the whole
   -- qualification and applies verbatim here.
-  on_response_intercept: (ExtCtx, string)
-    -> ResponseInterceptOutcome ! {IO, Process, FS, Clock},
   -- WI-D7 NARROWED THIS ROW from nine effects to one, on the same method.
   --
   -- FOURTEEN of fifteen bindings accept the empty row. ONE refuses:
@@ -953,46 +998,32 @@ export type ExtensionHooks = {
   -- QUALIFIED AT WI-D13, on the same terms as `on_response_intercept`: still a
   -- barrier for the SLOT and for eleven of the fifteen extensions, cleared for
   -- four. See the block above `on_pre_step`.
-  on_solver_candidate: (ExtCtx, string)
-    -> FinalizeOutcome ! {Process}
-}
-
 -- Neutral hooks for record-update construction. Each result is the identity for
 -- its host dispatcher: empty concatenations/patches, no policy opinion, and
 -- pass/delegate/no-intercept/no-decision for the chaining and first-match folds.
 -- World-threading slots preserve the world they receive.
-export pure func default_hooks(id: string) -> ExtensionHooks {
-  {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: \_ctx _plan. {
-      requested_total: None,
-      requested_solver: None,
-      requested_verifier: None
-    },
-    on_pre_step: \ctx _msgs. {
-      decision: PassThrough,
-      next_state: ctx.world
-    } ! {AI, IO, Trace},
-    on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle: \ctx _call. {
-      decision: Delegate,
-      next_state: ctx.world
-    } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \ctx _response_text. {
-      decision: NoIntercept,
-      next_state: ctx.world
-    } ! {IO, Process, FS, Clock},
-    on_solver_candidate: \ctx _candidate. {
-      decision: NoDecision,
-      next_state: ctx.world
-    } ! {Process}
-  }
-}
+export type Capability
+  = DescribeTools(() -> [ToolSchema])
+  | PromptShaper((ExtCtx) -> PromptPatch)
+  | BudgetShaper((ExtCtx, BudgetPlan) -> BudgetPatch)
+  | Compactor((ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})
+  | ToolPolicy((ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision)
+  | ToolProvider(
+      [string],
+      (ExtCtx, ToolCallEnvelope)
+        -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}
+    )
+  | ResponseInterceptor(
+      (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}
+    )
+  | SolverJudge((ExtCtx, string) -> FinalizeOutcome ! {Process})
 
-export type ExtRegistry = { hooks: [ExtensionHooks] }
+-- The registry entry: D5's owner-bearing shape. `id` is the host's install
+-- stamp (`"${name}#${idx}"`), `caps` the registration list UNCHANGED in list
+-- order (the invariant every dispatcher and B5's all-atoms witness read).
+export type ExtEntry = { id: string, caps: [Capability] }
+
+export type ExtRegistry = { entries: [ExtEntry] }
 
 export type ExtRuntime = {
   registry: ExtRegistry,

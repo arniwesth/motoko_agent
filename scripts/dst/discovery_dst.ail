@@ -477,7 +477,7 @@ func approval_overrides() -> FixtureOverrides {
 
 func approval_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [approval_hooks_of(id)] }, strict_mode: false, verification: v }
+  { registry: { entries: [approval_hooks_of(id)] }, strict_mode: false, verification: v }
 }
 
 -- ---------------------------------------------------------------------------
@@ -998,7 +998,7 @@ export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Shared
 
 func routing_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [fixture_hooks(id, { approval_overrides() | intercept: routing_intercept })] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | intercept: routing_intercept })] },
     strict_mode: false, verification: v }
 }
 
@@ -1165,7 +1165,7 @@ func effect_intercept(ctx: ExtCtx, _text: string)
 
 func effect_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [fixture_hooks(id, { approval_overrides() | intercept: effect_intercept })] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | intercept: effect_intercept })] },
     strict_mode: false, verification: v }
 }
 
@@ -1495,7 +1495,7 @@ func compose_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
   -- deliberately used an id no production registry contains, to kill an adapter
   -- that hardcoded "compose"; this one is the other half of that pair, and the
   -- id it asserts is "compose" because compose is the subject.
-  { registry: { hooks: [Compose.register_with_config(compose_cfg())] },
+  { registry: { entries: [{ id: "compose", caps: Compose.register_with_config(compose_cfg()) }] },
     strict_mode: false, verification: v }
 }
 
@@ -1709,7 +1709,7 @@ func grep_probe_intercept(ctx: ExtCtx, _text: string)
 
 func grep_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [fixture_hooks(id, { approval_overrides() | intercept: grep_probe_intercept })] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | intercept: grep_probe_intercept })] },
     strict_mode: false, verification: v }
 }
 
@@ -1784,7 +1784,7 @@ pure func replay_message_first(ms: [ReplayMismatch]) -> string {
 -- refuse, and it is why this line has a comment.
 func handle_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [fixture_hooks(id, { approval_overrides() | tools: ["T"], provide: routing_tool_handle })] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | tools: ["T"], provide: routing_tool_handle })] },
     strict_mode: false, verification: v }
 }
 
@@ -1866,7 +1866,7 @@ func batch_world() -> WorldState {
 
 func batch_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [fixture_hooks(id, { approval_overrides() | tools: ["T"],
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | tools: ["T"],
                           policy: allow_policy,
                           provide: routing_tool_handle })] },
     strict_mode: false, verification: v }

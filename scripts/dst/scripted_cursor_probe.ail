@@ -195,7 +195,7 @@ func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})
 
 func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks(id, pre)] }, strict_mode: false, verification: v }
 }
 
 -- ---------------------------------------------------------------------------

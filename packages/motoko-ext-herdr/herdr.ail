@@ -30,7 +30,7 @@ import std/json (Json, jo, kv, js, jnum, jb, get, asString)
 
 import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
-  ExtCtx, ExtensionHooks, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg, ToolSchema,
   ToolCallEnvelope, ToolResultEnvelope
@@ -516,7 +516,7 @@ func no_budget_patch() -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-export func make_hooks(cfg: HerdrConfig, tools: [string]) -> ExtensionHooks ! {IO, Process, FS, Clock} {
+export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO, Process, FS, Clock} {
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       on_tool_handle(cfg, ctx, call)
@@ -524,25 +524,23 @@ export func make_hooks(cfg: HerdrConfig, tools: [string]) -> ExtensionHooks ! {I
   let describe = func(_u: ()) -> [ToolSchema] {
     match tools { [] => [], _ => describe_tools(cfg.allowed_kinds) }
   };
-  {
-    id: "herdr",
-    -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this record only
-    -- carries the decision, so the two can never disagree.
-    provided_tools: tools,
-    on_describe_tools: describe,
-    on_build_system_prompt: \_ctx . { prepend: [], append: [] },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() },
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  [
+    DescribeTools(describe),
+    PromptShaper(\_ctx . { prepend: [], append: [] }),
+    BudgetShaper(func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() }),
+    Compactor(func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
       { decision: PassThrough, next_state: ctx.world }
-    },
-    on_tool_policy: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion },
-    on_tool_handle: handle,
-    on_response_intercept: func(ctx: ExtCtx, _t: string)
+    }),
+    ToolPolicy(func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }),
+    -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this list only
+    -- carries the decision, so the two can never disagree.
+    ToolProvider(tools, handle),
+    ResponseInterceptor(func(ctx: ExtCtx, _t: string)
       -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
       { decision: NoIntercept, next_state: ctx.world }
-    },
-    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} {
+    }),
+    SolverJudge(func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} {
       { decision: NoDecision, next_state: ctx.world }
-    }
-  }
+    })
+  ]
 }

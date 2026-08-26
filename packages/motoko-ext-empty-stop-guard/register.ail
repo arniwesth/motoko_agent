@@ -1,10 +1,11 @@
 module sunholo/motoko_ext_empty_stop_guard/register
 
+import std/option (None)
 import pkg/sunholo/motoko_ext_abi/types (
-  default_hooks,
   ExtCtx,
-  ExtensionHooks,
-  FinalizeOutcome
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  FinalizeOutcome,
+  PassThrough, NoOpinion, Delegate, NoIntercept
 )
 import pkg/sunholo/motoko_ext_empty_stop_guard/empty_stop_guard (decide)
 
@@ -12,6 +13,17 @@ func finalize(ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process} {
   { decision: decide(ctx, candidate), next_state: ctx.world }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
-  { default_hooks("empty_stop_guard") | on_solver_candidate: finalize }
+-- B8: 6.0 Capability list. The former `default_hooks` neutral bodies are
+-- inlined verbatim; only the judge slot is this extension's own.
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS} {
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(\_ctx. { prepend: [], append: [] }),
+    BudgetShaper(\_ctx _plan. { requested_total: None, requested_solver: None, requested_verifier: None }),
+    Compactor(\ctx _msgs. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace}),
+    ToolPolicy(\_ctx _call. NoOpinion),
+    ToolProvider([], \ctx _call. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}),
+    ResponseInterceptor(\ctx _response_text. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock}),
+    SolverJudge(finalize)
+  ]
 }

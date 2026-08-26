@@ -106,7 +106,7 @@ func guarded_hook() -> FixtureHooks {
 
 func rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [guarded_hook()] }, strict_mode: false, verification: v }
+  { registry: { entries: [guarded_hook()] }, strict_mode: false, verification: v }
 }
 
 func ctx() -> ExtCtx {

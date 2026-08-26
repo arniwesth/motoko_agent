@@ -4,7 +4,7 @@ import std/option (Option, Some, None)
 import std/fs (fileExists)
 
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg,
   ToolCallEnvelope
@@ -40,7 +40,7 @@ export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx
   }
 }, next_state: ctx.world } }
 
-export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS, Process, Rand} {
+export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> [Capability] ! {FS, Process, Rand} {
   let active = workdir_is_ailang_project(workdir);
   let cfg = mcp_config(timeout_ms, max_output_chars);
   let mappings = tool_mappings();
@@ -53,23 +53,22 @@ export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) 
   let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
     NoDecision
   }, next_state: ctx.world } };
-  {
-    id: "ailang_docs",
-    provided_tools: tools,
-    on_describe_tools: \_ . schemas,
-    on_build_system_prompt: \ctx. build_prompt_patch(ctx.task),
-    on_budget_plan:
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  [
+    DescribeTools(\_ . schemas),
+    PromptShaper(\ctx. build_prompt_patch(ctx.task)),
+    BudgetShaper(
       func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
         no_budget_patch()
-      },
-    on_pre_step:
+      }),
+    Compactor(
       func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
         PassThrough
-      }, next_state: ctx.world } },
-    on_tool_policy:
-      \_ctx _call. NoOpinion,
-    on_tool_handle: handle,
-    on_response_intercept: intercept,
-    on_solver_candidate: finalize
-  }
+      }, next_state: ctx.world } }),
+    ToolPolicy(
+      \_ctx _call. NoOpinion),
+    ToolProvider(tools, handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(finalize)
+  ]
 }

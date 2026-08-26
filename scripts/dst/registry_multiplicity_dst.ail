@@ -29,11 +29,11 @@ import pkg/sunholo/motoko_ext_abi/types (
   ToolCallEnvelope, ToolPolicyDecision, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome
 )
 import src/core/ext/registry_normalize (
-  Capability,
-  DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
-  ExtEntry,
   RegistrationRejection,
-  SecondVote, FoldKindRepeated, DuplicateToolName, EmptyRegistration,
+  SecondVote,
+  FoldKindRepeated,
+  DuplicateToolName,
+  EmptyRegistration,
   NormalizedRegistry,
   normalize_registration,
   normalize_registry,
@@ -44,6 +44,8 @@ import src/core/ext/registry_normalize (
   fold_kind_repeats_allowed,
   empty_registration_omits
 )
+-- B8: `Capability`/`ExtEntry` and the constructors are the ABI's now.
+import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtEntry)
 
 -- ---------------------------------------------------------------------------
 -- Neutral payloads. Only the KINDS and the names matter to the boundary.

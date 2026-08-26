@@ -7,7 +7,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   BudgetPlan,
   BudgetPatch,
   ExtCtx,
-  ExtensionHooks,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
   FinalizeDecision,
   FinalizeOutcome,
   Msg,
@@ -113,29 +113,29 @@ func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
     next_state: step.next_state }
 }
 
-func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtensionHooks {
-  {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: empty_prompt_patch,
-    on_budget_plan: empty_budget_patch,
-    on_pre_step: pre_step,
-    on_tool_policy: allow_policy,
-    on_tool_handle: delegate_tool,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: no_solver_decision
-  }
+-- The 6.0 host stamps the id, so `_id` is retained only to keep the three
+-- fixture names beside their builders.
+func hooks(_id: string, pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> [Capability] {
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(empty_prompt_patch),
+    BudgetShaper(empty_budget_patch),
+    Compactor(pre_step),
+    ToolPolicy(allow_policy),
+    ToolProvider([], delegate_tool),
+    ResponseInterceptor(no_intercept),
+    SolverJudge(no_solver_decision)
+  ]
 }
 
-export func reject_prefix_hooks() -> ExtensionHooks {
+export func reject_prefix_hooks() -> [Capability] {
   hooks("reject_prefix", prefix_pre_step)
 }
 
-export func reject_pair_hooks() -> ExtensionHooks {
+export func reject_pair_hooks() -> [Capability] {
   hooks("reject_pair", pair_pre_step)
 }
 
-export func reject_nocache_hooks() -> ExtensionHooks {
+export func reject_nocache_hooks() -> [Capability] {
   hooks("reject_nocache", nocache_pre_step)
 }

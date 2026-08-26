@@ -9,19 +9,28 @@
 module examples/smoke_registry_roundtrip
 
 import std/json (jo, decode, kv, js)
-import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_abi/types (Capability, ToolProvider)
 import pkg/sunholo/motoko_ext_a2a/types (A2AAgent, A2AConfig)
 import pkg/sunholo/motoko_ext_a2a/a2a (make_hooks as a2a_make_hooks)
 import pkg/sunholo/motoko_ext_mcp/mcp (McpConfig, McpServerDef, parse_mcp_config, make_hooks as mcp_make_hooks)
+import std/list as L (length)
+
+pure func provided_names(caps: [Capability]) -> [string] {
+  match caps {
+    [] => [],
+    ToolProvider(names, _) :: rest => names ++ provided_names(rest),
+    _ :: rest => provided_names(rest)
+  }
+}
 
 -- A2A extension: agent tool names are derived from config without disk I/O
 
-pure func a2a_hooks_have_correct_id() -> bool
+pure func a2a_hooks_register_capabilities() -> bool
   tests [((), true)]
   {
     let cfg: A2AConfig = { agents: [{ name: "planner", url: "http://localhost:7070", description: "Planning agent", skill_id: "main.handle_plan" }] };
     let hooks = a2a_make_hooks(cfg);
-    hooks.id == "a2a"
+    L.length(hooks) > 0
   }
 
 pure func a2a_tools_roundtrip_from_config() -> bool
@@ -34,7 +43,7 @@ pure func a2a_tools_roundtrip_from_config() -> bool
       ]
     };
     let hooks = a2a_make_hooks(cfg);
-    match hooks.provided_tools {
+    match provided_names(hooks) {
       t1 :: t2 :: [] => t1 == "delegate_to_search" && t2 == "delegate_to_summarize",
       _ => false
     }
@@ -44,16 +53,16 @@ pure func a2a_empty_config_yields_no_tools() -> bool
   tests [((), true)]
   {
     let hooks = a2a_make_hooks({ agents: [] });
-    match hooks.provided_tools { [] => true, _ => false }
+    match provided_names(hooks) { [] => true, _ => false }
   }
 
 -- MCP extension: transport field defaults to stdio without config file
 
-pure func mcp_hooks_have_correct_id() -> bool
+pure func mcp_hooks_register_capabilities() -> bool
   tests [((), true)]
   {
     let hooks = mcp_make_hooks({ servers: [] });
-    hooks.id == "mcp"
+    L.length(hooks) > 0
   }
 
 pure func mcp_stdio_server_parses_transport_default() -> bool
@@ -86,16 +95,6 @@ pure func mcp_http_transport_parsed_from_config() -> bool
         }
       }
     }
-  }
-
--- Extension hook IDs are stable: each extension identifies itself uniquely
-
-pure func hook_ids_are_non_empty() -> bool
-  tests [((), true)]
-  {
-    let a2a_hooks = a2a_make_hooks({ agents: [] });
-    let mcp_hooks = mcp_make_hooks({ servers: [] });
-    a2a_hooks.id != "" && mcp_hooks.id != "" && a2a_hooks.id != mcp_hooks.id
   }
 
 export func main() -> () ! {IO} {

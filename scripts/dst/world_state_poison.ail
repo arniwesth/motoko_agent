@@ -64,7 +64,7 @@ func allow_rt() -> ExtRuntime {
     intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
     judge: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
   });
-  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }
 
 func msg(role: string, content: string) -> Message {
@@ -79,7 +79,7 @@ func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_mil
 
 func empty_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 -- The tool class's live half. A world with an EMPTY tool queue delegates to the

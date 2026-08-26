@@ -3,7 +3,7 @@ module sunholo/motoko_ext_conformance/invariants
 import std/result (Result, Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (Msg, ToolCall)
 
-export pure func conformance_abi_version() -> string { "4.0" }
+export pure func conformance_abi_version() -> string { "6.0" }  -- B8: the kit (5.0.0) targets ABI 6.0, the Capability list
 
 pure func has_assistant_call(calls: [ToolCall], wanted_id: string) -> bool {
   match calls {

@@ -5,7 +5,7 @@ import std/extension (requireWorkdirFile)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtensionHooks, ExtCtx, BudgetPlan, BudgetPatch,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtCtx, BudgetPlan, BudgetPatch,
   ToolCallEnvelope, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   NoIntercept, NoDecision
 )
@@ -32,30 +32,28 @@ func enabled_in(workdir: string) -> bool ! {FS} {
 -- register_with_config uses a type variable for cfg so this extension is
 -- host-config-agnostic. workdir is read from MOTOKO_WORKDIR env var
 -- (set by the host at startup), falling back to "." if unset.
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process, Rand} {
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS, Process, Rand} {
   let workdir = getEnvOr("MOTOKO_WORKDIR", ".");
   let active = enabled_in(workdir);
   let cached_prompt = load_agent_prompt(workdir);
   let tools = if active then provided_tools() else [];
-  {
-    id: "omnigraph",
-    provided_tools: tools,
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(\ctx. on_build_system_prompt(cached_prompt, ctx)),
+    BudgetShaper(func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       no_budget_patch()
-    },
-    on_pre_step:
+    }),
+    Compactor(
       func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
         PassThrough
-      }, next_state: ctx.world } },
-    on_tool_policy: on_tool_policy,
-    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call) },
-    on_response_intercept: func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
+      }, next_state: ctx.world } }),
+    ToolPolicy(on_tool_policy),
+    ToolProvider(tools, func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call) }),
+    ResponseInterceptor(func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
       NoIntercept
-    }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
+    }, next_state: ctx.world } }),
+    SolverJudge(func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
       NoDecision
-    }, next_state: ctx.world } }
-  }
+    }, next_state: ctx.world } })
+  ]
 }

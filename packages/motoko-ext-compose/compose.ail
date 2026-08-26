@@ -42,7 +42,7 @@ import pkg/sunholo/motoko_ext_compose/types (ToolResultMeta, ComposeHostConfig)
 import pkg/sunholo/motoko_ext_compose/proc (bash_exec_tool, bash_exec_args, decode_bash_result, message_of)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ToolCallEnvelope, ToolResultEnvelope,
-  ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
   -- WI-D19: the routed half of `on_response_intercept`. `ExtPathKind`'s three
   -- constructors are imported by name because `remove_if_file` matches on them
   -- exhaustively rather than defaulting — see that function.
@@ -1102,7 +1102,7 @@ func join_csv(xs: [string]) -> string {
   }
 }
 
-export func register_with_config(runtime_cfg: ComposeHostConfig) -> ExtensionHooks ! {Env, FS, AI, Clock, IO, Process, Rand} {
+export func register_with_config(runtime_cfg: ComposeHostConfig) -> [Capability] ! {Env, FS, AI, Clock, IO, Process, Rand} {
   let composition_mode = runtime_cfg.compose.mode;
   let snippet_caps = join_csv(runtime_cfg.snippet_caps);
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call, runtime_cfg, snippet_caps) };
@@ -1110,19 +1110,18 @@ export func register_with_config(runtime_cfg: ComposeHostConfig) -> ExtensionHoo
   let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
     no_finalize_decision()
   }, next_state: ctx.world } };
-  {
-    id: "compose",
-    provided_tools: provided_tools(),
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: on_build_system_prompt,
-    on_budget_plan: budget_hook,
-    on_pre_step:
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(on_build_system_prompt),
+    BudgetShaper(budget_hook),
+    Compactor(
       func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
         PassThrough
-      }, next_state: ctx.world } },
-    on_tool_policy: \ctx call. on_tool_policy_with_mode(composition_mode, ctx, call),
-    on_tool_handle: handle,
-    on_response_intercept: intercept,
-    on_solver_candidate: finalize
-  }
+      }, next_state: ctx.world } }),
+    ToolPolicy(\ctx call. on_tool_policy_with_mode(composition_mode, ctx, call)),
+    ToolProvider(provided_tools(), handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(finalize)
+  ]
 }

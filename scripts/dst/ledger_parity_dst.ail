@@ -213,7 +213,7 @@ func base_overrides(policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) ->
 }
 
 func rt_with(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtRuntime {
-  { registry: { hooks: [base_hooks(id, policy)] }, strict_mode: false, verification: no_verification() }
+  { registry: { entries: [base_hooks(id, policy)] }, strict_mode: false, verification: no_verification() }
 }
 
 func deny_rt() -> ExtRuntime {
@@ -249,7 +249,7 @@ func handled_rt() -> ExtRuntime {
       }
     }
   });
-  { registry: { hooks: [hooks] }, strict_mode: false, verification: no_verification() }
+  { registry: { entries: [hooks] }, strict_mode: false, verification: no_verification() }
 }
 
 -- The DP7 runtime. `enabled` with a command that exits non-zero and prints
@@ -258,7 +258,7 @@ func handled_rt() -> ExtRuntime {
 -- Process capability for its own sake.
 func dp7_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: true, command: "exit 3" };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 -- ---------------------------------------------------------------------------

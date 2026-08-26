@@ -1,9 +1,9 @@
 [package]
 name = "sunholo/motoko_ext_abi"
-version = "5.0"
+version = "6.0"
 edition = "1"
 ailang = ">=0.17.0"
-description = "ABI contract for motoko_agent extension packages: ExtensionHooks, ExtCtx, policy and decision types"
+description = "ABI contract for motoko_agent extension packages: Capability, ExtCtx, policy and decision types"
 license = "Apache-2.0"
 
 [exports]
@@ -14,7 +14,7 @@ max = []
 
 [metadata]
 tags = ["motoko", "extension", "abi", "hooks", "plugin"]
-ai_summary = "Stable ABI contract for motoko_agent extensions. Provides ExtensionHooks record, ExtCtx, BudgetPlan, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, and VerificationConfig types. 5.0 adds the WI-B2b world token: ExtWorld, AiStepOutcome, and the four hook outcome records (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome) that carry D1's successor state back out of a hook. All motoko-ext-* packages depend on this package. Bumping ExtensionHooks is a major version bump."
+ai_summary = "Stable ABI contract for motoko_agent extensions. 6.0 replaces the ExtensionHooks record with the Capability sum (register_with_config -> [Capability], wrapped by the host into ExtEntry { id, caps }; ADR-001 Phase B, B8). Provides Capability, ExtEntry, ExtRegistry, ExtCtx, BudgetPlan, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, and VerificationConfig types. 5.0 adds the WI-B2b world token: ExtWorld, AiStepOutcome, and the four hook outcome records (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome) that carry D1's successor state back out of a hook. All motoko-ext-* packages depend on this package. Bumping ExtensionHooks is a major version bump."
 repository = "https://github.com/sunholo-data/ailang-packages/tree/main/packages/motoko-ext-abi"
 homepage = "https://ailang.sunholo.com/docs/packages/motoko-ext-abi"
 license_url = "https://github.com/sunholo-data/ailang-packages/blob/main/LICENSE"

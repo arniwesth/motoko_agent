@@ -96,7 +96,7 @@ func mk_budget() -> BudgetPlan {
 
 func structural_rt() -> ExtRuntime ! {Env, FS} {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { hooks: [register_structural_compaction(())] }, strict_mode: false, verification: v }
+  { registry: { entries: [{ id: "compaction_structural", caps: register_structural_compaction(()) }] }, strict_mode: false, verification: v }
 }
 
 -- WI-D4. THE CATALOGUE THIS SUITE RUNS ON, DECLARED RATHER THAN INHERITED.

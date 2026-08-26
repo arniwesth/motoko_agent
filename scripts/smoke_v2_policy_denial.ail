@@ -77,7 +77,7 @@ func mk_deny_all_hook() -> FixtureHooks {
 export func main() -> () ! {IO, Clock, Env} {
   let v: VerificationConfig = { enabled: false, command: "" };
   let rt: ExtRuntime = {
-    registry: { hooks: [mk_deny_all_hook()] },
+    registry: { entries: [mk_deny_all_hook()] },
     strict_mode: false,
     verification: v
   };

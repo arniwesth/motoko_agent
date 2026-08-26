@@ -166,7 +166,7 @@ func rt(id: string) -> ExtRuntime {
     intercept: no_intercept,
     judge: no_solver
   });
-  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }
 
 func run_recording(id: string, w: WorldState) -> TracedSessionResult

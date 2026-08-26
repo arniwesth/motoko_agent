@@ -9,9 +9,12 @@
 -- the 6.0 CAPABILITY KIND (`compact`, `judge`, `provide`, ...) rather than by
 -- the 5.x slot. So the ~20 fixture sites [RK C8] no longer spell the ABI's
 -- record shape at all: when B8 lands the `Capability` list, THIS function (and
--- the `FixtureHooks` alias) change, and no fixture does. `fixture_defaults()`
--- is the ABI's own `default_hooks` re-keyed, so a fixture that overrides one
--- kind writes `{ fixture_defaults() | judge: f }`.
+-- the `FixtureHooks` alias) change, and no fixture does. B8 DID THAT: the
+-- constructor now builds the 6.0 `[Capability]` list inside an `ExtEntry`, and
+-- `fixture_defaults()` carries the neutral bindings the ABI's `default_hooks`
+-- used to (byte-for-byte its body, re-keyed) -- the ABI no longer has a
+-- constructor, because a 6.0 registration has no "all eight slots" to fill. A
+-- fixture that overrides one kind still writes `{ fixture_defaults() | judge: f }`.
 
 module src/core/test/ext_fixture
 
@@ -20,13 +23,12 @@ import std/option (None)
 import std/string (contains)
 import src/core/config (VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  default_hooks,
+  ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
   ToolSchema,
   BudgetPlan,
   BudgetPatch,
   ExtCtx,
   ExtRuntime,
-  ExtensionHooks,
   FinalizeDecision,
   InterceptHandled,
   ContinueWithFeedback,
@@ -115,12 +117,13 @@ export pure func fixture_rt() -> ExtRuntime {
     judge: solve_candidate
   });
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }
 
 -- ============================================================================
--- B7: the test-owned constructor. The ONLY place outside the ABI probe
--- (`scripts/dst/declared_vs_performed.ail`) that spells the 5.x record.
+-- B7: the test-owned constructor. B8: it spells the 6.0 list -- every fixture
+-- registers all eight kinds, one atom each, in the canonical kind order, so a
+-- fixture's atoms are exactly `(kind, 0)` for each kind.
 -- ============================================================================
 
 -- What a fixture registers, keyed by the 6.0 capability kind. `tools` is the
@@ -137,40 +140,59 @@ export type FixtureOverrides = {
   judge: (ExtCtx, string) -> FinalizeOutcome ! {Process}
 }
 
--- The registration value a fixture hands to `ExtRegistry`. An alias today so
--- that no fixture names the ABI record; at B8 it becomes the `{ id, caps }`
--- entry and every `-> FixtureHooks` signature follows without an edit.
-export type FixtureHooks = ExtensionHooks
+-- The registration value a fixture hands to `ExtRegistry`: D5's `{ id, caps }`
+-- entry (B8). Every `-> FixtureHooks` signature followed without an edit.
+export type FixtureHooks = ExtEntry
 
--- The ABI's neutral bindings, re-keyed. Byte-for-byte `default_hooks`.
+-- The neutral bindings, keyed by kind. Each result is the identity for its
+-- host dispatcher: empty concatenations/patches, no policy opinion, and
+-- pass/delegate/no-intercept/no-decision for the chaining and first-match
+-- folds. World-threading kinds preserve the world they receive. (This was
+-- the ABI's `default_hooks` through 5.0, byte-for-byte.)
 export pure func fixture_defaults() -> FixtureOverrides {
-  let d = default_hooks("fixture_defaults");
   {
-    tools: d.provided_tools,
-    describe: d.on_describe_tools,
-    prompt: d.on_build_system_prompt,
-    budget: d.on_budget_plan,
-    compact: d.on_pre_step,
-    policy: d.on_tool_policy,
-    provide: d.on_tool_handle,
-    intercept: d.on_response_intercept,
-    judge: d.on_solver_candidate
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ctx. { prepend: [], append: [] },
+    budget: \_ctx _plan. {
+      requested_total: None,
+      requested_solver: None,
+      requested_verifier: None
+    },
+    compact: \ctx _msgs. {
+      decision: PassThrough,
+      next_state: ctx.world
+    } ! {AI, IO, Trace},
+    policy: \_ctx _call. NoOpinion,
+    provide: \ctx _call. {
+      decision: Delegate,
+      next_state: ctx.world
+    } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    intercept: \ctx _response_text. {
+      decision: NoIntercept,
+      next_state: ctx.world
+    } ! {IO, Process, FS, Clock},
+    judge: \ctx _candidate. {
+      decision: NoDecision,
+      next_state: ctx.world
+    } ! {Process}
   }
 }
 
--- THE CONSTRUCTOR. B8 changes this body (and the alias above) to build the
--- `Capability` list; nothing that calls it changes.
+-- THE CONSTRUCTOR. B8: builds the `Capability` list in the canonical kind
+-- order; nothing that calls it changed.
 export pure func fixture_hooks(id: string, ov: FixtureOverrides) -> FixtureHooks {
   {
     id: id,
-    provided_tools: ov.tools,
-    on_describe_tools: ov.describe,
-    on_build_system_prompt: ov.prompt,
-    on_budget_plan: ov.budget,
-    on_pre_step: ov.compact,
-    on_tool_policy: ov.policy,
-    on_tool_handle: ov.provide,
-    on_response_intercept: ov.intercept,
-    on_solver_candidate: ov.judge
+    caps: [
+      DescribeTools(ov.describe),
+      PromptShaper(ov.prompt),
+      BudgetShaper(ov.budget),
+      Compactor(ov.compact),
+      ToolPolicy(ov.policy),
+      ToolProvider(ov.tools, ov.provide),
+      ResponseInterceptor(ov.intercept),
+      SolverJudge(ov.judge)
+    ]
   }
 }

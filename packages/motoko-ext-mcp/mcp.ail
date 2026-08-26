@@ -6,7 +6,7 @@ import std/option (Option, Some, None)
 import std/result (Ok, Err)
 
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ToolResultEnvelope, ResponseInterceptDecision, FinalizeDecision,
   ToolCallEnvelope, Msg, PreStepDecision, PassThrough
 )
@@ -151,7 +151,7 @@ func mcp_error_envelope(call: ToolCallEnvelope, msg: string) -> ToolResultEnvelo
   { tool_call_id: call.id, tool: call.tool, stdout: "", stderr: msg, exit_code: 1, metadata: jo([]) }
 }
 
-export func make_hooks(cfg: McpConfig) -> ExtensionHooks {
+export func make_hooks(cfg: McpConfig) -> [Capability] {
   let tool_names = collect_all_tool_names(cfg);
   let servers = cfg.servers;
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
@@ -170,18 +170,16 @@ export func make_hooks(cfg: McpConfig) -> ExtensionHooks {
   let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
     NoDecision
   }, next_state: ctx.world } };
-  {
-    id: "mcp",
-    provided_tools: tool_names,
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \ctx. { prepend: [], append: [] },
-    on_budget_plan:       func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() },
-    on_tool_policy:       func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion },
-    on_pre_step:          func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
-    on_tool_handle:       handle,
-    on_response_intercept: intercept,
-    on_solver_candidate:  finalize
-  }
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(\ctx. { prepend: [], append: [] }),
+    BudgetShaper(func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() }),
+    Compactor(func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }),
+    ToolPolicy(func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }),
+    ToolProvider(tool_names, handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(finalize)
+  ]
 }
 
 -- Pure tests

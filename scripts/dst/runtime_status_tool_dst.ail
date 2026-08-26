@@ -124,7 +124,7 @@ func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { d
 func pending_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
-    registry: { hooks: [fixture_hooks("runtime-status-pending", {
+    registry: { entries: [fixture_hooks("runtime-status-pending", {
       tools: [],
       describe: no_describe,
       prompt: no_prompt,

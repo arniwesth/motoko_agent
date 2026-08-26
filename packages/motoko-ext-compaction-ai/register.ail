@@ -8,7 +8,7 @@ import std/json (decode, getString, getInt, getBool)
 import std/option (Option, Some, None)
 import std/fs (readFileResult)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, 
-  ExtensionHooks, ExtCtx, PreStepDecision,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtCtx, PreStepDecision,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   Allow, Delegate, NoIntercept, NoDecision
 )
@@ -90,28 +90,27 @@ func read_compaction_ai_config(profile_dir: string) -> CompactionAiConfig ! {Env
 }
 
 -- Register the AI compaction extension
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+export func register_with_config(_cfg: a) -> [Capability] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
   let compaction_cfg = read_compaction_ai_config(profile_dir);
   
-  {
-    id: "compaction_ai",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(\_ . { prepend: [], append: [] }),
+    BudgetShaper(\_ _ . { requested_total: None, requested_solver: None, requested_verifier: None }),
     -- WI-B2b. FORWARDS the outcome; it does not re-wrap it. This is the one
     -- hook in the tree that actually calls `ai_step`, so it is the one place
     -- where `next_state: ctx.world` would be a real defect rather than a
     -- harmless identity: `compact_with_ai` may have run the summarizer twice,
     -- and overwriting its successor with the world this hook was ENTERED with
     -- would replay those provider calls. It type-checks either way.
-    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepOutcome ! {AI, IO, Trace} {
+    Compactor(func(ctx: ExtCtx, msgs) -> PreStepOutcome ! {AI, IO, Trace} {
       compact_with_ai(ctx, msgs, compaction_cfg)
-    },
-    on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
-  }
+    }),
+    ToolPolicy(\_ _ . Allow),
+    ToolProvider([], \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}),
+    ResponseInterceptor(\ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock}),
+    SolverJudge(\ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process})
+  ]
 }

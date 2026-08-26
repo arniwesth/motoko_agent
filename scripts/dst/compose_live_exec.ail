@@ -98,7 +98,7 @@ func cfg() -> ComposeHostConfig {
 
 func rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [Compose.register_with_config(cfg())] },
+  { registry: { entries: [{ id: "compose", caps: Compose.register_with_config(cfg()) }] },
     strict_mode: false, verification: v }
 }
 

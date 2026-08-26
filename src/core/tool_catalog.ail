@@ -22,7 +22,7 @@ import std/ai (ToolSchema)
 import std/list as List (length)
 import std/string (contains)
 import src/core/config (VerificationConfig)
-import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtensionHooks)
+import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtEntry, Capability, DescribeTools, ToolProvider)
 
 -- Each schema's `parameters` field is a JSON-Schema-shaped string. To keep
 -- the strings readable AILANG-side, we build them in helper functions
@@ -103,19 +103,37 @@ pure func collect_hook_schemas(names: [string]) -> [ToolSchema] {
   }
 }
 
+-- B8: an entry's DescribeTools atoms, concatenated in list order.
+pure func declared_schemas(caps: [Capability]) -> [ToolSchema] {
+  match caps {
+    [] => [],
+    DescribeTools(f) :: rest => f() ++ declared_schemas(rest),
+    _ :: rest => declared_schemas(rest)
+  }
+}
+
+-- B8: the names every ToolProvider atom of an entry advertises, in list order.
+pure func provided_names(caps: [Capability]) -> [string] {
+  match caps {
+    [] => [],
+    ToolProvider(names, _) :: rest => names ++ provided_names(rest),
+    _ :: rest => provided_names(rest)
+  }
+}
+
 -- Prefer hook-declared schemas when available; fall back to name-only synthesis.
-pure func hook_schemas(h: ExtensionHooks) -> [ToolSchema] {
-  let declared = h.on_describe_tools();
+pure func hook_schemas(e: ExtEntry) -> [ToolSchema] {
+  let declared = declared_schemas(e.caps);
   match declared {
-    [] => collect_hook_schemas(h.provided_tools),
+    [] => collect_hook_schemas(provided_names(e.caps)),
     _ => declared
   }
 }
 
-pure func collect_ext_schemas(hooks: [ExtensionHooks]) -> [ToolSchema] {
-  match hooks {
+pure func collect_ext_schemas(entries: [ExtEntry]) -> [ToolSchema] {
+  match entries {
     [] => [],
-    h :: rest => hook_schemas(h) ++ collect_ext_schemas(rest)
+    e :: rest => hook_schemas(e) ++ collect_ext_schemas(rest)
   }
 }
 
@@ -123,7 +141,7 @@ pure func collect_ext_schemas(hooks: [ExtensionHooks]) -> [ToolSchema] {
 -- Use this instead of `tools()` when an ExtRuntime is available so that
 -- extension-provided tools appear in the LLM's tool list.
 export pure func tools_with_extensions(rt: ExtRuntime) -> [ToolSchema] {
-  tools() ++ collect_ext_schemas(rt.registry.hooks)
+  tools() ++ collect_ext_schemas(rt.registry.entries)
 }
 
 -- Inline tests
@@ -136,7 +154,7 @@ pure func test_no_extensions_returns_base_tools() -> bool
   tests [((), true)]
   {
     let v: VerificationConfig = { enabled: false, command: "make check_core" };
-    let rt: ExtRuntime = { registry: { hooks: [] }, strict_mode: false, verification: v };
+    let rt: ExtRuntime = { registry: { entries: [] }, strict_mode: false, verification: v };
     List.length(tools_with_extensions(rt)) == 7
   }
 

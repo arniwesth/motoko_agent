@@ -37,13 +37,13 @@ import src/core/ports (ScriptedStep)
 -- so the broken-workdir test wouldn't fire DP7 unless we explicitly enable.
 func enabled_rt(workdir: string, command: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: true, command: command };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 -- Disabled runtime (matches old empty_rt semantics for the fail-open test).
 func disabled_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 func no_rates() -> CostRates {

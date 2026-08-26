@@ -43,7 +43,7 @@ import std/result (Ok, Err)
 
 import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
-  ExtCtx, ExtensionHooks, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg, ToolSchema,
   ToolCallEnvelope, ToolResultEnvelope,
@@ -205,7 +205,7 @@ func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_pat
 
 func no_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
 
-export func make_hooks(cfg: AgentCliConfig) -> ExtensionHooks ! {IO, Process, FS} {
+export func make_hooks(cfg: AgentCliConfig) -> [Capability] ! {IO, Process, FS} {
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       on_tool_handle(cfg, ctx, call)
@@ -217,18 +217,17 @@ export func make_hooks(cfg: AgentCliConfig) -> ExtensionHooks ! {IO, Process, FS
   let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
     { decision: NoDecision, next_state: ctx.world }
   };
-  {
-    id: "agentcli",
-    provided_tools: tool_names(cfg.providers),
-    on_describe_tools: \_ . describe_tools(cfg.providers),
-    on_build_system_prompt: \_ctx . { prepend: [], append: [] },
-    on_budget_plan: budget_hook,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  [
+    DescribeTools(\_ . describe_tools(cfg.providers)),
+    PromptShaper(\_ctx . { prepend: [], append: [] }),
+    BudgetShaper(budget_hook),
+    Compactor(func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
       { decision: PassThrough, next_state: ctx.world }
-    },
-    on_tool_policy: no_tool_policy,
-    on_tool_handle: handle,
-    on_response_intercept: intercept,
-    on_solver_candidate: finalize
-  }
+    }),
+    ToolPolicy(no_tool_policy),
+    ToolProvider(tool_names(cfg.providers), handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(finalize)
+  ]
 }

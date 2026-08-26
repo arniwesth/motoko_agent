@@ -106,7 +106,7 @@ func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecisio
 
 func mk_runtime(hook: FixtureHooks) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [hook] }, strict_mode: false, verification: v }
+  { registry: { entries: [hook] }, strict_mode: false, verification: v }
 }
 
 -- Each step: emit a BashExec call (will be intercepted by Pending hook),
