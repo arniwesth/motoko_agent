@@ -364,7 +364,7 @@ echo "-- WI-D26: the inline branch is FULLY mediated, and the row that used to p
 # prediction:
 #
 #     "So this row is now also the standing witness for that unrouted seam: the
-#      day `proc_exec` grows an exit code and compose routes through it, this arm
+#      day `tool_handle` grows an exit code and compose routes through it, this arm
 #      stops dying and says so."
 #
 # WI-D23 grew the exit code, WI-D26 routed the seam, and the arm stopped dying.
@@ -1178,7 +1178,7 @@ control_pair "on_response_intercept" "int" " ! {IO, Process, FS, Clock}" " ! {IO
 # effect", and WI-D24 answered the second while writing the first —
 # `on_solver_candidate` declares `! {Process}` and WI-D24 concluded it "reaches
 # the seam", which is S33's shape: a proxy (the effect is present) standing in
-# for the truth (the whole row is admitted). `proc_exec` demands
+# for the truth (the whole row is admitted). `tool_handle` demands
 # `{IO, Process, FS}` and gets one of three.
 #
 # So the bound is asserted the only way that cannot be inferred wrong: a probe
@@ -1187,7 +1187,7 @@ control_pair "on_response_intercept" "int" " ! {IO, Process, FS, Clock}" " ! {IO
 #
 #   on_pre_step        ! {AI, IO, Trace}  ai_step   ACCEPT   (the one field)
 #                                         clock_now REJECT   (needs Clock)
-#   on_solver_candidate ! {Process}       proc_exec REJECT   (needs IO, FS too)
+#   on_solver_candidate ! {Process}       tool_handle REJECT   (needs IO, FS too)
 #                                         std/process.exec ACCEPT (AMBIENT)
 #
 # The last row is the one that says what the slot CAN do, and it is why the
@@ -1240,8 +1240,8 @@ port_accepts "on_pre_step -> ports.ai_step" " ! {AI, IO, Trace}" "" \
   'let o = ctx.ports.ai_step(ctx.world, "m", []); 0'
 port_rejects "on_pre_step -> ports.clock_now" " ! {AI, IO, Trace}" " ! {AI, IO, Trace, Clock}" "" \
   'let o = ctx.ports.clock_now(ctx.world); 0'
-port_rejects "on_solver_candidate -> ports.proc_exec" " ! {Process}" " ! {Process, IO, FS}" "" \
-  'let o = ctx.ports.proc_exec(ctx.world, "BashExec", "{}"); 0'
+port_rejects "on_solver_candidate -> ports.tool_handle" " ! {Process}" " ! {Process, IO, FS}" "" \
+  'let o = ctx.ports.tool_handle(ctx.world, "BashExec", "{}"); 0'
 port_accepts "on_solver_candidate -> AMBIENT std/process.exec" " ! {Process}" "import std/process (exec)" \
   'let _ = exec("true", []); 0'
 cleanup

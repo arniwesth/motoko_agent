@@ -443,7 +443,7 @@ func witness_of(initial: WorldState, run: TracedSessionResult) -> DiscoveryWitne
     file_removes: 0,
     dir_makes: 0,
     -- WI-D24 added the extension-effect class on the same terms: this scenario
-    -- installs no extension that reaches `ExtPorts.proc_exec`, so the pin holds
+    -- installs no extension that reaches `ExtPorts.tool_handle`, so the pin holds
     -- here and the class is still claimed at zero rather than unmentioned.
     extension_effects: 0,
     expected_env_reads: if dispatches > 0 then env_reads_with_dispatch(dispatches)
@@ -576,7 +576,7 @@ pure func join_ints(xs: [int]) -> string {
 
 pure func generated_manifest() -> ExecutionManifest {
   driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
-                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+                       ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 
 -- D2's `ExecutionProgram`, and the first one in this project whose three

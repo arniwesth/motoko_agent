@@ -12,7 +12,7 @@ module sunholo/motoko_ext_agentcli/agentcli
 -- expensive subscription worker.
 --
 -- WHY `on_tool_handle`. Of the eight ABI slots, exactly TWO can reach
--- `ExtPorts.proc_exec`, which demands the whole row `{IO, Process, FS}`: this
+-- `ExtPorts.tool_handle`, which demands the whole row `{IO, Process, FS}`: this
 -- one (the widest in the ABI) and `on_response_intercept`, which runs after the
 -- model has already produced text and so cannot be a delegation seam. The row
 -- algebra is `src/core/ext/runtime.ail:273-283`.

@@ -53,7 +53,7 @@ func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcom
   Err("ext ai_step port unavailable")
 }, next_state: world } }
 
--- WI-D16 widened `ExtPorts.proc_exec` to thread the world token. Returning
+-- WI-D16 widened `ExtPorts.tool_handle` to thread the world token. Returning
 -- `world` unchanged is S12's IDENTITY TRANSITION and is the correct answer for
 -- exactly `noop_clock_now`'s reason below: this port executes nothing, so there
 -- is no cursor to advance. It would be a silent defect in a binding that DID
@@ -70,7 +70,7 @@ func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcom
 -- `exit_code: -1` (WI-D23), NOT 0: a no-op executes nothing, and -1 is
 -- exactly the "no subprocess ran" value the ABI row's domain names. Writing
 -- 0 here would assert a success no process produced.
-func noop_proc_exec(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+func noop_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
   { output: "", exit_code: -1, next_state: world }
 }
 
@@ -130,7 +130,7 @@ func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
 func noop_ext_ports() -> ExtPorts {
   {
     ai_step: noop_ai_step,
-    proc_exec: noop_proc_exec,
+    tool_handle: noop_tool_handle,
     file_read: noop_file_read,
     file_write: noop_file_write,
     file_remove: noop_file_remove,

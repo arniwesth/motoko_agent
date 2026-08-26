@@ -462,7 +462,7 @@ func clause_classifier_2() -> bool ! {IO} {
 -- A call the tool does NOT report, attributed to the extension this profile DOES
 -- install. Fabricated deliberately and never fed to the real load.
 pure func fabricated_call() -> [Classifier2Call] {
-  [{ extension_id: "compose", field: "proc_exec",
+  [{ extension_id: "compose", field: "tool_handle",
      site: "packages/motoko-ext-compose/proc.ail:0 (FABRICATED — not a tool finding)" }]
 }
 
@@ -829,7 +829,7 @@ func scenario_the_demonstration()
   -- The producer this profile's criterion-2 entries NAME, run over this run.
   -- `check_discovery` grades the log in BOTH directions against witnesses the
   -- recorder did not write, and the extension-effect witness is derived from the
-  -- scenario's control flow — one `proc_exec` per intercept dispatch, and the
+  -- scenario's control flow — one `tool_handle` per intercept dispatch, and the
   -- dispatch count anchored to the independently-witnessed provider-call count.
   let findings = check_discovery(log, graded_witness(run.world.clock_ms - initial.clock_ms));
   let _ = if List.length(findings) > 0 then report_discovery(findings) else ();
@@ -925,7 +925,7 @@ func scenario_the_demonstration()
 --                       log-writing one; every class may advance time, so no
 --                       single class's recorder can satisfy this alone.
 --   the three FS classes and the extension-effect class come from compose's
---   control flow — one `dir_make`, one `file_write`, one `proc_exec` and one
+--   control flow — one `dir_make`, one `file_write`, one `tool_handle` and one
 --   `file_remove` per intercept dispatch, and exactly one response carries a
 --   fence.
 --   expected_env_reads  SOURCE-DERIVED and of a DIFFERENT KIND from the six

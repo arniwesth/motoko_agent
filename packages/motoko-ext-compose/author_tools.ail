@@ -13,15 +13,15 @@ import std/crypto (sha256Hex)
 -- S15. Through WI-D25 this note read: "`std/process` REMAINS, and the asymmetry
 -- is the finding rather than an unfinished edit… The one effect that stayed
 -- ambient is `grep_impl`'s `exec("rg", …)`, for the reason given at that
--- function: `ExtPorts.proc_exec` fronts a dispatcher over MOTOKO'S OWN tool
+-- function: `ExtPorts.tool_handle` fronts a dispatcher over MOTOKO'S OWN tool
 -- names and `rg` is not one of them, exactly as `ailang` is not."
 --
 -- The reason was correct and it was about the TOOL NAME, not about the seam:
--- `proc_exec(w, "BashExec", …)` runs any program at all, `rg` included. This
+-- `tool_handle(w, "BashExec", …)` runs any program at all, `rg` included. This
 -- module now performs NO ambient effect — every read leaves through `ExtPorts`
 -- (`path_stat` for the three kind guards, `file_read` for content, `dir_list`
 -- for entries, `clock_now` for the ledger stamp) and the one subprocess leaves
--- through `proc_exec`.
+-- through `tool_handle`.
 import std/json (Json, decode, get, asString, asNumber, encode, jo, kv, js, jb, jnum)
 import std/result (Ok, Err)
 import std/option (Option, Some, None)
@@ -433,13 +433,13 @@ func join_lines(xs: [string]) -> string {
 -- WHAT THE OBSTACLE WAS, EACH TIME, AND WHY IT IS GONE
 -- ---------------------------------------------------------------------------
 --
--- WI-D20 wrote: "`ExtPorts.proc_exec` fronts `Ports.tool_exec`, whose live
+-- WI-D20 wrote: "`ExtPorts.tool_handle` fronts `Ports.tool_exec`, whose live
 -- adapter is `tool_runtime.run_native_call` — an if-chain over `ReadFile`,
 -- `Search`, `WriteFile`, `EditFile`, `BashExec`, `RunTests` and a final `else`
 -- that returns '<tool> requires extension capability'. `rg` is not in that list,
--- so `proc_exec(w, "rg", …)` would not run ripgrep." True then and true now, and
+-- so `tool_handle(w, "rg", …)` would not run ripgrep." True then and true now, and
 -- it is a fact about the TOOL NAME. WI-D21 supplied the correction the routing
--- rests on: `proc_exec(w, "BashExec", …)` does not hit that `else` — it runs a
+-- rests on: `tool_handle(w, "BashExec", …)` does not hit that `else` — it runs a
 -- real subprocess and returns `BashExecResult { stdout, stderr, exit_code, meta }`
 -- encoded as JSON in `output`.
 --
@@ -478,7 +478,7 @@ func grep_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [str
     let guard_err = path_guard(path_glob, globs);
     if guard_err != "" then mk_err(w, "grep", path_glob, guard_err)
     else {
-      let out = p.proc_exec(w, bash_exec_tool(), bash_exec_args("rg", ["-n", "--no-heading", "-F", pattern, path_glob]));
+      let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args("rg", ["-n", "--no-heading", "-F", pattern, path_glob]));
       -- `out.exit_code` IS NOT READ, ON PURPOSE. See the block above this
       -- function: 1 is ripgrep's answer for "no matches", and this branch has to
       -- treat that identically to a match-free success.

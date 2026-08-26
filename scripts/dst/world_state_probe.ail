@@ -1057,7 +1057,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
 --
 --   live       `world_tool`'s [] arm on a command that exits 7. RED when the
 --              arm's binding is reverted to `exit_code: -1`.
---   adoption   `session.ext_ports_of`'s OWN `proc_exec` closure — not a
+--   adoption   `session.ext_ports_of`'s OWN `tool_handle` closure — not a
 --              substrate probe, per S14's two-subjects rule — against a
 --              scripted world whose `ScriptedTool` carries 5. RED when the
 --              bridge's projection is dropped or wired to the wrong variant.
@@ -1099,8 +1099,8 @@ export func exit_code_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, S
   -- `ext_ports_of`'s OWN closure against a scripted world, per S14.
   let w5 = { empty_world_state() | ext_effects: [scripted_tool] };
   let eports = Session.ext_ports_of(scripted_ports(), w5, "");
-  let adopted = eports.proc_exec(world_to_token(w5), "BashExec", "{}");
-  let ok_adopt = check("adoption: ext_ports_of's proc_exec closure hands the scripted exit code 5 through ExtProcOutcome",
+  let adopted = eports.tool_handle(world_to_token(w5), "BashExec", "{}");
+  let ok_adopt = check("adoption: ext_ports_of's tool_handle closure hands the scripted exit code 5 through ExtProcOutcome",
                        adopted.exit_code == 5 && adopted.output == "d23-scripted",
                        "expected exit_code 5 with output 'd23-scripted' — got exit_code ${show(adopted.exit_code)}");
 

@@ -150,7 +150,7 @@ func arg_str(args: Json, key: string, fallback: string) -> string {
 
 type HerdrRun = { out: string, err: string, code: int, next_state: ExtWorld }
 
--- Routed through `ExtPorts.proc_exec`, which is reachable here because the argv
+-- Routed through `ExtPorts.tool_handle`, which is reachable here because the argv
 -- is token-free by construction — see the note in `types.ail`. The guard is not
 -- decoration: if a caller ever manages to get a shell token into an argv
 -- element, sending it would silently drop every argument and run bare `herdr`,
@@ -160,7 +160,7 @@ func run_herdr(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, argv: [string]) -> He
     { out: "", err: "refused: the herdr argv contained a shell metacharacter and would have been mangled by motoko_agent#158 (`${show_argv(argv)}`)",
       code: 1, next_state: w }
   else {
-    let r = p.proc_exec(w, bash_exec_tool(), bash_exec_args(cfg.bin, argv));
+    let r = p.tool_handle(w, bash_exec_tool(), bash_exec_args(cfg.bin, argv));
     { out: bash_field(r.output, "stdout"),
       err: bash_field(r.output, "stderr"),
       code: bash_exit(r.output),

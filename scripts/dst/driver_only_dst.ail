@@ -82,8 +82,8 @@ pure func head_inventory() -> [CoreSite] {
 -- EMPTY AT WI-B4, and the emptiness is measured rather than convenient.
 -- WI-B2b widened `ExtPorts.ai_step` to return `AiStepOutcome`, which carries
 -- `next_state`, so `ai_step` LEFT the classifier-2 set. WI-D16 widened
--- `ExtPorts.proc_exec` the same way and it left too, so the derived set is
--- {env_get} — down from {env_get, proc_exec} — and there are ZERO member call
+-- `ExtPorts.tool_handle` the same way and it left too, so the derived set is
+-- {env_get} — down from {env_get, tool_handle} — and there are ZERO member call
 -- sites anywhere in the
 -- tree. The entry that used to sit here — `compaction_ai / ai_step` — named a
 -- site that no longer qualifies (and had drifted to :111 besides).

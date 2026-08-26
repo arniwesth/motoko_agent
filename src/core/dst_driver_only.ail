@@ -588,7 +588,7 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- RE-RECORDED AT WI-D16 FOR v15, and it is the SAME KIND of event again: a
     -- re-measurement, not a correction. FIVE line numbers changed here
     -- (`session.ail` 881 -> 911, 1126 -> 1160, 1232 -> 1266, 2677 -> 2711 and
-    -- 2787 -> 2821), all pushed down by the widening of `ExtPorts.proc_exec`
+    -- 2787 -> 2821), all pushed down by the widening of `ExtPorts.tool_handle`
     -- and the new `ExtPorts.file_read` seam inside `ext_ports_of`. Each anchored
     -- expression was compared character-for-character against `git show HEAD:`
     -- before and after; nothing about WHICH sites are attributed or routed
@@ -609,7 +609,7 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- EDIT THAT ADDED NO CODE. The same five `session.ail` line numbers moved
     -- again (965 -> 1061, 1224 -> 1320, 1330 -> 1426, 2775 -> 2871,
     -- 2885 -> 2981), all +96, pushed down by a COMMENT BLOCK written inside
-    -- `ext_ports_of`'s `proc_exec` closure. No seam, no import, no expression.
+    -- `ext_ports_of`'s `tool_handle` closure. No seam, no import, no expression.
     --
     -- That is worth one sentence rather than none, because the pattern recorded
     -- below is stated in terms of SEAMS: "every seam added to `ExtPorts` lands
@@ -626,7 +626,7 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- 2981 -> 3016), all +35, pushed down by the typed exit-code work at and
     -- above `ext_ports_of`: the `tool_outcome_exit_code` projection beside
     -- `tool_outcome_text`, the S15 re-tensing of the seam comment, and the
-    -- `proc_exec` closure's second output field. Verified
+    -- `tool_handle` closure's second output field. Verified
     -- character-for-character against `git show HEAD:` at all five. Still seven
     -- sites, still 6 routed of 7, `source_revision` unchanged for WI-D4's
     -- reason.

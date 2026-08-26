@@ -49,7 +49,7 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # its three new ExtPorts.path_stat/dir_list/dir_make bridges added 34 lines
 # inside `ext_ports_of` plus one on the import line. Each is the MECHANICAL drift this header describes
 # and not the D4 judgement the failure message warns about: D16's widening of
-# ExtPorts.proc_exec and its new ExtPorts.file_read seam added 30 and then 4
+# ExtPorts.tool_handle and its new ExtPorts.file_read seam added 30 and then 4
 # lines inside `ext_ports_of`, and D17's ExtPorts.file_write/file_remove seams
 # added 20 more plus 5 in the record literal — all above all five anchors. Each
 # anchored expression was compared to `git show HEAD:` before and after and is
@@ -113,7 +113,7 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # CHEAPEST EDIT THAT CAN CAUSE THIS. WI-D18's law was "every Route B SURFACE item
 # re-baselines". WI-D20 found the first exception: a non-surface item does too if
 # it needs a driver-side codec. THIS ITEM ADDED NO SEAM, NO IMPORT AND NO CODE AT
-# ALL — it wrote a comment block inside `ext_ports_of`'s `proc_exec` closure,
+# ALL — it wrote a comment block inside `ext_ports_of`'s `tool_handle` closure,
 # which sits above all five anchors, and that moved every one of them.
 #
 # So the law's real form is not about surfaces or codecs: ANY EDIT TO
@@ -131,7 +131,7 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # 1061/1320/1426/2871/2981 -> 1096/1355/1461/2906/3016, ALL +35 — the law above
 # firing exactly as priced. The item put the typed exit code through the bridge:
 # `tool_outcome_exit_code` (a new projection beside `tool_outcome_text`), the
-# S15 re-tensing of the seam comment's expired scope clause, and the `proc_exec`
+# S15 re-tensing of the seam comment's expired scope clause, and the `tool_handle`
 # closure's second output field all land at or above `ext_ports_of`, which sits
 # above all five anchors. All five were compared to `git show HEAD:` character
 # by character and are byte-identical — pure offset drift, no site changed

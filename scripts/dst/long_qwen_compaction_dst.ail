@@ -338,7 +338,7 @@ func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback 
 -- WI-A12 widened `Ports.tool_exec` to the typed contract. This fixture served
 -- an empty string; the typed equivalent is an empty completion for the id that
 -- was actually asked about, with the world unchanged. `fixed_ext_exec` was the
--- un-widened `ExtPorts.proc_exec` shape until WI-D16 widened that row; it now
+-- un-widened `ExtPorts.tool_handle` shape until WI-D16 widened that row; it now
 -- threads the token and returns it UNCHANGED, which is S12's identity
 -- transition and correct here because this fixture executes nothing.
 func fixed_exec(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
@@ -1244,7 +1244,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
           next_state: world_to_token(exchange.next_state)
         }
       },
-      proc_exec: fixed_ext_exec,
+      tool_handle: fixed_ext_exec,
       file_read: fixed_ext_file_read,
       file_write: fixed_ext_file_write,
       file_remove: fixed_ext_file_remove,

@@ -141,7 +141,7 @@ export type ExtClockReading = {
   next_state: ExtWorld
 }
 
--- The result of a world-threading `proc_exec`. WI-D16, and the same record shape
+-- The result of a world-threading `tool_handle`. WI-D16, and the same record shape
 -- as `AiStepOutcome` and `ExtClockReading` above for plan decision P1's reason:
 -- a later effect class adds a FIELD, where a sum would restructure every match
 -- site. `next_state` is again named for D5's classifier-2 criterion — the
@@ -293,7 +293,7 @@ export type ExtPorts = {
   -- D5 criterion 2 without supplying the vocabulary criterion 2 needs.
   ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Trace},
   -- SUPERSEDED AT WI-D16 IN ITS FIRST CLAUSE, and kept in the past tense per
-  -- plan rule S15. Through WI-D15 this row read
+  -- plan rule S15. Through WI-D15 this row (then named `proc_exec`) read
   --   proc_exec: (string, string) -> string ! {IO, Process, FS}
   -- and the note here read: "`proc_exec` and `env_get` stay un-widened and stay
   -- in the classifier-2 set. They front `Ports.tool_exec` and `Ports.env_get`,
@@ -316,7 +316,7 @@ export type ExtPorts = {
   -- effect: D5's classifier 2 selects "a field whose call is the extension-side
   -- entry to a core seam that D1 requires to thread successor state, AND WHICH
   -- CANNOT RETURN IT". `ExtProcOutcome` can return it, so the criterion no
-  -- longer selects this field and the set goes {env_get, proc_exec} ->
+  -- longer selects this field and the set goes {env_get, tool_handle} ->
   -- {env_get}. `tools/ext_call_inventory/fixtures/expected.json` carries that
   -- membership and goes red on this edit. THAT IS THE PIN WORKING. Editing it
   -- to restore green without reading the derived membership destroys the one
@@ -326,7 +326,7 @@ export type ExtPorts = {
   -- WI-D21: WHAT THE TWO STRINGS ARE. THIS ROW NEVER SAID, AND IT COST TWO ITEMS.
   -- =========================================================================
   --
-  --   proc_exec(world, tool, args_json)
+  --   tool_handle(world, tool, args_json)
   --
   -- `tool` is a MOTOKO TOOL NAME — one of `ReadFile`, `Search`, `WriteFile`,
   -- `EditFile`, `BashExec`, `RunTests` (`tool_runtime.run_native_call:165`) — and
@@ -334,20 +334,20 @@ export type ExtPorts = {
   -- binary and a working directory. Nothing in the tree type-checks the
   -- difference: both are `string`, and at WI-D20 the tree held FIVE bindings
   -- reading them TWO ways — `session.ail`'s bridge as `(name, args)` and three
-  -- `noop_proc_exec`s as `(_cmd, _cwd)`. A conformance harness whose signature
+  -- `noop_tool_handle`s as `(_cmd, _cwd)`. A conformance harness whose signature
   -- says `(cmd, cwd)` is a template for an implementation that shells out the
   -- first argument in the second; it compiles, and it is wired backwards.
   -- Renamed at every site at WI-D21; the row is documented here because the row
   -- is where the reading is decided and positional strings cannot carry it.
   --
-  -- THE NAME `proc_exec` IS ITSELF THE MISLEADING PART and is NOT changed here.
-  -- It says "execute a process" and the seam dispatches a tool; that is what sent
-  -- WI-D19 and WI-D20 looking for a subprocess seam. Renaming the FIELD is a
-  -- four-site edit (this row and the three noops — no extension consumes it yet),
-  -- so it is cheap in the tree and it is a breaking change to a PUBLISHED ABI at
-  -- `5.0`. It is priced and left, beside the typed-discrimination widening, for
-  -- the item that takes the schema bump: those two are the same conversation and
-  -- splitting them spends the break twice.
+  -- THE OLD NAME `proc_exec` WAS ITSELF THE MISLEADING PART. It said "execute a
+  -- process" and the seam dispatches a tool; that is what sent WI-D19 and WI-D20
+  -- looking for a subprocess seam. Renaming the FIELD was priced at WI-D21 as a
+  -- breaking change to a PUBLISHED ABI at `5.0` and left for the major. ABI 6.0
+  -- (ADR-001 Phase C, PLAN §B8 item 3) TAKES THE RENAME: `proc_exec` ->
+  -- `tool_handle`, rename only, no semantic change. The name is kept distinct
+  -- from the provider-side `ToolProvider` capability: this field INVOKES a host
+  -- tool through the port; a `ToolProvider` HANDLES a tool as a provider.
   --
   -- =========================================================================
   -- WI-D22 TOOK THE SCHEMA BUMP AND DID NOT TAKE THE RENAME. THE RELEASE
@@ -386,16 +386,16 @@ export type ExtPorts = {
   -- ride along with the accumulated widenings whenever they are cut. Seven items
   -- deferred cutting the release on the correct ground that cutting it is a
   -- release act with consumers outside this project; WI-D22's stop condition was
-  -- to say so rather than to cut it, and this is that report. The rename is
-  -- NOT applied, `proc_exec` still says the wrong thing, and the parameter names
-  -- (`tool`, `args_json`) plus the paragraph above are what stand between a
-  -- reader and the misreading until the major is cut.
+  -- to say so rather than to cut it, and this was that report. The major was
+  -- cut at 6.0 and the rename IS applied (`proc_exec` -> `tool_handle`); the
+  -- parameter names (`tool`, `args_json`) and the paragraph above remain the
+  -- reading of the two strings.
   --
   -- WHAT IT REACHES, so the next reader does not re-derive it: `BashExec` and
   -- `RunTests` run a REAL subprocess and return a real exit code, rendered into
   -- `ExtProcOutcome.output` as JSON and — since WI-D23 — typed into
   -- `ExtProcOutcome.exit_code`. See that type's note above and `session.ail`'s
-  -- `proc_exec` closure for the measured chain.
+  -- `tool_handle` closure for the measured chain.
   --
   -- WHO IT IS ATTRIBUTED TO, since WI-D24: the calling EXTENSION, by name. A
   -- dispatch through this seam is recorded as D2's `ExtensionEffectIdentity`
@@ -404,7 +404,7 @@ export type ExtPorts = {
   -- extension for that to work: the id travels in the world token the host
   -- re-seats before each hook, which is one more reason to pass `ctx.world`
   -- through rather than a token kept from somewhere else.
-  proc_exec: (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS},
+  tool_handle: (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS},
   -- WI-D16's filesystem read seam. It is a POINT READ — a path in, existence
   -- and contents out — because it fronts `Ports.file_read` and that seam is
   -- narrow by construction (WI-D3). Copied, not generalised.
@@ -439,7 +439,7 @@ export type ExtPorts = {
   --
   -- NOTHING CALLS IT. Route B part 2 routes compose's eighteen write-side sites;
   -- this item ships the surface and routes nothing, which is the same state
-  -- `file_read` and the widened `proc_exec` were left in at WI-D16 and is
+  -- `file_read` and the widened `tool_handle` were left in at WI-D16 and is
   -- reported rather than presented as coverage.
   file_write: (ExtWorld, string, string) -> ExtFileMutation ! {FS},
   -- WI-D17's filesystem REMOVE seam, fronting `Ports.file_remove`.
@@ -519,7 +519,7 @@ export type ExtPorts = {
   -- comment is what has to change.
   --
   -- Symmetry with the three widened rows above is NOT a reason. Two of them
-  -- (`ai_step`, `proc_exec`) had a demonstrated drop and one (`clock_now`) had a
+  -- (`ai_step`, `tool_handle`) had a demonstrated drop and one (`clock_now`) had a
   -- shape obstacle; this row has neither on any reachable caller.
   env_get: (string, string) -> string ! {Env}
 }

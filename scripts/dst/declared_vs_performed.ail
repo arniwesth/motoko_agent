@@ -166,7 +166,7 @@ func probe_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutco
 -- `_tool, _args_json` per the ABI row (WI-D23 renamed this probe's `_cmd, _args`
 -- with the census's other stragglers); `exit_code: -1` because a constant probe
 -- executes nothing and 0 would assert a success no process produced.
-func probe_proc_exec(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", exit_code: -1, next_state: world } }
+func probe_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", exit_code: -1, next_state: world } }
 func probe_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: world } }
 func probe_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
 func probe_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
@@ -178,7 +178,7 @@ func probe_env_get(_key: string, fallback: string) -> string ! {Env} { fallback 
 
 func probe_ports() -> ExtPorts {
   { ai_step: probe_ai_step,
-    proc_exec: probe_proc_exec,
+    tool_handle: probe_tool_handle,
     file_read: probe_file_read,
     file_write: probe_file_write,
     file_remove: probe_file_remove,
@@ -247,7 +247,7 @@ func trace_file_remove(w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
 
 func trace_ports() -> ExtPorts {
   { ai_step: probe_ai_step,
-    proc_exec: probe_proc_exec,
+    tool_handle: probe_tool_handle,
     file_read: probe_file_read,
     file_write: trace_file_write,
     file_remove: trace_file_remove,

@@ -395,7 +395,7 @@ export type WorldState = {
   -- SEAM, blank in the driver's own hands.
   --
   -- IT IS TRANSPORT, NOT SUPPLY, and it is on the world because the world token
-  -- is the ONLY per-hook channel that exists. `ExtPorts.proc_exec`'s ABI
+  -- is the ONLY per-hook channel that exists. `ExtPorts.tool_handle`'s ABI
   -- signature is `(ExtWorld, string, string)` and cannot gain an identity
   -- parameter below `6.0`; `ext_ports_of` builds ONE `ExtPorts` per step from a
   -- registry it cannot index; and `ext/runtime`'s fold — the one place that knows
@@ -486,7 +486,7 @@ export type WorldState = {
 --                 the tool ran one. See below.
 --
 -- WI-D22 ADDED `exit_code`, AND IT IS THE FIELD THIS WHOLE SCHEMA BUMP EXISTS
--- FOR. WI-D21 measured the chain: `ExtPorts.proc_exec` dispatches a Motoko tool
+-- FOR. WI-D21 measured the chain: `ExtPorts.tool_handle` dispatches a Motoko tool
 -- name, `BashExec` and `RunTests` reach `tool_runtime.run_process_result`, and
 -- that runs a REAL subprocess and builds a `BashExecResult` carrying a real
 -- `exit_code` — which then survives to the caller only as JSON text inside an
@@ -912,7 +912,7 @@ export type Ports = {
   -- WI-A12's typed tool contract. State-threaded, typed request, typed result.
   -- No `{Clock}` in the row: the adapter ADVANCES the virtual clock
   -- arithmetically from the scripted duration, it never reads one. That keeps
-  -- this row identical to `ExtPorts.proc_exec`'s, which is what lets the
+  -- this row identical to `ExtPorts.tool_handle`'s, which is what lets the
   -- extension seam project onto it without widening the ABI.
   tool_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS},
   -- WI-D24's EXTENSION-EFFECT dispatch class. Identical in shape to `tool_exec`

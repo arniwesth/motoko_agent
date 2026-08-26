@@ -25,7 +25,7 @@ import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, FinalizeOutcome,
 )
 import src/core/types (Msg)
 -- WI-D24. The holder stamp: this fold is the ONE place in the tree that knows
--- which extension is about to perform an effect, and `ExtPorts.proc_exec`'s ABI
+-- which extension is about to perform an effect, and `ExtPorts.tool_handle`'s ABI
 -- signature has nowhere to carry that. The id therefore rides in the world token
 -- the fold already re-seats per hook — see `WorldState.holder_ext_id` for the
 -- decision and `ports.recording_ext_effect` for the reader.
@@ -290,7 +290,7 @@ func fold_pre_step_atoms(id: string, caps: [Capability], i: int, ctx: ExtCtx, ms
       --
       -- WHY IT IS ON THE WORLD AND NOT ON `ctx`: an `ext_id` field on `ExtCtx`
       -- would tell the HOOK who it is, and the hook already knows. What needs to
-      -- know is `ext_ports_of`'s `proc_exec` closure, which is built one per
+      -- know is `ext_ports_of`'s `tool_handle` closure, which is built one per
       -- step from a registry it cannot index and whose ABI signature
       -- `(ExtWorld, string, string)` cannot gain a parameter below 6.0. The
       -- world token is the only value that reaches it, and this fold is the only
@@ -298,13 +298,13 @@ func fold_pre_step_atoms(id: string, caps: [Capability], i: int, ctx: ExtCtx, ms
       --
       -- THIS SLOT CANNOT ACTUALLY REACH THE SEAM AND IS STAMPED ANYWAY, measured
       -- rather than assumed: `on_pre_step`'s ABI row is `! {AI, IO, Trace}`,
-      -- which has no `Process`, so a hook here cannot call `proc_exec` at all.
+      -- which has no `Process`, so a hook here cannot call `tool_handle` at all.
       --
       -- CORRECTED AT WI-D25, two-part per S15 because the wrong count is the
       -- reason the right one is stated as row algebra rather than as a fact
       -- about which effects appear. WI-D24 wrote here: "Three of the seven
       -- slots can — `on_tool_handle`, `on_response_intercept` and
-      -- `on_solver_candidate`". TWO can. `proc_exec` demands the whole row
+      -- `on_solver_candidate`". TWO can. `tool_handle` demands the whole row
       -- `{IO, Process, FS}` and `on_solver_candidate` declares `! {Process}`
       -- alone, so the call does not type — the slot CONTAINS the effect and
       -- cannot reach the seam that needs it. "Can" was inferred from the
@@ -460,7 +460,7 @@ func first_handle_atoms(id: string, caps: [Capability], ctx: ExtCtx, call: ToolC
       if contains_tool(names, name) then {
         -- WI-D24. The holder stamp; see `fold_pre_step_atoms` for the
         -- decision. This slot's row is the widest of the seven, so it is one of
-        -- the TWO that can actually reach `ExtPorts.proc_exec` — WI-D24 wrote
+        -- the TWO that can actually reach `ExtPorts.tool_handle` — WI-D24 wrote
         -- "the three" here and WI-D25's row algebra corrected it; see
         -- `fold_pre_step_atoms`.
         let outcome = handle({ ctx | world: stamp_holder(world, id) }, call);
@@ -540,7 +540,7 @@ export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_te
 func decide_one_finalize(id: string, i: int, f: (ExtCtx, string) -> FinalizeOutcome ! {Process}, ctx: ExtCtx, candidate: string, world: ExtWorld) -> FinalizeOutcome ! {Process, IO, Clock} {
   -- WI-D24's holder stamp. WI-D24 wrote "`! {Process}`, so this slot reaches
   -- the seam too", and WI-D25 measured it FALSE: `! {Process}` admits no
-  -- `ExtPorts` field at all — `proc_exec` needs `{IO, Process, FS}` and every
+  -- `ExtPorts` field at all — `tool_handle` needs `{IO, Process, FS}` and every
   -- other field needs `AI`, `FS`, `Clock` or `Env` — so the ONLY subprocess a
   -- binding in this slot can run is AMBIENT `std/process.exec`, which is
   -- precisely what `context_mode`'s binding does. The stamp is kept for

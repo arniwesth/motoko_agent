@@ -690,10 +690,10 @@ pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
       && program_schema_version() == "execution-program/3"
   }
 
--- WI-D21. THE `ExtPorts.proc_exec` BRIDGE BUILDS AN INVOCATION THIS VALIDATOR
+-- WI-D21. THE `ExtPorts.tool_handle` BRIDGE BUILDS AN INVOCATION THIS VALIDATOR
 -- REJECTS, and this row is that sentence executed rather than written down.
 --
--- `session.ail`'s `proc_exec` closure constructs
+-- `session.ail`'s `tool_handle` closure constructs
 -- `{ call: { id: "", tool: <tool>, … } }` — a BLANK call id, because an
 -- extension calling this seam is not answering a model tool call and has none to
 -- supply. `ports.recording_tool` then records
@@ -713,7 +713,7 @@ pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
 -- no existing one constructs that class."
 --
 -- WI-D24 BUILT THE ADAPTER AND THE BRIDGE NO LONGER PRODUCES THIS IDENTITY AT
--- ALL. `ext_ports_of`'s `proc_exec` calls `Ports.ext_effect_exec`, whose recorder
+-- ALL. `ext_ports_of`'s `tool_handle` calls `Ports.ext_effect_exec`, whose recorder
 -- is `ports.recording_ext_effect`, and an extension-initiated dispatch is now
 -- recorded as `ExtensionEffectIdentity` — validated and replayed end to end by
 -- `discovery_dst`'s `effect_scenario`. The `ext_id` came from the world token
@@ -725,7 +725,7 @@ pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
 -- measurement the design rests on. The SECOND clause is the control: an ordinary
 -- driver-issued dispatch carries a real call id and passes, so this row fails for
 -- the blank and not for the shape of the fixture.
-pure func test_the_ext_proc_exec_invocation_shape_records_a_rejected_tool_identity() -> bool
+pure func test_the_ext_tool_handle_invocation_shape_records_a_rejected_tool_identity() -> bool
   tests [((), true)]
   {
     let from_the_bridge = validate_identity({
@@ -747,7 +747,7 @@ pure func test_the_ext_proc_exec_invocation_shape_records_a_rejected_tool_identi
 -- decision rests on a measured rule rather than on a reading of D2's prose.
 --
 -- THE FIRST CLAUSE USES `extension_effect_fault` DELIBERATELY. A7 declares that
--- class and its coverage-gap entry names `ExtPorts.proc_exec` by name, so the
+-- class and its coverage-gap entry names `ExtPorts.tool_handle` by name, so the
 -- `class_id` this seam needs is not a gap — it was already written. The second
 -- clause pins the other half: blank everything is exactly two rejections, and the
 -- call id is not one of them.

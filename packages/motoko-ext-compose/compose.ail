@@ -19,7 +19,7 @@ import std/crypto (sha256Hex)
 -- `std/process` WENT AT WI-D26, and with it the asymmetry. Kept two-part per
 -- S15; the sentence here read: "`std/process` STAYS and is still used, by
 -- `check_snippet` and `run_snippet`. That asymmetry is the honest residue of the
--- proc_exec finding below." The finding was about the TOOL NAME compose passed,
+-- tool_handle finding below." The finding was about the TOOL NAME compose passed,
 -- not about the seam — see the block at `on_response_intercept` for the three
 -- items it took to establish that and the one line that closed it.
 --
@@ -310,7 +310,7 @@ func cap_text(s: string, max_chars: int) -> string {
 -- "snippet runtime failed", so a -1 becomes a RETRY rather than a false success.
 
 func check_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string) -> { ok: bool, errors: string, exit_code: int, next_state: ExtWorld } ! {IO, Process, FS} {
-  let out = p.proc_exec(w, bash_exec_tool(), bash_exec_args("ailang", ["check", snippet_path]));
+  let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args("ailang", ["check", snippet_path]));
   -- THE BRANCH IS THE TYPED FIELD. `out.exitCode` became `out.exit_code` — a
   -- field read where the ambient form had a field read. Nothing here decodes
   -- anything to decide `ok`; `message_of` decodes only to recover the TEXT,
@@ -328,7 +328,7 @@ func run_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string, caps: string) -
   -- comma-joined capability list out of config (`--caps IO,FS,Net`), so it is
   -- one token to `ailang` and one token here; there is no shell to split it and
   -- nothing to quote against.
-  let out = p.proc_exec(w, bash_exec_tool(), bash_exec_args("ailang", ["run", "--caps", caps, "--entry", "main", snippet_path]));
+  let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args("ailang", ["run", "--caps", caps, "--entry", "main", snippet_path]));
   let streams = decode_bash_result(out.output);
   let raw_out = streams.stdout;
   let raw_err = streams.stderr;
@@ -944,20 +944,20 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
 --
 -- WHAT DID NOT ROUTE, AND WHY IT IS NOT A BUDGET DECISION. `check_snippet` and
 -- `run_snippet` shell out with `exec("ailang", [...])`. The seam that looks like
--- their home is `ExtPorts.proc_exec`, and it ANSWERS A DIFFERENT QUESTION — it
+-- their home is `ExtPorts.tool_handle`, and it ANSWERS A DIFFERENT QUESTION — it
 -- fronts `Ports.tool_exec`, whose live adapter is `dispatch_one` ->
 -- `run_native_batch` -> `tool_runtime.run_native_call`, a dispatcher over
--- MOTOKO'S OWN TOOL NAMES. `proc_exec(w, "ailang", …)` reaches that function's
+-- MOTOKO'S OWN TOOL NAMES. `tool_handle(w, "ailang", …)` reaches that function's
 -- final `else` and returns
 --   "ailang requires extension capability and is not available in native runtime"
 -- so routing here would not run the compiler at all; it would return a
 -- tool-error blob that `check_snippet` has no way to tell from a check failure.
 --
 -- WI-D21 CORRECTS THE SECOND HALF OF THAT PARAGRAPH, and the correction changes
--- what is owed here. What is above is accurate about `proc_exec(w, "ailang", …)`.
+-- what is owed here. What is above is accurate about `tool_handle(w, "ailang", …)`.
 -- What followed it — "there is no exit code to read" — was wrong, and it was
 -- wrong because it inferred the seam's capability from the ONE tool name compose
--- tried instead of reading the dispatcher. `proc_exec(w, "BashExec", …)` DOES run
+-- tried instead of reading the dispatcher. `tool_handle(w, "BashExec", …)` DOES run
 -- a real subprocess and DOES produce a real exit code: `run_native_call`'s
 -- `BashExec` arm builds `BashExecResult { …, exit_code, … }` and `dispatch_one`
 -- encodes it to JSON, which arrives as `ExtProcOutcome.output`. The exit code is
@@ -981,7 +981,7 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
 -- What this paragraph said through WI-D23: "What still blocks routing is
 -- IDENTITY, not typing: `recording_tool` records every `tool_exec` invocation as
 -- `ToolIdentity("loop_v2", inv.call.id, ...)` and the bridge's call id is blank,
--- so the first `proc_exec` call in a recorded run emits a program the validator
+-- so the first `tool_handle` call in a recorded run emits a program the validator
 -- rejects. Routing these sites waits on the eighth recording adapter and
 -- `ExtCtx.ext_id` — WI-D21 §5's plan."
 --
@@ -994,7 +994,7 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
 --
 -- WI-D26 SOLVED IT, AND WHAT IT COST IS THE PART WORTH RECORDING. Through
 -- WI-D25 this block ended: "SO WHAT REMAINS AT THESE SITES IS THE ORIGINAL
--- PARAGRAPH'S POINT AND NOTHING ELSE: `proc_exec(w, "ailang", …)` reaches no
+-- PARAGRAPH'S POINT AND NOTHING ELSE: `tool_handle(w, "ailang", …)` reaches no
 -- compiler, and the honest route is `BashExec` with a command line, whose result
 -- arrives rendered as JSON where `check_snippet` needs a typed answer. That is a
 -- shape question about THIS site, not a world-model gap, and it is what the

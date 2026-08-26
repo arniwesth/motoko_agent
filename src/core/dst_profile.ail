@@ -547,7 +547,7 @@ export type UnroutedSiteDeclaration = {
 -- One call site the classifier found: an extension reaching an `ExtPorts` field
 -- whose core seam threads successor state, which the ext seam cannot carry.
 --
--- The set is THREE fields at HEAD — `ai_step`, `proc_exec`, `env_get` — since
+-- The set is THREE fields at HEAD — `ai_step`, `tool_handle`, `env_get` — since
 -- A12 made `Ports.tool_exec` and `Ports.env_get` thread successor state. It is
 -- not written down here; it arrives with these rows, derived per run by
 -- `tools/ext_call_inventory/derive.py`, which consults no list of its own.
@@ -1549,7 +1549,7 @@ export pure func validate_manifest(m: ExecutionManifest, d: ProfileDefinition) -
     -- extension port at HEAD. The other two lists keep the requirement because
     -- neither can legitimately be empty — `scan_roots` scopes the routing scan
     -- and an empty one scans nothing, and `classifier_2_set` still has two
-    -- members (`env_get`, `proc_exec`).
+    -- members (`env_get`, `tool_handle`).
     --
     -- THE COST, because it is the shape this project keeps finding: an empty
     -- `unrouted_fields` no longer distinguishes "nothing is unrouted" from
@@ -2162,7 +2162,7 @@ pure func fixture_manifest() -> ExecutionManifest {
     profile_version: "1",
     event_vocabulary_version: Vocab.event_vocabulary_version(),
     normalized_configuration: "{}",
-    classifier_2_set: ["ai_step", "env_get", "proc_exec"],
+    classifier_2_set: ["ai_step", "env_get", "tool_handle"],
     unrouted_fields: ["some_unrouted_ext_port"],
     scan_roots: ["src", "packages"],
     scan_root_commit: "abc1234",
@@ -2215,7 +2215,7 @@ pure func test_manifest_records_both_derived_sets() -> bool
   {
     let m = fixture_manifest();
     List.length(m.classifier_2_set) == 3 && List.length(m.unrouted_fields) == 1
-      && contains_str(m.classifier_2_set, "proc_exec")
+      && contains_str(m.classifier_2_set, "tool_handle")
       && contains_str(m.unrouted_fields, "some_unrouted_ext_port")
   }
 

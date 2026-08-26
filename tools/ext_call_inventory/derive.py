@@ -6,7 +6,7 @@ Classifier 2 answers two questions, and the second is worthless without the firs
   1. WHICH `ExtPorts` fields are members?  D5 states the criterion --
      "a field whose call is the extension-side entry to a core seam that D1
      requires to thread successor state, and which cannot return it" -- and then
-     names `ai_step` as the only member with `clock_now`, `proc_exec` and
+     names `ai_step` as the only member with `clock_now`, `tool_handle` and
      `env_get` excluded.  That enumeration was true when written and WI-A12
      falsified it.  This tool DERIVES membership from the criterion every run and
      never consults a list, because a hardcoded list is a fail-open detector: it

@@ -732,7 +732,7 @@ execution_program:
 # branch on the typed code, the identity, the round trip — and establishes
 # nothing about whether the seam can run a compiler at all, because in a
 # scripted world it runs none. WI-D19 shipped exactly that gap in the other
-# direction (its note claimed `proc_exec` could not reach `ailang`, which was
+# direction (its note claimed `tool_handle` could not reach `ailang`, which was
 # true of the tool NAME it tried and false of the seam), and WI-D21 needed a
 # separate measurement to find it.
 #

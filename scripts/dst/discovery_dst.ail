@@ -633,7 +633,7 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
     file_removes: 0,
     dir_makes: 0,
     -- WI-D24 added the extension-effect class on the same terms: this scenario
-    -- installs no extension that reaches `ExtPorts.proc_exec`, so the pin holds
+    -- installs no extension that reaches `ExtPorts.tool_handle`, so the pin holds
     -- here and the class is still claimed at zero rather than unmentioned.
     extension_effects: 0,
     expected_env_reads: expected_env
@@ -784,7 +784,7 @@ pure func projections(xs: [Interaction]) -> [string] {
 
 pure func discovered_manifest() -> ExecutionManifest {
   driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
-                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+                       ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 
 pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
@@ -1097,7 +1097,7 @@ func routing_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
 -- ---------------------------------------------------------------------------
 --
 -- THIS IS THE ROW THAT CLOSES WI-D21 §4. Through WI-D23 the first extension to
--- call `ExtPorts.proc_exec` in a recorded run made the recorder emit a program
+-- call `ExtPorts.tool_handle` in a recorded run made the recorder emit a program
 -- its own validator refused: `recording_tool` wrote `ToolIdentity("loop_v2", "", tool)`
 -- and a blank tool call id is a rejection. WI-D21 asserted that latent defect
 -- against hand-built identities. This scenario is the executable answer — a real
@@ -1148,7 +1148,7 @@ func effect_world(answers: [string]) -> WorldState {
   { base_world(answers) | ext_effects: effect_tools() }
 }
 
--- The routed hook. ONE `proc_exec` per intercept, through `ctx.ports` — the
+-- The routed hook. ONE `tool_handle` per intercept, through `ctx.ports` — the
 -- production bridge, not a rebuilt closure (S14's two subjects).
 --
 -- The successor is threaded from the call's own `next_state`, which is what
@@ -1159,7 +1159,7 @@ func effect_world(answers: [string]) -> WorldState {
 func effect_intercept(ctx: ExtCtx, _text: string)
   -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
-  let out = p.proc_exec(ctx.world, "BashExec", "{\"cmd\":\"true\"}");
+  let out = p.tool_handle(ctx.world, "BashExec", "{\"cmd\":\"true\"}");
   { decision: { NoIntercept }, next_state: out.next_state }
 }
 
@@ -1215,7 +1215,7 @@ func effect_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMe
   let initial = effect_world([approve_line(), approve_line(), approve_line()]);
   let run = run_effect(ext_id, initial);
   let log = run.world.log;
-  -- One `proc_exec` per intercept, and the driver dispatches the intercept once
+  -- One `tool_handle` per intercept, and the driver dispatches the intercept once
   -- per assistant response. `provider_calls_witnessed` reads `ProviderCallPrepared`
   -- records production driver code writes, so the expectation cannot agree with
   -- the recorder by construction — WI-D19's argument, one class over.

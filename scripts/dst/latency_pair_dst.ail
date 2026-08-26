@@ -230,7 +230,7 @@ pure func slow_no_deadline_world() -> WorldState { world_of(slow_ms(), 0) }
 
 pure func manifest() -> ExecutionManifest {
   driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
-                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+                       ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 
 pure func program_of(log: [Interaction], initial: WorldState, tag: string) -> ExecutionProgram {
