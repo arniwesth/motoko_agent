@@ -224,9 +224,42 @@ def zero_barrier_set(inv, slots):
     return zero, barriers
 
 
+#: The 5.x slot -> 6.0 capability KIND (ADR-001 Phase B, B3). During B3..B7 the
+#: coverage artifact carries both dispatch tables, `hook_dispatch` over
+#: `HookSlot` and `capability_dispatch` over `CapabilityKind`; B8 deletes the
+#: first. This reader consults BOTH while both exist and FAILS if they disagree,
+#: so the transition cannot carry two answers to one question.
+SLOT_TO_KIND = {
+    "on_describe_tools": "DescribeToolsKind",
+    "on_build_system_prompt": "PromptShaperKind",
+    "on_budget_plan": "BudgetShaperKind",
+    "on_pre_step": "CompactorKind",
+    "on_tool_policy": "ToolPolicyKind",
+    "on_tool_handle": "ToolProviderKind",
+    "on_response_intercept": "ResponseInterceptorKind",
+    "on_solver_candidate": "SolverJudgeKind",
+}
+
+
 def is_unconditional(slot):
+    text = COVERAGE.read_text()
     camel = "On" + "".join(p.capitalize() for p in slot.removeprefix("on_").split("_"))
-    return re.search(camel + r"\s*=>\s*Unconditional", COVERAGE.read_text()) is not None
+    kind = SLOT_TO_KIND.get(slot)
+    if kind is None:
+        fail(f"slot {slot!r} has no capability kind in SLOT_TO_KIND; the 6.0 dispatch table "
+             "cannot be consulted for it, so its dispatch class is unknown rather than gated")
+    arms = []
+    for name in (camel, kind):
+        m = re.search(re.escape(name) + r"\s*=>\s*(Unconditional|Gated)", text)
+        if m:
+            arms.append(m.group(1))
+    if not arms:
+        fail(f"neither `{camel}` nor `{kind}` has a dispatch arm in {COVERAGE.relative_to(REPO)}; "
+             "the dispatch class of this slot cannot be read")
+    if len(set(arms)) > 1:
+        fail(f"`{camel}` and `{kind}` disagree on dispatch ({arms}) in "
+             f"{COVERAGE.relative_to(REPO)}; the two tables must agree until B8 removes one")
+    return arms[0] == "Unconditional"
 
 
 # ---------------------------------------------------------------------------

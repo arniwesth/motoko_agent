@@ -520,13 +520,17 @@ dst_target_list:
 #      that must load: driver_only's empty install list (vacuous, per P4) and a
 #      profile excluding only the one GATED hook.
 #
-#   2. A STRUCTURAL GUARD that the eight-slot enumeration still matches the ABI.
-#      `all_hook_slots()` is hand-written and AILANG has no constructor
-#      enumeration on the pin, so a ninth ABI hook could be added and left out
-#      of it while every check in the module still passed — an artifact that
-#      validates while incomplete, which is the exact failure S1 names for
-#      constructed artifacts. Counting the ABI record's `on_*` fields ties the
-#      enumeration to the thing it enumerates instead of to itself.
+#   2. A STRUCTURAL GUARD that the kind enumeration still matches the ABI.
+#      `all_capability_kinds()` (B3; `all_hook_slots()` until B8) is
+#      hand-written and AILANG has no constructor enumeration on the pin, so a
+#      ninth ABI kind could be added and left out of it while every check in
+#      the module still passed — an artifact that validates while incomplete,
+#      which is the exact failure S1 names for constructed artifacts. The ABI
+#      side is the `Capability` variant count once B8 lands, and the record's
+#      `on_*` field count until then (both shapes are accepted during B3–B7);
+#      the AIL side is PRINTED by `print_capability_kind_count`, because make
+#      cannot evaluate AILANG and a second hand-written 8 would pin the
+#      enumeration to itself. Portable: `[[:space:]]`, no `\s`.
 #
 # Note the ADR undercounts here and this target is where that shows: D5 says six
 # of eight slots are unconditionally dispatched and one is gated, leaving the
@@ -538,16 +542,25 @@ dst_target_list:
 profile_coverage:
 	@set -eu; \
 	ailang run --caps IO --entry main scripts/dst/profile_coverage_dst.ail < /dev/null; \
-	n=$$(awk '/export type ExtensionHooks/,/^}/' packages/motoko-ext-abi/types.ail | grep -c '^  on_'); \
-	if [ "$$n" -ne 8 ]; then \
-		echo "FAIL: the ABI declares $$n hook slots, but src/core/dst_profile_coverage.ail"; \
-		echo "      enumerates 8 in all_hook_slots(). A slot has been added or removed and"; \
-		echo "      the coverage artifact does not know about it, so every profile would"; \
-		echo "      validate while its disclosure was incomplete (D5)."; \
-		awk '/export type ExtensionHooks/,/^}/' packages/motoko-ext-abi/types.ail | grep '^  on_'; \
+	abi=packages/motoko-ext-abi/types.ail; \
+	if grep -q '^export type Capability' $$abi; then \
+		producer="type Capability variants"; \
+		n=$$(awk '/^export type Capability/,/^[[:space:]]*$$/' $$abi | grep -cE '^[[:space:]]*[=|][[:space:]]*[A-Z][A-Za-z0-9_]*[[:space:]]*\('); \
+	else \
+		producer="type ExtensionHooks on_ fields (5.x; B8 flips this to the Capability variants)"; \
+		n=$$(awk '/^export type ExtensionHooks/,/^}/' $$abi | grep -c '^  on_'); \
+	fi; \
+	k=$$(ailang run --caps IO --entry print_capability_kind_count scripts/dst/profile_coverage_dst.ail < /dev/null | tail -1 | tr -d '[:space:]'); \
+	if [ "$$n" -ne "$$k" ] || [ "$$k" -lt 1 ]; then \
+		echo "FAIL: the ABI declares $$n capability kinds ($$producer), but"; \
+		echo "      src/core/dst_profile_coverage.ail enumerates $$k in all_capability_kinds()."; \
+		echo "      A kind has been added or removed and the coverage artifact does not know"; \
+		echo "      about it, so every profile would validate while its disclosure was"; \
+		echo "      incomplete (D5/D6). Count KINDS, not instances: the AIL side is printed by"; \
+		echo "      print_capability_kind_count because make cannot evaluate AILANG."; \
 		exit 1; \
 	else \
-		echo "  ✓ all_hook_slots() enumerates all $$n ABI hook slots"; \
+		echo "  ✓ all_capability_kinds() enumerates all $$n ABI capability kinds ($$producer)"; \
 	fi; \
 	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
 

@@ -33,7 +33,17 @@ import src/core/dst_profile_coverage (
   rejection_message,
   disclosure_from_ids,
   disclosure_ids,
-  coverage_rules_version
+  coverage_rules_version,
+  CapabilityKind,
+  DescribeToolsKind, CompactorKind, ToolProviderKind, SolverJudgeKind,
+  AtomRef,
+  CapabilityDisclosure,
+  all_capability_kinds,
+  atoms_of_record_shape,
+  validate_capability_install_list,
+  capability_install_list_ok,
+  capability_disclosure_from_ids,
+  capability_disclosure_ids
 )
 
 -- `[string]` has no Eq instance on the pin, so list equality is spelled out.
@@ -225,6 +235,122 @@ func scenario_unknown_id_fails_closed() -> bool ! {IO} {
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- B3: the same shapes in the ATOM unit (extension, kind, index)
+-- ---------------------------------------------------------------------------
+
+func assert_cap_rejected(label: string, rule: string, install: [CapabilityDisclosure]) -> bool ! {IO} {
+  let rs = validate_capability_install_list(install);
+  let ok = List.length(rs) > 0 && has_rule(rs, rule);
+  let _ = if ok then println("  ✓ ${label}: rejected by [${rule}]")
+          else {
+            let _ = println("  ✗ ${label}: expected rejection by [${rule}], got ${show(List.length(rs))} rejection(s)");
+            report_rejections(rs)
+          };
+  ok
+}
+
+func assert_cap_accepted(label: string, install: [CapabilityDisclosure]) -> bool ! {IO} {
+  let rs = validate_capability_install_list(install);
+  let ok = List.length(rs) == 0;
+  let _ = if ok then println("  ✓ ${label}: accepted")
+          else {
+            let _ = println("  ✗ ${label}: expected acceptance, got ${show(List.length(rs))} rejection(s)");
+            report_rejections(rs)
+          };
+  ok
+}
+
+-- Two Compactor atoms and one ToolProvider: the shape D3/D4 make possible and
+-- a slot-keyed validator cannot express.
+pure func chain_atoms() -> [AtomRef] {
+  [{ kind: CompactorKind, index: 0 }, { kind: CompactorKind, index: 1 },
+   { kind: ToolProviderKind, index: 0 }]
+}
+
+-- A record-shaped registration expressed in the atom unit: eight atoms at
+-- index 0, all covered. The transition's degenerate list.
+pure func cap_record_shaped() -> [CapabilityDisclosure] {
+  [{ extension_id: "hello", atoms: atoms_of_record_shape(), covered: atoms_of_record_shape(), excluded: [] }]
+}
+
+-- LEGAL N>1: both compactors covered, the provider excluded (gated). The
+-- fixture that separates the atom unit from the slot unit -- under
+-- `HookSlot`, "on_pre_step" classified twice is `covered-excluded-disjoint`.
+pure func cap_same_kind_twice() -> [CapabilityDisclosure] {
+  [{ extension_id: "chain", atoms: chain_atoms(),
+     covered: [{ kind: CompactorKind, index: 0 }, { kind: CompactorKind, index: 1 }],
+     excluded: [{ kind: ToolProviderKind, index: 0 }] }]
+}
+
+-- D7 (recommended, not signed): registers nothing.
+pure func cap_no_capabilities() -> [CapabilityDisclosure] {
+  [{ extension_id: "inert", atoms: [], covered: [], excluded: [] }]
+}
+
+-- The second compactor classified nowhere. Correct count of entries for a
+-- validator that counted kinds (one compactor, one provider).
+pure func cap_second_atom_unaccounted() -> [CapabilityDisclosure] {
+  [{ extension_id: "partial", atoms: chain_atoms(),
+     covered: [{ kind: CompactorKind, index: 0 }],
+     excluded: [{ kind: ToolProviderKind, index: 0 }] }]
+}
+
+pure func cap_atom_in_both() -> [CapabilityDisclosure] {
+  [{ extension_id: "overlap", atoms: chain_atoms(),
+     covered: chain_atoms(), excluded: [{ kind: CompactorKind, index: 1 }] }]
+}
+
+-- Claims coverage of an atom the registration does not hold.
+pure func cap_phantom_atom() -> [CapabilityDisclosure] {
+  [{ extension_id: "phantom", atoms: chain_atoms(),
+     covered: chain_atoms() ++ [{ kind: SolverJudgeKind, index: 0 }], excluded: [] }]
+}
+
+-- Excludes an unconditional kind's atom.
+pure func cap_unconditional_atom_excluded() -> [CapabilityDisclosure] {
+  [{ extension_id: "silent_catalog", atoms: atoms_of_record_shape(),
+     covered: [{ kind: CompactorKind, index: 0 }],
+     excluded: [{ kind: DescribeToolsKind, index: 0 }] }]
+}
+
+func scenario_cap_ids_fail_closed() -> bool ! {IO} {
+  let bad = { extension_id: "typo", atoms: [{ kind: "compacter", index: 0 }], covered: [], excluded: [] };
+  match capability_disclosure_from_ids(bad) {
+    Err(r) => {
+      let ok = rejection_rule(r) == "unknown-capability-kind";
+      let _ = if ok then println("  ✓ unknown kind id: rejected by [unknown-capability-kind]")
+              else println("  ✗ unknown kind id: rejected by [${rejection_rule(r)}]");
+      ok
+    },
+    Ok(_) => { let _ = println("  ✗ unknown kind id: parsed clean, should have failed closed"); false }
+  }
+}
+
+func cap_section() -> bool ! {IO} {
+  let _ = println("  -- B3: the atom unit (extension, kind, index) --");
+  let a1 = assert_cap_accepted("record-shaped registration as eight atoms", cap_record_shaped());
+  let a2 = assert_cap_accepted("two Compactor atoms + gated ToolProvider excluded (legal N>1)", cap_same_kind_twice());
+  let r1 = assert_cap_rejected("registers no capability (D7, recommended)", "installed-with-no-capabilities", cap_no_capabilities());
+  let r2 = assert_cap_rejected("second atom of a kind classified nowhere", "atoms-covered-excluded-exhaustive", cap_second_atom_unaccounted());
+  let r3 = assert_cap_rejected("atom in both lists", "atoms-covered-excluded-disjoint", cap_atom_in_both());
+  let r4 = assert_cap_rejected("atom the registration does not hold", "atom-not-registered", cap_phantom_atom());
+  let r5 = assert_cap_rejected("unconditional kind's atom excluded", "unconditional-hook-excluded", cap_unconditional_atom_excluded());
+  let i1 = scenario_cap_ids_fail_closed();
+  let control = not capability_install_list_ok(cap_no_capabilities()) && capability_install_list_ok(cap_record_shaped());
+  let _ = if control then println("  ✓ control: the atom validator both accepts and rejects")
+          else println("  ✗ control: the atom validator never rejects");
+  a1 && a2 && r1 && r2 && r3 && r4 && r5 && i1 && control
+}
+
+-- THE PIN'S AIL SIDE (B3/I2). `make profile_coverage` cannot evaluate AILANG,
+-- so this entry prints `length(all_capability_kinds())` and make compares it
+-- to the ABI's own count -- the `Capability` variant lines once B8 lands, the
+-- `ExtensionHooks` `on_` fields until then.
+export func print_capability_kind_count() -> () ! {IO} {
+  println(show(List.length(all_capability_kinds())))
+}
+
 export func main() -> () ! {IO} {
   let _ = println("=== profile_coverage_dst (D5, ${coverage_rules_version()}) ===");
   let _ = println("  -- profiles that must load --");
@@ -249,12 +375,13 @@ export func main() -> () ! {IO} {
   let _ = println("  -- hook ids, not counts --");
   let i1 = scenario_ids_not_counts();
   let i2 = scenario_unknown_id_fails_closed();
+  let cap = cap_section();
   -- A negative control on the harness itself: install_list_ok must actually be
   -- capable of returning false, or every green check above is vacuous.
   let control = not install_list_ok(all_excluded()) && install_list_ok(driver_only_install());
   let _ = if control then println("  ✓ control: the validator both accepts and rejects")
           else println("  ✗ control: the validator never rejects — every check above is vacuous");
-  if p1 && p2 && p3 && r1 && r2 && r3 && r4 && r5 && r6 && r7 && i1 && i2 && control
+  if p1 && p2 && p3 && r1 && r2 && r3 && r4 && r5 && r6 && r7 && i1 && i2 && control && cap
   then println("profile_coverage_dst PASS")
   else {
     let _ = println("profile_coverage_dst FAIL");

@@ -183,7 +183,7 @@ def check_omission_basis(profile_src, required):
              "      WI-D6 recorded — re-decide the basis rather than inheriting it.")
 
     disp = (REPO / "src/core/dst_profile_coverage.ail").read_text()
-    if not re.search(r"OnBudgetPlan\s*=>\s*Unconditional", disp):
+    if not dispatch_unconditional(disp, "on_budget_plan"):
         fail("`OnBudgetPlan` is no longer unconditionally dispatched, so excluding it is a\n"
              "      coverage cost rather than a rejection. driver_only's omission basis has\n"
              "      changed — re-decide it.")
@@ -318,8 +318,7 @@ def check_barrier_count(abi, disp):
         # The dispatch classification is a SECOND producer: it lives in
         # dst_profile_coverage.ail, not in the ABI, and neither derives from
         # the other (S16).
-        camel = "On" + "".join(p.capitalize() for p in slot.removeprefix("on_").split("_"))
-        if not re.search(camel + r"\s*=>\s*Unconditional", disp):
+        if not dispatch_unconditional(disp, slot):
             gated.append(slot)
         elif row:
             slot_barriers.append((slot, row))
@@ -346,6 +345,45 @@ def check_barrier_count(abi, disp):
 
     print(f"    → {n} slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone")
     check_per_extension_barriers(slot_barriers, returns_world)
+
+
+#: The 5.x slot -> 6.0 capability KIND (ADR-001 Phase B, B3). Deliberately
+#: DUPLICATED from check_no_op_profile.py rather than imported, on that file's
+#: own rule about coupling one profile's guard to another's.
+SLOT_TO_KIND = {
+    "on_describe_tools": "DescribeToolsKind",
+    "on_build_system_prompt": "PromptShaperKind",
+    "on_budget_plan": "BudgetShaperKind",
+    "on_pre_step": "CompactorKind",
+    "on_tool_policy": "ToolPolicyKind",
+    "on_tool_handle": "ToolProviderKind",
+    "on_response_intercept": "ResponseInterceptorKind",
+    "on_solver_candidate": "SolverJudgeKind",
+}
+
+
+def dispatch_unconditional(disp, slot):
+    """The dispatch class of `slot`, read from BOTH tables the coverage
+    artifact carries during B3..B7 (`hook_dispatch` over `HookSlot`,
+    `capability_dispatch` over `CapabilityKind`), failing if they disagree or
+    if neither has an arm. B8 deletes the slot table; this reader then reads
+    the kind arm alone."""
+    camel = "On" + "".join(p.capitalize() for p in slot.removeprefix("on_").split("_"))
+    kind = SLOT_TO_KIND.get(slot)
+    if kind is None:
+        fail(f"slot {slot!r} has no capability kind in SLOT_TO_KIND, so its 6.0 dispatch "
+             "class cannot be read")
+    arms = []
+    for name in (camel, kind):
+        m = re.search(re.escape(name) + r"\s*=>\s*(Unconditional|Gated)", disp)
+        if m:
+            arms.append(m.group(1))
+    if not arms:
+        fail(f"neither `{camel}` nor `{kind}` has a dispatch arm in dst_profile_coverage.ail")
+    if len(set(arms)) > 1:
+        fail(f"`{camel}` and `{kind}` disagree on dispatch ({arms}); the two tables must agree "
+             "until B8 removes one")
+    return arms[0] == "Unconditional"
 
 
 def outcome_returns_world(abi, type_name):
