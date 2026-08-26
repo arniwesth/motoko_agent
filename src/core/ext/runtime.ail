@@ -38,7 +38,7 @@ import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
 export type StageOutcome = StageApplied(string) | StageRejected(string) | StageObserved(string, [DiagnosticField]) | StagePassed
-export type PreStepStage = { ext_id: string, outcome: StageOutcome }
+export type PreStepStage = { ext_id: string, atom: int, outcome: StageOutcome } -- B6: atom identity is TYPED here (index within the kind; 0 for the 5.x record shape), never stamped into `ext_id`
 export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage], artifacts: Json, next_state: ExtWorld } -- WI-B2b: `next_state` is the chain's successor world, threaded stage to stage
 
 export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
@@ -193,12 +193,12 @@ func apply_budget_patch(plan: BudgetPlan, patch: BudgetPatch) -> BudgetPlan {
   }
 }
 
-func emit_dummy_hook(hook: string, key: string, val: string) -> () ! {IO, Clock} {
+func emit_dummy_hook(hook: string, atom: int, key: string, val: string) -> () ! {IO, Clock} {
   let _ = println(encode(jo([
     kv("type", js("dummy_hook")),
     kv("ts", jnum(intToFloat(now()))),
     kv("hook", js(hook)),
-    kv(key, js(val))
+    kv(key, js(val)), kv("atom", jnum(intToFloat(atom))) -- B6: typed atom identity, beside the hook name
   ])));
   ()
 }
@@ -212,7 +212,7 @@ func fold_prompt_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, base: string) -> st
     [] => base,
     h :: rest => {
       let patch = (h.on_build_system_prompt)(ctx);
-      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_build_system_prompt", "appended", join_lines(patch.append)) else ();
+      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_build_system_prompt", record_atom(), "appended", join_lines(patch.append)) else ();
       fold_prompt_hooks(rest, ctx, apply_prompt_patch(base, patch))
     }
   }
@@ -228,7 +228,7 @@ func fold_budget_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, plan: BudgetPlan) -
     h :: rest => {
       let patch = (h.on_budget_plan)(ctx, plan);
       let val = match patch.requested_total { None => "", Some(n) => show(n) };
-      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_budget_plan", "requested_total", val) else ();
+      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_budget_plan", record_atom(), "requested_total", val) else ();
       fold_budget_hooks(rest, ctx, apply_budget_patch(plan, patch))
     }
   }
@@ -295,29 +295,29 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
           PassThroughObserved(code, _) => "observed:${code}",
           Compacted(_, note, _) => "compacted:${note}"
         };
-        emit_dummy_hook("on_pre_step", "decision", tag)
+        emit_dummy_hook("on_pre_step", record_atom(), "decision", tag)
       } else ();
       match decision {
         PassThrough => {
           let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts, world1);
-          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StagePassed } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
+          { msgs: next.msgs, stages: { ext_id: h.id, atom: record_atom(), outcome: StagePassed } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
         },
         PassThroughObserved(code, fields) => {
           let observation = normalize_diagnostic(code, fields);
           let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts, world1);
-          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageObserved(observation.code, observation.fields) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
+          { msgs: next.msgs, stages: { ext_id: h.id, atom: record_atom(), outcome: StageObserved(observation.code, observation.fields) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
         },
         Compacted(compacted_msgs, note, next_artifacts) => {
           match validate_compactor_output(msgs, compacted_msgs) {
             Ok(_) => {
               let next = fold_pre_step_chain_rec(rest, ctx, compacted_msgs, next_artifacts, world1);
-              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageApplied(note) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
+              { msgs: next.msgs, stages: { ext_id: h.id, atom: record_atom(), outcome: StageApplied(note) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
             },
             Err(reason) => {
               -- `world1`, not `world`: see the header. The compaction is
               -- rejected; the effects the stage already performed are not.
               let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts, world1);
-              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageRejected(reason) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
+              { msgs: next.msgs, stages: { ext_id: h.id, atom: record_atom(), outcome: StageRejected(reason) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
             }
           }
         }
@@ -346,7 +346,7 @@ func decide_one_policy(h: ExtensionHooks, ctx: ExtCtx, call: ToolCallEnvelope) -
       NoOpinion => "noop",
       Pending(_, _) => "pending"
     };
-    emit_dummy_hook("on_tool_policy", "decision", tag)
+    emit_dummy_hook("on_tool_policy", record_atom(), "decision", tag)
   } else ();
   decision
 }
@@ -469,7 +469,7 @@ func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string, worl
       ContinueWithFeedback(_) => "continue",
       NoDecision => "noop"
     };
-    emit_dummy_hook("on_solver_candidate", "decision", tag)
+    emit_dummy_hook("on_solver_candidate", record_atom(), "decision", tag)
   } else ();
   outcome
 }
@@ -853,4 +853,24 @@ func hook_name_reads_the_prefix_only_test() -> bool
       && hash_index("scratchpad#5") == 10
       -- the negative: everything after the first `#` is index to this reader
       && hook_name("scratchpad#5#2") == "scratchpad"
+  }
+
+-- B6: TYPED ATOM IDENTITY (ADR-001 Phase B; DSI I7, RK C3). The 5.x record
+-- binds one atom per kind, so every dispatcher above reports atom 0. At 6.0 the
+-- per-kind fold passes the atom's index within its kind here instead, and
+-- NOTHING else changes: `stamp_holder(world, h.id)` stays per extension and the
+-- stamp grammar `"${name}#${idx}"` (A3) never carries it. Kept at the END of
+-- the file so `tools/predicate-anchors/anchors.sh`'s pinned line 199 does not
+-- move.
+pure func record_atom() -> int { 0 }
+
+func pre_step_stage_carries_a_typed_atom_test() -> bool
+  tests [((), true)]
+  {
+    let stage: PreStepStage = { ext_id: "scratchpad#5", atom: 2, outcome: StagePassed };
+    -- the atom lives in the record; the stamp still resolves to the base name
+    stage.atom == 2
+      && hook_name(stage.ext_id) == "scratchpad"
+      && hash_index(stage.ext_id) == 10
+      && record_atom() == 0
   }

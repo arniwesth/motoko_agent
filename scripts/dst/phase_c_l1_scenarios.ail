@@ -393,9 +393,9 @@ func scenario_checkpoint_terminates_not_spins() -> Result[(), ScenarioFailure]
 
 func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure]
   ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
-  let a: PreStepStage = { ext_id: "A", outcome: StageApplied("a") };
-  let b: PreStepStage = { ext_id: "B", outcome: StageRejected("bad") };
-  let c: PreStepStage = { ext_id: "C", outcome: StageApplied("c") };
+  let a: PreStepStage = { ext_id: "A", atom: 0, outcome: StageApplied("a") };
+  let b: PreStepStage = { ext_id: "B", atom: 0, outcome: StageRejected("bad") };
+  let c: PreStepStage = { ext_id: "C", atom: 0, outcome: StageApplied("c") };
   let ra = stage_record(0, a);
   let rb = stage_record(0, b);
   let rc = stage_record(0, c);
@@ -415,9 +415,9 @@ func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFa
 func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFailure]
   ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let stages: [PreStepStage] = [
-    { ext_id: "A", outcome: StageApplied("a") },
-    { ext_id: "B", outcome: StageRejected("invalid") },
-    { ext_id: "C", outcome: StageApplied("c") }
+    { ext_id: "A", atom: 0, outcome: StageApplied("a") },
+    { ext_id: "B", atom: 0, outcome: StageRejected("invalid") },
+    { ext_id: "C", atom: 0, outcome: StageApplied("c") }
   ];
   match stages {
     a :: b :: c :: [] => {
