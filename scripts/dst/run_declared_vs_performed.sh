@@ -482,6 +482,31 @@ echo "-- producer 3: PERFORMED, inferred by the compiler (total over inputs) --"
 # `ailang_docs` and `compaction_ai`, whose registrations read Env and FS before
 # any hook runs.
 #
+# WHAT THIS PRODUCER IS, STATED PRECISELY (ADR-001 Phase B, B1; AR-codex
+# correction 4). "The compiler enforces the row" is five different claims, and
+# only the first of them is what this section measures:
+#   (a) the compiler checks each NAMED function's body against ITS OWN declared
+#       row -- `mutant_budget` below, and `mutant_register` after it, which
+#       makes the same claim about `register_with_config`'s row (the row that
+#       bounds every INLINE hook, see declared_vs_performed.ail's note);
+#   (b) the compiler does NOT compare a function value against the capability
+#       PAYLOAD row it is bound into -- measured by the CONSTRUCTOR-ARGUMENT
+#       probe in the limitation section: a wide-rowed named function is
+#       accepted into a narrower `K((..) -> T ! {row})`, and an unannotated
+#       inline lambda is bounded only by the enclosing function;
+#   (c) static transitive BODY reading -- `tools/ext_ambient_inventory/
+#       hook_scope.py` (classifier 3, per atom from B2), which scans a
+#       named binding rather than trusting its row;
+#   (d) the runtime witnesses in producer 2 above -- one path each, never a
+#       proof;
+#   (e) coverage/atom exhaustion -- `src/core/dst_profile_coverage.ail` (B3),
+#       which makes an unclassified atom a rejection rather than a gap.
+# A green row here is claim (a) alone. Claims (b)-(e) are what the rest of this
+# file and the two tools carry, and the 6.0 release criteria read: a named
+# binding passes on (a)+(c); an inline lambda passes on the enclosing row plus
+# (c); every same-kind atom is enumerated by (e) and read by (c); an atom (c)
+# cannot parse is NOT certifiable and its extension is not installable.
+#
 # It is asserted TWO-SIDED. The mutant must be REJECTED with the narrowed row
 # AND ACCEPTED with a widened one — otherwise a rejection caused by anything
 # else in the file (a typo, a missing import) would read as the effect checker
@@ -514,6 +539,46 @@ if AILANG_RELAX_MODULES=1 ailang check "$MUTANT" >/dev/null 2>&1; then
   ok "the SAME mutant with the row WIDENED to ! {Env} is accepted — so the rejection above is caused by the row, not by the file"
 else
   bad "the widened mutant is also rejected — the negative result above is not attributable to the effect row"
+fi
+
+# THE SECOND MUTANT (ADR-001 Phase B, B1), and it is about a DIFFERENT row.
+# `mutant_budget` measures a named function's OWN row -- claim (a) for a
+# binding written as a top-level function. But eight of the seventeen
+# extensions bind their hooks INLINE, and for those the note at
+# declared_vs_performed.ail:410-420 says the constraint is
+# `register_with_config`'s row, not the slot's. That claim was made from one
+# observation in `empty_stop_guard` and never had a control of its own. This
+# is that control, two-sided on D6's discipline: an inline `on_pre_step`
+# performing Env behind a `default_hooks` head must be REJECTED with
+# `register_with_config` at its narrow row and ACCEPTED once that row admits
+# Env -- and the rejection must NAME `register_with_config`, because a
+# rejection at the lambda's own annotation would be a different claim (the one
+# the constructor-argument probe below measures).
+write_mutant_register() {
+  cat > "$MUTANT" <<EOF
+module scripts/dst/dvp_mutant_probe
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (default_hooks, ExtCtx, ExtensionHooks, Msg, PreStepOutcome)
+export func register_with_config(_cfg: a) -> ExtensionHooks$1 {
+  { default_hooks("mutant") | on_pre_step: func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH", ""); { decision: { PassThrough }, next_state: ctx.world } } }
+}
+EOF
+}
+
+write_mutant_register ""
+if mout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
+  bad "mutant_register: an inline hook performing Env was ACCEPTED under a rowless register_with_config — the registration row is decorative and the absorption rows below measure nothing"
+elif echo "$mout" | grep -q "Effect checking failed for function 'register_with_config'"; then
+  ok "mutant_register: an inline on_pre_step performing Env is REJECTED at register_with_config's row — the enclosing registration row is what bounds an inline binding (the :410-420 note now has its control)"
+else
+  bad "mutant_register: rejected, but NOT at register_with_config's row — it fails elsewhere and establishes nothing about the registration row: $(echo "$mout" | grep -E '^Error' | head -1)"
+fi
+
+write_mutant_register " ! {Env}"
+if AILANG_RELAX_MODULES=1 ailang check "$MUTANT" >/dev/null 2>&1; then
+  ok "mutant_register: the SAME registration with its row WIDENED to ! {Env} is accepted — the rejection is caused by register_with_config's row"
+else
+  bad "mutant_register: the widened registration is also rejected — the negative result is not attributable to the registration row"
 fi
 cleanup
 
@@ -776,6 +841,94 @@ if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
   ok "UPDATE POSITION (b-control): the same named override at exactly the slot row is ACCEPTED, so (b)'s rejection is attributable to the row and not to the update head, the import, or the probe"
 else
   bad "UPDATE POSITION (b-control) was REJECTED — a clean named override at the slot's own row does not compile behind a default_hooks head, so nothing in this section measures rows and the empty_stop_guard migration itself should not compile either"
+fi
+limcleanup
+
+# THE CONSTRUCTOR-ARGUMENT PROBE (ADR-001 Phase B, B1; ADR Q3). At 6.0 a hook
+# is no longer a record field: it is the ARGUMENT of a capability constructor,
+# `K(f)` for `type C = K((string) -> () ! {IO})`. ADR-001 Q3 (measured on
+# v0.33.1) said the payload row bounds NOTHING in that position, for inline
+# lambdas AND for named functions. Every row here is pinned to what the PATH
+# `ailang` (v0.33.0) does, with the ADR expectation beside it.
+#
+# MEASURED 2026-08-26 on v0.33.0, and pinned as observed:
+#   (i-named)   a named function declared WIDER (! {Env, IO}) than the payload
+#               row (! {IO}), passed as the constructor argument
+#                                            -> ACCEPTED   (THE HOLE: payload-row
+#                                                          assignability is unchecked)
+#   (i-unannot) an UNANNOTATED inline lambda performing Env, enclosing row
+#               admits {Env, IO}              -> ACCEPTED   (the hole for inline
+#                                                          lambdas: the payload row
+#                                                          bounds nothing; only the
+#                                                          enclosing row does)
+#   (i-annot)   an inline lambda that DECLARES the payload row and performs Env
+#                                            -> REJECTED   at the lambda's own
+#                                                          annotation. ADR Q3's
+#                                                          inline case does NOT
+#                                                          reproduce on v0.33.0:
+#                                                          argument position checks
+#                                                          a lambda's declared row
+#                                                          (limitation 1 is about
+#                                                          record-FIELD position)
+#   (control)   the unannotated lambda with the enclosing row narrowed to {IO}
+#                                            -> REJECTED   at the enclosing row, so
+#                                                          (i-unannot)'s acceptance is
+#                                                          the position's doing
+#   (named-ctl) a named function at exactly the payload row -> ACCEPTED
+# So on this toolchain the enforcement plane for a constructor argument is:
+# a NAMED binding is checked against its OWN row only (claim (a)) and never
+# against the payload row (claim (b) is absent); an inline lambda is bounded by
+# the enclosing function's row, and additionally by its own annotation if it
+# writes one. Neither reads the payload row. That is why B2 scans a named
+# binding's body rather than trusting its row, and why every green row in
+# producer 3 is claim (a) alone.
+write_ctor() {  # $1 = declarations after the imports
+  cat > "$LIMPROBE" <<EOF
+module scripts/dst/dvp_limitation_probe
+import std/env (getEnvOr)
+import std/io (println)
+type C = K((string) -> () ! {IO}) | Noop
+$1
+EOF
+}
+
+write_ctor 'func impl(s: string) -> () ! {Env, IO} { let _ = getEnvOr("PATH",""); println(s) }
+export func build() -> C ! {IO} { K(impl) }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "CONSTRUCTOR ARGUMENT (i-named): a named function declared ! {Env, IO} is ACCEPTED as the argument of K((string) -> () ! {IO}) -- the payload row does not bound a named binding (ADR Q3 holds on v0.33.0); B2 must SCAN a named atom, not trust its row"
+else
+  bad "CONSTRUCTOR ARGUMENT (i-named) CHANGED: a wide-rowed named function is now REJECTED at the payload row. GOOD NEWS upstream -- payload-row assignability is checked -- and it means claim (b) exists; re-read B2's 'scanned, not trusted' rationale, which becomes belt-and-braces rather than the only enforcement"
+fi
+
+write_ctor 'export func build() -> C ! {Env, IO} { K(func(s: string) -> () { let _ = getEnvOr("PATH",""); println(s) }) }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "CONSTRUCTOR ARGUMENT (i-unannot): an UNANNOTATED inline lambda performing Env is ACCEPTED into the ! {IO} payload when the enclosing row admits Env -- the payload row bounds an inline lambda not at all; the enclosing function's row is the bound"
+else
+  bad "CONSTRUCTOR ARGUMENT (i-unannot) CHANGED: an unannotated inline lambda is now checked against the payload row it is bound into. GOOD NEWS upstream; claim (b) now exists for inline lambdas and the enclosing-row reasoning in this file is no longer the whole story"
+fi
+
+write_ctor 'export func build() -> C ! {Env, IO} { K(func(s: string) -> () ! {IO} { let _ = getEnvOr("PATH",""); println(s) }) }'
+if out=$(AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" 2>&1); then
+  bad "CONSTRUCTOR ARGUMENT (i-annot): an inline lambda DECLARING ! {IO} and performing Env was ACCEPTED in argument position -- ADR Q3's inline case now REPRODUCES on this toolchain (it was measured on v0.33.1). Argument position no longer checks a lambda's own annotation; limitation 1 has widened from record-field to argument position and the LIMITATION 1 control above should have gone red with it"
+elif echo "$out" | grep -q "uses effects not declared in its"; then
+  ok "CONSTRUCTOR ARGUMENT (i-annot): an inline lambda that DECLARES the payload row and performs Env is REJECTED at its own annotation -- argument position checks a lambda's declared row on v0.33.0 (ADR Q3's inline case does not reproduce here; pinned as observed)"
+else
+  bad "CONSTRUCTOR ARGUMENT (i-annot): rejected, but NOT at the lambda's annotation -- it fails elsewhere and establishes nothing about the position: $(echo "$out" | grep -E '^Error' | head -1)"
+fi
+
+write_ctor 'export func build() -> C ! {IO} { K(func(s: string) -> () { let _ = getEnvOr("PATH",""); println(s) }) }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  bad "CONSTRUCTOR ARGUMENT (control) was ACCEPTED with the enclosing row narrowed to ! {IO} -- the inline lambda's Env escaped every row, so (i-unannot) above measured the checker being absent rather than a positional gap"
+else
+  ok "CONSTRUCTOR ARGUMENT (control): the same unannotated lambda is REJECTED once the enclosing row drops Env -- so (i-unannot)'s acceptance is attributable to the position, and the enclosing function's row is the only bound on an inline atom"
+fi
+
+write_ctor 'func impl(s: string) -> () ! {IO} { println(s) }
+export func build() -> C ! {IO} { K(impl) }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "CONSTRUCTOR ARGUMENT (named-ctl): a named function at exactly the payload row is ACCEPTED, so (i-named) is not an artefact of the sum type, the import, or the probe"
+else
+  bad "CONSTRUCTOR ARGUMENT (named-ctl) was REJECTED -- a clean named function at the payload's own row does not compile as a constructor argument, so nothing in this section measures rows and the 6.0 registration shape itself would not compile"
 fi
 limcleanup
 
