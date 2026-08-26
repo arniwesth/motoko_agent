@@ -120,15 +120,16 @@ echo "-- producer 1: DECLARED, read from source --"
 # that blocked every install in the tree to no row at all. The gate reads the
 # row rather than trusting a comment about it, and it asserts the NEW state:
 # a re-widening must turn this red rather than pass quietly.
-abi_row=$(grep -n 'on_budget_plan: (ExtCtx, BudgetPlan)' "$ABI" || true)
+# B8: the slot is the `BudgetShaper` payload of the 6.0 `Capability` sum.
+abi_row=$(grep -n 'BudgetShaper((ExtCtx, BudgetPlan)' "$ABI" || true)
 if [ -z "$abi_row" ]; then
-  bad "on_budget_plan's ABI row not found in $ABI — the detector's declared side has no producer"
+  bad "BudgetShaper's payload row (was on_budget_plan's ABI row) not found in $ABI — the detector's declared side has no producer"
 else
   echo "      $ABI:$(echo "$abi_row" | cut -d: -f1)  $(echo "$abi_row" | cut -d: -f2- | sed 's/^ *//')"
   if echo "$abi_row" | grep -q '!'; then
     bad "the ABI row carries an effect row again — WI-D6 narrowed it to none, and D5 criterion 1 fails the moment it comes back"
   else
-    ok "ABI declares on_budget_plan effect-free (WI-D6 narrowed it; was the closed ! {Env, FS} through WI-D5)"
+    ok "ABI declares the BudgetShaper payload (on_budget_plan through 5.x) effect-free (WI-D6 narrowed it; was the closed ! {Env, FS} through WI-D5)"
   fi
 fi
 
@@ -558,27 +559,34 @@ write_mutant_register() {
   cat > "$MUTANT" <<EOF
 module scripts/dst/dvp_mutant_probe
 import std/env (getEnvOr)
-import pkg/sunholo/motoko_ext_abi/types (default_hooks, ExtCtx, ExtensionHooks, Msg, PreStepOutcome)
-export func register_with_config(_cfg: a) -> ExtensionHooks$1 {
-  { default_hooks("mutant") | on_pre_step: func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH", ""); { decision: { PassThrough }, next_state: ctx.world } } }
+import pkg/sunholo/motoko_ext_abi/types (Capability, Compactor, ExtCtx, Msg, PreStepOutcome, PassThrough)
+export func register_with_config(_cfg: a) -> [Capability]$1 {
+  [Compactor(func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH", ""); { decision: { PassThrough }, next_state: ctx.world } })]
 }
 EOF
 }
-
+# B8 RE-PINNED THIS PAIR. Through 5.x the widened control was ACCEPTED (the
+# enclosing registration row absorbed an inline record-field lambda's Env).
+# At 6.0 the atom sits in CONSTRUCTOR-ARGUMENT position of the IMPORTED sum,
+# and an annotated inline lambda is checked against ITS OWN row there: the
+# narrow case still fails at register_with_config, and the widened case now
+# fails at the lambda's annotation instead of passing. Both measured on
+# v0.33.0 at B8; the IMPORTED-SUM rows below carry the full table.
 write_mutant_register ""
 if mout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
-  bad "mutant_register: an inline hook performing Env was ACCEPTED under a rowless register_with_config — the registration row is decorative and the absorption rows below measure nothing"
+  bad "mutant_register: an inline Compactor performing Env was ACCEPTED under a rowless register_with_config — the registration row is decorative and the absorption rows below measure nothing"
 elif echo "$mout" | grep -q "Effect checking failed for function 'register_with_config'"; then
-  ok "mutant_register: an inline on_pre_step performing Env is REJECTED at register_with_config's row — the enclosing registration row is what bounds an inline binding (the :410-420 note now has its control)"
+  ok "mutant_register: an inline Compactor atom performing Env is REJECTED at register_with_config's row — the enclosing registration row still bounds an inline binding at 6.0"
 else
   bad "mutant_register: rejected, but NOT at register_with_config's row — it fails elsewhere and establishes nothing about the registration row: $(echo "$mout" | grep -E '^Error' | head -1)"
 fi
-
 write_mutant_register " ! {Env}"
-if AILANG_RELAX_MODULES=1 ailang check "$MUTANT" >/dev/null 2>&1; then
-  ok "mutant_register: the SAME registration with its row WIDENED to ! {Env} is accepted — the rejection is caused by register_with_config's row"
+if mout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
+  bad "mutant_register: the SAME registration with its row WIDENED to ! {Env} is ACCEPTED — the 5.x absorption is back: an annotated inline atom's Env escaped its own payload row in constructor-argument position. Re-measure the IMPORTED-SUM rows below"
+elif echo "$mout" | grep -q "uses effects not declared in its"; then
+  ok "mutant_register: the SAME registration WIDENED to ! {Env} is STILL rejected, at the LAMBDA'S OWN annotation — at 6.0 an annotated inline atom is bounded by its declared payload row, not by the registration row (5.x: accepted; B8 re-pinned)"
 else
-  bad "mutant_register: the widened registration is also rejected — the negative result is not attributable to the registration row"
+  bad "mutant_register: the widened registration is rejected, but NOT at the lambda's annotation — the verdict moved and establishes nothing: $(echo "$mout" | grep -E '^Error' | head -1)"
 fi
 cleanup
 
@@ -606,41 +614,26 @@ echo "-- WI-D7: the other THREE unconditionally-dispatched slots --"
 # The ABI rows, asserted at the widths WI-D7 measured. Narrower would be a claim
 # no binding supports; wider would be a row nothing performs. Either turns this
 # red rather than passing quietly.
+# B8: the slots are `Capability` payloads. `grep -A3` because ResponseInterceptor's
+# row wraps onto the next line; the row is everything from `!` to the payload's
+# closing `)`.
 check_slot_row() {
   local slot=$1 want=$2 refuser=$3 effects=$4
-  local got
-  # `-A1` because two of the three slots wrap their arrow onto the next line —
-  # and the match must be NON-GREEDY, because joining that next line can bring a
-  # SECOND `->` into scope. The first version was greedy, matched the following
-  # field's arrow, and reported `on_pre_step` as declaring no row at all.
-  got=$(grep -A1 "^  $slot: (ExtCtx" "$ABI" | tr '\n' ' ' \
+  local kind got
+  case "$slot" in
+    on_pre_step) kind=Compactor ;;
+    on_response_intercept) kind=ResponseInterceptor ;;
+    on_solver_candidate) kind=SolverJudge ;;
+    *) bad "check_slot_row: no 6.0 kind for slot $slot"; return ;;
+  esac
+  got=$(grep -A3 "^  | $kind(" "$ABI" | tr '\n' ' ' \
         | LC_ALL=C perl -ne 'print "$1\n" if /-> *[A-Za-z]+ *(! *\{[^}]*\})?/' | sed 's/ *$//')
   if [ "$got" = "$want" ]; then
-    ok "$slot declares $want — the union of what its fifteen bindings perform (refused by $refuser: $effects)"
+    ok "$kind (was $slot) declares $want — the union of what its bindings perform (refused by $refuser: $effects)"
   else
-    bad "$slot declares '$got', not '$want' — WI-D7 measured this row against all fifteen bindings; a change of width is a change of claim and must be re-measured, not inherited"
+    bad "$kind (was $slot) declares '$got', not '$want' — WI-D7 measured this row against all fifteen bindings; a change of width is a change of claim and must be re-measured, not inherited"
   fi
 }
-
-# WI-D8 moved this pin from ten effects to three, and the pin is why it moved
-# DELIBERATELY: it went red on the narrowing rather than accepting it, which is
-# the row saying "a change of width is a change of claim". The claim was
-# re-measured — every step of compaction_ai's chain read off the effect checker
-# one at a time — and the pin follows the measurement.
-check_slot_row on_pre_step \
-  "! {AI, IO, Trace}" \
-  "compaction_ai" "the three ExtPorts.ai_step performs, reached through that single call"
-check_slot_row on_response_intercept \
-  "! {IO, Process, FS, Clock}" \
-  "compose" "the inline-snippet path"
-check_slot_row on_solver_candidate \
-  "! {Process}" \
-  "context_mode" "a node bridge spawned fire-and-forget"
-
-# The refusing bindings, read from THEIR OWN declarations rather than from the
-# slot rows above. A second producer for the same fact: the slot row is the
-# union the ABI declares, these are what the individual bodies were annotated
-# at, and neither is derived from the other.
 check_refuser() {
   local file=$1 fn=$2 want=$3
   # `--` because every one of these patterns begins with `->`, which grep would
@@ -703,10 +696,10 @@ if grep -qF -- "ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, T
 else
   bad "ExtPorts.ai_step is no longer at its measured row ! {AI, IO, Trace}. It was measured from ext_ai_step's BODY, not from an annotation — re-measure before moving it"
 fi
-if grep -qF -- "on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}" "$ABI"; then
-  ok "ExtensionHooks.on_pre_step declares ! {AI, IO, Trace} — the fixpoint of compaction_ai's chain once the port narrowed"
+if grep -qF -- "Compactor((ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})" "$ABI"; then
+  ok "Capability.Compactor (ExtensionHooks.on_pre_step through 5.x) declares ! {AI, IO, Trace} — the fixpoint of compaction_ai's chain once the port narrowed"
 else
-  bad "ExtensionHooks.on_pre_step is no longer at ! {AI, IO, Trace}; re-measure the compaction_ai chain before moving it"
+  bad "Capability.Compactor is no longer at ! {AI, IO, Trace}; re-measure the compaction_ai chain before moving it"
 fi
 
 # S22: DERIVE the site sets and assert the counts. The WI-D8 handoff said
@@ -801,13 +794,22 @@ fi
 # unify, bodies of inline lambdas do not. D8's consequence for A5: the env/fs
 # controls, which already sit behind a `control_base() |` head, can stay inline;
 # a literal-to-update migration changes nothing the checker sees.
+# B8: the ABI no longer HAS a record-update position (`ExtensionHooks` and
+# `default_hooks` are gone), so these four rows measure the toolchain on a
+# LOCAL record that mirrors the two 5.x slots they exercise -- the same way
+# LIMITATION 1/2 above measure on a local `type R`. They are kept because they
+# are the record of WHY the 5.x tree absorbed inline effects, and because a
+# 6.0 extension can still build a record-field lambda and pass the field into
+# a constructor (the IMPORTED SUM `smuggle` row below), so the position is not dead.
 write_upd() {  # $1 = declarations after the imports
   cat > "$LIMPROBE" <<EOF
 module scripts/dst/dvp_limitation_probe
 import std/env (getEnvOr)
 import std/io (println)
 import std/option (None)
-import pkg/sunholo/motoko_ext_abi/types (default_hooks, ExtCtx, ExtensionHooks, Msg, PreStepOutcome, FinalizeOutcome)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepOutcome, FinalizeOutcome, PassThrough, NoDecision)
+type ExtensionHooks = { on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, on_solver_candidate: (ExtCtx, string) -> FinalizeOutcome ! {Process} }
+func default_hooks(_id: string) -> ExtensionHooks { { on_pre_step: \\ctx _m. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace}, on_solver_candidate: \\ctx _c. { decision: NoDecision, next_state: ctx.world } ! {Process} } }
 $1
 EOF
 }
@@ -931,6 +933,93 @@ else
   bad "CONSTRUCTOR ARGUMENT (named-ctl) was REJECTED -- a clean named function at the payload's own row does not compile as a constructor argument, so nothing in this section measures rows and the 6.0 registration shape itself would not compile"
 fi
 limcleanup
+echo ""
+echo "-- B8: CONSTRUCTOR ARGUMENT on the IMPORTED ABI sum (the rows above use a LOCAL sum) --"
+# MEASURED AT B8 ON v0.33.0, AND IT REVERSES THE LOCAL-SUM VERDICTS: for a sum
+# type IMPORTED from another module the compiler unifies a constructor argument's
+# row against the payload row as CLOSED rows -- exactly what it does for a
+# record field -- so ADR Q3's hole is a property of LOCALLY declared sums only.
+# The ABI's `Capability` is imported by every extension, so at 6.0 the payload
+# rows ARE compiler-enforced for named functions and unannotated lambdas, and an
+# annotated lambda is checked at its own annotation. What survives is the
+# record-field smuggle (limitation 1), pinned last.
+write_abi_ctor() {  # $1 = declarations after the imports
+  cat > "$LIMPROBE" <<EOF
+module scripts/dst/dvp_limitation_probe
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (Capability, Compactor, ExtCtx, Msg, PreStepOutcome, PassThrough)
+$1
+EOF
+}
+write_abi_ctor 'func impl(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace, Env} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } }
+export func build() -> [Capability] ! {Env} { [Compactor(impl)] }'
+if out=$(AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" 2>&1); then
+  bad "IMPORTED SUM (named-wide): a named function declared ! {AI, IO, Trace, Env} was ACCEPTED as a Compactor atom -- the payload row does not bound a named binding on the REAL ABI, and B2's named-atom body scan is the only thing that catches it"
+elif echo "$out" | grep -q "incompatible closed rows"; then
+  ok "IMPORTED SUM (named-wide): a named function declared ! {AI, IO, Trace, Env} is REJECTED as a Compactor atom (incompatible closed rows) -- on the real ABI the payload row IS compiler-enforced for named atoms"
+else
+  bad "IMPORTED SUM (named-wide): rejected, but not on closed-row unification -- establishes nothing: $(echo "$out" | grep -E '^Error' | head -1)"
+fi
+write_abi_ctor 'export func build() -> [Capability] ! {Env} { [Compactor(func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } })] }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  bad "IMPORTED SUM (unannot): an UNANNOTATED inline lambda performing Env was ACCEPTED as a Compactor atom under an enclosing ! {Env} -- the 5.x absorption survives on the real ABI"
+else
+  ok "IMPORTED SUM (unannot): an UNANNOTATED inline lambda performing Env is REJECTED at the payload row even though the enclosing row admits Env -- the enclosing row no longer absorbs an inline atom"
+fi
+write_abi_ctor 'export func build() -> [Capability] ! {Env} { [Compactor(func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } })] }'
+if out=$(AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" 2>&1); then
+  bad "IMPORTED SUM (annot): an inline lambda DECLARING the payload row and performing Env was ACCEPTED -- limitation 1 now applies in constructor-argument position"
+elif echo "$out" | grep -q "uses effects not declared in its"; then
+  ok "IMPORTED SUM (annot): an inline lambda DECLARING the payload row and performing Env is REJECTED at its own annotation -- same verdict as the local-sum (i-annot) row"
+else
+  bad "IMPORTED SUM (annot): rejected, but not at the lambda's annotation: $(echo "$out" | grep -E '^Error' | head -1)"
+fi
+write_abi_ctor 'export func build() -> [Capability] { [Compactor(func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } })] }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "IMPORTED SUM (exact-ctl): an inline lambda at exactly the payload row, performing nothing, is ACCEPTED -- so the three rejections above are caused by the rows, not by the probe"
+else
+  bad "IMPORTED SUM (exact-ctl) was REJECTED -- a clean atom at the payload's own row does not compile, so nothing in this section measures rows"
+fi
+write_abi_ctor 'type W = { f: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace} }
+export func build() -> [Capability] ! {Env} {
+  let w: W = { f: func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } } };
+  [Compactor(w.f)]
+}'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "IMPORTED SUM (smuggle): the SAME performing lambda bound to a LOCAL record field first and then passed as the atom is ACCEPTED -- limitation 1 is the one remaining door into a 6.0 payload, and it is what this file's control_env/control_fs use"
+else
+  bad "IMPORTED SUM (smuggle) was REJECTED: record-field lambda rows are now checked upstream. GOOD NEWS, and control_env/control_fs (built through that door) can no longer be constructed -- rebuild them before trusting the runtime rows above"
+fi
+# The local-vs-imported control: the SAME sum, once imported, flips the verdict.
+LIMMOD=scripts/dst/dvp_limitation_sum.ail   # no dot prefix: the module name must match the file name to be importable
+cat > "$LIMMOD" <<EOF
+module scripts/dst/dvp_limitation_sum
+export type C = K((string) -> () ! {IO}) | Noop
+EOF
+write_imp() {
+  cat > "$LIMPROBE" <<EOF
+module scripts/dst/dvp_limitation_probe
+import std/env (getEnvOr)
+import std/io (println)
+import scripts/dst/dvp_limitation_sum (C, K, Noop)
+$1
+EOF
+}
+write_imp 'func impl(s: string) -> () ! {Env, IO} { let _ = getEnvOr("PATH",""); println(s) }
+export func build() -> C ! {IO} { K(impl) }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  bad "LOCAL-vs-IMPORTED: the (i-named) shape is ACCEPTED against the IMPORTED copy of the same sum -- so the imported-sum rejections above are about the ABI's rows, not about import position, and this section's explanation is wrong"
+else
+  ok "LOCAL-vs-IMPORTED: the (i-named) shape accepted on the LOCAL sum is REJECTED against the IMPORTED copy of the same sum -- import position is what closes ADR Q3's hole"
+fi
+write_imp 'func impl(s: string) -> () ! {IO} { println(s) }
+export func build() -> C ! {IO} { K(impl) }'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "LOCAL-vs-IMPORTED (control): the exact-row impl is ACCEPTED against the imported sum, so the rejection above is the row"
+else
+  bad "LOCAL-vs-IMPORTED (control) REJECTED -- the imported-sum probe does not compile at all and the row above establishes nothing"
+fi
+rm -f "$LIMMOD"
 
 # THE FOURTH LIMITATION PROBE: CONSUMPTION / MATCH-OUT POSITION (ADR-001 Phase B,
 # B1; decides plan D9). The previous rows all bound a hook at CONSTRUCTION. D9

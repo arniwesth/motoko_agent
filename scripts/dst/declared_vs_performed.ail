@@ -84,6 +84,7 @@ import std/io (println)
 import std/env (getEnvOr)
 import std/fs (readFile)
 import std/json (Json, jo, kv, js, get, asString)
+import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 
@@ -99,8 +100,8 @@ import src/core/ext/runtime as Rt (
 )
 
 import pkg/sunholo/motoko_ext_abi/types (
-  default_hooks,
-  ExtCtx, ExtPorts, ExtWorld, ExtRuntime, ExtensionHooks,
+  Capability, ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  ExtCtx, ExtPorts, ExtWorld, ExtRuntime,
   BudgetPlan, BudgetPatch, PromptPatch, ToolSchema,
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   PreStepDecision, ToolPolicyDecision, ToolHandleDecision,
@@ -300,8 +301,8 @@ pure func join_ids(xs: [string]) -> string {
   }
 }
 
-func rt_of(h: ExtensionHooks) -> ExtRuntime {
-  { registry: { hooks: [h] }, strict_mode: false, verification: no_verification() }
+func rt_of(h: ExtEntry) -> ExtRuntime {
+  { registry: { entries: [h] }, strict_mode: false, verification: no_verification() }
 }
 
 -- ---------------------------------------------------------------------------
@@ -458,84 +459,76 @@ pure func compose_cfg(mode: string) -> ComposeHostConfig {
 -- lambda in ARGUMENT position, where the effect checker does fire, and the
 -- control stops compiling. That is why `control_hooks` is no longer
 -- parameterised over the hook.
-func env_control_hooks() -> ExtensionHooks ! {Env} {
-  { control_base() | on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+-- B8: THE CONTROLS GO THROUGH LIMITATION 1'S DOOR, AND THAT IS A MEASUREMENT.
+-- Through 5.x an inline lambda declaring the slot row and performing Env
+-- compiled in RECORD-FIELD position because the enclosing row absorbed it. At
+-- 6.0 the same body in CONSTRUCTOR-ARGUMENT position of the IMPORTED
+-- `Capability` sum is REJECTED in every shape B1 measured on a LOCAL sum as
+-- accepted: a named function declared `! {AI, IO, Trace, Env}` is refused
+-- (`incompatible closed rows: r2 has extra labels [Env]`), an unannotated
+-- inline lambda is refused at the payload row, and an annotated one at its own
+-- annotation. The runner's IMPORTED-SUM rows pin all four verdicts. So the
+-- ONLY way to build a performing control atom is the record-field smuggle:
+-- bind the lambda to a field of a LOCAL record type (where its row is not
+-- checked against its body -- limitation 1), then pass the field. Which is
+-- exactly the door the ADR feared and the runner's `smuggle` row pins.
+type ControlBody = { f: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace} }
+
+func env_control_body() -> ControlBody ! {Env} {
+  { f: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
       let _ = getEnvOr("PATH", "");
       { decision: { PassThrough }, next_state: ctx.world }
     } }
 }
 
-func fs_control_hooks() -> ExtensionHooks ! {FS} {
-  { control_base() | on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+func fs_control_body() -> ControlBody ! {FS} {
+  { f: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
       let _ = readFile("ailang.toml");
       { decision: { PassThrough }, next_state: ctx.world }
     } }
 }
 
--- MIGRATED TO THE ABI's `default_hooks` AT ADR-001 Phase A (A5), after A4
--- measured that record-update position is literal position on this toolchain.
--- The one field the old literal bound differently from the ABI default is
--- `on_tool_policy` (`Allow` where the default is `NoOpinion`), kept as an
--- override so the control's semantics are byte-for-byte what they were. The
--- two performing controls above still bind their lambda INLINE behind this
--- head: A4 (a) is the row that says they may. This is 1 of ~20 full-literal
--- sites in the tree [RK C8]; the other 19 are left for Phase B step B7.
-func control_base() -> ExtensionHooks {
-  { default_hooks("dvp_control") | on_tool_policy: \_ctx _call. Allow }
+func env_control_hooks() -> ExtEntry ! {Env} {
+  { id: "dvp_control", caps: [Compactor(env_control_body().f), ToolPolicy(\_ctx _call. Allow)] }
 }
 
--- ---------------------------------------------------------------------------
--- The witness hook, and the mutant that forced it to exist
--- ---------------------------------------------------------------------------
---
--- FOUND BY MUTATION, and it is the failure mode this whole item was warned
--- about. The first version of these arms printed a fixed completion marker.
--- Deleting the dispatch from an arm — leaving a program that measures NOTHING —
--- left this gate GREEN AT NINE OF NINE ROWS, because the marker's producer was
--- the arm's own code rather than the dispatch. That is S16 one level down,
--- inside the instrument built to answer S16.
---
--- The fix is that every subject arm now prints a value it can only obtain BY
--- DISPATCHING. `dvp_witness` is registered AFTER compose in the same registry,
--- and the folds in `src/core/ext/runtime.ail` are unconditional and in order,
--- so the witness's sentinel can only appear in the result if the fold ran and
--- invoked compose's hook FIRST. Deleting the dispatch now fails to compile;
--- faking the sentinel takes a deliberate edit rather than a deletion.
---
--- The sentinels are pairwise distinct (S7): a single shared value could not
--- distinguish which arm's fold produced it.
+func fs_control_hooks() -> ExtEntry ! {FS} {
+  { id: "dvp_control", caps: [Compactor(fs_control_body().f), ToolPolicy(\_ctx _call. Allow)] }
+}
+
 pure func budget_sentinel() -> int { 4242 }
 pure func solver_sentinel() -> string { "dvp-solver-witness" }
 pure func intercept_sentinel() -> string { "dvp-intercept-witness" }
 pure func witness_id() -> string { "dvp_witness" }
 
--- MIGRATED TO `default_hooks` AT ADR-001 Phase A (A5). Only the three slots
+-- MIGRATED TO `default_hooks` AT ADR-001 Phase A (A5), AND TO THE 6.0 LIST AT B8 (only the atoms that carry a sentinel are registered now). Only the three slots
 -- that carry a sentinel are written here; the neutral five come from the ABI.
 -- `on_tool_policy: Allow` is kept as an override for the same reason as in
 -- `control_base` — the old literal said `Allow`, the ABI default says
 -- `NoOpinion`, and this file's arms must keep measuring what they measured.
-func witness_hooks() -> ExtensionHooks {
-  { default_hooks(witness_id()) |
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func witness_hooks() -> ExtEntry {
+  { id: witness_id(), caps: [
+    -- a pass-through Compactor, so the chain's stage list names the witness
+    -- after the subject (compose_pre_step's `compose+dvp_witness`)
+    Compactor(\ctx _msgs. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace}),
+    BudgetShaper(func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: Some(budget_sentinel()), requested_solver: None, requested_verifier: None }
-    },
-    on_tool_policy: \_ctx _call. Allow,
-    on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+    }),
+    ToolPolicy(\_ctx _call. Allow),
+    ResponseInterceptor(func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
       { decision: { InterceptHandled({ tool_call_id: intercept_sentinel(), tool: "dvp", exit_code: 0,
                                        stdout: "", stderr: "", metadata: jo([]) }) },
         next_state: ctx.world }
-    },
-    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} {
+    }),
+    SolverJudge(func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} {
       { decision: { Accept(solver_sentinel()) }, next_state: ctx.world }
-    } }
+    })
+  ] }
 }
 
--- compose FIRST, witness SECOND. The order is the load-bearing part: every fold
--- in ext/runtime.ail walks the registry in order, so reaching the witness
--- entails having invoked compose.
 func compose_then_witness(mode: string) -> ExtRuntime ! {AI, Clock, Env, FS, IO, Process, Rand} {
-  let hooks = Compose.register_with_config(compose_cfg(mode));
-  { registry: { hooks: [hooks, witness_hooks()] }, strict_mode: false, verification: no_verification() }
+  let caps = Compose.register_with_config(compose_cfg(mode));
+  { registry: { entries: [{ id: "compose", caps: caps }, witness_hooks()] }, strict_mode: false, verification: no_verification() }
 }
 
 -- ---------------------------------------------------------------------------
@@ -759,7 +752,7 @@ export func control_fs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, Sh
 -- obtainable only by having called the registration.
 export func reg_test_dummy() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = TestDummy.register_with_config(0);
-  reached("reg_test_dummy", h.id)
+  reached("reg_test_dummy", show(List.length(h)))
 }
 
 -- test_dummy — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -767,7 +760,7 @@ export func reg_test_dummy() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand
 -- unless the fold ran and invoked test_dummy's `on_budget_plan` first.
 export func budget_test_dummy() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = TestDummy.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_test_dummy", show(out.total))
 }
@@ -776,7 +769,7 @@ export func budget_test_dummy() -> () ! {AI, Clock, Env, FS, IO, Net, Process, R
 -- obtainable only by having called the registration.
 export func reg_omnigraph() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Omnigraph.register_with_config(0);
-  reached("reg_omnigraph", h.id)
+  reached("reg_omnigraph", show(List.length(h)))
 }
 
 -- omnigraph — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -784,7 +777,7 @@ export func reg_omnigraph() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand,
 -- unless the fold ran and invoked omnigraph's `on_budget_plan` first.
 export func budget_omnigraph() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Omnigraph.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_omnigraph", show(out.total))
 }
@@ -793,7 +786,7 @@ export func budget_omnigraph() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Ra
 -- obtainable only by having called the registration.
 export func reg_context_mode() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = ContextMode.register_with_config(0);
-  reached("reg_context_mode", h.id)
+  reached("reg_context_mode", show(List.length(h)))
 }
 
 -- context_mode — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -801,7 +794,7 @@ export func reg_context_mode() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Ra
 -- unless the fold ran and invoked context_mode's `on_budget_plan` first.
 export func budget_context_mode() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = ContextMode.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_context_mode", show(out.total))
 }
@@ -810,7 +803,7 @@ export func budget_context_mode() -> () ! {AI, Clock, Env, FS, IO, Net, Process,
 -- obtainable only by having called the registration.
 export func reg_mcp() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Mcp.register_with_config(0);
-  reached("reg_mcp", h.id)
+  reached("reg_mcp", show(List.length(h)))
 }
 
 -- mcp — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -818,7 +811,7 @@ export func reg_mcp() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, Share
 -- unless the fold ran and invoked mcp's `on_budget_plan` first.
 export func budget_mcp() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Mcp.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_mcp", show(out.total))
 }
@@ -827,7 +820,7 @@ export func budget_mcp() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, Sh
 -- obtainable only by having called the registration.
 export func reg_exa_search() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = ExaSearch.register_with_config(0);
-  reached("reg_exa_search", h.id)
+  reached("reg_exa_search", show(List.length(h)))
 }
 
 -- exa_search — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -835,7 +828,7 @@ export func reg_exa_search() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand
 -- unless the fold ran and invoked exa_search's `on_budget_plan` first.
 export func budget_exa_search() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = ExaSearch.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_exa_search", show(out.total))
 }
@@ -844,7 +837,7 @@ export func budget_exa_search() -> () ! {AI, Clock, Env, FS, IO, Net, Process, R
 -- obtainable only by having called the registration.
 export func reg_ailang_docs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = AilangDocs.register_with_config(0);
-  reached("reg_ailang_docs", h.id)
+  reached("reg_ailang_docs", show(List.length(h)))
 }
 
 -- ailang_docs — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -852,7 +845,7 @@ export func reg_ailang_docs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Ran
 -- unless the fold ran and invoked ailang_docs's `on_budget_plan` first.
 export func budget_ailang_docs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = AilangDocs.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_ailang_docs", show(out.total))
 }
@@ -861,7 +854,7 @@ export func budget_ailang_docs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, 
 -- obtainable only by having called the registration.
 export func reg_compose() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = ComposeReg.register_with_config(0);
-  reached("reg_compose", h.id)
+  reached("reg_compose", show(List.length(h)))
 }
 
 -- compose — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -869,7 +862,7 @@ export func reg_compose() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, S
 -- unless the fold ran and invoked compose's `on_budget_plan` first.
 export func budget_compose() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = ComposeReg.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_compose", show(out.total))
 }
@@ -878,7 +871,7 @@ export func budget_compose() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand
 -- obtainable only by having called the registration.
 export func reg_a2a() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = A2a.register_with_config(0);
-  reached("reg_a2a", h.id)
+  reached("reg_a2a", show(List.length(h)))
 }
 
 -- a2a — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -886,7 +879,7 @@ export func reg_a2a() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, Share
 -- unless the fold ran and invoked a2a's `on_budget_plan` first.
 export func budget_a2a() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = A2a.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_a2a", show(out.total))
 }
@@ -895,7 +888,7 @@ export func budget_a2a() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, Sh
 -- obtainable only by having called the registration.
 export func reg_decision_framework() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = DecisionFramework.register_with_config(0);
-  reached("reg_decision_framework", h.id)
+  reached("reg_decision_framework", show(List.length(h)))
 }
 
 -- decision_framework — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -903,7 +896,7 @@ export func reg_decision_framework() -> () ! {AI, Clock, Env, FS, IO, Net, Proce
 -- unless the fold ran and invoked decision_framework's `on_budget_plan` first.
 export func budget_decision_framework() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = DecisionFramework.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_decision_framework", show(out.total))
 }
@@ -912,7 +905,7 @@ export func budget_decision_framework() -> () ! {AI, Clock, Env, FS, IO, Net, Pr
 -- obtainable only by having called the registration.
 export func reg_microrag() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Microrag.register_with_config(0);
-  reached("reg_microrag", h.id)
+  reached("reg_microrag", show(List.length(h)))
 }
 
 -- microrag — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -920,7 +913,7 @@ export func reg_microrag() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, 
 -- unless the fold ran and invoked microrag's `on_budget_plan` first.
 export func budget_microrag() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Microrag.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_microrag", show(out.total))
 }
@@ -929,7 +922,7 @@ export func budget_microrag() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Ran
 -- obtainable only by having called the registration.
 export func reg_compaction_ai() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = CompactionAi.register_with_config(0);
-  reached("reg_compaction_ai", h.id)
+  reached("reg_compaction_ai", show(List.length(h)))
 }
 
 -- compaction_ai — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -937,7 +930,7 @@ export func reg_compaction_ai() -> () ! {AI, Clock, Env, FS, IO, Net, Process, R
 -- unless the fold ran and invoked compaction_ai's `on_budget_plan` first.
 export func budget_compaction_ai() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = CompactionAi.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_compaction_ai", show(out.total))
 }
@@ -946,7 +939,7 @@ export func budget_compaction_ai() -> () ! {AI, Clock, Env, FS, IO, Net, Process
 -- obtainable only by having called the registration.
 export func reg_scratchpad() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Scratchpad.register_with_config(0);
-  reached("reg_scratchpad", h.id)
+  reached("reg_scratchpad", show(List.length(h)))
 }
 
 -- scratchpad — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -954,7 +947,7 @@ export func reg_scratchpad() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand
 -- unless the fold ran and invoked scratchpad's `on_budget_plan` first.
 export func budget_scratchpad() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Scratchpad.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_scratchpad", show(out.total))
 }
@@ -963,7 +956,7 @@ export func budget_scratchpad() -> () ! {AI, Clock, Env, FS, IO, Net, Process, R
 -- obtainable only by having called the registration.
 export func reg_compaction_structural() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = CompactionStructural.register_with_config(0);
-  reached("reg_compaction_structural", h.id)
+  reached("reg_compaction_structural", show(List.length(h)))
 }
 
 -- compaction_structural — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -971,7 +964,7 @@ export func reg_compaction_structural() -> () ! {AI, Clock, Env, FS, IO, Net, Pr
 -- unless the fold ran and invoked compaction_structural's `on_budget_plan` first.
 export func budget_compaction_structural() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = CompactionStructural.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_compaction_structural", show(out.total))
 }
@@ -980,7 +973,7 @@ export func budget_compaction_structural() -> () ! {AI, Clock, Env, FS, IO, Net,
 -- obtainable only by having called the registration.
 export func reg_empty_stop_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = EmptyStopGuard.register_with_config(0);
-  reached("reg_empty_stop_guard", h.id)
+  reached("reg_empty_stop_guard", show(List.length(h)))
 }
 
 -- empty_stop_guard — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -988,7 +981,7 @@ export func reg_empty_stop_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process
 -- unless the fold ran and invoked empty_stop_guard's `on_budget_plan` first.
 export func budget_empty_stop_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = EmptyStopGuard.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_empty_stop_guard", show(out.total))
 }
@@ -997,7 +990,7 @@ export func budget_empty_stop_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Proc
 -- obtainable only by having called the registration.
 export func reg_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = ProgressContractGuard.register_with_config(0);
-  reached("reg_progress_contract_guard", h.id)
+  reached("reg_progress_contract_guard", show(List.length(h)))
 }
 
 -- progress_contract_guard — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -1005,7 +998,7 @@ export func reg_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Net, 
 -- unless the fold ran and invoked progress_contract_guard's `on_budget_plan` first.
 export func budget_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = ProgressContractGuard.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_progress_contract_guard", show(out.total))
 }
@@ -1014,7 +1007,7 @@ export func budget_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Ne
 -- obtainable only by having called the registration.
 export func reg_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Agentcli.register_with_config(0);
-  reached("reg_agentcli", h.id)
+  reached("reg_agentcli", show(List.length(h)))
 }
 
 -- agentcli — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -1022,7 +1015,7 @@ export func reg_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, 
 -- unless the fold ran and invoked agentcli's `on_budget_plan` first.
 export func budget_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Agentcli.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_agentcli", show(out.total))
 }
@@ -1031,7 +1024,7 @@ export func budget_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Ran
 -- obtainable only by having called the registration.
 export func reg_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Herdr.register_with_config(0);
-  reached("reg_herdr", h.id)
+  reached("reg_herdr", show(List.length(h)))
 }
 
 -- herdr — DISPATCH arm. The witness hook is registered AFTER the subject in
@@ -1039,7 +1032,7 @@ export func reg_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, Sha
 -- unless the fold ran and invoked herdr's `on_budget_plan` first.
 export func budget_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Herdr.register_with_config(0);
-  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_herdr", show(out.total))
 }
