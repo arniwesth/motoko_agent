@@ -99,6 +99,7 @@ import src/core/ext/runtime as Rt (
 )
 
 import pkg/sunholo/motoko_ext_abi/types (
+  default_hooks,
   ExtCtx, ExtPorts, ExtWorld, ExtRuntime, ExtensionHooks,
   BudgetPlan, BudgetPatch, PromptPatch, ToolSchema,
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
@@ -471,19 +472,16 @@ func fs_control_hooks() -> ExtensionHooks ! {FS} {
     } }
 }
 
+-- MIGRATED TO THE ABI's `default_hooks` AT ADR-001 Phase A (A5), after A4
+-- measured that record-update position is literal position on this toolchain.
+-- The one field the old literal bound differently from the ABI default is
+-- `on_tool_policy` (`Allow` where the default is `NoOpinion`), kept as an
+-- override so the control's semantics are byte-for-byte what they were. The
+-- two performing controls above still bind their lambda INLINE behind this
+-- head: A4 (a) is the row that says they may. This is 1 of ~20 full-literal
+-- sites in the tree [RK C8]; the other 19 are left for Phase B step B7.
 func control_base() -> ExtensionHooks {
-  { id: "dvp_control",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-      { requested_total: None, requested_solver: None, requested_verifier: None }
-    },
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
-    on_tool_policy: \_ctx _call. Allow,
-    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { { decision: { Delegate }, next_state: ctx.world } },
-    on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } } }
+  { default_hooks("dvp_control") | on_tool_policy: \_ctx _call. Allow }
 }
 
 -- ---------------------------------------------------------------------------
@@ -511,17 +509,17 @@ pure func solver_sentinel() -> string { "dvp-solver-witness" }
 pure func intercept_sentinel() -> string { "dvp-intercept-witness" }
 pure func witness_id() -> string { "dvp_witness" }
 
+-- MIGRATED TO `default_hooks` AT ADR-001 Phase A (A5). Only the three slots
+-- that carry a sentinel are written here; the neutral five come from the ABI.
+-- `on_tool_policy: Allow` is kept as an override for the same reason as in
+-- `control_base` — the old literal said `Allow`, the ABI default says
+-- `NoOpinion`, and this file's arms must keep measuring what they measured.
 func witness_hooks() -> ExtensionHooks {
-  { id: witness_id(),
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+  { default_hooks(witness_id()) |
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: Some(budget_sentinel()), requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
     on_tool_policy: \_ctx _call. Allow,
-    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { { decision: { Delegate }, next_state: ctx.world } },
     on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
       { decision: { InterceptHandled({ tool_call_id: intercept_sentinel(), tool: "dvp", exit_code: 0,
                                        stdout: "", stderr: "", metadata: jo([]) }) },
