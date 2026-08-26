@@ -135,6 +135,8 @@ import pkg/sunholo/motoko_ext_scratchpad/register as Scratchpad (register_with_c
 import pkg/sunholo/motoko_ext_compaction_structural/register as CompactionStructural (register_with_config)
 import pkg/sunholo/motoko_ext_empty_stop_guard/register as EmptyStopGuard (register_with_config)
 import pkg/sunholo/motoko_ext_progress_contract_guard/register as ProgressContractGuard (register_with_config)
+import pkg/sunholo/motoko_ext_agentcli/register as Agentcli (register_with_config)
+import pkg/sunholo/motoko_ext_herdr/register as Herdr (register_with_config)
 
 -- ---------------------------------------------------------------------------
 -- A context with no driver behind it
@@ -1008,4 +1010,38 @@ export func budget_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Ne
   let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_progress_contract_guard", show(out.total))
+}
+
+-- agentcli — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Agentcli.register_with_config(0);
+  reached("reg_agentcli", h.id)
+}
+
+-- agentcli — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked agentcli's `on_budget_plan` first.
+export func budget_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Agentcli.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_agentcli", show(out.total))
+}
+
+-- herdr — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Herdr.register_with_config(0);
+  reached("reg_herdr", h.id)
+}
+
+-- herdr — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked herdr's `on_budget_plan` first.
+export func budget_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Herdr.register_with_config(0);
+  let rt = { registry: { hooks: [h, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_herdr", show(out.total))
 }

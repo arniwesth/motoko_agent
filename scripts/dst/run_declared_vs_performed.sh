@@ -87,10 +87,20 @@ WITHHELD_CAPS=IO,AI,Net,SharedMem,Clock,Stream,Trace,Rand
 # `scratchpad`, which the primary regime can only report as confounded.
 FS_ONLY_CAPS=IO,AI,Net,SharedMem,Clock,Stream,Trace,Rand,Env
 
-# The fifteen extensions the host can install, in registry_generated order.
-EXTS="test_dummy omnigraph context_mode mcp exa_search ailang_docs compose a2a
-      decision_framework microrag compaction_ai scratchpad compaction_structural
-      empty_stop_guard progress_contract_guard"
+# THE SUBJECT LIST IS DERIVED, NOT WRITTEN (ADR-001 Phase A step A2). It is the
+# host's own generated registry, in registry order, so an extension added to the
+# host is a subject the moment `registry_generated.ail` names it. The hand list
+# that stood here said fifteen after the tree had grown to seventeen, and this
+# gate went red on STALENESS (agentcli, herdr unmeasured) rather than on a
+# violation -- which is the right direction, and the reason the list is now read
+# rather than kept. The probe's imports and arms are still hand-written, and the
+# member-for-member row below is what holds THEM to this list.
+# `[a-z0-9_]` rather than `[a-z_]`: the first version of this row truncated
+# `register_a2a` to `a` and reported a disagreement that did not exist. A
+# character class is a claim about the data too.
+EXTS=$(grep -o 'register_with_config as register_[a-z0-9_]*' "$GENREG" \
+       | sed 's/.*as register_//' | tr '\n' ' ')
+N_EXTS=$(echo $EXTS | wc -w | tr -d ' ')
 
 pass=0
 fail=0
@@ -102,7 +112,7 @@ run_arm() {
   AILANG_RELAX_MODULES=1 ailang run --caps "$2" --entry "$1" "$PROBE" </dev/null 2>&1
 }
 
-echo "declared_vs_performed — D5's missing detector (WI-C5), all fifteen bindings (WI-D6)"
+echo "declared_vs_performed — D5's missing detector (WI-C5), all $N_EXTS bindings (WI-D6; count read from $GENREG)"
 echo ""
 echo "-- producer 1: DECLARED, read from source --"
 
@@ -155,21 +165,24 @@ else
   fi
 fi
 
-# THE SUBJECT LIST IS NOT HAND-WRITTEN. WI-D6's handoff named eight extensions
-# binding this slot; the tree has fifteen, and the six it missed are exactly the
-# ones a reader would skip. So the list is derived from the host's own generated
-# registry and compared member for member — an extension added to the host
-# cannot escape measurement by not being noticed.
-# `[a-z0-9_]` rather than `[a-z_]`: the first version of this row truncated
-# `register_a2a` to `a` and reported a disagreement that did not exist. A
-# character class is a claim about the data too.
-reg_names=$(grep -o 'register_with_config as register_[a-z0-9_]*' "$GENREG" \
-            | sed 's/.*as register_//' | sort)
-arm_names=$(echo $EXTS | tr ' ' '\n' | sort)
+# THE PROBE'S ARMS ARE HAND-WRITTEN AND THE SUBJECT LIST IS NOT. WI-D6's handoff
+# named eight extensions binding this slot; the tree had fifteen, and the six it
+# missed are exactly the ones a reader would skip. Then the tree grew to
+# seventeen and the hand list here missed two more (agentcli, herdr) [ADR-001
+# Phase A, A2]. So `EXTS` is now READ from the host's generated registry, and
+# what this row compares member for member is the registry against the probe's
+# own `reg_<ext>`/`budget_<ext>` arms -- the part that still has to be typed by
+# hand, and therefore the part that can still drift. An extension the host can
+# install with no arm in the probe is a subject this gate would otherwise skip
+# in silence.
+reg_names=$(echo $EXTS | tr ' ' '\n' | sort)
+arm_names=$(grep -oE '^export func (reg|budget)_[a-z0-9_]+\(' "$PROBE" \
+            | sed -E 's/^export func (reg|budget)_//; s/\($//' | sort | uniq -c \
+            | awk '$1 == 2 { print $2 }')
 if [ "$reg_names" == "$arm_names" ]; then
-  ok "the subject list equals $GENREG's install set member for member ($(echo "$arm_names" | wc -l) extensions)"
+  ok "every extension in $GENREG's install set has a reg_/budget_ arm pair in $PROBE ($N_EXTS extensions, member for member)"
 else
-  bad "the subject list and the host's generated registry DISAGREE — an installable extension is unmeasured:
+  bad "the host's generated registry and the probe's arm pairs DISAGREE — an installable extension is unmeasured:
 $(diff <(echo "$reg_names") <(echo "$arm_names") | head -10)"
 fi
 
@@ -236,7 +249,7 @@ else
 fi
 
 echo ""
-echo "   all fifteen on_budget_plan bindings, register-vs-dispatch differential:"
+echo "   all $N_EXTS on_budget_plan bindings, register-vs-dispatch differential:"
 echo "      regime A = Env, FS, Process withheld     regime B = FS, Process withheld (Env granted)"
 
 # Counted as SETS of extension names rather than as row tallies. The first
@@ -298,8 +311,8 @@ n_measured=$(echo $measured_set | wc -w)
 n_confounded=$(echo $confounded_set | wc -w)
 if [ "$blocking" -eq 0 ]; then
   ok "no binding is BLOCKING: across both regimes not one dispatch died on Env or FS"
-  echo "      MEASURED   ($n_measured/15): $(echo $measured_set)"
-  echo "      CONFOUNDED ($n_confounded/15): $(echo $confounded_set)"
+  echo "      MEASURED   ($n_measured/$N_EXTS): $(echo $measured_set)"
+  echo "      CONFOUNDED ($n_confounded/$N_EXTS): $(echo $confounded_set)"
   echo "      compose is confounded through its register WRAPPER (which reads Env) and"
   echo "      MEASURED separately by compose_budget above, which takes a literal config."
   echo "      The $n_confounded confounded subjects are settled by producer 3 below, not by this one."
@@ -722,11 +735,16 @@ limcleanup
 # `microrag` declare no row at all (so they absorb nothing), and `compose`
 # declares TWO — a wrapper in `register.ail` and the real one in `compose.ail`,
 # which is the file that also binds the hook.
+# 14 -> 16 at ADR-001 Phase A (A2): the registry grew by agentcli and herdr,
+# both of which declare a row. The denominator is still ROWS, and it is still
+# (extensions - 2 rowless + 1 for compose's second), stated as that arithmetic
+# so the next extension moves it by a visible +1 rather than by a re-pin.
+want_reg_rows=$((N_EXTS - 2 + 1))
 n_reg_rows=$( { grep -rlE "func register_with_config.*!" --include=*.ail packages/ 2>/dev/null || true; } | wc -l | tr -d ' ')
-if [ "$n_reg_rows" -eq 14 ]; then
-  ok "14 register_with_config rows across the 15 extensions (decision_framework and microrag declare none; compose declares two) — the denominator for the absorption rows below"
+if [ "$n_reg_rows" -eq "$want_reg_rows" ]; then
+  ok "$n_reg_rows register_with_config rows across the $N_EXTS extensions (decision_framework and microrag declare none; compose declares two) — the denominator for the absorption rows below"
 else
-  bad "the number of register_with_config rows moved from 14 to $n_reg_rows, so every absorption fraction below has a different denominator than the one they were measured against"
+  bad "the number of register_with_config rows moved from $want_reg_rows to $n_reg_rows, so every absorption fraction below has a different denominator than the one they were measured against"
 fi
 absorb() {  # $1 = effect name, $2 = expected count of ROWS admitting it
   local n
@@ -738,9 +756,15 @@ absorb() {  # $1 = effect name, $2 = expected count of ROWS admitting it
     bad "absorption of '$1' moved from $2 to $n rows. That changes how much the WI-D6/D7/D8 slot narrowings actually enforce — re-read the note in declared_vs_performed.ail"
   fi
 }
-absorb Env 14
-absorb FS 12
-absorb Process 7
+# Re-measured at ADR-001 Phase A (A2) over the seventeen-extension registry:
+# agentcli (`! {Env, FS, IO, Process}`) and herdr (`! {Clock, Env, FS, IO,
+# Process}`) each admit all three, so every count below moved by exactly +2
+# from the WI-D8 values (14, 12, 7). These are PINS, and the producer of the
+# expected value is the rows in `packages/*/register.ail` -- the next change is
+# a re-measurement, not a re-pin.
+absorb Env 16
+absorb FS 14
+absorb Process 9
 # The one registration that absorbs EVERYTHING, named rather than counted.
 if grep -qE "func register_with_config.*! ?$old_ten" packages/motoko-ext-compaction-ai/register.ail; then
   ok "compaction_ai's register_with_config still carries the ten-effect row — the ONE registration that absorbs any effect its inline hooks begin performing (recorded, not fixed: narrowing it is its own measurement item)"
@@ -868,8 +892,8 @@ cleanup
 echo ""
 echo "-- the three producers compared --"
 echo "      DECLARED  on_budget_plan : ! {}   (ABI row, static, authored — WI-D6 narrowed it)"
-echo "      PERFORMED on_budget_plan : ! {}   (runtime trap, out of process, $n_measured of 15 witnessed)"
-echo "      PERFORMED on_budget_plan : ! {}   (effect checker, all 15 bindings, total over inputs)"
+echo "      PERFORMED on_budget_plan : ! {}   (runtime trap, out of process, $n_measured of $N_EXTS witnessed)"
+echo "      PERFORMED on_budget_plan : ! {}   (effect checker, all $N_EXTS bindings, total over inputs)"
 echo "      Through WI-D5 the declared row was the closed ! {Env, FS} and the gap"
 echo "      between it and the behaviour was the sole reason no extension in the"
 echo "      tree was installable in a conformant profile. WI-D6 closed the gap by"

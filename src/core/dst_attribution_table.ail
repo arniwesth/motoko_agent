@@ -303,10 +303,17 @@ export pure func table_identity() -> TableIdentity {
 -- revision rejected uninstalled ids, which defeats the table's whole purpose —
 -- under that rule row 1 could not exist in any checked-in configuration, the
 -- site defaulted to unconditional core, and the driver obligation was five.
+-- The install set of `src/core/ext/registry_generated.ail`, in registry order.
+-- Fifteen through WI-D8; agentcli and herdr added at ADR-001 Phase A (A2) when
+-- `declared_vs_performed` found the runner's hand list two behind the registry.
+-- This list is hand-kept too, so it can lag the same way; the runner's
+-- member-for-member row is the check that notices, and this is the second
+-- place to update when it does.
 export pure func known_hook_ids() -> [string] {
   ["test_dummy", "omnigraph", "context_mode", "mcp", "exa_search", "ailang_docs",
    "compose", "a2a", "decision_framework", "microrag", "compaction_ai",
-   "scratchpad", "compaction_structural", "empty_stop_guard", "progress_contract_guard"]
+   "scratchpad", "compaction_structural", "empty_stop_guard", "progress_contract_guard",
+   "agentcli", "herdr"]
 }
 
 pure func contains_str(xs: [string], target: string) -> bool {
