@@ -14,7 +14,15 @@
     "and reject_update_head_not_default_hooks cover the `{ base | ... }` head. The",
     "yield pins below were NOT changed for it: empty_stop_guard was already pinned",
     "hook_port_mediated, and the selftest was red only because the tree had stopped",
-    "parsing its record [RK C1]."
+    "parsing its record [RK C1].",
+    "",
+    "ADR-001 Phase B, B2 (the 6.0 `[Capability]` list head): the four",
+    "control_capability_list_* and four reject_capability_list_* fixtures. Every",
+    "list control pins its ATOM COUNT -- the fail-closed denominator: a reader",
+    "that enumerates fewer atoms than are written cannot report the fixture",
+    "green. The named-wide control is the one that carries B1's finding: the",
+    "payload row bounds nothing in constructor-argument position, so a wide-rowed",
+    "named binding must be SCANNED, and it reaches std/env."
   ],
   "fixtures": {
     "control_registration_only": {
@@ -108,6 +116,66 @@
       ],
       "registration_only": [],
       "form": "an update whose base is a local builder, not `default_hooks` -- fail closed"
+    },
+    "control_capability_list_inline": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 3,
+      "form": "B2: a literal [Kind(f), ...] list, three inline atoms (one lambda with a comma)"
+    },
+    "control_capability_list_named_wide": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 1,
+      "form": "B2: a wide-rowed NAMED atom is scanned, not trusted -- it reaches std/env"
+    },
+    "control_capability_list_same_kind": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 4,
+      "form": "B2: N>1 of one kind enumerated per index, ToolProvider(names, handle), behind a hop"
+    },
+    "control_capability_list_empty": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 0,
+      "form": "B2: `[]` resolves with ZERO atoms, pinned (D7 is B3's question, not the reader's)"
+    },
+    "reject_capability_list_computed": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: the list is built by `[..] ++ extra(cfg)` -- literal lists only"
+    },
+    "reject_capability_list_element": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: one element is a call returning an atom -- a computed element"
+    },
+    "reject_capability_list_arity": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: ToolProvider applied to one argument -- the binding position is a guess"
+    },
+    "reject_capability_list_unknown_kind": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: `Judge(..)` is not a known constructor; plus a trailing comma (count discipline)"
     }
   },
   "yield": {
@@ -120,7 +188,11 @@
       "WI-D6 shape) and DROPS compaction_structural -- not because a hook of it",
       "reaches an effect, but because `show` is a door the shipped tool does not",
       "watch. That drop is the finding, and pinning it here is what keeps it from",
-      "being quietly re-admitted."
+      "being quietly re-admitted.",
+      "",
+      "`capability_list_atoms` (B2) pins, per extension, which registrations",
+      "resolve through the 6.0 list head and how many atoms each holds. EMPTY on",
+      "the 5.x tree by construction; B8 re-pins it with seventeen entries by hand."
     ],
     "extensions": 17,
     "closure_port_mediated": [
@@ -153,6 +225,7 @@
       "mcp",
       "progress_contract_guard",
       "test_dummy"
-    ]
+    ],
+    "capability_list_atoms": {}
   }
 }

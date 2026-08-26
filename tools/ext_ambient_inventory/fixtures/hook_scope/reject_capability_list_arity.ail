@@ -1,0 +1,14 @@
+-- WRONG ARITY: `ToolProvider` takes (names, handle) and is applied to one
+-- argument.  Whichever argument was meant, the binding position is ambiguous
+-- and the tool must not guess.  Fail closed.
+module fixture/reject_capability_list_arity
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ToolCallEnvelope, ToolHandleOutcome)
+
+func handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  { decision: { Delegate }, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  [ToolProvider(handle)]
+}

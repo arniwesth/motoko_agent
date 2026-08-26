@@ -1,0 +1,16 @@
+-- "Literal lists only".  The list is BUILT by an expression -- a literal
+-- concatenated with a call -- so the atoms past the literal are text this tool
+-- has not read.  Fail closed: capability-list-unresolvable.
+module fixture/reject_capability_list_computed
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, FinalizeOutcome)
+
+func judge(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: { NoDecision }, next_state: ctx.world }
+}
+
+func extra(_cfg: a) -> [Capability] { [] }
+
+export func register_with_config(cfg: a) -> [Capability] {
+  [SolverJudge(judge)] ++ extra(cfg)
+}
