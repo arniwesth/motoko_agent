@@ -61,11 +61,12 @@ import std/result (Result, Ok, Err)
 import std/ai (Message)
 import src/core/config (CostRates)
 import pkg/sunholo/motoko_ext_abi/types (
-  BudgetPlan, ExtRuntime, ExtCtx, ExtensionHooks, VerificationConfig,
+  BudgetPlan, ExtRuntime, ExtCtx, VerificationConfig,
   ToolCallEnvelope, ToolPolicyDecision, Allow, Deny, Pending, DenyAfterTimeout,
   ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, PreStepOutcome,
   PromptPatch, BudgetPatch, Msg, Delegate, Handled, NoIntercept, NoDecision, PassThrough
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks, FixtureOverrides)
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
 import src/core/test/stub_step (
@@ -182,26 +183,30 @@ pure func no_verification() -> VerificationConfig {
   { enabled: false, command: "" }
 }
 
-func base_hooks(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtensionHooks {
+func base_hooks(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
+  fixture_hooks(id, base_overrides(policy))
+}
+
+-- B7: the overrides as a value, updated by KIND below (no slot names).
+func base_overrides(policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureOverrides {
   {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+    tools: [],
+    describe: \_ . [],
+    prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
       { decision: PassThrough, next_state: ctx.world }
     },
-    on_tool_policy: policy,
-    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+    policy: policy,
+    provide: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       { decision: Delegate, next_state: ctx.world }
     },
-    on_response_intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+    intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
       { decision: NoIntercept, next_state: ctx.world }
     },
-    on_solver_candidate: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process} {
+    judge: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process} {
       { decision: NoDecision, next_state: ctx.world }
     }
   }
@@ -227,10 +232,10 @@ func pending_rt() -> ExtRuntime {
 -- exists so the closure is OBSERVED by the wire gate rather than inferred from
 -- another target's output.
 func handled_rt() -> ExtRuntime {
-  let hooks = {
-    base_hooks("d2_handled", \_ctx _call. Allow) |
-    provided_tools: ["BashExec"],
-    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let hooks = fixture_hooks("d2_handled", {
+    base_overrides(\_ctx _call. Allow) |
+    tools: ["BashExec"],
+    provide: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       {
         decision: Handled({
           tool_call_id: call.id,
@@ -243,7 +248,7 @@ func handled_rt() -> ExtRuntime {
         next_state: ctx.world
       }
     }
-  };
+  });
   { registry: { hooks: [hooks] }, strict_mode: false, verification: no_verification() }
 }
 

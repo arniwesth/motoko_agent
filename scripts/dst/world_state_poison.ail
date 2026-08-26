@@ -39,10 +39,11 @@ import src/core/session (TracedSessionResult)
 import src/core/test/stub_step (LiveAI, ScriptedWorld, tool_step, prose_step)
 import src/core/ports (WorldState, empty_world_state)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  BudgetPlan, BudgetPatch, ExtRuntime, ExtCtx, ExtensionHooks, Allow, PassThrough,
+  BudgetPlan, BudgetPatch, ExtRuntime, ExtCtx, Allow, PassThrough,
   PreStepDecision, PromptPatch, ToolPolicyDecision, ToolHandleDecision, ToolSchema,
   ResponseInterceptDecision, FinalizeDecision, Delegate, NoIntercept, NoDecision
 )
+import src/core/test/ext_fixture (fixture_hooks)
 import std/option (None)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
@@ -50,20 +51,19 @@ import src/core/tool_contract (ToolCallEnvelope)
 -- Allows every tool, so the unseeded world reaches the real dispatcher.
 func allow_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  let hooks: ExtensionHooks = {
-    id: "poison_allow",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+  let hooks = fixture_hooks("poison_allow", {
+    tools: [],
+    describe: \_ . [],
+    prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
-    on_tool_policy: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow },
-    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
-    on_response_intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
-  };
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
+    policy: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow },
+    provide: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
+    intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
+    judge: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+  });
   { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
 }
 

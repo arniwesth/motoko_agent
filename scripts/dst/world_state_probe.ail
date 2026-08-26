@@ -99,7 +99,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   Delegate,
   ExtCtx,
   ExtRuntime,
-  ExtensionHooks,
   FinalizeDecision,
   NoDecision,
   NoIntercept,
@@ -116,6 +115,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision,
   ToolSchema
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -232,19 +232,24 @@ func consuming_pre_step_2(ctx: ExtCtx, _msgs: [Msg])
 func consuming_pre_step_3(ctx: ExtCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: consume_steps(3, ctx.world, ctx.ports) } }
 
-func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtensionHooks {
-  {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: no_describe,
-    on_build_system_prompt: no_prompt,
-    on_budget_plan: no_budget,
-    on_pre_step: pre,
-    on_tool_policy: deny_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: no_solver
-  }
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> FixtureHooks {
+  hooks_with(id, pre, deny_policy)
+}
+
+-- B7: the policy is a parameter rather than a record update on the result, so
+-- no site outside ext_fixture.ail spells a slot name.
+func hooks_with(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
+  fixture_hooks(id, {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: pre,
+    policy: policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  })
 }
 
 func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, id: string) -> ExtRuntime {
@@ -685,15 +690,15 @@ func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision
   Pending("probe: approval required", DenyAfterTimeout)
 }
 
-func approval_hooks(id: string) -> ExtensionHooks {
-  { hooks(id, passthrough_pre_step) | on_tool_policy: pending_policy }
+func approval_hooks(id: string) -> FixtureHooks {
+  hooks_with(id, passthrough_pre_step, pending_policy)
 }
 
 func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow }
 
 func allow_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [{ hooks(id, passthrough_pre_step) | on_tool_policy: allow_policy }] }, strict_mode: false, verification: v }
+  { registry: { hooks: [hooks_with(id, passthrough_pre_step, allow_policy)] }, strict_mode: false, verification: v }
 }
 
 func approval_rt(id: string) -> ExtRuntime {

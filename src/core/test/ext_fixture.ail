@@ -2,6 +2,16 @@
 --
 -- This is an in-repo test extension, not a package. It exercises the
 -- extension-produced transcript paths before ledger emission is rewired.
+--
+-- ADR-001 Phase B, B7: THE ONE TEST-OWNED CONSTRUCTOR. Every DST/test fixture
+-- that used to write a full `ExtensionHooks` literal now calls
+-- `fixture_hooks(id, overrides)`, and `FixtureOverrides` names its fields by
+-- the 6.0 CAPABILITY KIND (`compact`, `judge`, `provide`, ...) rather than by
+-- the 5.x slot. So the ~20 fixture sites [RK C8] no longer spell the ABI's
+-- record shape at all: when B8 lands the `Capability` list, THIS function (and
+-- the `FixtureHooks` alias) change, and no fixture does. `fixture_defaults()`
+-- is the ABI's own `default_hooks` re-keyed, so a fixture that overrides one
+-- kind writes `{ fixture_defaults() | judge: f }`.
 
 module src/core/test/ext_fixture
 
@@ -10,6 +20,8 @@ import std/option (None)
 import std/string (contains)
 import src/core/config (VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  default_hooks,
+  ToolSchema,
   BudgetPlan,
   BudgetPatch,
   ExtCtx,
@@ -89,19 +101,76 @@ pure func pre_step(ctx: ExtCtx, msgs: [Msg])
   Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}", empty_ext_artifacts())
 }, next_state: ctx.world } }
 
+-- The fixture's own registration, through the constructor below.
 export pure func fixture_rt() -> ExtRuntime {
-  let hooks: ExtensionHooks = {
-    id: "phase_b_fixture",
-    provided_tools: ["FixtureEcho"],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: empty_prompt_patch,
-    on_budget_plan: empty_budget_patch,
-    on_pre_step: pre_step,
-    on_tool_policy: allow_policy,
-    on_tool_handle: handle_tool,
-    on_response_intercept: intercept_response,
-    on_solver_candidate: solve_candidate
-  };
+  let hooks = fixture_hooks("phase_b_fixture", {
+    tools: ["FixtureEcho"],
+    describe: \_ . [],
+    prompt: empty_prompt_patch,
+    budget: empty_budget_patch,
+    compact: pre_step,
+    policy: allow_policy,
+    provide: handle_tool,
+    intercept: intercept_response,
+    judge: solve_candidate
+  });
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}
+
+-- ============================================================================
+-- B7: the test-owned constructor. The ONLY place outside the ABI probe
+-- (`scripts/dst/declared_vs_performed.ail`) that spells the 5.x record.
+-- ============================================================================
+
+-- What a fixture registers, keyed by the 6.0 capability kind. `tools` is the
+-- advertised name list that `ToolProvider(names, handle)` carries at 6.0.
+export type FixtureOverrides = {
+  tools: [string],
+  describe: () -> [ToolSchema],
+  prompt: (ExtCtx) -> PromptPatch,
+  budget: (ExtCtx, BudgetPlan) -> BudgetPatch,
+  compact: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace},
+  policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
+  provide: (ExtCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+  intercept: (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock},
+  judge: (ExtCtx, string) -> FinalizeOutcome ! {Process}
+}
+
+-- The registration value a fixture hands to `ExtRegistry`. An alias today so
+-- that no fixture names the ABI record; at B8 it becomes the `{ id, caps }`
+-- entry and every `-> FixtureHooks` signature follows without an edit.
+export type FixtureHooks = ExtensionHooks
+
+-- The ABI's neutral bindings, re-keyed. Byte-for-byte `default_hooks`.
+export pure func fixture_defaults() -> FixtureOverrides {
+  let d = default_hooks("fixture_defaults");
+  {
+    tools: d.provided_tools,
+    describe: d.on_describe_tools,
+    prompt: d.on_build_system_prompt,
+    budget: d.on_budget_plan,
+    compact: d.on_pre_step,
+    policy: d.on_tool_policy,
+    provide: d.on_tool_handle,
+    intercept: d.on_response_intercept,
+    judge: d.on_solver_candidate
+  }
+}
+
+-- THE CONSTRUCTOR. B8 changes this body (and the alias above) to build the
+-- `Capability` list; nothing that calls it changes.
+export pure func fixture_hooks(id: string, ov: FixtureOverrides) -> FixtureHooks {
+  {
+    id: id,
+    provided_tools: ov.tools,
+    on_describe_tools: ov.describe,
+    on_build_system_prompt: ov.prompt,
+    on_budget_plan: ov.budget,
+    on_pre_step: ov.compact,
+    on_tool_policy: ov.policy,
+    on_tool_handle: ov.provide,
+    on_response_intercept: ov.intercept,
+    on_solver_candidate: ov.judge
+  }
 }

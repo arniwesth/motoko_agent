@@ -22,7 +22,6 @@ import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, PreStepOutcome, ToolHa
   BudgetPatch,
   ExtCtx,
   ExtRuntime,
-  ExtensionHooks,
   FinalizeDecision,
   NoDecision,
   NoIntercept,
@@ -35,6 +34,7 @@ import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, PreStepOutcome, ToolHa
   ToolHandleDecision,
   ToolPolicyDecision
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 
 func no_rates() -> CostRates {
   { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
@@ -101,36 +101,35 @@ func rewrite_tool(msgs: [Msg]) -> [Msg] {
   }
 }
 
-func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtensionHooks {
-  {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> FixtureHooks {
+  fixture_hooks(id, {
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ctx. { prepend: [], append: [] },
+    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: pre,
-    on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
-    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
-  }
+    compact: pre,
+    policy: \_ctx _call. NoOpinion,
+    provide: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
+    intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
+    judge: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+  })
 }
 
-func hook_a() -> ExtensionHooks {
+func hook_a() -> FixtureHooks {
   base_hook("chain_A", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted(msgs ++ [mk_msg("user", "chain-A")], "A", jo([]))
   }, next_state: ctx.world } })
 }
 
-func hook_b_bad() -> ExtensionHooks {
+func hook_b_bad() -> FixtureHooks {
   base_hook("chain_B", func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted([call_msg("tc-chain")], "B", jo([]))
   }, next_state: ctx.world } })
 }
 
-func hook_c() -> ExtensionHooks {
+func hook_c() -> FixtureHooks {
   base_hook("chain_C", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted(rewrite_tool(msgs), "C", jo([]))
   }, next_state: ctx.world } })

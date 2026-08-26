@@ -31,7 +31,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ExtCtx,
   ExtRuntime,
   ExtRegistry,
-  ExtensionHooks,
   ToolPolicyDecision,
   ToolHandleDecision,
   ResponseInterceptDecision,
@@ -42,6 +41,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   PromptPatch,
   BudgetPatch
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/test/stub_step (prose_step)
@@ -90,22 +90,21 @@ pure func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, 
   PassThrough
 }, next_state: ctx.world } }
 
-func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtensionHooks {
-  {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: empty_describe_tools,
-    on_build_system_prompt: empty_prompt_patch,
-    on_budget_plan: empty_budget_patch,
-    on_pre_step: pass_pre_step,
-    on_tool_policy: policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: noop_response_intercept,
-    on_solver_candidate: nodecision_solver_candidate
-  }
+func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
+  fixture_hooks(id, {
+    tools: [],
+    describe: empty_describe_tools,
+    prompt: empty_prompt_patch,
+    budget: empty_budget_patch,
+    compact: pass_pre_step,
+    policy: policy,
+    provide: no_handle,
+    intercept: noop_response_intercept,
+    judge: nodecision_solver_candidate
+  })
 }
 
-func mk_runtime(hook: ExtensionHooks) -> ExtRuntime {
+func mk_runtime(hook: FixtureHooks) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { hooks: [hook] }, strict_mode: false, verification: v }
 }

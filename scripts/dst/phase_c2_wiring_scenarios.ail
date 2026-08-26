@@ -40,7 +40,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   BudgetPatch,
   ExtCtx,
   ExtRuntime,
-  ExtensionHooks,
   FinalizeDecision,
   NoDecision,
   PassThrough,
@@ -56,6 +55,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   DenyAfterTimeout,
   Compacted
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 import pkg/sunholo/motoko_ext_empty_stop_guard/empty_stop_guard (decide_with_budget)
 import pkg/sunholo/motoko_ext_progress_contract_guard/progress_contract_guard (decide_with_budget as pc_decide_with_budget)
 
@@ -232,41 +232,39 @@ func bad_system_msg() -> Msg {
   { role: "system", content: "bad", tool_calls: [], tool_call_id: "" }
 }
 
-func stage_hook(id: string, mode: string) -> ExtensionHooks {
+func stage_hook(id: string, mode: string) -> FixtureHooks {
   let on_pre = func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     if mode == "pass" then PassThrough
     else if mode == "apply" then Compacted(msgs, "applied", jo([]))
     else Compacted([bad_system_msg()], "rejected", jo([]))
   }, next_state: ctx.world } };
-  {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: no_describe,
-    on_build_system_prompt: no_prompt,
-    on_budget_plan: no_budget,
-    on_pre_step: on_pre,
-    on_tool_policy: no_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: no_solver
-  }
+  fixture_hooks(id, {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: on_pre,
+    policy: no_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  })
 }
 
-func guard_hook() -> ExtensionHooks {
-  {
-    id: "empty_stop_guard",
-    provided_tools: [],
-    on_describe_tools: no_describe,
-    on_build_system_prompt: no_prompt,
-    on_budget_plan: no_budget,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+func guard_hook() -> FixtureHooks {
+  fixture_hooks("empty_stop_guard", {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
-    on_tool_policy: no_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: guard_solver
-  }
+    policy: no_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: guard_solver
+  })
 }
 
 func guard_rt() -> ExtRuntime {
@@ -282,21 +280,20 @@ func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {Process}  
   pc_decide_with_budget(ctx, text, 2)
 }, next_state: ctx.world } }
 
-func pc_guard_hook() -> ExtensionHooks {
-  {
-    id: "progress_contract_guard",
-    provided_tools: [],
-    on_describe_tools: no_describe,
-    on_build_system_prompt: no_prompt,
-    on_budget_plan: no_budget,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+func pc_guard_hook() -> FixtureHooks {
+  fixture_hooks("progress_contract_guard", {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
-    on_tool_policy: no_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: pc_guard_solver
-  }
+    policy: no_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: pc_guard_solver
+  })
 }
 
 func pc_guard_rt() -> ExtRuntime {
@@ -343,18 +340,17 @@ func pending_rt() -> ExtRuntime {
   let h = stage_hook("approval-pending", "pass");
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
-    registry: { hooks: [{
-      id: h.id,
-      provided_tools: h.provided_tools,
-      on_describe_tools: h.on_describe_tools,
-      on_build_system_prompt: h.on_build_system_prompt,
-      on_budget_plan: h.on_budget_plan,
-      on_pre_step: h.on_pre_step,
-      on_tool_policy: pending_policy,
-      on_tool_handle: h.on_tool_handle,
-      on_response_intercept: h.on_response_intercept,
-      on_solver_candidate: h.on_solver_candidate
-    }] },
+    registry: { hooks: [fixture_hooks(h.id, {
+      tools: h.provided_tools,
+      describe: h.on_describe_tools,
+      prompt: h.on_build_system_prompt,
+      budget: h.on_budget_plan,
+      compact: h.on_pre_step,
+      policy: pending_policy,
+      provide: h.on_tool_handle,
+      intercept: h.on_response_intercept,
+      judge: h.on_solver_candidate
+    })] },
     strict_mode: false,
     verification: v
   }
