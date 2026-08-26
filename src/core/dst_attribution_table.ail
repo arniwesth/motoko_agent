@@ -107,22 +107,32 @@
 -- ============================================================================
 --
 -- Rows name BASE hook ids (`test_dummy`, `scratchpad`). Installed hooks do not
--- carry those ids: `parse_tokens` (`src/core/ext/registry_generated.ail:52-64`)
+-- carry those ids: `parse_tokens` (`src/core/ext/registry_generated.ail:54-67`)
 -- stamps every instance as `"${name}#${idx}"`, so a runtime registry holds
 -- `scratchpad#5`. String equality between a row's `test_dummy` and an installed
 -- `test_dummy#0` finds NOTHING, the intersection comes back empty, and the
 -- empty-intersection rule then declares the site genuinely unreachable and
 -- drops it from the profile — the precise inversion of what the table is for,
--- and silent. `hook_id_matches` mirrors the runtime's own two predicates
--- (`ext/runtime.ail:196`, `tool_phase.ail:175`) and
--- `test_instance_suffixed_ids_intersect` is what holds it there.
+-- and silent. `hook_id_matches` (`:323` below) is one of FIVE prefix readers of
+-- that stamp, and it mirrors the other four: `hook_name` (`ext/runtime.ail:72-79`,
+-- slices at the first `#`), `is_test_dummy` (`ext/runtime.ail:207`),
+-- `is_compaction_ai_ext_id` (`session.ail:509`) and
+-- `scratchpad_extension_active_rec` (`tool_phase.ail:198`). The header once said
+-- "two predicates" and named stale lines; corrected at ADR-001 Phase A (A3)
+-- [RK C3]. `test_instance_suffixed_ids_intersect` is what holds the predicate
+-- there, and `test_atom_index_never_in_holder_stamp` is what holds the GRAMMAR:
+-- `"${name}#${idx}"` is the whole stamp and its `name` is the whole prefix. All
+-- five readers stop at the first `#`, so anything appended after the index — a
+-- 6.0 per-atom identity, say — would be read as part of the index by one reader
+-- and as part of the match by the others, silently. Atom identity goes in typed
+-- records, never in the stamp string [ADR-001 plan B6].
 
 module src/core/dst_attribution_table
 
 import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (startsWith)
+import std/string (startsWith, length, charAt)
 import std/crypto (sha256Hex)
 
 -- The version of the RULES in this module. Changing what attribution means
@@ -647,6 +657,66 @@ pure func test_instance_suffixed_ids_intersect() -> bool
       && not hook_id_matches("scratchpad_extra", "scratchpad")
       && not hook_id_matches("compose#0", "scratchpad")
   }
+
+-- THE HOLDER-STAMP GRAMMAR, locked before anyone designs a per-atom registry
+-- (ADR-001 Phase A, A3; plan invariant 3). Semantic ownership of a stamp is
+-- decided by its `name` prefix and NOTHING else: every known base id is
+-- `#`-free, every stamp built from one carries exactly one `#`, and a stamp with
+-- a second `#` after the index is precisely the shape the five prefix readers
+-- cannot tell apart from the base — `hook_id_matches` accepts it (prefix), and
+-- that acceptance is the reason atom identity must never enter the string.
+pure func test_atom_index_never_in_holder_stamp() -> bool
+  tests [((), true)]
+  {
+    all_hash_free(known_hook_ids())
+      && all_stamps_single_hash(known_hook_ids(), 0)
+      && all_stamps_match_base(known_hook_ids(), 7)
+      -- the negative: a second `#` is invisible to a prefix reader. If this
+      -- line ever goes red, a reader has started parsing past the index and
+      -- the grammar has grown a second field without this module's consent.
+      && hook_id_matches("scratchpad#5#2", "scratchpad")
+      && count_char(stamp("scratchpad", 5), "#") == 1
+  }
+
+pure func stamp(name: string, idx: int) -> string { "${name}#${show(idx)}" }
+
+pure func count_char(s: string, ch: string) -> int { count_char_rec(s, ch, 0, 0) }
+
+pure func count_char_rec(s: string, ch: string, i: int, acc: int) -> int {
+  if i >= length(s) then acc
+  else count_char_rec(s, ch, i + 1, if charAt(s, i) == ch then acc + 1 else acc)
+}
+
+pure func all_hash_free(ids: [string]) -> bool {
+  match ids {
+    [] => true,
+    x :: rest => count_char(x, "#") == 0 && all_hash_free(rest)
+  }
+}
+
+pure func all_stamps_single_hash(ids: [string], idx: int) -> bool {
+  match ids {
+    [] => true,
+    x :: rest => count_char(stamp(x, idx), "#") == 1 && all_stamps_single_hash(rest, idx + 1)
+  }
+}
+
+-- every stamp resolves to its own base and to NO other known base
+pure func all_stamps_match_base(ids: [string], idx: int) -> bool {
+  match ids {
+    [] => true,
+    x :: rest => hook_id_matches(stamp(x, idx), x)
+      && matches_exactly_one(stamp(x, idx), known_hook_ids(), 0)
+      && all_stamps_match_base(rest, idx + 1)
+  }
+}
+
+pure func matches_exactly_one(s: string, bases: [string], n: int) -> bool {
+  match bases {
+    [] => n == 1,
+    b :: rest => matches_exactly_one(s, rest, if hook_id_matches(s, b) then n + 1 else n)
+  }
+}
 
 -- A site with no row is unconditional core (clause 1's fallback).
 pure func test_unattributed_site_is_unconditional_core() -> bool

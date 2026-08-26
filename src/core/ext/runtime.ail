@@ -833,3 +833,24 @@ func dispatch_pending_hook() -> bool ! {Clock, IO}
       _ => false
     }
   }
+
+-- THE HOLDER-STAMP GRAMMAR, from the reader's side (ADR-001 Phase A, A3).
+-- `hook_name` is the first of five prefix readers of `"${name}#${idx}"` (the
+-- others: `is_test_dummy` above, `session.ail`'s `is_compaction_ai_ext_id`,
+-- `tool_phase.ail`'s `scratchpad_extension_active_rec`, and
+-- `dst_attribution_table.ail`'s `hook_id_matches`). It slices at the FIRST `#`
+-- and never looks past it, so a second `#` field would vanish into the index
+-- without a reader noticing — which is why atom identity is typed
+-- (`PreStepStage`, dummy-hook emission), never stamped. Kept at the END of the
+-- file: `tools/predicate-anchors/anchors.sh` pins line numbers above.
+func hook_name_reads_the_prefix_only_test() -> bool
+  tests [((), true)]
+  {
+    hook_name("scratchpad#5") == "scratchpad"
+      && hook_name("scratchpad") == "scratchpad"
+      && hook_name("empty_stop_guard#13") == "empty_stop_guard"
+      && hash_index("scratchpad") < 0
+      && hash_index("scratchpad#5") == 10
+      -- the negative: everything after the first `#` is index to this reader
+      && hook_name("scratchpad#5#2") == "scratchpad"
+  }
