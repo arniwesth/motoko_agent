@@ -544,13 +544,8 @@ profile_coverage:
 	@set -eu; \
 	ailang run --caps IO --entry main scripts/dst/profile_coverage_dst.ail < /dev/null; \
 	abi=packages/motoko-ext-abi/types.ail; \
-	if grep -q '^export type Capability' $$abi; then \
-		producer="type Capability variants"; \
-		n=$$(awk '/^export type Capability/,/^[[:space:]]*$$/' $$abi | grep -cE '^[[:space:]]*[=|][[:space:]]*[A-Z][A-Za-z0-9_]*[[:space:]]*\('); \
-	else \
-		producer="type ExtensionHooks on_ fields (5.x; B8 flips this to the Capability variants)"; \
-		n=$$(awk '/^export type ExtensionHooks/,/^}/' $$abi | grep -c '^  on_'); \
-	fi; \
+	producer="type Capability variants"; \
+	n=$$(awk '/^export type Capability/,/^[[:space:]]*$$/' $$abi | grep -cE '^[[:space:]]*[=|][[:space:]]*[A-Z][A-Za-z0-9_]*[[:space:]]*\('); \
 	k=$$(ailang run --caps IO --entry print_capability_kind_count scripts/dst/profile_coverage_dst.ail < /dev/null | tail -1 | tr -d '[:space:]'); \
 	if [ "$$n" -ne "$$k" ] || [ "$$k" -lt 1 ]; then \
 		echo "FAIL: the ABI declares $$n capability kinds ($$producer), but"; \

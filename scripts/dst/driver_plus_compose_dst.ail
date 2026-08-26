@@ -103,7 +103,7 @@ import src/core/dst_profile (
   routing_violation_at,
   is_excluded_hook
 )
-import src/core/dst_profile_coverage as Cov (DisclosureIds)
+import src/core/dst_profile_coverage as Cov (CapabilityDisclosureIds, AtomIds, atom_ids_id)
 import src/core/dst_attribution_table (
   CoreSite,
   unconditional_core_sites,
@@ -334,7 +334,7 @@ func clause_coverage_floor() -> bool ! {IO} {
   n > 0 && b
 }
 
-func show_floor(ds: [DisclosureIds]) -> () ! {IO} {
+func show_floor(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
   match ds {
     [] => (),
     x :: rest => {
@@ -344,12 +344,12 @@ func show_floor(ds: [DisclosureIds]) -> () ! {IO} {
   }
 }
 
-pure func empty_first(ds: [DisclosureIds]) -> [DisclosureIds] {
+pure func empty_first(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
   match ds {
     [] => [],
     x :: rest => {
-      let emptied: DisclosureIds =
-        { extension_id: x.extension_id, covered: [], excluded: x.covered };
+      let emptied: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms, covered: [], excluded: x.covered };
       emptied :: rest
     }
   }
@@ -377,11 +377,11 @@ func clause_no_unconditional_exclusion() -> bool ! {IO} {
   gated_only && b
 }
 
-pure func only_gated_excluded(ds: [DisclosureIds]) -> bool {
+pure func only_gated_excluded(ds: [CapabilityDisclosureIds]) -> bool {
   match ds {
     [] => true,
     x :: rest =>
-      List.length(x.excluded) == 1 && contains_str(x.excluded, "on_tool_handle")
+      List.length(x.excluded) == 1 && contains_str(atom_id_strs(x.excluded), "tool_provider[0]")
         && only_gated_excluded(rest)
   }
 }
@@ -390,18 +390,23 @@ pure func contains_str(xs: [string], t: string) -> bool {
   match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
 }
 
-pure func drop_id(xs: [string], t: string) -> [string] {
-  match xs { [] => [], x :: rest => if x == t then drop_id(rest, t) else x :: drop_id(rest, t) }
+-- B8: ids are atom ids (`kind[index]`) over `AtomIds` records.
+pure func drop_id(xs: [AtomIds], t: string) -> [AtomIds] {
+  match xs { [] => [], x :: rest => if Cov.atom_ids_id(x) == t then drop_id(rest, t) else x :: drop_id(rest, t) }
 }
 
-pure func exclude_pre_step(ds: [DisclosureIds]) -> [DisclosureIds] {
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs { [] => [], x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest) }
+}
+
+pure func exclude_pre_step(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
   match ds {
     [] => [],
     x :: rest => {
-      let moved: DisclosureIds =
-        { extension_id: x.extension_id,
-          covered: drop_id(x.covered, "on_pre_step") ++ ["on_tool_handle"],
-          excluded: ["on_pre_step"] };
+      let moved: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms,
+          covered: drop_id(x.covered, "compactor[0]") ++ [{ kind: "tool_provider", index: 0 }],
+          excluded: [{ kind: "compactor", index: 0 }] };
       moved :: rest
     }
   }
@@ -422,12 +427,12 @@ func clause_exclusion_is_stated_twice_and_agrees() -> bool ! {IO} {
         "classification-disagrees-with-disclosure", mutated)
 }
 
-pure func cover_everything(ds: [DisclosureIds]) -> [DisclosureIds] {
+pure func cover_everything(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
   match ds {
     [] => [],
     x :: rest => {
-      let all_covered: DisclosureIds =
-        { extension_id: x.extension_id, covered: x.covered ++ x.excluded, excluded: [] };
+      let all_covered: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms, covered: x.covered ++ x.excluded, excluded: [] };
       all_covered :: rest
     }
   }
@@ -472,14 +477,15 @@ func clause_disclosure_ids() -> bool ! {IO} {
   ok
 }
 
-func show_ids(ds: [DisclosureIds]) -> () ! {IO} {
+func show_ids(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
   match ds {
     [] => (),
     x :: rest => {
       let _ = println("DISCLOSURE ${x.extension_id}");
       let _ = println("      ${x.extension_id}");
-      let _ = println("        covered:  ${join_ids(x.covered)}");
-      let _ = println("        excluded: ${if List.length(x.excluded) == 0 then "(none)" else join_ids(x.excluded)}");
+      let _ = println("        atoms:    ${join_ids(atom_id_strs(x.atoms))}");
+      let _ = println("        covered:  ${join_ids(atom_id_strs(x.covered))}");
+      let _ = println("        excluded: ${if List.length(x.excluded) == 0 then "(none)" else join_ids(atom_id_strs(x.excluded))}");
       show_ids(rest)
     }
   }
@@ -639,7 +645,7 @@ func graded_world() -> WorldState {
 -- rather than one this file chose.
 func compose_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [Compose.register_with_config(compose_cfg())] },
+  { registry: { entries: [{ id: "compose", caps: Compose.register_with_config(compose_cfg()) }] },
     strict_mode: false, verification: v }
 }
 
@@ -722,7 +728,7 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       max_clock_advance_ms: 60000,
       chunk_draw_hi: 3
     },
-    manifest: compose_manifest("HEAD", "ailang 0.33.0", "5.0", "{}", ["env_get"], [], "HEAD"),
+    manifest: compose_manifest("HEAD", "ailang 0.33.0", "6.0", "{}", ["env_get"], [], "HEAD"),
     interactions: w.log
   }
 }
@@ -1083,15 +1089,15 @@ func scenario_exclusion_check() -> bool ! {IO} {
       profile_id: compose_profile_id(), profile_version: compose_profile_version(),
       event_vocabulary_version: "event-vocabulary/1" };
   let d = driver_plus_compose();
-  let sees_exclusion = is_excluded_hook(d, "compose", "on_tool_handle");
-  let sees_coverage = not is_excluded_hook(d, "compose", "on_response_intercept");
+  let sees_exclusion = is_excluded_hook(d, "compose", "tool_provider[0]");
+  let sees_coverage = not is_excluded_hook(d, "compose", "response_interceptor[0]");
   let violates =
-    match routing_violation_at(d, "compose", "on_tool_handle", 0, empty_ledger_trace(), meta) {
+    match routing_violation_at(d, "compose", "tool_provider[0]", 0, empty_ledger_trace(), meta) {
       None => false,
       Some(_) => true
     };
   let no_violation =
-    match routing_violation_at(d, "compose", "on_response_intercept", 0, empty_ledger_trace(), meta) {
+    match routing_violation_at(d, "compose", "response_interceptor[0]", 0, empty_ledger_trace(), meta) {
       None => true,
       Some(_) => false
     };
@@ -1105,7 +1111,7 @@ func scenario_exclusion_check() -> bool ! {IO} {
 }
 
 func scenario_manifest() -> bool ! {IO} {
-  let m = compose_manifest("HEAD", "ailang 0.33.0", "5.0", "{}", ["env_get"], [], "HEAD");
+  let m = compose_manifest("HEAD", "ailang 0.33.0", "6.0", "{}", ["env_get"], [], "HEAD");
   let rs = validate_manifest(m, driver_plus_compose());
   let ok = List.length(rs) == 0 && List.length(m.extension_packages) == 1;
   let _ = if ok then {

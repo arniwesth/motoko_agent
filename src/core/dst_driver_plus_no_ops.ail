@@ -153,10 +153,14 @@ import src/core/dst_attribution_table as Attr (
 import src/core/dst_fault_catalogue as Fault (FaultClass, fault_catalogue, conditional_class_ids)
 import src/core/dst_profile_coverage as Cov (
   coverage_rules_version,
-  DisclosureIds,
-  HookSlot,
-  all_hook_slots,
-  hook_slot_id
+  AtomRef,
+  AtomIds,
+  CapabilityDisclosureIds,
+  all_capability_kinds,
+  atoms_at_zero,
+  atom_id,
+  atom_ids_id,
+  capability_kind_id
 )
 import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
@@ -332,8 +336,11 @@ pure func package_of(id: string) -> InstalledPackage {
 -- on every run and fails if this list disagrees. That is the same discipline
 -- classifier 2's call inventory gets, and for the same reason: both readings
 -- type-check and the stale one is silent.
+-- B8: hook ids are ATOM ids, `kind[index]`; every installed extension here
+-- registers one atom per kind (the mechanical 5.x -> 6.0 migration), so the
+-- four rowed atoms are the four rowed kinds at index 0.
 export pure func criterion_2_slot_ids() -> [string] {
-  ["on_pre_step", "on_tool_handle", "on_response_intercept", "on_solver_candidate"]
+  ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]"]
 }
 
 pure func contains_str(xs: [string], t: string) -> bool {
@@ -384,11 +391,11 @@ pure func clauses_of(slot_id: string) -> Criterion2Clauses {
   if contains_str(criterion_2_slot_ids(), slot_id) then no_op_criterion_2() else no_criterion_2()
 }
 
-pure func entries_for(ext_id: string, slots: [HookSlot]) -> [HookClassificationEntry] {
-  match slots {
+pure func entries_for(ext_id: string, atoms: [AtomRef]) -> [HookClassificationEntry] {
+  match atoms {
     [] => [],
-    s :: rest => {
-      let id = Cov.hook_slot_id(s);
+    a :: rest => {
+      let id = Cov.atom_id(a);
       let e: HookClassificationEntry =
         { extension_id: ext_id, hook_id: id, classification: classification_of(id),
           basis: basis_of(id), clauses: clauses_of(id) };
@@ -397,19 +404,24 @@ pure func entries_for(ext_id: string, slots: [HookSlot]) -> [HookClassificationE
   }
 }
 
--- Iterating `all_hook_slots()` rather than writing eight ids per extension is
--- what makes a ninth ABI slot a compile-time visible change here instead of a
--- silently unclassified one: A6's own completeness backstop (`make
--- profile_coverage` counts the ABI's `on_*` fields) then covers this file too.
+-- Iterating the ATOMS (one per kind, from `all_capability_kinds()`) rather
+-- than writing eight ids per extension is what makes a ninth ABI kind a
+-- compile-time visible change here instead of a silently unclassified one:
+-- A6's own completeness backstop (`make profile_coverage` counts the ABI's
+-- `Capability` variants) then covers this file too. B8: the atom list per
+-- extension is the claim "one atom per kind", cross-checked against B2's
+-- enumeration by `tools/profile_definition/check_no_op_profile.py`.
+pure func registered_atoms() -> [AtomRef] { Cov.atoms_at_zero(Cov.all_capability_kinds()) }
+
 pure func classifications_of(ids: [string]) -> [HookClassificationEntry] {
   match ids {
     [] => [],
-    id :: rest => entries_for(id, Cov.all_hook_slots()) ++ classifications_of(rest)
+    id :: rest => entries_for(id, registered_atoms()) ++ classifications_of(rest)
   }
 }
 
-pure func all_slot_ids(slots: [HookSlot]) -> [string] {
-  match slots { [] => [], s :: rest => Cov.hook_slot_id(s) :: all_slot_ids(rest) }
+pure func atom_ids_of(atoms: [AtomRef]) -> [AtomIds] {
+  match atoms { [] => [], a :: rest => ({ kind: Cov.capability_kind_id(a.kind), index: a.index }) :: atom_ids_of(rest) }
 }
 
 -- D5 field 9. IDS, never counts — the whole point of the disclosure mechanism,
@@ -418,12 +430,13 @@ pure func all_slot_ids(slots: [HookSlot]) -> [string] {
 -- eight slots are unconditionally dispatched and could not be excluded anyway,
 -- and the eighth is the gated `on_tool_handle`, which this profile could
 -- legitimately exclude and does not.
-pure func disclosures_of(ids: [string]) -> [DisclosureIds] {
+pure func disclosures_of(ids: [string]) -> [CapabilityDisclosureIds] {
   match ids {
     [] => [],
     id :: rest => {
-      let d: DisclosureIds =
-        { extension_id: id, covered: all_slot_ids(Cov.all_hook_slots()), excluded: [] };
+      let d: CapabilityDisclosureIds =
+        { extension_id: id, atoms: atom_ids_of(registered_atoms()),
+          covered: atom_ids_of(registered_atoms()), excluded: [] };
       d :: disclosures_of(rest)
     }
   }
@@ -497,7 +510,7 @@ export pure func driver_plus_no_ops() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface, ABI 5.0. INCLUDED, which is the whole difference between this profile and driver_only: four extensions' hooks are dispatched across it on every run. What that buys is the DISPATCH being under test, not the extensions' effects — they perform none, and the coverage statement says so" },
+        note: "the motoko-ext-abi hook surface, ABI 6.0 (B8; was 5.0). INCLUDED, which is the whole difference between this profile and driver_only: four extensions' hooks are dispatched across it on every run. What that buys is the DISPATCH being under test, not the extensions' effects — they perform none, and the coverage statement says so" },
       { boundary_id: "extension.ext_ports", included: false,
         note: "the ExtPorts surface an extension uses to reach the world. EXCLUDED, and by MEASUREMENT rather than by declaration: classifier 3 reports 0 ExtPorts field calls in each of the four installed closures, so no installed hook crosses this boundary at all. It is the boundary WI-C5's compose-bearing profile would have to include, and naming it excluded here is what keeps that visible" }
     ],
@@ -689,7 +702,7 @@ pure func test_the_install_set_is_one_set_stated_three_ways() -> bool
     n == 4
       && List.length(d.installed_packages) == n
       && List.length(d.disclosures) == n
-      && List.length(d.hook_classifications) == n * List.length(Cov.all_hook_slots())
+      && List.length(d.hook_classifications) == n * List.length(registered_atoms())
   }
 
 -- Every slot of every installed extension is covered and nothing is excluded.
@@ -699,10 +712,10 @@ pure func test_every_slot_is_covered_and_nothing_is_excluded() -> bool
   tests [((), true)]
   {
     let d = driver_plus_no_ops();
-    covers_all(d.disclosures, List.length(Cov.all_hook_slots()))
+    covers_all(d.disclosures, List.length(registered_atoms()))
   }
 
-pure func covers_all(ds: [DisclosureIds], n: int) -> bool {
+pure func covers_all(ds: [CapabilityDisclosureIds], n: int) -> bool {
   match ds {
     [] => true,
     x :: rest =>
@@ -793,7 +806,7 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = no_ops_manifest("r", "t", "5.0", "{}", ["env_get"], [], "r");
+    let m = no_ops_manifest("r", "t", "6.0", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_no_ops().installed_packages)
       && List.length(m.extension_packages) == 4
       && m.profile_id == no_ops_id()
