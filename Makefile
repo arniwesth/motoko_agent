@@ -567,10 +567,21 @@ profile_coverage:
 # each behind a single named constant because both are OPEN. The fixtures are
 # one mutation each from a clean registration, every rejection asserted BY
 # RULE with id, variant and list position; the two open rows print which
-# reading of the constant they measured. Built against the module's LOCAL
-# `Capability` sketch so it is green before B8; the generated registry calls
-# `normalize_registration` once the AILANG generator emits it (D10).
-.PHONY: registry_multiplicity
+# reading of the constant they measured. Since B8 the module imports the ABI's
+# `Capability`, and the generated registry (make registry_gen) calls
+# `normalize_registration` (D10).
+.PHONY: registry_multiplicity registry_gen registry_gen_check
+# ABI 6.0 registry generator (ADR-001 Phase C, D10). Project-local: the
+# upstream `ailang generate-extension-registry` (v0.33.0) still emits the 5.x
+# record shape, so it must not be run in this tree. `registry_gen` rewrites
+# src/core/ext/registry_generated.ail from ailang.toml [extensions];
+# `registry_gen_check` fails if the committed file drifts from the generator.
+registry_gen:
+	@python3 tools/ext_registry_gen/generate.py
+
+registry_gen_check:
+	@python3 tools/ext_registry_gen/generate.py --check
+
 registry_multiplicity:
 	@ailang run --caps IO --entry main scripts/dst/registry_multiplicity_dst.ail < /dev/null
 	@ailang test src/core/ext/registry_normalize.ail > /dev/null && echo "  ✓ src/core/ext/registry_normalize.ail"
