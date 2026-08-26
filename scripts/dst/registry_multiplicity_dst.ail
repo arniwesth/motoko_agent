@@ -1,0 +1,206 @@
+-- scripts/dst/registry_multiplicity_dst.ail
+--
+-- ADR-001 Phase B, B4 acceptance: multiplicity validation at the registration
+-- boundary, in the `profile_definition` style -- ONE registration that
+-- normalizes clean (the negative control), and every rejecting fixture ONE
+-- MUTATION away from it, asserting the rejection NAMES ITS RULE, the extension,
+-- the variant and the list position. A fixture that trips an unrelated rule is
+-- green while testing nothing, and a validator that only ever rejects passes a
+-- suite of only-rejecting fixtures -- so the control is load-bearing.
+--
+-- Two fixtures read the OPEN decisions' constants rather than asserting a side:
+--   `fold kind repeated`  -> rejected iff `fold_kind_repeats_allowed()` is false (D4)
+--   `empty registration`  -> omitted-by-name iff `empty_registration_omits()` (D7)
+-- and print which reading they measured, so a flipped constant re-labels the
+-- row instead of turning the suite red.
+--
+-- This script normalizes against the LOCAL `Capability` sketch in
+-- src/core/ext/registry_normalize.ail. Nothing here reaches the 5.x runtime;
+-- the generated registry will call `normalize_registration` once the AILANG
+-- generator emits it (D10, upstream).
+
+module scripts/dst/registry_multiplicity_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, PromptPatch, BudgetPlan, BudgetPatch, Msg, PreStepOutcome, ToolSchema,
+  ToolCallEnvelope, ToolPolicyDecision, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome
+)
+import src/core/ext/registry_normalize (
+  Capability,
+  DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  ExtEntry,
+  RegistrationRejection,
+  SecondVote, FoldKindRepeated, DuplicateToolName, EmptyRegistration,
+  NormalizedRegistry,
+  normalize_registration,
+  normalize_registry,
+  rejection_rule,
+  rejection_message,
+  rejection_extension,
+  kind_name,
+  fold_kind_repeats_allowed,
+  empty_registration_omits
+)
+
+-- ---------------------------------------------------------------------------
+-- Neutral payloads. Only the KINDS and the names matter to the boundary.
+-- ---------------------------------------------------------------------------
+pure func describe() -> [ToolSchema] { [] }
+pure func shape(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+pure func budget(_ctx: ExtCtx, _p: BudgetPlan) -> BudgetPatch { { requested_total: None, requested_solver: None, requested_verifier: None } }
+pure func compact(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } }
+pure func policy(_ctx: ExtCtx, _c: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+pure func handle(ctx: ExtCtx, _c: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  { decision: Delegate, next_state: ctx.world }
+}
+pure func intercept(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: NoIntercept, next_state: ctx.world } }
+pure func judge(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: NoDecision, next_state: ctx.world } }
+
+-- THE NEGATIVE CONTROL: every kind once, plus a second ToolProvider with
+-- DISJOINT names (the one N>1 D3 admits unconditionally). Must load clean.
+pure func clean() -> [Capability] {
+  [DescribeTools(describe), PromptShaper(shape), BudgetShaper(budget), Compactor(compact),
+   ToolPolicy(policy), ToolProvider(["Alpha", "Beta"], handle), ResponseInterceptor(intercept),
+   SolverJudge(judge), ToolProvider(["Gamma"], handle)]
+}
+
+-- ---------------------------------------------------------------------------
+-- Harness
+-- ---------------------------------------------------------------------------
+func assert_clean(label: string, id: string, caps: [Capability]) -> bool ! {IO} {
+  match normalize_registration(id, caps) {
+    Ok(e) => {
+      let same_len = List.length(e.caps) == List.length(caps);
+      let in_order = kinds_of(e.caps) == kinds_of(caps);
+      let ok = same_len && in_order && e.id == id;
+      let _ = if ok then println("  ✓ ${label}: accepted, ${show(List.length(e.caps))} atom(s) pass through in list order")
+              else println("  ✗ ${label}: accepted but the entry does not carry the atoms in order");
+      ok
+    },
+    Err(r) => { let _ = println("  ✗ ${label}: expected acceptance, got ${rejection_message(r)}"); false }
+  }
+}
+
+-- `[string]` has no Eq instance on the pin, so list equality is spelled out.
+pure func same_names(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => if x == y then same_names(xs, ys) else false }
+  }
+}
+
+pure func kinds_of(cs: [Capability]) -> string {
+  match cs {
+    [] => "",
+    c :: rest => "${kind_name(c)};${kinds_of(rest)}"
+  }
+}
+
+-- Rejected BY the named rule, naming the extension, and -- through the
+-- constructor payload -- the variant and position the caller asserts.
+func assert_rejected(label: string, rule: string, id: string, caps: [Capability], payload_ok: (RegistrationRejection) -> bool) -> bool ! {IO} {
+  match normalize_registration(id, caps) {
+    Ok(_) => { let _ = println("  ✗ ${label}: accepted, expected rejection by [${rule}]"); false },
+    Err(r) => {
+      let ok = rejection_rule(r) == rule && rejection_extension(r) == id && payload_ok(r);
+      let _ = if ok then println("  ✓ ${label}: ${rejection_message(r)}")
+              else println("  ✗ ${label}: expected [${rule}] naming '${id}' with the asserted payload, got ${rejection_message(r)}");
+      ok
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The mutations, one per rule
+-- ---------------------------------------------------------------------------
+pure func second_policy() -> [Capability] { clean() ++ [ToolPolicy(policy)] }        -- position 9
+pure func second_judge() -> [Capability] { clean() ++ [SolverJudge(judge)] }          -- position 9
+pure func overlapping_providers() -> [Capability] { clean() ++ [ToolProvider(["Delta", "Beta"], handle)] }
+pure func duplicate_within_provider() -> [Capability] {
+  [DescribeTools(describe), ToolProvider(["Alpha", "Alpha"], handle)]
+}
+pure func fold_repeated() -> [Capability] { clean() ++ [Compactor(compact)] }         -- position 9
+
+func scenario_fold_kind(label: string) -> bool ! {IO} {
+  let r = normalize_registration("fold", fold_repeated());
+  if fold_kind_repeats_allowed() then
+    match r {
+      Ok(e) => { let _ = println("  ✓ ${label}: D4 SIGNED (fold_kind_repeats_allowed = true) -- second Compactor passes through at position 9, ${show(List.length(e.caps))} atoms in order"); List.length(e.caps) == 10 },
+      Err(x) => { let _ = println("  ✗ ${label}: D4 signed but rejected: ${rejection_message(x)}"); false }
+    }
+  else
+    match r {
+      Err(FoldKindRepeated(e, k, p)) => {
+        let ok = e == "fold" && k == "Compactor" && p == 9;
+        let _ = if ok then println("  ✓ ${label}: D4 OPEN (fold_kind_repeats_allowed = false) -- ${rejection_message(FoldKindRepeated(e, k, p))}")
+                else println("  ✗ ${label}: wrong payload (${e}, ${k}, ${show(p)})");
+        ok
+      },
+      Err(x) => { let _ = println("  ✗ ${label}: rejected by the wrong rule: ${rejection_message(x)}"); false },
+      Ok(_) => { let _ = println("  ✗ ${label}: D4 is OPEN and a second Compactor was ACCEPTED -- the gate is not reading the constant"); false }
+    }
+}
+
+-- The WHOLE build: one good, one empty, one bad. The build rejects, naming the
+-- bad one; with the bad one removed it loads and the empty one is NAMED, not
+-- dropped (D7 recommended reading), or rejected (the alternative), per the
+-- constant.
+func scenario_whole_registry(label: string) -> bool ! {IO} {
+  let good: ExtEntry = { id: "good#0", caps: clean() };
+  let empty: ExtEntry = { id: "empty#1", caps: [] };
+  let bad: ExtEntry = { id: "bad#2", caps: second_judge() };
+  let rejects = match normalize_registry([good, empty, bad]) {
+    Err(SecondVote(e, k, p)) => {
+      let ok = e == "bad#2" && k == "SolverJudge" && p == 9;
+      let _ = if ok then println("  ✓ ${label}: one bad extension rejects the WHOLE build -- ${rejection_message(SecondVote(e, k, p))}")
+              else println("  ✗ ${label}: wrong payload");
+      ok
+    },
+    Err(x) => { let _ = println("  ✗ ${label}: wrong rule: ${rejection_message(x)}"); false },
+    Ok(n) => { let _ = println("  ✗ ${label}: the build LOADED with ${show(List.length(n.entries))} entries -- a bad extension was silently omitted (fail-open)"); false }
+  };
+  let names = match normalize_registry([good, empty]) {
+    Ok(n) =>
+      if empty_registration_omits() then {
+        let ok = List.length(n.entries) == 1 && same_names(n.omitted_empty, ["empty#1"]);
+        let _ = if ok then println("  ✓ ${label}: D7 RECOMMENDED reading (empty_registration_omits = true) -- 'empty#1' omitted from the effective registry and NAMED in omitted_empty (B3 rejects it in a profile as installed-with-no-capabilities)")
+                else println("  ✗ ${label}: the empty registration was neither loaded nor named");
+        ok
+      } else { let _ = println("  ✗ ${label}: D7 set to reject, but the empty registration loaded"); false },
+    Err(EmptyRegistration(e)) =>
+      if not empty_registration_omits() then { let _ = println("  ✓ ${label}: D7 REJECTING reading (empty_registration_omits = false) -- '${e}' rejected at registration"); e == "empty#1" }
+      else { let _ = println("  ✗ ${label}: D7 set to omit, but the empty registration was rejected"); false },
+    Err(x) => { let _ = println("  ✗ ${label}: wrong rule: ${rejection_message(x)}"); false }
+  };
+  rejects && names
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("=== registry_multiplicity_dst (ADR-001 B4; D3 decided, D4 open = ${show(fold_kind_repeats_allowed())}, D7 omits = ${show(empty_registration_omits())}) ===");
+  let _ = println("  -- the negative control --");
+  let c = assert_clean("every kind once + a second ToolProvider with disjoint names", "clean#0", clean());
+  let _ = println("  -- one mutation each --");
+  let r1 = assert_rejected("second ToolPolicy", "second-vote-atom", "vote#1", second_policy(),
+    \r. match r { SecondVote(_, k, p) => k == "ToolPolicy" && p == 9, _ => false });
+  let r2 = assert_rejected("second SolverJudge", "second-vote-atom", "vote#2", second_judge(),
+    \r. match r { SecondVote(_, k, p) => k == "SolverJudge" && p == 9, _ => false });
+  let r3 = assert_rejected("two ToolProviders sharing 'Beta'", "duplicate-tool-name", "prov#3", overlapping_providers(),
+    \r. match r { DuplicateToolName(_, n, p) => n == "Beta" && p == 9, _ => false });
+  let r4 = assert_rejected("one ToolProvider advertising 'Alpha' twice", "duplicate-tool-name", "prov#4", duplicate_within_provider(),
+    \r. match r { DuplicateToolName(_, n, p) => n == "Alpha" && p == 1, _ => false });
+  let r5 = scenario_fold_kind("second Compactor (fold kind)");
+  let _ = println("  -- the whole build --");
+  let w = scenario_whole_registry("registry of good + empty + bad");
+  -- the harness's own control: the boundary must be able to reject at all
+  let control = (match normalize_registration("x", second_policy()) { Ok(_) => false, Err(_) => true })
+    && (match normalize_registration("x", clean()) { Ok(_) => true, Err(_) => false });
+  let _ = if control then println("  ✓ control: the boundary both accepts and rejects")
+          else println("  ✗ control: the boundary never rejects -- every row above is vacuous");
+  if c && r1 && r2 && r3 && r4 && r5 && w && control
+  then println("registry_multiplicity_dst PASS")
+  else { let _ = println("registry_multiplicity_dst FAIL"); exit(1) }
+}

@@ -436,7 +436,8 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   ext_ambient_inventory ext_call_inventory ext_call_inventory_selftest \
   conformance stream_parity latency_pair test_coverage_selftest \
   execution_program attribution_table profile_coverage compose_live_exec \
-  ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary
+  ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
+  registry_multiplicity
 
 # corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
 #
@@ -563,6 +564,21 @@ profile_coverage:
 		echo "  ✓ all_capability_kinds() enumerates all $$n ABI capability kinds ($$producer)"; \
 	fi; \
 	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
+
+# ADR-001 Phase B, B4: multiplicity validation at the registration boundary.
+# `src/core/ext/registry_normalize.ail` is the ONE host-owned place the D3
+# rules live (second ToolPolicy/SolverJudge rejected; ToolProvider names
+# disjoint per extension), with D4 (fold-kind N>1) and D7 (empty registration)
+# each behind a single named constant because both are OPEN. The fixtures are
+# one mutation each from a clean registration, every rejection asserted BY
+# RULE with id, variant and list position; the two open rows print which
+# reading of the constant they measured. Built against the module's LOCAL
+# `Capability` sketch so it is green before B8; the generated registry calls
+# `normalize_registration` once the AILANG generator emits it (D10).
+.PHONY: registry_multiplicity
+registry_multiplicity:
+	@ailang run --caps IO --entry main scripts/dst/registry_multiplicity_dst.ail < /dev/null
+	@ailang test src/core/ext/registry_normalize.ail > /dev/null && echo "  ✓ src/core/ext/registry_normalize.ail"
 
 # D5's profile-DEFINITION and EXECUTION-MANIFEST machinery (WI-A10). Three
 # checks, and the third exists because this is composition work:
