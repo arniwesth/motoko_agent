@@ -14,10 +14,6 @@ import pkg/sunholo/motoko_ext_omnigraph/omnigraph (
 )
 import pkg/sunholo/motoko_ext_omnigraph/prompts (load_agent_prompt)
 
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
 -- Self-disable check (M-EXT-PORTABILITY-GATE, v0.19.0): when the workdir
 -- lacks omnigraph/omnigraph.yaml, the extension advertises an empty tools
 -- list. Hosts won't dispatch unadvertised tools, so on_tool_handle is never

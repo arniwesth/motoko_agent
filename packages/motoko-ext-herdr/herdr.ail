@@ -512,10 +512,6 @@ export func on_tool_handle(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope
   else { decision: Delegate, next_state: ctx.world }
 }
 
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
 export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO, Process, FS, Clock} {
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {

@@ -123,10 +123,6 @@ export func collect_all_tool_names(cfg: McpConfig) -> [string] {
   collect_server_names_rec(cfg.servers)
 }
 
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
 func string_list_has(xs: [string], s: string) -> bool {
   match xs {
     [] => false,

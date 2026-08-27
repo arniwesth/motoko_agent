@@ -147,10 +147,6 @@ func make_result(call: ToolCallEnvelope, stdout: string, exit_code: int) -> Tool
   { tool_call_id: call.id, tool: call.tool, exit_code: exit_code, stdout: stdout, stderr: "", metadata: jo([]) }
 }
 
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
 export func make_hooks(cfg: A2AConfig) -> [Capability] ! {Net, Rand} {
   let agents = cfg.agents;
   let schemas = collect_schemas(agents);

@@ -126,8 +126,6 @@ pure func task_signals_fires_on_relevant_keywords() -> bool
       && not task_signals_self_modification("")
   }
 
-pure func empty_describe_tools() -> [ToolSchema] { [] }
-
 -- Conditional prompt patch: returns the matrix iff task_signals_self_modification.
 -- This is the canonical "context-aware extension" pattern — hooks fire every
 -- step with full ExtCtx; lightweight pure checks here keep irrelevant prompts

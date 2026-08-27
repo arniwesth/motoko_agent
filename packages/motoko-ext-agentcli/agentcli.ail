@@ -197,14 +197,6 @@ func arg_str(args: Json, key: string, fallback: string) -> string {
   }
 }
 
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() }
-
-func no_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
-
 export func make_hooks(cfg: AgentCliConfig) -> [Capability] ! {IO, Process, FS} {
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {

@@ -16,14 +16,6 @@ import pkg/sunholo/motoko_ext_scratchpad/prompts (prompt_patch)
 import pkg/sunholo/motoko_ext_scratchpad/types (tool_name, schema_json)
 import src/core/env_client (exec_scratchpad_cell)
 
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-  no_budget_patch()
-}
-
 func is_scratchpad_tool(name: string) -> bool {
   name == "scratchpad" || name == "Scratchpad"
 }

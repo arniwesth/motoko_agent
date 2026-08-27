@@ -113,7 +113,8 @@
 -- are gone with their consumers; the kind table below is the ONE dispatch
 -- table, the atom `{ kind, index }` is the ONE unit, and a profile writes its
 -- atoms explicitly (`atoms_at_zero(all_capability_kinds())` for the one-atom-
--- per-kind registrations every extension has at B8). The paragraphs above that
+-- per-kind registrations every extension had at B8; since item 4's 6.0
+-- trimming an extension lists only the kinds it binds). The paragraphs above that
 -- speak of "slots" are kept as the record of the 5.x unit they measured.
 --
 -- TRANSITION (B3..B7, before the ABI break): the ABI still shipped the
@@ -222,13 +223,17 @@ pure func same_atom(a: AtomRef, b: AtomRef) -> bool {
   capability_kind_id(a.kind) == capability_kind_id(b.kind) && a.index == b.index
 }
 
--- The registration shape "one atom of each of these kinds, at index 0". B8:
--- every extension in the tree registers exactly one atom per kind (the
--- mechanical record -> list migration), so a profile writes
--- `atoms_at_zero(all_capability_kinds())` for each installed extension and the
--- profile readers cross-check that claim against B2's per-extension atom
--- enumeration (`make ext_hook_scope`). The name says what it claims; nothing
--- here calls it a "record shape" any more.
+-- The registration shape "one atom of each of these kinds, at index 0". At B8
+-- (the mechanical record -> list migration) every extension registered one
+-- atom per kind, so `atoms_at_zero(all_capability_kinds())` WAS the tree's
+-- uniform registration. Item 4 (6.0 trimming) ended that uniformity: each
+-- extension now registers only the kinds it binds (39 atoms over 17
+-- extensions, not 17 x 8), so a profile writes the extension's actual kinds
+-- (`atoms_at_zero([ToolProviderKind, ...])`) and the profile readers
+-- cross-check that claim against B2's per-extension atom enumeration
+-- (`make ext_hook_scope`). The full-kind form survives here as the fixtures'
+-- `one_per_kind()` -- a fixture shape, not a claim about any real extension.
+-- The name says what it claims; nothing here calls it a "record shape" any more.
 export pure func atoms_at_zero(ks: [CapabilityKind]) -> [AtomRef] {
   match ks {
     [] => [],
