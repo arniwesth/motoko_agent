@@ -32,18 +32,6 @@ func parse_int_or(s: string, fallback: int) -> int {
   }
 }
 
-func no_budget_patch() -> BudgetPatch {
-  {
-    requested_total: None,
-    requested_solver: None,
-    requested_verifier: None
-  }
-}
-
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-  no_budget_patch()
-}
-
 func config_from_env() -> CtxConfig ! {Env} {
   {
     bin: getEnvOr("CONTEXT_MODE_BIN", "context-mode"),
