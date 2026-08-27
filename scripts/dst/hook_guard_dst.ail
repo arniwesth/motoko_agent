@@ -55,6 +55,7 @@ import src/core/dst_hook_guard (guarded_dispatch_tool_handle)
 import src/core/dst_attribution_table (table_identity)
 import src/core/dst_fault_catalogue (fault_catalogue, conditional_class_ids)
 import src/core/dst_profile (waivers_from)
+import src/core/dst_profile_coverage (CapabilityDisclosureIds, AtomIds, all_capability_kinds, capability_kind_id, atoms_at_zero, AtomRef)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
 import pkg/sunholo/motoko_ext_abi/types (
@@ -132,7 +133,7 @@ pure func meta() -> ReplayMetadata {
 -- green for an incidental reason (S7's shape: hold everything else constant)
 -- ---------------------------------------------------------------------------
 
-pure func definition_with(disclosures: [{ extension_id: string, covered: [string], excluded: [string] }]) -> ProfileDefinition {
+pure func definition_with(disclosures: [CapabilityDisclosureIds]) -> ProfileDefinition {
   let id = table_identity();
   let cat = fault_catalogue();
   { profile_id: "fixture_guard",
@@ -152,22 +153,42 @@ pure func definition_with(disclosures: [{ extension_id: string, covered: [string
     scan_roots: ["src", "packages"] }
 }
 
-pure func all_slots_but_tool_handle() -> [string] {
-  ["on_describe_tools", "on_build_system_prompt", "on_budget_plan", "on_pre_step",
-   "on_tool_policy", "on_response_intercept", "on_solver_candidate"]
+-- B3/B8: the coverage unit is the ATOM (kind, index-within-kind), and the
+-- guard names the providing atom `tool_provider[i]` to the profile — so the
+-- disclosure excludes THAT atom, not a 5.x slot name. One atom per kind at
+-- index 0 is exactly what `fixture_hooks` registers.
+pure func atom_ids_of(xs: [AtomRef]) -> [AtomIds] {
+  match xs { [] => [], x :: rest => ({ kind: capability_kind_id(x.kind), index: x.index }) :: atom_ids_of(rest) }
 }
 
--- EXCLUDES the gated slot.
+pure func eight() -> [AtomIds] { atom_ids_of(atoms_at_zero(all_capability_kinds())) }
+
+pure func tool_provider_atom() -> AtomIds { { kind: "tool_provider", index: 0 } }
+
+pure func all_atoms_but_tool_provider() -> [AtomIds] {
+  drop_atom(eight(), tool_provider_atom())
+}
+
+pure func drop_atom(xs: [AtomIds], t: AtomIds) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if x.kind == t.kind && x.index == t.index then drop_atom(rest, t) else x :: drop_atom(rest, t)
+  }
+}
+
+-- EXCLUDES the gated atom.
 pure func excluding() -> ProfileDefinition {
   definition_with([{ extension_id: guarded_ext_id(),
-                     covered: all_slots_but_tool_handle(),
-                     excluded: ["on_tool_handle"] }])
+                     atoms: eight(),
+                     covered: all_atoms_but_tool_provider(),
+                     excluded: [tool_provider_atom()] }])
 }
 
--- COVERS every slot. Identical in every other field.
+-- COVERS every atom. Identical in every other field.
 pure func covering() -> ProfileDefinition {
   definition_with([{ extension_id: guarded_ext_id(),
-                     covered: all_slots_but_tool_handle() ++ ["on_tool_handle"],
+                     atoms: eight(),
+                     covered: eight(),
                      excluded: [] }])
 }
 

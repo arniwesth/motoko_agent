@@ -382,11 +382,17 @@ declared_vs_performed:
 # no extension is installable while ExtensionHooks.on_budget_plan carries the
 # ABI's closed ! {Env, FS} row. These rows establish the mechanism, not that a
 # shipping profile is protected by it.
+# The recipe is bash for `pipefail`: without it the pipeline reports grep's
+# status, and a type error in the script -- which `ailang run` prints AFTER
+# its "✓ Running" preamble and exits 1 on -- went green here from B8 until it
+# was noticed. `grep -v` exits 1 on no output, so `|| true` keeps only that.
 .PHONY: hook_guard
+hook_guard: SHELL := /bin/bash
 hook_guard:
-	@set -eu; \
+	@set -euo pipefail; \
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
-	  --ai-stub --entry main scripts/dst/hook_guard_dst.ail < /dev/null | grep -v 'STRICT_FALLBACK\|^  '
+	  --ai-stub --entry main scripts/dst/hook_guard_dst.ail < /dev/null \
+	  | { grep -v 'STRICT_FALLBACK\|^  ' || true; }
 
 # ---------------------------------------------------------------------------
 # The sweep. Every target below is independent of every other -- the one
