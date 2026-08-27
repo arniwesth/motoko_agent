@@ -61,21 +61,10 @@ export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) 
   let mappings = tool_mappings();
   let cached_prompt = load_agent_prompt(workdir);
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(cfg, mappings, ctx, call) };
-  let intercept = func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-    no_response_intercept()
-  }, next_state: ctx.world } };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-    no_finalize_decision()
-  }, next_state: ctx.world } };
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   [
-    DescribeTools(\_ . []),
     PromptShaper(\ctx. on_build_system_prompt(cached_prompt, ctx)),
-    BudgetShaper(budget_hook),
-    Compactor(func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }),
-    ToolPolicy(no_tool_policy),
-    ToolProvider(all_tool_names(mappings), handle),
-    ResponseInterceptor(intercept),
-    SolverJudge(finalize)
+    ToolProvider(all_tool_names(mappings), handle)
   ]
 }
 

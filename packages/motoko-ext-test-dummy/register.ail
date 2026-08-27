@@ -56,8 +56,8 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Env} {
   let finalize = dc.finalize;
   let budget_total = dc.budget_total;
   let prompt_marker = dc.prompt_marker;
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   [
-    DescribeTools(\_ . []),
     PromptShaper(
       \_ctx.
         if prompt_marker == "" then { prepend: [], append: [] }
@@ -70,23 +70,11 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Env} {
           requested_verifier: None
         }
       }),
-    Compactor(
-      func(ctx: ExtCtx, _msgs: list[Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
-        PassThrough
-      }, next_state: ctx.world } }),
     ToolPolicy(
       \_ctx call.
         if tool_decision == "allow" then Allow
         else if tool_decision == "deny" then Deny("dummy deny")
         else NoOpinion),
-    ToolProvider([],
-      func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
-        Delegate
-      }, next_state: ctx.world } }),
-    ResponseInterceptor(
-      func(ctx: ExtCtx, _resp: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-        NoIntercept
-      }, next_state: ctx.world } }),
     SolverJudge(
       func(ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
         if finalize == "accept" then Accept(candidate)

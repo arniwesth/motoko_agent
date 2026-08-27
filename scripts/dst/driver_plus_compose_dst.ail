@@ -323,7 +323,8 @@ pure func all_reasoned(os: [OmittedExtension]) -> bool {
 -- 2. ROW 3's FOUR INSTALLED-EXTENSION CLAUSES
 -- ===========================================================================
 
--- CLAUSE 1: the coverage floor. Over one extension covering seven of eight.
+-- CLAUSE 1: the coverage floor. Over one extension covering three of its four
+-- registered atoms (item 4: compose registers only what it binds).
 func clause_coverage_floor() -> bool ! {IO} {
   let d = driver_plus_compose();
   let n = List.length(d.installed_packages);
@@ -368,11 +369,15 @@ func clause_no_unconditional_exclusion() -> bool ! {IO} {
   let _ = println("  -- ROW 3 CLAUSE 2: no unconditionally-dispatched hook excluded --");
   let _ = println("      compose excludes on_tool_handle, which is the ONE gated slot in the ABI");
   let _ = println("      (ext/runtime.ail tests contains_tool before dispatching). Excluding any of");
-  let _ = println("      the other seven would make the run unable to complete, and the rule says so.");
+  let _ = println("      the other registered atoms would make the run unable to complete, and the rule says so.");
   let gated_only = only_gated_excluded(d.disclosures);
   let _ = if gated_only then () else println("      ✗ an unconditionally-dispatched slot appears in an excluded list");
-  let mutated: ProfileDefinition = { d | disclosures: exclude_pre_step(d.disclosures) };
-  let b = binds("compose excluding on_pre_step, which is unconditionally dispatched",
+  -- Item 4: the mutation moves a REGISTERED unconditional atom into the
+  -- excluded list. compose no longer registers a Compactor, so excluding
+  -- `compactor[0]` would be rejected as atom-not-registered rather than for
+  -- the reason this clause is about; `response_interceptor[0]` is the one it holds.
+  let mutated: ProfileDefinition = { d | disclosures: exclude_response_intercept(d.disclosures) };
+  let b = binds("compose excluding on_response_intercept, which is unconditionally dispatched",
                 "unconditional-hook-excluded", mutated);
   gated_only && b
 }
@@ -399,14 +404,14 @@ pure func atom_id_strs(xs: [AtomIds]) -> [string] {
   match xs { [] => [], x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest) }
 }
 
-pure func exclude_pre_step(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
+pure func exclude_response_intercept(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
   match ds {
     [] => [],
     x :: rest => {
       let moved: CapabilityDisclosureIds =
         { extension_id: x.extension_id, atoms: x.atoms,
-          covered: drop_id(x.covered, "compactor[0]") ++ [{ kind: "tool_provider", index: 0 }],
-          excluded: [{ kind: "compactor", index: 0 }] };
+          covered: drop_id(x.covered, "response_interceptor[0]") ++ [{ kind: "tool_provider", index: 0 }],
+          excluded: [{ kind: "response_interceptor", index: 0 }] };
       moved :: rest
     }
   }
@@ -510,9 +515,11 @@ func scenario_the_record_shows_the_substance() -> bool ! {IO} {
   let _ = println("      ${compose_coverage_statement()}");
   -- The assertion is on the SUBSTANCE and not on the string: coverage exists,
   -- and — for the first time in this project — some of it mediates.
+  -- Item 4: the two vacuous criterion-2 entries left with compose's constant
+  -- Compactor and SolverJudge; the mediating one and the exclusion remain.
   let ok = s.covered_hooks > 0 && s.world_mediating_hooks == 1
-             && s.no_op_hooks == 2 && s.excluded_hooks == 1;
-  let _ = if ok then () else println("      ✗ the substance counts do not describe one mediating hook among seven covered");
+             && s.no_op_hooks == 0 && s.excluded_hooks == 1;
+  let _ = if ok then () else println("      ✗ the substance counts do not describe one mediating hook among the covered");
   ok
 }
 

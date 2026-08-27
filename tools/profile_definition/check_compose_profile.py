@@ -76,6 +76,7 @@ from check_fixtures import ambient_inventory, kind_of  # noqa: E402
 from check_no_op_profile import (  # noqa: E402
     abi_slots,
     check_disclosed_atoms_against_b2,
+    hook_scope_atoms,
     is_unconditional,
     parse_output,
     resolved_extensions,
@@ -292,12 +293,20 @@ def check_classifications(out, slots):
              "stale one is silent — re-read the split from types.ail")
     classified_rowed = sorted({h for (_e, h), (k, *_r) in out["classification"].items()
                                if k != "effect_free"})
-    if classified_rowed != stated:
+    # Item 4 (6.0 trimming): `rowed_slot_ids()` is the ABI fact over all four
+    # rowed kinds; the record carries an entry only for the atoms compose
+    # REGISTERS (B2's enumeration, already equated with the disclosure by check
+    # 1), so the comparison is against the stated ids compose actually holds.
+    registered = {f"{k}[{i}]" for (k, i) in hook_scope_atoms()[SUBJECT]}
+    stated_registered = sorted(s for s in stated if s in registered)
+    if classified_rowed != stated_registered:
         fail(f"the record classifies atoms {classified_rowed} as rowed (criterion 2 or excluded) "
-             f"and the profile's `rowed_slot_ids()` says {stated}")
+             f"and the profile's `rowed_slot_ids()` restricted to compose's registered atoms "
+             f"{sorted(registered)} says {stated_registered}")
     print(f"  ✓ every classification re-derived against the ABI's rowed/rowless split: "
           f"{len(rowed)} rowed {rowed}, {len(rowless)} rowless; the profile's "
-          f"`rowed_slot_ids()` literal {stated} agrees")
+          f"`rowed_slot_ids()` literal {stated} agrees, and of those compose registers "
+          f"{stated_registered}")
     print(f"  ✓ the ONE excluded atom is an atom of the ONE gated kind ({EXPECTED_EXCLUDED}), "
           f"re-derived from the dispatch table — the first non-empty exclusion in the project")
 

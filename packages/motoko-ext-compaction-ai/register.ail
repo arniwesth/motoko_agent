@@ -95,10 +95,8 @@ export func register_with_config(_cfg: a) -> [Capability] ! {AI, Clock, Env, FS,
   let compaction_cfg = read_compaction_ai_config(profile_dir);
   
   -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   [
-    DescribeTools(\_ . []),
-    PromptShaper(\_ . { prepend: [], append: [] }),
-    BudgetShaper(\_ _ . { requested_total: None, requested_solver: None, requested_verifier: None }),
     -- WI-B2b. FORWARDS the outcome; it does not re-wrap it. This is the one
     -- hook in the tree that actually calls `ai_step`, so it is the one place
     -- where `next_state: ctx.world` would be a real defect rather than a
@@ -107,10 +105,6 @@ export func register_with_config(_cfg: a) -> [Capability] ! {AI, Clock, Env, FS,
     -- would replay those provider calls. It type-checks either way.
     Compactor(func(ctx: ExtCtx, msgs) -> PreStepOutcome ! {AI, IO, Trace} {
       compact_with_ai(ctx, msgs, compaction_cfg)
-    }),
-    ToolPolicy(\_ _ . Allow),
-    ToolProvider([], \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}),
-    ResponseInterceptor(\ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock}),
-    SolverJudge(\ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process})
+    })
   ]
 }

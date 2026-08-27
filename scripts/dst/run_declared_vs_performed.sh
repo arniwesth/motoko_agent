@@ -221,11 +221,19 @@ check_subject() {
 # in the gate — but it means those three rows establish "the fold ran and
 # performed nothing", NOT "compose ran and performed nothing".
 #
+# ITEM 4 (6.0 trimming, 2026-08-27): compose no longer registers a Compactor
+# (nor a BudgetShaper or SolverJudge -- the constant no-ops were trimmed), so
+# the pre-step fold skips it by construction and `stages` can no longer name
+# it. The arm now prints the runtime's `loaded_extension_names` of the registry
+# beside the stage list, so the row still reddens when compose leaves the
+# constructor; compose_budget and compose_solver now measure the fold running
+# THROUGH an entry that holds no atom of that kind, which is the 6.0 shape.
+#
 # The two are joined by `compose_pre_step` plus the structural row below: all
 # four arms build their registry from the SAME constructor, so an arm set that
 # has lost compose cannot leave `compose_pre_step` green.
-check_subject compose_pre_step  "compose+dvp_witness" \
-  "PreStepChainResult.stages names compose by ext_id — the ONLY arm of the four that does"
+check_subject compose_pre_step  "dvp_witness|installed=compose+dvp_witness" \
+  "the stage list names the witness alone (compose registers no Compactor since item 4) and the registry names compose — the ONLY arm of the four that does"
 check_subject compose_budget    "4242" \
   "the witness's requested_total survived the fold; compose's participation rests on the row above"
 check_subject compose_solver    "dvp-solver-witness" \

@@ -189,11 +189,10 @@ import src/core/dst_profile_coverage as Cov (
   AtomRef,
   AtomIds,
   CapabilityDisclosureIds,
-  all_capability_kinds,
-  atoms_at_zero,
   atom_id,
   atom_ids_id,
-  capability_kind_id
+  capability_kind_id,
+  CapabilityKind, PromptShaperKind, ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind
 )
 import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
@@ -210,7 +209,15 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- moves an anchor this profile's acceptance fixture pins. The fixture pins
 -- `ext/runtime.ail:199` and `tool_phase.ail:318`, so this file joins the
 -- nine-file form WI-D24 measured, not the five-file one WI-D25 measured.
-export pure func compose_profile_version() -> string { "2" }
+-- v3 (2026-08-27, ADR-001 Phase C item 4 — 6.0 registration trimming).
+-- RE-ISSUED because the DENOMINATOR moved, not an anchor: compose now registers
+-- only the four atoms it binds with a real body (PromptShaper, ToolPolicy,
+-- ToolProvider, ResponseInterceptor); its constant Compactor and SolverJudge
+-- are gone, so the two VACUOUS criterion-2 entries are gone with them and the
+-- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
+-- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
+-- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
+export pure func compose_profile_version() -> string { "3" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -308,9 +315,11 @@ pure func package_of(id: string) -> InstalledPackage {
 -- `packages/motoko-ext-abi/types.ail` on every run and fails if this list
 -- disagrees. Same discipline classifier 2's call inventory gets, same reason:
 -- both readings type-check and the stale one is silent.
--- B8: hook ids are ATOM ids, `kind[index]`; compose registers one atom per
--- kind (the mechanical 5.x -> 6.0 migration), so the rowed atoms are the four
--- rowed kinds at index 0 and the one gated atom is `tool_provider[0]`.
+-- B8: hook ids are ATOM ids, `kind[index]`; the rowed KINDS at index 0 and the
+-- one gated atom is `tool_provider[0]`. Item 4: compose no longer registers a
+-- Compactor or a SolverJudge, so two of these four ids name atoms compose does
+-- not hold — the list stays the ABI FACT (the guard compares its kinds against
+-- types.ail) and `criterion_2_slot_ids` intersects it with the registration.
 export pure func rowed_slot_ids() -> [string] {
   ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]"]
 }
@@ -320,19 +329,18 @@ export pure func rowed_slot_ids() -> [string] {
 -- how a decision starts reading as a derivation.
 export pure func excluded_slot_ids() -> [string] { ["tool_provider[0]"] }
 
--- The rowed slots this profile actually covers: the ABI fact minus the decision,
--- computed rather than restated so the two cannot drift.
+-- The rowed atoms this profile actually covers: the ABI fact, restricted to
+-- the atoms compose REGISTERS, minus the decision — computed rather than
+-- restated so the three cannot drift. Item 4: one atom, `response_interceptor[0]`.
 export pure func criterion_2_slot_ids() -> [string] {
-  remove_ids(rowed_slot_ids(), excluded_slot_ids())
+  remove_ids(keep_ids(rowed_slot_ids(), atom_id_strs(atom_ids_of(registered_atoms()))), excluded_slot_ids())
 }
 
--- The covered slots whose port and origin clauses hold over an EMPTY SET,
--- because compose binds them to constants. Named rather than derived from a
--- count: `no_op_hooks == 2` is what the substance computes, and a reader owed
--- WHICH two should not have to subtract.
-export pure func vacuous_criterion_2_slot_ids() -> [string] {
-  ["compactor[0]", "solver_judge[0]"]
-}
+-- The covered rowed atoms whose port and origin clauses hold over an EMPTY
+-- SET, because compose binds them to constants. Item 4: NONE — the two constant
+-- bindings (Compactor, SolverJudge) were exactly the atoms trimming removed, so
+-- `no_op_hooks == 0` is what the substance computes now (v2: 2).
+export pure func vacuous_criterion_2_slot_ids() -> [string] { [] }
 
 pure func contains_str(xs: [string], t: string) -> bool {
   match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
@@ -342,6 +350,13 @@ pure func remove_ids(xs: [string], drop: [string]) -> [string] {
   match xs {
     [] => [],
     x :: rest => if contains_str(drop, x) then remove_ids(rest, drop) else x :: remove_ids(rest, drop)
+  }
+}
+
+pure func keep_ids(xs: [string], keep: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(keep, x) then x :: keep_ids(rest, keep) else keep_ids(rest, keep)
   }
 }
 
@@ -416,13 +431,22 @@ pure func entries_for(ext_id: string, atoms: [AtomRef]) -> [HookClassificationEn
   }
 }
 
--- Iterating the registered atoms (one per kind) rather than writing eight ids makes a ninth ABI
--- slot a compile-time visible change here instead of a silently unclassified
--- one, and A6's completeness backstop (`make profile_coverage`) then covers this
--- file too.
--- B8: the atom list per extension is the claim "one atom per kind",
--- cross-checked against B2's enumeration by check_compose_profile.py.
-pure func registered_atoms() -> [AtomRef] { Cov.atoms_at_zero(Cov.all_capability_kinds()) }
+-- Item 4 (6.0 trimming): THE ATOM LIST IS A CLAIM ABOUT compose's OWN
+-- REGISTRATION (`packages/motoko-ext-compose/compose.ail`), stated as literals
+-- and cross-checked on every run against B2's enumeration by
+-- `check_compose_profile.py` — a list that reads more or fewer atoms than the
+-- package writes is red. compose binds four atoms with a real body:
+--   PromptShaper (`on_build_system_prompt`), ToolPolicy (`on_tool_policy_with_mode`),
+--   ToolProvider (`provided_tools()`, `on_tool_handle`) and
+--   ResponseInterceptor (`on_response_intercept`).
+-- Until item 4 this was `atoms_at_zero(all_capability_kinds())` — one per kind.
+pure func kinds_at_zero(ks: [CapabilityKind]) -> [AtomRef] {
+  match ks { [] => [], k :: rest => ({ kind: k, index: 0 }) :: kinds_at_zero(rest) }
+}
+
+pure func registered_atoms() -> [AtomRef] {
+  kinds_at_zero([PromptShaperKind, ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind])
+}
 
 pure func classifications_of(ids: [string]) -> [HookClassificationEntry] {
   match ids {
@@ -767,12 +791,14 @@ pure func test_the_coverage_mediates_exactly_one_hook() -> bool
   tests [((), true)]
   {
     let s = compose_substance();
+    -- Item 4: four registered atoms — two rowless (criterion 1), one rowed and
+    -- mediating (criterion 2), one excluded (the gated ToolProvider).
     s.installed_extensions == 1
-      && s.covered_hooks == 7
+      && s.covered_hooks == 3
       && s.excluded_hooks == 1
-      && s.criterion_1_hooks == 4
-      && s.criterion_2_hooks == 3
-      && s.no_op_hooks == 2
+      && s.criterion_1_hooks == 2
+      && s.criterion_2_hooks == 1
+      && s.no_op_hooks == 0
       && s.world_mediating_hooks == 1
   }
 
@@ -801,7 +827,7 @@ pure func test_every_entry_rests_on_its_own_admissible_basis() -> bool
 
 pure func entries_ok(cs: [HookClassificationEntry], seen: int) -> bool {
   match cs {
-    [] => seen == 8,
+    [] => seen == 4,
     c :: rest => {
       let ok = match c.classification {
         WorldMediated =>
@@ -866,7 +892,7 @@ pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
   {
     List.length(rowed_slot_ids()) == 4
       && List.length(excluded_slot_ids()) == 1
-      && List.length(criterion_2_slot_ids()) == 3
+      && List.length(criterion_2_slot_ids()) == 1
       && not contains_str(criterion_2_slot_ids(), "tool_provider[0]")
       && contains_str(criterion_2_slot_ids(), "response_interceptor[0]")
   }

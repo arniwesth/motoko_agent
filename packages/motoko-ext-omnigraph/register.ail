@@ -37,23 +37,10 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS, Process, R
   let active = enabled_in(workdir);
   let cached_prompt = load_agent_prompt(workdir);
   let tools = if active then provided_tools() else [];
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   [
-    DescribeTools(\_ . []),
     PromptShaper(\ctx. on_build_system_prompt(cached_prompt, ctx)),
-    BudgetShaper(func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-      no_budget_patch()
-    }),
-    Compactor(
-      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
-        PassThrough
-      }, next_state: ctx.world } }),
     ToolPolicy(on_tool_policy),
-    ToolProvider(tools, func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call) }),
-    ResponseInterceptor(func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-      NoIntercept
-    }, next_state: ctx.world } }),
-    SolverJudge(func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-      NoDecision
-    }, next_state: ctx.world } })
+    ToolProvider(tools, func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call) })
   ]
 }

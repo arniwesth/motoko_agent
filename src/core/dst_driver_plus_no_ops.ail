@@ -156,11 +156,10 @@ import src/core/dst_profile_coverage as Cov (
   AtomRef,
   AtomIds,
   CapabilityDisclosureIds,
-  all_capability_kinds,
-  atoms_at_zero,
   atom_id,
   atom_ids_id,
-  capability_kind_id
+  capability_kind_id,
+  CapabilityKind, CompactorKind, PromptShaperKind, SolverJudgeKind
 )
 import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
@@ -206,7 +205,14 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- there is it goes at the TOP of this block with its date, per plan rule S15 —
 -- re-dating a claim in place is how a sentence becomes a false statement about
 -- history, and this file will carry claims that move.
-export pure func no_ops_version() -> string { "10" }
+-- v11 (2026-08-27, ADR-001 Phase C item 4 — 6.0 registration trimming).
+-- RE-ISSUED because the DENOMINATOR moved, not an anchor: each installed
+-- extension now registers only the atoms it binds with a real body, so the
+-- per-extension `atoms` claim went from "one atom per kind" (8 each, 32
+-- entries) to the extension's OWN list (`registered_atoms_of`, 4 entries in
+-- all). `check_no_op_profile.py` cross-checks each claim against B2's
+-- enumeration, which is what turned v10 red — as B8 §5 said it would.
+export pure func no_ops_version() -> string { "11" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -336,9 +342,10 @@ pure func package_of(id: string) -> InstalledPackage {
 -- on every run and fails if this list disagrees. That is the same discipline
 -- classifier 2's call inventory gets, and for the same reason: both readings
 -- type-check and the stale one is silent.
--- B8: hook ids are ATOM ids, `kind[index]`; every installed extension here
--- registers one atom per kind (the mechanical 5.x -> 6.0 migration), so the
--- four rowed atoms are the four rowed kinds at index 0.
+-- B8: hook ids are ATOM ids, `kind[index]`. Item 4: an installed extension
+-- registers only the atoms it binds, so the ids below are the ABI's four rowed
+-- kinds at index 0 and an entry exists for one only where the extension's own
+-- list (`registered_atoms_of`) holds it.
 export pure func criterion_2_slot_ids() -> [string] {
   ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]"]
 }
@@ -404,19 +411,38 @@ pure func entries_for(ext_id: string, atoms: [AtomRef]) -> [HookClassificationEn
   }
 }
 
--- Iterating the ATOMS (one per kind, from `all_capability_kinds()`) rather
--- than writing eight ids per extension is what makes a ninth ABI kind a
--- compile-time visible change here instead of a silently unclassified one:
--- A6's own completeness backstop (`make profile_coverage` counts the ABI's
--- `Capability` variants) then covers this file too. B8: the atom list per
--- extension is the claim "one atom per kind", cross-checked against B2's
--- enumeration by `tools/profile_definition/check_no_op_profile.py`.
-pure func registered_atoms() -> [AtomRef] { Cov.atoms_at_zero(Cov.all_capability_kinds()) }
+-- Item 4 (6.0 trimming): THE PER-EXTENSION ATOM LIST IS A CLAIM ABOUT THE
+-- PACKAGE'S OWN REGISTRATION, stated here as literals and cross-checked on
+-- every run against B2's enumeration (`make ext_hook_scope`) by
+-- `tools/profile_definition/check_no_op_profile.py` — a list that reads more
+-- or fewer atoms than the package writes is red. Each of the four registers
+-- exactly the one atom it binds with a real body:
+--   compaction_structural    Compactor     (`pre_step` -> compact_for_pre_step)
+--   decision_framework       PromptShaper  (`conditional_prompt_patch`)
+--   empty_stop_guard         SolverJudge   (`finalize`)
+--   progress_contract_guard  SolverJudge   (`decide`)
+-- Until item 4 every extension registered one atom per kind and this was
+-- `atoms_at_zero(all_capability_kinds())` for all four.
+pure func kinds_at_zero(ks: [CapabilityKind]) -> [AtomRef] {
+  match ks { [] => [], k :: rest => ({ kind: k, index: 0 }) :: kinds_at_zero(rest) }
+}
+
+pure func registered_atoms_of(ext_id: string) -> [AtomRef] {
+  if ext_id == "compaction_structural" then kinds_at_zero([CompactorKind])
+  else if ext_id == "decision_framework" then kinds_at_zero([PromptShaperKind])
+  else if ext_id == "empty_stop_guard" then kinds_at_zero([SolverJudgeKind])
+  else if ext_id == "progress_contract_guard" then kinds_at_zero([SolverJudgeKind])
+  else []
+}
+
+pure func total_registered_atoms(ids: [string]) -> int {
+  match ids { [] => 0, id :: rest => List.length(registered_atoms_of(id)) + total_registered_atoms(rest) }
+}
 
 pure func classifications_of(ids: [string]) -> [HookClassificationEntry] {
   match ids {
     [] => [],
-    id :: rest => entries_for(id, registered_atoms()) ++ classifications_of(rest)
+    id :: rest => entries_for(id, registered_atoms_of(id)) ++ classifications_of(rest)
   }
 }
 
@@ -426,17 +452,16 @@ pure func atom_ids_of(atoms: [AtomRef]) -> [AtomIds] {
 
 -- D5 field 9. IDS, never counts — the whole point of the disclosure mechanism,
 -- and the half of row 3 that says a no-op profile must be visible as such.
--- `excluded` is EMPTY for all four, which is a claim with teeth: seven of the
--- eight slots are unconditionally dispatched and could not be excluded anyway,
--- and the eighth is the gated `on_tool_handle`, which this profile could
--- legitimately exclude and does not.
+-- `excluded` is EMPTY for all four. Item 4: every atom the four register is
+-- of an unconditionally-dispatched kind (none registers a ToolProvider any
+-- more), so nothing here COULD be excluded without omitting the extension.
 pure func disclosures_of(ids: [string]) -> [CapabilityDisclosureIds] {
   match ids {
     [] => [],
     id :: rest => {
       let d: CapabilityDisclosureIds =
-        { extension_id: id, atoms: atom_ids_of(registered_atoms()),
-          covered: atom_ids_of(registered_atoms()), excluded: [] };
+        { extension_id: id, atoms: atom_ids_of(registered_atoms_of(id)),
+          covered: atom_ids_of(registered_atoms_of(id)), excluded: [] };
       d :: disclosures_of(rest)
     }
   }
@@ -702,24 +727,27 @@ pure func test_the_install_set_is_one_set_stated_three_ways() -> bool
     n == 4
       && List.length(d.installed_packages) == n
       && List.length(d.disclosures) == n
-      && List.length(d.hook_classifications) == n * List.length(registered_atoms())
+      && List.length(d.hook_classifications) == total_registered_atoms(installed_extension_ids())
   }
 
--- Every slot of every installed extension is covered and nothing is excluded.
--- Asserted against `all_hook_slots()` rather than against the literal 8, so a
--- ninth ABI slot moves this assertion instead of silently passing it.
+-- Every REGISTERED atom of every installed extension is covered and nothing is
+-- excluded. Asserted against each extension's own `registered_atoms_of` rather
+-- than against a literal, so a changed registration moves this assertion
+-- instead of silently passing it.
 pure func test_every_slot_is_covered_and_nothing_is_excluded() -> bool
   tests [((), true)]
   {
     let d = driver_plus_no_ops();
-    covers_all(d.disclosures, List.length(registered_atoms()))
+    covers_all(d.disclosures)
   }
 
-pure func covers_all(ds: [CapabilityDisclosureIds], n: int) -> bool {
+pure func covers_all(ds: [CapabilityDisclosureIds]) -> bool {
   match ds {
     [] => true,
     x :: rest =>
-      List.length(x.covered) == n && List.length(x.excluded) == 0 && covers_all(rest, n)
+      List.length(x.covered) == List.length(registered_atoms_of(x.extension_id))
+        && List.length(x.covered) > 0
+        && List.length(x.excluded) == 0 && covers_all(rest)
   }
 }
 
@@ -730,12 +758,15 @@ pure func test_the_coverage_is_non_zero_and_entirely_no_ops() -> bool
   tests [((), true)]
   {
     let s = no_ops_substance();
+    -- Item 4: four registered atoms in all — one rowless (decision_framework's
+    -- PromptShaper, criterion 1) and three rowed (a Compactor and two
+    -- SolverJudges, criterion 2, all vacuous).
     s.installed_extensions == 4
-      && s.covered_hooks == 32
+      && s.covered_hooks == 4
       && s.excluded_hooks == 0
-      && s.criterion_1_hooks == 16
-      && s.criterion_2_hooks == 16
-      && s.no_op_hooks == 16
+      && s.criterion_1_hooks == 1
+      && s.criterion_2_hooks == 3
+      && s.no_op_hooks == 3
       && s.world_mediating_hooks == 0
   }
 
@@ -751,7 +782,7 @@ pure func test_every_criterion_2_entry_is_measured_and_two_clauses_vacuous() -> 
 
 pure func entries_ok(cs: [HookClassificationEntry], seen: int) -> bool {
   match cs {
-    [] => seen == 32,
+    [] => seen == 4,
     c :: rest => {
       let ok = match c.classification {
         WorldMediated =>

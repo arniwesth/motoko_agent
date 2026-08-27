@@ -210,24 +210,10 @@ export func make_hooks(cfg: AgentCliConfig) -> [Capability] ! {IO, Process, FS} 
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       on_tool_handle(cfg, ctx, call)
     };
-  let intercept = func(ctx: ExtCtx, _response_text: string)
-    -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
-      { decision: NoIntercept, next_state: ctx.world }
-    };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
-    { decision: NoDecision, next_state: ctx.world }
-  };
   -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   [
     DescribeTools(\_ . describe_tools(cfg.providers)),
-    PromptShaper(\_ctx . { prepend: [], append: [] }),
-    BudgetShaper(budget_hook),
-    Compactor(func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
-      { decision: PassThrough, next_state: ctx.world }
-    }),
-    ToolPolicy(no_tool_policy),
-    ToolProvider(tool_names(cfg.providers), handle),
-    ResponseInterceptor(intercept),
-    SolverJudge(finalize)
+    ToolProvider(tool_names(cfg.providers), handle)
   ]
 }

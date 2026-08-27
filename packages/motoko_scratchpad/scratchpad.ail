@@ -98,14 +98,11 @@ export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: in
 
 export func make_hooks(timeout_secs: int) -> [Capability] ! {Net, Rand} {
   let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call, timeout_secs) };
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   [
     DescribeTools(\_ . on_describe_tools()),
     PromptShaper(\_ctx. prompt_patch()),
-    BudgetShaper(budget_hook),
-    Compactor(func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }),
     ToolPolicy(on_tool_policy),
-    ToolProvider(provided_tools(), handle),
-    ResponseInterceptor(func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }),
-    SolverJudge(func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } })
+    ToolProvider(provided_tools(), handle)
   ]
 }

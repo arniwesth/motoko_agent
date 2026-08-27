@@ -167,17 +167,9 @@ func microrag_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutc
 }, next_state: ctx.world } }
 
 export func register_with_config(_cfg: a) -> [Capability] {
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   [
     DescribeTools(microrag_describe_tools),
-    PromptShaper(\_ctx. { prepend: [], append: [] }),
-    BudgetShaper(
-      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-        { requested_total: None, requested_solver: None, requested_verifier: None }
-      }),
-    Compactor(
-      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
-        PassThrough
-      }, next_state: ctx.world } }),
     ToolPolicy(microrag_tool_policy),
     -- Declare WriteFile so motoko's first_handle routes it through our
     -- tool handler. Without this, dispatch_tool_handle skips us and
@@ -185,14 +177,6 @@ export func register_with_config(_cfg: a) -> [Capability] {
     -- first_handle gates on the ToolProvider's advertised names.
     -- We Delegate for non-.ail paths so motoko's native handler still
     -- runs in those cases.
-    ToolProvider(["WriteFile"], microrag_tool_handle),
-    ResponseInterceptor(
-      func(ctx: ExtCtx, _resp: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-        NoIntercept
-      }, next_state: ctx.world } }),
-    SolverJudge(
-      func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-        NoDecision
-      }, next_state: ctx.world } })
+    ToolProvider(["WriteFile"], microrag_tool_handle)
   ]
 }

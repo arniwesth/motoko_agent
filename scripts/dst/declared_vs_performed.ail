@@ -551,13 +551,19 @@ export func compose_budget() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand
 
 -- SUBJECT. compose's `on_pre_step`. Declared `! {AI, IO, Trace}` at the
 -- binding site (ten effects until WI-D8 measured `ExtPorts.ai_step` and the
--- slot followed the port down); the body is `PassThrough` beside `ctx.world`.
--- The strongest witness of the four: `PreStepChainResult.stages` carries one
--- entry PER HOOK, each tagged with `ext_id`, so this arm names compose directly
--- rather than inferring it from fold order.
+-- slot followed the port down); the body was `PassThrough` beside `ctx.world`.
+-- `PreStepChainResult.stages` carries one entry PER ATOM, each tagged with
+-- `ext_id`, so until item 4 this arm named compose directly (`compose+dvp_witness`).
+-- ITEM 4 (6.0 trimming): compose registers only what it binds and its constant
+-- Compactor is gone, so the production fold SKIPS compose by construction and
+-- the stage list names the witness alone. The row keeps certifying that compose
+-- is in the registry it was handed by printing, beside the stages, the
+-- runtime's own `loaded_extension_names` of that registry — removing compose
+-- from `compose_then_witness` still reddens this row and no other.
 export func compose_pre_step() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
-  let out = Rt.dispatch_pre_step_chain(compose_then_witness("tool"), probe_ctx("tool"), []);
-  reached("compose_pre_step", join_ids(stage_ids(out.stages)))
+  let rt = compose_then_witness("tool");
+  let out = Rt.dispatch_pre_step_chain(rt, probe_ctx("tool"), []);
+  reached("compose_pre_step", "${join_ids(stage_ids(out.stages))}|installed=${join_ids(Rt.loaded_extension_names(rt))}")
 }
 
 -- SUBJECT. compose's `on_solver_candidate`. Declared with nine effects; the

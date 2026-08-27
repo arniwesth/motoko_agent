@@ -605,9 +605,23 @@ def check_row_7(out):
                 if end < 0:
                     fail(f"'{ext}': unbalanced `ToolProvider(` in {src.name}")
                 hits.append((src, text, text[m.end():end - 1]))
+        if len(hits) == 0:
+            # Item 4 (6.0 trimming): an extension that registers NO ToolProvider
+            # atom has no provided-names list and no handle at all, so the gated
+            # ToolProvider dispatch is never reached for it and the
+            # ScratchpadResult path is closed by construction. That is stronger
+            # than the `ToolProvider([], handle)` shape, and B2's enumeration
+            # (check 4) is what guarantees the atom is really absent rather than
+            # merely unseen by this scan.
+            if any(kind == "tool_provider" for (kind, _i) in hook_scope_atoms()[ext]):
+                fail(f"'{ext}' registers a tool_provider atom per B2 and this scan finds no "
+                     f"`ToolProvider(` under {dirs[ext]}; the two readings disagree, fail-closed")
+            print(f"      row7 '{ext}': registers no ToolProvider atom at all (B2 agrees) — the gated "
+                  "dispatch is unreachable by construction")
+            continue
         if len(hits) != 1:
             fail(f"'{ext}' has {len(hits)} `ToolProvider(...)` atom(s) under {dirs[ext]} (in "
-                 f"{sorted({h[0].name for h in hits})}); this scan admits exactly ONE, so row 7's "
+                 f"{sorted({h[0].name for h in hits})}); this scan admits at most ONE, so row 7's "
                  "exemption cannot be re-derived and is not earned")
         path, text, payload = hits[0]
         args = _split_top(payload)
@@ -656,9 +670,9 @@ def check_row_7(out):
                  "`Delegate`; the scan cannot decide it")
 
     print(f"  ✓ CLAIM row7 re-derived from source: all {len(out['installed'])} installed extensions "
-          "register `ToolProvider([], handle)` (so the gated ToolProvider dispatch is never reached) "
-          "AND the handle returns `Delegate`, never `Handled` — two independent facts, neither of "
-          "them emptiness")
+          "either register NO ToolProvider atom (B2 agrees) or register `ToolProvider([], handle)` "
+          "with a handle that returns `Delegate`, never `Handled` — so the gated ToolProvider "
+          "dispatch is never reached, by two independent facts, neither of them emptiness")
 
 
 def check_statement(out):

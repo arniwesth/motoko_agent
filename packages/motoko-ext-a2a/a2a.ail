@@ -165,22 +165,11 @@ export func make_hooks(cfg: A2AConfig) -> [Capability] ! {Net, Rand} {
       }
     }
   }, next_state: ctx.world } };
-  let intercept = func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-    NoIntercept
-  }, next_state: ctx.world } };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-    NoDecision
-  }, next_state: ctx.world } };
   -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   [
     DescribeTools(\_ . schemas),
-    PromptShaper(\_ . { prepend: [], append: [] }),
-    BudgetShaper(func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() }),
-    Compactor(func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }),
-    ToolPolicy(func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }),
-    ToolProvider(names, handle),
-    ResponseInterceptor(intercept),
-    SolverJudge(finalize)
+    ToolProvider(names, handle)
   ]
 }
 
