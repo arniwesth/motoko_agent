@@ -482,13 +482,15 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # Both phases run even if the first reports failures, and the exit status is the
 # worse of the two -- `make dst` must still exit non-zero for CI, and a red
 # target in the fan-out must not hide the timed one behind it.
-# The pair that has been red since D22 (`prompts_test.ail` 0/6 and a
-# `stale_skip_record`). Named here ONLY so the closing summary can say "no new
-# failures" instead of leaving a reader to remember it. It waives nothing: the
-# exit code is propagated untouched and a sweep with only these red still exits
-# 2. scripts/dst/sweep_summary.sh also reports a target on this list that
-# PASSES, so the list cannot outlive the failure it describes.
-DST_KNOWN_RED := test_coverage test_coverage_selftest
+# Targets known to be red, named here ONLY so the closing summary can say "no
+# new failures" instead of leaving a reader to remember them. It waives
+# nothing: the exit code is propagated untouched and a sweep with only these
+# red still exits 2. scripts/dst/sweep_summary.sh also reports a target on this
+# list that PASSES, so the list cannot outlive the failure it describes.
+# Empty at HEAD: the D22 pair (test_coverage, test_coverage_selftest --
+# `prompts_test.ail` 0/6 and a `stale_skip_record`) has passed since the skip
+# record was brought current, and the summary's reverse check said to drop it.
+DST_KNOWN_RED :=
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
