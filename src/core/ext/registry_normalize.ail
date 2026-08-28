@@ -219,6 +219,7 @@ export pure func normalize_registration(id: string, caps: [Capability]) -> Resul
 -- rejects the build.
 export type NormalizedRegistry = { entries: [ExtEntry], omitted_empty: [string] }
 
+@allow_empty_ok("an empty registry is a legitimate NormalizedRegistry — zero entries and zero omissions (D7); callers distinguish it from error via the Result")
 export pure func normalize_registry(regs: [ExtEntry]) -> Result[NormalizedRegistry, RegistrationRejection] {
   match regs {
     [] => Ok({ entries: [], omitted_empty: [] }),

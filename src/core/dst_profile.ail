@@ -779,6 +779,7 @@ pure func capability_instruments(cs: [ForbiddenCapability]) -> [ProfileRejection
 -- Note what is NOT restated: the seven-unconditional split. `validate_disclosure`
 -- reads `hook_dispatch`, so the `on_describe_tools` correction is inherited
 -- rather than re-derived.
+@allow_empty_ok("an empty disclosures list is a legitimate parse result — no disclosures to parse")
 pure func parse_disclosures(ds: [CapabilityDisclosureIds]) -> Result[[CapabilityDisclosure], CoverageRejection] {
   match ds {
     [] => Ok([]),

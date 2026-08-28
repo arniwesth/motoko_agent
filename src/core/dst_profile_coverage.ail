@@ -444,6 +444,7 @@ export pure func capability_disclosure_ids(d: CapabilityDisclosure) -> Capabilit
     covered: atom_ids_of(d.covered), excluded: atom_ids_of(d.excluded) }
 }
 
+@allow_empty_ok("an empty atoms list is a legitimate decode result — no atoms to resolve")
 pure func atoms_from_ids(ext_id: string, ids: [AtomIds]) -> Result[[AtomRef], CoverageRejection] {
   match ids {
     [] => Ok([]),
