@@ -1,0 +1,72 @@
+flowchart TB
+  %% ADR-001 (017) extension ABI evolution — OVERVIEW of the decision.
+  %% Colour = role: blue measured fact · green decided now · purple decided for 6.0 ·
+  %% red-dashed rejected · amber the decision point · teal upstream lever · gray unknown.
+  %% Grounded 2026-08-26 at 366193c (2026-08-24) plus the uncommitted working tree that carries
+  %% default_hooks (types.ail:964-993 is a +35-line unstaged hunk; empty-stop-guard's record-update
+  %% form is likewise unstaged). ADR dated 2026-08-17; research §2 problem, §3 options, §4
+  %% recommendation, §5 questions; ADR §1 decision, §2 answers, §3 what changed, §5 unknown.
+
+  subgraph PROBLEM["§2 · The problem — record evolution is O(consumers)"]
+    direction TB
+    rec["ExtensionHooks is a RECORD<br/>types.ail:702-958 · id + provided_tools + 8 slots<br/>every extension writes every label"]:::fact
+    tax["adding one slot = 16-package edit + ABI major<br/>types.ail:7 · consumers exist outside this repo"]:::fact
+    asym["AILANG asymmetry: a record field breaks every constructor,<br/>a sum variant breaks only exhaustive matchers —<br/>extensions construct; only ext/runtime.ail matches"]:::fact
+    rec --> tax
+    asym --> tax
+  end
+
+  subgraph OPTIONS["§3 · Options considered"]
+    direction TB
+    o32["§3.2 default_hooks(id) + record update<br/>one ABI constructor · full literals still compile<br/>slot addition = one line in default_hooks"]:::now
+    o33["§3.3 capability registration<br/>register_with_config returns [Capability]<br/>new variant breaks zero packages"]:::v6
+    o31["§3.1 message bus / pub-sub<br/>one handle(envelope) = union row<br/>hooks are transformations, not events<br/>dynamic subscription fights DST replay"]:::rejected
+    o34["§3.4 upstream: optional / defaultable<br/>record fields in AILANG<br/>file via ailang-feedback, do not wait"]:::lever
+  end
+
+  tax --> OPTIONS
+
+  decide{"§1 Decision<br/>ADR-001 · 2026-08-17"}:::decision
+  o32 --> decide
+  o33 --> decide
+  o31 --> decide
+  o34 --> decide
+
+  now["<b>NOW — minor</b><br/>ship default_hooks(id) · migrate by record update<br/>no per-slot 'was overridden' witness:<br/>the record-update expression IS the witness<br/>make check_core 56 passed / 0 failed after landing"]:::now
+  six["<b>6.0 — one major, spent once</b><br/>capability registration §3.3<br/>bundled with proc_exec → tool_handle rename<br/>(types.ail:342-349 priced it for 6.0)"]:::v6
+  rej["<b>REJECTED</b> untyped bus §3.1<br/>revisit only for observational<br/>no-response hooks if they multiply"]:::rejected
+  file["file AILANG feature request §3.4"]:::lever
+
+  decide -->|"minor"| now
+  decide -->|"major"| six
+  decide -.->|"no"| rej
+  decide -->|"in parallel"| file
+
+  subgraph PRE["Steeled 6.0 precondition — hardens §4.3, does not overturn it"]
+    direction TB
+    q3["Q3 measured: capability-list rows are NOT<br/>compiler-enforced in constructor-argument position<br/>(7-file mutation matrix · runtime proof)"]:::fact
+    plane["so the body-reading derivation tooling<br/>(classifier 3 · declared_vs_performed) is the<br/>ENTIRE enforcement plane — must be re-shaped and<br/>taught to walk into constructor arguments before 6.0"]:::v6
+    q3 --> plane
+  end
+  six --> PRE
+
+  subgraph ANS["§2 · The four §5 questions, answered"]
+    direction TB
+    q1["Q1 coverage unit → (extension, capability-atom)<br/>'slot' does not survive · barriers per-extension,<br/>data-dependent · [] is a legal vacuous case"]:::fact
+    q2["Q2 multiplicity → N>1 for composable kinds,<br/>REJECTED for vote kinds ToolPolicy · SolverJudge<br/>enforced at registration, never in dispatchers"]:::fact
+    q4["Q4 witness → none needed; hook_scope.locate()<br/>has a PARSER gap on the record-update head<br/>(empty_stop_guard already HOOK-UNRESOLVED)"]:::fact
+  end
+  now --- q4
+  six --- q1
+  six --- q2
+
+  unknown[["§5 still unknown · declared_vs_performed 41/5 baseline (17 vs 15)<br/>N>1 fold fail-open unexercised · 6.0 ExtRegistry shape { id, caps }?<br/>consumption-side row enforcement unmeasured · v0.33.0 vs v0.33.1 skew"]]:::unknown
+  PRE -.-> unknown
+
+  classDef fact fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef now fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef v6 fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef rejected fill:#3a1620,stroke:#f7768e,color:#f7c6cf,stroke-dasharray:5 5;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef lever fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef unknown fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;
