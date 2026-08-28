@@ -2,8 +2,6 @@ module sunholo/motoko_ext_compaction_structural/register
 
 import std/option (None)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  BudgetPlan,
-  BudgetPatch,
   ExtCtx,
   Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
   FinalizeDecision,
@@ -15,10 +13,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision
 )
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
-
-func no_budget_patch(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
 
 func pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   compact_for_pre_step(ctx, msgs)
