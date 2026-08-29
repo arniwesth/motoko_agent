@@ -43,4 +43,5 @@ shows the right improvement loop: agent finds bug → A/B repro → fail-fast gu
 ## Verdict
 
 Concept 9/10, execution 7/10, current usability 6/10.
-See ADR-001 for what earns the 10th point; PLAN-001 for the work items.
+See VISION-001 for the four layers that earn the 10th concept point,
+ADR-001 for the decision it implies, and PLAN-001 for the work items.

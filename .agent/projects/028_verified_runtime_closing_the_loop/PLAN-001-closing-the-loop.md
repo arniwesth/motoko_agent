@@ -2,6 +2,12 @@
 
 Ordered by leverage. Items 1-2 are small and close the two loudest gaps.
 
+Vision mapping (VISION-001): items 1+3 -> Layer 1 (fail-closed finalization);
+items 2+4 -> Layers 2/4 (unverified-shell robustness, first pinned failure
+paths); item 5 -> Layers 2/3 (boundary contracts, claim provenance). Layer 4's
+standing self-repair loop is a work stream beyond this plan; the batch-skip
+regression in item 2 is its first entry.
+
 ## 1. Flip the DP7 gate to fail-closed
 
 - File: `src/core/session.ail` (funcs `run_dp7_verifier` ~L1800, `dp7_gate` ~L1816)
