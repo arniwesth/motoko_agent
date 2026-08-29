@@ -42,6 +42,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # new_contract_policy diffs against the PR base, which a depth-1
+          # checkout does not have.
+          fetch-depth: 0
 
       - name: Read AILANG floor from ailang.toml (single source of truth)
         id: pin
@@ -126,6 +130,18 @@ jobs:
       # disjunct and asserting VIOLATION (PLAN P5).
       - name: verify_mutations
         run: make verify_mutations
+
+      # The class of each contract is computed by Z3 and pinned. This fails if
+      # the tree and contracts.register disagree in either direction, including
+      # a class edited by hand while the solver computes something else -- the
+      # direction a hand-maintained register cannot check (ADR-001 §2).
+      - name: verify_classify_check
+        run: make verify_classify_check
+
+      # Every new pure func in src/core carries a contract or a checked excuse.
+      # Keyed on the diff against the PR base, not the tree.
+      - name: new_contract_policy
+        run: make new_contract_policy BASE=origin/${{ github.base_ref || 'main' }}
 
   dst_l2:
     name: dst_l2

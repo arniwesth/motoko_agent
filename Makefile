@@ -2386,6 +2386,11 @@ verify_core:
 		proven=$$((proven + v)); unstated=$$((unstated + u)); blocked=$$((blocked + b)); \
 	done; \
 	echo "verify_core: $$proven contracts proven, $$unstated unstated, $$blocked blocked; $$fail files failed, $$bare bare"; \
+	if [ -f tools/verify_classify/contracts.register ]; then \
+		sed -n 's/^# totals: /verify_core: pinned classification -- /p' tools/verify_classify/contracts.register; \
+		echo "  proven counts contracts; only 'substantive' constrains a body (ADR-001 §1)."; \
+		echo "  verify_classify_check is what proves that pin current."; \
+	fi; \
 	if [ "$$unstated" -ne 0 ]; then \
 		echo "verify_core: FAIL -- $$unstated contract(s) declare requires with no ensures."; \
 		echo "  An incomplete annotation reads as specified and is checked by nothing."; \
@@ -2393,6 +2398,35 @@ verify_core:
 		echo "  the file becomes 'blocked', which is reported and does not fail."; \
 	fi; \
 	[ "$$fail" -eq 0 ] && [ "$$unstated" -eq 0 ] || exit 1
+
+# The computed classification register (PLAN P3, ADR-001 §1-§2).
+#
+# `proven` is not the metric; `substantive` is. Each contract gets two generated
+# probes -- bind the result to a free argument and keep the ensures (VERIFIED =>
+# tautology), then require the contract on a free result and ensure it equals the
+# body (VERIFIED => the contract just restates the body). Both VIOLATION means
+# the contract is falsifiable AND admits results the body would not produce,
+# which is the only class that counts.
+#
+# verify_classify rewrites contracts.register; verify_classify_check fails if the
+# tree and the register disagree in either direction, INCLUDING a class edited by
+# hand while the solver computes something else. That last direction is why the
+# register is generated rather than maintained -- see dst_invariants.ail:72-84
+# for what a hand-maintained register is worth.
+verify_classify:
+	@python3 tools/verify_classify/classify.py --write
+
+verify_classify_check:
+	@python3 tools/verify_classify/classify.py --check
+
+# ADR-001 §4: every NEW `pure func` in src/core/ carries a contract or a
+# `-- contracts: ...` line saying what blocks one -- and the excuse is checked by
+# synthesising a trivial contract and confirming the verifier really rejects the
+# function. Keyed on the diff: ~1545 declarations predate the rule.
+# BASE defaults to the Makefile's BASE, so `make new_contract_policy BASE=main_dst`
+# on a branch cut from main_dst.
+new_contract_policy:
+	@python3 tools/verify_classify/new_contract_policy.py --base $(BASE)
 
 # Mutation checks for the guard contracts (PLAN P5). VERIFIED proves a contract
 # holds of the body; it does not prove the contract would notice the body

@@ -123,3 +123,72 @@ If your report fits one of these patterns, mention it — they're tracked upstre
 Bug fixes and features for Motoko itself follow the standard fork → branch → PR flow against this repo. Tests live alongside source: `make test` for core runtime tests; `cd src/tui && bun run test` for TUI.
 
 `make check_core` runs `ailang check` over every `.ail` file in `src/core/` — it should pass before you open a PR.
+
+## Contracts on `src/core/`
+
+`ailang verify` proves `ensures` clauses with Z3. `make verify_core` runs it over
+`src/core/`, and it will not tick a file that proved nothing.
+
+**Every new `pure func` in `src/core/` carries a contract, or a comment saying what
+blocks one.**
+
+```ailang
+-- contracts: BLOCKED — RECURSIVE (find_last)
+-- contracts: SKIPPED — unencodable builtin: std/string.split
+```
+
+`make new_contract_policy BASE=<your base branch>` enforces this. It is keyed on the
+diff, not the tree: roughly 1545 declarations predate the rule and are grandfathered.
+The excuse is not taken on trust — the checker synthesises a trivial contract on the
+function and confirms the verifier really does reject it, so an excuse on a function
+that would have verified is red.
+
+### What counts
+
+A green count is the wrong target. A contract that holds for every possible result
+proves nothing about the body, and three of the four contracts this repo started with
+were of that kind. `make verify_classify` computes each contract's class with two Z3
+probes and pins it in `tools/verify_classify/contracts.register`:
+
+| class | meaning |
+|---|---|
+| `substantive` | falsifiable, and admits results the body would not produce. **The only class that counts.** |
+| `tautology` | holds for every result. Permitted, registered, never counted. |
+| `spec-equals-body` | admits only the body's answer. A regression test, not evidence — and a standing invitation to look for the weaker property. |
+| `unclassified` | a probe was outside the SMT fragment, so the solver could not decide. |
+
+`make verify_classify_check` fails if the tree and the register disagree in either
+direction, including a class edited by hand while the solver computes something else.
+Re-pin with `make verify_classify` when you change a contract or a body. To disagree
+with a probe, add an `-- override:` line beneath the entry naming the probe result you
+are overriding.
+
+### Writing one that counts
+
+Reach for a **recall** property (what a guard must catch) and a **precision** property
+(what it must not reject) rather than restating the body:
+
+```ailang
+pure func has_shell_tokens(s: string) -> bool
+  ensures { (not contains(s, ";") || result) && (not contains(s, "|") || result) }
+```
+
+This is one-directional, so adding a ninth token still verifies while removing one
+fails with a counterexample. A restatement (`result == <the body>`) fails the addition
+too, which teaches people to update contracts mechanically.
+
+`make verify_mutations` falsifies the guard contracts by deleting a disjunct from each
+body and asserting the solver returns VIOLATION — VERIFIED alone only says a contract
+holds, not that it would notice the body changing.
+
+### Two things that will stop you
+
+The fragment is six rejection codes in `ailang/internal/smt/encodable.go`. In practice:
+
+- A plain `func` is never verified, whatever its body — `SKIPPED — has effects`.
+  Promote to `pure func` first.
+- String interpolation lowers through `show` and is unencodable, and `++` is
+  list-only. Use `concat_String(a, b)`, which encodes to SMT-LIB `str.++`.
+
+Background: `.agent/projects/027_z3_contracts/` — the decision (ADR-001), the
+measurements (RESEARCH), and what changed when it was implemented (FINDINGS).
