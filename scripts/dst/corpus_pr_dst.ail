@@ -242,11 +242,11 @@ import src/core/dst_corpus (
   render_corpus, corpus_rules_version
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  BudgetPlan, BudgetPatch, Delegate, ExtCtx, ExtRuntime, ExtensionHooks,
-  FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
+  BudgetPlan, BudgetPatch, Delegate, ExtCtx, ExtRuntime, FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
   PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
   ToolPolicyDecision, ToolSchema
 )
+import src/core/test/ext_fixture (fixture_hooks)
 
 -- ---------------------------------------------------------------------------
 -- Reporting
@@ -336,19 +336,18 @@ func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision
 
 func approval_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  let hooks: ExtensionHooks = {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: no_describe,
-    on_build_system_prompt: no_prompt,
-    on_budget_plan: no_budget,
-    on_pre_step: passthrough_pre_step,
-    on_tool_policy: pending_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: no_solver
-  };
-  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+  let hooks = fixture_hooks(id, {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: passthrough_pre_step,
+    policy: pending_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  });
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }
 
 func run_generated(id: string, w: WorldState) -> TracedSessionResult
@@ -367,7 +366,7 @@ func run_recording(id: string, w: WorldState) -> TracedSessionResult
 
 pure func run_manifest() -> ExecutionManifest {
   driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
-                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+                       ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 
 pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {

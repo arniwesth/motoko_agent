@@ -849,7 +849,7 @@ func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, m
 -- The widening it was waiting on is the one thing that could retire it, because
 -- the obstacle was the port's SHAPE and not its call sites: a two-argument port
 -- could always have been bridged, which is the whole of plan rule S3.
--- Project a typed tool outcome onto the un-widened `ExtPorts.proc_exec` string
+-- Project a typed tool outcome onto the un-widened `ExtPorts.tool_handle` string
 -- return. Faults are RENDERED rather than dropped: an extension handed "" when
 -- a tool actually failed is the silent-wrong shape this whole item exists to
 -- remove, even on a seam A12 does not own.
@@ -886,7 +886,7 @@ pure func decode_or_empty(raw: string) -> Json {
 }
 
 -- EXPORTED AT WI-D23, for one consumer: `world_state_probe`'s adoption row,
--- which per S14 must exercise THIS bridge's `proc_exec` closure against a
+-- which per S14 must exercise THIS bridge's `tool_handle` closure against a
 -- scripted world — a substrate probe that rebuilds the closure's shape would
 -- measure its own fidelity, not the bridge. Production still has exactly the
 -- four `mk_v2_ext_ctx` call sites below; nothing else should construct an
@@ -896,8 +896,8 @@ export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPo
   -- this closure captures no world at all — which is the point.
   --
   -- UPDATED AT WI-D16. This note used to read "`world` below is still captured
-  -- by `env_get` and `proc_exec`, and those two remain classifier-2 members
-  -- precisely because they cannot return a successor." `proc_exec` no longer
+  -- by `env_get` and `tool_handle`, and those two remain classifier-2 members
+  -- precisely because they cannot return a successor." `tool_handle` no longer
   -- does either: it takes the token now, so `env_get` is the LAST closure in
   -- this bridge that captures `world`, and it is the last classifier-2 member.
   -- That is deliberate and its reason is on the ABI row — its problematic
@@ -953,9 +953,9 @@ export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPo
   -- here — at the seam — rather than in two extension packages' comments.
   --
   -- The two strings are a MOTOKO TOOL NAME and that tool's JSON ARGUMENTS. The
-  -- parameters were called `name` and `args`, which is why three `noop_proc_exec`
+  -- parameters were called `name` and `args`, which is why three `noop_tool_handle`
   -- bindings in the tree call them `_cmd` and `_cwd` instead: the field is named
-  -- `proc_exec`, the ABI row types them `(ExtWorld, string, string)` and
+  -- `tool_handle`, the ABI row types them `(ExtWorld, string, string)` and
   -- documented neither, so five sites in the tree read two positional strings two
   -- INCOMPATIBLE ways and nothing type-checks the difference. Renamed at WI-D21.
   --
@@ -1051,7 +1051,7 @@ export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPo
   -- takes a WITNESS instead of a literal zero and the pin survives for every run
   -- that routes nothing. `RandomDrawIdentity` stays pinned at literal zero — its
   -- ground is unchanged, and it is still true that no adapter constructs it.
-  let proc_exec = func(w: ExtWorld, tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  let tool_handle = func(w: ExtWorld, tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
     let w0 = token_to_world(w);
     let inv: ToolInvocation = {
       call: { id: "", tool: tool, arguments: decode_or_empty(args_json) },
@@ -1150,7 +1150,7 @@ export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPo
   };
   {
     ai_step: ai_step,
-    proc_exec: proc_exec,
+    tool_handle: tool_handle,
     -- WI-D16. Nothing calls it yet — this item ships the seam and routes no
     -- extension (that is part 2). A seam with no callers is the situation WI-D3
     -- hit with `clock_now`; it is reported rather than presented as coverage.
@@ -3342,6 +3342,19 @@ export func run_v2_with_conversation(
   -- the outer conversation loop, and each traced run below derives its own from
   -- its own world. That is pre-existing behaviour, not a cursor being dropped.
   let session_id = derive_session_id(started_provider.ports, started_provider.world).id;
+  -- An empty task means there is no opening turn to run. Go straight to the
+  -- conversation loop rather than letting the empty task reach the provider as
+  -- a real model call on an empty user message -- which is what `/restart` did
+  -- before this guard existed.
+  --
+  -- The live launcher no longer reaches this branch: `rpc.run_with_config`
+  -- waits in `await_first_task` for the first real task before it builds
+  -- anything, precisely because the system prompt and the budget plan are both
+  -- task-conditional and both built exactly once. This stays as the guard for
+  -- direct callers (tests, harnesses) that hand an empty task straight in.
+  if task == "" then
+    conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts())
+  else {
   let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
   let initial_counts = runtime_status_counts(initial_traced.trace);
   match initial_traced.result {
@@ -3354,6 +3367,7 @@ export func run_v2_with_conversation(
       }));
       conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts)
     }
+  }
   }
 }
 

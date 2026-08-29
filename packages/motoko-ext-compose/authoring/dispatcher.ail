@@ -232,7 +232,7 @@ func rename_var_in_funcs_rec(funcs: [FuncDecl], name: string, from: string, to: 
 -- reason given at `compose.check_snippet`." That reason (the seam reaches no
 -- compiler under the tool name `ailang`, and the answer arrives rendered where a
 -- typed one is wanted) expired in two halves, at WI-D23 for the type and at
--- WI-D26 for the tool name: `proc_exec(w, "BashExec", …)` runs the compiler and
+-- WI-D26 for the tool name: `tool_handle(w, "BashExec", …)` runs the compiler and
 -- `ExtProcOutcome.exit_code` carries its code typed. This function now performs
 -- no ambient effect.
 --
@@ -265,10 +265,10 @@ func check_snippet(p: ExtPorts, w: ExtWorld, snippet: string) -> { ok: bool, err
   let stamp = show(reading.now_ms);
   let path = ".motoko-store/tmp/compose_structured_${sha256Hex("${stamp}${snippet}")}.ail";
   let written = p.file_write(reading.next_state, path, snippet);
-  let checked = p.proc_exec(written.next_state, bash_exec_tool(), bash_exec_args("ailang", ["check", path]));
+  let checked = p.tool_handle(written.next_state, bash_exec_tool(), bash_exec_args("ailang", ["check", path]));
   -- The successor threads from the CALL and not from `written`, which is the
   -- whole of what routing adds to this function's shape. `exec` returned a value
-  -- and left the world where it found it; `proc_exec` returns a world, and a
+  -- and left the world where it found it; `tool_handle` returns a world, and a
   -- `file_remove` started from `written.next_state` would discard the subprocess
   -- the line above just performed — S29's dropped successor, one line from where
   -- it would be invisible.

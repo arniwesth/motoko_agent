@@ -13,7 +13,7 @@
 -- probe of an upstream API is NOT evidence that OUR adoption of it works", and
 -- the mirror holds — an adoption proven only against a script is not evidence
 -- that the live arm exists. WI-D19 shipped a routing claim that was false in
--- exactly that direction (`proc_exec(w, "ailang", …)` reaches no compiler), and
+-- exactly that direction (`tool_handle(w, "ailang", …)` reaches no compiler), and
 -- it took WI-D21 to measure it. This file is the row that would have caught it.
 --
 -- WHAT IT DRIVES, AND WHY IT IS NOT A SESSION. `dispatch_response_intercept`
@@ -42,7 +42,7 @@
 -- that diagnostic's TEXT — "undefined variable" is `ailang check`'s wording and
 -- nothing in Motoko generates it — so a green here cannot be produced by a stub,
 -- by a tool-error blob, or by the "requires extension capability" string
--- WI-D19's `proc_exec(w, "ailang", …)` would have returned.
+-- WI-D19's `tool_handle(w, "ailang", …)` would have returned.
 
 module scripts/dst/compose_live_exec
 
@@ -56,7 +56,7 @@ import src/core/ext_world (world_to_token)
 import src/core/test/stub_step (live_ports)
 import src/core/ext/runtime as Rt (dispatch_response_intercept)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtRuntime, ExtensionHooks, BudgetPlan,
+  ExtCtx, ExtRuntime, BudgetPlan,
   ResponseInterceptDecision, InterceptHandled, NoIntercept, TokenTelemetry
 )
 import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
@@ -98,7 +98,7 @@ func cfg() -> ComposeHostConfig {
 
 func rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [Compose.register_with_config(cfg())] },
+  { registry: { entries: [{ id: "compose", caps: Compose.register_with_config(cfg()) }] },
     strict_mode: false, verification: v }
 }
 

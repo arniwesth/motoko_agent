@@ -31,6 +31,17 @@ NINE hold the `ExtensionHooks` record itself, so every inline hook body lives
 there, and SIX go further and declare named top-level hook functions in it.
 Dropping the file drops hook-reachable text for nine of fifteen extensions.
 
+B8 NOTE (ADR-001 Phase B).  The paragraph above was measured over the 5.x
+`ExtensionHooks` RECORD.  After B8 the ABI has no record and no
+`default_hooks`: `register_with_config` returns a literal `[Capability]` list
+(the B2 head), and that is the ONLY registration shape this tool reads.  The
+record head, the `{ default_hooks(id) | ... }` update head and their two
+rejection shapes (`hook-record-unresolvable`, `hook-slot-missing`) were
+removed rather than kept beside the list head; anything that is not a literal
+list reachable through delegation is `capability-list-unresolvable`.  The
+argument stands unchanged: the hook-reachable text still lives in
+`register.ail` for most extensions, now as constructor arguments.
+
 The split is therefore REACHABILITY-granular, computed from the eight bindings
 outward, and every step it cannot resolve is a rejection.
 
@@ -69,27 +80,49 @@ from pathlib import Path
 
 IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 
-#: The eight ABI slots.  Held here rather than derived so that a slot added to
-#: the ABI makes this tool FAIL (tiling assertion) rather than silently scan
-#: seven -- the shape ADR:1317-1337 records as having already cost this project
-#: one correction ("when a count and an enumeration disagree by one, the
-#: enumeration is the claim").
-SLOTS = (
-    "on_describe_tools", "on_build_system_prompt", "on_budget_plan", "on_pre_step",
-    "on_tool_policy", "on_tool_handle", "on_response_intercept", "on_solver_candidate",
-)
-
 REGISTER_FUNC = "register_with_config"
 
+#: B8: the 5.x `SLOTS` tuple (the eight `ExtensionHooks` fields and the tiling
+#: assertion over them) and the `default_hooks` / `ABI_TYPES` update-head
+#: resolution are gone with the record.  `CAPABILITY_KINDS` below is the
+#: enumeration that now fails closed in their place.
+
+#: THE 6.0 REGISTRATION SHAPE (ADR-001 Phase B, B2): `register_with_config`
+#: returns a LITERAL LIST of capability-constructor applications,
+#: `[Kind(arg, ...), ...]`, and every function-typed argument is a hook binding.
+#: `kind -> (arity, function-typed argument positions)`, from the type-checked
+#: `Capability` sketch (answer …9903186 / tmp/017-capability/capability.ail).
+#: Held here rather than derived so that a variant added to the ABI makes this
+#: tool FAIL on it (`capability-list-unresolvable`) rather than silently skip
+#: the atom -- the discipline the 5.x `SLOTS` tuple carried.  "Literal lists
+#: only": a list built by an expression is a rejection, and B8 makes that an
+#: ABI rule.
+CAPABILITY_KINDS: dict[str, tuple[int, tuple[int, ...]]] = {
+    "DescribeTools": (1, (0,)),
+    "PromptShaper": (1, (0,)),
+    "BudgetShaper": (1, (0,)),
+    "Compactor": (1, (0,)),
+    "ToolPolicy": (1, (0,)),
+    "ToolProvider": (2, (1,)),          # (names, handle); names is data, not a binding
+    "ResponseInterceptor": (1, (0,)),
+    "SolverJudge": (1, (0,)),
+}
+
 #: Rejection shapes this module adds to the parent's five.  Each is a REJECTION.
+#: B8 removed `hook-record-unresolvable` and `hook-slot-missing` with the record.
 HOOK_SHAPES = {
-    "hook-record-unresolvable": "`register_with_config`'s tail expression is neither an "
-                                "ExtensionHooks record literal nor a resolvable call that "
-                                "returns one, so the eight bindings cannot be located at all",
-    "hook-slot-missing": "the resolved record literal does not bind all eight ABI slots. "
-                         "The bindings must TILE the record: a slot this tool cannot see "
-                         "is a slot it cannot scan, and scanning seven of eight silently "
-                         "is the failure the assertion exists to prevent",
+    "capability-list-unresolvable": "`register_with_config`'s tail (possibly behind delegation "
+                                    "hops such as `make_hooks(cfg)`) is not a LITERAL LIST (the "
+                                    "6.0 `[Capability]` shape) this tool can enumerate atom by "
+                                    "atom: no `register_with_config`, an unresolvable or "
+                                    "over-deep delegation, a tail that is neither a list nor a "
+                                    "call, an element that is not `Kind(arg, ...)` for a known "
+                                    "capability constructor, a computed or spread element, a wrong "
+                                    "arity, a list built by an expression (`xs ++ ys`, a "
+                                    "conditional), or an element count that does not match the "
+                                    "atoms emitted. Over a list there is no tiling to assert, so "
+                                    "the fail-closed denominator is the element count, and an "
+                                    "atom this tool did not read is an atom nothing scanned",
     "hook-binding-unresolvable": "a slot is bound to an expression this tool cannot resolve "
                                  "to reachable text -- a computed expression, a value threaded "
                                  "through a parameter, or a delegation past the hop limit",
@@ -260,26 +293,60 @@ def balanced(expr: str, open_ch: str = "{", close_ch: str = "}") -> str | None:
     return None
 
 
-def split_record(body: str) -> dict[str, str]:
-    """`{ a: x, b: y }` body -> `{a: 'x', b: 'y'}`, splitting on depth-0 commas."""
+def split_args(text: str) -> list[str]:
+    """Depth-0 comma split of an argument list or list body.  A lambda holding
+    commas (`func(ctx: ExtCtx, call: ToolCallEnvelope) -> ...`) splits correctly
+    because its commas sit inside `(`/`{`.  An EMPTY or whitespace-only text is
+    zero elements; an empty element between commas is kept (as `""`) so the
+    caller can reject it rather than silently drop it."""
+    if not text.strip():
+        return []
     parts, depth, cur = [], 0, ""
-    for ch in body:
+    for ch in text:
         if ch in "{[(":
             depth += 1
         elif ch in "}])":
             depth -= 1
         if ch == "," and depth == 0:
-            parts.append(cur)
+            parts.append(cur.strip())
             cur = ""
         else:
             cur += ch
-    parts.append(cur)
-    out: dict[str, str] = {}
-    for p in parts:
-        m = re.match(rf"\s*({IDENT})\s*:\s*(.+)", p, re.S)
-        if m:
-            out[m.group(1)] = m.group(2).strip()
-    return out
+    parts.append(cur.strip())
+    return parts
+
+
+def top_level_constructor_heads(text: str) -> int:
+    """The number of depth-0 capability-constructor heads `Kind(` in `text` --
+    the INDEPENDENT atom count.
+
+    Independent in the way that matters, which a depth-0 COMMA count was not:
+    the element parser splits `text` on depth-0 commas and then emits exactly
+    one atom per element, so counting those same commas is the same measurement
+    twice and cannot disagree with it -- a denominator that reads as fail-closed
+    and is in fact unreachable.  Counting constructor HEADS measures a different
+    feature of the same text, and it disagrees on precisely the shape the
+    element parser gets wrong:
+
+        [ToolPolicy(p) ++ PromptShaper(q)]
+
+    is ONE comma-delimited element, and `Kind\s*\((.*)\)` accepts it whole --
+    the greedy `.*` swallows `p) ++ PromptShaper(q` -- so the parser emits ONE
+    atom for TWO capabilities and the comma count agrees with it.  Two heads
+    against one atom is the rejection that catches it.
+
+    Heads inside an argument (`Compactor(pick(SolverJudge(j)))`) sit at depth
+    >= 1 and are not elements, so they are not counted.
+    """
+    depths, depth = [], 0
+    for ch in text:
+        depths.append(depth)
+        if ch in "{[(":
+            depth += 1
+        elif ch in "}])":
+            depth -= 1
+    return sum(1 for m in re.finditer(rf"\b({IDENT})\s*\(", text)
+               if depths[m.start()] == 0 and m.group(1) in CAPABILITY_KINDS)
 
 
 def func_body(text: str, name: str) -> str | None:
@@ -454,6 +521,12 @@ class Scope:
 
     def __init__(self, ext: str, root: Path, mods: list[Path], repo: Path, resolve):
         self.ext, self.root, self.repo, self.resolve = ext, root.resolve(), repo, resolve
+        #: "capability-list" (6.0 `[Capability]`) once located, else None.  The
+        #: 5.x "record" value and the update head went with B8.
+        self.registration_shape: str | None = None
+        #: the atoms of a capability-list registration, keyed (kind, index)
+        #: where `index` counts WITHIN the kind, plus the list `position`.
+        self.atoms: list[dict] = []
         self.mods = [p.resolve() for p in mods]
         # door 4: interpolation-preserving, NOT the parent's `strip_noise`
         self.texts = {p: keep_interpolations(p.read_text(errors="replace")) for p in self.mods}
@@ -498,54 +571,67 @@ class Scope:
         #: per extension so the counterfactual yield is derived from the tool's
         #: own findings rather than asserted beside them.
         self.unresolved_callees: set[str] = set()
-        #: locals of the function that produced the hooks record -- everything an
-        #: inline binding closes over.  Populated by `locate`.
+        #: locals of the function that produced the capability list -- everything
+        #: an inline binding closes over.  Populated by `locate`.
         self.producing_locals: set[str] = set()
         self.producing_body: str = ""
 
-    # -- locating the eight bindings ---------------------------------------
+    # -- locating the bindings ---------------------------------------------
 
     def locate(self) -> bool:
+        """Find the literal `[Capability]` list, through delegation hops, or reject.
+
+        B8: this is the ONLY head.  Every failure to reach a literal list is
+        `capability-list-unresolvable` -- fail closed, never a pass."""
         text = self.texts.get(self.root)
         if text is None:
-            self.rejections.append(Rejection("hook-record-unresolvable", str(self.root),
+            self.rejections.append(Rejection("capability-list-unresolvable", str(self.root),
                                              "the closure root is not a readable module"))
             return False
         body = func_body(text, REGISTER_FUNC)
         if body is None:
-            self.rejections.append(Rejection("hook-record-unresolvable", self._rel(self.root),
+            self.rejections.append(Rejection("capability-list-unresolvable", self._rel(self.root),
                                              f"no `{REGISTER_FUNC}` declaration"))
             return False
 
         home, expr = self.root, tail_expression(body)
         self.registration_text = body[:len(body) - len(expr)] if body.endswith(expr) else body
-        # The body that PRODUCES the record, which is where a slot bound to a
-        # bare name may find its `let`.  It is `register_with_config`'s body only
-        # until the first delegation hop: five of the fifteen extensions return
-        # `make_hooks(cfg)`, and their `handle`/`intercept`/`finalize` locals live
-        # in `make_hooks`.  Looking them up by the REGISTRATION function's name
-        # after a hop finds nothing and rejects a resolvable binding.
+        # The body that PRODUCES the list, which is where a binding to a bare
+        # name may find its `let`.  It is `register_with_config`'s body only
+        # until the first delegation hop: several extensions return
+        # `make_hooks(cfg)`, and their `handle`/`intercept`/`finalize` locals
+        # live in `make_hooks`.  Looking them up by the REGISTRATION function's
+        # name after a hop finds nothing and rejects a resolvable binding.
         self.producing_body = body
         hops = 0
-        record = balanced(expr)
-        while record is None or not self._looks_like_hooks(record):
+        cap_list = balanced(expr, "[", "]")
+        while cap_list is None:
             if hops >= MAX_DELEGATION_HOPS:
                 self.rejections.append(Rejection(
-                    "hook-record-unresolvable", self._rel(home),
+                    "capability-list-unresolvable", self._rel(home),
                     f"delegation exceeded {MAX_DELEGATION_HOPS} hops at `{expr[:60]}`"))
                 return False
             m = re.match(rf"({IDENT})\s*\(", expr)
             if not m:
+                # a tail that MENTIONS a capability constructor but is not a
+                # literal list -- `[A(f)] ++ more(cfg)`, `if c then [..] else [..]`
+                # -- is the computed-list shape and is named as such
+                if any(re.search(rf"\b{k}\s*\(", expr) for k in CAPABILITY_KINDS):
+                    self.rejections.append(Rejection(
+                        "capability-list-unresolvable", self._rel(home),
+                        f"tail expression `{expr[:60]}` builds the capability list by an "
+                        f"expression rather than writing it as a literal -- literal lists only"))
+                    return False
                 self.rejections.append(Rejection(
-                    "hook-record-unresolvable", self._rel(home),
-                    f"tail expression `{expr[:60]}` is neither a record literal nor a call"))
+                    "capability-list-unresolvable", self._rel(home),
+                    f"tail expression `{expr[:60]}` is neither a literal list nor a call"))
                 return False
             nxt = self._resolve_func(home, m.group(1))
             if nxt is None:
                 self.rejections.append(Rejection(
-                    "hook-record-unresolvable", self._rel(home),
-                    f"`{m.group(1)}` returns the hooks record but resolves to no declaration "
-                    f"in this closure"))
+                    "capability-list-unresolvable", self._rel(home),
+                    f"`{m.group(1)}` returns the capability list but resolves to no "
+                    f"declaration in this closure"))
                 return False
             home, fbody = nxt
             # the delegated function may perform registration effects of its own
@@ -553,28 +639,101 @@ class Scope:
             self.registration_text += fbody[:len(fbody) - len(inner)] if fbody.endswith(inner) else fbody
             self.producing_body = fbody
             expr = inner
-            record = balanced(expr)
+            cap_list = balanced(expr, "[", "]")
             hops += 1
 
         self.hook_home = home
         self.delegation_hops = hops
         self.producing_locals = set(let_bindings(self.producing_body))
-        fields = split_record(record)
-        missing = [s for s in SLOTS if s not in fields]
-        if missing:
-            self.rejections.append(Rejection(
-                "hook-slot-missing", self._rel(home),
-                f"the resolved record binds {len(fields)} field(s) and is missing "
-                f"{', '.join(missing)} -- the eight bindings do not tile it"))
-            return False
-        self.bindings = {s: (home, fields[s]) for s in SLOTS}
-        return True
 
-    def _looks_like_hooks(self, record: str | None) -> bool:
-        if record is None:
+        # THE CAPABILITY LIST (ADR-001 Phase B, B2): a list of constructor
+        # applications, every function-typed argument a binding.  There is no
+        # record to tile; what fails closed instead is the ATOM COUNT, measured
+        # off the constructor heads rather than off the parse's own commas.
+        # a balanced `[` at the tail could also be the tail of an expression
+        # like `[x].head` -- require the whole tail
+        if not re.fullmatch(r"\[.*\]", expr.strip(), re.S):
+            self.rejections.append(Rejection(
+                "capability-list-unresolvable", self._rel(home),
+                f"tail expression `{expr[:60]}` starts a list but does not end it -- "
+                f"the capability list is not a literal"))
             return False
-        f = split_record(record)
-        return sum(1 for s in SLOTS if s in f) >= 4
+        self.registration_shape = "capability-list"
+        return self._locate_capability_list(home, cap_list)
+
+    def _locate_capability_list(self, home: Path, body: str) -> bool:
+        """`Kind(arg, ...), Kind(arg, ...)` -> atoms + bindings, or a rejection.
+
+        Every element must be an application of a constructor in
+        `CAPABILITY_KINDS` at its arity; every function-typed argument becomes a
+        binding keyed `Kind[index]` (index within the kind), which `walk`
+        resolves exactly as it resolves a record slot: an inline lambda to its
+        text, a bare name to its declaration's BODY.  A wide-rowed named
+        function is therefore scanned, not trusted -- its row bounds nothing
+        in constructor-argument position (B1's probe).  Anything else is
+        `capability-list-unresolvable`, and so is any disagreement between the
+        depth-0 constructor-head count and the atoms emitted -- see
+        `top_level_constructor_heads` for why the heads, and not the commas the
+        split itself reads, are what makes that a live check."""
+        elements = split_args(body)
+        expected = top_level_constructor_heads(body)
+        per_kind: dict[str, int] = {}
+        bindings: dict[str, tuple[Path, str]] = {}
+        atoms: list[dict] = []
+        for pos, el in enumerate(elements):
+            if not el:
+                self.rejections.append(Rejection(
+                    "capability-list-unresolvable", self._rel(home),
+                    f"capability list element {pos} is empty (a trailing or doubled comma) -- "
+                    f"the {expected} constructor head(s) cannot be reconciled with the atoms"))
+                return False
+            if el.startswith("..."):
+                self.rejections.append(Rejection(
+                    "capability-list-unresolvable", self._rel(home),
+                    f"capability list element {pos} is a spread `{el[:40]}` -- its atoms are "
+                    f"text this tool has not read"))
+                return False
+            m = re.fullmatch(rf"({IDENT})\s*\((.*)\)", el, re.S)
+            if m is None:
+                self.rejections.append(Rejection(
+                    "capability-list-unresolvable", self._rel(home),
+                    f"capability list element {pos} `{el[:60]}` is not a constructor "
+                    f"application `Kind(arg, ...)` -- a computed element is an atom this tool "
+                    f"cannot enumerate"))
+                return False
+            kind, argtext = m.group(1), m.group(2)
+            if kind not in CAPABILITY_KINDS:
+                self.rejections.append(Rejection(
+                    "capability-list-unresolvable", self._rel(home),
+                    f"capability list element {pos} applies `{kind}`, which is not one of the "
+                    f"{len(CAPABILITY_KINDS)} capability constructors this tool enumerates -- a "
+                    f"new ABI variant must be added to CAPABILITY_KINDS, not scanned around"))
+                return False
+            arity, fn_args = CAPABILITY_KINDS[kind]
+            args = split_args(argtext)
+            if len(args) != arity or any(not a for a in args):
+                self.rejections.append(Rejection(
+                    "capability-list-unresolvable", self._rel(home),
+                    f"`{kind}` at element {pos} is applied to {len(args)} argument(s); the "
+                    f"constructor takes {arity}"))
+                return False
+            idx = per_kind.get(kind, 0)
+            per_kind[kind] = idx + 1
+            for ai in fn_args:
+                key = f"{kind}[{idx}]" if len(fn_args) == 1 else f"{kind}[{idx}]@{ai}"
+                bindings[key] = (home, args[ai])
+            atoms.append({"kind": kind, "index": idx, "position": pos,
+                          "binding": args[fn_args[0]][:40]})
+        if len(atoms) != expected:
+            self.rejections.append(Rejection(
+                "capability-list-unresolvable", self._rel(home),
+                f"the capability list holds {expected} depth-0 constructor head(s) and "
+                f"{len(atoms)} atom(s) were emitted -- an atom was dropped or two were read "
+                f"as one, which is fail-open"))
+            return False
+        self.atoms = atoms
+        self.bindings = bindings
+        return True
 
     def _rel(self, p: Path) -> str:
         try:
@@ -877,6 +1036,9 @@ def derive_hook_scope(repo: Path, c3, producer, builtins: dict[str, str],
             "located": located,
             "delegation_hops": sc.delegation_hops,
             "hook_home": sc._rel(sc.hook_home) if sc.hook_home else None,
+            "registration_shape": sc.registration_shape,
+            "atoms": sc.atoms,
+            "atom_count": len(sc.atoms),
             "slots_bound": sorted(sc.bindings),
             "hook_ambient": ambient,
             "ext_ports_calls": ports,
@@ -985,8 +1147,19 @@ def self_test(repo: Path, c3, producer, builtins: dict[str, str],
                          f"(shapes {shapes}, ambient {len(ambient)})  [{want['form']}]")
         elif want["shapes"] and shapes != sorted(want["shapes"]):
             fails.append(f"{name}: expected shapes {sorted(want['shapes'])}, got {shapes}")
+        elif "atoms" in want and len(sc.atoms) != want["atoms"]:
+            # THE FAIL-CLOSED DENOMINATOR (B2): a list fixture pins how many
+            # atoms it holds, so a reader that resolves a list by reading fewer
+            # atoms than are written cannot report the fixture green.
+            fails.append(f"{name}: expected {want['atoms']} atom(s), enumerated {len(sc.atoms)} "
+                         f"({[(a['kind'], a['index']) for a in sc.atoms]})")
+        elif "atoms" in want and sc.registration_shape != "capability-list":
+            fails.append(f"{name}: pinned as a capability list but resolved as "
+                         f"{sc.registration_shape}")
         else:
-            print(f"  ok  {name:<34} {verdict:<20} {want['form']}")
+            extra = (f"  atoms={len(sc.atoms)}"
+                     if sc.registration_shape == "capability-list" and located else "")
+            print(f"  ok  {name:<34} {verdict:<20} {want['form']}{extra}")
     for gone in sorted(set(expected["fixtures"]) - set(present)):
         fails.append(f"{gone}: declared in expected.json but the fixture file is gone")
 
@@ -1031,6 +1204,22 @@ def self_test(repo: Path, c3, producer, builtins: dict[str, str],
                          f"(residue {sorted(set(got) ^ set(want[key]))})")
         else:
             print(f"  ok  yield {verdict:<20} {len(got)} of {len(res)}: {', '.join(got)}")
+
+    # The registration SHAPE over the real tree, pinned per extension: which
+    # extensions resolve through the 6.0 list head and how many atoms each
+    # holds.  Empty on the 5.x tree; B8 re-pinned it with seventeen entries by
+    # hand.  A pin in both directions, so an extension migrating early is noticed and a
+    # list read short is noticed.
+    got_lists = {e: r["atom_count"] for e, r in res.items()
+                 if r["registration_shape"] == "capability-list"}
+    want_lists = want.get("capability_list_atoms", {})
+    if got_lists != want_lists:
+        fails.append(f"YIELD capability-list atoms: expected {want_lists}, derived {got_lists}. "
+                     f"Per-extension atom counts are the fail-closed denominator and must be "
+                     f"re-pinned by hand, never inherited.")
+    else:
+        print(f"  ok  capability-list shape         {len(got_lists)} of {len(res)} extension(s) "
+              f"register through the 6.0 list head")
 
     residue = sorted({n for r in res.values() for n in r["unresolved_callees"]})
     if residue != sorted(want["door_3_residue"]):

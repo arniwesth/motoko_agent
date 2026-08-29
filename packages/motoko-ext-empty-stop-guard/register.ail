@@ -1,38 +1,23 @@
 module sunholo/motoko_ext_empty_stop_guard/register
 
 import std/option (None)
-import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  BudgetPlan,
-  BudgetPatch,
+import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx,
-  ExtensionHooks,
-  FinalizeDecision,
-  Msg,
-  PreStepDecision,
-  ResponseInterceptDecision,
-  ToolCallEnvelope,
-  ToolHandleDecision,
-  ToolPolicyDecision
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  FinalizeOutcome,
+  PassThrough, NoOpinion, Delegate, NoIntercept
 )
 import pkg/sunholo/motoko_ext_empty_stop_guard/empty_stop_guard (decide)
 
-func no_budget_patch(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
+func finalize(ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: decide(ctx, candidate), next_state: ctx.world }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
-  {
-    id: "empty_stop_guard",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: no_budget_patch,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
-    on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
-    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-      decide(ctx, candidate)
-    }, next_state: ctx.world } }
-  }
+-- B8: 6.0 Capability list. The former `default_hooks` neutral bodies are
+-- inlined verbatim; only the judge slot is this extension's own.
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS} {
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    SolverJudge(finalize)
+  ]
 }

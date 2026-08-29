@@ -5,7 +5,7 @@ import std/json (Json, jo, kv, js, get, asArray, asString)
 import std/string (contains)
 
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, ExtensionHooks, ToolSchema,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ToolSchema,
   BudgetPlan, BudgetPatch, PromptPatch,
   ToolCallEnvelope, ToolResultEnvelope,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision,
@@ -15,14 +15,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
 import pkg/sunholo/motoko_ext_scratchpad/prompts (prompt_patch)
 import pkg/sunholo/motoko_ext_scratchpad/types (tool_name, schema_json)
 import src/core/env_client (exec_scratchpad_cell)
-
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-  no_budget_patch()
-}
 
 func is_scratchpad_tool(name: string) -> bool {
   name == "scratchpad" || name == "Scratchpad"
@@ -96,18 +88,13 @@ export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: in
   }
 }, next_state: ctx.world } }
 
-export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net, Rand} {
+export func make_hooks(timeout_secs: int) -> [Capability] ! {Net, Rand} {
   let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call, timeout_secs) };
-  {
-    id: "scratchpad",
-    provided_tools: provided_tools(),
-    on_describe_tools: \_ . on_describe_tools(),
-    on_build_system_prompt: \_ctx. prompt_patch(),
-    on_budget_plan: budget_hook,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
-    on_tool_policy: on_tool_policy,
-    on_tool_handle: handle,
-    on_response_intercept: func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
-  }
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    DescribeTools(\_ . on_describe_tools()),
+    PromptShaper(\_ctx. prompt_patch()),
+    ToolPolicy(on_tool_policy),
+    ToolProvider(provided_tools(), handle)
+  ]
 }

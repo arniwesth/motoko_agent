@@ -27,7 +27,7 @@ import std/io (println, exit)
 import std/result (Result, Ok, Err)
 import std/ai (Message, AIError)
 import src/core/config (CostRates, VerificationConfig)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime, ExtensionHooks)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/test/stub_step (prose_step)
 import src/core/ports (ScriptedStep)
@@ -37,13 +37,13 @@ import src/core/ports (ScriptedStep)
 -- so the broken-workdir test wouldn't fire DP7 unless we explicitly enable.
 func enabled_rt(workdir: string, command: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: true, command: command };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 -- Disabled runtime (matches old empty_rt semantics for the fail-open test).
 func disabled_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 func no_rates() -> CostRates {

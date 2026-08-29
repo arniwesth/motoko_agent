@@ -213,7 +213,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   Delegate,
   ExtCtx,
   ExtRuntime,
-  ExtensionHooks,
   FinalizeDecision,
   NoDecision,
   NoIntercept,
@@ -232,6 +231,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision,
   ToolSchema
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks, FixtureOverrides)
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -455,22 +455,29 @@ func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision
 -- the routed scenario differs from the three original ones in EXACTLY ONE hook
 -- slot, so a second hooks literal would let the two drift in a way no reader
 -- would see and no gate would report.
-func approval_hooks_of(id: string) -> ExtensionHooks {
-  { id: id,
-    provided_tools: [],
-    on_describe_tools: no_describe,
-    on_build_system_prompt: no_prompt,
-    on_budget_plan: no_budget,
-    on_pre_step: passthrough_pre_step,
-    on_tool_policy: pending_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: no_solver }
+func approval_hooks_of(id: string) -> FixtureHooks {
+  fixture_hooks(id, approval_overrides())
+}
+
+-- B7: the overrides as a value, so the routed variants below differ from the
+-- approval shape by ONE kind-keyed field and no site spells a slot name.
+func approval_overrides() -> FixtureOverrides {
+  {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: passthrough_pre_step,
+    policy: pending_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  }
 }
 
 func approval_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [approval_hooks_of(id)] }, strict_mode: false, verification: v }
+  { registry: { entries: [approval_hooks_of(id)] }, strict_mode: false, verification: v }
 }
 
 -- ---------------------------------------------------------------------------
@@ -626,7 +633,7 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
     file_removes: 0,
     dir_makes: 0,
     -- WI-D24 added the extension-effect class on the same terms: this scenario
-    -- installs no extension that reaches `ExtPorts.proc_exec`, so the pin holds
+    -- installs no extension that reaches `ExtPorts.tool_handle`, so the pin holds
     -- here and the class is still claimed at zero rather than unmentioned.
     extension_effects: 0,
     expected_env_reads: expected_env
@@ -777,7 +784,7 @@ pure func projections(xs: [Interaction]) -> [string] {
 
 pure func discovered_manifest() -> ExecutionManifest {
   driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
-                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+                       ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 
 pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
@@ -991,7 +998,7 @@ export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Shared
 
 func routing_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [{ approval_hooks_of(id) | on_response_intercept: routing_intercept }] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | intercept: routing_intercept })] },
     strict_mode: false, verification: v }
 }
 
@@ -1090,7 +1097,7 @@ func routing_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
 -- ---------------------------------------------------------------------------
 --
 -- THIS IS THE ROW THAT CLOSES WI-D21 §4. Through WI-D23 the first extension to
--- call `ExtPorts.proc_exec` in a recorded run made the recorder emit a program
+-- call `ExtPorts.tool_handle` in a recorded run made the recorder emit a program
 -- its own validator refused: `recording_tool` wrote `ToolIdentity("loop_v2", "", tool)`
 -- and a blank tool call id is a rejection. WI-D21 asserted that latent defect
 -- against hand-built identities. This scenario is the executable answer — a real
@@ -1141,7 +1148,7 @@ func effect_world(answers: [string]) -> WorldState {
   { base_world(answers) | ext_effects: effect_tools() }
 }
 
--- The routed hook. ONE `proc_exec` per intercept, through `ctx.ports` — the
+-- The routed hook. ONE `tool_handle` per intercept, through `ctx.ports` — the
 -- production bridge, not a rebuilt closure (S14's two subjects).
 --
 -- The successor is threaded from the call's own `next_state`, which is what
@@ -1152,13 +1159,13 @@ func effect_world(answers: [string]) -> WorldState {
 func effect_intercept(ctx: ExtCtx, _text: string)
   -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
-  let out = p.proc_exec(ctx.world, "BashExec", "{\"cmd\":\"true\"}");
+  let out = p.tool_handle(ctx.world, "BashExec", "{\"cmd\":\"true\"}");
   { decision: { NoIntercept }, next_state: out.next_state }
 }
 
 func effect_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [{ approval_hooks_of(id) | on_response_intercept: effect_intercept }] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | intercept: effect_intercept })] },
     strict_mode: false, verification: v }
 }
 
@@ -1208,7 +1215,7 @@ func effect_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMe
   let initial = effect_world([approve_line(), approve_line(), approve_line()]);
   let run = run_effect(ext_id, initial);
   let log = run.world.log;
-  -- One `proc_exec` per intercept, and the driver dispatches the intercept once
+  -- One `tool_handle` per intercept, and the driver dispatches the intercept once
   -- per assistant response. `provider_calls_witnessed` reads `ProviderCallPrepared`
   -- records production driver code writes, so the expectation cannot agree with
   -- the recorder by construction — WI-D19's argument, one class over.
@@ -1488,7 +1495,7 @@ func compose_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
   -- deliberately used an id no production registry contains, to kill an adapter
   -- that hardcoded "compose"; this one is the other half of that pair, and the
   -- id it asserts is "compose" because compose is the subject.
-  { registry: { hooks: [Compose.register_with_config(compose_cfg())] },
+  { registry: { entries: [{ id: "compose", caps: Compose.register_with_config(compose_cfg()) }] },
     strict_mode: false, verification: v }
 }
 
@@ -1702,7 +1709,7 @@ func grep_probe_intercept(ctx: ExtCtx, _text: string)
 
 func grep_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [{ approval_hooks_of(id) | on_response_intercept: grep_probe_intercept }] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | intercept: grep_probe_intercept })] },
     strict_mode: false, verification: v }
 }
 
@@ -1777,7 +1784,7 @@ pure func replay_message_first(ms: [ReplayMismatch]) -> string {
 -- refuse, and it is why this line has a comment.
 func handle_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [{ approval_hooks_of(id) | provided_tools: ["T"], on_tool_handle: routing_tool_handle }] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | tools: ["T"], provide: routing_tool_handle })] },
     strict_mode: false, verification: v }
 }
 
@@ -1859,9 +1866,9 @@ func batch_world() -> WorldState {
 
 func batch_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [{ approval_hooks_of(id) | provided_tools: ["T"],
-                          on_tool_policy: allow_policy,
-                          on_tool_handle: routing_tool_handle }] },
+  { registry: { entries: [fixture_hooks(id, { approval_overrides() | tools: ["T"],
+                          policy: allow_policy,
+                          provide: routing_tool_handle })] },
     strict_mode: false, verification: v }
 }
 

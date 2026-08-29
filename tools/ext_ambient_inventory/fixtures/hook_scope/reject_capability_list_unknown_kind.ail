@@ -1,0 +1,17 @@
+-- AN UNKNOWN CONSTRUCTOR.  `Judge` is not one of the eight capability kinds
+-- this tool enumerates.  A ninth ABI variant must be added to
+-- CAPABILITY_KINDS by hand so its binding position is known; until then it is
+-- an atom nothing scanned.  Fail closed -- the SLOTS discipline, over a list.
+-- The trailing comma after it is the element-count discipline's own case:
+-- an empty element is a count the parse cannot reconcile.
+module fixture/reject_capability_list_unknown_kind
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, FinalizeOutcome)
+
+func judge(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: { NoDecision }, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  [Judge(judge),]
+}

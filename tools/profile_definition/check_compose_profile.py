@@ -39,7 +39,11 @@ exists in either predecessor's guard because neither predecessor could fail them
   4. the ONE excluded slot is the ONE gated slot, re-derived from
      `src/core/dst_profile_coverage.ail`'s dispatch table. D5 forbids excluding
      an unconditionally-dispatched hook, and this profile is the first that
-     excludes anything at all.
+     excludes anything at all. B8: hook ids are ATOM ids `kind[index]`, the
+     excluded one is `tool_provider[0]`, and the rowed/rowless split is read
+     off the `Capability` payloads and compared with the profile's own
+     `rowed_slot_ids()` literal. Check 1 also applies the B8 DENOMINATOR RULE:
+     compose's disclosed atoms must equal B2's enumeration of its registration.
 
   5. **THE DEMONSTRATION HAPPENED AND WAS NON-VACUOUS.** Every criterion-2 entry
      names `discovery`, an EXISTENTIAL producer whose evidence is a run, so the
@@ -68,16 +72,20 @@ AILANG_TOML = REPO / "ailang.toml"
 COVERAGE = REPO / "src/core/dst_profile_coverage.ail"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_fixtures import ambient_inventory  # noqa: E402
+from check_fixtures import ambient_inventory, kind_of  # noqa: E402
 from check_no_op_profile import (  # noqa: E402
     abi_slots,
+    check_disclosed_atoms_against_b2,
+    hook_scope_atoms,
     is_unconditional,
     parse_output,
     resolved_extensions,
 )
 
 SUBJECT = "compose"
-EXPECTED_EXCLUDED = "on_tool_handle"
+# B8: hook ids are ATOM ids `kind[index]`; the one gated atom compose registers
+# is its ToolProvider at index 0 (`excluded_slot_ids()` in the profile).
+EXPECTED_EXCLUDED = "tool_provider[0]"
 
 
 def fail(msg):
@@ -154,6 +162,10 @@ def check_install_set(out):
         fail(f"the disclosure set {sorted(out['disclosure'])} is not the install set "
              f"{sorted(installed)}; D5 requires one set stated three ways")
 
+    # B8 denominator rule: the disclosed atoms of every installed extension must
+    # equal B2's enumeration of its registration literal.
+    check_disclosed_atoms_against_b2(out, installed)
+
     print(f"  ✓ install set re-derived: exactly ['{SUBJECT}'] at {rec_version}, "
           f"+ {len(out['omitted'])} omitted = {len(resolved)} resolved extensions")
 
@@ -201,9 +213,10 @@ def check_the_basis_is_not_classifier_shaped(out, inv):
 def check_classifications(out, slots):
     seen_excluded = []
     for (ext, hook), (kind, producer, basis_kind, c1, c2, c3) in sorted(out["classification"].items()):
-        if hook not in slots:
-            fail(f"{ext}/{hook} is not one of the ABI's hook slots: {sorted(slots)}")
-        row = slots[hook][0]
+        # B8: `hook` is an atom id `kind[index]`; the row is a fact about the KIND.
+        if kind_of(hook) not in slots:
+            fail(f"{ext}/{hook} is not an atom of one of the ABI's capability kinds: {sorted(slots)}")
+        row = slots[kind_of(hook)][0]
         clauses = (c1, c2, c3)
 
         if kind == "explicitly_excluded":
@@ -264,10 +277,38 @@ def check_classifications(out, slots):
 
     rowed = sorted(s for s, (row, _t, _w) in slots.items() if row)
     rowless = sorted(s for s, (row, _t, _w) in slots.items() if not row)
+    # The profile states the same split as a literal (`rowed_slot_ids()`) and
+    # says this guard fails if it disagrees with types.ail — so it is compared,
+    # atom by atom, against the payload rows just read.
+    profile_src = (REPO / "src/core/dst_driver_plus_compose.ail").read_text()
+    pm = re.search(r"func rowed_slot_ids\(\)[^{]*\{\s*\[(.*?)\]\s*\}", profile_src, re.S)
+    if not pm:
+        fail("could not read `rowed_slot_ids()` in src/core/dst_driver_plus_compose.ail; the "
+             "profile's stated rowed/rowless split cannot be checked against the ABI")
+    stated = sorted(re.findall(r'"([^"]+)"', pm.group(1)))
+    stated_kinds = sorted({kind_of(a) for a in stated})
+    if stated_kinds != rowed:
+        fail(f"the profile's `rowed_slot_ids()` names kinds {stated_kinds} and the ABI's "
+             f"`Capability` payloads declare rows on {rowed}; both readings type-check and the "
+             "stale one is silent — re-read the split from types.ail")
+    classified_rowed = sorted({h for (_e, h), (k, *_r) in out["classification"].items()
+                               if k != "effect_free"})
+    # Item 4 (6.0 trimming): `rowed_slot_ids()` is the ABI fact over all four
+    # rowed kinds; the record carries an entry only for the atoms compose
+    # REGISTERS (B2's enumeration, already equated with the disclosure by check
+    # 1), so the comparison is against the stated ids compose actually holds.
+    registered = {f"{k}[{i}]" for (k, i) in hook_scope_atoms()[SUBJECT]}
+    stated_registered = sorted(s for s in stated if s in registered)
+    if classified_rowed != stated_registered:
+        fail(f"the record classifies atoms {classified_rowed} as rowed (criterion 2 or excluded) "
+             f"and the profile's `rowed_slot_ids()` restricted to compose's registered atoms "
+             f"{sorted(registered)} says {stated_registered}")
     print(f"  ✓ every classification re-derived against the ABI's rowed/rowless split: "
-          f"{len(rowed)} rowed {rowed}, {len(rowless)} rowless")
-    print(f"  ✓ the ONE excluded slot is the ONE gated slot ({EXPECTED_EXCLUDED}), re-derived "
-          f"from the dispatch table — the first non-empty exclusion in the project")
+          f"{len(rowed)} rowed {rowed}, {len(rowless)} rowless; the profile's "
+          f"`rowed_slot_ids()` literal {stated} agrees, and of those compose registers "
+          f"{stated_registered}")
+    print(f"  ✓ the ONE excluded atom is an atom of the ONE gated kind ({EXPECTED_EXCLUDED}), "
+          f"re-derived from the dispatch table — the first non-empty exclusion in the project")
 
 
 def check_the_mediating_hook(out):

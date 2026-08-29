@@ -3,7 +3,7 @@ module sunholo/motoko_ext_agentcli/register
 import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/option (Some, None)
-import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_abi/types (Capability)
 import pkg/sunholo/motoko_ext_agentcli/providers (Provider, all_providers)
 import pkg/sunholo/motoko_ext_agentcli/agentcli (AgentCliConfig, make_hooks)
 
@@ -47,7 +47,7 @@ func resolve(ps: [Provider]) -> [Provider] ! {Env} {
   }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, IO, Process} {
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS, IO, Process} {
   let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
   let cfg: AgentCliConfig = {
     providers: resolve(all_providers()),

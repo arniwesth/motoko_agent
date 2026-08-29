@@ -34,7 +34,7 @@ import std/bytes (toString)
 import std/json (get, asString, encode, jo)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtCtx,
-  ExtensionHooks,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
   ToolSchema,
   PromptPatch,
   BudgetPlan,
@@ -166,35 +166,17 @@ func microrag_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutc
   else Delegate
 }, next_state: ctx.world } }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks {
-  {
-    id: "microrag",
+export func register_with_config(_cfg: a) -> [Capability] {
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    DescribeTools(microrag_describe_tools),
+    ToolPolicy(microrag_tool_policy),
     -- Declare WriteFile so motoko's first_handle routes it through our
-    -- on_tool_handle. Without this, dispatch_tool_handle skips us and
+    -- tool handler. Without this, dispatch_tool_handle skips us and
     -- WriteFile goes straight to native dispatch — see ext/runtime.ail:
-    -- first_handle gates on `contains_tool(h.provided_tools, name)`.
+    -- first_handle gates on the ToolProvider's advertised names.
     -- We Delegate for non-.ail paths so motoko's native handler still
     -- runs in those cases.
-    provided_tools: ["WriteFile"],
-    on_describe_tools: microrag_describe_tools,
-    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan:
-      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-        { requested_total: None, requested_solver: None, requested_verifier: None }
-      },
-    on_pre_step:
-      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
-        PassThrough
-      }, next_state: ctx.world } },
-    on_tool_policy: microrag_tool_policy,
-    on_tool_handle: microrag_tool_handle,
-    on_response_intercept:
-      func(ctx: ExtCtx, _resp: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-        NoIntercept
-      }, next_state: ctx.world } },
-    on_solver_candidate:
-      func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-        NoDecision
-      }, next_state: ctx.world } }
-  }
+    ToolProvider(["WriteFile"], microrag_tool_handle)
+  ]
 }

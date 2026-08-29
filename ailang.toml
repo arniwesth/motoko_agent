@@ -50,7 +50,14 @@ packages      = [
   "sunholo/motoko_ext_herdr@0.1.0",
 ]
 config_import   = "src/core/config.RuntimeConfig"
+# hooks_import is required by upstream's manifest loader and names a 5.x type
+# that no longer exists at ABI 6.0; only the upstream (5.x-shape) generator
+# reads it. The project-local generator (make registry_gen,
+# tools/ext_registry_gen/generate.py) reads the three keys below instead.
 hooks_import    = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
+capability_import = "pkg/sunholo/motoko_ext_abi/types.Capability"
+entry_import      = "pkg/sunholo/motoko_ext_abi/types.ExtEntry"
+normalize_import  = "src/core/ext/registry_normalize"
 registry_import = "pkg/sunholo/motoko_ext_abi/types.ExtRegistry"
 output          = "src/core/ext/registry_generated.ail"
 # The row stamped on the generated dispatch functions: the union of the

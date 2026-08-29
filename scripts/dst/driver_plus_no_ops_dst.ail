@@ -84,7 +84,7 @@ import src/core/dst_profile (
   routing_violation_at,
   is_excluded_hook
 )
-import src/core/dst_profile_coverage as Cov (DisclosureIds)
+import src/core/dst_profile_coverage as Cov (CapabilityDisclosureIds, AtomIds, atom_ids_id)
 import src/core/dst_attribution_table (
   CoreSite,
   unconditional_core_sites,
@@ -207,7 +207,7 @@ func clause_coverage_floor() -> bool ! {IO} {
   n > 0 && b
 }
 
-func show_floor(ds: [DisclosureIds]) -> () ! {IO} {
+func show_floor(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
   match ds {
     [] => (),
     x :: rest => {
@@ -217,12 +217,12 @@ func show_floor(ds: [DisclosureIds]) -> () ! {IO} {
   }
 }
 
-pure func empty_first(ds: [DisclosureIds]) -> [DisclosureIds] {
+pure func empty_first(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
   match ds {
     [] => [],
     x :: rest => {
-      let emptied: DisclosureIds =
-        { extension_id: x.extension_id, covered: [], excluded: x.covered };
+      let emptied: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms, covered: [], excluded: x.covered };
       emptied :: rest
     }
   }
@@ -243,24 +243,29 @@ func clause_no_unconditional_exclusion() -> bool ! {IO} {
   none_excluded && b
 }
 
-pure func all_excluded_empty(ds: [DisclosureIds]) -> bool {
+pure func all_excluded_empty(ds: [CapabilityDisclosureIds]) -> bool {
   match ds {
     [] => true,
     x :: rest => List.length(x.excluded) == 0 && all_excluded_empty(rest)
   }
 }
 
-pure func drop_id(xs: [string], t: string) -> [string] {
-  match xs { [] => [], x :: rest => if x == t then drop_id(rest, t) else x :: drop_id(rest, t) }
+-- B8: ids are atom ids (`kind[index]`) over `AtomIds` records.
+pure func drop_id(xs: [AtomIds], t: string) -> [AtomIds] {
+  match xs { [] => [], x :: rest => if Cov.atom_ids_id(x) == t then drop_id(rest, t) else x :: drop_id(rest, t) }
 }
 
-pure func exclude_pre_step(ds: [DisclosureIds]) -> [DisclosureIds] {
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs { [] => [], x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest) }
+}
+
+pure func exclude_pre_step(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
   match ds {
     [] => [],
     x :: rest => {
-      let moved: DisclosureIds =
-        { extension_id: x.extension_id, covered: drop_id(x.covered, "on_pre_step"),
-          excluded: ["on_pre_step"] };
+      let moved: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms, covered: drop_id(x.covered, "compactor[0]"),
+          excluded: [{ kind: "compactor", index: 0 }] };
       moved :: rest
     }
   }
@@ -295,7 +300,7 @@ func clause_classifier_2() -> bool ! {IO} {
 -- point is that the rule's install-list intersection is non-empty now, so it
 -- has something to find.
 pure func fabricated_call() -> [Classifier2Call] {
-  [{ extension_id: "compaction_structural", field: "proc_exec",
+  [{ extension_id: "compaction_structural", field: "tool_handle",
      site: "packages/motoko-ext-compaction-structural/register.ail:0 (FABRICATED — not a tool finding)" }]
 }
 
@@ -312,14 +317,15 @@ func clause_disclosure_ids() -> bool ! {IO} {
   ok
 }
 
-func show_ids(ds: [DisclosureIds]) -> () ! {IO} {
+func show_ids(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
   match ds {
     [] => (),
     x :: rest => {
       let _ = println("DISCLOSURE ${x.extension_id}");
       let _ = println("      ${x.extension_id}");
-      let _ = println("        covered:  ${join_ids(x.covered)}");
-      let _ = println("        excluded: ${if List.length(x.excluded) == 0 then "(none)" else join_ids(x.excluded)}");
+      let _ = println("        atoms:    ${join_ids(atom_id_strs(x.atoms))}");
+      let _ = println("        covered:  ${join_ids(atom_id_strs(x.covered))}");
+      let _ = println("        excluded: ${if List.length(x.excluded) == 0 then "(none)" else join_ids(atom_id_strs(x.excluded))}");
       show_ids(rest)
     }
   }
@@ -461,9 +467,9 @@ func scenario_exclusion_check() -> bool ! {IO} {
     { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: no_ops_id(), profile_version: no_ops_version(),
       event_vocabulary_version: "event-vocabulary/1" };
-  let none_excluded = not is_excluded_hook(driver_plus_no_ops(), "compaction_structural", "on_tool_handle");
+  let none_excluded = not is_excluded_hook(driver_plus_no_ops(), "compaction_structural", "tool_provider[0]");
   let no_violation =
-    match routing_violation_at(driver_plus_no_ops(), "compaction_structural", "on_tool_handle", 0,
+    match routing_violation_at(driver_plus_no_ops(), "compaction_structural", "tool_provider[0]", 0,
                                empty_ledger_trace(), meta) {
       None => true,
       Some(_) => false
@@ -475,7 +481,7 @@ func scenario_exclusion_check() -> bool ! {IO} {
 }
 
 func scenario_manifest() -> bool ! {IO} {
-  let m = no_ops_manifest("HEAD", "ailang 0.33.0", "5.0", "{}",
+  let m = no_ops_manifest("HEAD", "ailang 0.33.0", "6.0", "{}",
                           ["env_get"], [], "HEAD");
   let rs = validate_manifest(m, driver_plus_no_ops());
   let ok = List.length(rs) == 0 && List.length(m.extension_packages) == 4;

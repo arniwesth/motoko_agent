@@ -675,6 +675,7 @@ pure func chunk_texts(cs: [StreamChunkRecord]) -> [string] {
 -- order. `ProviderScriptExhausted` contributes NO entry: it records a request
 -- the driver made after the script ran out, and re-queueing something for it
 -- would manufacture a response the discovery run never served.
+@allow_empty_ok("an empty interaction list is a legitimate replay script — no provider interactions to replay")
 pure func script_of(xs: [Interaction]) -> Result[[ScriptedStep], ReplayRefusal] {
   match xs {
     [] => Ok([]),
@@ -718,6 +719,7 @@ pure func approvals_of(xs: [Interaction]) -> [string] {
   }
 }
 
+@allow_empty_ok("an empty interaction list is a legitimate replay tool set — no tool interactions to replay")
 pure func tools_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefusal] {
   match xs {
     [] => Ok([]),
@@ -748,6 +750,7 @@ pure func tools_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefusal] {
 -- through `tool_outcome_record`, exactly as `recording_tool` does, so the bytes
 -- are the same bytes; a second decoder here would be a second reading of one
 -- format, which is the drift `decode_tool_outcome` was centralised to remove.
+@allow_empty_ok("an empty interaction list is a legitimate replay ext-effect set — no extension-effect interactions to replay")
 pure func ext_effects_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefusal] {
   match xs {
     [] => Ok([]),

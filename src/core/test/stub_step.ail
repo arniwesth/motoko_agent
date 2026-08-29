@@ -36,12 +36,12 @@ import src/core/dst_interaction (
   ProviderIdentity, OutcomeOk, generator_authored_count
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
+  ExtRuntime, ExtRegistry, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision,
-  ResponseInterceptDecision, FinalizeDecision,
-  PreStepDecision, PassThrough
+  ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PassThrough
 )
+import src/core/test/ext_fixture (fixture_hooks)  -- B7; joined the line above so anchors.sh's :203 does not move
 import src/core/types (Msg)
 -- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
 -- `WorldState` can carry it without either the port module or the driver
@@ -781,10 +781,10 @@ export pure func continuing_token_step(input_tok: int, output_tok: int, step_id:
 }
 
 -- No-op ExtRuntime for integration tests.
--- Returns an empty extension registry with no hooks.
+-- Returns an empty extension registry with no entries.
 export pure func empty_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 -- ExtRuntime for integration tests that denies all tool calls.
@@ -806,22 +806,21 @@ export func deny_all_rt() -> ExtRuntime {
     -> FinalizeOutcome ! {Process}  { { decision: {
     NoDecision
   }, next_state: ctx.world } };
-  let hooks: ExtensionHooks = {
-    id: "test_deny_all",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+  let hooks = fixture_hooks("test_deny_all", {
+    tools: [],
+    describe: \_ . [],
+    prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
-    on_tool_policy: deny_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: no_solver
-  };
+    policy: deny_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  });
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }

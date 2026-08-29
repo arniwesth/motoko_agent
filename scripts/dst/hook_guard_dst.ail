@@ -15,7 +15,7 @@
 --
 -- THE FIXTURE IS SYNTHETIC AND THAT IS DISCLOSED. No profile in this tree can
 -- reach this guard today — `driver_only` installs nothing, and no extension is
--- installable while `ExtensionHooks.on_budget_plan` carries the ABI's closed
+-- installable while the ABI's `on_budget_plan` slot carries the closed
 -- `! {Env, FS}` row. These rows therefore establish that the MECHANISM works,
 -- not that any shipping profile is protected by it. See the header of
 -- `src/core/dst_hook_guard.ail`.
@@ -55,16 +55,18 @@ import src/core/dst_hook_guard (guarded_dispatch_tool_handle)
 import src/core/dst_attribution_table (table_identity)
 import src/core/dst_fault_catalogue (fault_catalogue, conditional_class_ids)
 import src/core/dst_profile (waivers_from)
+import src/core/dst_profile_coverage (CapabilityDisclosureIds, AtomIds, all_capability_kinds, capability_kind_id, atoms_at_zero, AtomRef)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtRuntime, ExtensionHooks, ToolHandleOutcome,
+  ExtCtx, ExtRuntime, ToolHandleOutcome,
   BudgetPlan, BudgetPatch, PreStepOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   ToolPolicyDecision, ToolHandleDecision, PreStepDecision,
   ResponseInterceptDecision, FinalizeDecision,
   PassThrough, Allow, Delegate, Handled, NoIntercept, NoDecision,
   empty_ext_world
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 
 -- ---------------------------------------------------------------------------
 -- The extension under guard
@@ -80,31 +82,32 @@ pure func guarded_ext_id() -> string { "guarded_ext" }
 -- below assert on this marker rather than on the error alone.
 pure func ran_marker() -> string { "GUARDED-HOOK-BODY-RAN" }
 
-func guarded_hook() -> ExtensionHooks {
-  { id: guarded_ext_id(),
-    provided_tools: [guarded_tool()],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func guarded_hook() -> FixtureHooks {
+  fixture_hooks(guarded_ext_id(), {
+    tools: [guarded_tool()],
+    describe: \_ . [],
+    prompt: \_ctx. { prepend: [], append: [] },
+    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
-    on_tool_policy: \_ctx _call. Allow,
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    policy: \_ctx _call. Allow,
     -- Returns `Handled` with the marker in `stdout`, so a caller can tell
     -- "the body ran" from "the body was skipped" — the two are otherwise
     -- indistinguishable from an `Err`.
-    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+    provide: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       { decision: { Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0,
                               stdout: ran_marker(), stderr: "", metadata: jo([]) }) },
         next_state: ctx.world }
     },
-    on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } } }
+    intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
+    judge: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
+  })
 }
 
 func rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [guarded_hook()] }, strict_mode: false, verification: v }
+  { registry: { entries: [guarded_hook()] }, strict_mode: false, verification: v }
 }
 
 func ctx() -> ExtCtx {
@@ -130,7 +133,7 @@ pure func meta() -> ReplayMetadata {
 -- green for an incidental reason (S7's shape: hold everything else constant)
 -- ---------------------------------------------------------------------------
 
-pure func definition_with(disclosures: [{ extension_id: string, covered: [string], excluded: [string] }]) -> ProfileDefinition {
+pure func definition_with(disclosures: [CapabilityDisclosureIds]) -> ProfileDefinition {
   let id = table_identity();
   let cat = fault_catalogue();
   { profile_id: "fixture_guard",
@@ -150,22 +153,42 @@ pure func definition_with(disclosures: [{ extension_id: string, covered: [string
     scan_roots: ["src", "packages"] }
 }
 
-pure func all_slots_but_tool_handle() -> [string] {
-  ["on_describe_tools", "on_build_system_prompt", "on_budget_plan", "on_pre_step",
-   "on_tool_policy", "on_response_intercept", "on_solver_candidate"]
+-- B3/B8: the coverage unit is the ATOM (kind, index-within-kind), and the
+-- guard names the providing atom `tool_provider[i]` to the profile — so the
+-- disclosure excludes THAT atom, not a 5.x slot name. One atom per kind at
+-- index 0 is exactly what `fixture_hooks` registers.
+pure func atom_ids_of(xs: [AtomRef]) -> [AtomIds] {
+  match xs { [] => [], x :: rest => ({ kind: capability_kind_id(x.kind), index: x.index }) :: atom_ids_of(rest) }
 }
 
--- EXCLUDES the gated slot.
+pure func eight() -> [AtomIds] { atom_ids_of(atoms_at_zero(all_capability_kinds())) }
+
+pure func tool_provider_atom() -> AtomIds { { kind: "tool_provider", index: 0 } }
+
+pure func all_atoms_but_tool_provider() -> [AtomIds] {
+  drop_atom(eight(), tool_provider_atom())
+}
+
+pure func drop_atom(xs: [AtomIds], t: AtomIds) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if x.kind == t.kind && x.index == t.index then drop_atom(rest, t) else x :: drop_atom(rest, t)
+  }
+}
+
+-- EXCLUDES the gated atom.
 pure func excluding() -> ProfileDefinition {
   definition_with([{ extension_id: guarded_ext_id(),
-                     covered: all_slots_but_tool_handle(),
-                     excluded: ["on_tool_handle"] }])
+                     atoms: eight(),
+                     covered: all_atoms_but_tool_provider(),
+                     excluded: [tool_provider_atom()] }])
 }
 
--- COVERS every slot. Identical in every other field.
+-- COVERS every atom. Identical in every other field.
 pure func covering() -> ProfileDefinition {
   definition_with([{ extension_id: guarded_ext_id(),
-                     covered: all_slots_but_tool_handle() ++ ["on_tool_handle"],
+                     atoms: eight(),
+                     covered: eight(),
                      excluded: [] }])
 }
 

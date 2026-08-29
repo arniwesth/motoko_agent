@@ -32,7 +32,7 @@ import std/option (None)
 import std/string (length, toLower, contains)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtCtx,
-  ExtensionHooks,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
   ToolSchema,
   PromptPatch,
   BudgetPlan,
@@ -126,8 +126,6 @@ pure func task_signals_fires_on_relevant_keywords() -> bool
       && not task_signals_self_modification("")
   }
 
-pure func empty_describe_tools() -> [ToolSchema] { [] }
-
 -- Conditional prompt patch: returns the matrix iff task_signals_self_modification.
 -- This is the canonical "context-aware extension" pattern — hooks fire every
 -- step with full ExtCtx; lightweight pure checks here keep irrelevant prompts
@@ -140,32 +138,10 @@ pure func conditional_prompt_patch(ctx: ExtCtx) -> PromptPatch {
     { prepend: [], append: [] }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks {
-  {
-    id: "decision_framework",
-    provided_tools: [],
-    on_describe_tools: empty_describe_tools,
-    on_build_system_prompt: conditional_prompt_patch,
-    on_budget_plan:
-      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-        { requested_total: None, requested_solver: None, requested_verifier: None }
-      },
-    on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle:
-      func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
-        Delegate
-      }, next_state: ctx.world } },
-    on_response_intercept:
-      func(ctx: ExtCtx, _resp: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-        NoIntercept
-      }, next_state: ctx.world } },
-    on_solver_candidate:
-      func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-        NoDecision
-      }, next_state: ctx.world } },
-    on_pre_step:
-      func(ctx: ExtCtx, _history: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
-        PassThrough
-      }, next_state: ctx.world } }
-  }
+export func register_with_config(_cfg: a) -> [Capability] {
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    PromptShaper(conditional_prompt_patch)
+  ]
 }

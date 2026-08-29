@@ -33,16 +33,16 @@
     "worth naming as such rather than deleting.",
     "",
     "WI-D16 MOVED THIS BLOCK DELIBERATELY, and the move is the item's point rather",
-    "than a cost of it. `proc_exec` was widened from `(string, string) -> string` to",
+    "than a cost of it. `tool_handle` was widened from `(string, string) -> string` to",
     "`(ExtWorld, string, string) -> ExtProcOutcome`, so it can now return the",
     "successor `Ports.tool_exec` threads. D5's classifier 2 selects a field",
     "BECAUSE it cannot return successor state; the field can, so the criterion no",
-    "longer selects it and the set went {env_get, proc_exec} -> {env_get}. It moved",
+    "longer selects it and the set went {env_get, tool_handle} -> {env_get}. It moved",
     "member -> returns-it, which is the same transition WI-B2b made for `ai_step`",
     "and WI-C5 for `clock_now`, and the seam was then unchanged at Ports.tool_exec.",
     "",
     "WI-D24 MOVED THE SEAM, AND THIS PIN IS WHY THE MOVE IS RECORDED RATHER THAN",
-    "NOTICED. `proc_exec` now derives Ports.ext_effect_exec, not Ports.tool_exec.",
+    "NOTICED. `tool_handle` now derives Ports.ext_effect_exec, not Ports.tool_exec.",
     "The state is unchanged at `returns-it`; what changed is WHICH core seam the",
     "bridge closure forwards to, because an extension-initiated dispatch is a",
     "different D2 identity class from a driver tool call, is served from a",
@@ -121,7 +121,7 @@
       "state": "returns-it",
       "seam": "model_step"
     },
-    "proc_exec": {
+    "tool_handle": {
       "state": "returns-it",
       "seam": "ext_effect_exec"
     },

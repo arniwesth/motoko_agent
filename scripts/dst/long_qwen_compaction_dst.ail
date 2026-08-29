@@ -41,7 +41,6 @@ import src/core/phase_vocab (
 import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
   ExtRegistry,
-  ExtensionHooks,
   ExtCtx,
   BudgetPlan,
   PromptPatch,
@@ -62,6 +61,7 @@ import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutco
   Msg,
   DiagnosticField
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
 import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
@@ -338,7 +338,7 @@ func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback 
 -- WI-A12 widened `Ports.tool_exec` to the typed contract. This fixture served
 -- an empty string; the typed equivalent is an empty completion for the id that
 -- was actually asked about, with the world unchanged. `fixed_ext_exec` was the
--- un-widened `ExtPorts.proc_exec` shape until WI-D16 widened that row; it now
+-- un-widened `ExtPorts.tool_handle` shape until WI-D16 widened that row; it now
 -- threads the token and returns it UNCHANGED, which is S12's identity
 -- transition and correct here because this fixture executes nothing.
 func fixed_exec(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
@@ -551,7 +551,7 @@ func run_strict() -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process
   )
 }
 
-func compaction_ai_hook() -> ExtensionHooks ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+func compaction_ai_hook() -> FixtureHooks ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let cfg: CompactionAiConfig = {
     model: qwen_model,
     threshold_pct: 60,
@@ -562,35 +562,33 @@ func compaction_ai_hook() -> ExtensionHooks ! {AI, Clock, Env, FS, IO, Net, Proc
     min_gap_steps: 3,
     hard_override_pct: 95
   };
-  {
-    id: "compaction_ai",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
-    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { compact_with_ai(ctx, msgs, cfg) },
-    on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
-  }
+  fixture_hooks("compaction_ai", {
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ . { prepend: [], append: [] },
+    budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    compact: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { compact_with_ai(ctx, msgs, cfg) },
+    policy: \_ _ . Allow,
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  })
 }
 
-func structural_hook() -> ExtensionHooks {
-  {
-    id: "compaction_structural",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
-    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+func structural_hook() -> FixtureHooks {
+  fixture_hooks("compaction_structural", {
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ . { prepend: [], append: [] },
+    budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    compact: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       compact_for_pre_step(ctx, msgs)
     }, next_state: ctx.world } },
-    on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
-  }
+    policy: \_ _ . Allow,
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  })
 }
 
 func next_marker_from_call_id(id: string) -> string {
@@ -608,16 +606,15 @@ func next_marker_from_call_id(id: string) -> string {
   else step_marker(13)
 }
 
-func long_tool_hook() -> ExtensionHooks {
-  {
-    id: "long_result_tool",
-    provided_tools: ["LongResult"],
-    on_describe_tools: \_ . [{ name: "LongResult", description: "deterministic long-result fixture", parameters: "{\"type\":\"object\"}" }],
-    on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
-    on_pre_step: \ctx _. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace},
-    on_tool_policy: \_ _ . Allow,
-    on_tool_handle: func(ctx: ExtCtx, call) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+func long_tool_hook() -> FixtureHooks {
+  fixture_hooks("long_result_tool", {
+    tools: ["LongResult"],
+    describe: \_ . [{ name: "LongResult", description: "deterministic long-result fixture", parameters: "{\"type\":\"object\"}" }],
+    prompt: \_ . { prepend: [], append: [] },
+    budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    compact: \ctx _. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace},
+    policy: \_ _ . Allow,
+    provide: func(ctx: ExtCtx, call) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
       let next = next_marker_from_call_id(call.id);
       Handled({
         tool_call_id: call.id,
@@ -628,46 +625,45 @@ func long_tool_hook() -> ExtensionHooks {
         metadata: jo([kv("fixture", js("long_qwen")), kv("next", js(next))])
       })
     }, next_state: ctx.world } },
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
-  }
+    intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  })
 }
 
 func long_runtime() -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let v: VerificationConfig = { enabled: false, command: "" };
-  let reg: ExtRegistry = { hooks: [compaction_ai_hook(), structural_hook(), long_tool_hook()] };
+  let reg: ExtRegistry = { entries: [compaction_ai_hook(), structural_hook(), long_tool_hook()] };
   { registry: reg, strict_mode: false, verification: v }
 }
 
 func structural_only_runtime() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  let reg: ExtRegistry = { hooks: [structural_hook()] };
+  let reg: ExtRegistry = { entries: [structural_hook()] };
   { registry: reg, strict_mode: false, verification: v }
 }
 
-func headroom_budget_probe_hook() -> ExtensionHooks {
-  {
-    id: "headroom_budget_probe",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
-    on_pre_step: \ctx _. {
+func headroom_budget_probe_hook() -> FixtureHooks {
+  fixture_hooks("headroom_budget_probe", {
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ . { prepend: [], append: [] },
+    budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    compact: \ctx _. {
       decision: PassThroughObserved("headroom.context_limit", [
         { key: "context_limit", value: show(ctx.context_limit) }
       ]),
       next_state: ctx.world
     } ! {AI, IO, Trace},
-    on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
-  }
+    policy: \_ _ . Allow,
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  })
 }
 
 func headroom_runtime() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
-  let reg: ExtRegistry = { hooks: [headroom_budget_probe_hook(), structural_hook()] };
+  let reg: ExtRegistry = { entries: [headroom_budget_probe_hook(), structural_hook()] };
   { registry: reg, strict_mode: false, verification: v }
 }
 
@@ -1248,7 +1244,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
           next_state: world_to_token(exchange.next_state)
         }
       },
-      proc_exec: fixed_ext_exec,
+      tool_handle: fixed_ext_exec,
       file_read: fixed_ext_file_read,
       file_write: fixed_ext_file_write,
       file_remove: fixed_ext_file_remove,

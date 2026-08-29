@@ -21,7 +21,6 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   BudgetPatch,
   ExtCtx,
   ExtRuntime,
-  ExtensionHooks,
   FinalizeDecision,
   NoDecision,
   PassThrough,
@@ -36,6 +35,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   Pending,
   DenyAfterTimeout
 )
+import src/core/test/ext_fixture (fixture_hooks)
 
 func msg(role: string, content: string) -> Message {
   { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
@@ -124,18 +124,17 @@ func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { d
 func pending_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
-    registry: { hooks: [{
-      id: "runtime-status-pending",
-      provided_tools: [],
-      on_describe_tools: no_describe,
-      on_build_system_prompt: no_prompt,
-      on_budget_plan: no_budget,
-      on_pre_step: pass_pre_step,
-      on_tool_policy: pending_policy,
-      on_tool_handle: no_handle,
-      on_response_intercept: no_intercept,
-      on_solver_candidate: no_solver
-    }] },
+    registry: { entries: [fixture_hooks("runtime-status-pending", {
+      tools: [],
+      describe: no_describe,
+      prompt: no_prompt,
+      budget: no_budget,
+      compact: pass_pre_step,
+      policy: pending_policy,
+      provide: no_handle,
+      intercept: no_intercept,
+      judge: no_solver
+    })] },
     strict_mode: false,
     verification: v
   }

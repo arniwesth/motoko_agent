@@ -395,7 +395,7 @@ func generated_stages(n: int, index: int) -> [PreStepStage] ! {Rand} {
       if choice == 0 then StageApplied("gen")
       else if choice == 1 then StageRejected("gen")
       else StagePassed;
-    { ext_id: "gen_ext_${show(index)}", outcome: outcome }
+    { ext_id: "gen_ext_${show(index)}", atom: 0, outcome: outcome }
       :: generated_stages(n - 1, index + 1)
   }
 }

@@ -26,7 +26,7 @@ module sunholo/motoko_ext_herdr/register
 import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/option (Some, None)
-import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_abi/types (Capability)
 import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_kind, default_allowed_kinds, default_max_depth)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, tool_names)
 
@@ -37,7 +37,7 @@ func parse_int_or(s: string, fallback: int) -> int {
   }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Clock, Env, FS, IO, Process} {
+export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO, Process} {
   let workdir   = getEnvOr("MOTOKO_WORKDIR", ".");
   let herdr_env = getEnvOr("HERDR_ENV", "");
   -- PREFER THE INJECTED PATH OVER A `PATH` LOOKUP. HERDR_BIN_PATH is an

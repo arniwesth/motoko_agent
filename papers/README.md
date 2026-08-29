@@ -19,7 +19,6 @@ Papers that informed Motoko's design and point to future research directions.
 |---|---|---|
 | The Tsetlin Machine -- A Game Theoretic Bandit Driven Approach to Optimal Pattern Recognition with Propositional Logic | [1804.01508](https://arxiv.org/abs/1804.01508) | Foundation of Tsetlin Machine theory; used for symbolic error classification in Motoko's guard system |
 | LLM-Guided Semantic Bootstrapping for Interpretable Text Classification with Tsetlin Machines | [2604.12223](https://arxiv.org/abs/2604.12223) | LLM+Tsetlin hybrid approaches; future direction for Motoko's symbolic guard architecture |
-| A Neurosymbolic Approach to Natural Language Formalization and Verification | [2511.09008](https://arxiv.org/abs/2511.09008) | Formal verification of natural language; semi-formal verifier mode inspiration |
 
 ## Code & Software Engineering Benchmarks
 
@@ -41,6 +40,13 @@ Papers that informed Motoko's design and point to future research directions.
 | CodeGemma: Open Code Models Based on Gemma | [2406.11409](https://arxiv.org/abs/2406.11409) | Open code model capabilities; baseline model selection |
 | DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models | [2402.03300](https://arxiv.org/abs/2402.03300) | Mathematical reasoning in open models; relevant to formal verification |
 | Information Gain-based Policy Optimization: A Simple and Effective Approach for Multi-Turn Search Agents | [2510.14967](https://arxiv.org/abs/2510.14967) | Multi-turn agent policy optimization; extension budget planning |
+
+## Formal Verification & Hybrid Analysis
+
+| Paper | arXiv ID | Relevance to Motoko |
+|---|---|---|
+| Vulnerability Detection: From Formal Verification to Large Language Models and Hybrid Approaches | [2503.10784](https://arxiv.org/abs/2503.10784) | Survey of formal methods vs. LLM analysis vs. hybrids; ESBMC-AI's counterexample-guided repair loop is the pattern Motoko's DP7 verifier gate (`src/core/session.ail`) already implements with `ailang check` in the oracle slot. Motivates `m-motoko-z3-contracts.md` (raise the oracle from type-checking to Z3 contracts) and supplies the citable hallucination case — 4o/o1/R1 all report CWE-190 on code ESBMC proves safe in 0.73s — for the DST report's vacuity-accounting argument |
+| A Neurosymbolic Approach to Natural Language Formalization and Verification | [2511.09008](https://arxiv.org/abs/2511.09008) | Formal verification of natural language; semi-formal verifier mode inspiration |
 
 ## Tools & Infrastructure
 

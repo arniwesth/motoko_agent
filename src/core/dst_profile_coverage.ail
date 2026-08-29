@@ -76,6 +76,59 @@
 --      `length(all_hook_slots())`. That ties the enumeration to the ABI, which
 --      is the thing it is claiming to enumerate, rather than to itself.
 
+-- ============================================================================
+-- ADR-001 Phase B, B3: the coverage unit becomes (extension, kind, index)
+-- ============================================================================
+--
+-- At 6.0 an extension registers a LIST of capability atoms, `[Kind(f), ...]`,
+-- and one kind may appear more than once (D3/D4). The unit this module counts
+-- over is therefore no longer "the slot" but the ATOM, `{ kind, index }`, and
+-- the per-extension list of atoms is SUPPLIED -- by `tools/ext_ambient_inventory/
+-- hook_scope.py` (B2), the only fail-closed producer of it. An extension B2
+-- cannot enumerate has no `atoms` and cannot be installed in a profile.
+--
+-- WHY PER ATOM AND NOT PER KIND (D6, the justification owed): only because D4
+-- may admit repeated atoms of a fold kind. Exhaustion over KINDS would let an
+-- extension with two `Compactor` atoms disclose one and leave the other
+-- unclassified while every check passed; and disjointness over kinds would
+-- reject the legal N>1 case as `HookSlotDoubleClassified`. If D4 narrows to
+-- N<=1 everywhere, (extension, kind) suffices and `index` is always 0.
+--
+-- THE FAILURE MODE THIS CLOSES IS NOT A REJECTION, IT IS A SILENT VACUOUS
+-- "COVERED" [RK C4]. A slot-shaped validator handed a list-shaped registration
+-- has eight slots to account for and does so; it never learns that the
+-- extension bound `Compactor` twice, or bound nothing at all. Both read as
+-- "all eight covered". The atom unit makes the registration's OWN atom list the
+-- denominator, so a disclosure is exhaustive over what was registered, not over
+-- what the ABI could have held.
+--
+-- EMPTY REGISTRATION (D7, RECOMMENDED reading, NOT signed off): `atoms == []`
+-- is `InstalledWithNoCapabilities` -- a profile-definition rejection with the
+-- same shape as the coverage floor: omit the extension from the install list
+-- instead. The rule is one match arm; if D7 is decided the other way (omit
+-- silently, or disclose explicitly) it is that arm that changes.
+--
+-- B8 DELETED THE SLOT HALF. `HookSlot`, `all_hook_slots`, `hook_dispatch`,
+-- `ExtensionDisclosure`, the slot-keyed rejections and `atoms_of_record_shape`
+-- are gone with their consumers; the kind table below is the ONE dispatch
+-- table, the atom `{ kind, index }` is the ONE unit, and a profile writes its
+-- atoms explicitly (`atoms_at_zero(all_capability_kinds())` for the one-atom-
+-- per-kind registrations every extension had at B8; since item 4's 6.0
+-- trimming an extension lists only the kinds it binds). The paragraphs above that
+-- speak of "slots" are kept as the record of the 5.x unit they measured.
+--
+-- TRANSITION (B3..B7, before the ABI break): the ABI still shipped the
+-- `ExtensionHooks` record, so `HookSlot` and its consumers (`dst_profile.ail`,
+-- `dst_driver_plus_*.ail`, `profile_definition_dst.ail`) stay as they are, and
+-- the two units COEXIST in this module. A record-shaped registration is the
+-- degenerate list: one atom per kind at index 0 (`atoms_of_record_shape`), and
+-- `capability_kind_of_slot` is the total 5.x -> 6.0 mapping. B8 deletes the
+-- `HookSlot` half together with its consumers; nothing here needs to change
+-- shape again. `make profile_coverage` pins `length(all_capability_kinds())`
+-- against the ABI's variant count (or, while the record exists, its `on_`
+-- field count) -- the AIL entry point prints the number because make cannot
+-- evaluate AILANG [RC I2].
+
 module src/core/dst_profile_coverage
 
 import std/list as List (length)
@@ -90,113 +143,137 @@ export pure func coverage_rules_version() -> string { "coverage-rules/1" }
 
 -- One ABI hook slot. Mirrors `ExtensionHooks` in packages/motoko-ext-abi/types.ail;
 -- `id` and `provided_tools` are data fields, not hooks, and are not slots.
-export type HookSlot
-  = OnDescribeTools
-  | OnBuildSystemPrompt
-  | OnBudgetPlan
-  | OnPreStep
-  | OnToolPolicy
-  | OnToolHandle
-  | OnResponseIntercept
-  | OnSolverCandidate
+-- ============================================================================
+-- THE KIND TABLE. `CapabilityKind` mirrors the ABI's `Capability` variants one
+-- for one (`…Kind` suffix so the names do not collide with the payload
+-- constructors); `make profile_coverage` pins `length(all_capability_kinds())`
+-- against the count of `type Capability` variants in the ABI.
+-- ============================================================================
+export type CapabilityKind
+  = DescribeToolsKind
+  | PromptShaperKind
+  | BudgetShaperKind
+  | CompactorKind
+  | ToolPolicyKind
+  | ToolProviderKind
+  | ResponseInterceptorKind
+  | SolverJudgeKind
 
--- How the runtime reaches this slot for an installed extension.
---
--- `Unconditional` means the dispatch folds over every registered hook with no
--- per-extension gate, so an EXCLUDED unconditional hook is reached on the first
--- run and the run terminates as a HarnessFailure. Such a profile emits zero
--- SystemRuns and can satisfy no D7 invariant — which is why excluding one is a
--- definition-time rejection rather than a coverage cost.
---
--- `Gated` means the fold tests a per-extension predicate before calling, so an
--- excluded hook may legitimately never be reached. Exclusion is a coverage cost
--- there, not an un-runnable configuration.
 export type DispatchKind = Unconditional | Gated
 
--- Total by construction: a new HookSlot constructor makes this a compile error.
-export pure func hook_dispatch(s: HookSlot) -> DispatchKind {
-  match s {
-    -- tool_catalog.ail:114 collect_ext_schemas — the seventh, see header
-    OnDescribeTools => Unconditional,
-    OnBuildSystemPrompt => Unconditional,   -- ext/runtime.ail:213
-    OnBudgetPlan => Unconditional,          -- ext/runtime.ail:229
-    OnPreStep => Unconditional,             -- ext/runtime.ail:275
-    OnToolPolicy => Unconditional,          -- ext/runtime.ail:319
-    -- ext/runtime.ail:337, gated by contains_tool on provided_tools
-    OnToolHandle => Gated,
-    OnResponseIntercept => Unconditional,   -- ext/runtime.ail:363
-    OnSolverCandidate => Unconditional      -- ext/runtime.ail:414
+-- THE DISPATCH TABLE, read from `ext/runtime.ail`'s per-kind folds: every kind
+-- but ToolProvider is dispatched for every registered atom on every run;
+-- ToolProvider atoms are invoked only when the call names one of their
+-- advertised tools (`first_handle_atoms`). D5 forbids EXCLUDING an
+-- unconditionally-dispatched atom — the run cannot complete — so the profile's
+-- only move for one it cannot cover is to OMIT the extension.
+export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
+  match k {
+    DescribeToolsKind => Unconditional,
+    PromptShaperKind => Unconditional,
+    BudgetShaperKind => Unconditional,
+    CompactorKind => Unconditional,
+    ToolPolicyKind => Unconditional,
+    ToolProviderKind => Gated,
+    ResponseInterceptorKind => Unconditional,
+    SolverJudgeKind => Unconditional
   }
 }
 
--- The stable hook id. D5 requires ids in both the profile definition and the
--- run result; these strings are that surface and match the ABI field names.
--- Total by construction, as above.
-export pure func hook_slot_id(s: HookSlot) -> string {
-  match s {
-    OnDescribeTools => "on_describe_tools",
-    OnBuildSystemPrompt => "on_build_system_prompt",
-    OnBudgetPlan => "on_budget_plan",
-    OnPreStep => "on_pre_step",
-    OnToolPolicy => "on_tool_policy",
-    OnToolHandle => "on_tool_handle",
-    OnResponseIntercept => "on_response_intercept",
-    OnSolverCandidate => "on_solver_candidate"
+export pure func capability_kind_id(k: CapabilityKind) -> string {
+  match k {
+    DescribeToolsKind => "describe_tools",
+    PromptShaperKind => "prompt_shaper",
+    BudgetShaperKind => "budget_shaper",
+    CompactorKind => "compactor",
+    ToolPolicyKind => "tool_policy",
+    ToolProviderKind => "tool_provider",
+    ResponseInterceptorKind => "response_interceptor",
+    SolverJudgeKind => "solver_judge"
   }
 }
 
--- The load-time parse. A profile definition arrives as ids, and an id that is
--- not one of the eight is a rejection, never a skipped entry — otherwise a
--- typo silently shrinks the disclosed set and the exhaustion check below then
--- reports the wrong rule.
-export pure func hook_slot_from_id(id: string) -> Option[HookSlot] {
-  if id == "on_describe_tools" then Some(OnDescribeTools)
-  else if id == "on_build_system_prompt" then Some(OnBuildSystemPrompt)
-  else if id == "on_budget_plan" then Some(OnBudgetPlan)
-  else if id == "on_pre_step" then Some(OnPreStep)
-  else if id == "on_tool_policy" then Some(OnToolPolicy)
-  else if id == "on_tool_handle" then Some(OnToolHandle)
-  else if id == "on_response_intercept" then Some(OnResponseIntercept)
-  else if id == "on_solver_candidate" then Some(OnSolverCandidate)
+export pure func capability_kind_from_id(id: string) -> Option[CapabilityKind] {
+  if id == "describe_tools" then Some(DescribeToolsKind)
+  else if id == "prompt_shaper" then Some(PromptShaperKind)
+  else if id == "budget_shaper" then Some(BudgetShaperKind)
+  else if id == "compactor" then Some(CompactorKind)
+  else if id == "tool_policy" then Some(ToolPolicyKind)
+  else if id == "tool_provider" then Some(ToolProviderKind)
+  else if id == "response_interceptor" then Some(ResponseInterceptorKind)
+  else if id == "solver_judge" then Some(SolverJudgeKind)
   else None
 }
 
--- The eight slots. See the header for why this list's completeness is not a
--- compile error and what guards it instead.
-export pure func all_hook_slots() -> [HookSlot] {
-  [OnDescribeTools, OnBuildSystemPrompt, OnBudgetPlan, OnPreStep,
-   OnToolPolicy, OnToolHandle, OnResponseIntercept, OnSolverCandidate]
+export pure func all_capability_kinds() -> [CapabilityKind] {
+  [DescribeToolsKind, PromptShaperKind, BudgetShaperKind, CompactorKind,
+   ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind, SolverJudgeKind]
 }
 
--- D5's per-extension hook disclosure, for one INSTALLED extension.
-export type ExtensionDisclosure = {
+-- THE UNIT: an atom is (kind, index-within-kind) in the registration's list
+-- order — B6's typed identity, never a stamp.
+export type AtomRef = { kind: CapabilityKind, index: int }
+
+-- The atom id as every reader spells it: `kind_id[index]`, e.g. `tool_provider[0]`.
+export pure func atom_id(a: AtomRef) -> string {
+  "${capability_kind_id(a.kind)}[${show(a.index)}]"
+}
+
+pure func same_atom(a: AtomRef, b: AtomRef) -> bool {
+  capability_kind_id(a.kind) == capability_kind_id(b.kind) && a.index == b.index
+}
+
+-- The registration shape "one atom of each of these kinds, at index 0". At B8
+-- (the mechanical record -> list migration) every extension registered one
+-- atom per kind, so `atoms_at_zero(all_capability_kinds())` WAS the tree's
+-- uniform registration. Item 4 (6.0 trimming) ended that uniformity: each
+-- extension now registers only the kinds it binds (39 atoms over 17
+-- extensions, not 17 x 8), so a profile writes the extension's actual kinds
+-- (`atoms_at_zero([ToolProviderKind, ...])`) and the profile readers
+-- cross-check that claim against B2's per-extension atom enumeration
+-- (`make ext_hook_scope`). The full-kind form survives here as the fixtures'
+-- `one_per_kind()` -- a fixture shape, not a claim about any real extension.
+-- The name says what it claims; nothing here calls it a "record shape" any more.
+export pure func atoms_at_zero(ks: [CapabilityKind]) -> [AtomRef] {
+  match ks {
+    [] => [],
+    k :: rest => ({ kind: k, index: 0 }) :: atoms_at_zero(rest)
+  }
+}
+
+-- ============================================================================
+-- The disclosure: the registration's atoms (the denominator, from B2), and the
+-- profile's partition of them into covered and excluded.
+-- ============================================================================
+export type CapabilityDisclosure = {
   extension_id: string,
-  covered: [HookSlot],
-  excluded: [HookSlot]
+  atoms: [AtomRef],
+  covered: [AtomRef],
+  excluded: [AtomRef]
 }
 
--- Why a profile definition was rejected. Typed rather than a string so WI-A10
--- can render it into the definition-time rejection and the run result without
--- re-deriving the rule, and so a fixture can assert WHICH rule fired rather
--- than only that something did.
 export type CoverageRejection
   = ZeroCoveredHooks(string)
   | UnconditionalHookExcluded(string, string)
-  | HookSlotDoubleClassified(string, string)
-  | HookSlotUnaccounted(string, string)
-  | UnknownHookId(string, string)
   | DuplicateExtensionId(string)
+  | InstalledWithNoCapabilities(string)
+  | AtomDoubleClassified(string, string)
+  | AtomUnaccounted(string, string)
+  | AtomNotRegistered(string, string)
+  | DuplicateAtom(string, string)
+  | UnknownCapabilityKind(string, string)
 
--- The rule name. D5's acceptance evidence requires the rejection to NAME the
--- rule, not merely to fire.
 export pure func rejection_rule(r: CoverageRejection) -> string {
   match r {
     ZeroCoveredHooks(_) => "coverage-floor",
     UnconditionalHookExcluded(_, _) => "unconditional-hook-excluded",
-    HookSlotDoubleClassified(_, _) => "covered-excluded-disjoint",
-    HookSlotUnaccounted(_, _) => "covered-excluded-exhaustive",
-    UnknownHookId(_, _) => "unknown-hook-id",
-    DuplicateExtensionId(_) => "duplicate-extension-id"
+    DuplicateExtensionId(_) => "duplicate-extension-id",
+    InstalledWithNoCapabilities(_) => "installed-with-no-capabilities",
+    AtomDoubleClassified(_, _) => "atoms-covered-excluded-disjoint",
+    AtomUnaccounted(_, _) => "atoms-covered-excluded-exhaustive",
+    AtomNotRegistered(_, _) => "atom-not-registered",
+    DuplicateAtom(_, _) => "atoms-distinct",
+    UnknownCapabilityKind(_, _) => "unknown-capability-kind"
   }
 }
 
@@ -204,167 +281,202 @@ export pure func rejection_extension(r: CoverageRejection) -> string {
   match r {
     ZeroCoveredHooks(e) => e,
     UnconditionalHookExcluded(e, _) => e,
-    HookSlotDoubleClassified(e, _) => e,
-    HookSlotUnaccounted(e, _) => e,
-    UnknownHookId(e, _) => e,
-    DuplicateExtensionId(e) => e
+    DuplicateExtensionId(e) => e,
+    InstalledWithNoCapabilities(e) => e,
+    AtomDoubleClassified(e, _) => e,
+    AtomUnaccounted(e, _) => e,
+    AtomNotRegistered(e, _) => e,
+    DuplicateAtom(e, _) => e,
+    UnknownCapabilityKind(e, _) => e
   }
 }
 
 export pure func rejection_message(r: CoverageRejection) -> string {
   match r {
     ZeroCoveredHooks(e) =>
-      "[coverage-floor] extension '${e}' is installed with zero covered hooks; omit it from the install list instead (D5)",
+      "[coverage-floor] extension '${e}' is installed with zero covered atoms; omit it from the install list instead (D5)",
     UnconditionalHookExcluded(e, h) =>
-      "[unconditional-hook-excluded] extension '${e}' excludes '${h}', which is dispatched unconditionally; the run cannot complete, so omit the extension instead (D5)",
-    HookSlotDoubleClassified(e, h) =>
-      "[covered-excluded-disjoint] extension '${e}' classifies '${h}' more than once; covered and excluded must be disjoint (D5)",
-    HookSlotUnaccounted(e, h) =>
-      "[covered-excluded-exhaustive] extension '${e}' classifies neither covered nor excluded for '${h}'; all eight ABI slots must be exhausted (D5)",
-    UnknownHookId(e, h) =>
-      "[unknown-hook-id] extension '${e}' names hook id '${h}', which is not one of the eight ABI slots (D5)",
+      "[unconditional-hook-excluded] extension '${e}' excludes atom '${h}', whose kind is dispatched unconditionally; the run cannot complete, so omit the extension instead (D5)",
     DuplicateExtensionId(e) =>
-      "[duplicate-extension-id] extension '${e}' is disclosed more than once in the install list (D5)"
+      "[duplicate-extension-id] extension '${e}' is disclosed more than once in the install list (D5)",
+    InstalledWithNoCapabilities(e) =>
+      "[installed-with-no-capabilities] extension '${e}' is installed but registers no capability atom; omit it from the install list instead (D7, recommended reading)",
+    AtomDoubleClassified(e, a) =>
+      "[atoms-covered-excluded-disjoint] extension '${e}' classifies atom '${a}' more than once; covered and excluded must be disjoint per atom (D6)",
+    AtomUnaccounted(e, a) =>
+      "[atoms-covered-excluded-exhaustive] extension '${e}' classifies neither covered nor excluded for atom '${a}'; every registered atom must be classified (D6)",
+    AtomNotRegistered(e, a) =>
+      "[atom-not-registered] extension '${e}' classifies atom '${a}', which its registration does not hold; the atom list is the denominator and comes from hook_scope (B2)",
+    DuplicateAtom(e, a) =>
+      "[atoms-distinct] extension '${e}' registers atom '${a}' twice; (kind, index) must be unique within an extension (D6)",
+    UnknownCapabilityKind(e, k) =>
+      "[unknown-capability-kind] extension '${e}' names capability kind '${k}', which is not one of the Capability variants (B3)"
   }
 }
 
-pure func count_slot(xs: [HookSlot], target: string) -> int {
+pure func count_atom(xs: [AtomRef], target: AtomRef) -> int {
   match xs {
     [] => 0,
-    x :: rest =>
-      (if hook_slot_id(x) == target then 1 else 0) + count_slot(rest, target)
+    x :: rest => (if same_atom(x, target) then 1 else 0) + count_atom(rest, target)
   }
 }
 
--- Disjointness and exhaustion, checked together over the eight slots, because
--- one traversal decides both and separate traversals would let a duplicate
--- entry pad a list to eight while a slot went missing.
---
---   c + e == 0  the slot is classified nowhere       -> not exhaustive
---   c + e >  1  the slot is classified more than once -> not disjoint
---                (this catches "in both lists" AND "twice in one list")
-pure func slot_accounting(ext_id: string, d: ExtensionDisclosure, slots: [HookSlot]) -> [CoverageRejection] {
-  match slots {
+pure func atom_in(xs: [AtomRef], target: AtomRef) -> bool {
+  count_atom(xs, target) > 0
+}
+
+pure func distinct_atoms(ext_id: string, xs: [AtomRef], seen: [AtomRef]) -> [CoverageRejection] {
+  match xs {
     [] => [],
-    s :: rest => {
-      let id = hook_slot_id(s);
-      let n = count_slot(d.covered, id) + count_slot(d.excluded, id);
-      let here =
-        if n == 0 then [HookSlotUnaccounted(ext_id, id)]
-        else if n > 1 then [HookSlotDoubleClassified(ext_id, id)]
-        else [];
-      here ++ slot_accounting(ext_id, d, rest)
+    x :: rest => {
+      let here = if atom_in(seen, x) then [DuplicateAtom(ext_id, atom_id(x))] else [];
+      here ++ distinct_atoms(ext_id, rest, x :: seen)
     }
   }
 }
 
-pure func unconditional_exclusions(ext_id: string, excluded: [HookSlot]) -> [CoverageRejection] {
+-- Exhaustion + disjointness PER ATOM over the registration's own atoms.
+pure func atom_accounting(ext_id: string, d: CapabilityDisclosure, atoms: [AtomRef]) -> [CoverageRejection] {
+  match atoms {
+    [] => [],
+    a :: rest => {
+      let n = count_atom(d.covered, a) + count_atom(d.excluded, a);
+      let here =
+        if n == 0 then [AtomUnaccounted(ext_id, atom_id(a))]
+        else if n > 1 then [AtomDoubleClassified(ext_id, atom_id(a))]
+        else [];
+      here ++ atom_accounting(ext_id, d, rest)
+    }
+  }
+}
+
+-- The other direction: a classified atom the registration does not hold.
+pure func unregistered(ext_id: string, xs: [AtomRef], atoms: [AtomRef]) -> [CoverageRejection] {
+  match xs {
+    [] => [],
+    x :: rest => {
+      let here = if atom_in(atoms, x) then [] else [AtomNotRegistered(ext_id, atom_id(x))];
+      here ++ unregistered(ext_id, rest, atoms)
+    }
+  }
+}
+
+pure func unconditional_atom_exclusions(ext_id: string, excluded: [AtomRef]) -> [CoverageRejection] {
   match excluded {
     [] => [],
-    s :: rest => {
-      let here = match hook_dispatch(s) {
-        Unconditional => [UnconditionalHookExcluded(ext_id, hook_slot_id(s))],
+    a :: rest => {
+      let here = match capability_dispatch(a.kind) {
+        Unconditional => [UnconditionalHookExcluded(ext_id, atom_id(a))],
         Gated => []
       };
-      here ++ unconditional_exclusions(ext_id, rest)
+      here ++ unconditional_atom_exclusions(ext_id, rest)
     }
   }
 }
 
--- The three D5 rules for one installed extension, all of them, in one pass.
--- Returns every violation rather than the first: a definition with two distinct
--- defects should show both, and a fixture asserting one rule must not be able
--- to pass because a different rule happened to fire first.
-export pure func validate_disclosure(d: ExtensionDisclosure) -> [CoverageRejection] {
-  let floor =
-    if List.length(d.covered) == 0 then [ZeroCoveredHooks(d.extension_id)] else [];
-  floor
-    ++ unconditional_exclusions(d.extension_id, d.excluded)
-    ++ slot_accounting(d.extension_id, d, all_hook_slots())
-}
-
-pure func disclosed_before(ds: [ExtensionDisclosure], id: string) -> bool {
-  match ds {
-    [] => false,
-    d :: rest => if d.extension_id == id then true else disclosed_before(rest, id)
+-- D7 (recommended reading, adopted): an installed extension with NO atoms is
+-- rejected by name, first, and nothing else about it is evaluated.
+export pure func validate_capability_disclosure(d: CapabilityDisclosure) -> [CoverageRejection] {
+  if List.length(d.atoms) == 0 then [InstalledWithNoCapabilities(d.extension_id)]
+  else {
+    let floor =
+      if List.length(d.covered) == 0 then [ZeroCoveredHooks(d.extension_id)] else [];
+    floor
+      ++ distinct_atoms(d.extension_id, d.atoms, [])
+      ++ unconditional_atom_exclusions(d.extension_id, d.excluded)
+      ++ atom_accounting(d.extension_id, d, d.atoms)
+      ++ unregistered(d.extension_id, d.covered, d.atoms)
+      ++ unregistered(d.extension_id, d.excluded, d.atoms)
   }
 }
 
-pure func validate_install_list_rec(seen: [ExtensionDisclosure], ds: [ExtensionDisclosure]) -> [CoverageRejection] {
+pure func cap_disclosed_before(ds: [CapabilityDisclosure], id: string) -> bool {
+  match ds {
+    [] => false,
+    d :: rest => if d.extension_id == id then true else cap_disclosed_before(rest, id)
+  }
+}
+
+pure func validate_capability_install_list_rec(seen: [CapabilityDisclosure], ds: [CapabilityDisclosure]) -> [CoverageRejection] {
   match ds {
     [] => [],
     d :: rest => {
       let dup =
-        if disclosed_before(seen, d.extension_id) then [DuplicateExtensionId(d.extension_id)] else [];
-      dup ++ validate_disclosure(d) ++ validate_install_list_rec(seen ++ [d], rest)
+        if cap_disclosed_before(seen, d.extension_id) then [DuplicateExtensionId(d.extension_id)] else [];
+      dup ++ validate_capability_disclosure(d) ++ validate_capability_install_list_rec(seen ++ [d], rest)
     }
   }
 }
 
--- The whole install list. An EMPTY list passes, and that vacuity is correct
--- rather than a hole: `driver_only` (plan P4) installs no extensions at all, so
--- the floor and the disclosure hold vacuously and there is nothing to disclose.
--- Vacuous-pass is only dangerous when something WAS installed and went
--- unchecked, which the per-extension rules above make impossible.
-export pure func validate_install_list(ds: [ExtensionDisclosure]) -> [CoverageRejection] {
-  validate_install_list_rec([], ds)
+export pure func validate_capability_install_list(ds: [CapabilityDisclosure]) -> [CoverageRejection] {
+  validate_capability_install_list_rec([], ds)
 }
 
-export pure func install_list_ok(ds: [ExtensionDisclosure]) -> bool {
-  List.length(validate_install_list(ds)) == 0
+export pure func capability_install_list_ok(ds: [CapabilityDisclosure]) -> bool {
+  List.length(validate_capability_install_list(ds)) == 0
 }
 
 -- ============================================================================
--- The id surface. D5 requires hook IDS, not counts, in both the profile
--- definition and the run result.
+-- The id surface: what a profile WRITES. Parsed fail-closed — an unknown kind
+-- id is a rejection, never a silently dropped entry.
 -- ============================================================================
+export type AtomIds = { kind: string, index: int }
+export type CapabilityDisclosureIds = {
+  extension_id: string,
+  atoms: [AtomIds],
+  covered: [AtomIds],
+  excluded: [AtomIds]
+}
 
-pure func slot_ids(xs: [HookSlot]) -> [string] {
+export pure func atom_ids_id(a: AtomIds) -> string {
+  "${a.kind}[${show(a.index)}]"
+}
+
+pure func atom_ids_of(xs: [AtomRef]) -> [AtomIds] {
   match xs {
     [] => [],
-    x :: rest => hook_slot_id(x) :: slot_ids(rest)
+    x :: rest => ({ kind: capability_kind_id(x.kind), index: x.index }) :: atom_ids_of(rest)
   }
 }
 
-export type DisclosureIds = { extension_id: string, covered: [string], excluded: [string] }
-
--- What WI-A10 records in the profile definition and in the run result. Names,
--- never counts — the whole point of the disclosure mechanism.
-export pure func disclosure_ids(d: ExtensionDisclosure) -> DisclosureIds {
-  { extension_id: d.extension_id, covered: slot_ids(d.covered), excluded: slot_ids(d.excluded) }
+export pure func capability_disclosure_ids(d: CapabilityDisclosure) -> CapabilityDisclosureIds {
+  { extension_id: d.extension_id, atoms: atom_ids_of(d.atoms),
+    covered: atom_ids_of(d.covered), excluded: atom_ids_of(d.excluded) }
 }
 
-pure func slots_from_ids(ext_id: string, ids: [string]) -> Result[[HookSlot], CoverageRejection] {
+@allow_empty_ok("an empty atoms list is a legitimate decode result — no atoms to resolve")
+pure func atoms_from_ids(ext_id: string, ids: [AtomIds]) -> Result[[AtomRef], CoverageRejection] {
   match ids {
     [] => Ok([]),
     id :: rest =>
-      match hook_slot_from_id(id) {
-        None => Err(UnknownHookId(ext_id, id)),
-        Some(s) =>
-          match slots_from_ids(ext_id, rest) {
+      match capability_kind_from_id(id.kind) {
+        None => Err(UnknownCapabilityKind(ext_id, id.kind)),
+        Some(k) =>
+          match atoms_from_ids(ext_id, rest) {
             Err(e) => Err(e),
-            Ok(tail) => Ok(s :: tail)
+            Ok(tail) => Ok({ kind: k, index: id.index } :: tail)
           }
       }
   }
 }
 
--- Load-time parse of one disclosure from ids. Fails closed on an unrecognised
--- hook id rather than dropping it.
-export pure func disclosure_from_ids(ext_id: string, covered: [string], excluded: [string]) -> Result[ExtensionDisclosure, CoverageRejection] {
-  match slots_from_ids(ext_id, covered) {
+export pure func capability_disclosure_from_ids(d: CapabilityDisclosureIds) -> Result[CapabilityDisclosure, CoverageRejection] {
+  match atoms_from_ids(d.extension_id, d.atoms) {
     Err(e) => Err(e),
-    Ok(c) =>
-      match slots_from_ids(ext_id, excluded) {
+    Ok(atoms) =>
+      match atoms_from_ids(d.extension_id, d.covered) {
         Err(e) => Err(e),
-        Ok(x) => Ok({ extension_id: ext_id, covered: c, excluded: x })
+        Ok(c) =>
+          match atoms_from_ids(d.extension_id, d.excluded) {
+            Err(e) => Err(e),
+            Ok(x) => Ok({ extension_id: d.extension_id, atoms: atoms, covered: c, excluded: x })
+          }
       }
   }
 }
 
 -- ============================================================================
--- Inline tests. `make profile_coverage` runs these; the rejecting fixture
--- PROFILES live in scripts/dst/profile_coverage_dst.ail.
+-- Inline tests
 -- ============================================================================
 
 pure func rules_fired(rs: [CoverageRejection]) -> [string] {
@@ -381,137 +493,6 @@ pure func has_rule(rs: [CoverageRejection], rule: string) -> bool {
   }
 }
 
-pure func full_cover(ext_id: string) -> ExtensionDisclosure {
-  { extension_id: ext_id, covered: all_hook_slots(), excluded: [] }
-}
-
--- The only shape of exclusion a conformant profile may carry: the one gated
--- slot excluded, the other seven covered.
-pure func gated_excluded(ext_id: string) -> ExtensionDisclosure {
-  {
-    extension_id: ext_id,
-    covered: [OnDescribeTools, OnBuildSystemPrompt, OnBudgetPlan, OnPreStep,
-              OnToolPolicy, OnResponseIntercept, OnSolverCandidate],
-    excluded: [OnToolHandle]
-  }
-}
-
-pure func test_all_slots_covered_passes() -> bool
-  tests [((), true)]
-  {
-    install_list_ok([full_cover("ext_a")]) && install_list_ok([gated_excluded("compose")])
-  }
-
--- P4: driver_only installs nothing, so the floor and disclosure hold vacuously.
-pure func test_empty_install_list_passes_vacuously() -> bool
-  tests [((), true)]
-  {
-    install_list_ok([])
-  }
-
-pure func test_zero_covered_is_rejected() -> bool
-  tests [((), true)]
-  {
-    let d: ExtensionDisclosure =
-      { extension_id: "inert", covered: [], excluded: all_hook_slots() };
-    let rs = validate_disclosure(d);
-    has_rule(rs, "coverage-floor") && has_rule(rs, "unconditional-hook-excluded")
-  }
-
--- The correction this module carries: on_describe_tools is the seventh
--- unconditionally-dispatched slot, so excluding it is a rejection. Under D5's
--- stated "six", this fixture would have been accepted.
-pure func test_seven_slots_are_unconditional() -> bool
-  tests [((), true)]
-  {
-    let unconditional_count =
-      count_unconditional(all_hook_slots());
-    let describe_tools_excluded: ExtensionDisclosure = {
-      extension_id: "describes_only",
-      covered: [OnBuildSystemPrompt, OnBudgetPlan, OnPreStep, OnToolPolicy,
-                OnToolHandle, OnResponseIntercept, OnSolverCandidate],
-      excluded: [OnDescribeTools]
-    };
-    unconditional_count == 7
-      && has_rule(validate_disclosure(describe_tools_excluded), "unconditional-hook-excluded")
-  }
-
-pure func count_unconditional(xs: [HookSlot]) -> int {
-  match xs {
-    [] => 0,
-    x :: rest =>
-      (match hook_dispatch(x) { Unconditional => 1, Gated => 0 }) + count_unconditional(rest)
-  }
-}
-
--- Set completeness, not row shape: a disclosure that omits a slot entirely is
--- rejected. A validator checking only disjointness accepts this one.
-pure func test_missing_slot_is_rejected() -> bool
-  tests [((), true)]
-  {
-    let d: ExtensionDisclosure = {
-      extension_id: "partial",
-      covered: [OnDescribeTools, OnBuildSystemPrompt, OnBudgetPlan, OnPreStep,
-                OnToolPolicy, OnResponseIntercept],
-      excluded: [OnToolHandle]
-    };
-    let rs = validate_disclosure(d);
-    has_rule(rs, "covered-excluded-exhaustive")
-      && not has_rule(rs, "covered-excluded-disjoint")
-      && List.length(rs) == 1
-  }
-
-pure func test_overlapping_sets_are_rejected() -> bool
-  tests [((), true)]
-  {
-    let d: ExtensionDisclosure = {
-      extension_id: "overlap",
-      covered: all_hook_slots(),
-      excluded: [OnToolHandle]
-    };
-    has_rule(validate_disclosure(d), "covered-excluded-disjoint")
-  }
-
--- A duplicate inside ONE list pads the two lists to eight ENTRIES while leaving
--- a slot unaccounted — here `on_solver_candidate`. Both rules must fire.
---
--- This is the exact shape a length check accepts: seven covered plus one
--- excluded is eight, and eight is the right number. Only counting per SLOT, as
--- `slot_accounting` does, separates "eight entries" from "eight slots".
-pure func test_duplicate_within_covered_is_rejected() -> bool
-  tests [((), true)]
-  {
-    let d: ExtensionDisclosure = {
-      extension_id: "dup",
-      covered: [OnDescribeTools, OnDescribeTools, OnBuildSystemPrompt, OnBudgetPlan,
-                OnPreStep, OnToolPolicy, OnResponseIntercept],
-      excluded: [OnToolHandle]
-    };
-    let rs = validate_disclosure(d);
-    List.length(d.covered) + List.length(d.excluded) == 8
-      && has_rule(rs, "covered-excluded-disjoint")
-      && has_rule(rs, "covered-excluded-exhaustive")
-  }
-
-pure func test_unknown_hook_id_fails_closed() -> bool
-  tests [((), true)]
-  {
-    match disclosure_from_ids("typo", ["on_describe_tool"], []) {
-      Err(UnknownHookId(e, h)) => e == "typo" && h == "on_describe_tool",
-      _ => false
-    }
-  }
-
-pure func test_ids_round_trip() -> bool
-  tests [((), true)]
-  {
-    let ids = slot_ids(all_hook_slots());
-    match disclosure_from_ids("rt", ids, []) {
-      Err(_) => false,
-      Ok(d) => List.length(d.covered) == 8 && List.length(disclosure_ids(d).covered) == 8
-    }
-  }
-
 pure func distinct_ids(xs: [string], seen: [string]) -> bool {
   match xs {
     [] => true,
@@ -526,28 +507,175 @@ pure func contains_id(xs: [string], target: string) -> bool {
   }
 }
 
--- Eight DISTINCT slots. Length alone would accept a list that repeated one
--- constructor and omitted another — the same padding defect the disclosure
--- rules reject, one level up in the artifact itself.
-pure func test_all_hook_slots_is_eight_distinct() -> bool
+pure func kind_ids(ks: [CapabilityKind]) -> [string] {
+  match ks {
+    [] => [],
+    k :: rest => capability_kind_id(k) :: kind_ids(rest)
+  }
+}
+
+pure func cap_full(ext_id: string, atoms: [AtomRef]) -> CapabilityDisclosure {
+  { extension_id: ext_id, atoms: atoms, covered: atoms, excluded: [] }
+}
+
+pure func one_per_kind() -> [AtomRef] { atoms_at_zero(all_capability_kinds()) }
+
+pure func two_compactors() -> [AtomRef] {
+  [{ kind: CompactorKind, index: 0 }, { kind: CompactorKind, index: 1 },
+   { kind: ToolProviderKind, index: 0 }]
+}
+
+pure func without_kind(xs: [AtomRef], k: CapabilityKind) -> [AtomRef] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      if capability_kind_id(x.kind) == capability_kind_id(k) then without_kind(rest, k)
+      else x :: without_kind(rest, k)
+  }
+}
+
+pure func count_unconditional_kinds(ks: [CapabilityKind]) -> int {
+  match ks {
+    [] => 0,
+    k :: rest =>
+      (match capability_dispatch(k) { Unconditional => 1, Gated => 0 }) + count_unconditional_kinds(rest)
+  }
+}
+
+pure func test_all_capability_kinds_is_eight_distinct() -> bool
   tests [((), true)]
   {
-    List.length(all_hook_slots()) == 8 && distinct_ids(slot_ids(all_hook_slots()), [])
+    List.length(all_capability_kinds()) == 8 && distinct_ids(kind_ids(all_capability_kinds()), [])
+  }
+
+pure func test_one_atom_per_kind_fully_covered_passes() -> bool
+  tests [((), true)]
+  {
+    List.length(one_per_kind()) == 8
+      && capability_install_list_ok([cap_full("ext_a", one_per_kind())])
+      && capability_install_list_ok([])
+  }
+
+pure func test_seven_kinds_are_unconditional() -> bool
+  tests [((), true)]
+  {
+    let gated: CapabilityDisclosure =
+      { extension_id: "g", atoms: one_per_kind(),
+        covered: without_kind(one_per_kind(), ToolProviderKind),
+        excluded: [{ kind: ToolProviderKind, index: 0 }] };
+    let unc: CapabilityDisclosure =
+      { extension_id: "u", atoms: one_per_kind(),
+        covered: without_kind(one_per_kind(), DescribeToolsKind),
+        excluded: [{ kind: DescribeToolsKind, index: 0 }] };
+    capability_install_list_ok([gated])
+      && has_rule(validate_capability_disclosure(unc), "unconditional-hook-excluded")
+      && count_unconditional_kinds(all_capability_kinds()) == 7
+  }
+
+pure func test_zero_covered_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let rs = validate_capability_disclosure(
+      { extension_id: "inert", atoms: one_per_kind(), covered: [], excluded: one_per_kind() });
+    has_rule(rs, "coverage-floor") && has_rule(rs, "unconditional-hook-excluded")
+  }
+
+pure func test_same_kind_twice_is_not_double_classified() -> bool
+  tests [((), true)]
+  {
+    let d: CapabilityDisclosure =
+      { extension_id: "chain", atoms: two_compactors(),
+        covered: [{ kind: CompactorKind, index: 0 }, { kind: ToolProviderKind, index: 0 }],
+        excluded: [{ kind: CompactorKind, index: 1 }] };
+    let rs = validate_capability_disclosure(d);
+    has_rule(rs, "unconditional-hook-excluded")
+      && not has_rule(rs, "atoms-covered-excluded-disjoint")
+      && List.length(rs) == 1
+      && capability_install_list_ok([cap_full("chain", two_compactors())])
+  }
+
+pure func test_no_capabilities_is_rejected_by_name() -> bool
+  tests [((), true)]
+  {
+    let rs = validate_capability_disclosure({ extension_id: "inert", atoms: [], covered: [], excluded: [] });
+    has_rule(rs, "installed-with-no-capabilities") && List.length(rs) == 1
+  }
+
+pure func test_unaccounted_atom_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: CapabilityDisclosure =
+      { extension_id: "partial", atoms: two_compactors(),
+        covered: [{ kind: CompactorKind, index: 0 }, { kind: ToolProviderKind, index: 0 }],
+        excluded: [] };
+    let rs = validate_capability_disclosure(d);
+    has_rule(rs, "atoms-covered-excluded-exhaustive") && List.length(rs) == 1
+  }
+
+pure func test_double_classified_atom_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: CapabilityDisclosure =
+      { extension_id: "overlap", atoms: two_compactors(),
+        covered: two_compactors(), excluded: [{ kind: ToolProviderKind, index: 0 }] };
+    let rs = validate_capability_disclosure(d);
+    has_rule(rs, "atoms-covered-excluded-disjoint") && List.length(rs) == 1
+  }
+
+pure func test_unregistered_atom_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: CapabilityDisclosure =
+      { extension_id: "phantom", atoms: two_compactors(),
+        covered: two_compactors() ++ [{ kind: CompactorKind, index: 3 }], excluded: [] };
+    let rs = validate_capability_disclosure(d);
+    has_rule(rs, "atom-not-registered") && List.length(rs) == 1
+  }
+
+pure func test_duplicate_atom_in_registration_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let atoms = [{ kind: SolverJudgeKind, index: 0 }, { kind: SolverJudgeKind, index: 0 }];
+    has_rule(validate_capability_disclosure(cap_full("dup", atoms)), "atoms-distinct")
   }
 
 pure func test_duplicate_extension_id_is_rejected() -> bool
   tests [((), true)]
   {
-    has_rule(validate_install_list([full_cover("a"), full_cover("a")]), "duplicate-extension-id")
+    has_rule(validate_capability_install_list([cap_full("a", one_per_kind()), cap_full("a", one_per_kind())]), "duplicate-extension-id")
   }
 
 pure func test_rejection_message_names_the_rule() -> bool
   tests [((), true)]
   {
-    let rs = validate_disclosure({ extension_id: "x", covered: [], excluded: all_hook_slots() });
+    let rs = validate_capability_disclosure({ extension_id: "x", atoms: one_per_kind(), covered: [], excluded: one_per_kind() });
     match rs {
       [] => false,
       r :: _ => rejection_message(r) != "" && rejection_extension(r) == "x"
         && List.length(rules_fired(rs)) == List.length(rs)
     }
   }
+
+pure func test_ids_round_trip_and_fail_closed() -> bool
+  tests [((), true)]
+  {
+    let d = cap_full("rt", two_compactors());
+    let ok_trip = match capability_disclosure_from_ids(capability_disclosure_ids(d)) {
+      Err(_) => false,
+      Ok(back) => List.length(back.atoms) == 3 && first_atom_id(back.atoms) == "compactor[0]"
+        && atom_ids_id({ kind: "compactor", index: 0 }) == "compactor[0]"
+    };
+    let bad = match capability_disclosure_from_ids(
+      { extension_id: "typo", atoms: [{ kind: "compacter", index: 0 }], covered: [], excluded: [] }) {
+      Err(UnknownCapabilityKind(e, k)) => e == "typo" && k == "compacter",
+      _ => false
+    };
+    ok_trip && bad
+  }
+
+pure func first_atom_id(xs: [AtomRef]) -> string {
+  match xs {
+    [] => "",
+    x :: _ => atom_id(x)
+  }
+}

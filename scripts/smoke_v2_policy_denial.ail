@@ -19,7 +19,8 @@ module scripts/smoke_v2_policy_denial
 
 import std/io (println)
 import std/option (None)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PromptPatch, BudgetPatch, Msg, PreStepDecision, PassThrough)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PromptPatch, BudgetPatch, Msg, PreStepDecision, PassThrough)
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 import src/core/ext/runtime (dispatch_tool_policy)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/tool_contract (ToolCallEnvelope)
@@ -59,25 +60,24 @@ pure func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, 
   PassThrough
 }, next_state: ctx.world } }
 
-func mk_deny_all_hook() -> ExtensionHooks {
-  {
-	    id: "deny-all-test-hook",
-	    provided_tools: [],
-	    on_describe_tools: empty_describe_tools,
-	    on_build_system_prompt: empty_prompt_patch,
-	    on_budget_plan: empty_budget_patch,
-	    on_pre_step: pass_pre_step,
-	    on_tool_policy: deny_all_tool_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: noop_response_intercept,
-    on_solver_candidate: nodecision_solver_candidate
-  }
+func mk_deny_all_hook() -> FixtureHooks {
+  fixture_hooks("deny-all-test-hook", {
+	    tools: [],
+	    describe: empty_describe_tools,
+	    prompt: empty_prompt_patch,
+	    budget: empty_budget_patch,
+	    compact: pass_pre_step,
+	    policy: deny_all_tool_policy,
+	    provide: no_handle,
+	    intercept: noop_response_intercept,
+	    judge: nodecision_solver_candidate
+	  })
 }
 
 export func main() -> () ! {IO, Clock, Env} {
   let v: VerificationConfig = { enabled: false, command: "" };
   let rt: ExtRuntime = {
-    registry: { hooks: [mk_deny_all_hook()] },
+    registry: { entries: [mk_deny_all_hook()] },
     strict_mode: false,
     verification: v
   };

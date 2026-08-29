@@ -5,7 +5,7 @@ import std/net (httpGet, httpPost)
 import std/option (Option, Some, None)
 import std/rand (uuid4)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, ExtensionHooks, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ToolResultEnvelope, ResponseInterceptDecision, FinalizeDecision,
   ToolCallEnvelope, Msg, PreStepDecision
 )
@@ -147,11 +147,7 @@ func make_result(call: ToolCallEnvelope, stdout: string, exit_code: int) -> Tool
   { tool_call_id: call.id, tool: call.tool, exit_code: exit_code, stdout: stdout, stderr: "", metadata: jo([]) }
 }
 
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
-export func make_hooks(cfg: A2AConfig) -> ExtensionHooks ! {Net, Rand} {
+export func make_hooks(cfg: A2AConfig) -> [Capability] ! {Net, Rand} {
   let agents = cfg.agents;
   let schemas = collect_schemas(agents);
   let names = collect_tool_names(agents);
@@ -165,24 +161,12 @@ export func make_hooks(cfg: A2AConfig) -> ExtensionHooks ! {Net, Rand} {
       }
     }
   }, next_state: ctx.world } };
-  let intercept = func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-    NoIntercept
-  }, next_state: ctx.world } };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-    NoDecision
-  }, next_state: ctx.world } };
-  {
-    id: "a2a",
-    provided_tools: names,
-    on_describe_tools: \_ . schemas,
-    on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan:        func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() },
-    on_tool_policy:        func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion },
-    on_tool_handle:        handle,
-    on_response_intercept: intercept,
-    on_solver_candidate:   finalize,
-    on_pre_step:           func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
-  }
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    DescribeTools(\_ . schemas),
+    ToolProvider(names, handle)
+  ]
 }
 
 pure func tool_name_derives_correctly() -> bool

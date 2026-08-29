@@ -1,7 +1,7 @@
 module sunholo/motoko_ext_compose/proc
 
 -- WI-D26. THE ONE HOME for the two halves of a routed subprocess call: the
--- request compose hands `ExtPorts.proc_exec`, and the streams it reads back out
+-- request compose hands `ExtPorts.tool_handle`, and the streams it reads back out
 -- of the answer. Four call sites across three modules route through this seam
 -- (`compose.check_snippet`, `compose.run_snippet`,
 -- `author_tools.grep_impl`, `authoring/dispatcher.check_snippet`), and plan rule
@@ -16,7 +16,7 @@ module sunholo/motoko_ext_compose/proc
 -- ---------------------------------------------------------------------------
 --
 -- WI-D26's handoff priced the conversion as a QUOTING BOUNDARY: "each
--- `exec(cmd, argv)` becomes `p.proc_exec(w, "BashExec", … kv("cmd",
+-- `exec(cmd, argv)` becomes `p.tool_handle(w, "BashExec", … kv("cmd",
 -- js(<shell string>)) …)`", with the safety resting on the generated charset of
 -- every path compose passes. That framing is unnecessary, because the premise
 -- under it — "the seam's only subprocess door is `BashExec` -> `bash -lc`" — is
@@ -118,7 +118,7 @@ export type ProcStreams = {
 }
 
 -- The tool name every routed site passes. Named rather than spelled four times:
--- `proc_exec(w, "ailang", …)` is the mistake WI-D19 made and WI-D21 measured
+-- `tool_handle(w, "ailang", …)` is the mistake WI-D19 made and WI-D21 measured
 -- (it reaches `run_native_call`'s final `else` and answers "ailang requires
 -- extension capability"), and a constant is the cheapest way for that mistake to
 -- be unavailable rather than merely documented.

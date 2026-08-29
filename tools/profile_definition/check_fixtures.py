@@ -155,15 +155,18 @@ def check_omission_basis(profile_src, required):
     """
     abi = ABI_TYPES.read_text()
 
-    m = re.search(r"^\s*on_budget_plan:\s*\([^)]*\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
+    # B8: the 5.x `ExtensionHooks.on_budget_plan` field is gone; the same fact
+    # now lives in the `BudgetShaper((ExtCtx, BudgetPlan) -> BudgetPatch ...)`
+    # payload of the 6.0 `Capability` sum.
+    m = re.search(r"BudgetShaper\(\(ExtCtx,\s*BudgetPlan\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
                   abi, re.M)
     if not m:
-        fail("could not read `on_budget_plan`'s declaration in "
+        fail("could not read `Capability.BudgetShaper`'s payload in "
              f"{ABI_TYPES.relative_to(REPO)} — the omission basis cannot be checked")
     ret_type, row = m.group(1), (m.group(3) or "").strip()
 
     if row:
-        fail(f"`ExtensionHooks.on_budget_plan` declares an effect row again: ! {{{row}}}.\n"
+        fail(f"`Capability.BudgetShaper`'s payload declares an effect row again: ! {{{row}}}.\n"
              "      WI-D6 narrowed it to none after measuring all fifteen bindings and\n"
              "      finding that not one performs Env or FS (see `make declared_vs_performed`).\n"
              "      A row here makes the slot fail D5 criterion 1 on DECLARED effects, which\n"
@@ -178,13 +181,13 @@ def check_omission_basis(profile_src, required):
     # a successor appearing here would mean the slot ALSO satisfies criterion 2.
     # That is not a problem, but it is a change of basis and must be noticed.
     if "next_state" in rm.group(1):
-        fail(f"`{ret_type}` now carries a successor field, so `on_budget_plan` satisfies\n"
+        fail(f"`{ret_type}` now carries a successor field, so `BudgetShaper` satisfies\n"
              "      D5 criterion 2 as well as criterion 1. That is a wider claim than the one\n"
              "      WI-D6 recorded — re-decide the basis rather than inheriting it.")
 
     disp = (REPO / "src/core/dst_profile_coverage.ail").read_text()
-    if not re.search(r"OnBudgetPlan\s*=>\s*Unconditional", disp):
-        fail("`OnBudgetPlan` is no longer unconditionally dispatched, so excluding it is a\n"
+    if not dispatch_unconditional(disp, "budget_shaper"):
+        fail("`BudgetShaperKind` is no longer unconditionally dispatched, so excluding it is a\n"
              "      coverage cost rather than a rejection. driver_only's omission basis has\n"
              "      changed — re-decide it.")
 
@@ -193,7 +196,7 @@ def check_omission_basis(profile_src, required):
              "      require it (zero classifier-2 member call sites). If installing it is\n"
              "      intended, that is a coverage claim and a profile version bump.")
 
-    print(f"  ✓ omission basis intact: on_budget_plan is Unconditional, declares NO effect "
+    print(f"  ✓ omission basis intact: BudgetShaper is Unconditional, declares NO effect "
           f"row (WI-D6; was ! {{Env, FS}} through WI-D5), and returns {ret_type} (no successor)")
     if not required:
         print("    ! note: check 3 is now VACUOUS (zero classifier-2 member call sites). "
@@ -299,27 +302,27 @@ def check_barrier_count(abi, disp):
     name in the profile, either installed or omitted. Naming it is not a
     coverage claim; INSTALLING it is, and that is WI-C5's.
     """
-    slots = ["on_budget_plan", "on_pre_step", "on_tool_handle",
-             "on_response_intercept", "on_solver_candidate"]
+    # B8: the five 5.x slots this derivation reasons about are now the five
+    # capability KINDS whose payload is an outcome-returning hook. Named by
+    # kind id (the coverage artifact's `capability_kind_id`), and each row is
+    # read off the `Capability` payload rather than an `ExtensionHooks` field.
+    slots = ["budget_shaper", "compactor", "tool_provider",
+             "response_interceptor", "solver_judge"]
+    payloads = capability_payloads(abi)
 
     slot_barriers, covered, gated = [], [], []
     returns_world = {}
     for slot in slots:
-        # `\s*` spans newlines: two of these five slots wrap their arrow onto
-        # the next line, and a line-anchored pattern would read them as rowless.
-        m = re.search(re.escape(slot) + r":\s*\([^)]*\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
-                      abi, re.M)
-        if not m:
-            fail(f"could not read `{slot}`'s declaration in {ABI_TYPES.relative_to(REPO)} — "
+        if slot not in payloads:
+            fail(f"could not read `{slot}`'s payload in {ABI_TYPES.relative_to(REPO)} — "
                  "the barrier count cannot be derived, so installability is unknown")
-        row = (m.group(3) or "").strip()
-        returns_world[slot] = outcome_returns_world(abi, m.group(1))
+        row, outcome, _w = payloads[slot]
+        returns_world[slot] = outcome_returns_world(abi, outcome)
 
         # The dispatch classification is a SECOND producer: it lives in
         # dst_profile_coverage.ail, not in the ABI, and neither derives from
         # the other (S16).
-        camel = "On" + "".join(p.capitalize() for p in slot.removeprefix("on_").split("_"))
-        if not re.search(camel + r"\s*=>\s*Unconditional", disp):
+        if not dispatch_unconditional(disp, slot):
             gated.append(slot)
         elif row:
             slot_barriers.append((slot, row))
@@ -346,6 +349,104 @@ def check_barrier_count(abi, disp):
 
     print(f"    → {n} slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone")
     check_per_extension_barriers(slot_barriers, returns_world)
+
+
+COVERAGE = REPO / "src/core/dst_profile_coverage.ail"
+
+
+def kind_of(hook_id):
+    """The capability KIND id of a hook id. B8: hook ids are ATOM ids
+    `kind[index]` (`tool_provider[0]`); a bare kind id passes through."""
+    return re.sub(r"\[\d+\]$", "", hook_id)
+
+
+def kind_ctor(kind_id):
+    """`tool_provider` -> `ToolProviderKind`, the coverage artifact's constructor."""
+    return "".join(p.capitalize() for p in kind_id.split("_")) + "Kind"
+
+
+def capability_kind_ids(disp=None):
+    """The kind ids, read from `capability_kind_id`'s arms in the coverage
+    artifact (`XKind => "x"`) so that a ninth kind arrives at every reader that
+    quantifies over them. Read from the ONE table B8 left; a kind whose arm
+    does not round-trip through `kind_ctor` is a FAIL, because every reader
+    below maps ids to constructors that way."""
+    disp = COVERAGE.read_text() if disp is None else disp
+    block = re.search(r"func capability_kind_id\(.*?\n\}", disp, re.S)
+    if not block:
+        fail("could not find `capability_kind_id` in dst_profile_coverage.ail; the kind table "
+             "cannot be read and every per-kind check below would quantify over nothing")
+    arms = re.findall(r"(\w+)\s*=>\s*\"([a-z_]+)\"", block.group(0))
+    if not arms:
+        fail("`capability_kind_id` has no `XKind => \"x\"` arms; the kind table is unreadable")
+    for ctor, kid in arms:
+        if kind_ctor(kid) != ctor:
+            fail(f"kind id {kid!r} does not round-trip to its constructor `{ctor}` "
+                 f"(got `{kind_ctor(kid)}`); this reader's id -> constructor mapping is wrong for it")
+    return [kid for _c, kid in arms]
+
+
+def capability_payloads(abi):
+    """kind id -> (declared row, outcome type, returns world state), read per
+    VARIANT of the 6.0 `export type Capability` sum.
+
+    S16 enumeration — the ways a variant's hook payload can present:
+      (a) `Kind((args) -> Type)` on one line, no row;
+      (b) `Kind((args) -> Type ! {E, ...})` on one line;
+      (c) the payload wrapped over several lines — `ToolProvider` and
+          `ResponseInterceptor` are this shape. The whole block (from the
+          `export type Capability` line to the next blank line) is read and
+          each variant's parenthesised payload is cut by balanced parens, so
+          line wrapping cannot make a rowed payload read as rowless;
+      (d) a DATA argument beside the hook — `ToolProvider([string], handle)`.
+          The hook is whichever argument carries the arrow; `[string]` has
+          none, so the handle (the second argument) is what is read;
+      (e) a LIST return type — `DescribeTools` returns `[ToolSchema]`; the
+          bracketed form is matched rather than skipped;
+      (f) a variant with NO arrow at all. None exists; it would be a FAIL, not
+          a skip, because a kind this reader cannot row is a kind it cannot
+          classify.
+    """
+    m = re.search(r"^export type Capability\b(.*?)(?:\n\s*\n|\Z)", abi, re.M | re.S)
+    if not m:
+        fail(f"could not find `export type Capability` in {ABI_TYPES.relative_to(REPO)}")
+    block = m.group(1)
+    out = {}
+    for vm in re.finditer(r"(?:=|\|)\s*([A-Z]\w*)\s*\(", block):
+        ctor, i = vm.group(1), vm.end()
+        depth, j = 1, i
+        while j < len(block) and depth:
+            depth += {"(": 1, ")": -1}.get(block[j], 0)
+            j += 1
+        if depth:
+            fail(f"unbalanced payload for `Capability.{ctor}` in {ABI_TYPES.relative_to(REPO)}")
+        payload = block[i:j - 1]
+        fm = re.search(r"->\s*(\[?\s*\w+\s*\]?)\s*(!\s*\{([^}]*)\})?", payload)
+        if not fm:
+            fail(f"`Capability.{ctor}` has no hook payload (no `->` in `{payload.strip()[:60]}`)")
+        kid = re.sub(r"(?<!^)([A-Z])", r"_\1", ctor).lower()
+        row = (fm.group(3) or "").strip()
+        outcome = fm.group(1).replace(" ", "")
+        out[kid] = (row, outcome, outcome_returns_world(abi, outcome))
+    if not out:
+        fail("`export type Capability` parsed to ZERO variants")
+    return out
+
+
+def dispatch_unconditional(disp, hook_id):
+    """The dispatch class of a kind (or atom) id, read from the ONE dispatch
+    table B8 left in the coverage artifact: `capability_dispatch`'s
+    `XKind => Unconditional|Gated` arms. The 5.x `hook_dispatch` table is
+    gone, so there is no second answer to agree with."""
+    ctor = kind_ctor(kind_of(hook_id))
+    block = re.search(r"func capability_dispatch\(.*?\n\}", disp, re.S)
+    if not block:
+        fail("could not find `capability_dispatch` in dst_profile_coverage.ail")
+    m = re.search(re.escape(ctor) + r"\s*=>\s*(Unconditional|Gated)", block.group(0))
+    if not m:
+        fail(f"`{ctor}` has no dispatch arm in dst_profile_coverage.ail's `capability_dispatch`; "
+             f"the dispatch class of {hook_id!r} cannot be read")
+    return m.group(1) == "Unconditional"
 
 
 def outcome_returns_world(abi, type_name):

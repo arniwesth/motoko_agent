@@ -3,7 +3,7 @@ module sunholo/motoko_ext_exa_search/exa_search
 import std/option (Option, Some, None)
 
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg,
   ToolCallEnvelope
@@ -13,30 +13,6 @@ import pkg/sunholo/motoko_ext_mcp/exec (run_mcp_tool)
 import pkg/sunholo/motoko_ext_mcp/resolve (resolve_tool, all_tool_names)
 import pkg/sunholo/motoko_ext_exa_search/types (mcp_config, tool_mappings)
 import pkg/sunholo/motoko_ext_exa_search/prompts (load_agent_prompt, build_prompt_patch)
-
-func no_budget_patch() -> BudgetPatch {
-  {
-    requested_total: None,
-    requested_solver: None,
-    requested_verifier: None
-  }
-}
-
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-  no_budget_patch()
-}
-
-func no_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
-  NoOpinion
-}
-
-func no_response_intercept() -> ResponseInterceptDecision {
-  NoIntercept
-}
-
-func no_finalize_decision() -> FinalizeDecision {
-  NoDecision
-}
 
 export func provided_tools() -> [string] {
   all_tool_names(tool_mappings())
@@ -56,29 +32,16 @@ export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx
   }
 }, next_state: ctx.world } }
 
-export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS, Process, Rand} {
+export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> [Capability] ! {FS, Process, Rand} {
   let cfg = mcp_config(timeout_ms, max_output_chars);
   let mappings = tool_mappings();
   let cached_prompt = load_agent_prompt(workdir);
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(cfg, mappings, ctx, call) };
-  let intercept = func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-    no_response_intercept()
-  }, next_state: ctx.world } };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-    no_finalize_decision()
-  }, next_state: ctx.world } };
-  {
-    id: "exa_search",
-    provided_tools: all_tool_names(mappings),
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
-    on_budget_plan: budget_hook,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
-    on_tool_policy: no_tool_policy,
-    on_tool_handle: handle,
-    on_response_intercept: intercept,
-    on_solver_candidate: finalize
-  }
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    PromptShaper(\ctx. on_build_system_prompt(cached_prompt, ctx)),
+    ToolProvider(all_tool_names(mappings), handle)
+  ]
 }
 
 func list_len(xs: [string]) -> int {

@@ -21,7 +21,8 @@ import std/io (println)
 import std/option (None)
 import std/json (jo, kv, js, jnum, jb, encode)
 import std/ai (ToolSchema)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PromptPatch, BudgetPatch, Msg, PassThrough, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PromptPatch, BudgetPatch, Msg, PassThrough, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 import src/core/config (VerificationConfig)
 import src/core/ext/runtime (dispatch_tool_handle)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
@@ -71,25 +72,24 @@ pure func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, 
   PassThrough
 }, next_state: ctx.world } }
 
-func mk_handle_hook() -> ExtensionHooks {
-  {
-    id: "handle-fake-tool-hook",
-    provided_tools: ["FakeTool"],
-    on_describe_tools: empty_describe_tools,
-    on_build_system_prompt: empty_prompt_patch,
-    on_budget_plan: empty_budget_patch,
-    on_pre_step: pass_pre_step,
-    on_tool_policy: nooppolicy,
-    on_tool_handle: handle_fake_tool,
-    on_response_intercept: noop_response_intercept,
-    on_solver_candidate: nodecision_solver_candidate
-  }
+func mk_handle_hook() -> FixtureHooks {
+  fixture_hooks("handle-fake-tool-hook", {
+    tools: ["FakeTool"],
+    describe: empty_describe_tools,
+    prompt: empty_prompt_patch,
+    budget: empty_budget_patch,
+    compact: pass_pre_step,
+    policy: nooppolicy,
+    provide: handle_fake_tool,
+    intercept: noop_response_intercept,
+    judge: nodecision_solver_candidate
+  })
 }
 
 export func main() -> () ! {Clock, Env, IO, AI, FS, Net, Process, Rand, SharedMem, Stream} {
   let v: VerificationConfig = { enabled: false, command: "" };
   let rt: ExtRuntime = {
-    registry: { hooks: [mk_handle_hook()] },
+    registry: { entries: [mk_handle_hook()] },
     strict_mode: false,
     verification: v
   };

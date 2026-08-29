@@ -82,8 +82,8 @@ pure func head_inventory() -> [CoreSite] {
 -- EMPTY AT WI-B4, and the emptiness is measured rather than convenient.
 -- WI-B2b widened `ExtPorts.ai_step` to return `AiStepOutcome`, which carries
 -- `next_state`, so `ai_step` LEFT the classifier-2 set. WI-D16 widened
--- `ExtPorts.proc_exec` the same way and it left too, so the derived set is
--- {env_get} — down from {env_get, proc_exec} — and there are ZERO member call
+-- `ExtPorts.tool_handle` the same way and it left too, so the derived set is
+-- {env_get} — down from {env_get, tool_handle} — and there are ZERO member call
 -- sites anywhere in the
 -- tree. The entry that used to sit here — `compaction_ai / ai_step` — named a
 -- site that no longer qualifies (and had drifted to :111 besides).
@@ -260,9 +260,9 @@ func scenario_exclusion_check_is_vacuous() -> bool ! {IO} {
     { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: driver_only_id(), profile_version: driver_only_version(),
       event_vocabulary_version: "event-vocabulary/1" };
-  let none_excluded = not is_excluded_hook(driver_only(), "compose", "on_tool_handle");
+  let none_excluded = not is_excluded_hook(driver_only(), "compose", "tool_provider[0]");
   let no_violation =
-    match routing_violation_at(driver_only(), "compose", "on_tool_handle", 0,
+    match routing_violation_at(driver_only(), "compose", "tool_provider[0]", 0,
                                empty_ledger_trace(), meta) {
       None => true,
       Some(_) => false
@@ -284,7 +284,7 @@ func scenario_manifest() -> bool ! {IO} {
   -- WI-B2b, which took the ABI to 5.0. The manifest is what makes a run exactly
   -- reproducible, so a stale version here pins the wrong contract — and nothing
   -- compared it until `check_fixtures.py` gained the re-derivation.
-  let m = driver_only_manifest("HEAD", "ailang 0.33.0", "5.0", "{}",
+  let m = driver_only_manifest("HEAD", "ailang 0.33.0", "6.0", "{}",
                                ["env_get"], [], "HEAD");
   let rs = validate_manifest(m, driver_only());
   let ok = List.length(rs) == 0;

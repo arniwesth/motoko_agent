@@ -12,6 +12,24 @@ import std/json (jo, kv, js, ja, encode, decode)
 import pkg/sunholo/motoko_ext_a2a/types (A2AAgent, A2AConfig)
 import pkg/sunholo/motoko_ext_a2a/a2a (make_hooks)
 import pkg/sunholo/motoko_ext_a2a/config (read_a2a_config)
+import std/ai (ToolSchema)
+import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, ToolProvider)
+
+pure func provided_names(caps: [Capability]) -> [string] {
+  match caps {
+    [] => [],
+    ToolProvider(names, _) :: rest => names ++ provided_names(rest),
+    _ :: rest => provided_names(rest)
+  }
+}
+
+pure func described_tools(caps: [Capability]) -> [ToolSchema] {
+  match caps {
+    [] => [],
+    DescribeTools(f) :: rest => f() ++ described_tools(rest),
+    _ :: rest => described_tools(rest)
+  }
+}
 
 -- Tool names derive from agent names
 
@@ -24,7 +42,7 @@ pure func tool_names_are_prefixed() -> bool
     ];
     let cfg: A2AConfig = { agents: agents };
     let hooks = make_hooks(cfg);
-    match hooks.provided_tools {
+    match provided_names(hooks) {
       t1 :: t2 :: [] => t1 == "delegate_to_hello" && t2 == "delegate_to_summarizer",
       _ => false
     }
@@ -40,7 +58,7 @@ pure func describe_tools_returns_schemas() -> bool
     ];
     let cfg: A2AConfig = { agents: agents };
     let hooks = make_hooks(cfg);
-    let schemas = (hooks.on_describe_tools)();
+    let schemas = described_tools(hooks);
     match schemas {
       s :: [] => s.name == "delegate_to_planner",
       _ => false
@@ -54,7 +72,7 @@ pure func empty_config_no_tools() -> bool
   {
     let cfg: A2AConfig = { agents: [] };
     let hooks = make_hooks(cfg);
-    match hooks.provided_tools {
+    match provided_names(hooks) {
       [] => true,
       _ => false
     }

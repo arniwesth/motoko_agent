@@ -382,11 +382,17 @@ declared_vs_performed:
 # no extension is installable while ExtensionHooks.on_budget_plan carries the
 # ABI's closed ! {Env, FS} row. These rows establish the mechanism, not that a
 # shipping profile is protected by it.
+# The recipe is bash for `pipefail`: without it the pipeline reports grep's
+# status, and a type error in the script -- which `ailang run` prints AFTER
+# its "✓ Running" preamble and exits 1 on -- went green here from B8 until it
+# was noticed. `grep -v` exits 1 on no output, so `|| true` keeps only that.
 .PHONY: hook_guard
+hook_guard: SHELL := /bin/bash
 hook_guard:
-	@set -eu; \
+	@set -euo pipefail; \
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
-	  --ai-stub --entry main scripts/dst/hook_guard_dst.ail < /dev/null | grep -v 'STRICT_FALLBACK\|^  '
+	  --ai-stub --entry main scripts/dst/hook_guard_dst.ail < /dev/null \
+	  | { grep -v 'STRICT_FALLBACK\|^  ' || true; }
 
 # ---------------------------------------------------------------------------
 # The sweep. Every target below is independent of every other -- the one
@@ -436,7 +442,8 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   ext_ambient_inventory ext_call_inventory ext_call_inventory_selftest \
   conformance stream_parity latency_pair test_coverage_selftest \
   execution_program attribution_table profile_coverage compose_live_exec \
-  ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary
+  ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
+  registry_multiplicity
 
 # corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
 #
@@ -475,13 +482,15 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # Both phases run even if the first reports failures, and the exit status is the
 # worse of the two -- `make dst` must still exit non-zero for CI, and a red
 # target in the fan-out must not hide the timed one behind it.
-# The pair that has been red since D22 (`prompts_test.ail` 0/6 and a
-# `stale_skip_record`). Named here ONLY so the closing summary can say "no new
-# failures" instead of leaving a reader to remember it. It waives nothing: the
-# exit code is propagated untouched and a sweep with only these red still exits
-# 2. scripts/dst/sweep_summary.sh also reports a target on this list that
-# PASSES, so the list cannot outlive the failure it describes.
-DST_KNOWN_RED := test_coverage test_coverage_selftest
+# Targets known to be red, named here ONLY so the closing summary can say "no
+# new failures" instead of leaving a reader to remember them. It waives
+# nothing: the exit code is propagated untouched and a sweep with only these
+# red still exits 2. scripts/dst/sweep_summary.sh also reports a target on this
+# list that PASSES, so the list cannot outlive the failure it describes.
+# Empty at HEAD: the D22 pair (test_coverage, test_coverage_selftest --
+# `prompts_test.ail` 0/6 and a `stale_skip_record`) has passed since the skip
+# record was brought current, and the summary's reverse check said to drop it.
+DST_KNOWN_RED :=
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
@@ -520,13 +529,17 @@ dst_target_list:
 #      that must load: driver_only's empty install list (vacuous, per P4) and a
 #      profile excluding only the one GATED hook.
 #
-#   2. A STRUCTURAL GUARD that the eight-slot enumeration still matches the ABI.
-#      `all_hook_slots()` is hand-written and AILANG has no constructor
-#      enumeration on the pin, so a ninth ABI hook could be added and left out
-#      of it while every check in the module still passed — an artifact that
-#      validates while incomplete, which is the exact failure S1 names for
-#      constructed artifacts. Counting the ABI record's `on_*` fields ties the
-#      enumeration to the thing it enumerates instead of to itself.
+#   2. A STRUCTURAL GUARD that the kind enumeration still matches the ABI.
+#      `all_capability_kinds()` (B3; `all_hook_slots()` until B8) is
+#      hand-written and AILANG has no constructor enumeration on the pin, so a
+#      ninth ABI kind could be added and left out of it while every check in
+#      the module still passed — an artifact that validates while incomplete,
+#      which is the exact failure S1 names for constructed artifacts. The ABI
+#      side is the `Capability` variant count once B8 lands, and the record's
+#      `on_*` field count until then (both shapes are accepted during B3–B7);
+#      the AIL side is PRINTED by `print_capability_kind_count`, because make
+#      cannot evaluate AILANG and a second hand-written 8 would pin the
+#      enumeration to itself. Portable: `[[:space:]]`, no `\s`.
 #
 # Note the ADR undercounts here and this target is where that shows: D5 says six
 # of eight slots are unconditionally dispatched and one is gated, leaving the
@@ -538,18 +551,48 @@ dst_target_list:
 profile_coverage:
 	@set -eu; \
 	ailang run --caps IO --entry main scripts/dst/profile_coverage_dst.ail < /dev/null; \
-	n=$$(awk '/export type ExtensionHooks/,/^}/' packages/motoko-ext-abi/types.ail | grep -c '^  on_'); \
-	if [ "$$n" -ne 8 ]; then \
-		echo "FAIL: the ABI declares $$n hook slots, but src/core/dst_profile_coverage.ail"; \
-		echo "      enumerates 8 in all_hook_slots(). A slot has been added or removed and"; \
-		echo "      the coverage artifact does not know about it, so every profile would"; \
-		echo "      validate while its disclosure was incomplete (D5)."; \
-		awk '/export type ExtensionHooks/,/^}/' packages/motoko-ext-abi/types.ail | grep '^  on_'; \
+	abi=packages/motoko-ext-abi/types.ail; \
+	producer="type Capability variants"; \
+	n=$$(awk '/^export type Capability/,/^[[:space:]]*$$/' $$abi | grep -cE '^[[:space:]]*[=|][[:space:]]*[A-Z][A-Za-z0-9_]*[[:space:]]*\('); \
+	k=$$(ailang run --caps IO --entry print_capability_kind_count scripts/dst/profile_coverage_dst.ail < /dev/null | tail -1 | tr -d '[:space:]'); \
+	if [ "$$n" -ne "$$k" ] || [ "$$k" -lt 1 ]; then \
+		echo "FAIL: the ABI declares $$n capability kinds ($$producer), but"; \
+		echo "      src/core/dst_profile_coverage.ail enumerates $$k in all_capability_kinds()."; \
+		echo "      A kind has been added or removed and the coverage artifact does not know"; \
+		echo "      about it, so every profile would validate while its disclosure was"; \
+		echo "      incomplete (D5/D6). Count KINDS, not instances: the AIL side is printed by"; \
+		echo "      print_capability_kind_count because make cannot evaluate AILANG."; \
 		exit 1; \
 	else \
-		echo "  ✓ all_hook_slots() enumerates all $$n ABI hook slots"; \
+		echo "  ✓ all_capability_kinds() enumerates all $$n ABI capability kinds ($$producer)"; \
 	fi; \
 	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
+
+# ADR-001 Phase B, B4: multiplicity validation at the registration boundary.
+# `src/core/ext/registry_normalize.ail` is the ONE host-owned place the D3
+# rules live (second ToolPolicy/SolverJudge rejected; ToolProvider names
+# disjoint per extension), with D4 (fold-kind N>1) and D7 (empty registration)
+# each behind a single named constant because both are OPEN. The fixtures are
+# one mutation each from a clean registration, every rejection asserted BY
+# RULE with id, variant and list position; the two open rows print which
+# reading of the constant they measured. Since B8 the module imports the ABI's
+# `Capability`, and the generated registry (make registry_gen) calls
+# `normalize_registration` (D10).
+.PHONY: registry_multiplicity registry_gen registry_gen_check
+# ABI 6.0 registry generator (ADR-001 Phase C, D10). Project-local: the
+# upstream `ailang generate-extension-registry` (v0.33.0) still emits the 5.x
+# record shape, so it must not be run in this tree. `registry_gen` rewrites
+# src/core/ext/registry_generated.ail from ailang.toml [extensions];
+# `registry_gen_check` fails if the committed file drifts from the generator.
+registry_gen:
+	@python3 tools/ext_registry_gen/generate.py
+
+registry_gen_check:
+	@python3 tools/ext_registry_gen/generate.py --check
+
+registry_multiplicity:
+	@ailang run --caps IO --entry main scripts/dst/registry_multiplicity_dst.ail < /dev/null
+	@ailang test src/core/ext/registry_normalize.ail > /dev/null && echo "  ✓ src/core/ext/registry_normalize.ail"
 
 # D5's profile-DEFINITION and EXECUTION-MANIFEST machinery (WI-A10). Three
 # checks, and the third exists because this is composition work:
@@ -708,7 +751,7 @@ execution_program:
 # branch on the typed code, the identity, the round trip — and establishes
 # nothing about whether the seam can run a compiler at all, because in a
 # scripted world it runs none. WI-D19 shipped exactly that gap in the other
-# direction (its note claimed `proc_exec` could not reach `ailang`, which was
+# direction (its note claimed `tool_handle` could not reach `ailang`, which was
 # true of the tool NAME it tried and false of the seam), and WI-D21 needed a
 # separate measurement to find it.
 #

@@ -11,7 +11,7 @@ import std/list as List (length)
 import std/option (Option, Some, None)
 import std/string (startsWith, trim)
 import std/trace as Trace
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtRuntime, PolicyDefault, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtRuntime, PolicyDefault, ToolPolicyDecision, ToolHandleDecision, ExtEntry)
 import src/core/ext/runtime (dispatch_tool_policy, dispatch_tool_handle)
 import src/core/phase_vocab (
   ApprovalRequest,
@@ -189,11 +189,11 @@ func is_scratchpad_tool_name(name: string) -> bool {
 }
 
 func scratchpad_extension_active(rt: ExtRuntime) -> bool {
-  scratchpad_extension_active_rec(rt.registry.hooks)
+  scratchpad_extension_active_rec(rt.registry.entries)
 }
 
-func scratchpad_extension_active_rec(hooks: [ExtensionHooks]) -> bool {
-  match hooks {
+func scratchpad_extension_active_rec(entries: [ExtEntry]) -> bool {
+  match entries {
     [] => false,
     h :: rest => startsWith(h.id, "scratchpad#") || h.id == "scratchpad" || scratchpad_extension_active_rec(rest)
   }

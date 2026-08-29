@@ -186,10 +186,13 @@ import src/core/dst_attribution_table as Attr (
 import src/core/dst_fault_catalogue as Fault (FaultClass, fault_catalogue, conditional_class_ids)
 import src/core/dst_profile_coverage as Cov (
   coverage_rules_version,
-  DisclosureIds,
-  HookSlot,
-  all_hook_slots,
-  hook_slot_id
+  AtomRef,
+  AtomIds,
+  CapabilityDisclosureIds,
+  atom_id,
+  atom_ids_id,
+  capability_kind_id,
+  CapabilityKind, PromptShaperKind, ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind
 )
 import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
@@ -206,7 +209,15 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- moves an anchor this profile's acceptance fixture pins. The fixture pins
 -- `ext/runtime.ail:199` and `tool_phase.ail:318`, so this file joins the
 -- nine-file form WI-D24 measured, not the five-file one WI-D25 measured.
-export pure func compose_profile_version() -> string { "2" }
+-- v3 (2026-08-27, ADR-001 Phase C item 4 — 6.0 registration trimming).
+-- RE-ISSUED because the DENOMINATOR moved, not an anchor: compose now registers
+-- only the four atoms it binds with a real body (PromptShaper, ToolPolicy,
+-- ToolProvider, ResponseInterceptor); its constant Compactor and SolverJudge
+-- are gone, so the two VACUOUS criterion-2 entries are gone with them and the
+-- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
+-- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
+-- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
+export pure func compose_profile_version() -> string { "3" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -304,28 +315,32 @@ pure func package_of(id: string) -> InstalledPackage {
 -- `packages/motoko-ext-abi/types.ail` on every run and fails if this list
 -- disagrees. Same discipline classifier 2's call inventory gets, same reason:
 -- both readings type-check and the stale one is silent.
+-- B8: hook ids are ATOM ids, `kind[index]`; the rowed KINDS at index 0 and the
+-- one gated atom is `tool_provider[0]`. Item 4: compose no longer registers a
+-- Compactor or a SolverJudge, so two of these four ids name atoms compose does
+-- not hold — the list stays the ABI FACT (the guard compares its kinds against
+-- types.ail) and `criterion_2_slot_ids` intersects it with the registration.
 export pure func rowed_slot_ids() -> [string] {
-  ["on_pre_step", "on_tool_handle", "on_response_intercept", "on_solver_candidate"]
+  ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]"]
 }
 
 -- The one slot this profile excludes. Separate from `rowed_slot_ids` because it
 -- is a DECISION and that one is a fact about the ABI; folding them together is
 -- how a decision starts reading as a derivation.
-export pure func excluded_slot_ids() -> [string] { ["on_tool_handle"] }
+export pure func excluded_slot_ids() -> [string] { ["tool_provider[0]"] }
 
--- The rowed slots this profile actually covers: the ABI fact minus the decision,
--- computed rather than restated so the two cannot drift.
+-- The rowed atoms this profile actually covers: the ABI fact, restricted to
+-- the atoms compose REGISTERS, minus the decision — computed rather than
+-- restated so the three cannot drift. Item 4: one atom, `response_interceptor[0]`.
 export pure func criterion_2_slot_ids() -> [string] {
-  remove_ids(rowed_slot_ids(), excluded_slot_ids())
+  remove_ids(keep_ids(rowed_slot_ids(), atom_id_strs(atom_ids_of(registered_atoms()))), excluded_slot_ids())
 }
 
--- The covered slots whose port and origin clauses hold over an EMPTY SET,
--- because compose binds them to constants. Named rather than derived from a
--- count: `no_op_hooks == 2` is what the substance computes, and a reader owed
--- WHICH two should not have to subtract.
-export pure func vacuous_criterion_2_slot_ids() -> [string] {
-  ["on_pre_step", "on_solver_candidate"]
-}
+-- The covered rowed atoms whose port and origin clauses hold over an EMPTY
+-- SET, because compose binds them to constants. Item 4: NONE — the two constant
+-- bindings (Compactor, SolverJudge) were exactly the atoms trimming removed, so
+-- `no_op_hooks == 0` is what the substance computes now (v2: 2).
+export pure func vacuous_criterion_2_slot_ids() -> [string] { [] }
 
 pure func contains_str(xs: [string], t: string) -> bool {
   match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
@@ -335,6 +350,13 @@ pure func remove_ids(xs: [string], drop: [string]) -> [string] {
   match xs {
     [] => [],
     x :: rest => if contains_str(drop, x) then remove_ids(rest, drop) else x :: remove_ids(rest, drop)
+  }
+}
+
+pure func keep_ids(xs: [string], keep: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(keep, x) then x :: keep_ids(rest, keep) else keep_ids(rest, keep)
   }
 }
 
@@ -396,11 +418,11 @@ pure func clauses_of(slot_id: string) -> Criterion2Clauses {
   else no_criterion_2()
 }
 
-pure func entries_for(ext_id: string, slots: [HookSlot]) -> [HookClassificationEntry] {
-  match slots {
+pure func entries_for(ext_id: string, atoms: [AtomRef]) -> [HookClassificationEntry] {
+  match atoms {
     [] => [],
-    s :: rest => {
-      let id = Cov.hook_slot_id(s);
+    a :: rest => {
+      let id = Cov.atom_id(a);
       let e: HookClassificationEntry =
         { extension_id: ext_id, hook_id: id, classification: classification_of(id),
           basis: basis_of(id), clauses: clauses_of(id) };
@@ -409,34 +431,63 @@ pure func entries_for(ext_id: string, slots: [HookSlot]) -> [HookClassificationE
   }
 }
 
--- Iterating `all_hook_slots()` rather than writing eight ids makes a ninth ABI
--- slot a compile-time visible change here instead of a silently unclassified
--- one, and A6's completeness backstop (`make profile_coverage`) then covers this
--- file too.
+-- Item 4 (6.0 trimming): THE ATOM LIST IS A CLAIM ABOUT compose's OWN
+-- REGISTRATION (`packages/motoko-ext-compose/compose.ail`), stated as literals
+-- and cross-checked on every run against B2's enumeration by
+-- `check_compose_profile.py` — a list that reads more or fewer atoms than the
+-- package writes is red. compose binds four atoms with a real body:
+--   PromptShaper (`on_build_system_prompt`), ToolPolicy (`on_tool_policy_with_mode`),
+--   ToolProvider (`provided_tools()`, `on_tool_handle`) and
+--   ResponseInterceptor (`on_response_intercept`).
+-- Until item 4 this was `atoms_at_zero(all_capability_kinds())` — one per kind.
+pure func kinds_at_zero(ks: [CapabilityKind]) -> [AtomRef] {
+  match ks { [] => [], k :: rest => ({ kind: k, index: 0 }) :: kinds_at_zero(rest) }
+}
+
+pure func registered_atoms() -> [AtomRef] {
+  kinds_at_zero([PromptShaperKind, ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind])
+}
+
 pure func classifications_of(ids: [string]) -> [HookClassificationEntry] {
   match ids {
     [] => [],
-    id :: rest => entries_for(id, Cov.all_hook_slots()) ++ classifications_of(rest)
+    id :: rest => entries_for(id, registered_atoms()) ++ classifications_of(rest)
   }
 }
 
-pure func all_slot_ids(slots: [HookSlot]) -> [string] {
-  match slots { [] => [], s :: rest => Cov.hook_slot_id(s) :: all_slot_ids(rest) }
+pure func atom_ids_of(atoms: [AtomRef]) -> [AtomIds] {
+  match atoms { [] => [], a :: rest => ({ kind: Cov.capability_kind_id(a.kind), index: a.index }) :: atom_ids_of(rest) }
 }
+
+pure func drop_atom_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(ids, Cov.atom_ids_id(x)) then drop_atom_ids(rest, ids) else x :: drop_atom_ids(rest, ids)
+  }
+}
+
+pure func keep_atom_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(ids, Cov.atom_ids_id(x)) then x :: keep_atom_ids(rest, ids) else keep_atom_ids(rest, ids)
+  }
+}
+
 
 -- D5 field 9. IDS, never counts. **THE FIRST NON-EMPTY `excluded` LIST IN THE
 -- PROJECT.** Both predecessors disclose eight covered and zero excluded, which
 -- exercises the disclosure's shape and not its purpose — row 3's clause exists
 -- so that a profile which does NOT cover a slot has to say which, by name, and
 -- until this file nothing ever had to.
-pure func disclosures_of(ids: [string]) -> [DisclosureIds] {
+pure func disclosures_of(ids: [string]) -> [CapabilityDisclosureIds] {
   match ids {
     [] => [],
     id :: rest => {
-      let d: DisclosureIds =
+      let d: CapabilityDisclosureIds =
         { extension_id: id,
-          covered: remove_ids(all_slot_ids(Cov.all_hook_slots()), excluded_slot_ids()),
-          excluded: excluded_slot_ids() };
+          atoms: atom_ids_of(registered_atoms()),
+          covered: drop_atom_ids(atom_ids_of(registered_atoms()), excluded_slot_ids()),
+          excluded: keep_atom_ids(atom_ids_of(registered_atoms()), excluded_slot_ids()) };
       d :: disclosures_of(rest)
     }
   }
@@ -507,13 +558,13 @@ export pure func driver_plus_compose() -> ProfileDefinition {
       { boundary_id: "tool.envelope_dispatch", included: true,
         note: "tool_envelope_dispatch and tool_phase's typed ToolCallEnvelope contract" },
       { boundary_id: "tool.process_exec", included: true,
-        note: "Ports.tool_exec, whose ToolExecution threads successor state (A12). INCLUDED AND NOW REACHED FROM TWO SIDES: the driver's own tool phase, and — since WI-D26 routed compose's four exec sites — an installed extension's `ExtPorts.proc_exec`, which lands on the same seam through the ext bridge" },
+        note: "Ports.tool_exec, whose ToolExecution threads successor state (A12). INCLUDED AND NOW REACHED FROM TWO SIDES: the driver's own tool phase, and — since WI-D26 routed compose's four exec sites — an installed extension's `ExtPorts.tool_handle`, which lands on the same seam through the ext bridge" },
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface, ABI 5.0. INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
+        note: "the motoko-ext-abi hook surface, ABI 6.0 (B8; was 5.0). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
       { boundary_id: "extension.ext_ports", included: true,
-        note: "the ExtPorts surface an extension uses to reach the world. **INCLUDED, and this is the whole difference between this profile and both predecessors.** driver_only excluded it because it installs nothing; driver_plus_no_ops excluded it BY MEASUREMENT, classifier 3 reporting 0 ExtPorts field calls in each installed closure, and named it 'the boundary WI-C5's compose-bearing profile would have to include'. This is that profile and it includes it: classifier 3 reports 36 ExtPorts field calls in compose's closure, and the graded session records one of them — a proc_exec — as an origin-tagged interaction in the recorded program" }
+        note: "the ExtPorts surface an extension uses to reach the world. **INCLUDED, and this is the whole difference between this profile and both predecessors.** driver_only excluded it because it installs nothing; driver_plus_no_ops excluded it BY MEASUREMENT, classifier 3 reporting 0 ExtPorts field calls in each installed closure, and named it 'the boundary WI-C5's compose-bearing profile would have to include'. This is that profile and it includes it: classifier 3 reports 36 ExtPorts field calls in compose's closure, and the graded session records one of them — a tool_handle — as an origin-tagged interaction in the recorded program" }
     ],
 
     -- D5 field 4. The driver's own four, plus the one this profile adds. It is
@@ -561,7 +612,7 @@ export pure func driver_plus_compose() -> ProfileDefinition {
       { capability: "AI",
         instrument: "make world_state — the provider poison PAIR: the deterministic entry point completes with AI withheld, and the live world dies with it withheld. NAMED LIMIT, AND IT IS THE REASON on_tool_handle IS EXCLUDED: compose's `handle_compose_tool` calls `callStreamResult`, an AMBIENT provider call, so the pair does NOT cover that chain. This profile excludes the slot that reaches it rather than covering it and disclosing the gap in prose — the exclusion is in D5 field 9 where a machine can read it, and `routing_violation_at` fires if a run dispatches it anyway" },
       { capability: "Process",
-        instrument: "make world_state — the typed tool-contract poison PAIR: a fully-seeded world completes with Process withheld, and an UNSEEDED one dies. AND for the installed set this is now a SUBSTANTIVE claim rather than a vacuous one: WI-D26 routed compose's four `std/process.exec` sites onto ExtPorts.proc_exec and removed the std/process imports, so classifier 3 reports ZERO ambient {Process} sources in compose's closure. The graded session serves compose's `ailang check` from WorldState.ext_effects; before WI-D26 the same run spawned a real subprocess and the replay spawned it again" },
+        instrument: "make world_state — the typed tool-contract poison PAIR: a fully-seeded world completes with Process withheld, and an UNSEEDED one dies. AND for the installed set this is now a SUBSTANTIVE claim rather than a vacuous one: WI-D26 routed compose's four `std/process.exec` sites onto ExtPorts.tool_handle and removed the std/process imports, so classifier 3 reports ZERO ambient {Process} sources in compose's closure. The graded session serves compose's `ailang check` from WorldState.ext_effects; before WI-D26 the same run spawned a real subprocess and the replay spawned it again" },
       { capability: "Rand",
         instrument: "make world_state — no module under src/core/*.ail reaches std/rand, checked structurally; D1 names an ambient RNG as a prohibited hiding place for world state. AND for the installed set: classifier 3 reports no ambient {Rand} source in compose's closure, so the structural claim extends to the installed package by measurement rather than by scope" },
       { capability: "Env",
@@ -693,7 +744,7 @@ export pure func compose_manifest(
 -- ---------------------------------------------------------------------------
 
 -- The three D5 fields that name the install set must be ONE set, stated three
--- ways. Asserted against `all_hook_slots()` rather than 8.
+-- ways. Asserted against `registered_atoms()` rather than 8.
 pure func test_the_install_set_is_one_set_stated_three_ways() -> bool
   tests [((), true)]
   {
@@ -702,7 +753,7 @@ pure func test_the_install_set_is_one_set_stated_three_ways() -> bool
     n == 1
       && List.length(d.installed_packages) == n
       && List.length(d.disclosures) == n
-      && List.length(d.hook_classifications) == n * List.length(Cov.all_hook_slots())
+      && List.length(d.hook_classifications) == n * List.length(registered_atoms())
   }
 
 -- THE FIRST NON-EMPTY EXCLUDED LIST. Asserted as a partition of the eight slots
@@ -712,17 +763,21 @@ pure func test_the_disclosure_excludes_exactly_one_slot() -> bool
   tests [((), true)]
   {
     let d = driver_plus_compose();
-    partitions_all(d.disclosures, List.length(Cov.all_hook_slots()))
+    partitions_all(d.disclosures, List.length(registered_atoms()))
   }
 
-pure func partitions_all(ds: [DisclosureIds], n: int) -> bool {
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs { [] => [], x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest) }
+}
+
+pure func partitions_all(ds: [CapabilityDisclosureIds], n: int) -> bool {
   match ds {
     [] => true,
     x :: rest =>
       List.length(x.excluded) == 1
-        && contains_str(x.excluded, "on_tool_handle")
+        && contains_str(atom_id_strs(x.excluded), "tool_provider[0]")
         && List.length(x.covered) == n - 1
-        && not contains_str(x.covered, "on_tool_handle")
+        && not contains_str(atom_id_strs(x.covered), "tool_provider[0]")
         && partitions_all(rest, n)
   }
 }
@@ -736,12 +791,14 @@ pure func test_the_coverage_mediates_exactly_one_hook() -> bool
   tests [((), true)]
   {
     let s = compose_substance();
+    -- Item 4: four registered atoms — two rowless (criterion 1), one rowed and
+    -- mediating (criterion 2), one excluded (the gated ToolProvider).
     s.installed_extensions == 1
-      && s.covered_hooks == 7
+      && s.covered_hooks == 3
       && s.excluded_hooks == 1
-      && s.criterion_1_hooks == 4
-      && s.criterion_2_hooks == 3
-      && s.no_op_hooks == 2
+      && s.criterion_1_hooks == 2
+      && s.criterion_2_hooks == 1
+      && s.no_op_hooks == 0
       && s.world_mediating_hooks == 1
   }
 
@@ -770,7 +827,7 @@ pure func test_every_entry_rests_on_its_own_admissible_basis() -> bool
 
 pure func entries_ok(cs: [HookClassificationEntry], seen: int) -> bool {
   match cs {
-    [] => seen == 8,
+    [] => seen == 4,
     c :: rest => {
       let ok = match c.classification {
         WorldMediated =>
@@ -787,7 +844,7 @@ pure func entries_ok(cs: [HookClassificationEntry], seen: int) -> bool {
             && not clause_is_substantive(c.clauses.world_state),
         ExplicitlyExcluded =>
           c.basis.producer == "disclosure"
-            && c.hook_id == "on_tool_handle"
+            && c.hook_id == "tool_provider[0]"
             && not clause_is_substantive(c.clauses.ports)
             && not clause_is_vacuous(c.clauses.ports)
       };
@@ -835,16 +892,16 @@ pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
   {
     List.length(rowed_slot_ids()) == 4
       && List.length(excluded_slot_ids()) == 1
-      && List.length(criterion_2_slot_ids()) == 3
-      && not contains_str(criterion_2_slot_ids(), "on_tool_handle")
-      && contains_str(criterion_2_slot_ids(), "on_response_intercept")
+      && List.length(criterion_2_slot_ids()) == 1
+      && not contains_str(criterion_2_slot_ids(), "tool_provider[0]")
+      && contains_str(criterion_2_slot_ids(), "response_interceptor[0]")
   }
 
 -- The manifest's extension list is a PROJECTION of the install list.
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = compose_manifest("r", "t", "5.0", "{}", ["env_get"], [], "r");
+    let m = compose_manifest("r", "t", "6.0", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_compose().installed_packages)
       && List.length(m.extension_packages) == 1
       && m.profile_id == compose_profile_id()

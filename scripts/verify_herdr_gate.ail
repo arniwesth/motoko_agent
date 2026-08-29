@@ -37,12 +37,20 @@ import std/list as L (length)
 import std/option (Option, Some, None)
 import src/core/config (load_config_from_cli)
 import src/core/ext/registry_generated (parse_core_ext_order)
-import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtRegistry)
+import pkg/sunholo/motoko_ext_abi/types (ExtEntry, ExtRegistry, Capability, ToolProvider)
 
-func tools_of(hooks: [ExtensionHooks]) -> [string] {
-  match hooks {
+pure func provided_names(caps: [Capability]) -> [string] {
+  match caps {
     [] => [],
-    h :: _ => h.provided_tools
+    ToolProvider(names, _) :: rest => names ++ provided_names(rest),
+    _ :: rest => provided_names(rest)
+  }
+}
+
+func tools_of(entries: [ExtEntry]) -> [string] {
+  match entries {
+    [] => [],
+    e :: _ => provided_names(e.caps)
   }
 }
 
@@ -57,7 +65,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
   let args = getArgs();
   let cfg = load_config_from_cli([]);
   let registry = parse_core_ext_order("herdr", cfg);
-  let tools = tools_of(registry.hooks);
+  let tools = tools_of(registry.entries);
   let n = L.length(tools);
   let env = describe_env();
 

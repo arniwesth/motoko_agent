@@ -92,7 +92,7 @@ import src/core/dst_fault_catalogue (
   fault_catalogue,
   conditional_class_ids
 )
-import src/core/dst_profile_coverage (all_hook_slots, hook_slot_id, hook_dispatch, Unconditional, Gated, HookSlot)
+import src/core/dst_profile_coverage (all_capability_kinds, capability_kind_id, capability_dispatch, atoms_at_zero, atom_id, atom_ids_id, Unconditional, Gated, CapabilityKind, AtomRef, AtomIds)
 import src/core/dst_result (DstResult, RunFailed, harness_failure_kind_name, ReplayMetadata)
 import src/core/phase_vocab (empty_ledger_trace)
 
@@ -172,7 +172,7 @@ pure func clean_manifest() -> ExecutionManifest {
     normalized_configuration: "{}",
     -- WI-B4: `ai_step` LEFT this set at WI-B2b (widened to return AiStepOutcome,
     -- which carries next_state). 3 -> 2, zero member call sites tree-wide.
-    -- WI-D16: `proc_exec` LEFT IT TOO, on the same criterion and for the same
+    -- WI-D16: `tool_handle` LEFT IT TOO, on the same criterion and for the same
     -- reason — widened to return `ExtProcOutcome`, which carries `next_state`.
     -- 2 -> 1, and `env_get` is now the sole member. It was left un-widened
     -- deliberately: its problematic callers are in `register_with_config`,
@@ -347,10 +347,25 @@ pure func installed(ext_id: string, path: string) -> InstalledPackage {
   { extension_id: ext_id, package_id: "sunholo/${ext_id}", version: "0.1.0", source_path: path }
 }
 
-pure func with_disclosure(ext_id: string, covered: [string], excluded: [string]) -> ProfileDefinition {
+-- B8: disclosures are per ATOM. The fixture registers the one-atom-per-kind
+-- shape every extension has at B8 (`eight()`), and `covered`/`excluded` are
+-- atom ids over it.
+pure func a(kind: string, idx: int) -> AtomIds { { kind: kind, index: idx } }
+
+pure func atom_ids_of(xs: [AtomRef]) -> [AtomIds] {
+  match xs { [] => [], x :: rest => a(capability_kind_id(x.kind), x.index) :: atom_ids_of(rest) }
+}
+
+pure func eight() -> [AtomIds] { atom_ids_of(atoms_at_zero(all_capability_kinds())) }
+
+pure func with_disclosure(ext_id: string, covered: [AtomIds], excluded: [AtomIds]) -> ProfileDefinition {
+  with_atoms(ext_id, eight(), covered, excluded)
+}
+
+pure func with_atoms(ext_id: string, atoms: [AtomIds], covered: [AtomIds], excluded: [AtomIds]) -> ProfileDefinition {
   { clean() |
     installed_packages: [installed(ext_id, "packages/motoko-ext-${ext_id}/${ext_id}.ail")],
-    disclosures: [{ extension_id: ext_id, covered: covered, excluded: excluded }] }
+    disclosures: [{ extension_id: ext_id, atoms: atoms, covered: covered, excluded: excluded }] }
 }
 
 -- WI-D13. A definition that installs one extension, discloses every slot as
@@ -375,9 +390,9 @@ pure func with_entry(
 ) -> ProfileDefinition {
   { clean() |
     installed_packages: [installed("based", "packages/motoko-ext-based/based.ail")],
-    disclosures: [{ extension_id: "based", covered: all_ids_rec(all_hook_slots()), excluded: [] }],
+    disclosures: [{ extension_id: "based", atoms: eight(), covered: eight(), excluded: [] }],
     hook_classifications: [
-      { extension_id: "based", hook_id: "on_pre_step", classification: c,
+      { extension_id: "based", hook_id: "compactor[0]", classification: c,
         basis: { producer: producer, revision: revision }, clauses: cl }
     ] }
 }
@@ -386,31 +401,31 @@ pure func no_op_clauses() -> Criterion2Clauses {
   { ports: Vacuously, origin_tag: Vacuously, world_state: Substantively }
 }
 
-pure func all_ids_rec(xs: [HookSlot]) -> [string] {
-  match xs {
+pure func without(ids: [AtomIds], drop: string) -> [AtomIds] {
+  match ids {
     [] => [],
-    x :: rest => hook_slot_id(x) :: all_ids_rec(rest)
+    x :: rest => if atom_ids_id(x) == drop then without(rest, drop) else x :: without(rest, drop)
   }
 }
 
-pure func without(ids: [string], drop: string) -> [string] {
+pure func only(ids: [AtomIds], keep: string) -> [AtomIds] {
   match ids {
     [] => [],
-    x :: rest => if x == drop then without(rest, drop) else x :: without(rest, drop)
+    x :: rest => if atom_ids_id(x) == keep then x :: only(rest, keep) else only(rest, keep)
   }
 }
 
 -- Each of the SEVEN unconditionally-dispatched slots, excluded in turn, with
--- the other seven covered. Iterating `all_hook_slots()` and consulting
--- `hook_dispatch` means this sweep cannot go stale: a ninth slot, or a slot
+-- the other seven covered. Iterating the atoms of `all_capability_kinds()` and
+-- consulting `capability_dispatch` means this sweep cannot go stale: a ninth kind, or a kind
 -- whose dispatch kind changes, is picked up without editing this function.
 -- Writing "the seven" out by hand here would be the very re-derivation the
 -- module header forbids.
 func seven_unconditional() -> bool ! {IO} {
-  sweep_slots(all_hook_slots(), 0, true)
+  sweep_slots(atoms_at_zero(all_capability_kinds()), 0, true)
 }
 
-func sweep_slots(xs: [HookSlot], seen: int, acc: bool) -> bool ! {IO} {
+func sweep_slots(xs: [AtomRef], seen: int, acc: bool) -> bool ! {IO} {
   match xs {
     [] => {
       let ok = seen == 7;
@@ -419,12 +434,12 @@ func sweep_slots(xs: [HookSlot], seen: int, acc: bool) -> bool ! {IO} {
       acc && ok
     },
     s :: rest => {
-      let id = hook_slot_id(s);
-      match hook_dispatch(s) {
+      let id = atom_id(s);
+      match capability_dispatch(s.kind) {
         Gated => {
-          -- The one gated slot: excluding it is LEGAL, and asserting that keeps
-          -- this sweep from degenerating into "reject every exclusion".
-          let d = with_disclosure("gatedok", without(all_ids_rec(all_hook_slots()), id), [id]);
+          -- The one gated kind: excluding its atom is LEGAL, and asserting that
+          -- keeps this sweep from degenerating into "reject every exclusion".
+          let d = with_disclosure("gatedok", without(eight(), id), only(eight(), id));
           let ok = List.length(load(d)) == 0;
           let _ = if ok then println("  ✓ '${id}' is GATED: excluding it loads clean")
                   else {
@@ -434,7 +449,7 @@ func sweep_slots(xs: [HookSlot], seen: int, acc: bool) -> bool ! {IO} {
           sweep_slots(rest, seen, acc && ok)
         },
         Unconditional => {
-          let d = with_disclosure("uncond", without(all_ids_rec(all_hook_slots()), id), [id]);
+          let d = with_disclosure("uncond", without(eight(), id), only(eight(), id));
           let ok = has_rule(load(d), "unconditional-hook-excluded");
           let _ = if ok then println("  ✓ '${id}' unconditionally dispatched: excluding it is rejected")
                   else println("  ✗ '${id}' unconditionally dispatched: exclusion was NOT rejected");
@@ -494,23 +509,23 @@ func exclusion_check() -> bool ! {IO} {
     { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: "fixture_clean", profile_version: "1",
       event_vocabulary_version: "event-vocabulary/1" };
-  let d = with_disclosure("gated", without(all_ids_rec(all_hook_slots()), "on_tool_handle"), ["on_tool_handle"]);
+  let d = with_disclosure("gated", without(eight(), "tool_provider[0]"), only(eight(), "tool_provider[0]"));
   let violated =
-    match routing_violation_at(d, "gated", "on_tool_handle", 4, empty_ledger_trace(), meta) {
+    match routing_violation_at(d, "gated", "tool_provider[0]", 4, empty_ledger_trace(), meta) {
       None => false,
       Some(RunFailed(f)) =>
         harness_failure_kind_name(f.kind) == "routing_violation" && f.interaction_position == 4,
       Some(_) => false
     };
   let proceeds =
-    match routing_violation_at(d, "gated", "on_tool_policy", 4, empty_ledger_trace(), meta) {
+    match routing_violation_at(d, "gated", "tool_policy[0]", 4, empty_ledger_trace(), meta) {
       None => true,
       Some(_) => false
     };
   -- Vacuous for an empty install list, which is `driver_only`'s shape. Stated
   -- as an assertion rather than a comment: "vacuous" is a claim about the code.
   let vacuous =
-    match routing_violation_at(clean(), "anything", "on_tool_handle", 0, empty_ledger_trace(), meta) {
+    match routing_violation_at(clean(), "anything", "tool_provider[0]", 0, empty_ledger_trace(), meta) {
       None => true,
       Some(_) => false
     };
@@ -593,21 +608,19 @@ export func main() -> () ! {IO} {
 
   let _ = println("  -- the coverage floor and the disclosure (delegated to A6) --");
   let floor = assert_rejected("an installed extension with ZERO covered hooks", "coverage-floor",
-                              with_disclosure("inert", [], all_ids_rec(all_hook_slots())));
-  let unknown = assert_rejected("an unknown hook id", "unknown-hook-id",
-                                with_disclosure("typo", ["on_describe_tool"], []));
-  let overlap = assert_rejected("covered and excluded not DISJOINT", "covered-excluded-disjoint",
-                                with_disclosure("overlap", all_ids_rec(all_hook_slots()), ["on_tool_handle"]));
+                              with_disclosure("inert", [], eight()));
+  let unknown = assert_rejected("an unknown capability kind", "unknown-capability-kind",
+                                with_atoms("typo", [a("describe_tool", 0)], [a("describe_tool", 0)], []));
+  let overlap = assert_rejected("covered and excluded not DISJOINT per atom", "atoms-covered-excluded-disjoint",
+                                with_disclosure("overlap", eight(), only(eight(), "tool_provider[0]")));
   -- THE fixture that separates this from a row-shape validator. Both lists are
-  -- disjoint, every id is a real slot, and the entry count is CORRECT — seven
-  -- covered plus one excluded is eight. `on_solver_candidate` is classified
-  -- nowhere. Only counting per SLOT rejects it.
-  let partial = assert_rejected("SET COMPLETENESS: eight entries, seven slots", "covered-excluded-exhaustive",
+  -- disjoint, every id is a real atom, and the entry count is CORRECT — seven
+  -- covered plus one excluded is eight. `solver_judge[0]` is classified
+  -- nowhere. Only counting per ATOM rejects it.
+  let partial = assert_rejected("SET COMPLETENESS: eight entries, seven atoms", "atoms-covered-excluded-exhaustive",
                                 with_disclosure("partial",
-                                  ["on_describe_tools", "on_describe_tools", "on_build_system_prompt",
-                                   "on_budget_plan", "on_pre_step", "on_tool_policy",
-                                   "on_response_intercept"],
-                                  ["on_tool_handle"]));
+                                  a("describe_tools", 0) :: without(without(eight(), "tool_provider[0]"), "solver_judge[0]"),
+                                  only(eight(), "tool_provider[0]")));
 
   let _ = println("  -- the seven/one dispatch split, swept rather than restated --");
   let seven = seven_unconditional();
@@ -622,14 +635,14 @@ export func main() -> () ! {IO} {
   let c2 = assert_rejected("an INSTALLED extension calling a classifier-2 field", "classifier-2-extension-installed",
                            { clean() |
                              installed_packages: [installed("compaction_ai", "packages/motoko-ext-compaction-ai/compaction_ai.ail")],
-                             disclosures: [{ extension_id: "compaction_ai",
-                                             covered: all_ids_rec(all_hook_slots()), excluded: [] }],
+                             disclosures: [{ extension_id: "compaction_ai", atoms: eight(),
+                                             covered: eight(), excluded: [] }],
                              omitted_extensions: [] });
   let roots = assert_rejected("a package whose AILANG source is OUTSIDE the scan roots", "package-outside-scan-roots",
                               { clean() |
                                 installed_packages: [installed("remote", "/root/.ailang/registry/sunholo/remote/lib.ail")],
-                                disclosures: [{ extension_id: "remote",
-                                                covered: all_ids_rec(all_hook_slots()), excluded: [] }] });
+                                disclosures: [{ extension_id: "remote", atoms: eight(),
+                                                covered: eight(), excluded: [] }] });
 
   let _ = println("  -- decision 1: unrouted reachable core sites --");
   let undeclared = assert_rejected("an unrouted reachable site left UNDECLARED", "unrouted-site-undeclared",

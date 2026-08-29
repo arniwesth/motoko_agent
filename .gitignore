@@ -88,3 +88,9 @@ deepseek-harness/
 # open-source repo. Kept in the workspace so they survive a devcontainer
 # rebuild, like .remarkable/ above — never commit anything under here.
 .agent/local/
+
+# Live dagr run state (the herdr-dagr pane's view of a delegation run). Rewritten
+# in full on every delegate state change and meaningless outside the session that
+# produced it, so it is ephemeral by construction and never a shared record — see
+# DESIGN-dagr-as-delegation-view.md §5 in .agent/projects/021_herdr_delegation/.
+.dagr/

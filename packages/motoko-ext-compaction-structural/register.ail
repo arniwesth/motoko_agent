@@ -2,10 +2,8 @@ module sunholo/motoko_ext_compaction_structural/register
 
 import std/option (None)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  BudgetPlan,
-  BudgetPatch,
   ExtCtx,
-  ExtensionHooks,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
   FinalizeDecision,
   Msg,
   PreStepDecision,
@@ -16,25 +14,14 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
 )
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
 
-func no_budget_patch(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
 func pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   compact_for_pre_step(ctx, msgs)
 }, next_state: ctx.world } }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
-  {
-    id: "compaction_structural",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: no_budget_patch,
-    on_pre_step: pre_step,
-    on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
-    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
-  }
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS} {
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    Compactor(pre_step)
+  ]
 }

@@ -4,7 +4,7 @@ import std/option (Option, Some, None)
 import std/fs (fileExists)
 
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg,
   ToolCallEnvelope
@@ -14,10 +14,6 @@ import pkg/sunholo/motoko_ext_mcp/exec (run_mcp_tool)
 import pkg/sunholo/motoko_ext_mcp/resolve (resolve_tool, all_tool_names)
 import pkg/sunholo/motoko_ext_ailang_docs/types (mcp_config, tool_mappings, tool_schemas)
 import pkg/sunholo/motoko_ext_ailang_docs/prompts (build_prompt_patch)
-
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
 
 -- Workdir gate: only register tools when the workdir is plausibly an
 -- AILANG project. Cheap heuristic — check for ailang.toml at the root.
@@ -40,36 +36,18 @@ export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx
   }
 }, next_state: ctx.world } }
 
-export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS, Process, Rand} {
+export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> [Capability] ! {FS, Process, Rand} {
   let active = workdir_is_ailang_project(workdir);
   let cfg = mcp_config(timeout_ms, max_output_chars);
   let mappings = tool_mappings();
   let tools = if active then all_tool_names(mappings) else [];
   let schemas = if active then tool_schemas() else [];
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(cfg, mappings, ctx, call) };
-  let intercept = func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-    NoIntercept
-  }, next_state: ctx.world } };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
-    NoDecision
-  }, next_state: ctx.world } };
-  {
-    id: "ailang_docs",
-    provided_tools: tools,
-    on_describe_tools: \_ . schemas,
-    on_build_system_prompt: \ctx. build_prompt_patch(ctx.task),
-    on_budget_plan:
-      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
-        no_budget_patch()
-      },
-    on_pre_step:
-      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
-        PassThrough
-      }, next_state: ctx.world } },
-    on_tool_policy:
-      \_ctx _call. NoOpinion,
-    on_tool_handle: handle,
-    on_response_intercept: intercept,
-    on_solver_candidate: finalize
-  }
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    DescribeTools(\_ . schemas),
+    PromptShaper(\ctx. build_prompt_patch(ctx.task)),
+    ToolProvider(tools, handle)
+  ]
 }

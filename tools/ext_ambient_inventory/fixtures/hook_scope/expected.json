@@ -8,68 +8,153 @@
     "",
     "The pair that carries the READING is control_registration_only /",
     "control_hook_reaches_env: same import, same call, different position. If",
-    "they ever agree, the tool has stopped measuring the reading."
+    "they ever agree, the tool has stopped measuring the reading.",
+    "",
+    "ADR-001 Q4 (the default_hooks minor) once had three record-update fixtures",
+    "here (control_record_update_*, reject_update_head_not_default_hooks). B8",
+    "removed them with the record head: the ABI no longer has `ExtensionHooks` or",
+    "`default_hooks`, so the record path, `hook-record-unresolvable` and",
+    "`hook-slot-missing` are gone, and every remaining fixture is written in the",
+    "6.0 `[Capability]` list shape (eight atoms, in the canonical order, unless",
+    "the fixture's purpose is the list itself).",
+    "",
+    "ADR-001 Phase B, B2 (the 6.0 `[Capability]` list head): the four",
+    "control_capability_list_* and four reject_capability_list_* fixtures. Every",
+    "list control pins its ATOM COUNT -- the fail-closed denominator: a reader",
+    "that enumerates fewer atoms than are written cannot report the fixture",
+    "green. The named-wide control is the one that carries B1's finding: the",
+    "payload row bounds nothing in constructor-argument position, so a wide-rowed",
+    "named binding must be SCANNED, and it reaches std/env."
   ],
   "fixtures": {
     "control_registration_only": {
       "verdict": "HOOK-PORT-MEDIATED",
       "shapes": [],
-      "registration_only": ["std/env.getEnvOr"],
-      "form": "registration reads Env; no hook reaches it (the WI-D6 shape)"
+      "registration_only": [
+        "std/env.getEnvOr"
+      ],
+      "form": "registration reads Env; no hook reaches it (the WI-D6 shape)",
+      "atoms": 8
     },
     "control_hook_reaches_env": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
-      "form": "TWO-SIDED twin of the above: the same call, moved into a hook body"
+      "form": "TWO-SIDED twin of the above: the same call, moved into a hook body",
+      "atoms": 8
     },
     "control_named_hook_in_register": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
-      "form": "the microrag shape -- hook logic in register.ail reaching std/fs"
+      "form": "the microrag shape -- a named ToolProvider handle in register.ail reaching std/fs",
+      "atoms": 8
     },
     "control_ext_ports_call": {
       "verdict": "HOOK-PORT-MEDIATED",
       "shapes": [],
       "registration_only": [],
-      "form": "property 1's positive half: ExtPorts.ai_step is admitted, not rejected"
+      "form": "property 1's positive half: ExtPorts.ai_step is admitted, not rejected",
+      "atoms": 8
     },
     "control_interpolated_call": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
-      "form": "door 4: the effectful call exists only inside a string interpolation"
-    },
-    "reject_record_unresolvable": {
-      "verdict": "HOOK-UNRESOLVED",
-      "shapes": ["hook-record-unresolvable"],
-      "registration_only": [],
-      "form": "the hooks record comes from a function this closure does not hold"
-    },
-    "reject_slot_missing": {
-      "verdict": "HOOK-UNRESOLVED",
-      "shapes": ["hook-slot-missing"],
-      "registration_only": [],
-      "form": "seven of eight slots bound -- the bindings do not tile the record"
+      "form": "door 4: the effectful call exists only inside a string interpolation",
+      "atoms": 8
     },
     "reject_binding_unresolvable": {
       "verdict": "HOOK-UNRESOLVED",
-      "shapes": ["hook-binding-unresolvable"],
+      "shapes": [
+        "hook-binding-unresolvable"
+      ],
       "registration_only": [],
-      "form": "a slot bound to a bare name that resolves nowhere"
+      "form": "an atom bound to a bare name that resolves nowhere"
     },
     "reject_unknown_callee": {
       "verdict": "HOOK-UNRESOLVED",
-      "shapes": ["unknown-callee"],
+      "shapes": [
+        "unknown-callee"
+      ],
       "registration_only": [],
       "form": "door 3: `show` -- a language builtin no producer at HEAD can classify"
     },
     "reject_applied_local": {
       "verdict": "HOOK-UNRESOLVED",
-      "shapes": ["applied-local"],
+      "shapes": [
+        "applied-local"
+      ],
       "registration_only": [],
       "form": "a hook APPLIES a value closed over at registration (door 6's corner)"
+    },
+    "control_capability_list_inline": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 3,
+      "form": "B2: a literal [Kind(f), ...] list, three inline atoms (one lambda with a comma)"
+    },
+    "control_capability_list_named_wide": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 1,
+      "form": "B2: a wide-rowed NAMED atom is scanned, not trusted -- it reaches std/env"
+    },
+    "control_capability_list_same_kind": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 4,
+      "form": "B2: N>1 of one kind enumerated per index, ToolProvider(names, handle), behind a hop"
+    },
+    "control_capability_list_empty": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 0,
+      "form": "B2: `[]` resolves with ZERO atoms, pinned (D7 is B3's question, not the reader's)"
+    },
+    "reject_capability_list_computed": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: the list is built by `[..] ++ extra(cfg)` -- literal lists only"
+    },
+    "reject_capability_list_element": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: one element is a call returning an atom -- a computed element"
+    },
+    "reject_capability_list_arity": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: ToolProvider applied to one argument -- the binding position is a guess"
+    },
+    "reject_capability_list_unknown_kind": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: `Judge(..)` is not a known constructor; plus a trailing comma (count discipline)"
+    },
+    "reject_capability_list_juxtaposed": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "B2: `A(f) ++ B(g)` INSIDE the list -- one element, two constructor heads"
     }
   },
   "yield": {
@@ -82,20 +167,64 @@
       "WI-D6 shape) and DROPS compaction_structural -- not because a hook of it",
       "reaches an effect, but because `show` is a door the shipped tool does not",
       "watch. That drop is the finding, and pinning it here is what keeps it from",
-      "being quietly re-admitted."
+      "being quietly re-admitted.",
+      "",
+      "`capability_list_atoms` (B2) pins, per extension, which registrations",
+      "resolve through the 6.0 list head and how many atoms each holds. Empty on",
+      "the 5.x tree by construction; B8 re-pinned it BY HAND with seventeen entries",
+      "of eight atoms each. Item 4 (6.0 trimming) re-pinned it BY HAND again: each",
+    "package now lists only the atoms it binds with a real body (39 over 17)."
     ],
     "extensions": 17,
     "closure_port_mediated": [
-      "compaction_structural", "decision_framework", "empty_stop_guard", "progress_contract_guard"
+      "compaction_structural",
+      "decision_framework",
+      "empty_stop_guard",
+      "progress_contract_guard"
     ],
     "hook_port_mediated": [
-      "decision_framework", "empty_stop_guard", "mcp", "progress_contract_guard", "test_dummy"
+      "decision_framework",
+      "empty_stop_guard",
+      "mcp",
+      "progress_contract_guard",
+      "test_dummy"
     ],
-    "hook_ambient": ["a2a", "agentcli", "scratchpad"],
-    "door_3_residue": ["intToFloat", "show"],
+    "hook_ambient": [
+      "a2a",
+      "agentcli",
+      "scratchpad"
+    ],
+    "door_3_residue": [
+      "intToFloat",
+      "show"
+    ],
     "counterfactual_if_residue_resolved": [
-      "compaction_ai", "compaction_structural", "decision_framework", "empty_stop_guard",
-      "mcp", "progress_contract_guard", "test_dummy"
-    ]
+      "compaction_ai",
+      "compaction_structural",
+      "decision_framework",
+      "empty_stop_guard",
+      "mcp",
+      "progress_contract_guard",
+      "test_dummy"
+    ],
+    "capability_list_atoms": {
+      "a2a": 2,
+      "agentcli": 2,
+      "ailang_docs": 3,
+      "compaction_ai": 1,
+      "compaction_structural": 1,
+      "compose": 4,
+      "context_mode": 4,
+      "decision_framework": 1,
+      "empty_stop_guard": 1,
+      "exa_search": 2,
+      "herdr": 2,
+      "mcp": 1,
+      "microrag": 3,
+      "omnigraph": 3,
+      "progress_contract_guard": 1,
+      "scratchpad": 4,
+      "test_dummy": 4
+    }
   }
 }

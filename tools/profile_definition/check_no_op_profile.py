@@ -42,6 +42,11 @@ THE SIX CHECKS, and the fourth and fifth are the ones with teeth:
 Per plan rule S16, the enumeration for each new scan is in the function that
 performs it, written BEFORE the unit was chosen, and every unenumerated shape
 reads as FAIL rather than as absent.
+
+B8 (ADR-001, ABI 6.0): hook ids are ATOM ids `kind[index]` over the eight
+capability KINDS; the rowed/rowless split is read off the `Capability` payloads;
+and a seventh check, the DENOMINATOR RULE, requires every installed extension's
+disclosed atoms to equal B2's enumeration of its registration literal.
 """
 
 import json
@@ -54,16 +59,21 @@ REPO = Path(__file__).resolve().parents[2]
 ABI_TYPES = REPO / "packages/motoko-ext-abi/types.ail"
 AILANG_TOML = REPO / "ailang.toml"
 COVERAGE = REPO / "src/core/dst_profile_coverage.ail"
+HOOK_SCOPE = REPO / "tools/ext_ambient_inventory/hook_scope.py"
+AMBIENT_DERIVE = REPO / "tools/ext_ambient_inventory/derive.py"
 
-# The four slots the barrier derivation reasons about plus the four it does not.
-# Not a list of "which are rowed" — that is derived below. This is only the set
-# of ABI hook fields, and it is read from the coverage artifact's own id list so
-# that a ninth slot arrives here too.
+# B8: hook ids are ATOM ids `kind[index]` over the 6.0 capability KINDS. The
+# kind table is read from the coverage artifact's own `capability_kind_id` so
+# that a ninth kind arrives here too, and the per-extension atoms are read from
+# B2's enumeration (`hook_scope.py`), not assumed.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_fixtures import (  # noqa: E402
     ambient_inventory,
+    capability_kind_ids,
+    capability_payloads,
+    dispatch_unconditional,
     installable_extension_dirs,
-    outcome_returns_world,
+    kind_of,
 )
 
 
@@ -93,13 +103,26 @@ def parse_output(path):
     """
     text = Path(path).read_text()
     out = {"classification": {}, "installed": {}, "omitted": set(),
-           "disclosure": set(), "claim": {}, "statement": ""}
+           "disclosure": set(), "disclosed_atoms": {}, "claim": {}, "statement": ""}
 
+    # B8: the indented `atoms:` / `covered:` / `excluded:` lines that follow a
+    # DISCLOSURE line carry the disclosure's atom ids; they are collected per
+    # extension so the B2 cross-check in `check_install_set` can read the
+    # disclosure itself and not only the classification entries derived from it.
+    current = None
     for line in text.splitlines():
         parts = line.split()
         if not parts:
             continue
         tag = parts[0]
+        if current is not None and tag in ("atoms:", "covered:", "excluded:"):
+            ids = [t.strip() for t in " ".join(parts[1:]).split(",") if t.strip()]
+            if ids == ["(none)"]:
+                ids = []
+            out["disclosed_atoms"].setdefault(current, {})[tag.rstrip(":")] = ids
+            continue
+        if tag != "DISCLOSURE" and not (tag == current and len(parts) == 1):
+            current = None
         if tag == "CLASSIFICATION":
             if len(parts) != 9:
                 fail(f"a CLASSIFICATION line has {len(parts)} fields, expected 9: {line!r}.\n"
@@ -123,6 +146,7 @@ def parse_output(path):
             out["omitted"].add(parts[1])
         elif tag == "DISCLOSURE":
             out["disclosure"].add(parts[1])
+            current = parts[1]
         elif tag == "CLAIM":
             out["claim"][parts[1]] = " ".join(parts[2:])
         elif tag == "STATEMENT":
@@ -141,44 +165,27 @@ def parse_output(path):
 
 
 def abi_slots():
-    """slot id -> (declared row, outcome type, returns world state).
+    """capability kind id -> (declared row, outcome type, returns world state).
 
-    S16 enumeration — the ways a slot's declaration can present in the ABI:
-      (a) `name: (args) -> Type` on one line, no row;
-      (b) `name: (args) -> Type ! {E, ...}` on one line;
-      (c) the arrow wrapped onto the next line, with or without the row. TWO of
-          the eight are this shape, and a line-anchored pattern reads them as
-          rowless — the exact fail-open `check_fixtures` documents. `\\s*` spans
-          newlines here for the same reason;
-      (d) a row written with a type variable or an open row. None exists in this
-          ABI; the capture would keep the raw text and a non-empty capture reads
-          as ROWED, which is the fail-closed direction;
-      (e) a LIST return type — `on_describe_tools` returns `[ToolSchema]`, so a
-          bare `\\w+` capture reads that slot as unfindable. It is one of the
-          eight and a `continue` here would have skipped it silently; the
-          bracketed form is matched instead and a slot the pattern cannot find
-          at all is a FAIL, never a skip.
+    B8: the 5.x `ExtensionHooks` record is gone. The kind ids come from the
+    coverage artifact's `capability_kind_id` arms (`XKind => "x"`), read there
+    rather than written here so a ninth kind arrives at this guard too; each
+    kind's row and outcome are read from its `Capability` payload by
+    `check_fixtures.capability_payloads`, whose docstring carries the S16
+    enumeration of payload shapes. A kind the table names and the ABI does not
+    row (or the reverse) is a FAIL, never a skip.
     """
-    abi = ABI_TYPES.read_text()
-    # The slot ids come from A6's `hook_slot_id`, whose arms read
-    # `OnDescribeTools => "on_describe_tools"`. Read from the coverage artifact
-    # rather than written here, so a ninth slot arrives at this guard too.
-    slot_ids = sorted(set(re.findall(r'=>\s*"(on_[a-z_]+)"', COVERAGE.read_text())))
-    if len(slot_ids) != 8:
-        fail(f"read {len(slot_ids)} hook slot ids from {COVERAGE.relative_to(REPO)}, expected 8: "
-             f"{slot_ids}. The ABI gained or lost a slot and this guard's per-slot checks would "
+    kinds = capability_kind_ids()
+    if len(kinds) != 8:
+        fail(f"read {len(kinds)} capability kind ids from {COVERAGE.relative_to(REPO)}, expected 8: "
+             f"{kinds}. The ABI gained or lost a kind and this guard's per-kind checks would "
              "silently skip it.")
-
-    slots = {}
-    for slot in slot_ids:
-        m = re.search(re.escape(slot) + r":\s*\([^)]*\)\s*->\s*(\[?\s*\w+\s*\]?)\s*(!\s*\{([^}]*)\})?",
-                      abi, re.M)
-        if not m:
-            fail(f"could not read `{slot}`'s declaration in {ABI_TYPES.relative_to(REPO)}; the "
-                 "criterion each covered hook rests on cannot be re-derived")
-        row = (m.group(3) or "").strip()
-        slots[slot] = (row, m.group(1), outcome_returns_world(abi, m.group(1)))
-    return slots
+    payloads = capability_payloads(ABI_TYPES.read_text())
+    if set(payloads) != set(kinds):
+        fail(f"the coverage artifact's kind table {sorted(kinds)} and the ABI's `Capability` "
+             f"variants {sorted(payloads)} disagree; a kind in one and not the other has no "
+             "row this guard can re-derive")
+    return {k: payloads[k] for k in kinds}
 
 
 def resolved_extensions():
@@ -224,9 +231,146 @@ def zero_barrier_set(inv, slots):
     return zero, barriers
 
 
-def is_unconditional(slot):
-    camel = "On" + "".join(p.capitalize() for p in slot.removeprefix("on_").split("_"))
-    return re.search(camel + r"\s*=>\s*Unconditional", COVERAGE.read_text()) is not None
+def is_unconditional(hook_id):
+    """B8: one dispatch table. `hook_id` may be an atom id (`tool_provider[0]`)
+    or a kind id; either way the `XKind => Unconditional|Gated` arm of
+    `capability_dispatch` is what answers."""
+    return dispatch_unconditional(COVERAGE.read_text(), hook_id)
+
+
+_HOOK_SCOPE_CACHE = {}
+
+
+def hook_scope_atoms():
+    """B2's per-extension enumeration of registered capability atoms:
+    extension id -> sorted [(kind id, index)].
+
+    This is the B8 DENOMINATOR RULE's independent producer: a profile's
+    disclosed atoms must equal what `hook_scope.py` enumerates from the
+    package's own `register_with_config` literal. `derive.py --hook-scope`
+    prints a report rather than JSON, so the two modules are loaded by path
+    (the way `derive._hook_scope` itself does) and `derive_hook_scope` is
+    called in-process.
+
+    S16 enumeration — how an extension's entry can fail to yield atoms:
+      (a) `registration_shape` is not `capability-list` (the list head was not
+          located, or the registration is not a literal list) — FAIL; a
+          denominator nobody could count is not zero;
+      (b) an atom whose constructor is not in the coverage artifact's kind
+          table — FAIL, the ABI gained a variant this guard cannot classify;
+      (c) an extension absent from the result entirely — FAIL at the caller.
+    """
+    if _HOOK_SCOPE_CACHE:
+        return _HOOK_SCOPE_CACHE["atoms"]
+    import importlib.util
+    import os
+
+    def load(name, path):
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    c3 = load("motoko_ambient_derive_for_profile", AMBIENT_DERIVE)
+    hs = load("motoko_hook_scope_for_profile", HOOK_SCOPE)
+
+    closure = c3.derive(REPO, do_provision=True)
+    if closure["provision_failures"]:
+        fail(f"B2's cache precondition was not established: {closure['provision_failures']}; "
+             "the per-extension atom enumeration is unavailable, so the denominator is unknown")
+    producer = c3.Producer()
+    producer.load([REPO / "src", REPO / "packages", REPO / "scripts"])
+    stdlib = Path(os.environ.get(c3.STDLIB_ENV) or c3.DEFAULT_STDLIB)
+    builtins = c3.builtin_effects(stdlib, producer) if stdlib.is_dir() else {}
+    c2 = c3.c2
+    abi_types = c2.record_types(c2.strip_noise((REPO / c2.ABI_TYPES).read_text()))
+    core_types = c2.record_types(c2.strip_noise((REPO / c2.CORE_PORTS).read_text()))
+    c2.ALL_TYPES.clear()
+    c2.ALL_TYPES.update(core_types)
+    c2.ALL_TYPES.update(abi_types)
+    ext_fields = tuple(abi_types.get("ExtPorts", {}))
+    if not ext_fields:
+        fail("ExtPorts has no fields in the ABI; B2 cannot run and the atom enumeration is unknown")
+    res = hs.derive_hook_scope(REPO, c3, producer, builtins, ext_fields)
+
+    ctor_to_kind = {}
+    for kid in capability_kind_ids():
+        ctor_to_kind["".join(p.capitalize() for p in kid.split("_"))] = kid
+
+    atoms = {}
+    for ext, r in res.items():
+        if r.get("registration_shape") != "capability-list":
+            fail(f"B2 reads '{ext}'s registration as {r.get('registration_shape')!r}, not "
+                 "`capability-list`; its atom count cannot be enumerated, so the denominator "
+                 "for it is UNKNOWN rather than eight. Rejections: "
+                 f"{[x.get('detail') for x in r.get('rejections', [])][:3]}")
+        got = []
+        for a in r.get("atoms", []):
+            kid = ctor_to_kind.get(a["kind"])
+            if kid is None:
+                fail(f"B2 enumerates a `{a['kind']}` atom in '{ext}' that the coverage artifact's "
+                     "kind table does not name; the ABI gained a variant this guard cannot classify")
+            got.append((kid, int(a["index"])))
+        if len(got) != r.get("atom_count"):
+            fail(f"B2's atom list for '{ext}' has {len(got)} entries and reports atom_count="
+                 f"{r.get('atom_count')}; an atom was dropped, which is fail-open")
+        atoms[ext] = sorted(got)
+    _HOOK_SCOPE_CACHE["atoms"] = atoms
+    return atoms
+
+
+def atom_ref(atom_id):
+    """`tool_provider[0]` -> ('tool_provider', 0). Any other shape is a FAIL:
+    an id this guard cannot read is an atom it cannot cross-check."""
+    m = re.fullmatch(r"([a-z_]+)\[(\d+)\]", atom_id)
+    if not m:
+        fail(f"hook id {atom_id!r} is not an atom id `kind[index]`; B8 hook ids are atom ids")
+    return (m.group(1), int(m.group(2)))
+
+
+def check_disclosed_atoms_against_b2(out, ext_ids):
+    """THE B8 DENOMINATOR RULE. For every INSTALLED extension, the profile's
+    disclosed atoms (kind + index) must equal B2's enumeration of the atoms
+    its `register_with_config` literal registers. A profile that discloses
+    fewer atoms than the package registers has a hook nobody classified; one
+    that discloses more has coverage claimed over an atom that does not exist.
+
+    Two readings of the profile are compared, and both must agree with B2:
+    the CLASSIFICATION entries (one per atom, computed from the disclosure)
+    and, when the acceptance script printed them, the DISCLOSURE block's own
+    `covered:`/`excluded:` id lines.
+    """
+    b2 = hook_scope_atoms()
+    for ext in sorted(ext_ids):
+        if ext not in b2:
+            fail(f"B2 has no atom enumeration for installed extension '{ext}'; fail-closed, its "
+                 "denominator is unknown")
+        want = b2[ext]
+        classified = sorted(atom_ref(h) for (e, h) in out["classification"] if e == ext)
+        if classified != want:
+            fail(f"'{ext}': the profile classifies atoms {classified} and B2 enumerates {want} "
+                 f"from its registration literal. The disclosed atom set must EQUAL what the "
+                 "package registers (kind + index); this is the B8 denominator rule.")
+        da = out["disclosed_atoms"].get(ext)
+        if da is None:
+            fail(f"'{ext}': the acceptance script printed no `atoms:`/`covered:`/`excluded:` lines "
+                 "under its DISCLOSURE line, so the disclosure itself cannot be compared with B2 "
+                 "(only the entries derived from it were); a denominator that is not printed is "
+                 "not one this guard can read")
+        disclosed = sorted(atom_ref(h) for h in da.get("covered", []) + da.get("excluded", []))
+        if disclosed != want:
+            fail(f"'{ext}': the DISCLOSURE block lists atoms {disclosed} (covered + excluded) "
+                 f"and B2 enumerates {want}; the disclosure itself, not only the entries "
+                 "derived from it, must equal the registration")
+        if "atoms" in da:
+            listed = sorted(atom_ref(h) for h in da["atoms"])
+            if listed != want:
+                fail(f"'{ext}': the DISCLOSURE block's `atoms:` line lists {listed} and B2 "
+                     f"enumerates {want}")
+    n = sum(len(b2[e]) for e in ext_ids)
+    print(f"  ✓ B8 denominator: every installed extension's disclosed atoms equal B2's enumeration "
+          f"of its registration literal ({n} atom(s) over {len(ext_ids)} extension(s))")
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +422,8 @@ def check_install_set(out, inv, slots):
         fail(f"the disclosed set {sorted(out['disclosure'])} is not the installed set "
              f"{sorted(installed)}")
 
+    check_disclosed_atoms_against_b2(out, installed)
+
 
 def check_classifications(out, inv, slots):
     """Check 4 and check 5, over every (extension, hook) entry.
@@ -296,16 +442,21 @@ def check_classifications(out, inv, slots):
     A record that disagrees with any of the three is red.
     """
     installed = set(out["installed"])
-    expected = {(e, s) for e in installed for s in slots}
+    # B8: one entry per (installed extension, REGISTERED ATOM), the atoms read
+    # from B2's enumeration rather than assumed to be one per kind.
+    b2 = hook_scope_atoms()
+    expected = {(e, f"{k}[{i}]") for e in installed for (k, i) in b2[e]}
     got = set(out["classification"])
     if got != expected:
         missing, extra = sorted(expected - got), sorted(got - expected)
-        fail(f"the classification entries are not one per (installed extension, ABI slot).\n"
+        fail(f"the classification entries are not one per (installed extension, registered atom).\n"
              f"      missing: {missing}\n      unexpected: {extra}")
 
     n_c1 = n_c2 = 0
     for (ext, hook), (kind, producer, basis_kind, c1, c2, c3) in sorted(out["classification"].items()):
-        row, outcome, returns_world = slots[hook]
+        if kind_of(hook) not in slots:
+            fail(f"{ext}/{hook} names a capability kind the ABI does not have: {sorted(slots)}")
+        row, outcome, returns_world = slots[kind_of(hook)]
         e = inv["extensions"][ext]
         port_mediated = e["verdict"] == "PORT-MEDIATED"
         nothing_to_tag = e["ext_ports_calls"] == 0
@@ -380,73 +531,148 @@ def check_claims(out, inv):
     check_row_7(out)
 
 
+def _balanced(text, start):
+    """Index just past the `)` that closes the `(` at `text[start]`, or -1."""
+    depth = 0
+    for j in range(start, len(text)):
+        depth += {"(": 1, ")": -1}.get(text[j], 0)
+        if depth == 0:
+            return j + 1
+    return -1
+
+
+def _split_top(args):
+    """Split `args` at depth-0 commas (parens, brackets, braces)."""
+    out, depth, cur = [], 0, []
+    for ch in args:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    out.append("".join(cur))
+    return [a.strip() for a in out]
+
+
 def check_row_7(out):
     """Row 7's two facts, each re-derived from the extension's own source.
 
     S16 enumeration — how an extension can reach the `ScratchpadResult` path,
     written before the scan unit was chosen. The variant is emitted only when a
-    tool named `scratchpad` is served by an `on_tool_handle` returning `Handled`
-    with a `cells` key, and the dispatch gate is
-    `contains_tool(h.provided_tools, name)` (src/core/ext/runtime.ail:356). So
-    an extension reaches it only if BOTH:
+    tool named `scratchpad` is served by a ToolProvider handle returning
+    `Handled` with a `cells` key, and the dispatch gate is the atom's own
+    provided-names list. So an extension reaches it only if BOTH:
 
-      (a) `provided_tools` is non-empty. Ways it can be:
-            1. an inline list literal — the shape all four use;
+      (a) the `ToolProvider(<names>, <handle>)` atom's NAMES are non-empty.
+          Ways they can be written:
+            1. an inline list literal — the shape all four use; only the empty
+               literal `[]` is admitted;
             2. a named identifier or function call — CANNOT be decided by this
                scan, so it FAILS rather than passing;
             3. built from config inside `register_with_config` — same, FAILS.
-      (b) `on_tool_handle` can return `Handled`. Ways it can be bound:
+      (b) the HANDLE can return `Handled`. Ways it can be bound:
             1. an inline `func`/lambda whose body names the constructor — the
                shape all four use;
-            2. a reference to a named top-level function — CANNOT be decided
-               without following it, so it FAILS;
+            2. a reference to a named top-level function IN THE PACKAGE — B8
+               admits it by following the name to its body in the package's
+               own `.ail` files and applying the same scan there; a name that
+               resolves nowhere in the package FAILS;
             3. a value threaded from elsewhere — FAILS.
 
-    Only shape 1 of each is admitted. Every other shape is a FAIL, which is the
-    fail-closed direction: this scan can refuse an extension that in fact never
-    emits, and cannot bless one that does.
+    B8: the facts are read off the `ToolProvider` atom of the literal
+    `[Capability]` list, never off a `provided_tools:`/`on_tool_handle:` field
+    or a `default_hooks` head — both are gone from the ABI. A package with no
+    `ToolProvider(` atom, or with more than one, is a shape this scan does not
+    admit and FAILS. Every unenumerated shape is a FAIL, which is the
+    fail-closed direction: this scan can refuse an extension that in fact
+    never emits, and cannot bless one that does.
     """
     dirs = {v: k for k, v in installable_extension_dirs().items()}
     for ext in sorted(out["installed"]):
         pkg = REPO / dirs[ext]
         srcs = sorted(pkg.glob("*.ail"))
-        hit = None
-        for s in srcs:
-            text = s.read_text()
-            if "provided_tools:" in text and "on_tool_handle:" in text:
-                hit = (s, text)
-                break
-        if hit is None:
-            fail(f"could not find the ExtensionHooks record for '{ext}' under {dirs[ext]}; row 7's "
-                 "exemption cannot be re-derived, so it is not earned")
-        path, text = hit
+        hits = []
+        for src in srcs:
+            text = src.read_text()
+            for m in re.finditer(r"\bToolProvider\s*\(", text):
+                if re.search(r"\bimport\b", text[max(0, text.rfind("\n", 0, m.start())):m.start()]):
+                    continue
+                end = _balanced(text, m.end() - 1)
+                if end < 0:
+                    fail(f"'{ext}': unbalanced `ToolProvider(` in {src.name}")
+                hits.append((src, text, text[m.end():end - 1]))
+        if len(hits) == 0:
+            # Item 4 (6.0 trimming): an extension that registers NO ToolProvider
+            # atom has no provided-names list and no handle at all, so the gated
+            # ToolProvider dispatch is never reached for it and the
+            # ScratchpadResult path is closed by construction. That is stronger
+            # than the `ToolProvider([], handle)` shape, and B2's enumeration
+            # (check 4) is what guarantees the atom is really absent rather than
+            # merely unseen by this scan.
+            if any(kind == "tool_provider" for (kind, _i) in hook_scope_atoms()[ext]):
+                fail(f"'{ext}' registers a tool_provider atom per B2 and this scan finds no "
+                     f"`ToolProvider(` under {dirs[ext]}; the two readings disagree, fail-closed")
+            print(f"      row7 '{ext}': registers no ToolProvider atom at all (B2 agrees) — the gated "
+                  "dispatch is unreachable by construction")
+            continue
+        if len(hits) != 1:
+            fail(f"'{ext}' has {len(hits)} `ToolProvider(...)` atom(s) under {dirs[ext]} (in "
+                 f"{sorted({h[0].name for h in hits})}); this scan admits at most ONE, so row 7's "
+                 "exemption cannot be re-derived and is not earned")
+        path, text, payload = hits[0]
+        args = _split_top(payload)
+        if len(args) != 2:
+            fail(f"'{ext}'s `ToolProvider` atom has {len(args)} argument(s), expected (names, handle)")
+        names, handle = args
 
-        pt = re.search(r"provided_tools:\s*(\[[^\]]*\]|\S+)", text)
-        if not pt:
-            fail(f"'{ext}' has no readable `provided_tools` binding in {path.name}")
-        if pt.group(1).strip() != "[]":
-            fail(f"'{ext}' binds `provided_tools: {pt.group(1).strip()}`, which is not the empty\n"
+        if names != "[]":
+            fail(f"'{ext}' registers `ToolProvider({names}, ...)`, whose names are not the empty\n"
                  "      literal this scan can decide. Row 7's first fact is UNVERIFIED — fail-closed,\n"
-                 "      because a non-empty or computed tool list opens the gated on_tool_handle\n"
+                 "      because a non-empty or computed tool list opens the gated ToolProvider\n"
                  "      dispatch and with it the ScratchpadResult path.")
 
-        th = re.search(r"on_tool_handle:\s*(.*?)(?=\n\s{2,4}on_[a-z_]+:|\n\s*\}\s*\n)", text, re.S)
-        if not th:
-            fail(f"could not read '{ext}'s `on_tool_handle` binding in {path.name}")
-        body = th.group(1)
-        if "func(" not in body and "\\" not in body:
-            fail(f"'{ext}' binds `on_tool_handle` to something this scan cannot follow "
-                 f"({body.strip()[:60]!r}); row 7's second fact is UNVERIFIED — fail-closed")
+        body = handle
+        if "func(" not in body and "func " not in body and "\\" not in body:
+            # shape (b)2: a bare name; follow it to its body in the package.
+            if not re.fullmatch(r"[A-Za-z_]\w*", body):
+                fail(f"'{ext}' binds its ToolProvider handle to something this scan cannot follow "
+                     f"({body[:60]!r}); row 7's second fact is UNVERIFIED — fail-closed")
+            found = None
+            for src in srcs:
+                t = src.read_text()
+                fm = re.search(r"^(?:export\s+)?(?:pure\s+)?func\s+" + re.escape(body) + r"\s*\(",
+                               t, re.M)
+                if fm:
+                    bstart = t.find("{", fm.end())
+                    depth, j = 0, bstart
+                    while j < len(t):
+                        depth += {"{": 1, "}": -1}.get(t[j], 0)
+                        j += 1
+                        if depth == 0:
+                            break
+                    found = (src, t[fm.start():j])
+                    break
+            if found is None:
+                fail(f"'{ext}' binds its ToolProvider handle to `{body}`, which resolves to no "
+                     f"top-level `func {body}(` in {dirs[ext]}; row 7's second fact is "
+                     "UNVERIFIED — fail-closed")
+            path, body = found[0], found[1]
         if "Handled" in body:
-            fail(f"'{ext}'s `on_tool_handle` can return `Handled`, which is the constructor the\n"
-                 "      ScratchpadResult path needs. Row 7's exemption does not hold for this profile.")
+            fail(f"'{ext}'s ToolProvider handle ({path.name}) can return `Handled`, which is the\n"
+                 "      constructor the ScratchpadResult path needs. Row 7's exemption does not hold\n"
+                 "      for this profile.")
         if "Delegate" not in body:
-            fail(f"'{ext}'s `on_tool_handle` returns neither `Handled` nor `Delegate`; the scan "
-                 "cannot decide it")
+            fail(f"'{ext}'s ToolProvider handle ({path.name}) returns neither `Handled` nor "
+                 "`Delegate`; the scan cannot decide it")
 
     print(f"  ✓ CLAIM row7 re-derived from source: all {len(out['installed'])} installed extensions "
-          "bind `provided_tools: []` (so the gated on_tool_handle dispatch is never reached) AND "
-          "return `Delegate`, never `Handled` — two independent facts, neither of them emptiness")
+          "either register NO ToolProvider atom (B2 agrees) or register `ToolProvider([], handle)` "
+          "with a handle that returns `Delegate`, never `Handled` — so the gated ToolProvider "
+          "dispatch is never reached, by two independent facts, neither of them emptiness")
 
 
 def check_statement(out):

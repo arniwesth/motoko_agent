@@ -2,23 +2,21 @@
 -- interpolation.  `strip_noise` blanks string literals wholesale, so an
 -- import-granular parent never had to care -- but a CALL-granular reader that
 -- inherits that lid cannot see this at all, and would report the fixture clean.
--- Must resolve AMBIENT.
+-- Must resolve AMBIENT.  B8: eight-atom list, the call in `PromptShaper`.
 module fixture/control_interpolated_call
 
 import std/clock (now)
-import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtCtx)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
 
-export func register_with_config(_cfg: a) -> ExtensionHooks {
-  {
-    id: "control_interpolated_call",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: ["t=${now()}"] },
-    on_budget_plan: \_ _ . { requested_total: None },
-    on_pre_step: func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
-    on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle: func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } },
-    on_response_intercept: func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
-  }
+export func register_with_config(_cfg: a) -> [Capability] {
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(\_ctx. { prepend: [], append: ["t=${now()}"] }),
+    BudgetShaper(\_ctx _plan. { requested_total: None, requested_solver: None, requested_verifier: None }),
+    Compactor(func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } }),
+    ToolPolicy(\_ctx _call. NoOpinion),
+    ToolProvider([], func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } }),
+    ResponseInterceptor(func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } }),
+    SolverJudge(func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } })
+  ]
 }

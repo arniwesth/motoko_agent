@@ -7,7 +7,8 @@ import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockRead
   BudgetPlan,
   ExtCtx,
   ExtPorts,
-  ExtensionHooks,
+  Capability,
+  Compactor,
   Msg,
   PreStepDecision,
   PassThrough,
@@ -30,10 +31,10 @@ export type ScenarioFailure = {
 
 export type Scenario = {
   id: string,
-  run: (ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  run: ([Capability]) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
 }
 
--- WI-D16 widened `ExtPorts.proc_exec` to thread the world token. Returning
+-- WI-D16 widened `ExtPorts.tool_handle` to thread the world token. Returning
 -- `world` unchanged is S12's IDENTITY TRANSITION and is the correct answer for
 -- exactly `noop_clock_now`'s reason below: this port executes nothing, so there
 -- is no cursor to advance. It would be a silent defect in a binding that DID
@@ -50,7 +51,7 @@ export type Scenario = {
 -- `exit_code: -1` (WI-D23), NOT 0: a no-op executes nothing, and -1 is
 -- exactly the "no subprocess ran" value the ABI row's domain names. Writing
 -- 0 here would assert a success no process produced.
-func noop_proc_exec(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+func noop_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
   { output: "", exit_code: -1, next_state: world }
 }
 
@@ -119,7 +120,7 @@ func poison_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutc
 export func canned_ports() -> ExtPorts {
   {
     ai_step: canned_ai_step,
-    proc_exec: noop_proc_exec,
+    tool_handle: noop_tool_handle,
     file_read: noop_file_read,
     file_write: noop_file_write,
     file_remove: noop_file_remove,
@@ -134,7 +135,7 @@ export func canned_ports() -> ExtPorts {
 export func poison_ports() -> ExtPorts {
   {
     ai_step: poison_ai_step,
-    proc_exec: noop_proc_exec,
+    tool_handle: noop_tool_handle,
     file_read: noop_file_read,
     file_write: noop_file_write,
     file_remove: noop_file_remove,
@@ -273,13 +274,31 @@ func decision_artifacts(d: PreStepDecision) -> Json {
   }
 }
 
-export func compaction_occurred(hooks: ExtensionHooks) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+-- 6.0 Capability list: the compactor scenarios exercise exactly ONE atom.
+-- Walk the list for the FIRST `Compactor(f)`; a list without one cannot be
+-- conformance-tested as a compactor, and `compact_with` says so.
+func compact_with(caps: [Capability], ctx: ExtCtx, msgs: [Msg]) -> Result[PreStepDecision, ScenarioFailure] ! {AI, IO, Trace} {
+  match caps {
+    [] => Err({ failed_invariant: "no_compactor_atom", trace: ["capability list carries no Compactor atom"] }),
+    Compactor(f) :: _ => Ok(f(ctx, msgs).decision),
+    _ :: rest => compact_with(rest, ctx, msgs)
+  }
+}
+
+pure func count_caps(caps: [Capability]) -> int {
+  match caps { [] => 0, _ :: rest => 1 + count_caps(rest) }
+}
+
+export func compaction_occurred(caps: [Capability]) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let segment = compaction_segment();
   let ctx = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-  match hooks.on_pre_step(ctx, segment).decision {
-    Compacted(_, _, _) => true,
-    PassThrough => false,
-    PassThroughObserved(_, _) => false
+  match compact_with(caps, ctx, segment) {
+    Err(_) => false,
+    Ok(d) => match d {
+      Compacted(_, _, _) => true,
+      PassThrough => false,
+      PassThroughObserved(_, _) => false
+    }
   }
 }
 
@@ -304,11 +323,16 @@ func ok_or_failure(ok: bool, scenario: string, invariant_name: string, segment: 
 export func scenario_system_prefix_preserved() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   {
     id: "conformance.compactor.system_prefix_preserved",
-    run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    run: func(caps: [Capability]) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
       let segment = compaction_segment();
       let ctx = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-      let out = decision_msgs(segment, hooks.on_pre_step(ctx, segment).decision);
-      ok_or_failure(no_system_in_output(out), "conformance.compactor.system_prefix_preserved", "no_system_in_output", segment, out)
+      match compact_with(caps, ctx, segment) {
+        Err(f) => Err(f),
+        Ok(d) => {
+          let out = decision_msgs(segment, d);
+          ok_or_failure(no_system_in_output(out), "conformance.compactor.system_prefix_preserved", "no_system_in_output", segment, out)
+        }
+      }
     }
   }
 }
@@ -316,12 +340,17 @@ export func scenario_system_prefix_preserved() -> Scenario ! {AI, Clock, Env, FS
 export func scenario_tool_pairing_preserved() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   {
     id: "conformance.compactor.tool_pairing_preserved",
-    run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    run: func(caps: [Capability]) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
       let segment = compaction_segment();
       let ctx = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-      let out = decision_msgs(segment, hooks.on_pre_step(ctx, segment).decision);
-      if not pairing_preserved(segment, out) then Err(failure("conformance.compactor.tool_pairing_preserved", "pairing_preserved", segment, out))
-      else ok_or_failure(ids_preserved(segment, out), "conformance.compactor.tool_pairing_preserved", "ids_preserved", segment, out)
+      match compact_with(caps, ctx, segment) {
+        Err(f) => Err(f),
+        Ok(d) => {
+          let out = decision_msgs(segment, d);
+          if not pairing_preserved(segment, out) then Err(failure("conformance.compactor.tool_pairing_preserved", "pairing_preserved", segment, out))
+          else ok_or_failure(ids_preserved(segment, out), "conformance.compactor.tool_pairing_preserved", "ids_preserved", segment, out)
+        }
+      }
     }
   }
 }
@@ -329,13 +358,21 @@ export func scenario_tool_pairing_preserved() -> Scenario ! {AI, Clock, Env, FS,
 export func scenario_deterministic_replay() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   {
     id: "conformance.compactor.deterministic_replay",
-    run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    run: func(caps: [Capability]) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
       let segment = compaction_segment();
       let ctx1 = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
       let ctx2 = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-      let out1 = decision_msgs(segment, hooks.on_pre_step(ctx1, segment).decision);
-      let out2 = decision_msgs(segment, hooks.on_pre_step(ctx2, segment).decision);
-      ok_or_failure(same_msgs(out1, out2), "conformance.compactor.deterministic_replay", "deterministic_replay", segment, out2)
+      match compact_with(caps, ctx1, segment) {
+        Err(f) => Err(f),
+        Ok(d1) => match compact_with(caps, ctx2, segment) {
+          Err(f) => Err(f),
+          Ok(d2) => {
+            let out1 = decision_msgs(segment, d1);
+            let out2 = decision_msgs(segment, d2);
+            ok_or_failure(same_msgs(out1, out2), "conformance.compactor.deterministic_replay", "deterministic_replay", segment, out2)
+          }
+        }
+      }
     }
   }
 }
@@ -343,14 +380,23 @@ export func scenario_deterministic_replay() -> Scenario ! {AI, Clock, Env, FS, I
 export func scenario_artifact_cache_effective() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   {
     id: "conformance.compactor.artifact_cache_effective",
-    run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    run: func(caps: [Capability]) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
       let segment = compaction_segment();
       let ctx1 = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
-      let d1 = hooks.on_pre_step(ctx1, segment).decision;
-      let out1 = decision_msgs(segment, d1);
-      let ctx2 = mk_conformance_ctx(segment, decision_artifacts(d1), poison_ports());
-      let out2 = decision_msgs(segment, hooks.on_pre_step(ctx2, segment).decision);
-      ok_or_failure(same_msgs(out1, out2), "conformance.compactor.artifact_cache_effective", "artifact_cache_effective", segment, out2)
+      match compact_with(caps, ctx1, segment) {
+        Err(f) => Err(f),
+        Ok(d1) => {
+          let out1 = decision_msgs(segment, d1);
+          let ctx2 = mk_conformance_ctx(segment, decision_artifacts(d1), poison_ports());
+          match compact_with(caps, ctx2, segment) {
+            Err(f) => Err(f),
+            Ok(d2) => {
+              let out2 = decision_msgs(segment, d2);
+              ok_or_failure(same_msgs(out1, out2), "conformance.compactor.artifact_cache_effective", "artifact_cache_effective", segment, out2)
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -374,30 +420,32 @@ func print_trace(lines: [string]) -> () ! {IO} {
   }
 }
 
-export func run_scenario(hooks: ExtensionHooks, s: Scenario) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  s.run(hooks)
+export func run_scenario(caps: [Capability], s: Scenario) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  s.run(caps)
 }
 
-func run_all(hooks: ExtensionHooks, scenarios: [Scenario], failed: int) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func run_all(caps: [Capability], scenarios: [Scenario], failed: int) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
   match scenarios {
     [] => failed,
     s :: rest => {
-      match run_scenario(hooks, s) {
+      match run_scenario(caps, s) {
         Ok(_) => {
           let _ = println("scenario=${s.id} ok");
-          run_all(hooks, rest, failed)
+          run_all(caps, rest, failed)
         },
         Err(f) => {
           let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
           let _ = print_trace(f.trace);
-          run_all(hooks, rest, failed + 1)
+          run_all(caps, rest, failed + 1)
         }
       }
     }
   }
 }
 
-export func run_conformance(hooks: ExtensionHooks) -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
-  let _ = println("conformance kit ${conformance_abi_version()} ABI ${conformance_abi_version()} hooks=${hooks.id}");
-  run_all(hooks, all_scenarios(), 0)
+-- The 6.0 list carries no id (the host stamps it), so the banner reports the
+-- atom count instead.
+export func run_conformance(caps: [Capability]) -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let _ = println("conformance kit 5.0.0 ABI ${conformance_abi_version()} caps=${show(count_caps(caps))}");
+  run_all(caps, all_scenarios(), 0)
 }

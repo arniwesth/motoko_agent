@@ -157,9 +157,10 @@ import std/string (startsWith)
 
 import src/core/dst_profile_coverage as Cov (
   CoverageRejection,
-  DisclosureIds,
-  ExtensionDisclosure,
-  HookSlot,
+  CapabilityDisclosureIds,
+  CapabilityDisclosure,
+  AtomIds,
+  CapabilityKind,
   DispatchKind,
   Unconditional,
   Gated
@@ -546,7 +547,7 @@ export type UnroutedSiteDeclaration = {
 -- One call site the classifier found: an extension reaching an `ExtPorts` field
 -- whose core seam threads successor state, which the ext seam cannot carry.
 --
--- The set is THREE fields at HEAD — `ai_step`, `proc_exec`, `env_get` — since
+-- The set is THREE fields at HEAD — `ai_step`, `tool_handle`, `env_get` — since
 -- A12 made `Ports.tool_exec` and `Ports.env_get` thread successor state. It is
 -- not written down here; it arrives with these rows, derived per run by
 -- `tools/ext_call_inventory/derive.py`, which consults no list of its own.
@@ -572,8 +573,11 @@ export type ProfileDefinition = {
   -- D5 field 2
   installed_packages: [InstalledPackage],
   hook_classifications: [HookClassificationEntry],
-  -- D5 field 9 (separate from field 2 in D5: ids, not classifications)
-  disclosures: [DisclosureIds],
+  -- D5 field 9 (separate from field 2 in D5: ids, not classifications).
+  -- B8: per ATOM `{ kind, index }` (D6) -- the registration's atoms are the
+  -- denominator, covered/excluded partition them. A hook id anywhere in this
+  -- file is an atom id, `kind[index]` (e.g. `tool_provider[0]`).
+  disclosures: [CapabilityDisclosureIds],
   -- D5 fields 3-7
   adapter_boundaries: [AdapterBoundary],
   resource_models: [ResourceModel],
@@ -775,11 +779,12 @@ pure func capability_instruments(cs: [ForbiddenCapability]) -> [ProfileRejection
 -- Note what is NOT restated: the seven-unconditional split. `validate_disclosure`
 -- reads `hook_dispatch`, so the `on_describe_tools` correction is inherited
 -- rather than re-derived.
-pure func parse_disclosures(ds: [DisclosureIds]) -> Result[[ExtensionDisclosure], CoverageRejection] {
+@allow_empty_ok("an empty disclosures list is a legitimate parse result — no disclosures to parse")
+pure func parse_disclosures(ds: [CapabilityDisclosureIds]) -> Result[[CapabilityDisclosure], CoverageRejection] {
   match ds {
     [] => Ok([]),
     d :: rest =>
-      match Cov.disclosure_from_ids(d.extension_id, d.covered, d.excluded) {
+      match Cov.capability_disclosure_from_ids(d) {
         Err(e) => Err(e),
         Ok(parsed) =>
           match parse_disclosures(rest) {
@@ -801,7 +806,7 @@ pure func lift_coverage(rs: [CoverageRejection]) -> [ProfileRejection] {
 export pure func validate_coverage(d: ProfileDefinition) -> [ProfileRejection] {
   match parse_disclosures(d.disclosures) {
     Err(e) => [CoverageDefect(Cov.rejection_rule(e), Cov.rejection_message(e))],
-    Ok(parsed) => lift_coverage(Cov.validate_install_list(parsed))
+    Ok(parsed) => lift_coverage(Cov.validate_capability_install_list(parsed))
   }
 }
 
@@ -945,17 +950,26 @@ export pure func validate_routing(d: ProfileDefinition) -> [ProfileRejection] {
 -- ("installed at all"), because the shortcut would be wrong the day the ABI
 -- gains a second gated slot, and because the D5 form is the one the ADR's
 -- routing-audit row names.
-pure func excluded_ids_for(ds: [DisclosureIds], ext_id: string) -> [string] {
-  match ds {
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs {
     [] => [],
-    d :: rest => if d.extension_id == ext_id then d.excluded else excluded_ids_for(rest, ext_id)
+    x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest)
   }
 }
 
-pure func all_slot_ids_rec(xs: [HookSlot]) -> [string] {
-  match xs {
+pure func excluded_ids_for(ds: [CapabilityDisclosureIds], ext_id: string) -> [string] {
+  match ds {
     [] => [],
-    x :: rest => Cov.hook_slot_id(x) :: all_slot_ids_rec(rest)
+    d :: rest => if d.extension_id == ext_id then atom_id_strs(d.excluded) else excluded_ids_for(rest, ext_id)
+  }
+}
+
+-- B8: the extension's OWN registered atoms (the denominator), not a fixed
+-- slot list -- an extension with two Compactor atoms has two things to exclude.
+pure func atom_ids_for(ds: [CapabilityDisclosureIds], ext_id: string) -> [string] {
+  match ds {
+    [] => [],
+    d :: rest => if d.extension_id == ext_id then atom_id_strs(d.atoms) else atom_ids_for(rest, ext_id)
   }
 }
 
@@ -968,15 +982,13 @@ pure func any_unexcluded(excluded: [string], slots: [string]) -> bool {
 
 export pure func validate_classifier_2(d: ProfileDefinition, calls: [Classifier2Call]) -> [ProfileRejection] {
   let installed = installed_ids(d.installed_packages);
-  let slots = all_slot_ids_rec(Cov.all_hook_slots());
-  classifier_2_rec(d, calls, installed, slots)
+  classifier_2_rec(d, calls, installed)
 }
 
 pure func classifier_2_rec(
   d: ProfileDefinition,
   calls: [Classifier2Call],
-  installed: [string],
-  slots: [string]
+  installed: [string]
 ) -> [ProfileRejection] {
   match calls {
     [] => [],
@@ -984,11 +996,15 @@ pure func classifier_2_rec(
       let here =
         if contains_str(installed, c.extension_id) then {
           let excluded = excluded_ids_for(d.disclosures, c.extension_id);
-          if any_unexcluded(excluded, slots) then
+          let atoms = atom_ids_for(d.disclosures, c.extension_id);
+          -- an installed extension with NO disclosed atoms is caught by the
+          -- coverage gate (`installed-with-no-capabilities`); here it counts as
+          -- "every atom un-excluded" so the classifier-2 rule still fires
+          if List.length(atoms) == 0 || any_unexcluded(excluded, atoms) then
             [Classifier2ExtensionInstalled(c.extension_id, c.field, c.site)]
           else []
         } else [];
-      here ++ classifier_2_rec(d, rest, installed, slots)
+      here ++ classifier_2_rec(d, rest, installed)
     }
   }
 }
@@ -1099,7 +1115,7 @@ export pure func validate_waivers(d: ProfileDefinition, catalogue: [FaultClass])
 -- Internal consistency: D5 states the install list three times
 -- ---------------------------------------------------------------------------
 
-pure func disclosure_ids_of(ds: [DisclosureIds]) -> [string] {
+pure func disclosure_ids_of(ds: [CapabilityDisclosureIds]) -> [string] {
   match ds {
     [] => [],
     d :: rest => d.extension_id :: disclosure_ids_of(rest)
@@ -1144,7 +1160,7 @@ export pure func validate_extension_sets(d: ProfileDefinition) -> [ProfileReject
 -- the other has never heard of.
 pure func classification_agrees(
   cs: [HookClassificationEntry],
-  ds: [DisclosureIds]
+  ds: [CapabilityDisclosureIds]
 ) -> [ProfileRejection] {
   match cs {
     [] => [],
@@ -1534,7 +1550,7 @@ export pure func validate_manifest(m: ExecutionManifest, d: ProfileDefinition) -
     -- extension port at HEAD. The other two lists keep the requirement because
     -- neither can legitimately be empty — `scan_roots` scopes the routing scan
     -- and an empty one scans nothing, and `classifier_2_set` still has two
-    -- members (`env_get`, `proc_exec`).
+    -- members (`env_get`, `tool_handle`).
     --
     -- THE COST, because it is the shape this project keeps finding: an empty
     -- `unrouted_fields` no longer distinguishes "nothing is unrouted" from
@@ -1706,16 +1722,29 @@ pure func test_forbidden_capability_needs_an_instrument() -> bool
 -- The composition defect this module exists to avoid, asserted directly: the
 -- excluded-hook rule is READ from A6, so `on_describe_tools` — D5's prose
 -- undercount — is rejected here without this module restating anything.
+-- B8 test helpers: atom ids. `eight()` is the one-atom-per-kind registration
+-- every extension in the tree has at B8; `all_but(ids)` is it minus `ids`.
+pure func ai(kind: string, idx: int) -> AtomIds { { kind: kind, index: idx } }
+pure func kinds_at_zero(ks: [CapabilityKind]) -> [AtomIds] {
+  match ks { [] => [], k :: rest => ai(Cov.capability_kind_id(k), 0) :: kinds_at_zero(rest) }
+}
+pure func eight() -> [AtomIds] { kinds_at_zero(Cov.all_capability_kinds()) }
+pure func all_but(ids: [string]) -> [AtomIds] { drop_ids(eight(), ids) }
+pure func drop_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(ids, Cov.atom_ids_id(x)) then drop_ids(rest, ids) else x :: drop_ids(rest, ids)
+  }
+}
+
 pure func test_describe_tools_exclusion_is_inherited_not_restated() -> bool
   tests [((), true)]
   {
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "x", package_id: "p", version: "1", source_path: "packages/x/x.ail" }],
-      disclosures: [{ extension_id: "x",
-                      covered: ["on_build_system_prompt", "on_budget_plan", "on_pre_step",
-                                "on_tool_policy", "on_tool_handle", "on_response_intercept",
-                                "on_solver_candidate"],
-                      excluded: ["on_describe_tools"] }] };
+      disclosures: [{ extension_id: "x", atoms: eight(),
+                      covered: all_but(["describe_tools[0]"]),
+                      excluded: [ai("describe_tools", 0)] }] };
     has_rule(validate_coverage(d), "unconditional-hook-excluded")
   }
 
@@ -1728,13 +1757,11 @@ pure func test_partial_disclosure_is_rejected_through_the_profile_gate() -> bool
   {
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "p", package_id: "p", version: "1", source_path: "packages/p/p.ail" }],
-      disclosures: [{ extension_id: "p",
-                      covered: ["on_describe_tools", "on_describe_tools", "on_build_system_prompt",
-                                "on_budget_plan", "on_pre_step", "on_tool_policy",
-                                "on_response_intercept"],
-                      excluded: ["on_tool_handle"] }] };
+      disclosures: [{ extension_id: "p", atoms: eight(),
+                      covered: ai("describe_tools", 0) :: all_but(["tool_provider[0]", "solver_judge[0]"]),
+                      excluded: [ai("tool_provider", 0)] }] };
     let rs = validate_coverage(d);
-    has_rule(rs, "covered-excluded-exhaustive") && has_rule(rs, "covered-excluded-disjoint")
+    has_rule(rs, "atoms-covered-excluded-exhaustive") && has_rule(rs, "atoms-covered-excluded-disjoint")
   }
 
 pure func test_unknown_hook_id_fails_closed() -> bool
@@ -1742,8 +1769,8 @@ pure func test_unknown_hook_id_fails_closed() -> bool
   {
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "t", package_id: "p", version: "1", source_path: "src/t.ail" }],
-      disclosures: [{ extension_id: "t", covered: ["on_describe_tool"], excluded: [] }] };
-    has_rule(validate_coverage(d), "unknown-hook-id")
+      disclosures: [{ extension_id: "t", atoms: [ai("describe_tool", 0)], covered: [ai("describe_tool", 0)], excluded: [] }] };
+    has_rule(validate_coverage(d), "unknown-capability-kind")
   }
 
 -- Decision 1, forward half: the two unrouted reachable core sites at HEAD must
@@ -1799,7 +1826,7 @@ pure func test_classifier_2_extension_installed_is_rejected() -> bool
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "compaction_ai", package_id: "p", version: "1",
                              source_path: "packages/motoko-ext-compaction-ai/compaction_ai.ail" }],
-      disclosures: [{ extension_id: "compaction_ai", covered: [], excluded: [] }] };
+      disclosures: [{ extension_id: "compaction_ai", atoms: eight(), covered: eight(), excluded: [] }] };
     let calls: [Classifier2Call] =
       [{ extension_id: "compaction_ai", field: "ai_step",
          site: "packages/motoko-ext-compaction-ai/compaction_ai.ail:106" }];
@@ -1824,7 +1851,7 @@ pure func test_package_outside_scan_roots_is_rejected() -> bool
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "remote", package_id: "sunholo/remote", version: "1",
                              source_path: "/home/x/.ailang/registry/sunholo/remote/lib.ail" }],
-      disclosures: [{ extension_id: "remote", covered: [], excluded: [] }] };
+      disclosures: [{ extension_id: "remote", atoms: [], covered: [], excluded: [] }] };
     has_rule(validate_scan_roots(d), "package-outside-scan-roots")
   }
 
@@ -1832,7 +1859,7 @@ pure func test_extension_sets_must_agree() -> bool
   tests [((), true)]
   {
     let d: ProfileDefinition = { fixture_base() |
-      disclosures: [{ extension_id: "ghost", covered: ["on_describe_tools"], excluded: [] }] };
+      disclosures: [{ extension_id: "ghost", atoms: [ai("describe_tools", 0)], covered: [ai("describe_tools", 0)], excluded: [] }] };
     has_rule(validate_extension_sets(d), "extension-set-disagrees")
   }
 
@@ -1841,10 +1868,10 @@ pure func test_classification_must_agree_with_disclosure() -> bool
   {
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "c", package_id: "p", version: "1", source_path: "packages/c/c.ail" }],
-      hook_classifications: [{ extension_id: "c", hook_id: "on_tool_handle", classification: ExplicitlyExcluded,
+      hook_classifications: [{ extension_id: "c", hook_id: "tool_provider[0]", classification: ExplicitlyExcluded,
                                basis: { producer: "disclosure", revision: "HEAD" },
                                clauses: no_criterion_2() }],
-      disclosures: [{ extension_id: "c", covered: ["on_tool_handle"], excluded: [] }] };
+      disclosures: [{ extension_id: "c", atoms: [ai("tool_provider", 0)], covered: [ai("tool_provider", 0)], excluded: [] }] };
     has_rule(validate_classifications(d), "classification-disagrees-with-disclosure")
   }
 
@@ -1866,7 +1893,7 @@ pure func test_classification_must_agree_with_disclosure() -> bool
 -- one field from clean, so an unrelated rule firing means the mutation did
 -- something other than what it says.
 pure func based(p: string, rev: string) -> [HookClassificationEntry] {
-  [{ extension_id: "c", hook_id: "on_pre_step", classification: WorldMediated,
+  [{ extension_id: "c", hook_id: "compactor[0]", classification: WorldMediated,
      basis: { producer: p, revision: rev },
      -- WI-D14: the clause record the entry needs to be well-formed, so that a
      -- basis fixture fails on its BASIS and not on a clause. This is the
@@ -1878,7 +1905,7 @@ pure func with_classifications(cs: [HookClassificationEntry]) -> ProfileDefiniti
   { fixture_base() |
     installed_packages: [{ extension_id: "c", package_id: "p", version: "1", source_path: "packages/c/c.ail" }],
     hook_classifications: cs,
-    disclosures: [{ extension_id: "c", covered: ["on_pre_step"], excluded: [] }] }
+    disclosures: [{ extension_id: "c", atoms: [ai("compactor", 0)], covered: [ai("compactor", 0)], excluded: [] }] }
 }
 
 -- ARM 1. `WorldMediated` on no producer at all — precisely the entry a profile
@@ -1946,7 +1973,7 @@ pure func test_the_record_distinguishes_measured_from_read() -> bool
 -- ---------------------------------------------------------------------------
 
 pure func mediated_on(p: string, cl: Criterion2Clauses) -> [HookClassificationEntry] {
-  [{ extension_id: "c", hook_id: "on_pre_step", classification: WorldMediated,
+  [{ extension_id: "c", hook_id: "compactor[0]", classification: WorldMediated,
      basis: { producer: p, revision: "c3de56f" }, clauses: cl }]
 }
 
@@ -1972,7 +1999,7 @@ pure func test_effect_free_on_a_read_basis_is_accepted() -> bool
   tests [((), true)]
   {
     let d = with_classifications(
-      [{ extension_id: "c", hook_id: "on_pre_step", classification: EffectFree,
+      [{ extension_id: "c", hook_id: "compactor[0]", classification: EffectFree,
          basis: { producer: "declared_row", revision: "c3de56f" },
          clauses: no_criterion_2() }]);
     List.length(validate_classifications(d)) == 0
@@ -2000,7 +2027,7 @@ pure func test_criterion_2_clauses_on_a_criterion_1_entry_are_rejected() -> bool
   tests [((), true)]
   {
     let d = with_classifications(
-      [{ extension_id: "c", hook_id: "on_pre_step", classification: EffectFree,
+      [{ extension_id: "c", hook_id: "compactor[0]", classification: EffectFree,
          basis: { producer: "declared_row", revision: "c3de56f" },
          clauses: no_op_clauses() }]);
     has_rule(validate_classifications(d), "criterion-2-clauses-not-applicable")
@@ -2136,7 +2163,7 @@ pure func fixture_manifest() -> ExecutionManifest {
     profile_version: "1",
     event_vocabulary_version: Vocab.event_vocabulary_version(),
     normalized_configuration: "{}",
-    classifier_2_set: ["ai_step", "env_get", "proc_exec"],
+    classifier_2_set: ["ai_step", "env_get", "tool_handle"],
     unrouted_fields: ["some_unrouted_ext_port"],
     scan_roots: ["src", "packages"],
     scan_root_commit: "abc1234",
@@ -2189,7 +2216,7 @@ pure func test_manifest_records_both_derived_sets() -> bool
   {
     let m = fixture_manifest();
     List.length(m.classifier_2_set) == 3 && List.length(m.unrouted_fields) == 1
-      && contains_str(m.classifier_2_set, "proc_exec")
+      && contains_str(m.classifier_2_set, "tool_handle")
       && contains_str(m.unrouted_fields, "some_unrouted_ext_port")
   }
 
@@ -2211,11 +2238,9 @@ pure func excluding_profile() -> ProfileDefinition {
   { fixture_base() |
     installed_packages: [{ extension_id: "compose", package_id: "sunholo/motoko_ext_compose",
                            version: "0.2.4", source_path: "packages/motoko-ext-compose/compose.ail" }],
-    disclosures: [{ extension_id: "compose",
-                    covered: ["on_describe_tools", "on_build_system_prompt", "on_budget_plan",
-                              "on_pre_step", "on_tool_policy", "on_response_intercept",
-                              "on_solver_candidate"],
-                    excluded: ["on_tool_handle"] }] }
+    disclosures: [{ extension_id: "compose", atoms: eight(),
+                    covered: all_but(["tool_provider[0]"]),
+                    excluded: [ai("tool_provider", 0)] }] }
 }
 
 pure func test_excluded_dispatch_returns_a_typed_routing_violation() -> bool
@@ -2224,7 +2249,7 @@ pure func test_excluded_dispatch_returns_a_typed_routing_violation() -> bool
     let meta: ReplayMetadata =
       { source_revision: "r", toolchain_version: "t", profile_id: "fixture",
         profile_version: "1", event_vocabulary_version: Vocab.event_vocabulary_version() };
-    match routing_violation_at(excluding_profile(), "compose", "on_tool_handle", 3,
+    match routing_violation_at(excluding_profile(), "compose", "tool_provider[0]", 3,
                                empty_ledger_trace(), meta) {
       None => false,
       Some(RunFailed(f)) =>
@@ -2244,7 +2269,7 @@ pure func test_covered_dispatch_proceeds() -> bool
     let meta: ReplayMetadata =
       { source_revision: "r", toolchain_version: "t", profile_id: "fixture",
         profile_version: "1", event_vocabulary_version: Vocab.event_vocabulary_version() };
-    match routing_violation_at(excluding_profile(), "compose", "on_tool_policy", 3,
+    match routing_violation_at(excluding_profile(), "compose", "tool_policy[0]", 3,
                                empty_ledger_trace(), meta) {
       None => true,
       Some(_) => false
@@ -2260,7 +2285,7 @@ pure func test_empty_install_list_cannot_violate() -> bool
     let meta: ReplayMetadata =
       { source_revision: "r", toolchain_version: "t", profile_id: "fixture",
         profile_version: "1", event_vocabulary_version: Vocab.event_vocabulary_version() };
-    match routing_violation_at(fixture_base(), "anything", "on_tool_handle", 0,
+    match routing_violation_at(fixture_base(), "anything", "tool_provider[0]", 0,
                                empty_ledger_trace(), meta) {
       None => true,
       Some(_) => false
