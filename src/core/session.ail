@@ -3342,6 +3342,16 @@ export func run_v2_with_conversation(
   -- the outer conversation loop, and each traced run below derives its own from
   -- its own world. That is pre-existing behaviour, not a cursor being dropped.
   let session_id = derive_session_id(started_provider.ports, started_provider.world).id;
+  -- An empty task means there is no opening turn to run: the process was
+  -- spawned to warm the module graph (the TUI pre-spawns at boot so the
+  -- AILANG load overlaps with the user typing) or respawned by `/restart`.
+  -- Go straight to the conversation loop and block on stdin for the first
+  -- user_message. Without this branch the empty task reaches the provider
+  -- as a real model call on an empty user message -- which is what
+  -- `/restart` did before this guard existed.
+  if task == "" then
+    conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts())
+  else {
   let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
   let initial_counts = runtime_status_counts(initial_traced.trace);
   match initial_traced.result {
@@ -3354,6 +3364,7 @@ export func run_v2_with_conversation(
       }));
       conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts)
     }
+  }
   }
 }
 

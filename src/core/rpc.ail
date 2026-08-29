@@ -241,10 +241,14 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
 	  };
   let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_agents);
 
-  let init: [Msg] = [
-    { role: "system", content: system, tool_calls: [], tool_call_id: "" },
-    { role: "user", content: task, tool_calls: [], tool_call_id: "" }
-  ];
+  let system_msg: Msg = { role: "system", content: system, tool_calls: [], tool_call_id: "" };
+  -- A pre-warm spawn (TUI boot) or a `/restart` respawn carries no task.
+  -- Seeding an empty user turn would leave a blank user message at the head
+  -- of the history every later turn is appended to; send the system message
+  -- alone and let the conversation loop supply the first real user turn.
+  let init: [Msg] =
+    if task == "" then [system_msg]
+    else [system_msg, { role: "user", content: task, tool_calls: [], tool_call_id: "" }];
 
   let _ = emit(encode(jo([
     kv("type", js("v2_mode")),

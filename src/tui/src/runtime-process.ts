@@ -701,6 +701,15 @@ export class RuntimeProcess {
     this.proc.stdin?.write(JSON.stringify(cmd) + "\n");
   }
 
+  /**
+   * True once the child has exited. The TUI pre-spawns a runtime at boot to warm
+   * the AILANG module graph; the first-prompt path reads this to decide between
+   * writing to that process and spawning a replacement.
+   */
+  get isDead(): boolean {
+    return this.dead;
+  }
+
   abort(): void {
     this.send({ type: "abort" });
   }

@@ -114,7 +114,7 @@ func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecisio
 func mk_runtime(hooks: [FixtureHooks]) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   {
-    registry: { hooks: hooks },
+    registry: { entries: hooks },
     strict_mode: false,
     verification: v
   }
