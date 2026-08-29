@@ -113,9 +113,19 @@ jobs:
       - name: test_coverage (run every inline test under src/core)
         run: make test_coverage_selftest test_coverage
 
-      - name: verify_core (advisory)
-        continue-on-error: true
+      # Enforcing since MOT-130. verify_core no longer ticks a file that proves
+      # nothing, and a `requires` with no `ensures` exits non-zero (ADR-001 §3).
+      # A ratchet nothing reads is not a ratchet, so the advisory flag came off
+      # in the same change that gave the gate something true to say. Contracts
+      # the Z3 fragment rejects are reported as `blocked` and never fail here.
+      - name: verify_core
         run: make verify_core
+
+      # VERIFIED proves a contract holds of its body, not that it would notice
+      # the body changing. This falsifies each guard contract by deleting a
+      # disjunct and asserting VIOLATION (PLAN P5).
+      - name: verify_mutations
+        run: make verify_mutations
 
   dst_l2:
     name: dst_l2
