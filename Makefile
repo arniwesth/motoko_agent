@@ -2394,6 +2394,16 @@ verify_core:
 	fi; \
 	[ "$$fail" -eq 0 ] && [ "$$unstated" -eq 0 ] || exit 1
 
+# Mutation checks for the guard contracts (PLAN P5). VERIFIED proves a contract
+# holds of the body; it does not prove the contract would notice the body
+# changing. This deletes one disjunct from each guard and asserts VIOLATION.
+#
+# Mutates tracked sources in place and restores them on exit, so it is
+# deliberately NOT wired into check_core or verify_core -- nothing DP7 or
+# another agent runs may edit the tree underneath them.
+verify_mutations:
+	@./scripts/verify_contract_mutations.sh
+
 verify_ext:
 	@proven=0; unstated=0; blocked=0; fail=0; bare=0; \
 	for f in $$(find src/core/ext -name "*.ail" ! -name "*_test.ail"); do \
