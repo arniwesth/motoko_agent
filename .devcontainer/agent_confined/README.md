@@ -6,11 +6,9 @@ which motoko and the delegate CLIs (`claude`, `codex`, `omp`) are started as pan
 **This profile is additive.** `.devcontainer/default` is untouched: you keep *Reopen in Container* exactly as
 before, with its `sudo` and its VS Code attach. Nothing here is read by it.
 
-**Status (2026-08-22): the image builds; first attach in progress.** Three defects so far, all fixed and all
-recorded in [`HISTORY.md`](./HISTORY.md): `apt-get purge sudo` is refused by dpkg without
-`SUDO_FORCE_REMOVE=yes`; the build context was 11.68 GB; and `agent.sh` used bash-4-and-GNU-only constructs
-on a host that is macOS bash 3.2. **Note the split runtime** — the container is bash 5, but `agent.sh` and
-`checks/r9-container.sh`'s host legs run on your Mac, so bash 3.2 + BSD userland is the floor for those.
+**Note the split runtime.** The container is bash 5, but `agent.sh` and `checks/r9-container.sh`'s host
+legs run on the host — so bash 3.2 + BSD userland is the floor for those, and a GNU-only construct in
+either will work here and fail there.
 
 | you want | read |
 |---|---|
@@ -24,23 +22,14 @@ on a host that is macOS bash 3.2. **Note the split runtime** — the container i
 ## What this is for
 
 Attaching VS Code to a container is the mechanism that injects the operator's GitHub credential and
-ssh-agent socket into the agent's UID. Measured inside motoko's own devcontainer on 2026-08-22, with
-`checks/`:
+ssh-agent socket into the agent's UID. The credential VS Code's helper serves is an **OAuth app access
+token for the operator's own account** — not a scoped PAT — and it is live in the attached container
+rather than merely announced. Every absence in this profile follows from removing that, and from one
+further rule: **an agent that cannot install anything cannot undo an absence**, which is why there is no
+`sudo` here and why herdr, the CLIs and motoko's whole toolchain are baked into the image.
 
-```
-FAIL  leg2: sudo -n true SUCCEEDED
-FAIL  leg3: SSH_AUTH_SOCK / REMOTE_CONTAINERS_IPC / REMOTE_CONTAINERS_SOCKETS / VSCODE_IPC_HOOK_CLI are set
-FAIL  leg3: forwarded socket file(s) exist: /tmp/vscode-ssh-auth-….sock, …ipc-….sock, ~/.gnupg/S.gpg-agent
-FAIL  leg4: a VS Code remote-containers helper is configured
-FAIL  leg4: git credential fill returns a gho_-shaped value
-FAIL  leg6: host.docker.internal resolves
-```
-
-That last-but-one line is the point. A `gho_` value is a GitHub **OAuth app access token** for the operator's
-own account — not a scoped PAT — and it is *live* in the attached container, not merely announced. Every
-absence in this profile follows from removing that, and from one further rule: **an agent that cannot install
-anything cannot undo an absence**, which is why there is no `sudo` here and why herdr, the CLIs and motoko's
-whole toolchain are baked into the image.
+`checks/` is what turns that from a claim into something testable; run it against any container to see
+which of these properties actually hold there.
 
 The counterweight, stated up front because the table of absences will otherwise oversell it: **confining a
 container does not confine the tree.** See *What is deliberately not absent*.
@@ -177,7 +166,7 @@ plainly so nobody mistakes them for a boundary.
 | the build fails with *"HERDR_VERSION and HERDR_SHA256 are required"* | you ran `docker compose build` directly. Use `agent.sh build`, which exports the pinned values |
 | `agent.sh upgrade` fails with *403 Forbidden* | herdr.dev rejects some HTTP clients by User-Agent; the resolver sets one. If it still fails, the site is down — `agent.sh build` still works from the pinned file |
 | motoko fails at start-up on a missing module | `src/tui/node_modules` is not on the tree: `agent.sh bootstrap` |
-| the obsidian MCP server never connects | expected, and named: `host.docker.internal` is deliberately not routed here. See *Design* |
+| the obsidian MCP server never connects | expected. What stops it is the **egress boundary**, at every layer: on the internal-only network the embedded resolver does not even serve `host.docker.internal` (on a routed network it does, with or without `extra_hosts`); there is no route to the host's address range regardless; and the proxy, which *can* resolve the name, refuses the destination by CIDR. See *Design* |
 | `claude` or `codex` asks you to log in again after a rebuild | expected: nothing mounts `/home/motoko`, so a subscription login dies with the container. Use the API keys, or uncomment the named-volume block in `docker-compose.yml` |
 | a `git checkout` fails part-way with `EROFS` | you switched to a branch whose content differs under `.devcontainer`, `.vscode` or `.git/hooks`, which are mounted read-only. Do that from the host or your own container |
 
@@ -188,8 +177,7 @@ does, something is wrong and `checks/r9-container.sh` leg 1 will fail.
 
 ## Operating rules
 
-**As of 2026-08-22 this is where the work happens.** Not a second container beside the operator's —
-the working one. The operator's devcontainer is kept, deliberately, but its job narrowed: it is for
+**This is where the work happens.** Not a second container beside the operator's — the working one. The operator's devcontainer is kept, deliberately, but its job narrowed: it is for
 **reading and reviewing** (rendered markdown, diffs, VS Code's own tooling), not for producing
 changes. Four places, one job each:
 
@@ -211,10 +199,10 @@ Three consequences, in order of how likely they are to catch you:
   distinguishes a human decision from a mechanism. `.agent/github/` and the web UI are where that
   distinction now lives. The corollary is the second row of the table: **committing from the
   devcontainer would quietly reintroduce the operator's name**, which is the one way to break this.
-* **Keeping the devcontainer keeps its exposure.** It has passwordless sudo, the forwarded
-  ssh-agent socket, and a live `gho_` credential helper — the findings this whole profile answers —
-  and it mounts the same tree. That is an accepted cost of having a usable editor, not an oversight;
-  it is why the *agent* does not live there.
+* **Keeping the devcontainer keeps its privileges.** It is a normal attached dev container, with
+  everything that implies, and it mounts the same tree — that is an accepted cost of having a usable
+  editor, not an oversight, and it is why the *agent* does not live there. `agent.sh check` run against
+  it will tell you exactly which properties it does and does not have.
 
 Three rules, because the tree is still shared with the host and with any other container you start.
 
@@ -246,6 +234,8 @@ make agent_confined_check                    # the same thing
 #                   gh present, GH_TOKEN/GITHUB_TOKEN unset, the bot token authenticates as motoko-agent
 #                   and is REFUSED on a branch-protection read, no remote-containers helper, no gho_
 #                   credential, the profile marker, every baked-in tool present, no host.docker.internal
+#   leg 7:          the egress boundary — no direct route off-box, public egress ONLY through the proxy,
+#                   and the proxy itself refuses private/reserved destinations
 
 # R7 — the git-configuration and frozen-content audit. Owner: a human, from a host terminal.
 #   RECORD ONLY AFTER SANITISING: a baseline taken over a planted directive approves it.
@@ -278,19 +268,55 @@ an audit gets replaced by a snapshot — and **do** re-record from the reviewed 
 | `sudo`, any sudoers drop-in | with `NOPASSWD: ALL` the agent can `apt-get install openssh-client`, so every other absence is a speed bump | every new tool is an operator-side image rebuild; that is why herdr, the CLIs and the toolchain are baked in |
 | `openssh-client`, `openssh-server` | an ssh-agent socket or key is a GitHub-independent push path as the operator | no SSH git from here; HTTPS with the bot token instead |
 | `/var/run/docker.sock`, `docker` CLI | `docker run -v /:/host` is host root | no container-based tests here |
-| `extra_hosts: host.docker.internal:host-gateway` | a convenient *name* for the host — **not**, as an earlier version of this table claimed, the route itself (see below) | **the obsidian MCP server in `.mcp.json` is unreachable**, because it is addressed by name. The `ailang-docs` and `linear` MCP servers are public https and are unaffected |
+| `extra_hosts: host.docker.internal:host-gateway` | a convenient *name* for the host — not the route itself, and under this runtime not even the name (see below) | on its own, **nothing** — the name is served anyway. **The obsidian MCP server in `.mcp.json` is unreachable**, but that is the egress boundary's doing, not this row's. The `ailang-docs` and `linear` MCP servers are public https and reach it through the proxy |
 | an external network join | the source profile joined the operator's stack to share its ClickHouse; motoko has no such dependency | nothing — outbound access to the model APIs, npm and github.com is unaffected |
 | host credential mounts (`~/.config/gcloud`, `~/.ssh`, `~/.claude`) | each hands the operator's host credentials straight back to the agent | subscription logins do not persist across a rebuild; see the commented opt-in in `docker-compose.yml` |
 
-**`extra_hosts` is a name, not a boundary — corrected 2026-08-22.** The row above used to read "a route
-to host services", and that was wrong. `extra_hosts` writes an `/etc/hosts` entry and nothing else.
-Measured in the operator's container: the name resolves to `0.250.250.254` (OrbStack's dedicated host
-address, *not* the default gateway `192.168.107.1`), and a connection to it is **refused** rather than
-timing out — packets reach the host and are actively rejected, so the address is routable. Dropping
-`extra_hosts` here therefore removes the hostname, and a process in this container can very likely still
-reach the host by IP. Treat it as a speed bump, in the same class as `GH_PROMPT_DISABLED` and the
-root-owned herdr binary. Whether the same address is routable from *this* profile's network is untested,
-because that network has never been up.
+**`extra_hosts` is a name, not a boundary — and under this runtime, not even the name.** It writes an
+`/etc/hosts` entry and nothing else. It is also a *Docker-Engine* idiom: on Engine, `host.docker.internal`
+resolves only because Engine writes that mapping. This stack runs on **OrbStack**, whose embedded resolver
+synthesises the name on any routed network regardless — so dropping the directive removes neither a name
+nor a route. Worth carrying to the rest of the table: **a control reasoned from "the runtime won't do X by
+default" has to be verified against the runtime actually in use.**
+
+What closes both the name and the route is the egress boundary below. On the internal-only network the
+name does not resolve at all, there is no route to the host's address range under any name, and the proxy
+— which is on a routed network and does resolve it — refuses that destination outright.
+
+### The egress boundary: one way out, and it is a proxy
+
+Every absence in the table above withholds a **credential or a privilege**. None of them withholds a
+**destination** — and a container with unrestricted outbound access can reach whatever private networks
+its host is attached to, as that host. That is a different category of control, so it gets its own.
+
+`agent` sits on a single `internal: true` network. Docker installs **no gateway and no NAT** for such a
+network, so there is no route off-box at all: not to the internet, not to the host's own address range,
+not into RFC1918 or CGNAT space. The one container dual-homed onto both that network and a routed one is
+`egress-proxy`, a squid forward proxy, and the agent's `HTTP(S)_PROXY` points at it. It never decrypts —
+clients issue `CONNECT host:443` and it decides by destination — so there is no CA to install and no
+credential exposed to it.
+
+**Its policy today is deliberately permissive: forward to every public host, deny every private and
+reserved range.** GitHub, npm and the model APIs are unaffected; what is removed is reachability of
+private networks and of the host. `squid.conf` carries a commented strict-allowlist block, so tightening
+to "only these domains" is that one edit and nothing else.
+
+Two properties follow, and both are the point rather than side effects:
+
+* **It fails closed.** A tool that ignores `HTTP(S)_PROXY` does not leak — it has no route, so it simply
+  fails. That is also how you find a proxy-unaware tool: it stops working instead of quietly going direct.
+* **This is what makes `NET_RAW` harmless.** The container keeps Docker's default capability set, raw
+  sockets included; on a network with no gateway, they have nowhere to go.
+
+`checks/r9-container.sh` **leg 7** asserts the whole shape: no direct route to a public IP, no direct route
+into CGNAT space, public egress *through* the proxy works, and the proxy refuses a private destination when
+asked through it. An edit that puts `agent` back on a routed network fails the first two legs loudly.
+
+**One thing to know before reading leg 7's output.** Through a proxy, an `https://` URL is a `CONNECT`
+tunnel, and curl reports `http_code 000` for *any* tunnel that fails to open — so a proxy that denied the
+destination and a proxy that is not running would be indistinguishable. Leg 7 therefore probes the private
+range over `http://`, where a deny comes back as a real `403`, and treats `000` as *the proxy did not
+answer at all*. A check whose pass condition is also one of its failure modes is not a check.
 
 ### What is deliberately *not* absent
 
@@ -330,16 +356,13 @@ attach, do the thing, detach; then **discard the container** (`agent.sh stop && 
 reusing it, because the forwarded helper and sockets live in the container; then re-run `agent.sh check`
 before restarting the agent.
 
-### Identity: what did *not* transfer from the source record
+### Identity: which account acts, and what that does not settle
 
-The source ADR's §D1–§D3 are about minting a fine-grained PAT from the **operator's own account**, with
-attribution explicitly out of scope. Motoko already answered that question differently and better:
-016_github_ops ADR-001 C9 uses a **machine user**, so `MOTOKO_BOT_GH_TOKEN` and the `motoko-agent` login
-replace the whole PAT-delivery apparatus — there is no `agent.sh github` here, and no
-`github-agent-token.sh`. R9 leg 4 is retargeted accordingly: it asserts *which account answers*, not merely
-that a credential exists.
+Everything GitHub-related here acts as a **machine user**: `MOTOKO_BOT_GH_TOKEN` and the `motoko-agent`
+login, per 016_github_ops ADR-001 C9. R9 leg 4 asserts *which account answers*, not merely that a
+credential exists.
 
-What is **not** settled is the other half of the problem. A credential with `contents: write` carries
+What that does **not** settle is the other half of the problem. A credential with `contents: write` carries
 push, merge *and* ref deletion as one grant, so **protection**, not permission, has to do the denying
 — and **whether `arniwesth/motoko_agent` carries any branch or tag ruleset at all is unmeasured.** A
 separate bot account bounds *who* acts; it does not bound *what* the credential can do. Reading that
@@ -348,32 +371,42 @@ check, and the bot's refusal in R9 leg 4 is a pass rather than the answer.
 
 ---
 
+## Where the measurement record lives
+
+The working notes for this profile — how each property was measured, and the reasoning behind decisions
+that would otherwise look arbitrary in the files themselves — are kept **outside this repository**, in
+`.agent/local/` (git-ignored). This README states what the boundary *is*; those notes state how it was
+arrived at.
+
+Not having them costs you the reasoning, not the rules: everything load-bearing here is asserted by
+`checks/`, not by prose.
+
 ## Known gaps
 
 Everything in this list is a thing this port did not do, stated so it is not mistaken for done.
 
-1. **The image has not finished building.** The first attempt got to step 7 of 17; steps 8-17 — the herdr
-   download, the three CLIs, the integrations — have never run. Items 3-5 are what a completed build
-   settles.
-2. ~~**Does the image build with `sudo` purged?**~~ Settled: yes, with `SUDO_FORCE_REMOVE=yes`. dpkg's
-   prerm refuses otherwise, and the build asserted the absence loudly rather than producing an
-   unconfined image, which is what that assertion is for.
-3. **Does motoko's TUI render correctly in a herdr pane?** herdr's defaults were tuned for full-screen agent
+1. **Does motoko's TUI render correctly in a herdr pane?** herdr's defaults were tuned for full-screen agent
    TUIs and its own scrollback handling replaces the forty lines of `tmux.conf` the source profile needed —
    but motoko's TUI grabs mouse tracking, and that combination is unmeasured.
-4. **Do the herdr integrations install at build time?** herdr's CLI normally talks to a running server, and
+2. **Do the herdr integrations install at build time?** herdr's CLI normally talks to a running server, and
    there is none during a build. `agent.sh bootstrap` re-runs them against the live server, which is the path
    expected to work.
-5. **Does `claude` / `codex` authenticate from the curated environment?** `ANTHROPIC_API_KEY` is not in the
+3. **Does `claude` / `codex` authenticate from the curated environment?** `ANTHROPIC_API_KEY` is not in the
    repository `.env` today; `OPENAI_API_KEY` is.
-6. **The operator's own container is unchanged**, so the findings at the top of this file are still true of
-   it. Removing the NOPASSWD drop-in and `host.docker.internal` from `.devcontainer/Dockerfile` and
-   `.devcontainer/docker-compose.yml` is a separate, deliberate change nobody has made.
-7. **A *visible* browser is deliberately absent.** `terminal-browser` was installed here on
-   2026-08-22 and removed the same day: it renders, but markedly worse in a container than on the
-   host, for architectural reasons rather than tunable ones. Run that one on your Mac.
-   `agent-browser` replaces it for the agent's purposes and has no rendering path at all.
-   [`HISTORY.md`](./HISTORY.md) has both sets of measurements.
-8. **`tools/tmux-web` was not ported.** herdr supersedes most of it — `herdr terminal session observe` and
+4. **The operator's own container is unchanged.** Narrowing it the way this profile is narrowed — the
+   sudoers drop-in, `extra_hosts` — is a separate, deliberate change nobody has made. `agent.sh check`
+   run against it reports where it stands.
+5. **A *visible* browser is deliberately absent.** Terminal-rendering browsers work markedly worse in a
+   container than on the host, for architectural reasons rather than tunable ones — run one of those on
+   your own machine. `agent-browser` covers the agent's purposes and has no rendering path at all.
+6. **No AppArmor here, and nothing should assume otherwise.** On Docker Engine on a Linux host, every
+   container additionally runs under the `docker-default` AppArmor profile — a mandatory-access-control
+   layer above capabilities and seccomp. Under OrbStack (and Docker Desktop) there is no host AppArmor, so
+   that layer is simply **absent**: no `/proc/self/attr/current`, and the `apparmor`
+   LSM is not visible under this runtime. Nothing in this profile claims it, so nothing written here is
+   false — the gap is that a future hardening step reaching for `apparmor=docker-default` would **silently no-op** here
+   instead of failing. Same class as the `extra_hosts` case: an Engine default assumed under a runtime
+   that is not Engine.
+7. **`tools/tmux-web` was not ported.** herdr supersedes most of it — `herdr terminal session observe` and
    `control` emit newline-delimited JSON frames, which is a better bridge than scraping `capture-pane` — but
    nothing here serves a browser.

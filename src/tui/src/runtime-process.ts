@@ -346,6 +346,24 @@ export function buildChildEnv(
     MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
       process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
   };
+  // Egress proxy environment, forwarded only when actually present.
+  //
+  // The agent container sits on an `internal: true` docker network with no
+  // NAT and no external DNS — a squid sidecar is the single exit, addressed
+  // through HTTP_PROXY/HTTPS_PROXY/NO_PROXY. `buildChildEnv` is an explicit
+  // allowlist, so without these lines the AILANG runtime child never sees the
+  // proxy, dials the provider host directly, and every step dies on
+  // `lookup openrouter.ai on 127.0.0.11:53: server misbehaving`. Measured
+  // 2026-08-23: 134 consecutive stream_error_retry, zero bytes on the wire.
+  for (const key of [
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+  ]) {
+    const value = process.env[key];
+    if (value && value.trim() !== "") {
+      childEnv[key] = value;
+    }
+  }
   // The herdr pane environment, forwarded only when it is actually present.
   //
   // WHY THIS IS NEEDED AT ALL, because the obvious reading of 021 §4.4 is

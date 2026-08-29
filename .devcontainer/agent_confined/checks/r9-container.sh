@@ -228,10 +228,24 @@ in_container() {
   # 192.168.65.254 — Docker Desktop's host address, which has no reason to exist under OrbStack. The
   # defensible reading is "egress to these addresses is not blocked", and the useful signal is a change
   # over time, not the absolute result. Do not upgrade this to a pass/fail on that basis.
-  if getent hosts host.docker.internal >/dev/null 2>&1; then
-    fail "leg6: host.docker.internal RESOLVES — extra_hosts was added back (see docker-compose.yml)"
+  # WHAT extra_hosts ACTUALLY DOES is write /etc/hosts, so that is what this asserts.
+  #
+  # It used to use `getent`, which consults the hosts file AND DNS — and under OrbStack the container
+  # runtime's embedded resolver (127.0.0.11) answers for host.docker.internal whether or not
+  # extra_hosts is set. Measured 2026-08-23 inside agent_confined: no uncommented extra_hosts in this
+  # profile's compose (at HEAD or in the tree), no entry in /etc/hosts, and `getent` still returned
+  # 0.250.250.254. The leg therefore failed permanently while blaming a compose change that had not
+  # happened.
+  #
+  # This also strengthens README's "extra_hosts is a name, not a boundary" correction: under OrbStack,
+  # dropping extra_hosts does not even remove the NAME, let alone the route.
+  if grep -qE '(^|[[:space:]])host\.docker\.internal([[:space:]]|$)' /etc/hosts; then
+    fail "leg6: host.docker.internal is in /etc/hosts — extra_hosts was added back (see docker-compose.yml)"
   else
-    pass "leg6: host.docker.internal does not resolve (the name is absent; see the probe below)"
+    pass "leg6: no extra_hosts entry for host.docker.internal in /etc/hosts"
+    if getent hosts host.docker.internal >/dev/null 2>&1; then
+      info "leg6: the name still RESOLVES, via the container runtime's DNS rather than extra_hosts — expected under OrbStack, and not something this profile can withdraw"
+    fi
   fi
   local addr probe
   for addr in 0.250.250.254 192.168.65.254 "$(awk 'NR>1 && $2=="00000000" {print $3; exit}' /proc/net/route         | sed 's/../0x& /g' | awk '{printf "%d.%d.%d.%d", $4, $3, $2, $1}')"; do
@@ -245,6 +259,57 @@ in_container() {
       info "leg6: ${addr} did not answer (proves nothing — a filtered route and an absent one look alike)"
     fi
   done
+
+  # leg 7 — the EGRESS BOUNDARY. The agent must sit on the internal-only network with the egress-proxy as
+  # its single exit, so it cannot reach any private network the host is attached to (VPN / mesh-overlay /
+  # LAN) or the container host. Unlike leg 6 (which only reports), this leg ASSERTS pass/fail, because here
+  # the outcome is a configured control rather than a platform-specific address set:
+  #   (a) NO direct route off-box — a public IP literal AND a CGNAT-range canary must both fail to connect;
+  #   (b) public egress DOES work through the proxy; and
+  #   (c) the proxy REFUSES a private/reserved destination even when asked through it (the CIDR deny).
+  # A regression that puts `agent` back on a routed network fails (a); a missing/broken proxy fails (b);
+  # a squid.conf without the private-CIDR deny fails (c). 100.100.100.100 is used only as a canary in the
+  # CGNAT range 100.64.0.0/10 (nothing local listens there); any address in that range would do.
+  if timeout 5 bash -c 'echo > /dev/tcp/1.1.1.1/443' 2>/dev/null; then
+    fail "leg7: reached a public IP (1.1.1.1:443) DIRECTLY — the agent is NOT on the internal-only network; the egress boundary is OFF"
+  else
+    pass "leg7: no direct route off-box (1.1.1.1:443 unreachable) — agent is confined to the internal network"
+  fi
+  if timeout 5 bash -c 'echo > /dev/tcp/100.100.100.100/443' 2>/dev/null; then
+    fail "leg7: reached the CGNAT/private range (100.100.100.100:443) DIRECTLY — the egress boundary is OFF"
+  else
+    pass "leg7: no direct route to the CGNAT/private range (100.100.100.100:443)"
+  fi
+  local proxy="${HTTPS_PROXY:-${https_proxy:-}}"
+  if [[ -z "$proxy" ]]; then
+    fail "leg7: HTTPS_PROXY is unset in the container — the agent has no configured exit (boundary misconfigured)"
+  elif ! command -v curl >/dev/null 2>&1; then
+    info "leg7: curl absent — cannot verify proxied egress (parts b/c skipped)"
+  else
+    local code
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -x "$proxy" https://api.github.com 2>/dev/null)"
+    if [[ "$code" =~ ^[2-4][0-9][0-9]$ ]]; then
+      pass "leg7: public egress works THROUGH the proxy (api.github.com -> HTTP ${code})"
+    else
+      fail "leg7: proxied egress to api.github.com failed (got '${code:-no response}') — proxy down, or its policy denies it.
+        '000' means curl got no HTTP status at all; the proxy's own logs are the only thing that tells
+        those apart, from a HOST shell: docker logs \$(docker ps -aq --filter label=com.docker.compose.service=egress-proxy)"
+    fi
+    # http://, NOT https://. Through a proxy, an https:// URL is a CONNECT tunnel, and curl reports
+    # http_code 000 for ANY tunnel that fails to open — a proxy that DENIED the destination and a proxy
+    # that is not running at all are indistinguishable, so the old https:// form here passed while the
+    # proxy was dead. A plain http:// request is proxied as an ordinary GET, so the deny comes back as a
+    # real 403 response and 000 keeps its honest meaning: nothing answered.
+    local pcode
+    pcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -x "$proxy" http://100.100.100.100/ 2>/dev/null)"
+    if [[ "$pcode" == "403" ]]; then
+      pass "leg7: the proxy REFUSES the CGNAT/private range (100.100.100.100 -> HTTP 403)"
+    elif [[ "$pcode" == "000" ]]; then
+      fail "leg7: the proxy did not answer at all for 100.100.100.100 (no HTTP status) — it is down or unreachable, so this leg proves NOTHING about the CIDR deny"
+    else
+      fail "leg7: the proxy FORWARDED to a CGNAT/private address (100.100.100.100 -> HTTP ${pcode}) — the private-CIDR deny is missing from squid.conf"
+    fi
+  fi
 }
 
 # ----------------------------------------------------------------------------------------------------------

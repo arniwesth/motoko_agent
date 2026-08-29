@@ -179,7 +179,7 @@ RUN arch="$(uname -m)" \
 # ---------------------------------------------------------------------------- headless web access
 # `agent-browser` (vercel-labs) — browser automation built for agents rather than for test suites:
 # a native Rust binary plus a persistent daemon driving Chromium over CDP. It NEVER touches the
-# terminal, which is the whole reason it is here and terminal-browser is not (HISTORY.md, 2026-08-22):
+# terminal, which is the whole reason it is here and terminal-browser is not (measured 2026-08-22; the log is local-only, see README *Where the measurement record lives*):
 # no Kitty graphics, no pixel geometry from `docker exec`, no GPU path to miss.
 #
 # The centrepiece for an agent is the ref system: `snapshot -i` returns an accessibility tree with
