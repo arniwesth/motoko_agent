@@ -3342,13 +3342,16 @@ export func run_v2_with_conversation(
   -- the outer conversation loop, and each traced run below derives its own from
   -- its own world. That is pre-existing behaviour, not a cursor being dropped.
   let session_id = derive_session_id(started_provider.ports, started_provider.world).id;
-  -- An empty task means there is no opening turn to run: the process was
-  -- spawned to warm the module graph (the TUI pre-spawns at boot so the
-  -- AILANG load overlaps with the user typing) or respawned by `/restart`.
-  -- Go straight to the conversation loop and block on stdin for the first
-  -- user_message. Without this branch the empty task reaches the provider
-  -- as a real model call on an empty user message -- which is what
-  -- `/restart` did before this guard existed.
+  -- An empty task means there is no opening turn to run. Go straight to the
+  -- conversation loop rather than letting the empty task reach the provider as
+  -- a real model call on an empty user message -- which is what `/restart` did
+  -- before this guard existed.
+  --
+  -- The live launcher no longer reaches this branch: `rpc.run_with_config`
+  -- waits in `await_first_task` for the first real task before it builds
+  -- anything, precisely because the system prompt and the budget plan are both
+  -- task-conditional and both built exactly once. This stays as the guard for
+  -- direct callers (tests, harnesses) that hand an empty task straight in.
   if task == "" then
     conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts())
   else {

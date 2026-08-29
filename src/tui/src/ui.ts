@@ -4010,6 +4010,13 @@ export class AgentUI {
     // Before any task has started, treat the first plain-text submission as the task.
     if (this.awaitingTask && value && !value.startsWith("/")) {
       this.awaitingTask = false;
+      // A completed task leaves `taskDone` set, and `/restart` puts the session
+      // back into awaitingTask — so this branch IS reachable with it still true.
+      // Clearing it here is what the follow-up branch below has always done:
+      // left set, the ESC guard refuses to interrupt this turn, a second plain
+      // line is sent mid-task as a follow-up, and the runtime's session_start
+      // forces the status line back to idle while the task runs.
+      this.taskDone = false;
       this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       this.onInitialTask?.(value);
       // Go non-idle here rather than waiting for the runtime's first event. Even

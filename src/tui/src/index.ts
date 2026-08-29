@@ -824,6 +824,17 @@ async function main(): Promise<void> {
       process.argv[2] ??
       process.env.TASK ??
       (await promptForTask());
+    // Non-TTY means one task, run to completion, then exit — the runtime never
+    // reads a task from stdin in headless mode. An empty one has nothing to
+    // run, so fail here instead of spawning a runtime that exits having done
+    // nothing. Reachable with an empty argv[2] or TASK (`??` only falls through
+    // on null/undefined) and when promptForTask() reads a closed stdin.
+    if (task.trim() === "") {
+      process.stderr.write(
+        "No task given. Pass it as the first argument or set TASK=... (stdin is not a TTY, so there is nothing to prompt).\n",
+      );
+      process.exit(2);
+    }
     const ui = jsonlOutput ? new JsonlLogger() : new PlainLogger();
     const logger = new SessionLogger(projectRoot, pkgVersion);
     sessionLogger = logger;
@@ -931,23 +942,32 @@ async function main(): Promise<void> {
             if (runtimeProcess && !runtimeProcess.isDead) return;
             spawnRuntimeProcess("", false);
           }, 100);
-        } else if (preWarmIdle) {
-          // A pre-warm runtime died before any prompt was submitted (bad config,
-          // a failed startup check). Stay in the TUI and keep awaiting a task —
-          // exiting here would look like Motoko refusing to start. The next
-          // prompt spawns a fresh runtime through the onInitialTask fallback,
-          // which is where the failure becomes visible.
-          preWarmIdle = false;
-          ui.addHistoryText("Runtime exited before the first prompt; it will be restarted when you submit one.", "red");
-          ui.setAwaitingTask(true);
         } else if (interrupted) {
           // ESC was pressed — don't exit; let the user submit a new task.
           interrupted = false;
+          preWarmIdle = false;
+          errorOccurred = false;
           ui.setAwaitingTask(true);
         } else if (errorOccurred) {
           // Process crashed after emitting an error (unexpected exit on the
-          // normal error path).  Recover rather than exiting the TUI.
+          // normal error path).  Recover rather than exiting the TUI. The error
+          // event has already been rendered, so there is nothing to add here.
+          //
+          // Ordered BEFORE the pre-warm branch: a boot pre-spawn that dies of
+          // bad config is the cheapest failure signal the user ever gets, and
+          // relabelling it "it will be restarted when you submit one" hides the
+          // reason at exactly the moment it is most useful.
           errorOccurred = false;
+          preWarmIdle = false;
+          ui.setAwaitingTask(true);
+        } else if (preWarmIdle) {
+          // A pre-warm runtime exited before any prompt was submitted, without
+          // saying why. Stay in the TUI and keep awaiting a task — exiting here
+          // would look like Motoko refusing to start. The next prompt spawns a
+          // fresh runtime through the onInitialTask fallback, which is where
+          // the failure becomes visible.
+          preWarmIdle = false;
+          ui.addHistoryText("Runtime exited before the first prompt; it will be restarted when you submit one.", "red");
           ui.setAwaitingTask(true);
         } else {
           void closing.then(() => {
@@ -968,7 +988,21 @@ async function main(): Promise<void> {
     sessionLogger?.logUserInput(content);
     runtimeProcess?.sendUserMessage(content);
   };
-  ui.onAbort = () => { if (runtimeProcess) { runtimeProcess.abort(); } else { ui.stop(); process.exit(0); } };
+  ui.onAbort = () => {
+    // Ctrl+C quits unless a live runtime is actually working on a task. The
+    // boot pre-spawn and a `/restart` respawn both leave a warm runtime in
+    // `runtimeProcess` with no task attached (`preWarmIdle`): aborting that one
+    // exits into the preWarmIdle branch above, which deliberately keeps the TUI
+    // up, and the next Ctrl+C is then swallowed by RuntimeProcess.send()'s
+    // dead-child guard — leaving no way out of the TUI at all.
+    if (runtimeProcess && !runtimeProcess.isDead && !preWarmIdle) {
+      runtimeProcess.abort();
+      return;
+    }
+    runtimeProcess?.kill();
+    ui.stop();
+    process.exit(0);
+  };
   ui.onInterrupt = () => { interrupted = true; runtimeProcess?.kill(); };
 
   // Restart handler — respawn the runtime process with optional new profile

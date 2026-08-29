@@ -316,19 +316,37 @@ def split_args(text: str) -> list[str]:
     return parts
 
 
-def top_level_commas(text: str) -> int:
-    """The number of depth-0 commas in `text` -- the INDEPENDENT element count
-    (commas + 1 for a non-blank list), computed without parsing an element, so
-    an element the parser drops is a mismatch rather than a silence."""
-    depth, n = 0, 0
+def top_level_constructor_heads(text: str) -> int:
+    """The number of depth-0 capability-constructor heads `Kind(` in `text` --
+    the INDEPENDENT atom count.
+
+    Independent in the way that matters, which a depth-0 COMMA count was not:
+    the element parser splits `text` on depth-0 commas and then emits exactly
+    one atom per element, so counting those same commas is the same measurement
+    twice and cannot disagree with it -- a denominator that reads as fail-closed
+    and is in fact unreachable.  Counting constructor HEADS measures a different
+    feature of the same text, and it disagrees on precisely the shape the
+    element parser gets wrong:
+
+        [ToolPolicy(p) ++ PromptShaper(q)]
+
+    is ONE comma-delimited element, and `Kind\s*\((.*)\)` accepts it whole --
+    the greedy `.*` swallows `p) ++ PromptShaper(q` -- so the parser emits ONE
+    atom for TWO capabilities and the comma count agrees with it.  Two heads
+    against one atom is the rejection that catches it.
+
+    Heads inside an argument (`Compactor(pick(SolverJudge(j)))`) sit at depth
+    >= 1 and are not elements, so they are not counted.
+    """
+    depths, depth = [], 0
     for ch in text:
+        depths.append(depth)
         if ch in "{[(":
             depth += 1
         elif ch in "}])":
             depth -= 1
-        elif ch == "," and depth == 0:
-            n += 1
-    return n
+    return sum(1 for m in re.finditer(rf"\b({IDENT})\s*\(", text)
+               if depths[m.start()] == 0 and m.group(1) in CAPABILITY_KINDS)
 
 
 def func_body(text: str, name: str) -> str | None:
@@ -630,8 +648,8 @@ class Scope:
 
         # THE CAPABILITY LIST (ADR-001 Phase B, B2): a list of constructor
         # applications, every function-typed argument a binding.  There is no
-        # record to tile; what fails closed instead is the ELEMENT COUNT,
-        # computed independently of the parse.
+        # record to tile; what fails closed instead is the ATOM COUNT, measured
+        # off the constructor heads rather than off the parse's own commas.
         # a balanced `[` at the tail could also be the tail of an expression
         # like `[x].head` -- require the whole tail
         if not re.fullmatch(r"\[.*\]", expr.strip(), re.S):
@@ -654,9 +672,11 @@ class Scope:
         function is therefore scanned, not trusted -- its row bounds nothing
         in constructor-argument position (B1's probe).  Anything else is
         `capability-list-unresolvable`, and so is any disagreement between the
-        depth-0 comma count and the atoms emitted."""
+        depth-0 constructor-head count and the atoms emitted -- see
+        `top_level_constructor_heads` for why the heads, and not the commas the
+        split itself reads, are what makes that a live check."""
         elements = split_args(body)
-        expected = 0 if not body.strip() else top_level_commas(body) + 1
+        expected = top_level_constructor_heads(body)
         per_kind: dict[str, int] = {}
         bindings: dict[str, tuple[Path, str]] = {}
         atoms: list[dict] = []
@@ -665,7 +685,7 @@ class Scope:
                 self.rejections.append(Rejection(
                     "capability-list-unresolvable", self._rel(home),
                     f"capability list element {pos} is empty (a trailing or doubled comma) -- "
-                    f"the element count ({expected}) cannot be reconciled with the atoms"))
+                    f"the {expected} constructor head(s) cannot be reconciled with the atoms"))
                 return False
             if el.startswith("..."):
                 self.rejections.append(Rejection(
@@ -707,8 +727,9 @@ class Scope:
         if len(atoms) != expected:
             self.rejections.append(Rejection(
                 "capability-list-unresolvable", self._rel(home),
-                f"the capability list has {expected} element(s) by depth-0 comma count and "
-                f"{len(atoms)} atom(s) were emitted -- an atom was dropped, which is fail-open"))
+                f"the capability list holds {expected} depth-0 constructor head(s) and "
+                f"{len(atoms)} atom(s) were emitted -- an atom was dropped or two were read "
+                f"as one, which is fail-open"))
             return False
         self.atoms = atoms
         self.bindings = bindings
