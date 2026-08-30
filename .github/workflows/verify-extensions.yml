@@ -33,6 +33,12 @@ concurrency:
   group: verify-extensions-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The development trunk. main is a release mirror that main_dst is merged into
+  # periodically, so anything keyed on "what is new" must compare against
+  # main_dst -- see the new_contract_policy step.
+  TRUNK: main_dst
+
 jobs:
   verify_extensions:
     name: verify_extensions + check_core + smoke_no_delegated_storm
@@ -155,20 +161,37 @@ jobs:
       # Keyed on the incoming diff, not the tree. PRs compare with their base
       # branch; pushes compare with the pre-push commit (origin/main is already
       # at HEAD after checkout and would make every push look empty).
+      #
+      # TRUNK is main_dst, not main. main is a release mirror that main_dst is
+      # periodically merged into, so it runs months behind: on 2026-08-30 it was
+      # still at PR #78 while main_dst was at #177. A main_dst -> main
+      # integration PR therefore diffs the whole trunk, and the gate that is
+      # keyed on the diff *precisely because* ~1545 declarations predate the rule
+      # (ADR-001 §4) turns back into the tree-wide gate it was designed not to
+      # be -- PR #154 reported 1565 of 1577 "new" declarations unjustified, every
+      # one of them old. Every commit on such a PR was already gated when it
+      # landed on main_dst, so gate the trunk against itself and get the empty
+      # diff that is the honest answer.
       - name: new_contract_policy
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.head_ref }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            contract_base="origin/$PR_BASE"
+            if [[ "$PR_HEAD" == "$TRUNK" ]]; then
+              contract_base="origin/$TRUNK"
+            else
+              contract_base="origin/$PR_BASE"
+            fi
           elif [[ "$EVENT_NAME" == "push" ]]; then
             contract_base="$PUSH_BEFORE"
           else
-            contract_base="origin/main"
+            contract_base="origin/$TRUNK"
           fi
+          echo "new_contract_policy base: $contract_base"
           make new_contract_policy BASE="$contract_base"
 
   dst_l2:
