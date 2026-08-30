@@ -99,5 +99,13 @@ run_case src/core/recovery.ail should_retry_stream_error \
   '    && remaining_step_budget > 1' \
   'remaining_step_budget'
 
+# The trace redaction guard. One call site (session.ail:262,
+# `if trace_sensitive_key(key) then js("[redacted]")`) and no test, so this case
+# and the contract are its only mechanical coverage. Dropping a key here is how
+# a secret reaches the trace.
+run_case src/core/session.ail trace_sensitive_key \
+  '    || key == "cmd"' \
+  '$p_key: String = "cmd"'
+
 echo "verify_mutations: $pass falsified, $fail unfalsified"
 [ "$fail" -eq 0 ]

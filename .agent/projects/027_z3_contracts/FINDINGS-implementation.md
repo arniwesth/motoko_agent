@@ -268,8 +268,8 @@ Four were checked with real contracts rather than assumed:
 | `cost_phase.cost_cap_exceeded` | `not result \|\| (max > 0 && total >= max)` | ✓ 12.8ms |
 | `recovery.should_retry_stream_error` | `not result \|\| (remaining > 1 && retryable)` | ✓ 10.4ms |
 
-`recovery.should_retry_stream_error` is the one taken here (F15); `trace_sensitive_key` was
-written, verified, and then reverted for a reason worth its own finding (F14). The two
+Both were taken: `recovery.should_retry_stream_error` (F15) for one file, and
+`trace_sensitive_key` (F14) for seven, once the anchor cascade was priced and paid (F16). The two
 `cost_phase` contracts already have example tests, so a contract there upgrades examples to
 universal quantification -- worth doing, not urgent.
 
@@ -281,48 +281,46 @@ module, is *out* for a narrow reason: it calls the nullary `output_token_allowan
 \"()\"". Several candidates are blocked only by that. Whether AILANG could encode a nullary
 call is unexamined here and may be the one upstream item in this project worth filing.
 
-## F14 — `trace_sensitive_key` is the uncovered guard, and `session.ail` is contract-frozen
+## F14 — `trace_sensitive_key` was the uncovered guard, and `session.ail` is contract-frozen
 
 RESEARCH §3 E7 asked which guards in the write-path chain had no coverage and found
 `has_shell_tokens`. The same question asked of the trace path finds `trace_sensitive_key`
-(`session.ail:228`): one call site -- `session.ail:248`,
-`if trace_sensitive_key(key) then js("[redacted]")` -- and no test, no property, no contract.
-It decides whether a value is redacted before it reaches the trace, so the failure mode is a
-secret on disk rather than a command in a shell. That E7's method transferred cleanly to a
-module nobody had looked at is the argument for running the survey rather than reasoning about
-the fragment: the guard was two greps away and three documents missed it.
+(`session.ail:228`): one call site -- `if trace_sensitive_key(key) then js("[redacted]")` --
+and no test, no property, no contract. It decides whether a value is redacted before it reaches
+the trace, so the failure mode is a secret on disk rather than a command in a shell. That E7's
+method transferred cleanly to a module nobody had looked at is the argument for running the
+survey rather than reasoning about the fragment: the guard was two greps away and three
+documents missed it.
 
-The contract was written and it works: a one-directional recall over the nine keys, ✓ VERIFIED
-[11.0ms], **substantive** on both probes, and falsified -- deleting `key == "cmd"` yields
+The contract is a one-directional recall over the nine keys: ✓ VERIFIED [11.0ms], **substantive**
+on both probes, and falsified -- deleting `key == "cmd"` yields
 `✗ VIOLATION trace_sensitive_key, $p_key: String = "cmd"`.
 
-**It was reverted, and the reason is the finding.** `session.ail` carries five line-number
-anchors -- 1148 / 1407 / 1513 / 2996 / 3106 -- pinned in `dst_attribution_table.ail` and
-checked by `tools/predicate-anchors/anchors.sh`. The contract is +14 lines at line 236, above
-all five, so `make dst` went red on `anchors` and `attribution_table`. Per that script's own
-header, re-baselining touches ~11 files and **re-issues three DST profiles**
-(`driver_only_version`, `no_ops_version`, `compose_profile_version`).
+**It cost a DST profile re-issue, and that is the finding.** `session.ail` carries five
+line-number anchors -- 1148 / 1407 / 1513 / 2996 / 3106 -- pinned in `dst_attribution_table.ail`
+and checked by `tools/predicate-anchors/anchors.sh`. The contract is +14 lines at :236, above
+all five, so the first `make dst` went red on `anchors` and `attribution_table`.
 
-There is no cheap placement. Every in-fragment candidate in `session.ail` sits between lines
-195 and 1772 (`provider_api_model` :195 … `step_cost_millicents` :1772), so **any** contract
-in that file crosses at least two anchors. Shrinking the comment does not help -- the cascade
-triggers on one added line. Making the edit line-count-neutral is the WI-D19 precedent, but
-`anchors.sh` calls that "the cosmetic edit `ext/runtime.ail:24` already had to make once;
-twice is a habit".
+**There is no cheap placement, and this is the first cause that placement cannot dodge.** Every
+in-fragment candidate in `session.ail` sits between :195 (`provider_api_model`) and :1772
+(`step_cost_millicents`), so *any* contract in that file crosses at least two anchors.
+Shrinking the comment does not help -- the cascade triggers on one added line. WI-D19 avoided
+the cascade by making every edit line-count-neutral and WI-D20 rejected buying lines back as
+"a habit"; a contract can do neither. So **`session.ail` is contract-frozen unless the item
+prices the re-baseline**, and contract adoption joins `ext_ports_of` edits as a class of item
+that must. None of ADR-001, the PLAN or RESEARCH anticipated this, because none proposed
+touching `session.ail` outside P4.
 
-So: **`session.ail` is contract-frozen unless the item pays the anchor re-baseline.** The
-anchors are an instrument, not a defect -- a line-number anchor is what makes the drift visible
-at all -- but `anchors.sh` says "an item that plans for Route B should price it", and contract
-adoption is now a second class of item that must. None of ADR-001, the PLAN or RESEARCH
-anticipated this, because none of them proposed touching `session.ail` outside P4.
+**What paying it cost (F16).** Seven files, not the eleven `anchors.sh` names as the worst
+case -- the width is the set of files that *pin the anchors that moved*, derived at the item
+with both greps the header prescribes, and the four discovered-site fixtures pin only
+`ext/runtime.ail:199` and `tool_phase.ail:318`, neither of which moved.
 
-`recovery.ail` was taken instead (F15). `trace_sensitive_key` remains the highest-value
-uncontracted guard in the tree and is worth an item that prices the cascade up front.
-
-## F15 — What landed instead: the retry bound
+## F15 — The retry bound, landed first and cheaply
 
 `recovery.should_retry_stream_error` (`recovery.ail:17`) carries no line pins -- checked
-against both `anchors.sh` and a grep for `recovery.ail:<line>` literals -- so it costs one file.
+against both `anchors.sh` and a grep for `recovery.ail:<line>` literals -- so it costs one file,
+against the seven F16 paid for the `session.ail` guard. Landed first for that reason.
 
 ```ailang
 ensures { not result || (remaining_step_budget > 1 && retryable) }   -- ✓ VERIFIED [24.1ms]
@@ -341,3 +339,31 @@ that.
 The body was reformatted onto three lines so each conjunct is individually mutable; behaviour
 is identical. `make verify_mutations` deletes `&& remaining_step_budget > 1` and the solver
 returns VIOLATION -- the edit that turns a bounded retry into an unbounded one.
+
+## F16 — The re-baseline, recorded the way the header demands
+
+**The D4 judgement, made rather than assumed.** The routed clock set is unchanged:
+`grep -o 'clock_now(.*'` over `git show HEAD:src/core/session.ail` and over the working tree is
+identical, six sites and six. All five anchored expressions were compared character-for-character
+at their new offsets and are byte-identical. Pure offset drift -- no site was added, removed,
+re-argued or re-routed, so "which site is 'the' attributed one" has the answer it had before.
+This is an anchor re-measurement, not a table correction.
+
+| | |
+|---|---|
+| anchors | `1148/1407/1513/2996/3106` → `1162/1421/1527/3010/3120`, all **+14** |
+| table identity | `sha256:de7030a1…` → `sha256:c6cf9b2c…` (source revision `c0fbf10` unchanged) |
+| profiles | `driver_only` 23→24, `no_ops` 11→12, `compose` 3→4 |
+
+The seven files: `anchors.sh` (the check), `dst_attribution_table.ail` (5 rows + 1 test
+literal), `attribution_table_dst.ail` (1 literal, `:1513` in `omitted_site`), the three profiles
+(version + content hash), and `session.ail` itself.
+
+`table_source_revision()` stays at `c0fbf10`: it has not moved through any of the six previous
+re-baselines and is compared for equality between table and profile, not against git.
+
+**A note on what this cost per unit of value.** One contract on a nine-line predicate re-issued
+three versioned DST profiles. That is not an argument against either the contract or the
+anchors -- a line-number anchor is what makes the drift visible at all, and the guard had no
+other mechanical coverage -- but it is the measurement an item planning a `session.ail` contract
+should budget against. `make verify_survey` names the candidates; this finding names their price.

@@ -225,7 +225,21 @@ pure func trace_event_enabled(event_type: string) -> bool {
   event_type == "session_start" || event_type == "run_summary"
 }
 
-pure func trace_sensitive_key(key: string) -> bool {
+-- Recall: every key in the list below must be classified sensitive, so that
+-- trace_json_value redacts it. One-directional, like has_shell_tokens in
+-- tool_runtime.ail -- adding a tenth key still verifies, removing one does not
+-- (the solver returns the key as the counterexample). The converse is omitted
+-- deliberately: for an enumeration it is the body restated, and a restatement
+-- would fail the addition edit too. Falsified in CI by verify_mutations; this
+-- predicate has no test and one call site (:262), so the contract and that
+-- mutation case are its only mechanical coverage.
+pure func trace_sensitive_key(key: string) -> bool
+  ensures { (not (key == "task")       || result) && (not (key == "text")    || result)
+         && (not (key == "text_delta") || result) && (not (key == "output")  || result)
+         && (not (key == "content")    || result) && (not (key == "cmd")     || result)
+         && (not (key == "feedback")   || result) && (not (key == "errors")  || result)
+         && (not (key == "message")    || result) }
+  {
   key == "task"
     || key == "text"
     || key == "text_delta"
