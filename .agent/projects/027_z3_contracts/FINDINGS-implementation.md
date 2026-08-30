@@ -69,18 +69,21 @@ derives a property test from each contract and runs it against generated inputs:
 ✓ compress_output_property_2       (100 cases)
 ✓ is_root_property_1               (100 cases)
 ✓ has_shell_tokens_property_1      (100 cases)
+✓ shell_command_needs_wrap_property_1 (100 cases)
 ✓ is_absolute_path_property_1      (100 cases)
 ✓ starts_with_root_dir_property_1  (100 cases)
 ```
 
-So a `blocked` contract is not dead weight awaiting a solver: it is randomly checked at test
-time, just not proved. That strengthens ADR §3's decision that `blocked` must never fail the
-build — writing a contract the fragment rejects still buys checking — and it is why
-`compress_output` and `shell_tokens_in_process` keep contracts they cannot prove.
+So a `blocked` contract can still buy random checking, but only when the generator can construct
+its arguments. `compress_output` does. The first implementation left
+`shell_tokens_in_process` blocked in Z3 *and* skipped in property testing because its argument is
+a `ProcessExecReq` record. The fix extracted the scalar obligation into
+`shell_command_needs_wrap(string)`, which is both VERIFIED and property-tested, and added an
+explicit example over `ProcessExecReq` for the recursive args boundary.
 
-Two contracts get no generator and are skipped rather than run (`isSome`, `is_native_backend`,
-and now `shell_tokens_in_process`, whose argument is a record). `make test_coverage` already
-accounts for that class of skip, so the count moved from 2 to 3 without going red.
+Two contracts still get no generator and are skipped rather than run (`isSome` and
+`is_native_backend`). `make test_coverage` accounts for that upstream limitation; no new skipped
+property was added by this work.
 
 ## F5 — `is_absolute_path` does have a substantive contract; the restatement was not the ceiling
 
@@ -202,11 +205,15 @@ project is named after.
 ## F11 — ADR §5's third precondition is already satisfied by the register
 
 "A contract silently dropping from VERIFIED to SKIPPED must be red, or the gate can weaken
-without failing." It is red. A contract that stops verifying computes `unclassified` instead
-of `substantive`, and `verify_classify_check` fails on the difference: as a *relabel* if the
-contract and body text are unchanged (the mechanism demonstrated directly -- hand-editing
-`isSome`'s pinned class produces "pinned as substantive but the solver computes tautology"),
-or as a *stale pin* if the text moved. Both exit 1.
+without failing." It is red. A contract that receives a real SKIPPED verdict computes
+`unclassified` instead of `substantive`, and `verify_classify_check` fails on the difference:
+as a *relabel* if the contract and body text are unchanged (the mechanism demonstrated directly
+-- hand-editing `isSome`'s pinned class produces "pinned as substantive but the solver computes
+tautology"), or as a *stale pin* if the text moved. Both exit 1.
+
+An ERROR or absent probe verdict is not another spelling of SKIPPED: classification now stops
+before writing or checking the register, so a broken generated probe cannot be pinned as an
+allowed `unclassified` contract.
 
 Stated as reasoning from the demonstrated mechanism rather than as its own measurement: the
 relabel direction was tested by editing the register, not by engineering a real
@@ -220,12 +227,12 @@ and 1 restatement". It did, and then the work moved it:
 
 | | before | after |
 |---|---|---|
-| gate line | `2 with contracts, 0 failed, 51 without` | `8 contracts proven, 0 unstated, 2 blocked; 0 files failed, 50 bare` |
-| substantive | 1 | **6** |
+| gate line | `2 with contracts, 0 failed, 51 without` | `11 contracts proven, 0 unstated, 1 blocked; 0 files failed, 48 bare` |
+| substantive | 1 | **9** |
 | tautology | 2 | 2 |
 | spec-equals-body | 1 | 0 |
-| unclassified | 0 | 2 |
-| falsified by a mutation test | 0 | 2 |
+| unclassified | 0 | 1 |
+| falsified by a mutation test | 0 | 5 |
 | enforced in CI | no (`continue-on-error: true`) | yes |
 
 The two tautologies are `isSome` and `is_native_backend`, both `result == true || result ==

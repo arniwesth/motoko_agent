@@ -152,9 +152,24 @@ jobs:
         run: make verify_classify_check
 
       # Every new pure func in src/core carries a contract or a checked excuse.
-      # Keyed on the diff against the PR base, not the tree.
+      # Keyed on the incoming diff, not the tree. PRs compare with their base
+      # branch; pushes compare with the pre-push commit (origin/main is already
+      # at HEAD after checkout and would make every push look empty).
       - name: new_contract_policy
-        run: make new_contract_policy BASE=origin/${{ github.base_ref || 'main' }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            contract_base="origin/$PR_BASE"
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            contract_base="$PUSH_BEFORE"
+          else
+            contract_base="origin/main"
+          fi
+          make new_contract_policy BASE="$contract_base"
 
   dst_l2:
     name: dst_l2

@@ -152,13 +152,16 @@ probes and pins it in `tools/verify_classify/contracts.register`:
 
 | class | meaning |
 |---|---|
-| `substantive` | falsifiable, and admits results the body would not produce. **The only class that counts.** |
-| `tautology` | holds for every result. Permitted, registered, never counted. |
+| `substantive` | falsifiable on the function's precondition domain, and admits results the body would not produce. **The only class that counts.** |
+| `tautology` | holds for every result allowed by the original `requires`. Permitted, registered, never counted. |
 | `spec-equals-body` | admits only the body's answer. A regression test, not evidence — and a standing invitation to look for the weaker property. |
 | `unclassified` | a probe was outside the SMT fragment, so the solver could not decide. |
 
 `make verify_classify_check` fails if the tree and the register disagree in either
 direction, including a class edited by hand while the solver computes something else.
+The generated probes preserve the original `requires`; an `ensures` implied only by a
+precondition is therefore classified as a tautology, not as substantive. An ERROR or a
+missing probe verdict fails closed instead of being treated as `unclassified`.
 Re-pin with `make verify_classify` when you change a contract or a body. To disagree
 with a probe, add an `-- override:` line beneath the entry naming the probe result you
 are overriding.

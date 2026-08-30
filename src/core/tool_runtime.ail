@@ -67,21 +67,58 @@ pure func any_shell_tokens(xs: [string]) -> bool {
   }
 }
 
--- Recall on the scalar half of the decision: the three shells, an embedded space,
--- and anything has_shell_tokens catches must all force a wrap. Expected to land in
--- the gate's `blocked` bucket -- the body also calls the recursive any_shell_tokens
--- (see above) -- but the obligation is stated, and it is checked as a generated
--- property test.
-pure func shell_tokens_in_process(req: ProcessExecReq) -> bool
-  ensures { (not (req.cmd == "bash") || result)
-         && (not (req.cmd == "sh")   || result)
-         && (not (req.cmd == "zsh")  || result)
-         && (not contains(req.cmd, " ")  || result)
-         && (not has_shell_tokens(req.cmd) || result) }
+-- The verifier cannot encode the recursive args half of the ProcessExecReq
+-- decision, so keep the scalar half in a primitive-argument helper that both Z3
+-- and the property generator can execute. The recall contract is deliberately
+-- weaker than the body: adding another shell token still verifies, while
+-- removing any named case does not.
+pure func shell_command_needs_wrap(cmd: string) -> bool
+  ensures { (not (cmd == "bash") || result)
+         && (not (cmd == "sh")   || result)
+         && (not (cmd == "zsh")  || result)
+         && (not contains(cmd, " ")  || result)
+         && (not contains(cmd, "|")  || result)
+         && (not contains(cmd, ">")  || result)
+         && (not contains(cmd, "<")  || result)
+         && (not contains(cmd, "&&") || result)
+         && (not contains(cmd, "||") || result)
+         && (not contains(cmd, ";")  || result)
+         && (not contains(cmd, "$(") || result)
+         && (not contains(cmd, "`")  || result) }
   {
-  if req.cmd == "bash" || req.cmd == "sh" || req.cmd == "zsh" then true
-  else if contains(req.cmd, " ") then true
-  else has_shell_tokens(req.cmd) || any_shell_tokens(req.args)
+  cmd == "bash"
+    || cmd == "sh"
+    || cmd == "zsh"
+    || contains(cmd, " ")
+    || contains(cmd, "|")
+    || contains(cmd, ">")
+    || contains(cmd, "<")
+    || contains(cmd, "&&")
+    || contains(cmd, "||")
+    || contains(cmd, ";")
+    || contains(cmd, "$(")
+    || contains(cmd, "`")
+}
+
+-- contracts: BLOCKED — RECURSIVE any_shell_tokens. The scalar obligation lives
+-- on shell_command_needs_wrap above; explicit examples below exercise the record
+-- boundary and the recursive args path that neither Z3 nor generated properties
+-- can cover on this toolchain.
+pure func shell_tokens_in_process(req: ProcessExecReq) -> bool {
+  shell_command_needs_wrap(req.cmd) || any_shell_tokens(req.args)
+}
+
+func shell_tokens_in_process_examples() -> bool
+  tests [((), true)]
+  {
+    shell_tokens_in_process({ cmd: "bash", args: [], cwd: None,
+      streaming: false, needs_stderr_live: false, needs_hard_cancel: false })
+      && shell_tokens_in_process({ cmd: "git status", args: [], cwd: None,
+        streaming: false, needs_stderr_live: false, needs_hard_cancel: false })
+      && shell_tokens_in_process({ cmd: "printf", args: ["hello;date"], cwd: None,
+        streaming: false, needs_stderr_live: false, needs_hard_cancel: false })
+      && not shell_tokens_in_process({ cmd: "git", args: ["status"], cwd: None,
+        streaming: false, needs_stderr_live: false, needs_hard_cancel: false })
 }
 
 func arg_json(args: Json, key: string) -> Json {

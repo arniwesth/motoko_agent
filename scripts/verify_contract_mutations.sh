@@ -88,6 +88,10 @@ run_case src/core/tool_runtime.ail has_shell_tokens \
   '    || contains(s, ";")' \
   '$p_s: String = ";"'
 
+run_case src/core/tool_runtime.ail shell_command_needs_wrap \
+  '    || cmd == "sh"' \
+  '$p_cmd: String = "sh"'
+
 run_case src/core/tool_runtime.ail starts_with_root_dir \
   '  startsWith(path, "Users/")   ||' \
   'Users/'

@@ -9,14 +9,18 @@ cannot validate its own labels -- the editor moves the contract and the label
 together, which is not an attack but the normal workflow (ADR-001 §2, and the
 failure recorded at src/core/dst_invariants.ail:72-84).
 
-Two probes decide the class of contract E over `f(args) -> T` with body B
-(ADR-001 §1):
+Two probes decide the class of contract E over `f(args) -> T` with body B and
+preconditions R (ADR-001 §1). Preserving R is essential: the real verifier
+proves E only on that domain, so dropping it would make an `ensures` implied by
+R look substantive even though it constrains no result.
 
   TAUT       pure func taut_f(args, r: T) -> T ensures { E } { r }
+               (under the original requires clauses R)
              VERIFIED means E holds for every result => tautology.
 
   DETERMINE  pure func det_f(args, r: T) -> T
-               requires { E[result := r] } ensures { result == B } { r }
+               requires { R, E[result := r] }
+               ensures { result == B } { r }
              VERIFIED means E admits only the body's answer => spec-equals-body.
              Semantic, so it catches restatements through lets and aliases too.
 
@@ -41,7 +45,7 @@ import hashlib
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,6 +70,7 @@ class Contract:
     name: str
     params: str          # "start: int, end: int"
     ret: str             # "{ start: int, end: int }"
+    requires: tuple[str, ...]  # preconditions, braces stripped
     ensures: str         # contract text, braces stripped
     body: str            # body block, braces INCLUDED
     solve_ms: float | None = None
@@ -77,7 +82,12 @@ class Contract:
 
     @property
     def contract_hash(self) -> str:
-        return _hash(self.ensures)
+        # Preserve the historical ensures-only hash when there is no
+        # precondition, while ensuring that adding or editing requires always
+        # invalidates the pin.
+        clauses = [f"requires {{ {req} }}" for req in self.requires]
+        clauses.append(self.ensures)
+        return _hash("\n".join(clauses))
 
     @property
     def body_hash(self) -> str:
@@ -133,6 +143,7 @@ def scan(path: Path) -> list[Contract]:
         # line ends at a brace the regex has already consumed. Walk from the end
         # of the signature over the clauses.
         i = m.end()
+        requires = []
         ensures = None
 
         while True:
@@ -149,7 +160,9 @@ def scan(path: Path) -> list[Contract]:
                 if stripped.startswith(kw):
                     j = text.index(opener, i + skip)
                     k = _match_delim(text, j, opener, closer)
-                    if kw == "ensures":
+                    if kw == "requires":
+                        requires.append(text[j + 1:k - 1].strip())
+                    elif kw == "ensures":
                         ensures = text[j + 1:k - 1].strip()
                     i = k
                     break
@@ -164,6 +177,7 @@ def scan(path: Path) -> list[Contract]:
         out.append(Contract(module=rel, name=m.group("name"),
                             params=m.group("params").strip(),
                             ret=m.group("ret").strip(),
+                            requires=tuple(requires),
                             ensures=ensures, body=body))
     return out
 
@@ -189,36 +203,63 @@ def probe_source(module_path: Path, contracts: list[Contract]) -> str:
 
     for c in contracts:
         sep = ", " if c.params else ""
+        original_requires = (
+            f"  requires {{ {', '.join(c.requires)} }}\n" if c.requires else ""
+        )
+        determine_requires = ", ".join(
+            (*c.requires, RESULT_RE.sub(FREE, c.ensures))
+        )
         parts.append(
             f"pure func taut_{c.name}({c.params}{sep}{FREE}: {c.ret}) -> {c.ret}\n"
+            f"{original_requires}"
             f"  ensures {{ {c.ensures} }}\n"
             f"  {{ {FREE} }}\n"
         )
         parts.append(
             f"pure func det_{c.name}({c.params}{sep}{FREE}: {c.ret}) -> {c.ret}\n"
-            f"  requires {{ {RESULT_RE.sub(FREE, c.ensures)} }}\n"
+            f"  requires {{ {determine_requires} }}\n"
             f"  ensures  {{ result == {c.body} }}\n"
             f"  {{ {FREE} }}\n"
         )
     return "\n".join(parts)
 
 
-VERDICT_RE = re.compile(r"(VERIFIED|VIOLATION|SKIPPED)\s+(\w+)(?:\s+\x1b\[2m([\d.]+)ms)?")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+VERDICT_RE = re.compile(
+    r"(VERIFIED|VIOLATION|SKIPPED|ERROR)\s+(\w+)(?:\s+([\d.]+)ms)?"
+)
 
 
-def verdicts(path: Path) -> dict[str, tuple[str, float | None]]:
+def verdicts(
+    path: Path, expected: set[str] | None = None
+) -> dict[str, tuple[str, float | None]]:
     # Relative to ROOT: `ailang verify` checks the module declaration against the
     # file path, and an absolute path fails that check (MOD010).
     out = subprocess.run(["ailang", "verify", str(Path(path).resolve().relative_to(ROOT))],
                          capture_output=True, text=True, cwd=ROOT)
     if out.returncode not in (0, 1):
         raise SystemExit(f"ailang verify failed on {path}:\n{out.stdout}{out.stderr}")
+    blob = out.stdout + out.stderr
     found: dict[str, tuple[str, float | None]] = {}
-    for line in (out.stdout + out.stderr).splitlines():
-        m = VERDICT_RE.search(line)
+    for line in blob.splitlines():
+        m = VERDICT_RE.search(ANSI_RE.sub("", line))
         if m:
             ms = float(m.group(3)) if m.group(3) else None
             found[m.group(2)] = (m.group(1), ms)
+
+    errors = sorted(name for name, (status, _) in found.items() if status == "ERROR")
+    if errors:
+        raise SystemExit(
+            f"ailang verify reported ERROR for {', '.join(errors)} in {path}:\n{blob}"
+        )
+
+    if expected is not None:
+        missing = sorted(expected - found.keys())
+        if missing:
+            raise SystemExit(
+                f"ailang verify produced no verdict for {', '.join(missing)} in {path}; "
+                f"classification cannot continue:\n{blob}"
+            )
     return found
 
 
@@ -264,6 +305,10 @@ HEADER = """\
 #                     regression test, not evidence; a standing invitation to
 #                     look for the weaker property (ADR-001 §1).
 #   unclassified      a probe was SKIPPED; the fragment could not decide.
+#
+# Both probes preserve the function's original requires clauses. Without that,
+# an ensures implied entirely by a precondition would be mislabelled substantive
+# even though it says nothing about the result.
 #
 # `solve` is the contract's own time from `ailang verify` on the real module,
 # recorded so P4 can see the tail before verify rides in DP7's path (PLAN Q2).
@@ -340,7 +385,7 @@ def collect() -> list[Contract]:
         if not contracts:
             continue
 
-        real = verdicts(path)
+        real = verdicts(path, {c.name for c in contracts})
         for c in contracts:
             v = real.get(c.name)
             if v and v[0] == "VERIFIED":
@@ -348,10 +393,15 @@ def collect() -> list[Contract]:
 
         probe = GEN / f"{path.stem}_probe.ail"
         probe.write_text(probe_source(path, contracts))
-        got = verdicts(probe)
+        expected_probes = {
+            probe_name
+            for c in contracts
+            for probe_name in (f"taut_{c.name}", f"det_{c.name}")
+        }
+        got = verdicts(probe, expected_probes)
         for c in contracts:
-            c.taut = got.get(f"taut_{c.name}", ("SKIPPED", None))[0]
-            c.det = got.get(f"det_{c.name}", ("SKIPPED", None))[0]
+            c.taut = got[f"taut_{c.name}"][0]
+            c.det = got[f"det_{c.name}"][0]
 
         classify(contracts)
         all_contracts.extend(contracts)

@@ -2349,7 +2349,10 @@ test: test_core
 #             the solver could not. Reported, never fails -- failing here would punish
 #             the attempt and make deleting the contract the cheapest route to green.
 #
-# VIOLATION or ERROR exits 1 (contracts written but broken).
+# VIOLATION or ERROR exits 1 (contracts written but broken). AILANG v0.33
+# returns zero for per-function encoding/solver ERROR verdicts unless --strict
+# is used; --strict would also reject the intentionally tolerated SKIPPED
+# bucket, so parse ERROR explicitly below instead of trusting only its status.
 # Files with no contracts at all are counted as bare and do not fail.
 # Reasons, not rejection codes: verify.go:340-349 strips codes from the human message.
 verify_core:
@@ -2368,6 +2371,13 @@ verify_core:
 		fi; \
 		if echo "$$out" | grep -q "no functions with contracts"; then \
 			bare=$$((bare + 1)); \
+			continue; \
+		fi; \
+		e="$$(echo "$$out" | grep -c 'ERROR')"; \
+		if [ $$e -ne 0 ]; then \
+			echo "  ✗ $$f (verifier ERROR)"; \
+			echo "$$out" | grep -E 'ERROR|encoding error:|solver error:' | head -6 | sed 's/^/      /'; \
+			fail=$$((fail + 1)); \
 			continue; \
 		fi; \
 		v="$$(echo "$$out" | grep -c 'VERIFIED')"; \
@@ -2404,11 +2414,12 @@ verify_core:
 # The computed classification register (PLAN P3, ADR-001 §1-§2).
 #
 # `proven` is not the metric; `substantive` is. Each contract gets two generated
-# probes -- bind the result to a free argument and keep the ensures (VERIFIED =>
-# tautology), then require the contract on a free result and ensure it equals the
-# body (VERIFIED => the contract just restates the body). Both VIOLATION means
-# the contract is falsifiable AND admits results the body would not produce,
-# which is the only class that counts.
+# probes -- preserve the original requires, bind the result to a free argument
+# and keep the ensures (VERIFIED => tautology on the function's real domain),
+# then require the contract on a free result and ensure it equals the body
+# (VERIFIED => the contract just restates the body). Both VIOLATION means the
+# contract is falsifiable AND admits results the body would not produce, which
+# is the only class that counts.
 #
 # verify_classify rewrites contracts.register; verify_classify_check fails if the
 # tree and the register disagree in either direction, INCLUDING a class edited by
@@ -2419,6 +2430,7 @@ verify_classify:
 	@python3 tools/verify_classify/classify.py --write
 
 verify_classify_check:
+	@python3 -m unittest discover -s tools/verify_classify -p 'test_*.py'
 	@python3 tools/verify_classify/classify.py --check
 
 # ADR-001 §4: every NEW `pure func` in src/core/ carries a contract or a
@@ -2428,7 +2440,7 @@ verify_classify_check:
 # BASE defaults to the Makefile's BASE, so `make new_contract_policy BASE=main_dst`
 # on a branch cut from main_dst.
 new_contract_policy:
-	@python3 tools/verify_classify/new_contract_policy.py --base $(BASE)
+	@python3 tools/verify_classify/new_contract_policy.py --base "$(BASE)"
 
 # Which functions in src/core COULD carry a contract -- synthesises a trivial
 # ensures on each and reads the verdict. Not a gate: it answers "where next",
@@ -2462,6 +2474,13 @@ verify_ext:
 		fi; \
 		if echo "$$out" | grep -q "no functions with contracts"; then \
 			bare=$$((bare + 1)); \
+			continue; \
+		fi; \
+		e="$$(echo "$$out" | grep -c 'ERROR')"; \
+		if [ $$e -ne 0 ]; then \
+			echo "  ✗ $$f (verifier ERROR)"; \
+			echo "$$out" | grep -E 'ERROR|encoding error:|solver error:' | head -6 | sed 's/^/      /'; \
+			fail=$$((fail + 1)); \
 			continue; \
 		fi; \
 		v="$$(echo "$$out" | grep -c 'VERIFIED')"; \
