@@ -232,3 +232,112 @@ The two tautologies are `isSome` and `is_native_backend`, both `result == true |
 false` over a `bool` -- they share a contract hash in the register, which is the clearest
 possible statement of what they are worth. They are permitted, registered, and counted as
 zero.
+
+## F13 — The sweep the plan declined is four times smaller than it estimated, and it named the wrong modules
+
+PLAN P3.6 declined a coverage sweep on an estimate: "1069 of 1545 `pure func`s pass a crude
+in-fragment filter and most are DST-world constructors where a contract would restate a
+constructor." The conclusion holds. The number does not, and the estimate hid the interesting
+part.
+
+Measured with `make verify_survey` (`tools/verify_classify/survey.py`, added for this): a
+trivial `ensures { true }` is synthesised on every `pure func` lacking one, the module is
+verified once, and the per-function verdict is read.
+
+| verdict | count |
+|---|---|
+| **VERIFIED — inside the fragment** | **285** |
+| SKIPPED — recursive callee, unencodable builtin or type | 828 |
+| ERROR — encoder reached the body and failed | 426 |
+| EFFECTS — declares an effect row, never probed | 1 |
+
+1542 declarations across 40 modules; nothing unreadable. So the in-fragment population is
+**285, not 1069** -- the crude filter over-counted by a factor of ~3.7, because it could not
+see recursive callees or unencodable callee signatures.
+
+The split is what matters. **212 of the 285 are in `dst_*`**, exactly the world constructors
+P3.6 was right to exclude. That leaves **73 on the production surface**, and the plan never
+named them because it inherited the design doc's module list.
+
+Four were checked with real contracts rather than assumed:
+
+| function | contract | verdict |
+|---|---|---|
+| `session.trace_sensitive_key` | recall over all 9 redacted keys | ✓ 11.0ms |
+| `cost_phase.step_cost_millicents` | non-negative inputs ⇒ `result >= 0` | ✓ 14.0ms |
+| `cost_phase.cost_cap_exceeded` | `not result \|\| (max > 0 && total >= max)` | ✓ 12.8ms |
+| `recovery.should_retry_stream_error` | `not result \|\| (remaining > 1 && retryable)` | ✓ 10.4ms |
+
+`recovery.should_retry_stream_error` is the one taken here (F15); `trace_sensitive_key` was
+written, verified, and then reverted for a reason worth its own finding (F14). The two
+`cost_phase` contracts already have example tests, so a contract there upgrades examples to
+universal quantification -- worth doing, not urgent.
+
+Two cautions the survey itself makes visible. Being in the fragment does not make a contract
+worth writing -- `compaction.exhaustion_pct` is `{ 95 }` and verifies, where a contract
+restates a literal. And `compaction.effective_input_limit`, the real arithmetic in that
+module, is *out* for a narrow reason: it calls the nullary `output_token_allowance()`, and
+"Function ... calls \"output_token_allowance\" whose signature uses an unencodable type
+\"()\"". Several candidates are blocked only by that. Whether AILANG could encode a nullary
+call is unexamined here and may be the one upstream item in this project worth filing.
+
+## F14 — `trace_sensitive_key` is the uncovered guard, and `session.ail` is contract-frozen
+
+RESEARCH §3 E7 asked which guards in the write-path chain had no coverage and found
+`has_shell_tokens`. The same question asked of the trace path finds `trace_sensitive_key`
+(`session.ail:228`): one call site -- `session.ail:248`,
+`if trace_sensitive_key(key) then js("[redacted]")` -- and no test, no property, no contract.
+It decides whether a value is redacted before it reaches the trace, so the failure mode is a
+secret on disk rather than a command in a shell. That E7's method transferred cleanly to a
+module nobody had looked at is the argument for running the survey rather than reasoning about
+the fragment: the guard was two greps away and three documents missed it.
+
+The contract was written and it works: a one-directional recall over the nine keys, ✓ VERIFIED
+[11.0ms], **substantive** on both probes, and falsified -- deleting `key == "cmd"` yields
+`✗ VIOLATION trace_sensitive_key, $p_key: String = "cmd"`.
+
+**It was reverted, and the reason is the finding.** `session.ail` carries five line-number
+anchors -- 1148 / 1407 / 1513 / 2996 / 3106 -- pinned in `dst_attribution_table.ail` and
+checked by `tools/predicate-anchors/anchors.sh`. The contract is +14 lines at line 236, above
+all five, so `make dst` went red on `anchors` and `attribution_table`. Per that script's own
+header, re-baselining touches ~11 files and **re-issues three DST profiles**
+(`driver_only_version`, `no_ops_version`, `compose_profile_version`).
+
+There is no cheap placement. Every in-fragment candidate in `session.ail` sits between lines
+195 and 1772 (`provider_api_model` :195 … `step_cost_millicents` :1772), so **any** contract
+in that file crosses at least two anchors. Shrinking the comment does not help -- the cascade
+triggers on one added line. Making the edit line-count-neutral is the WI-D19 precedent, but
+`anchors.sh` calls that "the cosmetic edit `ext/runtime.ail:24` already had to make once;
+twice is a habit".
+
+So: **`session.ail` is contract-frozen unless the item pays the anchor re-baseline.** The
+anchors are an instrument, not a defect -- a line-number anchor is what makes the drift visible
+at all -- but `anchors.sh` says "an item that plans for Route B should price it", and contract
+adoption is now a second class of item that must. None of ADR-001, the PLAN or RESEARCH
+anticipated this, because none of them proposed touching `session.ail` outside P4.
+
+`recovery.ail` was taken instead (F15). `trace_sensitive_key` remains the highest-value
+uncontracted guard in the tree and is worth an item that prices the cascade up front.
+
+## F15 — What landed instead: the retry bound
+
+`recovery.should_retry_stream_error` (`recovery.ail:17`) carries no line pins -- checked
+against both `anchors.sh` and a grep for `recovery.ail:<line>` literals -- so it costs one file.
+
+```ailang
+ensures { not result || (remaining_step_budget > 1 && retryable) }   -- ✓ VERIFIED [24.1ms]
+```
+
+A **precision** property, where P5's guard contracts were recall: it does not say when a retry
+must happen, it fences the two ways approving one becomes unsafe. Strictly weaker than the body
+-- dropping `retry_enabled` still satisfies it -- so it does not restate the policy, and both
+probes return VIOLATION: **substantive**.
+
+What it buys over the two example tests already there (`should_retry_stream_error(true, true, 2)`
+and `not should_retry_stream_error(true, true, 1)`): those fix two budgets, the contract fixes
+every budget. An unbounded retry loop is the failure it forecloses, and no example can state
+that.
+
+The body was reformatted onto three lines so each conjunct is individually mutable; behaviour
+is identical. `make verify_mutations` deletes `&& remaining_step_budget > 1` and the solver
+returns VIOLATION -- the edit that turns a bounded retry into an unbounded one.

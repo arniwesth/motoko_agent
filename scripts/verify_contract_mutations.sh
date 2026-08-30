@@ -92,5 +92,12 @@ run_case src/core/tool_runtime.ail starts_with_root_dir \
   '  startsWith(path, "Users/")   ||' \
   'Users/'
 
+# The retry bound. Unlike the two above this is a PRECISION property, so the
+# mutation is the conjunct whose loss would let a retry through with no budget
+# left to spend on it -- the edit that turns a bounded retry into an unbounded one.
+run_case src/core/recovery.ail should_retry_stream_error \
+  '    && remaining_step_budget > 1' \
+  'remaining_step_budget'
+
 echo "verify_mutations: $pass falsified, $fail unfalsified"
 [ "$fail" -eq 0 ]
