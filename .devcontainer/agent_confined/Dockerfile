@@ -268,7 +268,8 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium
 # route to apt — so "I'll grab it when I need it" is not available in this profile the way it is in
 # the operator's. Baking them in is the only way they exist at all. Sourced from
 # https://rockstardeveloperuniversity.com/best-terminal-cli-tools, minus its #14 (tmux/Zellij):
-# herdr IS the session layer here, and a second multiplexer inside it is a way to lose a pane.
+# herdr IS the session layer here, and a second multiplexer inside it is a way to lose a pane. `just`
+# is the one addition that is not from that list.
 #
 # jq is already installed by scripts/install-prerequisites.sh and is deliberately not repeated.
 #
@@ -304,6 +305,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   delta     noble ships 0.16 as `git-delta`, three minor versions behind.
 #   tldr      the client is `tlrc`, the tldr-pages project's own Rust client, which installs its
 #             binary as `tldr`. Not in noble.
+#   just      noble ships 1.16, from June 2023; upstream is 1.58. Modules and most of the recipe
+#             attributes landed in between, so the packaged version cannot read a current justfile.
+#             This repo drives itself with make rather than just — `just` is here for the justfiles
+#             that arrive with somebody else's repository.
 #   lazygit   noble has no package.
 #   spiceedit https://spice-edit.com — a mouse-first terminal editor for SSH/tmux work. Binary name
 #             has no hyphen. Not in any distro.
@@ -321,15 +326,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # INTEGRITY follows the convention this file already uses: verify when upstream publishes a digest
 # (herdr does, from its manifest), otherwise pin the version and assert the binary runs (as
-# PLAYWRIGHT_VERSION and AGENT_BROWSER_VERSION do). Three of the nine publish a checksums file and
+# PLAYWRIGHT_VERSION and AGENT_BROWSER_VERSION do). Four of the ten publish a checksums file and
 # get the third field; the other six do not publish one at all, and inventing hardcoded hashes here
 # would only restate a digest computed from the same download. `--ignore-missing` is required for the
 # ones that do: the file lists every platform's archive and exactly one of them is on disk.
 #
 # THE ARCHIVES DISAGREE ON EVERYTHING — how to spell amd64 (`x86_64`, `amd64`, `linux_x86_64`),
 # whether the tag carries a `v`, and whether the binary sits at the archive root or one directory
-# down. Rather than encode nine layouts, the loop extracts and then FINDS the executable by name,
-# which is the one thing all nine agree on. zoxide publishes musl-only builds for Linux; that is
+# down. Rather than encode ten layouts, the loop extracts and then FINDS the executable by name,
+# which is the one thing all ten agree on. zoxide publishes musl-only builds for Linux; that is
 # fine, and is why it gets its own target token.
 ARG FZF_VERSION=0.74.3
 ARG BAT_VERSION=0.26.1
@@ -338,6 +343,7 @@ ARG FD_VERSION=10.5.0
 ARG ZOXIDE_VERSION=0.10.0
 ARG DELTA_VERSION=0.19.2
 ARG TLRC_VERSION=1.13.1
+ARG JUST_VERSION=1.58.0
 ARG LAZYGIT_VERSION=0.64.1
 ARG SPICEEDIT_VERSION=0.0.43
 RUN set -eu; \
@@ -356,6 +362,7 @@ RUN set -eu; \
       "zoxide|$gh/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-${musl}.tar.gz|" \
       "delta|$gh/dandavison/delta/releases/download/${DELTA_VERSION}/delta-${DELTA_VERSION}-${rust}.tar.gz|" \
       "tldr|$gh/tldr-pages/tlrc/releases/download/v${TLRC_VERSION}/tlrc-v${TLRC_VERSION}-${rust}.tar.gz|" \
+      "just|$gh/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-${musl}.tar.gz|$gh/casey/just/releases/download/${JUST_VERSION}/SHA256SUMS" \
       "lazygit|$gh/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_${lg}.tar.gz|$gh/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/checksums.txt" \
       "spiceedit|$gh/cloudmanic/spice-edit/releases/download/v${SPICEEDIT_VERSION}/spiceedit_${SPICEEDIT_VERSION}_${go}.tar.gz|$gh/cloudmanic/spice-edit/releases/download/v${SPICEEDIT_VERSION}/checksums.txt" \
     ; do \
@@ -375,7 +382,8 @@ RUN set -eu; \
     done; \
     rm -rf /tmp/tool; \
     fzf --version; bat --version; eza --version; fd --version; \
-    zoxide --version; delta --version; tldr --version; lazygit --version; spiceedit --version
+    zoxide --version; delta --version; tldr --version; just --version; \
+    lazygit --version; spiceedit --version
 
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
