@@ -181,6 +181,14 @@ too, which teaches people to update contracts mechanically.
 body and asserting the solver returns VIOLATION — VERIFIED alone only says a contract
 holds, not that it would notice the body changing.
 
+### Finding somewhere to write one
+
+`make verify_survey` synthesises a trivial `ensures { true }` on every `pure func` in
+`src/core` and reports which ones the solver can actually decide — 285 of 1542 today, of
+which 73 are outside `dst_*`. Use `--module <stem>` for one file. It answers "where
+next"; being inside the fragment does not make a contract worth writing, so check what
+you wrote against the classes above.
+
 ### Two things that will stop you
 
 The fragment is six rejection codes in `ailang/internal/smt/encodable.go`. In practice:

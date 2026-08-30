@@ -2428,6 +2428,13 @@ verify_classify_check:
 new_contract_policy:
 	@python3 tools/verify_classify/new_contract_policy.py --base $(BASE)
 
+# Which functions in src/core COULD carry a contract -- synthesises a trivial
+# ensures on each and reads the verdict. Not a gate: it answers "where next",
+# and being in the fragment does not make a contract worth writing. Takes a
+# couple of minutes; `--module <stem>` for one file, `--all` to include dst_*.
+verify_survey:
+	@python3 tools/verify_classify/survey.py
+
 # Mutation checks for the guard contracts (PLAN P5). VERIFIED proves a contract
 # holds of the body; it does not prove the contract would notice the body
 # changing. This deletes one disjunct from each guard and asserts VIOLATION.
