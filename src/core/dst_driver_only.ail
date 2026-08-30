@@ -509,7 +509,7 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "23" }
+export pure func driver_only_version() -> string { "24" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -675,7 +675,29 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- character-for-character against `git show ce9b599:` — so no site was
     -- added, removed, re-argued or re-routed and the D4 judgement has the same
     -- answer it had before.
-    content_hash: "sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55" }
+    -- MOT-130: re-recorded with both successors', from
+    -- sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55.
+    -- All five session anchors moved +14 — 1148/1407/1513/2996/3106 ->
+    -- 1162/1421/1527/3010/3120 — pushed by a Z3 CONTRACT and its comment on
+    -- `trace_sensitive_key` (session.ail:236), which sits above all five. That
+    -- cause is new in this pair's history: #160 was the first re-issue caused by
+    -- a comment, and this is the first caused by a VERIFICATION artifact.
+    --
+    -- IT IS ALSO THE FIRST RE-ISSUE THAT COULD NOT BE AVOIDED BY PLACEMENT.
+    -- WI-D19 dodged the cascade by making every edit line-count-neutral; a
+    -- contract cannot be, and every function in `session.ail` that the SMT
+    -- fragment can decide sits between :195 and :1772 — above at least two
+    -- anchors. So `session.ail` is contract-frozen unless an item prices this,
+    -- which makes contract adoption a second class of item that must, alongside
+    -- the `ext_ports_of` edits the anchors.sh header already names.
+    --
+    -- NOT A TABLE CORRECTION. An anchor re-measurement: the routed clock set is
+    -- unchanged — six sites before, six after, `clock_now(` text identical
+    -- character-for-character against `git show HEAD:` — and all five anchored
+    -- expressions are byte-identical at their new offsets, so no site was added,
+    -- removed, re-argued or re-routed and the D4 judgement has the same answer
+    -- it had before.
+    content_hash: "sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66" }
 }
 
 -- ---------------------------------------------------------------------------

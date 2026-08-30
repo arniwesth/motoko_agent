@@ -217,7 +217,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
 -- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
 -- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
-export pure func compose_profile_version() -> string { "3" }
+export pure func compose_profile_version() -> string { "4" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -236,7 +236,13 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- is what WI-D27 predicted when it wrote that a third profile widens every
     -- future re-baseline. An anchor re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55" }
+    -- MOT-130: re-recorded with both predecessors', from
+    -- sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55
+    -- — this file's SECOND re-issue, and again it cost nothing but this comment.
+    -- All five session anchors moved +14, pushed by a Z3 contract on
+    -- `trace_sensitive_key`. An anchor re-measurement, not a table correction.
+    -- See `driver_only_attribution_ref`.
+    content_hash: "sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66" }
 }
 
 -- ---------------------------------------------------------------------------

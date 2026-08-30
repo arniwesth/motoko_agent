@@ -265,12 +265,49 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # not an argument against the comments — they carry the measurement the fix
 # rests on — but an item that budgets "one function" should budget this too.
 
+# MOT-130 RE-BASELINED THE FIVE session.ail ANCHORS A SEVENTH TIME, ALL +14 —
+# `1148/1407/1513/2996/3106 -> 1162/1421/1527/3010/3120` — and it is the first
+# re-issue in this file's history caused by a Z3 CONTRACT. #160 was the first
+# caused by a comment; this one is eight lines of comment and six of `ensures` on
+# `trace_sensitive_key` (session.ail:236), the trace redaction guard, which sits
+# above all five.
+#
+# THE D4 JUDGEMENT WAS MADE: the routed clock set is unchanged. `grep -o
+# 'clock_now(.*'` over `git show HEAD:src/core/session.ail` and over the working
+# tree is IDENTICAL, six sites and six, and all five anchored expressions were
+# compared character-for-character at their new offsets and are byte-identical.
+# Pure offset drift; no site changed identity, routing or attribution.
+#
+# THE WIDTH WAS DERIVED, NOT READ OFF THE EDITED FILE, per the rule above. Both
+# greps were run. The four discovered-site fixtures carry only
+# `ext/runtime.ail:199` and `tool_phase.ail:318`, NEITHER of which moved, so they
+# needed no edit — this is WI-D25's narrow form widened by WI-D27's third
+# profile. The files that PIN the moved anchors are seven:
+#
+#   1. this file                                (the check itself)
+#   2. src/core/dst_attribution_table.ail       (5 rows + 1 test literal)
+#   3. scripts/dst/attribution_table_dst.ail    (1 literal, `:1513` in omitted_site)
+#   4. src/core/dst_driver_only.ail             (v23 -> v24 + content hash)
+#   5. src/core/dst_driver_plus_no_ops.ail      (v11 -> v12 + content hash)
+#   6. src/core/dst_driver_plus_compose.ail     (v3  -> v4  + content hash)
+#   7. src/core/session.ail                     (the contract itself)
+#
+# AND IT IS THE FIRST CAUSE THAT PLACEMENT CANNOT DODGE, which is the part worth
+# recording. WI-D19 avoided the cascade by making every edit line-count-neutral,
+# and WI-D20 rejected buying lines back as "a habit". A contract can do neither:
+# it cannot be line-count-neutral, and every function in `session.ail` the SMT
+# fragment can decide sits between :195 (`provider_api_model`) and :1772
+# (`step_cost_millicents`) — above at least two anchors, so there is no free
+# placement either. `session.ail` is therefore contract-frozen unless the item
+# prices this, and contract adoption joins `ext_ports_of` edits as a class of
+# item that must. Measured with `make verify_survey`.
+
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1148 1407 1513 2996 3106; do
+for l in 1162 1421 1527 3010 3120; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

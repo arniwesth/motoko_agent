@@ -2336,50 +2336,178 @@ test_integration:
 test: test_core
 
 # Z3 contract verification for pure core modules.
-# VIOLATION or ERROR exits 1 (contracts written but broken).
-# SKIPPED exits 0 (contracts aspirational or function outside Z3 fragment).
-# Files with no contracts are noted but do not fail.
+#
+# Every unticked file prints the reason `ailang verify` gave, and no file with zero
+# VERIFIED contracts prints a tick. "Amber" is split by cause, because the two halves
+# need opposite treatment (ADR-001 §3, .agent/projects/027_z3_contracts/):
+#
+#   unstated  requires with no ensures -- nobody ever wrote an obligation, and the
+#             requires is never asserted against a caller either (verify.go:290-304),
+#             so it is documentation that reads as a specification. EXITS 1.
+#   blocked   an ensures exists and the Z3 fragment rejected it (NOT_PURE, RECURSIVE,
+#             HIGHER_ORDER, UNENCODABLE_TYPE, unencodable builtin). Someone tried and
+#             the solver could not. Reported, never fails -- failing here would punish
+#             the attempt and make deleting the contract the cheapest route to green.
+#
+# VIOLATION or ERROR exits 1 (contracts written but broken). AILANG v0.33
+# returns zero for per-function encoding/solver ERROR verdicts unless --strict
+# is used; --strict would also reject the intentionally tolerated SKIPPED
+# bucket, so parse ERROR explicitly below instead of trusting only its status.
+# Files with no contracts at all are counted as bare and do not fail.
+# Reasons, not rejection codes: verify.go:340-349 strips codes from the human message.
 verify_core:
-	@ok=0; fail=0; none=0; \
+	@proven=0; unstated=0; blocked=0; fail=0; bare=0; \
 	for f in src/core/*.ail; do \
 		case "$$f" in *_test.ail) continue ;; esac; \
 		out="$$(ailang verify "$$f" 2>&1)"; \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "  ✗ $$f"; \
-			echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3; \
+			detail="$$(echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3)"; \
+			[ -n "$$detail" ] || detail="$$(echo "$$out" | grep -v '^[[:space:]]*$$' | head -3)"; \
+			echo "$$detail" | sed 's/^/      /'; \
 			fail=$$((fail + 1)); \
-		elif echo "$$out" | grep -q "no functions with contracts"; then \
-			none=$$((none + 1)); \
-		else \
-			proven="$$(echo "$$out" | grep 'VERIFIED' | wc -l | tr -d ' ')"; \
-			echo "  ✓ $$f ($$proven proven)"; \
-			ok=$$((ok + 1)); \
+			continue; \
 		fi; \
+		if echo "$$out" | grep -q "no functions with contracts"; then \
+			bare=$$((bare + 1)); \
+			continue; \
+		fi; \
+		e="$$(echo "$$out" | grep -c 'ERROR')"; \
+		if [ $$e -ne 0 ]; then \
+			echo "  ✗ $$f (verifier ERROR)"; \
+			echo "$$out" | grep -E 'ERROR|encoding error:|solver error:' | head -6 | sed 's/^/      /'; \
+			fail=$$((fail + 1)); \
+			continue; \
+		fi; \
+		v="$$(echo "$$out" | grep -c 'VERIFIED')"; \
+		u="$$(echo "$$out" | grep 'Reason:' | grep -c 'no ensures clause')"; \
+		b="$$(echo "$$out" | grep -c 'Reason:')"; b=$$((b - u)); \
+		if [ $$v -eq 0 ] && [ $$u -eq 0 ] && [ $$b -eq 0 ]; then \
+			echo "  ? $$f (contracts present but no verdict parsed -- gate cannot classify)"; \
+			fail=$$((fail + 1)); \
+			continue; \
+		fi; \
+		desc=""; \
+		[ $$v -gt 0 ] && desc="$$v proven"; \
+		[ $$u -gt 0 ] && desc="$${desc:+$$desc, }$$u unstated"; \
+		[ $$b -gt 0 ] && desc="$${desc:+$$desc, }$$b blocked"; \
+		if [ $$u -gt 0 ]; then mark="!"; elif [ $$b -gt 0 ]; then mark="~"; else mark="✓"; fi; \
+		echo "  $$mark $$f ($$desc)"; \
+		echo "$$out" | awk '/SKIPPED/ { name = $$3 } /Reason:/ { sub(/^ *Reason: */, ""); print "      " name ": " $$0 }'; \
+		proven=$$((proven + v)); unstated=$$((unstated + u)); blocked=$$((blocked + b)); \
 	done; \
-	echo "verify_core: $$ok with contracts, $$fail failed, $$none without contracts"; \
-	[ "$$fail" -eq 0 ] || exit 1
+	echo "verify_core: $$proven contracts proven, $$unstated unstated, $$blocked blocked; $$fail files failed, $$bare bare"; \
+	if [ -f tools/verify_classify/contracts.register ]; then \
+		sed -n 's/^# totals: /verify_core: pinned classification -- /p' tools/verify_classify/contracts.register; \
+		echo "  proven counts contracts; only 'substantive' constrains a body (ADR-001 §1)."; \
+		echo "  verify_classify_check is what proves that pin current."; \
+	fi; \
+	if [ "$$unstated" -ne 0 ]; then \
+		echo "verify_core: FAIL -- $$unstated contract(s) declare requires with no ensures."; \
+		echo "  An incomplete annotation reads as specified and is checked by nothing."; \
+		echo "  Add an ensures, or drop the requires. If the fragment rejects the ensures"; \
+		echo "  the file becomes 'blocked', which is reported and does not fail."; \
+	fi; \
+	[ "$$fail" -eq 0 ] && [ "$$unstated" -eq 0 ] || exit 1
 
-# Z3 contract verification for extension modules.
+# The computed classification register (PLAN P3, ADR-001 §1-§2).
+#
+# `proven` is not the metric; `substantive` is. Each contract gets two generated
+# probes -- preserve the original requires, bind the result to a free argument
+# and keep the ensures (VERIFIED => tautology on the function's real domain),
+# then require the contract on a free result and ensure it equals the body
+# (VERIFIED => the contract just restates the body). Both VIOLATION means the
+# contract is falsifiable AND admits results the body would not produce, which
+# is the only class that counts.
+#
+# verify_classify rewrites contracts.register; verify_classify_check fails if the
+# tree and the register disagree in either direction, INCLUDING a class edited by
+# hand while the solver computes something else. That last direction is why the
+# register is generated rather than maintained -- see dst_invariants.ail:72-84
+# for what a hand-maintained register is worth.
+verify_classify:
+	@python3 tools/verify_classify/classify.py --write
+
+verify_classify_check:
+	@python3 -m unittest discover -s tools/verify_classify -p 'test_*.py'
+	@python3 tools/verify_classify/classify.py --check
+
+# ADR-001 §4: every NEW `pure func` in src/core/ carries a contract or a
+# `-- contracts: ...` line saying what blocks one -- and the excuse is checked by
+# synthesising a trivial contract and confirming the verifier really rejects the
+# function. Keyed on the diff: ~1545 declarations predate the rule.
+# BASE defaults to the Makefile's BASE, so `make new_contract_policy BASE=main_dst`
+# on a branch cut from main_dst.
+new_contract_policy:
+	@python3 tools/verify_classify/new_contract_policy.py --base "$(BASE)"
+
+# Which functions in src/core COULD carry a contract -- synthesises a trivial
+# ensures on each and reads the verdict. Not a gate: it answers "where next",
+# and being in the fragment does not make a contract worth writing. Takes a
+# couple of minutes; `--module <stem>` for one file, `--all` to include dst_*.
+verify_survey:
+	@python3 tools/verify_classify/survey.py
+
+# Mutation checks for the guard contracts (PLAN P5). VERIFIED proves a contract
+# holds of the body; it does not prove the contract would notice the body
+# changing. This deletes one disjunct from each guard and asserts VIOLATION.
+#
+# Mutates tracked sources in place and restores them on exit, so it is
+# deliberately NOT wired into check_core or verify_core -- nothing DP7 or
+# another agent runs may edit the tree underneath them.
+verify_mutations:
+	@./scripts/verify_contract_mutations.sh
+
 verify_ext:
-	@ok=0; fail=0; none=0; \
+	@proven=0; unstated=0; blocked=0; fail=0; bare=0; \
 	for f in $$(find src/core/ext -name "*.ail" ! -name "*_test.ail"); do \
 		out="$$(ailang verify "$$f" 2>&1)"; \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "  ✗ $$f"; \
-			echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3; \
+			detail="$$(echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3)"; \
+			[ -n "$$detail" ] || detail="$$(echo "$$out" | grep -v '^[[:space:]]*$$' | head -3)"; \
+			echo "$$detail" | sed 's/^/      /'; \
 			fail=$$((fail + 1)); \
-		elif echo "$$out" | grep -q "no functions with contracts"; then \
-			none=$$((none + 1)); \
-		else \
-			proven="$$(echo "$$out" | grep 'VERIFIED' | wc -l | tr -d ' ')"; \
-			echo "  ✓ $$f ($$proven proven)"; \
-			ok=$$((ok + 1)); \
+			continue; \
 		fi; \
+		if echo "$$out" | grep -q "no functions with contracts"; then \
+			bare=$$((bare + 1)); \
+			continue; \
+		fi; \
+		e="$$(echo "$$out" | grep -c 'ERROR')"; \
+		if [ $$e -ne 0 ]; then \
+			echo "  ✗ $$f (verifier ERROR)"; \
+			echo "$$out" | grep -E 'ERROR|encoding error:|solver error:' | head -6 | sed 's/^/      /'; \
+			fail=$$((fail + 1)); \
+			continue; \
+		fi; \
+		v="$$(echo "$$out" | grep -c 'VERIFIED')"; \
+		u="$$(echo "$$out" | grep 'Reason:' | grep -c 'no ensures clause')"; \
+		b="$$(echo "$$out" | grep -c 'Reason:')"; b=$$((b - u)); \
+		if [ $$v -eq 0 ] && [ $$u -eq 0 ] && [ $$b -eq 0 ]; then \
+			echo "  ? $$f (contracts present but no verdict parsed -- gate cannot classify)"; \
+			fail=$$((fail + 1)); \
+			continue; \
+		fi; \
+		desc=""; \
+		[ $$v -gt 0 ] && desc="$$v proven"; \
+		[ $$u -gt 0 ] && desc="$${desc:+$$desc, }$$u unstated"; \
+		[ $$b -gt 0 ] && desc="$${desc:+$$desc, }$$b blocked"; \
+		if [ $$u -gt 0 ]; then mark="!"; elif [ $$b -gt 0 ]; then mark="~"; else mark="✓"; fi; \
+		echo "  $$mark $$f ($$desc)"; \
+		echo "$$out" | awk '/SKIPPED/ { name = $$3 } /Reason:/ { sub(/^ *Reason: */, ""); print "      " name ": " $$0 }'; \
+		proven=$$((proven + v)); unstated=$$((unstated + u)); blocked=$$((blocked + b)); \
 	done; \
-	echo "verify_ext: $$ok with contracts, $$fail failed, $$none without contracts"; \
-	[ "$$fail" -eq 0 ] || exit 1
+	echo "verify_ext: $$proven contracts proven, $$unstated unstated, $$blocked blocked; $$fail files failed, $$bare bare"; \
+	if [ "$$unstated" -ne 0 ]; then \
+		echo "verify_ext: FAIL -- $$unstated contract(s) declare requires with no ensures."; \
+		echo "  An incomplete annotation reads as specified and is checked by nothing."; \
+		echo "  Add an ensures, or drop the requires. If the fragment rejects the ensures"; \
+		echo "  the file becomes 'blocked', which is reported and does not fail."; \
+	fi; \
+	[ "$$fail" -eq 0 ] && [ "$$unstated" -eq 0 ] || exit 1
 
 # ---------------------------------------------------------------------------
 # ADR-001 D5 obligation 2, classifier 1: the effect-bearing stdlib module set.

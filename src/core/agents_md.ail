@@ -35,6 +35,9 @@ func find_last(i: int, s: string) -> int =
   else if substring(s, i, i + 1) == "/" then i
   else find_last(i - 1, s)
 
+-- contracts: BLOCKED — RECURSIVE. The shrinking property that makes walk_agents
+-- terminate (dirname's result is strictly shorter than its input) needs the callee
+-- find_last de-recursed first. Covered today by the tests block below.
 func dirname(path: string) -> string
   tests [
     ("/home/user/file.txt",  "/home/user"),
@@ -73,7 +76,8 @@ func dirname(path: string) -> string
 -- Returns true if the path is at the filesystem root.
 -- Handles both Unix (/) and Windows (C:\, etc.) roots.
 -- ---------------------------------------------------------------------------
-func is_root(path: string) -> bool
+pure func is_root(path: string) -> bool
+  ensures { not result || str_length(path) <= 3 }
   tests [
     ("/",        true),
     ("/home",    false),
@@ -179,22 +183,3 @@ export func with_agents_context(system: string, dir: string) -> string ! {FS} {
     "${system}\n${agents_content}"
   }
 }
-
--- ---------------------------------------------------------------------------
--- Z3 / SMT verification targets
---
--- These invariants are simple boolean predicates with no string splitting —
--- Z3's string theory can handle them without timing out.
--- ---------------------------------------------------------------------------
-
--- is_root only holds for short paths: "/" "X:" "X:\"
--- (ensures we never mistake /home or longer paths for root)
-@verify(depth: 1)
-func is_root_length_bound(path: string) -> bool
-  { not is_root(path) || str_length(path) <= 3 }
-
--- dirname result is always strictly shorter than input (termination guarantee)
--- This is the key property that ensures walk_agents terminates
-@verify(depth: 1)
-func dirname_shrinks(path: string) -> bool
-  { path == "/" || str_length(dirname(path)) < str_length(path) }

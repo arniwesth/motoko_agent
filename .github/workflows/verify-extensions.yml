@@ -42,6 +42,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # new_contract_policy diffs against the PR base, which a depth-1
+          # checkout does not have.
+          fetch-depth: 0
 
       - name: Read AILANG floor from ailang.toml (single source of truth)
         id: pin
@@ -83,6 +87,19 @@ jobs:
       - name: Confirm ailang version
         run: ailang --version
 
+      # `ailang verify` shells out to Z3; without it EVERY module errors. That
+      # went unnoticed for as long as verify_core ran under continue-on-error,
+      # which discarded the exit code -- so the target has never actually
+      # verified anything here. Installing the solver is what makes the step
+      # mean what its name says. scripts/install-prerequisites.sh names z3 for
+      # the same reason; this job builds ailang directly and so must too.
+      - name: Install Z3
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends z3
+          z3 --version
+
       - name: Hydrate extension packages
         run: make CI=1 sync_packages
 
@@ -113,9 +130,46 @@ jobs:
       - name: test_coverage (run every inline test under src/core)
         run: make test_coverage_selftest test_coverage
 
-      - name: verify_core (advisory)
-        continue-on-error: true
+      # Enforcing since MOT-130. verify_core no longer ticks a file that proves
+      # nothing, and a `requires` with no `ensures` exits non-zero (ADR-001 §3).
+      # A ratchet nothing reads is not a ratchet, so the advisory flag came off
+      # in the same change that gave the gate something true to say. Contracts
+      # the Z3 fragment rejects are reported as `blocked` and never fail here.
+      - name: verify_core
         run: make verify_core
+
+      # VERIFIED proves a contract holds of its body, not that it would notice
+      # the body changing. This falsifies each guard contract by deleting a
+      # disjunct and asserting VIOLATION (PLAN P5).
+      - name: verify_mutations
+        run: make verify_mutations
+
+      # The class of each contract is computed by Z3 and pinned. This fails if
+      # the tree and contracts.register disagree in either direction, including
+      # a class edited by hand while the solver computes something else -- the
+      # direction a hand-maintained register cannot check (ADR-001 §2).
+      - name: verify_classify_check
+        run: make verify_classify_check
+
+      # Every new pure func in src/core carries a contract or a checked excuse.
+      # Keyed on the incoming diff, not the tree. PRs compare with their base
+      # branch; pushes compare with the pre-push commit (origin/main is already
+      # at HEAD after checkout and would make every push look empty).
+      - name: new_contract_policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            contract_base="origin/$PR_BASE"
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            contract_base="$PUSH_BEFORE"
+          else
+            contract_base="origin/main"
+          fi
+          make new_contract_policy BASE="$contract_base"
 
   dst_l2:
     name: dst_l2

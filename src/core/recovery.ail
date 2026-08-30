@@ -14,8 +14,18 @@ import std/string (contains)
 -- non-retryable error (ProtocolError, ContextLength, SchemaValidation,
 -- AuthFailed, ...) means the exact same request will fail again, so retrying
 -- just burns the step budget resending a doomed payload — fail fast instead.
-export pure func should_retry_stream_error(retryable: bool, retry_enabled: bool, remaining_step_budget: int) -> bool {
-  retryable && retry_enabled && remaining_step_budget > 1
+-- Precision, and it is what bounds the retry loop: a retry may only be approved
+-- when there is budget left to spend on it AND the provider marked the error
+-- retryable. Strictly weaker than the body -- dropping `retry_enabled` still
+-- satisfies it -- so it does not restate the policy, it fences the two ways the
+-- policy could become unsafe. The tests below fix two points; this fixes every
+-- budget, which is the property an example cannot state.
+export pure func should_retry_stream_error(retryable: bool, retry_enabled: bool, remaining_step_budget: int) -> bool
+  ensures { not result || (remaining_step_budget > 1 && retryable) }
+  {
+  retryable
+    && retry_enabled
+    && remaining_step_budget > 1
 }
 
 export pure func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
