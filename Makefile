@@ -2437,8 +2437,14 @@ verify_classify_check:
 # `-- contracts: ...` line saying what blocks one -- and the excuse is checked by
 # synthesising a trivial contract and confirming the verifier really rejects the
 # function. Keyed on the diff: ~1545 declarations predate the rule.
-# BASE defaults to the Makefile's BASE, so `make new_contract_policy BASE=main_dst`
-# on a branch cut from main_dst.
+#
+# BASE here is the development trunk, NOT the Makefile-wide BASE (line 83), which
+# is `make pr`'s target branch. main is a release mirror that main_dst is merged
+# into periodically and runs months behind it, so diffing against main re-flags
+# every declaration that predates the rule -- the whole reason this gate is keyed
+# on the diff rather than the tree. A command-line `BASE=` still wins, for a
+# branch cut from somewhere else.
+new_contract_policy: BASE = main_dst
 new_contract_policy:
 	@python3 tools/verify_classify/new_contract_policy.py --base "$(BASE)"
 
