@@ -2360,7 +2360,9 @@ verify_core:
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "  ✗ $$f"; \
-			echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3; \
+			detail="$$(echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3)"; \
+			[ -n "$$detail" ] || detail="$$(echo "$$out" | grep -v '^[[:space:]]*$$' | head -3)"; \
+			echo "$$detail" | sed 's/^/      /'; \
 			fail=$$((fail + 1)); \
 			continue; \
 		fi; \
@@ -2452,7 +2454,9 @@ verify_ext:
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "  ✗ $$f"; \
-			echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3; \
+			detail="$$(echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3)"; \
+			[ -n "$$detail" ] || detail="$$(echo "$$out" | grep -v '^[[:space:]]*$$' | head -3)"; \
+			echo "$$detail" | sed 's/^/      /'; \
 			fail=$$((fail + 1)); \
 			continue; \
 		fi; \

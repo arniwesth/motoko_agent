@@ -33,7 +33,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GEN = Path(__file__).resolve().parent / "generated"
 
-DECL_RE = re.compile(r"^\+(?:export\s+)?pure\s+func\s+(?P<name>\w+)\s*\(")
+DECL_ADD_RE = re.compile(r"^\+(?:export\s+)?pure\s+func\s+(?P<name>\w+)\s*\(")
+DECL_DEL_RE = re.compile(r"^-(?:export\s+)?pure\s+func\s+(?P<name>\w+)\s*\(")
 HUNK_FILE_RE = re.compile(r"^\+\+\+ b/(?P<path>.+)$")
 JUSTIFY_RE = re.compile(r"--\s*contracts:\s*(?P<claim>.+)$", re.M)
 
@@ -57,17 +58,34 @@ def added_pure_funcs(base: str) -> dict[str, list[str]]:
         ["git", "diff", f"{base}...HEAD", "--unified=0", "--", "src/core"],
         capture_output=True, text=True, cwd=ROOT, check=True).stdout
 
-    out: dict[str, list[str]] = {}
+    added: dict[str, list[str]] = {}
+    removed: dict[str, set[str]] = {}
     path = None
     for line in diff.splitlines():
         m = HUNK_FILE_RE.match(line)
         if m:
             path = m.group("path")
             continue
-        m = DECL_RE.match(line)
-        if m and path and path.endswith(".ail") and not path.endswith("_test.ail"):
-            out.setdefault(path, []).append(m.group("name"))
-    return out
+        if not (path and path.endswith(".ail") and not path.endswith("_test.ail")):
+            continue
+        m = DECL_ADD_RE.match(line)
+        if m:
+            added.setdefault(path, []).append(m.group("name"))
+            continue
+        m = DECL_DEL_RE.match(line)
+        if m:
+            removed.setdefault(path, set()).add(m.group("name"))
+
+    # A declaration whose signature line was also DELETED was edited, not added:
+    # bumping a literal in a one-line body (`... -> string { "11" }` to `"12"`)
+    # rewrites the `pure func` line and would otherwise read as a new function.
+    # The rule is about declarations that did not exist before, so those are
+    # dropped. A `func` PROMOTED to `pure func` is still counted: its deleted
+    # line has no `pure`, so it does not match DECL_DEL_RE, and the declaration
+    # is newly subject to the rule.
+    return {p: [n for n in names if n not in removed.get(p, ())]
+            for p, names in added.items()
+            if [n for n in names if n not in removed.get(p, ())]}
 
 
 def declaration_of(text: str, name: str) -> tuple[int, int] | None:
