@@ -416,6 +416,34 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
     { result: err_result(call.id, "DelegateCheck", "`${name}` was not started by this extension. Only handles returned by Delegate can be checked, and nothing else in the session will be touched."), next_state: ctx.world }
   else if handle_is_motoko(name) then do_check_motoko(cfg, ctx, call, name)
   else {
+    -- THE FILE FIRST, HERE TOO (MOT-131). `do_check_motoko` has always read
+    -- the answer file before asking herdr anything; this path asked herdr
+    -- first, so a delegate that wrote its answer and whose pane then went away
+    -- — closed by the operator, crashed, or reaped from another session —
+    -- returned `agent_not_found` and the answer on disk was never read. The
+    -- answer file is the completion gate, so its presence settles the check
+    -- regardless of what herdr can still say about the agent.
+    let t_early = p.clock_now(ctx.world);
+    let answer0 = answer_path(cfg.work_dir, name);
+    let early = p.file_read(t_early.next_state, answer0);
+    if early.present && early.content != "" then {
+      -- Reap if the pane can still be found; a delegate whose pane is already
+      -- gone needs no reaping and the lookup failing is not the caller's
+      -- problem. `waited` is 0: this check looked and it had already finished,
+      -- so the elapsed figure is an upper bound (`types.elapsed_is_exact`).
+      let g0 = run_herdr(cfg, p, early.next_state, argv_get(name));
+      let pane0 = agent_pane_of(g0.out);
+      let after_close =
+        if g0.code == 0 && pane0 != "" then run_herdr(cfg, p, g0.next_state, argv_close(pane0)).next_state
+        else g0.next_state;
+      { result: {
+          tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+          stdout: "Delegate `${name}` finished.${elapsed_note(name, t_early.now_ms, 0)}\n\n${truncate(early.content, cfg.max_output_chars)}",
+          stderr: "", metadata: meta_timed(name, pane0, t_early.now_ms, 0)
+        },
+        next_state: after_close }
+    }
+    else {
     -- WAIT FIRST, SERVER-SIDE. Without this the model busy-polls: `agent get`
     -- returns in 4ms, a model cannot sleep, so the loop runs at whatever rate
     -- the model can emit tool calls. Measured on a real run: ten DelegateCheck
@@ -490,6 +518,7 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
             stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited)
           },
           next_state: rd.next_state }
+    }
     }
     }
   }
