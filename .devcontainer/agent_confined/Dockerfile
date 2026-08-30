@@ -263,6 +263,120 @@ RUN arch="$(uname -m)" \
 ENV AGENT_BROWSER_SKILLS_DIR=/opt/agent-browser/skill-data
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium
 
+# ---------------------------------------------------------------------------- the hand tools
+# The everyday terminal kit, baked in because the agent CANNOT INSTALL ANYTHING — no sudo, and no
+# route to apt — so "I'll grab it when I need it" is not available in this profile the way it is in
+# the operator's. Baking them in is the only way they exist at all. Sourced from
+# https://rockstardeveloperuniversity.com/best-terminal-cli-tools, minus its #14 (tmux/Zellij):
+# herdr IS the session layer here, and a second multiplexer inside it is a way to lose a pane.
+#
+# jq is already installed by scripts/install-prerequisites.sh and is deliberately not repeated.
+#
+# ripgrep IS listed below even though `rg` appears to work already — that `rg` is a shell FUNCTION
+# the Claude Code CLI defines, which re-execs the claude binary with its bundled copy. It exists only
+# in an interactive shell that sourced claude's shim, it is not on PATH for anything else, and it
+# disappears if that CLI is not installed. A real binary is a different thing from a shim.
+#
+# ROOT, into /usr/local/bin, for the same reason herdr is: what the operator installed cannot be
+# overwritten in place. Same caveat too — ~/.local/bin is writable and earlier on PATH, so this is a
+# speed bump, not a control.
+USER root
+
+# apt for the four that Ubuntu packages at a version worth having and that ship no useful standalone
+# binary. httpie is the one with a real cost — it is Python, not a static binary — but python3 and
+# pip are already in this image from install-prerequisites.sh, so what it adds is its own dependency
+# tree rather than an interpreter. If that ever needs to go, `xh` is the static-binary replacement
+# that speaks the same command line.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ripgrep \
+        htop \
+        ncdu \
+        httpie \
+    && rm -rf /var/lib/apt/lists/* \
+    && rg --version && htop --version && ncdu -v && http --version
+
+# The rest come from upstream release archives rather than apt, and each for a stated reason:
+#
+#   eza       not packaged in Ubuntu 24.04 at all.
+#   bat, fd   apt renames the binaries to `batcat` and `fdfind` (Debian name clashes), so every
+#             snippet and muscle memory in the world is wrong against the packaged version.
+#   fzf       noble ships 0.44; the shell integration used below (`fzf --bash`) landed in 0.48.
+#   delta     noble ships 0.16 as `git-delta`, three minor versions behind.
+#   tldr      the client is `tlrc`, the tldr-pages project's own Rust client, which installs its
+#             binary as `tldr`. Not in noble.
+#   lazygit   noble has no package.
+#   spiceedit https://spice-edit.com — a mouse-first terminal editor for SSH/tmux work. Binary name
+#             has no hyphen. Not in any distro.
+#
+# PINNED BY VERSION ARG WITH A DEFAULT HERE, deliberately NOT in versions.env. That file is the set of
+# pins `agent.sh upgrade` re-resolves from upstream on demand, which is right for the harness — herdr
+# and the agent CLIs — and wrong for hand tools whose version nobody is racing. This is the same call
+# PLAYWRIGHT_VERSION already makes, and for the reason versions.env states beside it: a pin that lives
+# in the Dockerfile is one somebody bumps on purpose.
+#
+# NOT `curl … | sh` for any of them, and this is the reason the herdr block above already gives: those
+# installers resolve "latest" at RUN time, Docker caches the layer, and the image then keeps whatever
+# was current the day it was first built, forever. A pinned archive URL changes when the ARG changes,
+# which is what makes the layer invalidate honestly.
+#
+# INTEGRITY follows the convention this file already uses: verify when upstream publishes a digest
+# (herdr does, from its manifest), otherwise pin the version and assert the binary runs (as
+# PLAYWRIGHT_VERSION and AGENT_BROWSER_VERSION do). Three of the nine publish a checksums file and
+# get the third field; the other six do not publish one at all, and inventing hardcoded hashes here
+# would only restate a digest computed from the same download. `--ignore-missing` is required for the
+# ones that do: the file lists every platform's archive and exactly one of them is on disk.
+#
+# THE ARCHIVES DISAGREE ON EVERYTHING — how to spell amd64 (`x86_64`, `amd64`, `linux_x86_64`),
+# whether the tag carries a `v`, and whether the binary sits at the archive root or one directory
+# down. Rather than encode nine layouts, the loop extracts and then FINDS the executable by name,
+# which is the one thing all nine agree on. zoxide publishes musl-only builds for Linux; that is
+# fine, and is why it gets its own target token.
+ARG FZF_VERSION=0.74.3
+ARG BAT_VERSION=0.26.1
+ARG EZA_VERSION=0.23.5
+ARG FD_VERSION=10.5.0
+ARG ZOXIDE_VERSION=0.10.0
+ARG DELTA_VERSION=0.19.2
+ARG TLRC_VERSION=1.13.1
+ARG LAZYGIT_VERSION=0.64.1
+ARG SPICEEDIT_VERSION=0.0.43
+RUN set -eu; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      aarch64|arm64) rust=aarch64-unknown-linux-gnu; musl=aarch64-unknown-linux-musl; go=linux_arm64; lg=linux_arm64 ;; \
+      x86_64|amd64)  rust=x86_64-unknown-linux-gnu;  musl=x86_64-unknown-linux-musl;  go=linux_amd64; lg=linux_x86_64 ;; \
+      *) echo "no release assets for $arch" >&2; exit 1 ;; \
+    esac; \
+    gh=https://github.com; \
+    for spec in \
+      "fzf|$gh/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-${go}.tar.gz|$gh/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf_${FZF_VERSION}_checksums.txt" \
+      "bat|$gh/sharkdp/bat/releases/download/v${BAT_VERSION}/bat-v${BAT_VERSION}-${rust}.tar.gz|" \
+      "eza|$gh/eza-community/eza/releases/download/v${EZA_VERSION}/eza_${rust}.tar.gz|" \
+      "fd|$gh/sharkdp/fd/releases/download/v${FD_VERSION}/fd-v${FD_VERSION}-${rust}.tar.gz|" \
+      "zoxide|$gh/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-${musl}.tar.gz|" \
+      "delta|$gh/dandavison/delta/releases/download/${DELTA_VERSION}/delta-${DELTA_VERSION}-${rust}.tar.gz|" \
+      "tldr|$gh/tldr-pages/tlrc/releases/download/v${TLRC_VERSION}/tlrc-v${TLRC_VERSION}-${rust}.tar.gz|" \
+      "lazygit|$gh/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_${lg}.tar.gz|$gh/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/checksums.txt" \
+      "spiceedit|$gh/cloudmanic/spice-edit/releases/download/v${SPICEEDIT_VERSION}/spiceedit_${SPICEEDIT_VERSION}_${go}.tar.gz|$gh/cloudmanic/spice-edit/releases/download/v${SPICEEDIT_VERSION}/checksums.txt" \
+    ; do \
+      bin="${spec%%|*}"; rest="${spec#*|}"; url="${rest%%|*}"; sums="${rest#*|}"; \
+      rm -rf /tmp/tool; mkdir -p /tmp/tool; \
+      curl -fsSL -o "/tmp/tool/$(basename "$url")" "$url"; \
+      if [ -n "$sums" ]; then \
+        curl -fsSL -o /tmp/tool/checksums.txt "$sums"; \
+        ( cd /tmp/tool && sha256sum --ignore-missing -c checksums.txt ); \
+      else \
+        echo "==> $bin: upstream publishes no checksum file; pinned at its version arg"; \
+      fi; \
+      tar xzf "/tmp/tool/$(basename "$url")" -C /tmp/tool; \
+      found="$(find /tmp/tool -type f -perm -u+x -name "$bin" | head -1)"; \
+      [ -n "$found" ] || { echo "no '$bin' executable inside $url" >&2; exit 1; }; \
+      install -o root -g root -m 0755 "$found" "/usr/local/bin/$bin"; \
+    done; \
+    rm -rf /tmp/tool; \
+    fzf --version; bat --version; eza --version; fd --version; \
+    zoxide --version; delta --version; tldr --version; lazygit --version; spiceedit --version
+
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
@@ -345,6 +459,47 @@ COPY --from=herdr-sidebar-build --chown=${USERNAME}:${USERNAME} \
      /src/plugins/herdr-sidebar /opt/herdr-sidebar
 RUN herdr plugin link /opt/herdr-sidebar \
     && herdr plugin list
+
+
+# ---------------------------------------------------------------------------- the hand tools, wired up
+# Three of the tools above do nothing useful as a bare binary on PATH — they are shell and git
+# integrations that happen to ship as a binary. This is the half that makes them real, and it has to
+# happen at BUILD time for the same reason the herdr integrations do: nothing mounts /home/motoko, so
+# anything written here at run time is discarded by the next `agent.sh stop`.
+#
+# WHAT IS DELIBERATELY NOT HERE: aliases for `ls` → eza and `cat` → bat. They are the first thing every
+# guide suggests and they are a bad trade in a container an AGENT drives — the agent reads command
+# output as data, and silently swapping the formatter under two of the most-parsed commands in
+# existence buys nicer colours at the cost of surprising a parser. `eza` and `bat` are one word away
+# for anyone who wants them.
+RUN printf '%s\n' \
+      '' \
+      '# --- hand tools (baked in by .devcontainer/agent_confined/Dockerfile) ---' \
+      '# zoxide: adds `z <partial>` to jump to a directory you have visited. `cd` is untouched.' \
+      'command -v zoxide >/dev/null && eval "$(zoxide init bash)"' \
+      '# fzf: CTRL-T (paste a file path), CTRL-R (fuzzy history), ALT-C (cd), and ** completion.' \
+      'command -v fzf >/dev/null && eval "$(fzf --bash)"' \
+    >> /home/${USERNAME}/.bashrc \
+    && tail -8 /home/${USERNAME}/.bashrc
+
+# delta is a PAGER, so it is configured through git rather than invoked. This is safe for the agent's
+# own scripted use: git disables its pager when stdout is not a tty, so `git diff` captured into a
+# variable is byte-identical to before — only an interactive `git diff` changes.
+#
+# `merge.conflictStyle = zdiff3` is what delta's own README recommends alongside these and is
+# deliberately LEFT OUT: it rewrites conflict markers, which is text the agent parses during a merge,
+# and that is a real behaviour change rather than a display one.
+#
+# Appended to the git identity block's settings rather than merged into it: that block is about WHO
+# commits, this one is about how a diff looks, and the grep at its end asserts the former.
+RUN git config --global core.pager delta \
+    && git config --global interactive.diffFilter 'delta --color-only' \
+    && git config --global delta.navigate true \
+    && git config --global --get core.pager
+
+# tldr ships no pages — it downloads them on first use. Baking the cache in means the tool works on a
+# container with no network and costs no first-run wait. ~30 MB for the English pages, measured.
+RUN tldr --update
 
 # THE FONT PROBE CANNOT BE RIGHT IN THIS TOPOLOGY, so it is turned off rather than answered.
 #
