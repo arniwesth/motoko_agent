@@ -2179,7 +2179,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_herdr_gate
+check_core: verify_extensions verify_herdr_gate verify_herdr_check_answer
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2223,6 +2223,16 @@ verify_herdr_gate:
 	else \
 		echo "  (skipping the in-pane leg: not running under herdr)"; \
 	fi
+
+# MOT-131: DelegateCheck (claude/codex path) must read the answer file BEFORE
+# asking herdr about the agent, exactly as the motoko path always has. Scripted
+# ports, no herdr needed, so it runs everywhere. Pins both sides: answer on
+# disk + agent gone returns the answer; no answer + agent gone stays an error.
+verify_herdr_check_answer:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_mot131_early_answer.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_herdr_check_answer: DelegateCheck lost a delivered answer (MOT-131)" && exit 1)
 
 verify_extensions:
 	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \
