@@ -32,8 +32,8 @@ module sunholo/motoko_ext_herdr/types
 --      them — a healthy agent has a populated `matched_rule` and a null
 --      `fallback_reason`. `explain_says_ready` is that test.
 
-import std/string (length, substring, contains, intToStr, join, replace, stringToInt, find)
-import std/json (Json, decode, encode, get, asString, asNumber, jo, ja, js, kv)
+import std/string (length, substring, contains, intToStr, join, replace, split, stringToInt, find)
+import std/json (Json, decode, encode, get, asString, asNumber, asArray, jo, ja, js, kv)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import std/process (ProcessError, NotAllowed, NotFound, PermissionDenied,
@@ -1105,6 +1105,267 @@ export pure func is_settled(status: string) -> bool
     ("working", false), ("blocked", false), ("unknown", false), ("", false)
   ]
   { status == "done" || status == "idle" }
+
+-- ---------------------------------------------------------------------------
+-- Ownership: who spawned this pane (F-5)
+-- ---------------------------------------------------------------------------
+--
+-- A pane does not die with its caller, so an orphaned delegate is an
+-- unattended, unsandboxed agent with tree and credential access
+-- (`DESIGN-f5-orphan-ownership.md` §1). Everything below exists to answer ONE
+-- question positively — "is this pane a delegate of THIS Motoko session?" —
+-- because P2-6's rule is that a kill needs positive proof of ownership, never
+-- "not me". `owns_name`'s `mot-dlg-` prefix cannot answer it: two concurrent
+-- Motokos both own that prefix.
+--
+-- The proof is a herdr pane token written at spawn:
+--
+--     pane report-metadata <pane> --source motoko-delegate \
+--       --token mot-owner=<own HERDR_PANE_ID>:<session-start-ms>
+--
+-- The session-start half distinguishes a RESTARTED Motoko in the same pane from
+-- the run that spawned the delegate, which the pane id alone cannot.
+--
+-- MEASURED REACH, and it is not the whole of time
+-- (`MEASUREMENTS-2026-08-31-token-survival.md`): tokens do not survive a herdr
+-- SERVER restart — and neither do the delegates, which are killed with it. So
+-- ownership is good for one server lifetime, which is exactly as long as there
+-- is anything to own. Do not paper over the gap with a name-based rule; that is
+-- the rule P2-6 measured going wrong.
+--
+-- THE VALUE IS ALSO WRITTEN IN TYPESCRIPT (MOT-118 class). `HERDR_REAP_ON_EXIT`
+-- lives in the TUI exit seam (`src/tui/src/herdr-owner-token.ts`), on the far
+-- side of a language boundary nothing links, and it must build the SAME string
+-- from the SAME two inputs. If this format changes, that file changes with it.
+
+export pure func owner_token_key() -> string
+  tests [((), "mot-owner")]
+  { "mot-owner" }
+
+export pure func owner_token_value(own_pane: string, session_ms: string) -> string
+  tests [
+    (("w1:p1", "1756000000000"), "w1:p1:1756000000000"),
+    (("", "1756000000000"), ":1756000000000")
+  ]
+  { "${own_pane}:${session_ms}" }
+
+export pure func owner_token_arg(own_pane: string, session_ms: string) -> string
+  tests [(("w1:p1", "1756000000000"), "mot-owner=w1:p1:1756000000000")]
+  { "${owner_token_key()}=${owner_token_value(own_pane, session_ms)}" }
+
+-- The pane half of a token value. Pane ids CONTAIN a colon (`w1:p1`), so this
+-- is "everything before the last colon", not "the first field".
+pure func drop_last(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => match rest {
+      [] => [],
+      _  => x :: drop_last(rest)
+    }
+  }
+}
+
+export pure func owner_pane_of(token_value: string) -> string
+  tests [
+    ("w1:p1:1756000000000", "w1:p1"),
+    ("w12:p3:1", "w12:p3"),
+    ("nocolons", ""),
+    ("", "")
+  ]
+  { join(":", drop_last(split(token_value, ":"))) }
+
+-- `--source` is display-only provenance; herdr keys the token by its own name.
+export pure func argv_report_owner(pane: string, own_pane: string, session_ms: string) -> [string]
+  {
+    ["pane", "report-metadata", pane, "--source", "motoko-delegate",
+     "--token", owner_token_arg(own_pane, session_ms)]
+  }
+
+export pure func argv_report_owner_str(pane: string, own_pane: string, session_ms: string) -> string
+  tests [
+    (("w1:pA", "w1:p1", "1756000000000"),
+     "pane report-metadata w1:pA --source motoko-delegate --token mot-owner=w1:p1:1756000000000")
+  ]
+  { show_argv(argv_report_owner(pane, own_pane, session_ms)) }
+
+-- PANES, NOT AGENTS, and that is a correction to the design's §2.1 mechanism.
+-- Both calls carry tokens and both cost one call, but a tokened pane with no
+-- agent row — a motoko delegate whose inner run released its agent authority,
+-- or never got far enough to claim one — is INVISIBLE to `agent list` and
+-- visible here. Measured 2026-08-31 (token-survival addendum). The gate is
+-- unchanged: the `mot-owner` token and nothing else.
+export pure func argv_pane_list() -> [string]
+  { ["pane", "list"] }
+
+export pure func argv_pane_list_str() -> string
+  tests [((), "pane list")]
+  { show_argv(argv_pane_list()) }
+
+pure func panes_of(stdout: string) -> [Json] {
+  match decode(stdout) {
+    Err(_) => [],
+    Ok(o) => match get(o, "result") {
+      None => [],
+      Some(r) => match get(r, "panes") {
+        None => [],
+        Some(ps) => match asArray(ps) { Some(xs) => xs, None => [] }
+      }
+    }
+  }
+}
+
+pure func json_str(j: Json, key: string) -> string {
+  match get(j, key) {
+    None => "",
+    Some(v) => match asString(v) { Some(s) => s, None => "" }
+  }
+}
+
+-- herdr writes its OWN tokens — the sidebar pane carries
+-- `herdr-sidebar-explorer` and `herdr-sidebar-git` (measured 2026-08-31). So
+-- "has tokens" is not a Motoko signal and the key filter is not optional.
+pure func pane_owner_of(p: Json) -> string {
+  match get(p, "tokens") {
+    None => "",
+    Some(t) => json_str(t, owner_token_key())
+  }
+}
+
+pure func pane_ids_of(ps: [Json]) -> [string] {
+  match ps {
+    [] => [],
+    p :: rest => json_str(p, "pane_id") :: pane_ids_of(rest)
+  }
+}
+
+export pure func live_pane_ids(stdout: string) -> [string]
+  { pane_ids_of(panes_of(stdout)) }
+
+export pure func live_pane_ids_str(stdout: string) -> string
+  tests [
+    ("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:p2\"}]}}", "w1:p1,w1:p2"),
+    ("{\"error\":{\"code\":\"server_not_running\"}}", ""),
+    ("", "")
+  ]
+  { join(",", live_pane_ids(stdout)) }
+
+pure func has_str(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == needle then true else has_str(rest, needle)
+  }
+}
+
+-- THREE CLASSES, and only one of them is ever touched.
+--
+--   mine    — the token equals this session's. A live delegate of this run.
+--   stale   — the owner is gone: either the owner pane is this very pane under
+--             an older session (a Motoko cannot be its own predecessor), or the
+--             owner pane is no longer in the pane list at all.
+--   foreign — someone else's, still plausibly alive. Left strictly alone, and
+--             an UNPARSEABLE token lands here too: a token whose pane half we
+--             cannot read is not proof of anything, and the default direction
+--             for "no proof" is hands off (P2-6).
+export pure func sweep_class(own_pane: string, own_token: string, owner: string, live: [string]) -> string
+  tests [
+    (("w1:p1", "w1:p1:200", "w1:p1:200", ["w1:p1"]), "mine"),
+    (("w1:p1", "w1:p1:200", "w1:p1:100", ["w1:p1"]), "stale"),
+    (("w1:p1", "w1:p1:200", "w1:p9:100", ["w1:p1"]), "stale"),
+    (("w1:p1", "w1:p1:200", "w1:p9:100", ["w1:p1", "w1:p9"]), "foreign"),
+    (("w1:p1", "w1:p1:200", "garbage", ["w1:p1"]), "foreign"),
+    (("w1:p1", "w1:p1:200", "", ["w1:p1"]), "foreign")
+  ]
+  {
+    if owner == "" then "foreign"
+    else if owner == own_token then "mine"
+    else {
+      let op = owner_pane_of(owner);
+      if op == "" then "foreign"
+      else if op == own_pane then "stale"
+      else if has_str(live, op) then "foreign"
+      else "stale"
+    }
+  }
+
+pure func stale_of(ps: [Json], own_pane: string, own_token: string, live: [string]) -> [string] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let tail = stale_of(rest, own_pane, own_token, live);
+      let owner = pane_owner_of(p);
+      let id = json_str(p, "pane_id");
+      -- Never sweep the pane this Motoko is sitting in, whatever it carries.
+      if id != "" && id != own_pane && sweep_class(own_pane, own_token, owner, live) == "stale"
+      then id :: tail
+      else tail
+    }
+  }
+}
+
+-- The whole sweep, as one pure function of `pane list`'s stdout.
+export pure func sweep_stale_panes(stdout: string, own_pane: string, session_ms: string) -> [string]
+  {
+    let ps = panes_of(stdout);
+    stale_of(ps, own_pane, owner_token_value(own_pane, session_ms), pane_ids_of(ps))
+  }
+
+export pure func sweep_stale_panes_str(stdout: string, own_pane: string, session_ms: string) -> string
+  tests [
+    -- own live delegate + a stale one owned by a pane that is gone
+    (("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:pA\",\"tokens\":{\"mot-owner\":\"w1:p1:200\"}},{\"pane_id\":\"w1:pB\",\"tokens\":{\"mot-owner\":\"w1:p7:100\"}}]}}",
+      "w1:p1", "200"), "w1:pB"),
+    -- the owner pane is still alive: foreign, hands off
+    (("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:p7\"},{\"pane_id\":\"w1:pB\",\"tokens\":{\"mot-owner\":\"w1:p7:100\"}}]}}",
+      "w1:p1", "200"), ""),
+    -- a previous run in THIS pane: stale, and the only case where the owner
+    -- pane is alive and the verdict is still stale
+    (("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:pB\",\"tokens\":{\"mot-owner\":\"w1:p1:100\"}}]}}",
+      "w1:p1", "200"), "w1:pB"),
+    -- untagged panes and herdr's own tokens are not delegates
+    (("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p2\",\"tokens\":{\"herdr-sidebar-git\":\"1788\"}},{\"pane_id\":\"w1:p3\"}]}}",
+      "w1:p1", "200"), ""),
+    (("{\"error\":{\"code\":\"server_not_running\"}}", "w1:p1", "200"), ""),
+    (("", "w1:p1", "200"), "")
+  ]
+  { join(",", sweep_stale_panes(stdout, own_pane, session_ms)) }
+
+-- REPORT ALWAYS, KILL ONLY UNDER `HERDR_SWEEP_STALE=1` (design §5.4, D3). The
+-- asymmetry that decides the default: one report line against a killed agent.
+export pure func sweep_report(stale: [string], closing: bool) -> string
+  tests [
+    (([], false), ""),
+    ((["w1:pB"], false),
+     "\n\nOrphan sweep: 1 pane carries this extension's ownership tag from a Motoko session that is gone (w1:pB). It is still running and still costing quota. Nothing was closed — set HERDR_SWEEP_STALE=1 to have future sessions close them, or close it by hand."),
+    ((["w1:pB", "w1:pC"], true),
+     "\n\nOrphan sweep: closed 2 panes tagged by a Motoko session that is gone (w1:pB, w1:pC).")
+  ]
+  {
+    match stale {
+      [] => "",
+      _ => {
+        let n = length_of(stale);
+        let noun = if n == 1 then "pane" else "panes";
+        let ids = join(", ", stale);
+        if closing then
+          "\n\nOrphan sweep: closed ${intToStr(n)} ${noun} tagged by a Motoko session that is gone (${ids})."
+        else {
+          let verb = if n == 1 then "It is" else "They are";
+          "\n\nOrphan sweep: ${intToStr(n)} ${noun} ${if n == 1 then "carries" else "carry"} this extension's ownership tag from a Motoko session that is gone (${ids}). ${verb} still running and still costing quota. Nothing was closed — set HERDR_SWEEP_STALE=1 to have future sessions close them, or close ${if n == 1 then "it" else "them"} by hand."
+        }
+      }
+    }
+  }
+
+pure func length_of(xs: [string]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + length_of(rest) }
+}
+
+-- One sentinel per run, so the sweep reports once and not on every tool call.
+-- Keyed by the session clock alone: the pane id carries a colon and this is a
+-- filename, and two runs in one workdir cannot share a millisecond.
+export pure func sweep_sentinel_path(work_dir: string, session_ms: string) -> string
+  tests [(("/w/.motoko/herdr-delegates", "1756000000000"), "/w/.motoko/herdr-delegates/.sweep-1756000000000")]
+  { "${work_dir}/.sweep-${session_ms}" }
 
 -- ---------------------------------------------------------------------------
 -- The routed process port

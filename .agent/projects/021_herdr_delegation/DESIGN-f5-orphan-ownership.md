@@ -25,9 +25,18 @@ exactly three ways:
 
 2.1 **`pane report-metadata --token` is a durable, readable ownership tag.**
 `herdr pane report-metadata <pane> --source <id> --token k=v` persists; the token reads back in
-`pane get` (`.metadata.tokens`), in `agent get`, and — decisively — in **`agent list`**, so a sweep
-enumerates every candidate with its tokens in ONE call. `--ttl-ms` and `--clear-token` work.
-*Not measured:* survival across a herdr server restart.
+`pane get` (`.result.pane.tokens` — on the pane object, not under `metadata`; corrected 2026-08-31
+against herdr 0.8.2), in `agent get`, and — decisively — in **`agent list`**, so a sweep enumerates
+every candidate with its tokens in ONE call. `--ttl-ms` and `--clear-token` work.
+
+2.1a **Tokens do NOT survive a herdr server restart — and neither do the delegates.** Measured
+2026-08-31, [`MEASUREMENTS-2026-08-31-token-survival.md`](MEASUREMENTS-2026-08-31-token-survival.md):
+the restored pane keeps its `pane_id`, gets a new `terminal_id`, and carries no `tokens` key;
+`session.json` (v3) persists only `cwd`, `label` and `agent_session`, so the loss is structural. In
+the same restart the pane's process is **killed**, not orphaned (measured `Z`/defunct immediately
+after `server stop`), and the pane returns as a fresh shell. The sweep is therefore
+**same-server-lifetime**, and that is the whole of its population: a server restart ends the orphans
+it would have found rather than hiding them. §5.4 states the reach.
 
 2.2 **`pane process-info` exposes argv/cwd** of a pane's processes — enough to *suspect* a delegate,
 never to prove one. Heuristic only; P2-6 rules it out as a kill gate.
@@ -81,6 +90,10 @@ None excludes the others; they compose into a policy ladder.
    `mot-owner` token whose owner is not this session and whose owner pane no longer exists; say so
    in the first tool result (and, later, as dagr `note` events). `HERDR_SWEEP_STALE=1` upgrades
    reporting to closing, still gated on the token — never on name, kind, or argv (P2-6).
+   **Its reach is one herdr server lifetime** (§2.1a): a delegate tagged before a server restart is
+   unrecognisable afterwards, and must stay unrecognised — the fallback P2-6 forbids is exactly the
+   name-based rule that would "fix" this. Nothing is lost by the limit, because the same restart
+   killed the delegate.
 5. **dagr consequence, resolving `DESIGN-dagr` §8's sequencing:** with 1–4, a producer run file can
    no longer silently assert in-flight work across a crash — the next session's sweep *sees* the
    stale owner and can record it. The producer's task for a stale-owned pane is `lost`-adjacent but
@@ -91,8 +104,10 @@ None excludes the others; they compose into a policy ladder.
 ## 6. Decision points — all decided by the owner, 2026-08-31
 
 - **D1 — accepted as proposed.** Tag format `mot-owner=<pane>:<session-ms>`; tagging is degradable
-  (a failed tag costs sweepability, never the delegation). The unmeasured token survival across a
-  herdr server restart (§2.1) stays a prerequisite for *relying* on the sweep, not for tagging.
+  (a failed tag costs sweepability, never the delegation). The token-survival prerequisite this
+  point held open is **measured and closed** (§2.1a): tokens do not survive a server restart, the
+  sweep is same-server-lifetime, and the decision is unaffected — the restart kills the delegates
+  too.
 - **D2 — accepted as proposed, with one addition.** Default is *leave running, visible*; reaping is
   opt-in via `HERDR_REAP_ON_EXIT=1`. The addition: **`agent_confined` sets `HERDR_REAP_ON_EXIT=1`
   in its own environment** (`.devcontainer/agent_confined/`), so the disposable container — where
@@ -110,6 +125,9 @@ None excludes the others; they compose into a policy ladder.
 ## 7. Explicitly out of scope
 
 - Settle-on-exit for the *run file* (dagr §8 item 4) — same seam, different question.
-- Token survival across herdr server restart (§2.1) — measure before relying on the sweep in
-  long-lived servers.
+- ~~Token survival across herdr server restart~~ — **measured 2026-08-31, closed**
+  ([`MEASUREMENTS-2026-08-31-token-survival.md`](MEASUREMENTS-2026-08-31-token-survival.md)): no
+  survival, and none needed (§2.1a). What remains genuinely out of scope is a delegate that
+  detaches from its pane (`nohup`/`setsid`): it would survive a restart, lose its pane association,
+  and be invisible to any token-gated sweep. No code path starts a delegate that way.
 - O2 (never-polled but caller still alive): not an orphan; the dagr producer's `note` covers it.

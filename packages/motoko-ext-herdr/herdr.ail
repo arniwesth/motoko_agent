@@ -45,6 +45,8 @@ import pkg/sunholo/motoko_ext_herdr/types (
   argv_pane_run, argv_wait_until, motoko_handle, handle_is_motoko,
   handle_pane, handle_name,
   depth_allows, next_depth, argv_env_depth,
+  argv_report_owner, argv_pane_list, sweep_stale_panes, sweep_report,
+  sweep_sentinel_path, owner_token_value,
   failure_code, failure_message, explain_says_ready,
   split_pane_id, agent_status_of, agent_pane_of, is_settled,
   bash_exec_tool, bash_exec_args, bash_field, bash_exit
@@ -64,6 +66,15 @@ export type HerdrConfig = {
   depth: int,
   max_depth: int,
   motoko_script: string,
+  -- OWNERSHIP (F-5). `session_ms` is the run identity that `own_pane` alone
+  -- cannot supply — a Motoko restarted in the same pane would otherwise claim
+  -- the previous run's delegates. It is MINTED BY THE TUI and arrives as
+  -- MOTOKO_SESSION_MS so that the host-side reaper builds the same token; see
+  -- `types.owner_token_value`. Empty disables tagging and the sweep rather than
+  -- inventing a value that only this side would agree with.
+  session_ms: string,
+  -- D3: the sweep reports by default and closes only when the operator says so.
+  sweep_stale: bool,
   start_timeout_ms: int,
   -- How long DelegateCheck blocks server-side before answering "still working".
   -- See `types.argv_wait` for why blocking is the default and not an option the
@@ -179,6 +190,94 @@ func explain_failure(step: string, argv: [string], run: HerdrRun) -> string {
 }
 
 -- ---------------------------------------------------------------------------
+-- Ownership (F-5): tag at spawn, sweep at first call
+-- ---------------------------------------------------------------------------
+
+-- TAGGING IS DEGRADABLE BY DECISION (design D1). A delegate that could not be
+-- tagged is merely unsweepable, which is the status quo this change improves
+-- on; failing the delegation over it would trade a working delegate for a
+-- tidier ledger. So this returns a NOTE, never an error, and the note is
+-- appended to a result the caller already succeeded in producing.
+func tag_owner(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, pane: string)
+  -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  if cfg.session_ms == "" then
+    { note: " This delegate carries no ownership tag (no MOTOKO_SESSION_MS in this run), so an orphan sweep will not recognise it as this session's.",
+      next_state: w }
+  else {
+    let r = run_herdr(cfg, p, w, argv_report_owner(pane, cfg.own_pane, cfg.session_ms));
+    if r.code == 0 then { note: "", next_state: r.next_state }
+    else
+      { note: " Ownership tagging failed (`${failure_code(r.code, r.err)}`); the delegate is running normally but will not be recognisable to an orphan sweep.",
+        next_state: r.next_state }
+  }
+}
+
+-- BY EXPLICIT PANE ID, one call each, and only for ids the token gate produced.
+-- Never by name, kind or argv — P2-6 is a measured instance of that rule going
+-- wrong.
+func close_panes(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, ids: [string])
+  -> ExtWorld ! {IO, Process, FS} {
+  match ids {
+    [] => w,
+    id :: rest => close_panes(cfg, p, run_herdr(cfg, p, w, argv_close(id)).next_state, rest)
+  }
+}
+
+-- THE STARTUP SWEEP, run at the first tool call rather than at registration.
+-- `register_with_config` has the effects but not the PORTS: `run_herdr` goes
+-- through `ExtPorts.tool_handle`, which only exists once a hook is invoked with
+-- an `ExtCtx`. The first tool call is the earliest moment the sweep can happen
+-- at all, and it is still "before this session does anything with delegates".
+--
+-- ONCE PER RUN, marked by a sentinel file. The marker goes down BEFORE the
+-- sweep runs, deliberately: a sweep that fails should not retry on every
+-- subsequent tool call and re-report the same panes for the rest of the
+-- session. At-most-once is the correct shape for an advisory report.
+func sweep_once(cfg: HerdrConfig, ctx: ExtCtx)
+  -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  let p = ctx.ports;
+  -- No run identity means no ownership test, and without the test the only
+  -- rule left is a name prefix, which is exactly the rule that must not be
+  -- used. Same refusal as `do_delegate`'s for a work_dir outside the sandbox:
+  -- a write there terminates the run rather than erroring.
+  if cfg.session_ms == "" || path_within(ctx.workdir, cfg.work_dir) == false then
+    { note: "", next_state: ctx.world }
+  else {
+    let sentinel = sweep_sentinel_path(cfg.work_dir, cfg.session_ms);
+    let seen = p.file_read(ctx.world, sentinel);
+    if seen.present then { note: "", next_state: seen.next_state }
+    else {
+      let dir = p.dir_make(seen.next_state, cfg.work_dir);
+      let mark = p.file_write(dir.next_state, sentinel, cfg.session_ms);
+      let ls = run_herdr(cfg, p, mark.next_state, argv_pane_list());
+      -- A sweep that cannot enumerate says nothing. `server_not_running` here
+      -- means herdr is unwell, not that anything is orphaned.
+      if ls.code != 0 then { note: "", next_state: ls.next_state }
+      else {
+        let stale = sweep_stale_panes(ls.out, cfg.own_pane, cfg.session_ms);
+        match stale {
+          [] => { note: "", next_state: ls.next_state },
+          _  =>
+            if cfg.sweep_stale then
+              { note: sweep_report(stale, true),
+                next_state: close_panes(cfg, p, ls.next_state, stale) }
+            else
+              { note: sweep_report(stale, false), next_state: ls.next_state }
+        }
+      }
+    }
+  }
+}
+
+-- The sweep's note rides on the result the model was already going to read.
+-- On a failed call it belongs with the failure text, not in an empty stdout.
+func with_note(r: ToolResultEnvelope, note: string) -> ToolResultEnvelope {
+  if note == "" then r
+  else if r.exit_code == 0 then { r | stdout: "${r.stdout}${note}" }
+  else { r | stderr: "${r.stderr}${note}" }
+}
+
+-- ---------------------------------------------------------------------------
 -- Delegate
 -- ---------------------------------------------------------------------------
 
@@ -265,11 +364,12 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
               -- agent that does not exist (measured: agent_not_found in 2ms), so
               -- there is nothing to rename and nothing to gate on. See
               -- `types.motoko_handle`.
-              let t = p.clock_now(rn.next_state);
+              let tag = tag_owner(cfg, p, rn.next_state, pane);
+              let t = p.clock_now(tag.next_state);
               let h = motoko_handle(clock.now_ms, pane);
               { result: {
                   tool_call_id: call.id, tool: "Delegate", exit_code: 0,
-                  stdout: "Delegate `${h}` is running motoko in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.",
+                  stdout: "Delegate `${h}` is running motoko in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.${tag.note}",
                   stderr: "", metadata: meta_kind(h, pane, motoko_kind())
                 },
                 next_state: t.next_state }
@@ -312,12 +412,13 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
                 -- this one call, and `agent start` alone measured ~3.9s. Two
                 -- Delegate calls in one step were 3.9s apart for exactly this
                 -- reason, and nothing said so.
-                let t = p.clock_now(pr.next_state);
+                let tag = tag_owner(cfg, p, pr.next_state, pane);
+                let t = p.clock_now(tag.next_state);
                 { result: {
                     tool_call_id: call.id,
                     tool: "Delegate",
                     exit_code: 0,
-                    stdout: "Delegate `${name}` is running `${kind}` in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.",
+                    stdout: "Delegate `${name}` is running `${kind}` in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.${tag.note}",
                     stderr: "",
                     metadata: meta_kind(name, pane, kind)
                   },
@@ -530,13 +631,19 @@ func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
 
 export func on_tool_handle(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   -> ToolHandleOutcome ! {IO, Process, FS, Clock} {
+  -- THE SWEEP RUNS BEFORE EITHER TOOL, not only before `Delegate`. A session
+  -- that only ever polls an existing delegate is still a session that should
+  -- see the orphans a previous one left behind. It is a no-op after the first
+  -- call — see `sweep_once`.
   if call.tool == "Delegate" then {
-    let r = do_delegate(cfg, ctx, call);
-    { decision: Handled(r.result), next_state: r.next_state }
+    let sw = sweep_once(cfg, ctx);
+    let r = do_delegate(cfg, { ctx | world: sw.next_state }, call);
+    { decision: Handled(with_note(r.result, sw.note)), next_state: r.next_state }
   }
   else if call.tool == "DelegateCheck" then {
-    let r = do_check(cfg, ctx, call);
-    { decision: Handled(r.result), next_state: r.next_state }
+    let sw = sweep_once(cfg, ctx);
+    let r = do_check(cfg, { ctx | world: sw.next_state }, call);
+    { decision: Handled(with_note(r.result, sw.note)), next_state: r.next_state }
   }
   else { decision: Delegate, next_state: ctx.world }
 }

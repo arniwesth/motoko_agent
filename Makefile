@@ -2179,7 +2179,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_herdr_gate verify_herdr_check_answer
+check_core: verify_extensions verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2233,6 +2233,18 @@ verify_herdr_check_answer:
 		scripts/verify_mot131_early_answer.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_herdr_check_answer: DelegateCheck lost a delivered answer (MOT-131)" && exit 1)
+
+# MOT-133 / F-5: every delegate pane carries an ownership token, and a pane
+# tagged by a session that is gone is REPORTED, not closed, unless the operator
+# set HERDR_SWEEP_STALE=1. Scripted ports record each herdr argv, so the tag is
+# asserted against the call that was made rather than the sentence about it.
+# The gate on the report-only default is the point: it is the one rung that can
+# destroy another session's work (design D3, P2-6).
+verify_herdr_owner_tag:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_mot133_owner_tag.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_herdr_owner_tag: delegate ownership tagging or the orphan sweep regressed (MOT-133)" && exit 1)
 
 verify_extensions:
 	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \
