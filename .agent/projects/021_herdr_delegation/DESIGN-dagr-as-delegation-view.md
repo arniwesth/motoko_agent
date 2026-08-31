@@ -2,8 +2,10 @@
 
 Date: 2026-08-26. Revised 2026-08-30 twice (§3–§4 rewritten against the code, §5–§8 extended; then
 a delegated codex review, 18 findings, folded in; see §9).
-Status: **Design. Not implemented. No Linear issue yet.** **Depends on F-5 (the orphan story),
-which is open** — see §8; the first draft said "depends on nothing in flight" and was wrong.
+Status: **Design. Not implemented. No Linear issue yet.** The F-5 dependency is **resolved as a
+design question** (accepted 2026-08-31,
+[`DESIGN-f5-orphan-ownership.md`](DESIGN-f5-orphan-ownership.md)); sequencing now means landing
+the producer with or after F-5's *implementation*, not waiting on a decision.
 Provenance: `herdr-dagr` v0.3.1 installed and probed this session (§7 is measured). The mapping in
 §3–§4 is design, derived from findings already in this project's
 [`MEASUREMENTS-2026-08-22.md`](MEASUREMENTS-2026-08-22.md) and
@@ -451,7 +453,11 @@ before the answer file, losing a delivered answer when the pane was gone. **Fixe
 (`scripts/verify_mot131_early_answer.ail`, `make verify_herdr_check_answer`). The §3.2 table
 assumes it, and it now holds.
 
-With items 3, 5, 6 and 7 settled, **F-5 (the orphan story) is the only remaining dependency.**
+With items 3, 5, 6 and 7 settled and F-5 **decided** (accepted 2026-08-31,
+[`DESIGN-f5-orphan-ownership.md`](DESIGN-f5-orphan-ownership.md): tag at spawn, visible by
+default, reaping and stale-sweep kills opt-in), no design question remains open. The remaining
+sequencing is implementation order: the F-5 tag-at-spawn and the producer touch the same
+`do_delegate` seam and should land together or tag-first.
 
 Sequence it *after* the F-5 orphan story — which makes F-5 a **dependency**, and the status
 block now says so. A run file that records delegates which then outlive

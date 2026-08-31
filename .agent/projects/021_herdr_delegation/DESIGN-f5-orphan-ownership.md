@@ -1,7 +1,8 @@
 # Design: F-5 — who owns an orphaned delegate
 
 Date: 2026-08-31
-Status: **Proposal, awaiting owner sign-off on the three decision points in §6.**
+Status: **Accepted 2026-08-31 (owner sign-off on all three §6 decision points; see §6). F-5 is
+closed as a design question; what remains is implementation.**
 Closes (if accepted): `RESEARCH-herdr-delegation-surface.md` §5.1 / §6 F-5 — the last dependency of
 [`DESIGN-dagr-as-delegation-view.md`](DESIGN-dagr-as-delegation-view.md) §8.
 Provenance: §2 measured this session (2026-08-31, live herdr `w5`); everything else cites
@@ -87,14 +88,24 @@ None excludes the others; they compose into a policy ladder.
    leave the old file untouched and report only), never as a fabricated settlement — the old run
    file belongs to the dead session's writer, and §5's one-writer rule survives.
 
-## 6. Decision points for the owner
+## 6. Decision points — all decided by the owner, 2026-08-31
 
-- **D1.** Accept the tag format `mot-owner=<pane>:<session-ms>` and tagging-as-degradable (§3)?
-- **D2.** Accept the default of *leave running, visible* with reaping opt-in via
-  `HERDR_REAP_ON_EXIT` (§5.2–5.3)? The alternative — reap by default — is defensible on the §1
-  edge; it just destroys in-flight work by default to get there.
-- **D3.** Accept that the startup sweep reports by default and kills only under
-  `HERDR_SWEEP_STALE=1` (§5.4)?
+- **D1 — accepted as proposed.** Tag format `mot-owner=<pane>:<session-ms>`; tagging is degradable
+  (a failed tag costs sweepability, never the delegation). The unmeasured token survival across a
+  herdr server restart (§2.1) stays a prerequisite for *relying* on the sweep, not for tagging.
+- **D2 — accepted as proposed, with one addition.** Default is *leave running, visible*; reaping is
+  opt-in via `HERDR_REAP_ON_EXIT=1`. The addition: **`agent_confined` sets `HERDR_REAP_ON_EXIT=1`
+  in its own environment** (`.devcontainer/agent_confined/`), so the disposable container — where
+  quota burn dominates and no operator work lives in panes — gets the safe default without
+  hard-coding it for everyone. The reap-by-default alternative was considered and rejected: it
+  destroys in-flight work on every clean exit, including the "quit Motoko, delegate finishes
+  anyway, answer file lands" case the answer-file gate exists to honor, to mitigate a risk the
+  parity record shows the operator has already accepted for the orchestrator itself.
+- **D3 — accepted as proposed, held firmly.** The startup sweep reports by default and kills only
+  under `HERDR_SWEEP_STALE=1`, gated on the ownership token alone. It is the only rung that can
+  destroy another session's work, it acts on the least information, and P2-6 is a measured
+  instance of this class of rule going wrong; the asymmetry (one report line vs. a killed agent)
+  decides the default.
 
 ## 7. Explicitly out of scope
 
