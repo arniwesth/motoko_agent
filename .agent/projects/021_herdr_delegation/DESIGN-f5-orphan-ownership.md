@@ -113,7 +113,10 @@ None excludes the others; they compose into a policy ladder.
   opt-in via `HERDR_REAP_ON_EXIT=1`. The addition: **`agent_confined` sets `HERDR_REAP_ON_EXIT=1`
   in its own environment** (`.devcontainer/agent_confined/`), so the disposable container — where
   quota burn dominates and no operator work lives in panes — gets the safe default without
-  hard-coding it for everyone. The reap-by-default alternative was considered and rejected: it
+  hard-coding it for everyone. **Not yet applied**: `.devcontainer` is mounted read-only inside the
+  agent container by design, so this one line has to come from the operator's container or the
+  host. The exact block and where it goes:
+  [`PATCH-agent-confined-reap-on-exit.md`](PATCH-agent-confined-reap-on-exit.md). The reap-by-default alternative was considered and rejected: it
   destroys in-flight work on every clean exit, including the "quit Motoko, delegate finishes
   anyway, answer file lands" case the answer-file gate exists to honor, to mitigate a risk the
   parity record shows the operator has already accepted for the orchestrator itself.

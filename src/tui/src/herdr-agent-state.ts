@@ -30,6 +30,7 @@
  */
 
 import { spawn, spawnSync } from "child_process";
+import { reapOwnedPanes } from "./herdr-reap.js";
 
 /**
  * Motoko's own run states, restated here rather than imported from ui.ts.
@@ -331,6 +332,18 @@ export function releaseHerdrReporter(): void {
   if (released) return;
   if (!active && !spawnHook) return;
   released = true;
+  // REAP BEFORE RELEASING, and only under HERDR_REAP_ON_EXIT=1 (F-5 D2). Delegate panes outlive
+  // this process by design — nothing kills them when their caller goes away — so the opt-in rung
+  // closes the ones carrying THIS session's ownership token, by explicit pane id, never by name.
+  // It runs first because releasing our own agent row is the last thing that should happen; both
+  // are bounded and best-effort, and neither may keep Motoko from exiting. See `herdr-reap.ts`.
+  if (active) {
+    try {
+      reapOwnedPanes(process.env, active.bin, active.paneId);
+    } catch {
+      // A surviving delegate pane is a far smaller problem than a Motoko that cannot exit.
+    }
+  }
   const paneId = active?.paneId ?? "test-pane";
   const args = buildReleaseArgs(paneId, ++seq);
   if (spawnHook) {
