@@ -836,6 +836,33 @@ export pure func failure_code(exit_code: int, stderr: string) -> string
     else "herdr_cli_rejected"
   }
 
+-- WHICH FAILURES MEAN "THE AGENT IS GONE" — measured, not assumed
+-- (`MEASUREMENTS-2026-08-31-failure-codes.md`). This is the gate on the dagr
+-- producer's `lost` row, and it is narrow on purpose: burying a transient herdr
+-- error as a dead attempt is exactly the confidently-wrong graph the producer
+-- exists to avoid.
+--
+--   agent_not_found    the agent is gone. herdr does not distinguish "never
+--                      existed" from "existed and its pane closed" — staged
+--                      both ways, plus a never-existent pane id, all exit 1
+--                      with this code from BOTH `agent wait` and `agent get`.
+--                      For the producer the distinction does not matter:
+--                      either way there is nothing left to observe.
+--   server_not_running herdr's API socket is unreachable. The pane may be
+--                      perfectly alive behind it — write NOTHING.
+--   anything else      unclassified. The measured enumeration is not
+--                      exhaustive, and a code not seen is not evidence.
+export pure func means_agent_gone(exit_code: int, stderr: string) -> bool
+  tests [
+    ((1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}"), true),
+    ((1, "{\"error\":{\"code\":\"server_not_running\",\"message\":\"x\"}}"), false),
+    ((1, "{\"error\":{\"code\":\"timeout\",\"message\":\"x\"}}"), false),
+    ((2, "herdr agent commands:"), false),
+    ((1, "--current requires HERDR_PANE_ID"), false),
+    ((0, ""), false)
+  ]
+  { failure_code(exit_code, stderr) == "agent_not_found" }
+
 -- One accurate sentence per shape. Each names what actually happened and what
 -- to do about it; none of them mentions PATH unless PATH is the problem.
 export pure func failure_message(exit_code: int, stderr: string) -> string

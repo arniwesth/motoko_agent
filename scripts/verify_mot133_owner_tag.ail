@@ -173,7 +173,7 @@ func mk_ctx(ports: ExtPorts) -> ExtCtx {
 func mk_cfg(sweep_stale: bool) -> HerdrConfig {
   { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
     allowed_kinds: "claude", depth: 0, max_depth: 1, motoko_script: "./x.sh",
-    session_ms: "200", sweep_stale: sweep_stale,
+    session_ms: "200", sweep_stale: sweep_stale, dagr_dir: "/tmp/.dagr",
     start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000 }
 }
 

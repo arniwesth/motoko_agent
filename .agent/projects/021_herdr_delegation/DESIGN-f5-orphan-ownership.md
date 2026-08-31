@@ -1,8 +1,9 @@
 # Design: F-5 — who owns an orphaned delegate
 
 Date: 2026-08-31
-Status: **Accepted 2026-08-31 (owner sign-off on all three §6 decision points; see §6). F-5 is
-closed as a design question; what remains is implementation.**
+Status: **Accepted 2026-08-31 (owner sign-off on all three §6 decision points; see §6).
+Extension half implemented the same day (MOT-133: tag at spawn, report-only startup sweep); the
+TUI's `HERDR_REAP_ON_EXIT` rung (§5.3, MOT-134) is still to build.**
 Closes (if accepted): `RESEARCH-herdr-delegation-surface.md` §5.1 / §6 F-5 — the last dependency of
 [`DESIGN-dagr-as-delegation-view.md`](DESIGN-dagr-as-delegation-view.md) §8.
 Provenance: §2 measured this session (2026-08-31, live herdr `w5`); everything else cites

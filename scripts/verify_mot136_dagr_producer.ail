@@ -1,0 +1,369 @@
+-- scripts/verify_mot136_dagr_producer.ail
+--
+-- MOT-136: the dagr producer, driven end to end through the two real check
+-- lifecycles, with an IN-MEMORY FILESYSTEM behind the ports.
+--
+-- Why a fake filesystem rather than scripted returns: the producer's publish is
+-- a transaction — `file_write(tmp)` then `mv` — and its whole point is that the
+-- live file only ever changes at the rename. A port that just says "ok" would
+-- assert nothing about that. Here `file_write` really stores bytes, `mv` really
+-- moves them, and the document this script prints is the one a dagr pane would
+-- have read. The Makefile target pipes each printed document through
+-- `dagr check --strict --json` against the pinned v0.3.1 binary, which is where
+-- contract validity is established (§6: not at runtime, once in CI).
+--
+-- The lifecycle covers, in one continuous world:
+--
+--   1. Delegate (claude)                  -> task + a1 working, one note
+--   2. DelegateCheck, still working       -> liveness latched, no settle
+--   3. DelegateCheck, blocked             -> task blocked, attempt still working
+--   4. DelegateCheck, answer on disk      -> done · reported, receipt = the path
+--   5. DelegateCheck again                -> IDEMPOTENT: nothing appended (§3.5)
+--   6. Delegate with retry_of             -> a2 on the SAME task, cause followup
+--   7. Delegate (motoko) + agent gone     -> attempt lost, task failed (§4)
+--   8. a setup failure after `pane split` -> NO task at all (§3.2)
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run \
+--     --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main scripts/verify_mot136_dagr_producer.ail
+--
+-- Prints OK/FAIL per assertion and one `DAGR_DOC <json>` line per published
+-- document. Exits non-zero on any FAIL.
+module scripts/verify_mot136_dagr_producer
+
+import std/io (println, exit)
+import std/json (Json, jo, ja, kv, js, jnum, encode, decode, get, asString, asArray, asObject)
+import std/string (contains, join, intToStr)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtClockReading,
+  ToolCallEnvelope, ToolResultEnvelope, ToolHandleOutcome, ToolHandleDecision,
+  Handled, Delegate, BudgetPlan, empty_ext_world
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle)
+
+-- ---------------------------------------------------------------------------
+-- A filesystem in the world token
+-- ---------------------------------------------------------------------------
+
+func kvs_without(kvs: [{key: string, value: Json}], key: string) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    p :: rest => if p.key == key then kvs_without(rest, key) else p :: kvs_without(rest, key)
+  }
+}
+
+func obj_set(o: Json, key: string, v: Json) -> Json {
+  match asObject(o) {
+    None => jo([kv(key, v)]),
+    Some(kvs) => jo(kvs_without(kvs, key) ++ [kv(key, v)])
+  }
+}
+
+func obj_del(o: Json, key: string) -> Json {
+  match asObject(o) { None => o, Some(kvs) => jo(kvs_without(kvs, key)) }
+}
+
+func sfield(o: Json, key: string) -> string {
+  match get(o, key) {
+    None => "",
+    Some(v) => match asString(v) { Some(s) => s, None => "" }
+  }
+}
+
+func files_of(w: ExtWorld) -> Json {
+  match get(w.token, "files") { Some(f) => f, None => jo([]) }
+}
+
+func with_files(w: ExtWorld, f: Json) -> ExtWorld { { token: obj_set(w.token, "files", f) } }
+
+func read_file(w: ExtWorld, path: string) -> string { sfield(files_of(w), path) }
+
+func has_file(w: ExtWorld, path: string) -> bool {
+  match get(files_of(w), path) { Some(_) => true, None => false }
+}
+
+func put_file(w: ExtWorld, path: string, content: string) -> ExtWorld {
+  with_files(w, obj_set(files_of(w), path, js(content)))
+}
+
+func drop_file(w: ExtWorld, path: string) -> ExtWorld {
+  with_files(w, obj_del(files_of(w), path))
+}
+
+-- ---------------------------------------------------------------------------
+-- Ports over that filesystem
+-- ---------------------------------------------------------------------------
+
+func fs_read(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if has_file(world, path)
+  then { present: true, content: read_file(world, path), next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+func fs_write(world: ExtWorld, path: string, content: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: put_file(world, path, content) }
+}
+
+func fs_remove(world: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: drop_file(world, path) }
+}
+
+func fs_dir(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: world }
+}
+
+func envelope(stdout: string, stderr: string, code: int) -> string {
+  encode(jo([kv("stdout", js(stdout)), kv("stderr", js(stderr)),
+             kv("exit_code", jnum(_int_to_float(code)))]))
+}
+
+func herdr_error(code: string) -> string {
+  encode(jo([kv("error", jo([kv("code", js(code)), kv("message", js("scripted"))]))]))
+}
+
+func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (match asString(x) { Some(s) => s, None => "" }) :: strings_of(rest)
+  }
+}
+
+func cmd_of(args_json: string) -> string {
+  match decode(args_json) { Err(_) => "", Ok(o) => sfield(o, "cmd") }
+}
+
+func argv_text(args_json: string) -> string {
+  match decode(args_json) {
+    Err(_) => "",
+    Ok(o) => match get(o, "args") {
+      None => "",
+      Some(a) => match asArray(a) { Some(xs) => join(" ", strings_of(xs)), None => "" }
+    }
+  }
+}
+
+func argv_list(args_json: string) -> [string] {
+  match decode(args_json) {
+    Err(_) => [],
+    Ok(o) => match get(o, "args") {
+      None => [],
+      Some(a) => match asArray(a) { Some(xs) => strings_of(xs), None => [] }
+    }
+  }
+}
+
+-- `agent get` answers with `status`; `agent wait` and `agent get` fail with
+-- `agent_not_found` when `gone`; `pane split` always succeeds so that step 8's
+-- setup failure is staged on `agent start` instead.
+func scripted(status: string, gone: bool, split_ok: bool)
+  -> (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS} {
+  func(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+    let cmd = cmd_of(args_json);
+    let argv = argv_text(args_json);
+    -- THE PUBLISH TRANSACTION, FOR REAL: the live file changes only here.
+    if cmd == "mv" then {
+      let parts = argv_list(args_json);
+      match parts {
+        src :: rest => match rest {
+          dst :: _ => {
+            let moved = drop_file(put_file(world, dst, read_file(world, src)), src);
+            { output: envelope("", "", 0), exit_code: 0, next_state: moved }
+          },
+          [] => { output: envelope("", "mv: missing destination", 1), exit_code: 1, next_state: world }
+        },
+        [] => { output: envelope("", "mv: missing operand", 1), exit_code: 1, next_state: world }
+      }
+    }
+    else if contains(argv, "pane split") then
+      if split_ok then
+        { output: envelope("{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"},\"type\":\"pane_info\"}}", "", 0),
+          exit_code: 0, next_state: world }
+      else { output: envelope("", herdr_error("pane_split_failed"), 1), exit_code: 1, next_state: world }
+    else if contains(argv, "agent explain") then
+      { output: envelope("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}", "", 0),
+        exit_code: 0, next_state: world }
+    else if contains(argv, "agent start") then
+      if split_ok then { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: world }
+      else { output: envelope("", herdr_error("agent_start_failed"), 1), exit_code: 1, next_state: world }
+    else if contains(argv, "agent get") || contains(argv, "agent wait") then
+      if gone then { output: envelope("", herdr_error("agent_not_found"), 1), exit_code: 1, next_state: world }
+      else
+        { output: envelope("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"${status}\",\"pane_id\":\"w1:pA\"}}}", "", 0),
+          exit_code: 0, next_state: world }
+    else if contains(argv, "pane list") then
+      { output: envelope("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"}]}}", "", 0), exit_code: 0, next_state: world }
+    else
+      { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: world }
+  }
+}
+
+-- One clock per step, so `started_at` precedes `ended_at` the way the contract
+-- requires and the validator checks.
+func clock_at(ms: int) -> (ExtWorld) -> ExtClockReading ! {Clock} {
+  func(world: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: ms, next_state: world } }
+}
+
+func ports_at(ms: int, status: string, gone: bool, split_ok: bool) -> ExtPorts {
+  let base = noop_ext_ports();
+  { ai_step: base.ai_step,
+    tool_handle: scripted(status, gone, split_ok),
+    file_read: fs_read,
+    file_write: fs_write,
+    file_remove: fs_remove,
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: fs_dir,
+    clock_now: clock_at(ms),
+    env_get: base.env_get }
+}
+
+func mk_ctx(ports: ExtPorts, world: ExtWorld) -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-mot136", step: 0, model: "test-model", cwd: "/tmp",
+    hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
+    env_server_url: "", budget_remaining: 4, history_slice: [],
+    state_key: "test", context_limit: 0, ports: ports,
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: world }
+}
+
+func mk_cfg() -> HerdrConfig {
+  { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
+    allowed_kinds: "claude,motoko", depth: 0, max_depth: 1, motoko_script: "./x.sh",
+    session_ms: "200", sweep_stale: false, dagr_dir: "/tmp/.dagr",
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000 }
+}
+
+func run_file_path() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
+
+-- ---------------------------------------------------------------------------
+-- Driving it
+-- ---------------------------------------------------------------------------
+
+type Step = { world: ExtWorld, out: string, err: string, code: int }
+
+func drive(world: ExtWorld, ports: ExtPorts, call: ToolCallEnvelope) -> Step ! {IO, Process, FS, Clock} {
+  let r = on_tool_handle(mk_cfg(), mk_ctx(ports, world), call);
+  match r.decision {
+    Handled(res) => { world: r.next_state, out: res.stdout, err: res.stderr, code: res.exit_code },
+    Delegate => { world: r.next_state, out: "", err: "on_tool_handle delegated the call", code: 1 }
+  }
+}
+
+func delegate_call(id: string, prompt: string, kind: string, task_kind: string, retry_of: string) -> ToolCallEnvelope {
+  { id: id, tool: "Delegate",
+    arguments: jo([kv("prompt", js(prompt)), kv("kind", js(kind)),
+                   kv("task_kind", js(task_kind)), kv("retry_of", js(retry_of))]) }
+}
+
+func check_call(id: string, name: string) -> ToolCallEnvelope {
+  { id: id, tool: "DelegateCheck", arguments: jo([kv("name", js(name))]) }
+}
+
+func doc_of(w: ExtWorld) -> Json {
+  match decode(read_file(w, run_file_path())) { Ok(d) => d, Err(_) => jo([]) }
+}
+
+func count_of(xs: [Json]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + count_of(rest) }
+}
+
+func arr_field(o: Json, key: string) -> [Json] {
+  match get(o, key) {
+    None => [],
+    Some(v) => match asArray(v) { Some(xs) => xs, None => [] }
+  }
+}
+
+func events(w: ExtWorld) -> int { count_of(arr_field(doc_of(w), "events")) }
+func tasks(w: ExtWorld) -> int { count_of(arr_field(doc_of(w), "tasks")) }
+
+func check(label: string, ok: bool) -> bool ! {IO} {
+  if ok then { println("OK: ${label}"); true } else { println("FAIL: ${label}"); false }
+}
+
+func emit(w: ExtWorld) -> () ! {IO} {
+  println("DAGR_DOC ${read_file(w, run_file_path())}")
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let w0 = empty_ext_world();
+
+  -- 1. Delegate (claude). Handle is seeded from the clock: mot-dlg-1000.
+  let s1 = drive(w0, ports_at(1000, "working", false, true),
+                 delegate_call("c1", "Fix the parser\nmore detail", "claude", "impl", ""));
+  let a1 = check("Delegate opens one task with one attempt", tasks(s1.world) == 1 && s1.code == 0);
+  let a2 = check("the run file carries a contract version and a task id that is not a pane id",
+                 contains(read_file(s1.world, run_file_path()), "\"dagr\":3")
+                   && contains(read_file(s1.world, run_file_path()), "mot-dlg-1000")
+                   && contains(read_file(s1.world, run_file_path()), "\"kind\":\"impl\""));
+  emit(s1.world);
+
+  -- 2. Still working: liveness latches, nothing settles.
+  let s2 = drive(s1.world, ports_at(2000, "working", false, true), check_call("c2", "mot-dlg-1000"));
+  let a3 = check("a working check latches prompt_acknowledged and settles nothing",
+                 contains(read_file(s2.world, run_file_path()), "\"prompt_acknowledged\":true")
+                   && contains(read_file(s2.world, run_file_path()), "attempt_settled") == false);
+  emit(s2.world);
+
+  -- 3. Blocked: the TASK blocks, the attempt keeps working, and the unblocker
+  --    is named (dagr refuses a blocked node that is only a red mark).
+  let s3 = drive(s2.world, ports_at(3000, "blocked", false, true), check_call("c3", "mot-dlg-1000"));
+  let a4 = check("a blocked delegate blocks the task and names its unblocker",
+                 contains(read_file(s3.world, run_file_path()), "\"state\":\"blocked\"")
+                   && contains(read_file(s3.world, run_file_path()), "\"unblock\":\"operator"));
+  emit(s3.world);
+
+  -- 4. The answer lands. done · reported, receipt = the answer path.
+  let seeded = put_file(s3.world, "/tmp/mot/answer-mot-dlg-1000.md", "the delegate delivered");
+  let s4 = drive(seeded, ports_at(4000, "idle", false, true), check_call("c4", "mot-dlg-1000"));
+  let a5 = check("an answer on disk settles done at tier reported, receipted by path",
+                 contains(read_file(s4.world, run_file_path()), "\"evidence\":\"reported\"")
+                   && contains(read_file(s4.world, run_file_path()), "\"receipt\":\"/tmp/mot/answer-mot-dlg-1000.md\"")
+                   && contains(read_file(s4.world, run_file_path()), "\"verified\"") == false);
+  -- The unblock line from step 3 must not outlive the block: a settled task
+  -- still asking the operator to answer a prompt is a stale fact, and stale
+  -- facts are what a confidently wrong graph is made of.
+  let a5b = check("settling clears the unblock line the blocked check wrote",
+                  contains(read_file(s4.world, run_file_path()), "unblock") == false);
+  emit(s4.world);
+
+  -- 5. THE IDEMPOTENCE CASE. Nothing consumes the answer file, so this check
+  --    reaches the same branch and must append nothing.
+  let before = events(s4.world);
+  let s5 = drive(s4.world, ports_at(5000, "idle", false, true), check_call("c5", "mot-dlg-1000"));
+  let a6 = check("a second check on a finished delegate appends no second settlement",
+                 events(s5.world) == before && tasks(s5.world) == 1);
+
+  -- 6. retry_of links a new attempt onto the SAME task.
+  let s6 = drive(s5.world, ports_at(6000, "working", false, true),
+                 delegate_call("c6", "Fix the parser again", "claude", "impl", "mot-dlg-1000"));
+  let a7 = check("retry_of appends attempt a2 to the existing task, cause followup",
+                 tasks(s6.world) == 1
+                   && contains(read_file(s6.world, run_file_path()), "mot-dlg-1000·a2")
+                   && contains(read_file(s6.world, run_file_path()), "\"type\":\"followup\""));
+  emit(s6.world);
+
+  -- 7. The delegate is gone: attempt lost, task failed. The handle is the one
+  --    minted at 6000, which the retry now owns.
+  let s7 = drive(s6.world, ports_at(7000, "working", true, true), check_call("c7", "mot-dlg-6000"));
+  let a8 = check("agent_not_found settles the attempt lost and the task failed",
+                 contains(read_file(s7.world, run_file_path()), "\"result\":\"lost\"")
+                   && contains(read_file(s7.world, run_file_path()), "\"state\":\"failed\""));
+  emit(s7.world);
+
+  -- 8. A setup failure after the split writes NO task: the pane is closed and
+  --    a task appended at the split would survive as a phantom working row.
+  let t8 = tasks(s7.world);
+  let s8 = drive(s7.world, ports_at(8000, "working", false, false),
+                 delegate_call("c8", "never starts", "claude", "impl", ""));
+  let a9 = check("a delegation that fails its setup appends no task at all",
+                 s8.code == 1 && tasks(s8.world) == t8);
+  emit(s8.world);
+
+  if a1 && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a8 && a9 then () else exit(1)
+}

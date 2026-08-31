@@ -2179,7 +2179,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag
+check_core: verify_extensions verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_dagr_producer
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2245,6 +2245,50 @@ verify_herdr_owner_tag:
 		scripts/verify_mot133_owner_tag.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_herdr_owner_tag: delegate ownership tagging or the orphan sweep regressed (MOT-133)" && exit 1)
+
+# MOT-136: the dagr producer, in two legs.
+#
+# The first drives `Delegate`/`DelegateCheck` through both check lifecycles over
+# an in-memory filesystem — so the publish transaction (`file_write` then `mv`)
+# is exercised for real — and asserts the mapping: idempotent terminal writes, a
+# retry as attempt a2 of the same task, `lost` only from `agent_not_found`, no
+# task at all for a delegation that fails its setup.
+#
+# The second is where CONTRACT VALIDITY IS ESTABLISHED. The producer runs no
+# schema validation at runtime by design (the document is deterministic code's
+# output, not a model's), so every document it publishes is checked here against
+# a PINNED v0.3.1 binary. Unpinned `herdr plugin install` fails on a machine
+# without Cargo whenever main is ahead of the release tag, so the pin is not
+# optional:
+#
+#   herdr plugin install aemrebarut/herdr-dagr --ref v0.3.1 --yes
+#
+# Without a binary the leg is skipped loudly rather than passing quietly — a
+# green tick for a check that did not run is worse than a red one.
+DAGR_BIN ?= $(shell command -v dagr 2>/dev/null || ls $$HOME/.config/herdr/plugins/github/herdr-dagr-*/bin/dagr 2>/dev/null | head -1)
+
+verify_dagr_producer:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_mot136_dagr_producer.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_dagr_producer: the producer's lifecycle mapping regressed (MOT-136)" && exit 1); \
+	if [ -x "$(DAGR_BIN)" ]; then \
+		n=0; bad=0; \
+		echo "$$out" | grep '^DAGR_DOC ' | sed 's/^DAGR_DOC //' | while IFS= read -r doc; do \
+			n=$$((n + 1)); \
+			printf '%s' "$$doc" > .dagr-check-$$n.json; \
+			if ! $(DAGR_BIN) check .dagr-check-$$n.json --strict --json > /dev/null 2>&1; then \
+				echo "  ✗ published document $$n is not contract-valid:"; \
+				$(DAGR_BIN) check .dagr-check-$$n.json --strict --json; \
+				bad=1; \
+			fi; \
+			rm -f .dagr-check-$$n.json; \
+			[ $$bad -eq 0 ] || exit 1; \
+		done || exit 1; \
+		echo "  ✓ every published document passes $$($(DAGR_BIN) --version) check --strict"; \
+	else \
+		echo "  (skipping the contract leg: no dagr binary — herdr plugin install aemrebarut/herdr-dagr --ref v0.3.1 --yes)"; \
+	fi
 
 verify_extensions:
 	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \

@@ -91,6 +91,17 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- D3, held firmly: reporting is the default and closing is opt-in. This is
     -- the only rung that can destroy another session's work.
     sweep_stale: getEnvOr("HERDR_SWEEP_STALE", "") == "1",
+    -- THE dagr RUN FILE'S HOME. Inside the workdir for `work_dir`'s reason —
+    -- AILANG_FS_SANDBOX is pinned there and a write outside it terminates the
+    -- run — and NOT a plain `.dagr/run.json`: the file name carries the pane
+    -- and the session so that two Motokos in one checkout, which is an ordinary
+    -- way to use herdr, cannot clobber each other. Point the dagr pane at it
+    -- with DAGR_RUN; it also finds `.dagr/*.json` on its own.
+    --
+    -- Producing the file costs nothing when nobody reads it, so this is not
+    -- gated on the dagr binary being installed — the same philosophy as the
+    -- tool gate above, one level down: write, and let the view be absent.
+    dagr_dir: getEnvOr("MOTOKO_DAGR_DIR", "${workdir}/.dagr"),
     -- BELOW MOTOKO'S 30s PROCESS WALL BY CONSTRUCTION. herdr's own default for
     -- `agent start --timeout` is 30000 — exactly Motoko's — so leaving this
     -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
