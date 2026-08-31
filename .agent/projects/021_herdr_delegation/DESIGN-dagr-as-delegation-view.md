@@ -97,10 +97,13 @@ was protecting — pane ids never in `id` — still holds via `handle_name`.
 
 Fields **not** emitted, and why:
 
-- `kind`: `Delegate` has no task-category parameter (`herdr.ail`, `delegate_params`), so a review or
-  a research task would be stamped `impl`. Omit it if the contract allows; otherwise emit the
-  most neutral kind the v0.3.1 validator accepts. Adding a `task_kind` parameter is a schema change
-  for the owner (§8).
+- `kind`: emitted only from the model's own declaration. **Decided 2026-08-31 (§8 item 7):**
+  `Delegate` grows an optional `task_kind: impl|review|research|test|docs` parameter — enumerated,
+  not free text, or every session invents a vocabulary — bundled with `retry_of` so the model sees
+  one schema migration, not two. Omitted → the producer omits `kind`, assuming the v0.3.1 binary
+  accepts a kind-less task (the handoff must verify this once; if it refuses, fall back to a
+  deliberately neutral `task`). Never derive it from agent kind: a review delegated to claude is
+  still a review. A model mislabel costs a wrong glyph, nothing operational.
 - `model`: nothing selects or records one (`DESIGN-delegate-model-selection.md`). A guessed chip is
   a fabrication; omit until selection lands.
 
@@ -169,7 +172,15 @@ thing the pane shows that the transcript does not, is always zero.
 The fix is a tool-schema change, not a producer change: an optional `retry_of: <handle>` parameter
 on `Delegate`. When present, the producer appends attempt *n+1* to the **existing** task with
 `cause: followup, ref: <prev attempt>` instead of opening a new task. The model chooses whether to
-pass it; the extension records it mechanically. Not required for a first landing; §8 lists it.
+pass it; the extension records it mechanically.
+
+**Decided 2026-08-31 (§8 item 3): in v1.** It is the cheapest of the three schema questions and it
+protects the one signal that justified adopting dagr. Validation is local and refuses the *linkage*,
+never the delegation: the handle must be one this extension issued (`owns_name`), must exist in the
+run file, and its task must be terminal — otherwise open a new task and append a `note` event saying
+the link was refused and why. The parameter description must say "only when re-issuing a task whose
+previous delegate failed or under-delivered", because every schema property teaches the model
+something and this one invites linking merely-similar tasks.
 
 ## 4. Evidence tiers, derived mechanically
 
@@ -181,8 +192,9 @@ requires judgment.
 | answer file present and non-empty (either lifecycle) | `done` | `reported` | see §4.2 for why not `asserted`, why not `verified`, and the caveat that the file may itself report failure |
 | answer file present **and** independently checked | `done` | `verified` | only tier that may claim mechanical proof; no code path produces it — §4.1 |
 | claude/codex: agent settled, **no answer file** | `settled_unverified` | `heuristic` | P2-3. Not a soft `done`, and not `failed`: nothing observed says the work failed, only that no envelope arrived |
-| `agent wait` **or** `agent get` fails with `agent_not_found` | attempt `lost` → task `failed` | — | M-extra-6; keep the attempt, it is the record. `types.ail` documents that a gone agent surfaces from the *wait* (2 ms), so classifying only `agent get` misses the primary path |
-| `agent wait` / `agent get` fails with any other code (socket, timeout-that-is-not-`timeout`, unknown) | — | — | a herdr error, not a delegate outcome: **write nothing** |
+| `agent wait` **or** `agent get` fails with `agent_not_found` | attempt `lost` → task `failed` | — | M-extra-6; keep the attempt, it is the record. `types.ail` documents that a gone agent surfaces from the *wait* (2 ms), so classifying only `agent get` misses the primary path. **Measured 2026-08-31** ([`MEASUREMENTS-2026-08-31-failure-codes.md`](MEASUREMENTS-2026-08-31-failure-codes.md)): a never-existent name, a never-existent pane, and a real agent whose pane was closed all return exit 1 · `agent_not_found`, from both calls — herdr does not distinguish them, and the producer does not need to |
+| `agent wait` / `agent get` fails with `server_not_running` | — | — | **measured 2026-08-31**: herdr's API socket is unreachable; the pane may be perfectly alive behind it. **Write nothing**; surface the error to the model |
+| `agent wait` / `agent get` fails with any other code (unlisted, unknown) | — | — | a herdr error, not a delegate outcome: **write nothing**. The measured enumeration is not exhaustive, and a code not seen is not evidence the agent is gone |
 
 Rows deliberately **absent**, with the reason:
 
@@ -221,15 +233,22 @@ is exactly what an unattended `codex` fails to perform while *saying* it succeed
 file-at-path is the envelope; its contents are the payload. `reported` is the honest tier, and the
 `receipt` should be the answer path so a reader can tell which envelope was meant.
 
-**The caveat, which is a real trade-off and not settled here.** The answer protocol asks for
-arbitrary Markdown (`types.task_wrapper_prompt`), and a delegate can write a file that *says* "I
-could not do this". The code cannot tell that from success, so the producer would write `done ·
-reported` over a delivered failure report. Two honest ways out: (a) a typed answer envelope with an
-explicit `outcome: done|failed` line that the extension parses — a delegate-protocol change that
-touches the wrapper prompt, both check paths and every existing measurement; or (b) keep the
-free-text file and accept that `reported` means "delivered an answer", not "succeeded". (b) is
-the first landing; (a) is for the owner (§8), and is also what would let a delegate's own
-`failed` be recorded at all.
+**The caveat, and the decision (2026-08-31, §8 item 6).** The answer protocol asks for arbitrary
+Markdown (`types.task_wrapper_prompt`), and a delegate can write a file that *says* "I could not do
+this". The code cannot tell that from success, so the producer writes `done · reported` over a
+delivered failure report. Three options were priced: (a) keep free text — `reported` means
+"delivered an answer", not "succeeded"; (b) a strict typed envelope (`outcome: done|failed` parsed,
+malformed → `settled_unverified`) — the only fully honest option, and the only one that can demote
+a good answer from a non-compliant delegate (P2-3 showed unattended codex barely manages file
+existence; demanding structure adds a new failure mode) and it invalidates the existing compliance
+measurements; (c) a tolerant envelope — parse the outcome line if present, default to
+`done · reported` if absent: monotone, no compliance cliff, but proves nothing where delegates
+ignore it.
+
+**Decision: (a) for the producer's first landing; (c) as its own follow-up change with its own
+compliance measurement; (b) only if (c) measures well.** The delegate protocol is the riskiest
+unknown here and does not belong on the critical path of the least risky feature. Until (c) lands,
+a delegate's own `failed` cannot be recorded, and `reported` reads as "delivered".
 
 ## 5. File placement, sandbox, and recursion
 
@@ -410,26 +429,29 @@ Adopt (a). Land it as its own change, with two things settled first:
    implements this. Same-workdir concurrent sessions are *not* left open: key the file by own
    pane (§5).
 
-And three items the implementer should hand back rather than decide:
+The items the first revision handed back are now settled (owner decisions, 2026-08-31, recorded
+at their sections):
 
-3. **`retry_of` on `Delegate`** (§3.2). Without it the pane never shows rework. It is a tool-schema
-   change visible to the model, so it is a product decision, not a producer detail.
-4. **Settle-on-exit** (§6). Whether a task the model stopped polling should be settled by something
-   other than `DelegateCheck` is an ABI-slot question; the first landing writes a `note` and stops.
-5. **`lost` classification** (§4). Which `failure_code` values mean "the pane is gone" versus "herdr
-   is unwell" must be measured before the `lost` row is wired, or the graph will bury transient
-   socket errors as dead attempts. Until measured, a non-zero `agent wait`/`agent get` writes
-   nothing.
-6. **Typed answer envelope** (§4.2). Whether the delegate protocol should carry an explicit
-   `done|failed` outcome. Without it a delivered failure report renders as `done · reported`.
-7. **`task_kind` on `Delegate`** (§3.1). Without it no task kind can be emitted honestly.
+3. **`retry_of` on `Delegate`** — **decided: in v1** (§3.6). Bundled with `task_kind` as one
+   schema migration.
+4. **Settle-on-exit** (§6) — **still open, and stays with the owner.** An ABI-slot question; the
+   first landing writes a `note` and stops.
+5. **`lost` classification** (§4) — **measured, closed.**
+   [`MEASUREMENTS-2026-08-31-failure-codes.md`](MEASUREMENTS-2026-08-31-failure-codes.md):
+   `agent_not_found` (from wait or get) ⇔ gone → `lost`; `server_not_running` ⇔ herdr unwell →
+   write nothing; anything unlisted → write nothing.
+6. **Typed answer envelope** (§4.2) — **decided: free text now, tolerant envelope as its own
+   follow-up, strict only if the tolerant one measures well.**
+7. **`task_kind` on `Delegate`** (§3.1) — **decided: in v1, bundled with `retry_of`;** enumerated
+   values, omitted → no `kind` emitted.
 
-And one code fix that stands on its own, independent of dagr: `do_check` (claude/codex) calls
-`agent wait` and `agent get` **before** reading the answer file, so a delegate that wrote its
-answer and whose pane was then closed — by the operator, by a crash, by M-extra-6 reaping from
-another session — returns `agent_not_found` and the answer is never read. `do_check_motoko`
-already does the early read. Filed as its own Linear issue; the producer's §3.2 table assumes it
-is fixed.
+One code fix stood on its own, independent of dagr: `do_check` (claude/codex) read herdr state
+before the answer file, losing a delivered answer when the pane was gone. **Fixed and merged**
+(MOT-131, PR #180, 2026-08-31), with a scripted-ports regression test
+(`scripts/verify_mot131_early_answer.ail`, `make verify_herdr_check_answer`). The §3.2 table
+assumes it, and it now holds.
+
+With items 3, 5, 6 and 7 settled, **F-5 (the orphan story) is the only remaining dependency.**
 
 Sequence it *after* the F-5 orphan story — which makes F-5 a **dependency**, and the status
 block now says so. A run file that records delegates which then outlive
@@ -480,3 +502,12 @@ findings, all checked against the code before adoption):
 - F-5 promoted from "sequence after" to a stated dependency (header, §8).
 - Answer-file-means-`done` caveat and the typed-envelope trade-off recorded, left to the owner
   (§4.2, §8 item 6).
+
+Third pass, 2026-08-31 — decisions and measurements, no new design:
+
+- MOT-131 fixed and merged (PR #180); §8's standalone code fix is no longer an assumption.
+- `lost` classification measured and wired into §4
+  ([`MEASUREMENTS-2026-08-31-failure-codes.md`](MEASUREMENTS-2026-08-31-failure-codes.md)).
+- Owner decisions recorded: `retry_of` in v1 (§3.6); `task_kind` in v1, bundled (§3.1); answer
+  envelope free-text now / tolerant later / strict only on evidence (§4.2).
+- Remaining open: F-5 (the dependency) and settle-on-exit (§8 item 4).
