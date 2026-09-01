@@ -14,7 +14,25 @@ is not a thing to do quietly for a convenience default.
 
 Apply it from the operator's container or the host.
 
-## The patch
+## Applying it
+
+From the **host**, or from the operator's dev container (only `agent_confined` mounts
+`.devcontainer` read-only; `.devcontainer/docker-compose.yml` mounts the repo read-write, so the
+edit works from there too):
+
+```sh
+git apply .agent/projects/021_herdr_delegation/agent-confined-reap-on-exit.patch
+```
+
+Then recreate the container so the new environment reaches it — an env-var change needs no rebuild,
+but `docker compose` only delivers it on recreate, and recreating ends every herdr session in the
+container:
+
+```sh
+.devcontainer/agent_confined/agent.sh          # `compose up -d` recreates on config drift
+```
+
+## The patch, inline
 
 `.devcontainer/agent_confined/docker-compose.yml`, in the `environment:` block, immediately after
 the `GH_TOKEN: ${MOTOKO_BOT_GH_TOKEN:-}` line:
