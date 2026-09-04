@@ -22,10 +22,14 @@ module sunholo/motoko_ext_herdr/dagr
 -- did not observe. Four fields are refused by name, each for its own reason
 -- (§3.1, §3.4, §4):
 --
---   `verified`        no path independently checks a delegate's answer, so
---                     every settle lands at `reported` and the pane is
---                     visibly short of `◆`. That is the honest reading and it
---                     is also the progress bar for 023.
+--   `verified`        no path independently checks a delegate's ANSWER, so
+--                     every settle of delegated work lands at `reported` and
+--                     the pane is visibly short of `◆`. That is the honest
+--                     reading and it is also the progress bar for 023. The one
+--                     place the tier is earned is `open_failed_task`, which
+--                     grades a spawn this code watched fail rather than a
+--                     result it was told about; its receipt is herdr's exit
+--                     code.
 --   `asserted`        reading a prose claim needs a screen read, which neither
 --                     check path does.
 --   `model`           nothing selects or records one.
@@ -122,9 +126,13 @@ export pure func run_id(own_pane: string, session_ms: string) -> string
   tests [(("w1:p1", "1756000000000"), "run-motoko-w1-p1-1756000000000")]
   { "run-motoko-${slug(own_pane)}-${session_ms}" }
 
+export pure func run_file_name(own_pane: string, session_ms: string) -> string
+  tests [(("w1:p1", "1756000000000"), "run-w1-p1-1756000000000.json")]
+  { "run-${slug(own_pane)}-${session_ms}.json" }
+
 export pure func run_file(dagr_dir: string, own_pane: string, session_ms: string) -> string
   tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/run-w1-p1-1756000000000.json")]
-  { "${dagr_dir}/run-${slug(own_pane)}-${session_ms}.json" }
+  { "${dagr_dir}/${run_file_name(own_pane, session_ms)}" }
 
 -- The `.tmp` sibling stays in the SAME directory on purpose: `mv` is atomic
 -- only within a filesystem, and a tmp under /tmp with the run file in the tree
@@ -138,6 +146,29 @@ export pure func run_tmp(dagr_dir: string, own_pane: string, session_ms: string)
 export pure func refused_marker(dagr_dir: string, own_pane: string, session_ms: string) -> string
   tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/.unparseable-w1-p1-1756000000000")]
   { "${dagr_dir}/.unparseable-${slug(own_pane)}-${session_ms}" }
+
+-- THE VIEW-PANE SENTINEL, and it is the reason auto-opening cannot run away.
+--
+-- The extension has no state between tool calls (`herdr.dagr_record` says so),
+-- so "did this session already open a view?" has to be a fact on disk. It is
+-- keyed like every other per-run path here — by producer pane AND session — so
+-- a Motoko restarted in the same pane opens its own view for its own run file
+-- rather than inheriting the previous run's marker.
+--
+-- IT HOLDS THE PANE ID, not just a bit. That costs nothing over an empty
+-- sentinel and it is what lets a later reader — the operator, or anything that
+-- wants to replace the view rather than add a second one — name the pane it is
+-- allowed to touch. `scripts/dagr-pane.sh` keeps `.dagr/.pane` for the same
+-- purpose and for the same reason: a pane is only ours to close if we can prove
+-- we opened it.
+--
+-- MEASURED WHY: 2026-09-01 a session opened ~90 view panes by opening one per
+-- poll. The marker goes down BEFORE the open is attempted, which is
+-- `sweep_once`'s rule too — a failed attempt that retries on every subsequent
+-- Delegate call is the same runaway with a slower fuse.
+export pure func pane_marker(dagr_dir: string, own_pane: string, session_ms: string) -> string
+  tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/.pane-w1-p1-1756000000000")]
+  { "${dagr_dir}/.pane-${slug(own_pane)}-${session_ms}" }
 
 export pure func attempt_id(task_id: string, n: int) -> string
   tests [(("mot-dlg-7", 1), "mot-dlg-7·a1"), (("mot-dlg-7", 2), "mot-dlg-7·a2")]
@@ -361,8 +392,10 @@ export pure func open_task(doc: Json, id: string, title: string, kind: string,
                            actor: string, pane: string, loc_agent: string, now_ms: int) -> Json {
   let a = new_attempt(id, 1, jo([kv("type", js("initial"))]), actor, pane, loc_agent, now_ms);
   -- `owner` is the handle the model holds, which at open time IS the id; a
-  -- linked retry is the only thing that moves it. `locator.agent` is a
-  -- different fact — what herdr calls the agent — and for a motoko delegate
+  -- linked retry is the only thing that moves it, to the NEW handle, so a
+  -- reader comparing the task's `id` (the first delegation) with its `owner`
+  -- (who is working on it now) can tell a retried task from new work.
+  -- `locator.agent` is a different fact — what herdr calls the agent — and for a motoko delegate
   -- the row self-reports as `motoko` (MOT-120), not as the handle.
   let t = jo([
     kv("id", js(id)), kv("title", js(title)), kv("kind", js(kind)),
@@ -373,11 +406,65 @@ export pure func open_task(doc: Json, id: string, title: string, kind: string,
                started_event(id, attempt_id(id, 1), actor, now_ms))
 }
 
+-- A DELEGATION THAT CONSUMED RESOURCES AND FAILED IS STILL A FACT (F3).
+--
+-- `open_task` above explains why nothing is written at `pane split`: a task
+-- appended there would survive as a phantom `working` row for a delegation that
+-- never happened. Measured live 2026-09-01, the OTHER half of that choice cost
+-- more than the phantom would have. Two `claude` spawns each took a pane, an
+-- `agent start` and a task file, failed at `agent prompt` with `agent_not_ready`
+-- — and left the run file with NO ROW AT ALL. A reader of that document sees a
+-- session that delegated three times. It delegated five.
+--
+-- So the answer is not to open earlier. It is to open and settle in ONE
+-- transition: the task is BORN `failed` with an already-terminal attempt, so it
+-- is never observable as `working` and the phantom the comment above refuses
+-- cannot appear, while the work that was actually spent stays on the record.
+--
+-- `verified` IS THE HONEST TIER HERE AND NOWHERE ELSE IN THIS FILE, and the
+-- header's refusal of it is unchanged in substance. Every other settle grades a
+-- claim about A DELEGATE'S ANSWER, which nothing independently checks, so every
+-- one of those lands at `reported`. This one grades a claim about THE SPAWN,
+-- and its evidence is herdr's own exit status read by this code — a mechanical
+-- receipt in the contract's own terms, with the exit code as the receipt.
+--
+-- The tier travels as a PARAMETER rather than a constant because one call-site
+-- never invoked herdr at all: the motoko quoting refusal spends a pane but its
+-- only "receipt" is this extension's own prose, so it lands at `reported`.
+-- `verified` here means "herdr-observed or extension-observed spawn spend",
+-- never "the delegate's answer was checked" — that reading stays refused.
+--
+-- TWO CLOCK READINGS, not one. `started_at` is when the delegation began and
+-- `ended_at` is when it failed; collapsing them onto the failure moment would
+-- state that a spawn which spent 3.9s on `agent start` took no time at all.
+export pure func open_failed_task(doc: Json, id: string, title: string, kind: string,
+                                  actor: string, pane: string, loc_agent: string,
+                                  receipt: string, reason: string,
+                                  started_ms: int, now_ms: int, tier: string) -> Json {
+  let a0 = new_attempt(id, 1, jo([kv("type", js("initial"))]), actor, pane, loc_agent, started_ms);
+  let outcome = jo([kv("result", js("failed")), kv("evidence", js(tier)),
+                    kv("receipt", js(receipt)), kv("reason", js(reason))]);
+  let a = obj_set(obj_set(obj_set(a0, "state", js("failed")),
+                          "ended_at", js(at(now_ms))),
+                  "outcome", outcome);
+  let t = jo([
+    kv("id", js(id)), kv("title", js(title)), kv("kind", js(kind)),
+    kv("owner", js(id)), kv("state", js("failed")), kv("deps", ja([])),
+    kv("attempts", ja([a]))
+  ]);
+  touch(append_event(append_event(with_tasks(doc, tasks_of(doc) ++ [t]),
+                                  started_event(id, attempt_id(id, 1), actor, started_ms)),
+                     settled_event(id, attempt_id(id, 1), actor, reason, now_ms)),
+        now_ms)
+}
+
 -- A RETRY IS AN ATTEMPT, NOT A NEW TASK (§3.6). This is the whole of what
 -- `retry_of` buys: dagr's rework rendering needs attempt n to carry a cause
 -- pointing back at attempt n−1, and without it every re-delegation looks like
 -- new work and the rework count — arguably the one thing the pane shows that
--- the transcript does not — is always zero.
+-- the transcript does not — is always zero. `owner` moves to the new handle
+-- for the same reason: `task_of_key` resolves EITHER handle to this task, and
+-- the task's `id` keeps the first handle so the retry chain stays visible.
 export pure func open_retry(doc: Json, id: string, new_key: string, actor: string,
                             pane: string, agent: string, reason: string, now_ms: int) -> Json {
   match find_task(tasks_of(doc), id) {
@@ -461,7 +548,8 @@ export pure func settle(doc: Json, id: string, attempt_state: string, task_state
       -- Settling also clears any unblock line, for `mark_working`'s reason.
       let t2 = obj_del(obj_set(t, "state", js(task_state)), "unblock");
       map_last_attempt(t2, func(a: Json) -> Json {
-        obj_set(obj_set(obj_set(a, "state", js(attempt_state)),
+        let a1 = if attempt_state == "done" then obj_set(a, "liveness", liveness(true)) else a;
+        obj_set(obj_set(obj_set(a1, "state", js(attempt_state)),
                         "ended_at", js(at(now_ms))),
                 "outcome", outcome)
       })
@@ -483,3 +571,127 @@ export pure func add_note(doc: Json, id: string, detail: string, now_ms: int) ->
 }
 
 export pure func render(doc: Json) -> string { encode(doc) }
+
+-- ---------------------------------------------------------------------------
+-- What a PREVIOUS session left behind (F1)
+-- ---------------------------------------------------------------------------
+--
+-- `dagr_open` already writes, in the run file's own words, that a task settles
+-- only when the model calls `DelegateCheck`. What it cannot say is what happens
+-- after that: the session ends, the document freezes with its last attempt
+-- `working`, and nothing ever revisits it. Measured live 2026-09-01 — `.dagr/`
+-- still held `run-w1-p6-1788279509710.json` from a run three hours earlier,
+-- carrying task `mot-dlg-1788282630477` `working` on pane `w1:p8`, a pane that
+-- no longer existed. The startup sweep reported nothing, and was right to: it
+-- enumerates PANES, and that pane was gone. Nobody was looking at the records.
+--
+-- SO THIS READS AND NEVER WRITES. One writer per file is what keeps two
+-- Motokos in one checkout from clobbering each other (§5) and it gets no
+-- exception for a file whose writer merely LOOKS dead — "looks dead" is the
+-- judgement P2-6 measured going wrong, one class over. What comes out is a
+-- sentence; the correction stays with whoever owns that file.
+
+pure func starts_with(s: string, pre: string) -> bool
+  { length(s) >= length(pre) && substring(s, 0, length(pre)) == pre }
+
+pure func ends_with(s: string, suf: string) -> bool
+  { length(s) >= length(suf) && substring(s, length(s) - length(suf), length(s)) == suf }
+
+-- A `.dagr/` entry this producer wrote in SOME session. `own_file` is this
+-- session's own basename and is never included — that is the one file we are
+-- the writer of, and its in-flight tasks are genuinely in flight. `run.json`
+-- fails the `run-` test on purpose: it is the hand-authored install probe and
+-- nothing about it is this producer's to read as a record.
+export pure func is_foreign_run_file(name: string, own_file: string) -> bool
+  tests [
+    (("run-w1-p6-100.json", "run-w1-p1-200.json"), true),
+    (("run-w1-p1-200.json", "run-w1-p1-200.json"), false),
+    (("run.json", "run-w1-p1-200.json"), false),
+    (("probe-alpha.txt", "run-w1-p1-200.json"), false),
+    ((".unparseable-w1-p1-200", "run-w1-p1-200.json"), false)
+  ]
+  { starts_with(name, "run-") && ends_with(name, ".json") && name != own_file }
+
+pure func has_str(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == needle then true else has_str(rest, needle)
+  }
+}
+
+pure func abandoned_of(ts: [Json], live: [string]) -> [string] {
+  match ts {
+    [] => [],
+    t :: rest => {
+      let tail = abandoned_of(rest, live);
+      let id = sfield(t, "id");
+      match last_of(arr_field(t, "attempts")) {
+        None => tail,
+        Some(a) => {
+          let pane = sfield(field(a, "locator"), "pane");
+          -- BOTH CONDITIONS, and the pane one is what makes this a fact rather
+          -- than a guess. An in-flight attempt whose pane is STILL THERE may be
+          -- a delegate of a session that is still running; saying it is
+          -- abandoned would be the same class of misreport this file exists to
+          -- prevent, pointed the other way.
+          if attempt_is_terminal(sfield(a, "state")) == false
+             && pane != "" && has_str(live, pane) == false
+          then "${id} (${sfield(t, "kind")}) on pane ${pane}" :: tail
+          else tail
+        }
+      }
+    }
+  }
+}
+
+-- Tasks in `content` whose latest attempt is still in flight on a pane that is
+-- not in `live`. An unparseable file yields nothing: we are not its writer and
+-- not its validator either.
+export pure func abandoned_tasks(content: string, live: [string]) -> [string] {
+  match decode(content) {
+    Err(_) => [],
+    Ok(doc) => abandoned_of(tasks_of(doc), live)
+  }
+}
+
+export pure func abandoned_tasks_str(content: string, live: [string]) -> string
+  tests [
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"kind\":\"review\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1"]), "mot-dlg-5 (review) on pane w1:p8"),
+    -- the pane is still there: not this function's call to make
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"kind\":\"review\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1", "w1:p8"]), ""),
+    -- settled work is not abandoned, whatever became of its pane
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"kind\":\"review\",\"attempts\":[{\"state\":\"done\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1"]), ""),
+    -- only the LATEST attempt counts: a1 lost, a2 running on a live pane
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"kind\":\"impl\",\"attempts\":[{\"state\":\"lost\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}",
+      ["w1:p9"]), ""),
+    (("not json", ["w1:p1"]), ""),
+    (("", ["w1:p1"]), "")
+  ]
+  { join(",", abandoned_tasks(content, live)) }
+
+pure func count_str(xs: [string]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + count_str(rest) }
+}
+
+-- REPORT, NEVER REPAIR, and the sentence says which. A model told "there is a
+-- stale record" without being told it is not its to fix will try to fix it.
+export pure func abandoned_report(items: [string]) -> string
+  tests [
+    ([], ""),
+    ((["run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8"]),
+     "\n\nStale delegation record: 1 task in another session's dagr run file is recorded still in flight on a pane that no longer exists (run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8). Nothing was changed: this session is not that file's writer and never writes to it. The record is stale, not the work — that delegate is gone, and its result, if any, was never collected.")
+  ]
+  {
+    match items {
+      [] => "",
+      _ => {
+        let n = count_str(items);
+        let noun = if n == 1 then "task" else "tasks";
+        let verb = if n == 1 then "is" else "are";
+        "\n\nStale delegation record: ${intToStr(n)} ${noun} in another session's dagr run file ${verb} recorded still in flight on a pane that no longer exists (${join(", ", items)}). Nothing was changed: this session is not that file's writer and never writes to it. The record is stale, not the work — ${if n == 1 then "that delegate is" else "those delegates are"} gone, and ${if n == 1 then "its result" else "their results"}, if any, ${if n == 1 then "was" else "were"} never collected."
+      }
+    }
+  }

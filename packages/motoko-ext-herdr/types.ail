@@ -1109,6 +1109,40 @@ export pure func split_pane_id(stdout: string) -> string
   ]
   { nested_string(stdout, "result", "pane", "pane_id") }
 
+-- ONE LEVEL DEEPER THAN EVERY OTHER READER HERE, and that is why it is its own
+-- function rather than a fourth argument to `nested_string`. `plugin pane open`
+-- answers `{"result":{"plugin_pane":{"pane":{"pane_id":...}}}}` — the pane is
+-- wrapped in the plugin record that owns it — where `pane split` answers
+-- `{"result":{"pane":{"pane_id":...}}}`. Reading the second shape out of the
+-- first silently yields "", which the caller would read as "opened but
+-- untaggable" rather than as a parse miss.
+export pure func plugin_pane_id(stdout: string) -> string
+  tests [
+    ("{\"id\":\"cli:plugin\",\"result\":{\"plugin_pane\":{\"entrypoint\":\"dagr\",\"pane\":{\"label\":\"dagr\",\"pane_id\":\"w1:p8\"},\"plugin_id\":\"herdr-dagr\"},\"type\":\"plugin_pane_opened\"}}", "w1:p8"),
+    -- the `pane split` shape, which this must NOT accept
+    ("{\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"}}}", ""),
+    ("{\"error\":{\"code\":\"plugin_not_installed\"}}", ""),
+    ("", "")
+  ]
+  {
+    match decode(stdout) {
+      Err(_) => "",
+      Ok(o) => match get(o, "result") {
+        None => "",
+        Some(r) => match get(r, "plugin_pane") {
+          None => "",
+          Some(pp) => match get(pp, "pane") {
+            None => "",
+            Some(pane) => match get(pane, "pane_id") {
+              None => "",
+              Some(v) => match asString(v) { Some(x) => x, None => "" }
+            }
+          }
+        }
+      }
+    }
+  }
+
 export pure func agent_status_of(stdout: string) -> string
   tests [
     ("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"idle\",\"pane_id\":\"w1:p8\"},\"type\":\"agent_info\"}}", "idle"),
@@ -1393,6 +1427,58 @@ pure func length_of(xs: [string]) -> int {
 export pure func sweep_sentinel_path(work_dir: string, session_ms: string) -> string
   tests [(("/w/.motoko/herdr-delegates", "1756000000000"), "/w/.motoko/herdr-delegates/.sweep-1756000000000")]
   { "${work_dir}/.sweep-${session_ms}" }
+
+-- ---------------------------------------------------------------------------
+-- The dagr view pane (MOT-137)
+-- ---------------------------------------------------------------------------
+--
+-- OPENING THE VIEW IS A LAYOUT MUTATION, so it is opt-in (HERDR_DAGR_PANE=1)
+-- for the same reason `sweep_stale` is: this file's rung-ordering rule is that
+-- anything which changes the operator's workspace rather than reporting to it
+-- waits to be asked. What the flag buys when it IS asked for is that the run
+-- file stops being a thing only a reader who knows about `scripts/dagr-pane.sh`
+-- ever sees.
+--
+-- WHY NOT `plugin action invoke open-dagr`, which is the obvious call: that
+-- action resolves `.dagr/run.json`, and this producer writes
+-- `.dagr/run-<pane>-<session>.json` — keyed that way because one writer per
+-- file is what stops two Motokos in one checkout from clobbering each other
+-- (DESIGN-dagr-as-delegation-view.md §5). The two rules never intersect, so the
+-- stock action renders whatever stale document is lying in the directory. The
+-- run file therefore travels explicitly as $DAGR_RUN, exactly as
+-- `scripts/dagr-pane.sh` passes it.
+--
+-- `--no-focus`, AND IT IS NOT A STYLE CHOICE. `dagr-pane.sh` passes `--focus`
+-- because a human just typed it and is looking at the result. This fires from
+-- inside a `Delegate` tool call, mid-turn, with the operator reading Motoko's
+-- own pane; taking focus there interrupts a person to show them a picture they
+-- did not ask for at that instant. Verified against the binary: `plugin pane
+-- open` accepts both `--focus` and `--no-focus`.
+--
+-- `--target-pane`, FOR THE SAME REASON `argv_split` PASSES `--current`: without
+-- it the split is relative to whatever herdr considers focused, which from
+-- inside a tool call is not knowably Motoko's own pane. The view belongs beside
+-- the session it is a view OF.
+export pure func dagr_plugin_id() -> string
+  tests [((), "herdr-dagr")]
+  { "herdr-dagr" }
+
+export pure func argv_dagr_pane(own_pane: string, run_path: string, cwd: string) -> [string]
+  {
+    ["plugin", "pane", "open", "--plugin", dagr_plugin_id(), "--entrypoint", "dagr",
+     "--placement", "split", "--direction", "right", "--target-pane", own_pane,
+     "--no-focus", "--cwd", cwd, "--env", "DAGR_RUN=${run_path}"]
+  }
+
+-- Every element token-free, so `argv_is_safe` passes and the routed port stays
+-- reachable: a run path is `path_is_safe`-checked by the caller and `=` is not
+-- one of #158's triggers — `argv_split` has carried `--env KEY=` since 021.
+export pure func argv_dagr_pane_str(own_pane: string, run_path: string, cwd: string) -> string
+  tests [
+    (("w1:p1", "/w/.dagr/run-w1-p1-1756000000000.json", "/w"),
+     "plugin pane open --plugin herdr-dagr --entrypoint dagr --placement split --direction right --target-pane w1:p1 --no-focus --cwd /w --env DAGR_RUN=/w/.dagr/run-w1-p1-1756000000000.json")
+  ]
+  { show_argv(argv_dagr_pane(own_pane, run_path, cwd)) }
 
 -- ---------------------------------------------------------------------------
 -- The routed process port

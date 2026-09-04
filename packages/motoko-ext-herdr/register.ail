@@ -102,6 +102,18 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- gated on the dagr binary being installed — the same philosophy as the
     -- tool gate above, one level down: write, and let the view be absent.
     dagr_dir: getEnvOr("MOTOKO_DAGR_DIR", "${workdir}/.dagr"),
+    -- SHOW THE VIEW, DON'T JUST WRITE IT (MOT-137). Opt-in, and it is the same
+    -- rung rule `sweep_stale` above follows: reporting is the default, and
+    -- anything that mutates the operator's workspace — closing their panes,
+    -- splitting their terminal — waits to be asked. A package that split the
+    -- screen of everyone who inherited it would be making a layout decision on
+    -- their behalf from inside a tool call.
+    --
+    -- This repo's own container sets it (`.devcontainer/agent_confined/
+    -- docker-compose.yml`), which is where "always on for us, inert for
+    -- everyone else" belongs — the same place HERDR_REAP_ON_EXIT and
+    -- HERDR_ALLOWED_KINDS make their profile-local calls.
+    dagr_pane: getEnvOr("HERDR_DAGR_PANE", "") == "1",
     -- BELOW MOTOKO'S 30s PROCESS WALL BY CONSTRUCTION. herdr's own default for
     -- `agent start --timeout` is 30000 — exactly Motoko's — so leaving this
     -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
