@@ -1,0 +1,338 @@
+-- scripts/verify_mot137_dagr_pane.ail
+--
+-- MOT-137: under HERDR_DAGR_PANE=1, `motoko-ext-herdr` opens the dagr view
+-- itself on the first delegation of a run, at most once, and never at the cost
+-- of the delegation.
+--
+-- WHY THIS GATE EXISTS AT ALL, and it is not "new code should have a test".
+-- Every failure this pins has already happened once, measured, in this repo:
+--
+--   * 2026-09-01, a session opened ~90 view panes by opening one per poll with
+--     nothing on disk recording that it had already opened one. Cases 3 and 4
+--     are that failure in its two shapes — a second delegation must not open a
+--     second pane, and NEITHER MUST A FAILED FIRST ONE, which is the same
+--     runaway with a slower fuse.
+--   * The same session spent twenty minutes hunting for a view while its own
+--     run file sat unread on disk, because the stock `open-dagr` action reads
+--     `.dagr/run.json` and this producer writes `.dagr/run-<pane>-<session>`.
+--     Case 2 asserts the run file travels EXPLICITLY as $DAGR_RUN, by exact
+--     argv, because an open that finds the wrong document looks like success.
+--
+-- What is pinned here:
+--
+--   1. off by default: no view pane is opened, and the result still tells the
+--      operator how to open one by hand
+--   2. on: the exact `plugin pane open` argv, `--no-focus` and `--target-pane`
+--      included, and the opened pane tagged `mot-owner` so the exit reaper and
+--      the orphan sweep can both recognise it
+--   3. at most once per run: with the marker present, nothing is opened
+--   4. a refused open does not fail the delegation, and the marker went down
+--      BEFORE the attempt, so the next call does not retry
+--   5. no run identity, no view: without MOTOKO_SESSION_MS there is no run file
+--      to point a view at, and nothing is opened
+--
+-- Every case drives the exported `on_tool_handle` with scripted ports — no
+-- herdr, no filesystem. The scripted `tool_handle` RECORDS each argv into the
+-- world token, so "the view was opened" is asserted against the actual call
+-- rather than inferred from the sentence about it.
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run \
+--     --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main scripts/verify_mot137_dagr_pane.ail
+--
+-- Prints one OK/FAIL line per case; exits non-zero on any FAIL.
+module scripts/verify_mot137_dagr_pane
+
+import std/io (println, exit)
+import std/json (Json, jo, ja, kv, js, jnum, encode, decode, get, asArray, asString)
+import std/string (contains, join)
+import std/option (Some, None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtClockReading,
+  ToolCallEnvelope, ToolHandleOutcome, ToolHandleDecision,
+  Handled, Delegate, BudgetPlan, empty_ext_world
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle)
+
+-- ---------------------------------------------------------------------------
+-- The call log, carried in the world token
+-- ---------------------------------------------------------------------------
+
+func log_of(w: ExtWorld) -> [Json] {
+  match asArray(w.token) { Some(xs) => xs, None => [] }
+}
+
+func record(w: ExtWorld, entry: string) -> ExtWorld {
+  { token: ja(log_of(w) ++ [js(entry)]) }
+}
+
+func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (match asString(x) { Some(s) => s, None => "" }) :: strings_of(rest)
+  }
+}
+
+func log_lines(w: ExtWorld) -> [string] {
+  match asArray(w.token) { None => [], Some(xs) => strings_of(xs) }
+}
+
+func log_text(w: ExtWorld) -> string { join("\n", log_lines(w)) }
+
+-- ---------------------------------------------------------------------------
+-- A scripted herdr
+-- ---------------------------------------------------------------------------
+
+func argv_text(args_json: string) -> string {
+  match decode(args_json) {
+    Err(_) => "",
+    Ok(o) => match get(o, "args") {
+      None => "",
+      Some(a) => match asArray(a) { Some(xs) => join(" ", strings_of(xs)), None => "" }
+    }
+  }
+}
+
+func envelope(stdout: string, stderr: string, code: int) -> string {
+  encode(jo([kv("stdout", js(stdout)), kv("stderr", js(stderr)),
+             kv("exit_code", jnum(_int_to_float(code)))]))
+}
+
+func herdr_error(code: string) -> string {
+  encode(jo([kv("error", jo([kv("code", js(code)), kv("message", js("scripted"))]))]))
+}
+
+-- THE SHAPE THAT MATTERS. `plugin pane open` wraps the pane in the plugin
+-- record that owns it — one level deeper than `pane split` — and reading the
+-- wrong shape yields "" silently, which the extension would report as "opened
+-- but untaggable". `types.plugin_pane_id` has the unit test; this fixture is
+-- the same answer herdr actually gave on 2026-09-03, pane id and all.
+func plugin_pane_opened() -> string {
+  "{\"id\":\"cli:plugin\",\"result\":{\"plugin_pane\":{\"entrypoint\":\"dagr\",\"pane\":{\"cwd\":\"/tmp\",\"label\":\"dagr\",\"pane_id\":\"w1:pV\",\"revision\":0},\"plugin_id\":\"herdr-dagr\"},\"type\":\"plugin_pane_opened\"}}"
+}
+
+-- Canned answers for the calls a successful `Delegate` makes, plus whatever the
+-- case under test wants back from `plugin pane open`.
+func scripted(open_ok: bool)
+  -> (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS} {
+  func(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+    let argv = argv_text(args_json);
+    let w = record(world, argv);
+    if contains(argv, "pane split") then
+      { output: envelope("{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"},\"type\":\"pane_info\"}}", "", 0),
+        exit_code: 0, next_state: w }
+    else if contains(argv, "agent explain") then
+      { output: envelope("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}", "", 0),
+        exit_code: 0, next_state: w }
+    else if contains(argv, "plugin pane open") then
+      if open_ok then { output: envelope(plugin_pane_opened(), "", 0), exit_code: 0, next_state: w }
+      else { output: envelope("", herdr_error("plugin_not_installed"), 1), exit_code: 1, next_state: w }
+    else
+      { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: w }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Filesystem
+-- ---------------------------------------------------------------------------
+
+func ok_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: world }
+}
+
+func ok_dir(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: world }
+}
+
+-- THE SWEEP SENTINEL IS PRESENT IN EVERY CASE, deliberately. MOT-133's orphan
+-- sweep runs at the first tool call and issues `pane list`; it has its own gate
+-- and nothing here is about it. Marking it done keeps this log to the calls
+-- this file is actually asserting on.
+func fresh_run(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, ".sweep-") then { present: true, content: "200", next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+-- The same session one delegation later: the view-pane marker is on disk and
+-- carries the pane it opened.
+func view_already_open(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, ".sweep-") then { present: true, content: "200", next_state: world }
+  else if contains(path, ".pane-") then { present: true, content: "w1:pV", next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+func fixed_clock(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 1787475040757, next_state: world }
+}
+
+func ports_for(open_ok: bool, read: (ExtWorld, string) -> ExtFileRead ! {FS}) -> ExtPorts {
+  let base = noop_ext_ports();
+  { ai_step: base.ai_step,
+    tool_handle: scripted(open_ok),
+    file_read: read,
+    file_write: ok_write,
+    file_remove: base.file_remove,
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: ok_dir,
+    clock_now: fixed_clock,
+    env_get: base.env_get }
+}
+
+func mk_ctx(ports: ExtPorts) -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-mot137", step: 0, model: "test-model", cwd: "/tmp",
+    hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
+    env_server_url: "", budget_remaining: 4, history_slice: [],
+    state_key: "test", context_limit: 0, ports: ports,
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: empty_ext_world() }
+}
+
+-- own pane w1:p1, session 200 -> run file `/tmp/.dagr/run-w1-p1-200.json`.
+func mk_cfg(dagr_pane: bool, session_ms: string) -> HerdrConfig {
+  { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
+    allowed_kinds: "claude", depth: 0, max_depth: 1, motoko_script: "./x.sh",
+    session_ms: session_ms, sweep_stale: false, dagr_dir: "/tmp/.dagr",
+    dagr_pane: dagr_pane,
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000 }
+}
+
+func delegate_call() -> ToolCallEnvelope {
+  { id: "c1", tool: "Delegate", arguments: jo([kv("prompt", js("do a thing"))]) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Cases
+-- ---------------------------------------------------------------------------
+
+type Case = {
+  label: string,
+  ports: ExtPorts,
+  dagr_pane: bool,
+  session_ms: string,
+  expect_exit: int,
+  expect_in_out: [string],
+  expect_not_in_out: [string],
+  expect_in_log: [string],
+  expect_not_in_log: [string]
+}
+
+func all_contained(hay: string, needles: [string]) -> bool {
+  match needles {
+    [] => true,
+    n :: rest => if contains(hay, n) then all_contained(hay, rest) else false
+  }
+}
+
+func none_contained(hay: string, needles: [string]) -> bool {
+  match needles {
+    [] => true,
+    n :: rest => if contains(hay, n) then false else none_contained(hay, rest)
+  }
+}
+
+func run_case(c: Case) -> bool ! {IO, Process, FS, Clock} {
+  let out = on_tool_handle(mk_cfg(c.dagr_pane, c.session_ms), mk_ctx(c.ports), delegate_call());
+  let calls = log_text(out.next_state);
+  match out.decision {
+    Delegate => {
+      println("FAIL: ${c.label} — on_tool_handle delegated a Delegate call");
+      false
+    },
+    Handled(r) => {
+      let text = "${r.stdout}${r.stderr}";
+      if r.exit_code != c.expect_exit then {
+        println("FAIL: ${c.label} — exit ${show(r.exit_code)} (wanted ${show(c.expect_exit)}); out: ${text}");
+        false
+      } else if all_contained(text, c.expect_in_out) == false then {
+        println("FAIL: ${c.label} — result text missing an expected phrase; out: ${text}");
+        false
+      } else if none_contained(text, c.expect_not_in_out) == false then {
+        println("FAIL: ${c.label} — result text carried a forbidden phrase; out: ${text}");
+        false
+      } else if all_contained(calls, c.expect_in_log) == false then {
+        println("FAIL: ${c.label} — expected herdr call not issued; calls:\n${calls}");
+        false
+      } else if none_contained(calls, c.expect_not_in_log) == false then {
+        println("FAIL: ${c.label} — a forbidden herdr call was issued; calls:\n${calls}");
+        false
+      } else {
+        println("OK: ${c.label}");
+        true
+      }
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  -- THE WHOLE ARGV, NOT A SUBSTRING OF IT. Each flag in here is load-bearing
+  -- and each was got wrong somewhere first: `--env DAGR_RUN=` because the stock
+  -- action reads `.dagr/run.json` and would render another session's graph;
+  -- `--no-focus` because this fires mid-turn while the operator is reading
+  -- Motoko's own pane; `--target-pane` because from inside a tool call
+  -- "whatever is focused" is not knowably this session's pane.
+  let open_argv = "plugin pane open --plugin herdr-dagr --entrypoint dagr --placement split --direction right --target-pane w1:p1 --no-focus --cwd /tmp --env DAGR_RUN=/tmp/.dagr/run-w1-p1-200.json";
+  let view_tag = "pane report-metadata w1:pV --source motoko-delegate --token mot-owner=w1:p1:200";
+
+  let c1 = run_case({
+    label: "off by default: no view pane, and the result still says how to open one",
+    ports: ports_for(true, fresh_run),
+    dagr_pane: false, session_ms: "200", expect_exit: 0,
+    expect_in_out: ["scripts/dagr-pane.sh"],
+    expect_not_in_out: ["showing this run live"],
+    expect_in_log: [],
+    expect_not_in_log: ["plugin pane open"] });
+
+  let c2 = run_case({
+    label: "HERDR_DAGR_PANE=1 opens the view on the run file, unfocused, and tags it",
+    ports: ports_for(true, fresh_run),
+    dagr_pane: true, session_ms: "200", expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA", "A dagr pane (w1:pV) is showing this run live"],
+    -- THE HAND-OPEN INSTRUCTION MUST GO. Telling the operator to run the script
+    -- in the same breath as opening the pane for them is how a reader learns to
+    -- stop reading these notes.
+    expect_not_in_out: ["scripts/dagr-pane.sh"],
+    expect_in_log: [open_argv, view_tag],
+    expect_not_in_log: [] });
+
+  let c3 = run_case({
+    label: "at most once per run: with the marker present, nothing is opened",
+    ports: ports_for(true, view_already_open),
+    dagr_pane: true, session_ms: "200", expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA"],
+    expect_not_in_out: ["showing this run live"],
+    expect_in_log: [],
+    expect_not_in_log: ["plugin pane open"] });
+
+  -- The marker goes down BEFORE the attempt, so this case also pins that a
+  -- refused open is not retried on the next delegation — the ~90-pane failure
+  -- at one pane per Delegate instead of one per poll.
+  let c4 = run_case({
+    label: "a refused open does not fail the delegation and falls back to the script",
+    ports: ports_for(false, fresh_run),
+    dagr_pane: true, session_ms: "200", expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA",
+                    "could not be opened automatically",
+                    "plugin_not_installed",
+                    "scripts/dagr-pane.sh"],
+    expect_not_in_out: ["showing this run live"],
+    expect_in_log: ["plugin pane open"],
+    expect_not_in_log: [view_tag] });
+
+  -- No MOTOKO_SESSION_MS is an ordinary case (`ailang run` without the TUI),
+  -- not a bug: there is no run file, so there is nothing for a view to show.
+  let c5 = run_case({
+    label: "no run identity, no view: without MOTOKO_SESSION_MS nothing is opened",
+    ports: ports_for(true, fresh_run),
+    dagr_pane: true, session_ms: "", expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA"],
+    expect_not_in_out: ["showing this run live"],
+    expect_in_log: [],
+    expect_not_in_log: ["plugin pane open"] });
+
+  if c1 && c2 && c3 && c4 && c5 then () else exit(1)
+}

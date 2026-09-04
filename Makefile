@@ -2179,7 +2179,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_dagr_producer
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_dagr_producer
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2246,26 +2246,66 @@ verify_herdr_owner_tag:
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_herdr_owner_tag: delegate ownership tagging or the orphan sweep regressed (MOT-133)" && exit 1)
 
+# MOT-137: under HERDR_DAGR_PANE=1 the extension opens the dagr view itself, on
+# the first delegation, AT MOST ONCE — and a refused open neither fails the
+# delegation nor retries on the next one. Both halves are measured failures, not
+# hypotheticals: a 2026-09-01 session opened ~90 view panes at one per poll, and
+# spent twenty minutes hunting for a view while its own run file sat unread
+# because the stock `open-dagr` action reads a different path. Scripted ports
+# record each herdr argv, so the exact `--env DAGR_RUN=` the view is opened on
+# is asserted against the call rather than the sentence about it.
+verify_herdr_dagr_pane:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_mot137_dagr_pane.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_herdr_dagr_pane: the auto-opened dagr view regressed (MOT-137)" && exit 1)
+
 # MOT-136: the dagr producer, in two legs.
 #
 # The first drives `Delegate`/`DelegateCheck` through both check lifecycles over
 # an in-memory filesystem — so the publish transaction (`file_write` then `mv`)
 # is exercised for real — and asserts the mapping: idempotent terminal writes, a
 # retry as attempt a2 of the same task, `lost` only from `agent_not_found`, no
-# task at all for a delegation that fails its setup.
+# task at all when `pane split` itself fails, and — since 2026-09-02, F3 — a
+# task BORN `failed` when the spawn dies after the split, because that is work
+# the session actually spent.
 #
 # The second is where CONTRACT VALIDITY IS ESTABLISHED. The producer runs no
 # schema validation at runtime by design (the document is deterministic code's
 # output, not a model's), so every document it publishes is checked here against
-# a PINNED v0.3.1 binary. Unpinned `herdr plugin install` fails on a machine
-# without Cargo whenever main is ahead of the release tag, so the pin is not
-# optional:
+# the PINNED binary named by DAGR_VERSION below. Unpinned `herdr plugin install`
+# fails on a machine without Cargo whenever main is ahead of the release tag, so
+# the pin is not optional:
 #
-#   herdr plugin install aemrebarut/herdr-dagr --ref v0.3.1 --yes
+#   herdr plugin install aemrebarut/herdr-dagr --ref v$(DAGR_VERSION) --yes
 #
+# The pin lives here and nowhere else. CI parses DAGR_VERSION out of this file
+# the way it parses the AILANG floor out of ailang.toml, so the version the gate
+# checks against cannot drift from the version the instruction above installs.
+DAGR_VERSION ?= 0.3.1
+
 # Without a binary the leg is skipped loudly rather than passing quietly — a
-# green tick for a check that did not run is worse than a red one.
+# green tick for a check that did not run is worse than a red one. A skip is
+# loud enough for a person watching a local run and not loud enough for CI,
+# where nobody reads a green log: DAGR_REQUIRED=1 turns the missing binary into
+# a red check instead. CI sets it; a laptop without the plugin still skips.
+DAGR_REQUIRED ?= 0
 DAGR_BIN ?= $(shell command -v dagr 2>/dev/null || ls $$HOME/.config/herdr/plugins/github/herdr-dagr-*/bin/dagr 2>/dev/null | head -1)
+
+# Open the dagr pane on THIS repo's live delegation run. Not part of any gate —
+# it needs a running herdr session, and it opens a pane.
+#
+# It exists because `herdr plugin action invoke open-dagr` CANNOT show a Motoko
+# run: `dagr view` resolves $DAGR_RUN then `.dagr/run.json`, and the producer
+# writes `.dagr/run-<pane>-<session_ms>.json` because one writer per file is
+# what keeps two Motokos in a checkout from clobbering each other (§5).
+#
+#   make dagr                       # newest run file
+#   make dagr ARGS='--pane w1:p1'   # a specific producer's run
+#   make dagr ARGS=--print          # print the herdr command, open nothing
+.PHONY: dagr
+dagr:
+	@scripts/dagr-pane.sh $(ARGS)
 
 verify_dagr_producer:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
@@ -2286,9 +2326,26 @@ verify_dagr_producer:
 			[ $$bad -eq 0 ] || exit 1; \
 		done || exit 1; \
 		echo "  ✓ every published document passes $$($(DAGR_BIN) --version) check --strict"; \
+	elif [ "$(DAGR_REQUIRED)" = "1" ]; then \
+		echo "  ✗ the contract leg cannot run: no dagr binary, and DAGR_REQUIRED=1"; \
+		exit 1; \
 	else \
-		echo "  (skipping the contract leg: no dagr binary — herdr plugin install aemrebarut/herdr-dagr --ref v0.3.1 --yes)"; \
+		echo "  (skipping the contract leg: no dagr binary — herdr plugin install aemrebarut/herdr-dagr --ref v$(DAGR_VERSION) --yes)"; \
 	fi
+
+# The loop guard, over the shape that actually happened (2026-09-01: 197 steps
+# of one open-pane/read/close cycle, ~90 panes, twenty minutes, still going when
+# the log ended). Pure functions over a synthetic transcript, so it runs
+# everywhere and needs no herdr.
+#
+# The NEGATIVE cases are the ones that decide whether this is shippable: a guard
+# that breaks `DelegateCheck` polling would be worse than no guard, which is why
+# the count is over (call, result) PAIRS rather than over calls.
+verify_repetition_guard:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO --entry main \
+		scripts/verify_repetition_guard.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_repetition_guard: the no-progress loop guard regressed" && exit 1)
 
 verify_extensions:
 	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \

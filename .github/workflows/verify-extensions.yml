@@ -109,7 +109,53 @@ jobs:
       - name: Hydrate extension packages
         run: make CI=1 sync_packages
 
+      # verify_dagr_producer's contract leg -- the ONLY place a published dagr
+      # document is checked against the real schema -- runs only if a dagr
+      # binary is on PATH, and skips green otherwise. No step installed one, so
+      # that leg has never run in CI. Herdr is not installed here either, so
+      # this fetches the same checksum-verified release asset the plugin's own
+      # install.sh would, at the pin the Makefile names. DAGR_REQUIRED=1 on the
+      # step below is the other half: without it, a fetch that quietly fails
+      # would put the skip back and CI would be green for a check that did not
+      # run.
+      - name: Install pinned dagr (the contract checker)
+        run: |
+          set -euo pipefail
+          version=$(sed -nE 's/^DAGR_VERSION \?= ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' Makefile | head -n1)
+          if [[ -z "$version" ]]; then
+            echo "::error::Could not parse DAGR_VERSION from Makefile" >&2
+            exit 1
+          fi
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)               target="x86_64-unknown-linux-musl" ;;
+            Linux-aarch64 | Linux-arm64) target="aarch64-unknown-linux-musl" ;;
+            *)
+              echo "::error::no pinned dagr build for $(uname -s)-$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          base="https://github.com/aemrebarut/herdr-dagr/releases/download/v${version}"
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+            "$base/dagr-$target.tar.gz" -o "$tmp/dagr.tar.gz"
+          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+            "$base/dagr-$target.sha256" -o "$tmp/dagr.sha256"
+          expected=$(awk 'NR == 1 {print $1}' "$tmp/dagr.sha256")
+          actual=$(sha256sum "$tmp/dagr.tar.gz" | awk '{print $1}')
+          if [[ "$expected" != "$actual" ]]; then
+            echo "::error::dagr checksum mismatch (expected $expected, got $actual)" >&2
+            exit 1
+          fi
+          tar -xzf "$tmp/dagr.tar.gz" -C "$tmp"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$tmp/dagr" "$HOME/.local/bin/dagr"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/dagr" --version
+
       - name: check_core (verify_extensions + type-check src/core/*.ail)
+        env:
+          # Refuse the skip: no binary is a red check here, not a quiet pass.
+          DAGR_REQUIRED: '1'
         run: make check_core
 
       - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)

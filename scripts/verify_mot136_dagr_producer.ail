@@ -21,7 +21,10 @@
 --   5. DelegateCheck again                -> IDEMPOTENT: nothing appended (§3.5)
 --   6. Delegate with retry_of             -> a2 on the SAME task, cause followup
 --   7. Delegate (motoko) + agent gone     -> attempt lost, task failed (§4)
---   8. a setup failure after `pane split` -> NO task at all (§3.2)
+--   8. `pane split` itself fails            -> NO task at all (§3.2)
+--   9. a spawn that fails AFTER the split -> a task BORN failed (F3)
+--  10. a refused `retry_of`               -> the tool result says so, not just
+--                                            the run file
 --
 -- Usage:
 --   AILANG_RELAX_MODULES=1 ailang run \
@@ -159,7 +162,11 @@ func argv_list(args_json: string) -> [string] {
 -- `agent get` answers with `status`; `agent wait` and `agent get` fail with
 -- `agent_not_found` when `gone`; `pane split` always succeeds so that step 8's
 -- setup failure is staged on `agent start` instead.
-func scripted(status: string, gone: bool, split_ok: bool)
+-- `fail_at` names the FIRST spawn step that fails: "" (none), "split", "start"
+-- or "prompt". It replaces the old `split_ok` boolean because F3 is a failure
+-- AFTER the split — the pane, the agent and the task file are all spent — and a
+-- flag that fails the split cannot reach it.
+func scripted(status: string, gone: bool, fail_at: string)
   -> (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS} {
   func(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
     let cmd = cmd_of(args_json);
@@ -179,16 +186,21 @@ func scripted(status: string, gone: bool, split_ok: bool)
       }
     }
     else if contains(argv, "pane split") then
-      if split_ok then
+      if fail_at == "split" then { output: envelope("", herdr_error("pane_split_failed"), 1), exit_code: 1, next_state: world }
+      else
         { output: envelope("{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"},\"type\":\"pane_info\"}}", "", 0),
           exit_code: 0, next_state: world }
-      else { output: envelope("", herdr_error("pane_split_failed"), 1), exit_code: 1, next_state: world }
     else if contains(argv, "agent explain") then
       { output: envelope("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}", "", 0),
         exit_code: 0, next_state: world }
     else if contains(argv, "agent start") then
-      if split_ok then { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: world }
-      else { output: envelope("", herdr_error("agent_start_failed"), 1), exit_code: 1, next_state: world }
+      if fail_at == "start" then { output: envelope("", herdr_error("agent_start_failed"), 1), exit_code: 1, next_state: world }
+      else { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: world }
+    -- THE F3 SHAPE, MEASURED 2026-09-01: the pane split, the agent started and
+    -- the readiness gate passed, and only then did `agent prompt` refuse.
+    else if contains(argv, "agent prompt") then
+      if fail_at == "prompt" then { output: envelope("", herdr_error("agent_not_ready"), 1), exit_code: 1, next_state: world }
+      else { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: world }
     else if contains(argv, "agent get") || contains(argv, "agent wait") then
       if gone then { output: envelope("", herdr_error("agent_not_found"), 1), exit_code: 1, next_state: world }
       else
@@ -208,9 +220,13 @@ func clock_at(ms: int) -> (ExtWorld) -> ExtClockReading ! {Clock} {
 }
 
 func ports_at(ms: int, status: string, gone: bool, split_ok: bool) -> ExtPorts {
+  ports_failing_at(ms, status, gone, if split_ok then "" else "split")
+}
+
+func ports_failing_at(ms: int, status: string, gone: bool, fail_at: string) -> ExtPorts {
   let base = noop_ext_ports();
   { ai_step: base.ai_step,
-    tool_handle: scripted(status, gone, split_ok),
+    tool_handle: scripted(status, gone, fail_at),
     file_read: fs_read,
     file_write: fs_write,
     file_remove: fs_remove,
@@ -235,6 +251,9 @@ func mk_cfg() -> HerdrConfig {
   { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
     allowed_kinds: "claude,motoko", depth: 0, max_depth: 1, motoko_script: "./x.sh",
     session_ms: "200", sweep_stale: false, dagr_dir: "/tmp/.dagr",
+    -- MOT-137 off: this leg pins the DOCUMENT, and the opener is a herdr call
+    -- that writes nothing into it. Its own gate is `verify_mot137_dagr_pane.ail`.
+    dagr_pane: false,
     start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000 }
 }
 
@@ -280,6 +299,36 @@ func arr_field(o: Json, key: string) -> [Json] {
 }
 
 func events(w: ExtWorld) -> int { count_of(arr_field(doc_of(w), "events")) }
+
+func sfield(o: Json, key: string) -> string {
+  match get(o, key) {
+    None => "",
+    Some(v) => match asString(v) { Some(x) => x, None => "" }
+  }
+}
+
+func in_state(xs: [Json], state: string) -> int {
+  match xs {
+    [] => 0,
+    a :: rest => (if sfield(a, "state") == state then 1 else 0) + in_state(rest, state)
+  }
+}
+
+func find_task(ts: [Json], id: string) -> Option[Json] {
+  match ts {
+    [] => None,
+    t :: rest => if sfield(t, "id") == id then Some(t) else find_task(rest, id)
+  }
+}
+
+-- How many of a task's attempts sit in `state`. Used to assert that the
+-- born-failed task has exactly one attempt and it is already terminal.
+func count_in_state(w: ExtWorld, id: string, state: string) -> int {
+  match find_task(arr_field(doc_of(w), "tasks"), id) {
+    None => 0,
+    Some(t) => in_state(arr_field(t, "attempts"), state)
+  }
+}
 func tasks(w: ExtWorld) -> int { count_of(arr_field(doc_of(w), "tasks")) }
 
 func check(label: string, ok: bool) -> bool ! {IO} {
@@ -297,6 +346,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
   let s1 = drive(w0, ports_at(1000, "working", false, true),
                  delegate_call("c1", "Fix the parser\nmore detail", "claude", "impl", ""));
   let a1 = check("Delegate opens one task with one attempt", tasks(s1.world) == 1 && s1.code == 0);
+  -- ONCE PER RUN, and the first delegation is the only place it may appear:
+  -- repeating it on every Delegate call would be noise in the one output the
+  -- model reads most.
+  let a1b = check("the first delegation of a run says how to open the dagr view",
+                  contains(s1.out, "scripts/dagr-pane.sh"));
   let a2 = check("the run file carries a contract version and a task id that is not a pane id",
                  contains(read_file(s1.world, run_file_path()), "\"dagr\":3")
                    && contains(read_file(s1.world, run_file_path()), "mot-dlg-1000")
@@ -342,6 +396,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
   -- 6. retry_of links a new attempt onto the SAME task.
   let s6 = drive(s5.world, ports_at(6000, "working", false, true),
                  delegate_call("c6", "Fix the parser again", "claude", "impl", "mot-dlg-1000"));
+  -- ...and no later one repeats it. Once per run is the whole point: this rides
+  -- on the output the model reads most, and a line on every Delegate call is
+  -- noise, not documentation.
+  let a7b = check("later delegations do not repeat the view pointer",
+                  contains(s6.out, "scripts/dagr-pane.sh") == false);
   let a7 = check("retry_of appends attempt a2 to the existing task, cause followup",
                  tasks(s6.world) == 1
                    && contains(read_file(s6.world, run_file_path()), "mot-dlg-1000·a2")
@@ -365,5 +424,45 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                  s8.code == 1 && tasks(s8.world) == t8);
   emit(s8.world);
 
-  if a1 && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a8 && a9 then () else exit(1)
+  -- 9. F3: a spawn that fails AFTER the split is a fact, not a silence. Two
+  --    `claude` delegations died here on 2026-09-01 — a pane, an `agent start`
+  --    and a task file each — and appended nothing at all. The row is born
+  --    terminal, so the phantom `working` §3.2 refuses still cannot appear.
+  let s9 = drive(s8.world, ports_failing_at(9000, "working", false, "prompt"),
+                 delegate_call("c9", "never gets the task", "claude", "impl", ""));
+  let d9 = read_file(s9.world, run_file_path());
+  let a10 = check("a spawn that fails after the split is recorded as a failed task",
+                  s9.code == 1 && tasks(s9.world) == t8 + 1
+                    && contains(d9, "\"result\":\"failed\"")
+                    && contains(d9, "agent_not_ready"));
+  -- The model still gets the WHOLE failure sentence. Recording the failure
+  -- rewrote this error's construction, and a truncated or mangled message would
+  -- be a worse regression than the omission it fixes.
+  let a10b = check("the model still gets the full failure explanation",
+                   contains(s9.err, "Submitting the task to the delegate")
+                     && contains(s9.err, "agent_not_ready"));
+  let a11 = check("that failed task is never observable as working",
+                  contains(d9, "\"id\":\"mot-dlg-9000\",\"title\"")
+                    && count_in_state(s9.world, "mot-dlg-9000", "failed") == 1);
+  -- The refusal reaches the MODEL too, not only the graph: a delegation whose
+  -- setup failed already errors, so what is asserted here is the receipt.
+  let a12 = check("the failed spawn carries a mechanical receipt, not a claim",
+                  contains(d9, "\"evidence\":\"verified\"") && contains(d9, "herdr exit 1"));
+  emit(s9.world);
+
+  -- 10. §3.6, the half the model could not see. A `retry_of` this extension
+  --     never issued is refused as a LINKAGE and the work opens as new — which
+  --     the run file always said and the tool result never did (measured
+  --     2026-09-01: steps 6 and 7 both returned a bare success).
+  let s10 = drive(s9.world, ports_at(10000, "working", false, true),
+                  delegate_call("c10", "gamma", "claude", "docs", "not-a-real-handle"));
+  let a13 = check("a refused retry_of link is stated in the tool result, not only the run file",
+                  s10.code == 0
+                    && contains(s10.out, "was NOT recorded")
+                    && contains(s10.out, "not a handle this extension issued")
+                    && contains(read_file(s10.world, run_file_path()), "was not linked"));
+  emit(s10.world);
+
+  if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
+     && a10 && a10b && a11 && a12 && a13 then () else exit(1)
 }
