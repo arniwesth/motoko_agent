@@ -592,6 +592,10 @@ pure func count_unconditional_kinds(ks: [CapabilityKind]) -> int {
   }
 }
 
+-- contracts: SKIPPED — "calls "all_capability_kinds" whose signature uses an
+-- unencodable type "()"". Every nullary enumerator in this module is blocked the
+-- same way, so every test reading one is too. The assertion is the `tests [...]`
+-- block, run by `ailang test` and by `make profile_coverage`.
 pure func test_all_capability_kinds_is_nine_distinct() -> bool
   tests [((), true)]
   {
@@ -615,6 +619,8 @@ pure func test_one_atom_per_kind_fully_covered_passes() -> bool
 -- excluding the unconditional one is rejected, excluding the gated one loads
 -- clean, and excluding the lifecycle one loads clean too -- for a different
 -- reason, recorded in `capability_dispatch`.
+-- contracts: SKIPPED — "calls "all_capability_kinds" whose signature uses an
+-- unencodable type "()"". See the note above `test_all_capability_kinds_is_nine_distinct`.
 pure func test_dispatch_kinds_split_seven_one_one() -> bool
   tests [((), true)]
   {
@@ -634,20 +640,36 @@ pure func test_dispatch_kinds_split_seven_one_one() -> bool
       && capability_install_list_ok([life])
       && has_rule(validate_capability_disclosure(unc), "unconditional-hook-excluded")
       && count_unconditional_kinds(all_capability_kinds()) == 7
-      && count_kinds_of_dispatch(all_capability_kinds(), Gated) == 1
-      && count_kinds_of_dispatch(all_capability_kinds(), Lifecycle) == 1
+      && count_gated_kinds(all_capability_kinds()) == 1
+      && count_lifecycle_kinds(all_capability_kinds()) == 1
   }
 
-pure func dispatch_id(d: DispatchKind) -> string {
-  match d { Unconditional => "unconditional", Gated => "gated", Lifecycle => "lifecycle" }
-}
-
-pure func count_kinds_of_dispatch(ks: [CapabilityKind], want: DispatchKind) -> int {
+-- ONE COUNTER PER KIND, in `count_unconditional_kinds`'s exact shape, rather than
+-- one parameterised counter over a `DispatchKind`. The general version needed a
+-- helper comparing two `DispatchKind` values, and a `pure func` taking an ADT
+-- VERIFIES a trivial contract — so ADR-001 §4 requires a real one — while an
+-- `ensures` over an ADT parameter has no generator, so `ailang test` reports
+-- "1 properties never ran (no generator)" and exits 1, failing `make
+-- profile_coverage` whose last step is exactly that. Two policies pulling
+-- opposite ways; the shape that satisfies both is the one already here.
+-- contracts: BLOCKED — RECURSIVE. A synthesised `ensures { true }` ERRORS rather
+-- than skipping; the property worth stating quantifies over the list.
+pure func count_gated_kinds(ks: [CapabilityKind]) -> int {
   match ks {
     [] => 0,
     k :: rest =>
-      (if dispatch_id(capability_dispatch(k)) == dispatch_id(want) then 1 else 0)
-        + count_kinds_of_dispatch(rest, want)
+      (match capability_dispatch(k) { Gated => 1, Unconditional => 0, Lifecycle => 0 })
+        + count_gated_kinds(rest)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE; see `count_gated_kinds`.
+pure func count_lifecycle_kinds(ks: [CapabilityKind]) -> int {
+  match ks {
+    [] => 0,
+    k :: rest =>
+      (match capability_dispatch(k) { Lifecycle => 1, Unconditional => 0, Gated => 0 })
+        + count_lifecycle_kinds(rest)
   }
 }
 

@@ -68,14 +68,30 @@ import src/core/ext/runtime (RenderedIntent, dispatch_exit_intents)
 -- The manifest's own version, read by the TUI dispatcher and refused when it
 -- does not match. A shape change that the reader silently half-understood
 -- would execute a subset of the actions and report a complete sweep.
-export pure func manifest_version() -> string { "exit-actions/1" }
+export pure func manifest_version() -> string
+  ensures { result != "" }
+  { "exit-actions/1" }
 
 -- The env var the host names the file in. One definition, read here, written
 -- by `buildChildEnv`.
-export pure func manifest_path_var() -> string { "MOTOKO_EXIT_MANIFEST" }
+-- The contract is `result != ""` rather than the literal, and the difference is
+-- the point: the reader refuses a manifest whose version does not match, and an
+-- EMPTY name would make `Ports.env_get` read a variable nobody sets and publish
+-- nowhere -- silently, since "no manifest named" is the ordinary no-TUI case.
+-- Pinning the literal instead would be spec-equals-body: a regression test
+-- wearing a contract's clothes (ADR-001 §1).
+export pure func manifest_path_var() -> string
+  ensures { result != "" }
+  { "MOTOKO_EXIT_MANIFEST" }
 
 -- One action, as the TUI reads it. `kind` is the tag the dispatcher switches
 -- on; an unknown kind is skipped there rather than guessed at.
+-- contracts: SKIPPED — the fragment cannot encode `Json`. Verified by
+-- synthesising `ensures { true }`: "SMT declaration closure could not resolve a
+-- required sort ... "Record_key_value" referenced in declaration of "Json" is not
+-- declared". Every function below that builds or folds Json is blocked the same
+-- way; the shape assertions live in `verify_exit_intent` and
+-- `exit-actions.test.ts`, which read the encoded document instead.
 export pure func action_json(a: ExitAction) -> Json {
   match a {
     ClosePane(c) => jo([
@@ -93,6 +109,9 @@ export pure func action_json(a: ExitAction) -> Json {
   }
 }
 
+-- contracts: BLOCKED — RECURSIVE over the action list. A synthesised
+-- `ensures { true }` ERRORS rather than skipping, which is the fragment saying it
+-- cannot unroll this at all.
 pure func actions_json(xs: [ExitAction]) -> [Json] {
   match xs {
     [] => [],
@@ -100,6 +119,7 @@ pure func actions_json(xs: [ExitAction]) -> [Json] {
   }
 }
 
+-- contracts: SKIPPED — builds `Json`; see `action_json`.
 pure func intent_json(i: RenderedIntent) -> Json {
   jo([
     kv("ext", js(i.ext)),
@@ -112,6 +132,7 @@ pure func intent_json(i: RenderedIntent) -> Json {
   ])
 }
 
+-- contracts: BLOCKED — RECURSIVE; see `actions_json`.
 pure func intents_json(xs: [RenderedIntent]) -> [Json] {
   match xs {
     [] => [],
@@ -121,6 +142,9 @@ pure func intents_json(xs: [RenderedIntent]) -> [Json] {
 
 -- The whole document. `count` is the number of intents, not of actions: it is
 -- a shape check for the reader, not a summary of the work.
+-- contracts: SKIPPED — "calls "manifest_version" whose signature uses an
+-- unencodable type "()"", and builds `Json` besides. The nullary signature is the
+-- first blocker the verifier reports and the Json sort is the second.
 export pure func manifest_json(intents: [RenderedIntent]) -> Json {
   jo([
     kv("version", js(manifest_version())),
@@ -129,6 +153,9 @@ export pure func manifest_json(intents: [RenderedIntent]) -> Json {
   ])
 }
 
+-- contracts: BLOCKED — RECURSIVE. The property worth stating (the count equals
+-- the list length) quantifies over the list, which is the shape the fragment
+-- rejects; a synthesised `ensures { true }` ERRORS rather than skipping.
 pure func count_intents(xs: [RenderedIntent]) -> int {
   match xs {
     [] => 0,

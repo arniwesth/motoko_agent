@@ -1728,7 +1728,12 @@ pure func ai(kind: string, idx: int) -> AtomIds { { kind: kind, index: idx } }
 pure func kinds_at_zero(ks: [CapabilityKind]) -> [AtomIds] {
   match ks { [] => [], k :: rest => ai(Cov.capability_kind_id(k), 0) :: kinds_at_zero(rest) }
 }
-pure func one_per_kind() -> [AtomIds] { kinds_at_zero(Cov.all_capability_kinds()) }
+-- contracts: SKIPPED — "calls "all_capability_kinds" whose signature uses an
+-- unencodable type "()"". Renamed from `eight()` at ABI 7.0 (the name was a
+-- standing claim about the kind count), so the policy sees it as new; the body is
+-- unchanged and was never contractable either.
+pure func one_per_kind() -> [AtomIds]
+  { kinds_at_zero(Cov.all_capability_kinds()) }
 pure func all_but(ids: [string]) -> [AtomIds] { drop_ids(one_per_kind(), ids) }
 pure func drop_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
   match xs {
