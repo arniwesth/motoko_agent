@@ -32,7 +32,11 @@ module sunholo/motoko_ext_herdr/dagr
 --                     code.
 --   `asserted`        reading a prose claim needs a screen read, which neither
 --                     check path does.
---   `model`           nothing selects or records one.
+--   `model`           (was refused: nothing selected one. Since Delegate gained a
+--                     free-string `model` param, the REQUEST is recorded on the
+--                     attempt as `model` verbatim — a display chip (`fable·xhigh`),
+--                     never a claim about what ran. Empty means the caller said
+--                     nothing and the field is omitted.)
 --   `last_output_at`  the extension never reads pane output, and dagr renders
 --   `queued_input`    this field as staleness ("14m silent"). A value nobody
 --                     observed is a misreport, not a placeholder.
@@ -373,15 +377,24 @@ pure func liveness(ack: bool) -> Json { jo([kv("prompt_acknowledged", jb(ack))])
 pure func locator(pane: string, agent: string) -> Json
   { jo([kv("pane", js(pane)), kv("agent", js(agent))]) }
 
+-- `model` is the REQUESTED model chip, recorded verbatim (dagr renders it as a
+-- display chip, never a claim about what ran). Empty omits the field — the
+-- caller said nothing and the CLI default stands.
 pure func new_attempt(task_id: string, n: int, cause: Json, actor: string,
                       pane: string, agent: string, now_ms: int) -> Json {
-  jo([
+  new_attempt_model(task_id, n, cause, actor, pane, agent, now_ms, "")
+}
+
+pure func new_attempt_model(task_id: string, n: int, cause: Json, actor: string,
+                            pane: string, agent: string, now_ms: int, model: string) -> Json {
+  let base = jo([
     kv("id", js(attempt_id(task_id, n))), kv("n", jnum(_int_to_float(n))),
     kv("cause", cause), kv("actor", js(actor)),
     kv("locator", locator(pane, agent)),
     kv("state", js("working")), kv("started_at", js(at(now_ms))),
     kv("liveness", liveness(false))
-  ])
+  ]);
+  if model == "" then base else obj_set(base, "model", js(model))
 }
 
 -- THE FIRST WRITE POINT, and it is deliberately not "after `pane split`"
@@ -390,7 +403,15 @@ pure func new_attempt(task_id: string, n: int, cause: Json, actor: string,
 -- a phantom `working` row for a delegation that never happened.
 export pure func open_task(doc: Json, id: string, title: string, kind: string,
                            actor: string, pane: string, loc_agent: string, now_ms: int) -> Json {
-  let a = new_attempt(id, 1, jo([kv("type", js("initial"))]), actor, pane, loc_agent, now_ms);
+  open_task_model(doc, id, title, kind, actor, pane, loc_agent, now_ms, "")
+}
+
+-- The requested-model variant. Records the ask verbatim on the attempt; empty
+-- omits the field (CLI default). A retry carries its own ask on its own attempt.
+export pure func open_task_model(doc: Json, id: string, title: string, kind: string,
+                                 actor: string, pane: string, loc_agent: string,
+                                 now_ms: int, model: string) -> Json {
+  let a = new_attempt_model(id, 1, jo([kv("type", js("initial"))]), actor, pane, loc_agent, now_ms, model);
   -- `owner` is the handle the model holds, which at open time IS the id; a
   -- linked retry is the only thing that moves it, to the NEW handle, so a
   -- reader comparing the task's `id` (the first delegation) with its `owner`
@@ -467,13 +488,19 @@ export pure func open_failed_task(doc: Json, id: string, title: string, kind: st
 -- the task's `id` keeps the first handle so the retry chain stays visible.
 export pure func open_retry(doc: Json, id: string, new_key: string, actor: string,
                             pane: string, agent: string, reason: string, now_ms: int) -> Json {
+  open_retry_model(doc, id, new_key, actor, pane, agent, reason, now_ms, "")
+}
+
+export pure func open_retry_model(doc: Json, id: string, new_key: string, actor: string,
+                                  pane: string, agent: string, reason: string,
+                                  now_ms: int, model: string) -> Json {
   match find_task(tasks_of(doc), id) {
     None => doc,
     Some(t) => {
       let n = count_of(arr_field(t, "attempts")) + 1;
       let prev = latest_attempt_id(doc, id);
       let cause = jo([kv("type", js("followup")), kv("ref", js(prev)), kv("reason", js(reason))]);
-      let a = new_attempt(id, n, cause, actor, pane, agent, now_ms);
+      let a = new_attempt_model(id, n, cause, actor, pane, agent, now_ms, model);
       let t2 = obj_set(obj_set(obj_set(t, "attempts", ja(arr_field(t, "attempts") ++ [a])),
                                "state", js("working")),
                        "owner", js(new_key));

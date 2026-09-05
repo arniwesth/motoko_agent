@@ -195,7 +195,8 @@ func scripted(status: string, gone: bool, fail_at: string)
         exit_code: 0, next_state: world }
     else if contains(argv, "agent start") then
       if fail_at == "start" then { output: envelope("", herdr_error("agent_start_failed"), 1), exit_code: 1, next_state: world }
-      else { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: world }
+      else { output: envelope("{\"result\":{}}", "", 0), exit_code: 0,
+             next_state: put_file(world, "/tmp/.last-agent-start", argv) }
     -- THE F3 SHAPE, MEASURED 2026-09-01: the pane split, the agent started and
     -- the readiness gate passed, and only then did `agent prompt` refuse.
     else if contains(argv, "agent prompt") then
@@ -274,10 +275,20 @@ func drive(world: ExtWorld, ports: ExtPorts, call: ToolCallEnvelope) -> Step ! {
 }
 
 func delegate_call(id: string, prompt: string, kind: string, task_kind: string, retry_of: string) -> ToolCallEnvelope {
+  delegate_call_model(id, prompt, kind, task_kind, retry_of, "")
+}
+
+func delegate_call_model(id: string, prompt: string, kind: string, task_kind: string, retry_of: string, model: string) -> ToolCallEnvelope {
   { id: id, tool: "Delegate",
     arguments: jo([kv("prompt", js(prompt)), kv("kind", js(kind)),
+                   kv("model", js(model)),
                    kv("task_kind", js(task_kind)), kv("retry_of", js(retry_of))]) }
 }
+
+-- The last `agent start` argv the scripted port saw. The `agent start` branch
+-- answers blindly, so without this the model flag would be asserted only against
+-- the run file and never against the call that carries it.
+func last_start_argv(world: ExtWorld) -> string { read_file(world, "/tmp/.last-agent-start") }
 
 func check_call(id: string, name: string) -> ToolCallEnvelope {
   { id: id, tool: "DelegateCheck", arguments: jo([kv("name", js(name))]) }
@@ -463,6 +474,29 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && contains(read_file(s10.world, run_file_path()), "was not linked"));
   emit(s10.world);
 
+  -- 11. A requested model threads into `agent start` AND the run file, verbatim.
+  --     The flag rides the same `--` slot the relaxation flags use; the run file
+  --     records the ASK (display chip), never a claim about what ran.
+  let s11 = drive(s10.world, ports_at(11000, "working", false, true),
+                  delegate_call_model("c11", "model work", "claude", "impl", "", "claude-fable-5"));
+  let a14 = check("a requested model is passed to agent start after --",
+                  s11.code == 0
+                    && contains(last_start_argv(s11.world), "--model claude-fable-5"));
+  let a15 = check("a requested model is recorded verbatim on the attempt",
+                  contains(read_file(s11.world, run_file_path()), "\"model\":\"claude-fable-5\""));
+  emit(s11.world);
+
+  -- 12. A model with a shell token degrades to CLI-default: refused from the
+  --     argv, visible in the transcript and the run file as asked.
+  let s12 = drive(s11.world, ports_at(12000, "working", false, true),
+                  delegate_call_model("c12", "metachar work", "claude", "impl", "", "a;b"));
+  let a16 = check("a model with metacharacters is refused from agent start",
+                  s12.code == 0
+                    && contains(last_start_argv(s12.world), "--model") == false);
+  let a17 = check("the refused model ask is still recorded verbatim",
+                  contains(read_file(s12.world, run_file_path()), "\"model\":\"a;b\""));
+  emit(s12.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
-     && a10 && a10b && a11 && a12 && a13 then () else exit(1)
+     && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 then () else exit(1)
 }

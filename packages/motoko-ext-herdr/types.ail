@@ -399,6 +399,31 @@ export pure func grants_relaxation(kind: string) -> bool
 -- claude needs nothing: it is unattended-capable in this image with no
 -- relaxation at all, and is ~1.3x faster. It is the default kind for that
 -- reason, not for parity of treatment.
+-- PER-KIND, PER-MODEL ARGV. Both CLIs take a model flag (`claude --model`,
+-- `codex -m/--model`) and herdr passes trailing `[AGENT_ARG]...` through after
+-- `--` — the same slot the relaxation flags above ride. Free-string by operator
+-- decision: model names are alnum/dash/dot/underscore by shape, so anything
+-- carrying a shell token is refused rather than sent (same rule as
+-- `path_is_safe`). Empty means "CLI default" and adds nothing, which keeps
+-- today's behaviour byte-identical when the caller says nothing.
+export pure func kind_model_args(k: string, model: string) -> [string]
+  tests [
+    (("claude", "claude-fable-5"), ["--model", "claude-fable-5"]),
+    (("codex", "gpt-5.3-codex"), ["-m", "gpt-5.3-codex"]),
+    (("claude", ""), []),
+    (("codex", ""), []),
+    (("gemini", "gemini-2.5-pro"), []),
+    (("motoko", "whatever"), []),
+    (("claude", "a;b"), []),
+    (("claude", "a`id`"), [])
+  ]
+  {
+    if model == "" || has_shell_tokens(model) then []
+    else if k == "claude" then ["--model", model]
+    else if k == "codex" then ["-m", model]
+    else []
+  }
+
 export pure func kind_default_args(k: string) -> [string]
   { if k == "codex" then ["-s", "danger-full-access", "-a", "never"] else [] }
 
@@ -428,12 +453,25 @@ export pure func argv_split(cwd: string, depth_env: string) -> [string]
 -- herdr's own default is 30000 — exactly Motoko's — so leaving it off is the
 -- trap 021 §3.1 named.
 export pure func argv_start(name: string, kind: string, pane: string, timeout_ms: int) -> [string]
+  { argv_start_model(name, kind, pane, timeout_ms, "") }
+
+-- `model` is operator-supplied free text; `kind_model_args` refuses anything
+-- with a shell token, so an accepted model keeps `argv_is_safe` green and a
+-- refused one degrades to CLI-default rather than failing the delegation.
+export pure func argv_start_model(name: string, kind: string, pane: string, timeout_ms: int, model: string) -> [string]
+  tests [
+    (("mot-dlg-7", "claude", "w1:pA", 20000, ""), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000"),
+    (("mot-dlg-7", "claude", "w1:pA", 20000, "claude-fable-5"), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5"),
+    (("mot-dlg-8", "codex", "w1:pB", 20000, "gpt-5.3-codex"), "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never -m gpt-5.3-codex"),
+    (("mot-dlg-7", "claude", "w1:pA", 20000, "a;b"), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000")
+  ]
   {
     let base = ["agent", "start", name, "--kind", kind, "--pane", pane,
                 "--timeout", intToStr(timeout_ms)];
-    match kind_default_args(kind) {
+    let extra = kind_default_args(kind) ++ kind_model_args(kind, model);
+    match extra {
       [] => base,
-      extra => base ++ ["--"] ++ extra
+      _ => base ++ ["--"] ++ extra
     }
   }
 
@@ -514,6 +552,13 @@ export pure func argv_start_str(name: string, kind: string, pane: string, timeou
      "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never")
   ]
   { show_argv(argv_start(name, kind, pane, timeout_ms)) }
+
+export pure func argv_start_model_str(name: string, kind: string, pane: string, timeout_ms: int, model: string) -> string
+  tests [
+    (("mot-dlg-7", "claude", "w1:pA", 20000, "claude-fable-5"),
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5")
+  ]
+  { show_argv(argv_start_model(name, kind, pane, timeout_ms, model)) }
 
 export pure func kind_default_args_str(k: string) -> string
   tests [

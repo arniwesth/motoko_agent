@@ -38,14 +38,14 @@ import pkg/sunholo/motoko_ext_abi/types (
 import pkg/sunholo/motoko_ext_herdr/dagr (
   run_file, run_tmp, refused_marker, pane_marker, load_doc, render, task_title,
   task_kind_or_default, known_task_kinds, task_of_key, can_link_retry, is_empty_run,
-  open_task, open_failed_task, open_retry, settle, mark_blocked, mark_working, latch_ack,
+  open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report
 )
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
-  known_kind, default_kind, kind_allowed, grants_relaxation,
+  known_kind, default_kind, kind_allowed, grants_relaxation, kind_model_args,
   path_is_safe, path_within, argv_is_safe, show_argv,
-  argv_split, argv_start, argv_prompt, argv_get, argv_explain, argv_close,
+  argv_split, argv_start, argv_start_model, argv_prompt, argv_get, argv_explain, argv_close,
   argv_wait, wait_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
   is_motoko, motoko_kind, motoko_run_payload, motoko_payload_is_safe,
   argv_pane_run, argv_wait_until, motoko_handle, handle_is_motoko,
@@ -113,7 +113,7 @@ export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
 -- `retry_of` says what it is for, because the temptation it invites is linking
 -- merely-similar tasks and the rework count is only worth having if it is true.
 func delegate_params(allowed: string) -> string {
-  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":[\"prompt\"]}"
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.\"},\"model\":{\"type\":\"string\",\"description\":\"Model for the delegate CLI (claude `--model`, codex `-m`). Free string; empty means the CLI default. Shell metacharacters are refused and fall back to the default. Applies to claude/codex only; ignored for other kinds.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":[\"prompt\"]}"
 }
 
 func check_params() -> string {
@@ -158,6 +158,16 @@ func relaxation_note(kind: string) -> string {
   if grants_relaxation(kind) then
     ", which the operator has permitted to run with its sandbox and approval prompts disabled"
   else ""
+}
+
+-- The requested model, for the transcript. Empty means the caller said nothing
+-- and the CLI default stands; a non-empty value that yields no argv (wrong kind
+-- or refused metacharacters) is still what was asked, so it is reported as
+-- asked rather than silently normalised.
+func model_note(kind: string, model: string) -> string {
+  if model == "" then ""
+  else if kind == "claude" || kind == "codex" then " with model `${model}`"
+  else " (model `${model}` ignored: applies to claude/codex only)"
 }
 
 func err_result(call_id: string, tool: string, msg: string) -> ToolResultEnvelope {
@@ -403,7 +413,7 @@ func run_key(handle: string) -> string {
 -- that justified adopting dagr, and it is only worth having if it is true.
 func dagr_open(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_ms: int,
                key: string, title: string, kind: string, actor: string,
-               pane: string, loc_agent: string, retry_of: string)
+               pane: string, loc_agent: string, retry_of: string, model: string)
   -> DagrWrite ! {IO, Process, FS} {
   dagr_record(cfg, p, w, workdir, now_ms, func(doc0: Json, ms: int) -> DagrStep {
     -- ONE NOTE PER RUN, SAYING WHAT THIS GRAPH CANNOT DO (§6). `DelegateCheck`
@@ -435,12 +445,12 @@ func dagr_open(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_
                 then " (A dagr pane can show this run live — the operator opens it with `scripts/dagr-pane.sh`. The stock `open-dagr` action will not find it: this run file is keyed by pane and session, and that action looks for `.dagr/run.json`.)"
                 else "";
     if retry_of == "" then
-      { doc: open_task(doc, key, title, kind, actor, pane, loc_agent, ms), note: first }
+      { doc: open_task_model(doc, key, title, kind, actor, pane, loc_agent, ms, model), note: first }
     else {
       let target = if owns_name(run_key(retry_of)) then task_of_key(doc, run_key(retry_of)) else "";
       if target != "" && can_link_retry(doc, target) then
-        { doc: open_retry(doc, target, key, actor, pane, loc_agent,
-                          "re-delegated as `${key}`", ms),
+        { doc: open_retry_model(doc, target, key, actor, pane, loc_agent,
+                                "re-delegated as `${key}`", ms, model),
           note: first }
       else {
         let why =
@@ -452,7 +462,7 @@ func dagr_open(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_
         -- the model gets it in the tool result because the delegation it just
         -- made is NOT the retry it asked for, and it has no other way to find
         -- that out. Not an error: §3.6 refuses the linkage, never the work.
-        { doc: add_note(open_task(doc, key, title, kind, actor, pane, loc_agent, ms), key,
+        { doc: add_note(open_task_model(doc, key, title, kind, actor, pane, loc_agent, ms, model), key,
                         "retry_of `${retry_of}` was not linked (${why}); opened as new work", ms),
           note: "${first} NOTE: the `retry_of` link to `${retry_of}` was NOT recorded — ${why}. This delegation is on the record as new work, not as a further attempt at that task." }
       }
@@ -724,6 +734,10 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   -- and says why in a note) and never fails a delegation over a picture.
   let task_kind = task_kind_or_default(arg_str(call.arguments, "task_kind", ""));
   let retry_of = arg_str(call.arguments, "retry_of", "");
+  -- Free string, CLI-default when empty. Token-safety is enforced where the
+  -- argv is built (`kind_model_args` degrades to no flag); the raw ask is kept
+  -- for the transcript and the run file so a refusal is visible, not silent.
+  let model = arg_str(call.arguments, "model", "");
 
   if prompt == "" then
     { result: err_result(call.id, "Delegate", "Delegate requires a non-empty `prompt`."), next_state: ctx.world }
@@ -826,7 +840,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
               -- herdr knows, not what this extension called it.
               let rec = dagr_open(cfg, p, t.next_state, ctx.workdir, t.now_ms,
                                   handle_name(h), task_title(prompt), task_kind,
-                                  motoko_kind(), pane, motoko_kind(), retry_of);
+                                  motoko_kind(), pane, motoko_kind(), retry_of, model);
               -- AFTER THE PUBLISH, so the view has a file to read at startup.
               let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
               { result: {
@@ -839,7 +853,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
           }
         }
         else {
-          let st = run_herdr(cfg, p, sp.next_state, argv_start(name, kind, pane, cfg.start_timeout_ms));
+          let st = run_herdr(cfg, p, sp.next_state, argv_start_model(name, kind, pane, cfg.start_timeout_ms, model));
           if st.code != 0 then {
             -- Do not leak the pane we just made. This is the narrowest orphan
             -- rule that works and it is deliberately not a sweep: it closes the
@@ -851,7 +865,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
                                   spawn_receipt(st),
                                   "`herdr agent start --kind ${kind}` failed in pane ${pane}; the pane was closed again",
                                   "verified");
-            { result: err_result(call.id, "Delegate", "${explain_failure("Starting a `${kind}` delegate", argv_start(name, kind, pane, cfg.start_timeout_ms), st)}${rec.note}"), next_state: rec.next_state }
+            { result: err_result(call.id, "Delegate", "${explain_failure("Starting a `${kind}` delegate", argv_start_model(name, kind, pane, cfg.start_timeout_ms, model), st)}${rec.note}"), next_state: rec.next_state }
           }
           else {
             -- READINESS GATE. herdr reports `interactive_ready: true` for
@@ -896,14 +910,14 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
                 let t = p.clock_now(tag.next_state);
                 let rec = dagr_open(cfg, p, t.next_state, ctx.workdir, t.now_ms,
                                     name, task_title(prompt), task_kind,
-                                    kind, pane, name, retry_of);
+                                    kind, pane, name, retry_of, model);
                 -- AFTER THE PUBLISH, so the view has a file to read at startup.
                 let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
                 { result: {
                     tool_call_id: call.id,
                     tool: "Delegate",
                     exit_code: 0,
-                    stdout: "Delegate `${name}` is running `${kind}` in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.${tag.note}${rec.note}${view.note}",
+                    stdout: "Delegate `${name}` is running `${kind}`${model_note(kind, model)} in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.${tag.note}${rec.note}${view.note}",
                     stderr: "",
                     metadata: meta_kind(name, pane, kind)
                   },
