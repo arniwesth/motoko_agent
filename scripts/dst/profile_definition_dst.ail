@@ -24,7 +24,7 @@
 --                           slot classified nowhere. A row-shape validator
 --                           accepts it. Only counting per SLOT rejects it.
 --
---   `eight_unconditional`   each of the EIGHT unconditionally-dispatched slots
+--   `seven_unconditional`   each of the SEVEN unconditionally-dispatched slots
 --                           excluded in turn. D5's prose says six. Under six,
 --                           the `on_describe_tools` case loads clean and then
 --                           fails closed on the first model step.
@@ -92,7 +92,7 @@ import src/core/dst_fault_catalogue (
   fault_catalogue,
   conditional_class_ids
 )
-import src/core/dst_profile_coverage (all_capability_kinds, capability_kind_id, capability_dispatch, atoms_at_zero, atom_id, atom_ids_id, Unconditional, Gated, CapabilityKind, AtomRef, AtomIds)
+import src/core/dst_profile_coverage (all_capability_kinds, capability_kind_id, capability_dispatch, atoms_at_zero, atom_id, atom_ids_id, Unconditional, Gated, Lifecycle, CapabilityKind, AtomRef, AtomIds)
 import src/core/dst_result (DstResult, RunFailed, harness_failure_kind_name, ReplayMetadata)
 import src/core/phase_vocab (empty_ledger_trace)
 
@@ -415,26 +415,27 @@ pure func only(ids: [AtomIds], keep: string) -> [AtomIds] {
   }
 }
 
--- Each of the EIGHT unconditionally-dispatched slots, excluded in turn, with
--- the other eight covered. EIGHT at ABI 7.0: `ExitIntent` joined the
--- unconditional side, because what is dispatched is the RENDER and the render
--- runs at every turn end for every registered atom -- only its EXECUTION is
--- conditional, and that happens in the host at exit over published data, where
--- no atom is dispatched at all. Iterating the atoms of `all_capability_kinds()` and
+-- Each of the SEVEN unconditionally-dispatched slots, excluded in turn, with
+-- the others covered. SEVEN, one GATED and one LIFECYCLE at ABI 7.0. An earlier
+-- 7.0 draft made it eight by filing `ExitIntent` as unconditional, on the
+-- argument that its render runs at every turn end for every atom; the render is
+-- in fact gated by the operator opt-in AND by whether the host named a manifest
+-- at all, so it does neither. See `capability_dispatch`. Iterating the atoms of
+-- `all_capability_kinds()` and
 -- consulting `capability_dispatch` means this sweep cannot go stale: a ninth kind, or a kind
 -- whose dispatch kind changes, is picked up without editing this function.
 -- Writing "the seven" out by hand here would be the very re-derivation the
 -- module header forbids.
-func eight_unconditional() -> bool ! {IO} {
+func seven_unconditional() -> bool ! {IO} {
   sweep_slots(atoms_at_zero(all_capability_kinds()), 0, true)
 }
 
 func sweep_slots(xs: [AtomRef], seen: int, acc: bool) -> bool ! {IO} {
   match xs {
     [] => {
-      let ok = seen == 8;
-      let _ = if ok then println("  ✓ all EIGHT unconditionally-dispatched slots reject exclusion (D5's prose says six)")
-              else println("  ✗ expected 8 unconditionally-dispatched slots, swept ${show(seen)}");
+      let ok = seen == 7;
+      let _ = if ok then println("  ✓ all SEVEN unconditionally-dispatched slots reject exclusion (D5's prose says six)")
+              else println("  ✗ expected 7 unconditionally-dispatched slots, swept ${show(seen)}");
       acc && ok
     },
     s :: rest => {
@@ -448,6 +449,20 @@ func sweep_slots(xs: [AtomRef], seen: int, acc: bool) -> bool ! {IO} {
           let _ = if ok then println("  ✓ '${id}' is GATED: excluding it loads clean")
                   else {
                     let _ = println("  ✗ '${id}' is gated but excluding it was rejected");
+                    report(load(d))
+                  };
+          sweep_slots(rest, seen, acc && ok)
+        },
+        -- ABI 7.0. A lifecycle atom is dispatched at a boundary the profile may
+        -- or may not exercise, so excluding it must LOAD -- and it must load for
+        -- its own reason rather than by being mistaken for a gated one, which is
+        -- why this arm exists separately instead of sharing `Gated`'s.
+        Lifecycle => {
+          let d = with_disclosure("lifecycleok", without(one_per_kind(), id), only(one_per_kind(), id));
+          let ok = List.length(load(d)) == 0;
+          let _ = if ok then println("  ✓ '${id}' is LIFECYCLE: excluding it loads clean (the boundary claim is not checked -- see capability_dispatch)")
+                  else {
+                    let _ = println("  ✗ '${id}' is lifecycle but excluding it was rejected");
                     report(load(d))
                   };
           sweep_slots(rest, seen, acc && ok)
@@ -627,7 +642,7 @@ export func main() -> () ! {IO} {
                                   only(one_per_kind(), "tool_provider[0]")));
 
   let _ = println("  -- the seven/one dispatch split, swept rather than restated --");
-  let seven = eight_unconditional();
+  let seven = seven_unconditional();
 
   let _ = println("  -- the attribution reference --");
   let stale_bind = assert_stale_binding();

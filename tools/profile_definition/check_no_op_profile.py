@@ -71,6 +71,7 @@ from check_fixtures import (  # noqa: E402
     ambient_inventory,
     capability_kind_ids,
     capability_payloads,
+    dispatch_kind,
     dispatch_unconditional,
     installable_extension_dirs,
     kind_of,
@@ -220,7 +221,13 @@ def zero_barrier_set(inv, slots):
     rather than undischarged), and the slot's outcome type returns explicit
     world state.
     """
-    barriers = [s for s, (row, _t, _w) in slots.items() if row and is_unconditional(s)]
+    # ROWED AND REACHABLE, which is not the same as rowed and UNCONDITIONAL.
+    # `Lifecycle` (ABI 7.0's `ExitIntent`) is dispatched at a boundary a profile
+    # may or may not exercise — but when it is exercised it performs its row, so
+    # treating it as barrier-free because it is not `Unconditional` would be the
+    # conservative answer inverted. Only `Gated` is excluded here, on the
+    # narrower ground that a call may never name it.
+    barriers = [s for s, (row, _t, _w) in slots.items() if row and dispatch_class(s) != "Gated"]
     if not barriers:
         fail("no slot is both unconditionally dispatched and rowed, so the barrier set is EMPTY "
              "and every extension trivially clears it. That is WI-C5's trigger and must be "
@@ -240,9 +247,14 @@ def zero_barrier_set(inv, slots):
 
 def is_unconditional(hook_id):
     """B8: one dispatch table. `hook_id` may be an atom id (`tool_provider[0]`)
-    or a kind id; either way the `XKind => Unconditional|Gated` arm of
+    or a kind id; either way the `XKind => Unconditional|Gated|Lifecycle` arm of
     `capability_dispatch` is what answers."""
     return dispatch_unconditional(COVERAGE.read_text(), hook_id)
+
+
+def dispatch_class(hook_id):
+    """The three-valued dispatch class. See `check_fixtures.dispatch_kind`."""
+    return dispatch_kind(COVERAGE.read_text(), hook_id)
 
 
 _HOOK_SCOPE_CACHE = {}

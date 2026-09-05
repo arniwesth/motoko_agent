@@ -160,7 +160,19 @@ export type CapabilityKind
   | SolverJudgeKind
   | ExitIntentKind
 
-export type DispatchKind = Unconditional | Gated
+-- THREE kinds since ABI 7.0, and the third exists because two could only
+-- describe `ExitIntent` by lying in one direction or the other.
+--
+--   Unconditional  every registered atom, every run. Excluding one is a
+--                  rejection: the run WILL dispatch it, so a profile claiming
+--                  otherwise is claiming something false about its own run.
+--   Gated          dispatched only when something names it -- `ToolProvider`
+--                  when a call names one of its advertised tools. Exclusion is
+--                  legitimate because the run may genuinely never reach it.
+--   Lifecycle      dispatched at a lifecycle BOUNDARY that a profile may or
+--                  may not exercise. Not "every run" and not "when a call names
+--                  it": something about the RUN'S SHAPE decides.
+export type DispatchKind = Unconditional | Gated | Lifecycle
 
 -- THE DISPATCH TABLE, read from `ext/runtime.ail`'s per-kind folds: every kind
 -- but ToolProvider is dispatched for every registered atom on every run;
@@ -168,20 +180,36 @@ export type DispatchKind = Unconditional | Gated
 -- advertised tools (`first_handle_atoms`). D5 forbids EXCLUDING an
 -- unconditionally-dispatched atom — the run cannot complete — so the profile's
 -- only move for one it cannot cover is to OMIT the extension.
--- 7.0, and the question is NOT the one the exit-intent design expected to have
--- to answer. `ExitIntent` looked like it needed a third `DispatchKind` -- an
--- atom that fires at most once, only on a clean exit, never under SIGKILL --
--- and both existing answers looked wrong: `Unconditional` a coverage lie,
--- `Gated` a licence to exclude it.
+-- 7.0 FIRST ANSWERED THIS WRONG, AND THE CORRECTION IS WORTH THE SPACE.
 --
--- The data-not-closure shape settles it without a new variant. What is
--- dispatched is the RENDER, and the render runs at EVERY turn end for EVERY
--- registered ExitIntent atom -- an unconditional fold, exactly like the other
--- seven. What is conditional is the EXECUTION of the rendered actions, and
--- that happens in the TUI's exit handler over published DATA, where no atom is
--- dispatched and no extension code runs at all. A profile that excluded an
--- ExitIntent atom would be claiming the render does not happen, and it does.
--- So: Unconditional, and it is the truth rather than the convenient answer.
+-- The original argument ran: what is dispatched is the RENDER, the render runs
+-- at every turn end for every registered atom, therefore `Unconditional` -- "the
+-- truth rather than the convenient answer". The premise was false, and the
+-- review that found it was right. The render is gated TWICE, in this tree, by
+-- code the same change introduced:
+--
+--   `ext/runtime.ail` skips the CALL for an atom whose `enabled` is false --
+--   the operator opt-in captured at registration. That was a deliberate choice
+--   (an extension whose knob is off should do no per-turn FS work) and it means
+--   "every registered atom" was never true.
+--
+--   `ext/exit_manifest.ail` returns before the fold runs at all when the host
+--   named no manifest -- `ailang run` without the TUI, and every DST profile.
+--   So "every turn end" was not true either.
+--
+-- `Unconditional` would therefore make a profile's disclosure claim something
+-- that does not happen; `Gated` would file it beside `ToolProvider`, whose
+-- exclusion is legitimate because a CALL may never name it -- a different
+-- reason that would read as the same one. Hence `Lifecycle`: rendered at a
+-- lifecycle boundary the profile may or may not exercise.
+--
+-- WHAT IS NOT IMPLEMENTED, stated rather than implied: exclusion of a Lifecycle
+-- atom is admitted here WITHOUT the harness proving the boundary is unreached.
+-- The honest rule is "legal only when the profile excludes that boundary and
+-- non-dispatch is enforced"; enforcement needs profiles to declare boundaries,
+-- which they cannot yet. Until then a Lifecycle exclusion is an unchecked claim
+-- -- weaker than an `Unconditional` rejection and stronger than silence,
+-- because it is at least named as its own kind.
 export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
   match k {
     DescribeToolsKind => Unconditional,
@@ -192,7 +220,7 @@ export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
     ToolProviderKind => Gated,
     ResponseInterceptorKind => Unconditional,
     SolverJudgeKind => Unconditional,
-    ExitIntentKind => Unconditional
+    ExitIntentKind => Lifecycle
   }
 }
 
@@ -386,7 +414,10 @@ pure func unconditional_atom_exclusions(ext_id: string, excluded: [AtomRef]) -> 
     a :: rest => {
       let here = match capability_dispatch(a.kind) {
         Unconditional => [UnconditionalHookExcluded(ext_id, atom_id(a))],
-        Gated => []
+        Gated => [],
+        -- Admitted, and see `capability_dispatch` for what is NOT checked: the
+        -- profile's claim that it does not reach the boundary is taken on trust.
+        Lifecycle => []
       };
       here ++ unconditional_atom_exclusions(ext_id, rest)
     }
@@ -557,7 +588,7 @@ pure func count_unconditional_kinds(ks: [CapabilityKind]) -> int {
   match ks {
     [] => 0,
     k :: rest =>
-      (match capability_dispatch(k) { Unconditional => 1, Gated => 0 }) + count_unconditional_kinds(rest)
+      (match capability_dispatch(k) { Unconditional => 1, Gated => 0, Lifecycle => 0 }) + count_unconditional_kinds(rest)
   }
 }
 
@@ -575,10 +606,16 @@ pure func test_one_atom_per_kind_fully_covered_passes() -> bool
       && capability_install_list_ok([])
   }
 
--- EIGHT at 7.0, seven before it: `ExitIntent`'s render is an unconditional
--- per-turn-end fold (see `capability_dispatch`), so the new kind joins the
--- unconditional side and `ToolProvider` remains the ONE gated kind.
-pure func test_eight_kinds_are_unconditional() -> bool
+-- SEVEN unconditional, ONE gated, ONE lifecycle at 7.0 -- and the three-way
+-- split is the assertion, not the seven. A version of this test that only
+-- counted unconditional kinds would pass with `ExitIntent` classified either
+-- way, which is exactly how the first 7.0 answer went in undetected.
+--
+-- Each arm exercises the CONSEQUENCE of its kind rather than the label:
+-- excluding the unconditional one is rejected, excluding the gated one loads
+-- clean, and excluding the lifecycle one loads clean too -- for a different
+-- reason, recorded in `capability_dispatch`.
+pure func test_dispatch_kinds_split_seven_one_one() -> bool
   tests [((), true)]
   {
     let gated: CapabilityDisclosure =
@@ -589,10 +626,30 @@ pure func test_eight_kinds_are_unconditional() -> bool
       { extension_id: "u", atoms: one_per_kind(),
         covered: without_kind(one_per_kind(), DescribeToolsKind),
         excluded: [{ kind: DescribeToolsKind, index: 0 }] };
+    let life: CapabilityDisclosure =
+      { extension_id: "l", atoms: one_per_kind(),
+        covered: without_kind(one_per_kind(), ExitIntentKind),
+        excluded: [{ kind: ExitIntentKind, index: 0 }] };
     capability_install_list_ok([gated])
+      && capability_install_list_ok([life])
       && has_rule(validate_capability_disclosure(unc), "unconditional-hook-excluded")
-      && count_unconditional_kinds(all_capability_kinds()) == 8
+      && count_unconditional_kinds(all_capability_kinds()) == 7
+      && count_kinds_of_dispatch(all_capability_kinds(), Gated) == 1
+      && count_kinds_of_dispatch(all_capability_kinds(), Lifecycle) == 1
   }
+
+pure func dispatch_id(d: DispatchKind) -> string {
+  match d { Unconditional => "unconditional", Gated => "gated", Lifecycle => "lifecycle" }
+}
+
+pure func count_kinds_of_dispatch(ks: [CapabilityKind], want: DispatchKind) -> int {
+  match ks {
+    [] => 0,
+    k :: rest =>
+      (if dispatch_id(capability_dispatch(k)) == dispatch_id(want) then 1 else 0)
+        + count_kinds_of_dispatch(rest, want)
+  }
+}
 
 pure func test_zero_covered_is_rejected() -> bool
   tests [((), true)]

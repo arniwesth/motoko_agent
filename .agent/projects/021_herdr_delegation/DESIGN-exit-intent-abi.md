@@ -198,14 +198,33 @@ moved and left that drift reporting itself.
 
 ## 5. The four open questions, answered
 
-1. **(M6, dispatch classification.)** `Unconditional`, and the shape settles it rather than
-   a judgement call. What is dispatched is the RENDER, and the render runs at every turn
-   end for every registered atom — an unconditional fold like the other seven. What is
-   conditional is the EXECUTION of the rendered actions, which happens in the TUI's exit
-   handler over published data, where no atom is dispatched and no extension code runs at
-   all. A profile excluding an `ExitIntent` atom would be claiming the render does not
-   happen, and it does. So `Unconditional` is the truth, not the convenient answer, and no
-   third `DispatchKind` variant was needed. `ToolProvider` remains the ONE gated kind.
+1. **(M6, dispatch classification.) ANSWERED WRONG FIRST — `Lifecycle`, a third variant.**
+   The original answer was `Unconditional`, argued from "the render runs at every turn end
+   for every registered atom" and asserted as "the truth, not the convenient answer". The
+   premise was false, and the review caught it. The render is gated twice, by code the same
+   change introduced: `ext/runtime.ail` skips the call when the atom's captured `enabled` is
+   false, and `ext/exit_manifest.ail` returns before the fold runs at all when the host named
+   no manifest — which is `ailang run` without the TUI, and every DST profile. So neither
+   "every atom" nor "every turn end" held.
+
+   `Gated` would have been wrong differently: it files the kind beside `ToolProvider`, whose
+   exclusion is legitimate because a CALL may never name it — a different reason that would
+   read as the same one. `DispatchKind` therefore gains `Lifecycle`: dispatched at a
+   lifecycle boundary a profile may or may not exercise. Seven unconditional, one gated, one
+   lifecycle, and `profile_definition_dst` sweeps all three by consequence rather than label.
+
+   **What is NOT implemented, said plainly:** a `Lifecycle` exclusion is admitted without the
+   harness proving the boundary is unreached. The honest rule is "legal only when the profile
+   excludes that boundary and non-dispatch is enforced", and enforcement needs profiles to
+   declare boundaries, which they cannot yet. Until then the claim is unchecked — weaker than
+   an `Unconditional` rejection, stronger than silence, because it is at least named.
+
+   The cascade was smaller than predicted: `dst_profile_coverage.ail`, a three-valued reader
+   in `check_fixtures.py`, barrier selection in `check_no_op_profile.py` (only `Gated` is
+   barrier-free — a `Lifecycle` row still runs when its boundary IS exercised, so treating it
+   as free would invert the conservative answer), and the DST sweep. The three profiles did
+   NOT need re-issuing: `table_content_hash` covers the attribution rows, not the dispatch
+   table, and the barrier count held at four.
 2. **(M9, can the two-step publish complete inside the exit budget?)** Yes, and the answer
    is cheaper than the question assumed: the extension writes the tmp file while it is
    alive, and the host's half of the transaction is `fs.renameSync` — one syscall, no
