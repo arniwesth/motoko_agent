@@ -509,13 +509,40 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "24" }
+export pure func driver_only_version() -> string { "25" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
 -- `driver_only_version` and re-recording both halves of this pair.
 export pure func driver_only_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT ABI 7.0 FOR v25, from
+    -- sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66.
+    -- FIVE anchors moved, all +2 (`1162/1421/1527/3010/3120 ->
+    -- 1164/1423/1529/3012/3122`), and the cause is two import lines in
+    -- `session.ail` for the exit-intent seam (`ext/exit_manifest`,
+    -- `ext/ctx_defaults`), both above every anchor.
+    --
+    -- ONE OF THE FIVE DID NOT FAIL THE CHECK, and that is the part worth
+    -- recording: at +2 the `:1162` anchor landed on `let clock_now = func(...)`
+    -- instead of `let reading = p.clock_now(w0);` — a different expression
+    -- carrying the same substring, so the grep matched and the anchor silently
+    -- re-pointed. Re-baselining only the four that shouted would have frozen a
+    -- green anchor onto the wrong line. All five were re-derived.
+    --
+    -- All five anchored expressions were compared to
+    -- `git show cec2e25~1:src/core/session.ail` character by character and are
+    -- byte-identical: pure offset drift, no site changed identity, routing or
+    -- attribution. The exit-manifest publish reads no clock, so the routed set
+    -- is the same six it was.
+    --
+    -- THE WIDTH WAS MIS-PRICED FIRST AND THE GATE CORRECTED IT. The re-baseline
+    -- note in `anchors.sh` initially claimed a THREE-file cascade on the grounds
+    -- that no fixture-carried anchor moved — true, and not the rule. `make
+    -- driver_only` answered `the attribution table was corrected and driver_only
+    -- was not re-issued (D4)`, which is the six-file form: the three profile
+    -- versions and their refs are pinned to the TABLE, not to the anchors it
+    -- happens to hold. The claim in `anchors.sh` is corrected to match.
     -- RE-RECORDED AT WI-D25 FOR v22, NINTH time, from
     -- sha256:4339fef00fff65bcbdaa42374424ec375b4f4329d2f85db5ebaee41b23d44572.
     -- TWO anchors moved, not five and not six, and that is the narrowest
@@ -697,7 +724,7 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- expressions are byte-identical at their new offsets, so no site was added,
     -- removed, re-argued or re-routed and the D4 judgement has the same answer
     -- it had before.
-    content_hash: "sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66" }
+    content_hash: "sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33" }
 }
 
 -- ---------------------------------------------------------------------------

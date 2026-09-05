@@ -59,7 +59,7 @@ import std/io (println, exit)
 import std/json (Json, encode, jo, kv, js, ja)
 import std/list as List (length)
 import std/string (contains)
-import std/fs (writeFileResult, mkdirAll)
+import std/fs (writeFileResult, mkdirAll, removeFileResult)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx, ExtWorld, ExtPorts, ExtFileRead, BudgetPlan, empty_ext_world,
@@ -76,11 +76,12 @@ import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks)
 -- ---------------------------------------------------------------------------
 
 -- This session is pane `w1:p1`, clock `200`, so its token value is `w1:p1:200`
--- and its run file is `/tmp/.dagr/run-w1-p1-200.json`.
+-- and its run file is `.tmp-verify-exit-intent/.dagr/run-w1-p1-200.json` (relative,
+-- so the decoy plant stays inside the FS sandbox).
 func mk_cfg(reap: bool, session_ms: string) -> HerdrConfig {
   { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
     allowed_kinds: "claude", depth: 0, max_depth: 1, motoko_script: "./x.sh",
-    session_ms: session_ms, sweep_stale: false, dagr_dir: "/tmp/.dagr",
+    session_ms: session_ms, sweep_stale: false, dagr_dir: ".tmp-verify-exit-intent/.dagr",
     dagr_pane: false, start_timeout_ms: 1000, check_wait_ms: 1000,
     max_output_chars: 16000, reap_on_exit: reap }
 }
@@ -311,14 +312,14 @@ func case_manifest_shape_is_what_the_host_parses() -> bool ! {IO, Process, FS, C
 --   the two DISAGREE                   without this the case is vacuous — a
 --                                      broken fixture renders nothing twice
 --                                      and reads as green.
-func decoy_path() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
+func decoy_path() -> string { ".tmp-verify-exit-intent/.dagr/run-w1-p1-200.json" }
 
 func decoy_content() -> string {
   "{\"dagr\":3,\"tasks\":[{\"id\":\"decoy\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:pDECOY\"}}]}],\"events\":[]}"
 }
 
 func plant_decoy() -> bool ! {FS} {
-  let _ = mkdirAll("/tmp/.dagr");
+  let _ = mkdirAll(".tmp-verify-exit-intent/.dagr");
   match writeFileResult(decoy_path(), decoy_content()) {
     Ok(_) => true,
     Err(_) => false
@@ -343,6 +344,20 @@ func case_manifest_var_is_the_agreed_name() -> bool ! {IO} {
          "got `${manifest_path_var()}`; src/tui/src/runtime-process.ts writes this name")
 }
 
+-- The decoy is a byproduct of the gate, not of the repo: it lives under a
+-- relative scratch dir, and the gate removes it before it reports success, so
+-- a passing run leaves nothing behind. Cleanup failure is loud (a FAIL naming
+-- the path) rather than a stray directory a later run could mistake for state.
+func case_decoy_is_cleaned_up() -> bool ! {IO, FS} {
+  let gone = match removeFileResult(decoy_path()) {
+    Ok(_) => true,
+    Err(_) => false
+  };
+  report("the decoy file is removed so a passing run leaves no scratch state",
+         gone,
+         "could not remove ${decoy_path()}; the next run's decoy plant would still pass (it overwrites), but a stray run file under .tmp-verify-exit-intent is state this gate should not leave")
+}
+
 export func main() -> () ! {IO, Process, FS, Clock, Env} {
   let r1 = case_registered_either_way();
   let r2 = case_off_renders_nothing_but_discloses();
@@ -353,8 +368,9 @@ export func main() -> () ! {IO, Process, FS, Clock, Env} {
   let r7 = case_manifest_shape_is_what_the_host_parses();
   let r8 = case_render_reads_through_the_port_and_only_the_port();
   let r9 = case_manifest_var_is_the_agreed_name();
-  let all_ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9;
-  if all_ok then println("verify_exit_intent: 9 cases OK")
+  let r10 = case_decoy_is_cleaned_up();
+  let all_ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10;
+  if all_ok then println("verify_exit_intent: 10 cases OK")
   else {
     let _ = println("verify_exit_intent: FAILED");
     exit(1)

@@ -217,7 +217,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
 -- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
 -- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
-export pure func compose_profile_version() -> string { "4" }
+export pure func compose_profile_version() -> string { "5" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -225,6 +225,33 @@ export pure func compose_profile_version() -> string { "4" }
 -- without re-deriving.
 export pure func compose_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT ABI 7.0 FOR v5, from
+    -- sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66.
+    -- FIVE anchors moved, all +2 (`1162/1421/1527/3010/3120 ->
+    -- 1164/1423/1529/3012/3122`), and the cause is two import lines in
+    -- `session.ail` for the exit-intent seam (`ext/exit_manifest`,
+    -- `ext/ctx_defaults`), both above every anchor.
+    --
+    -- ONE OF THE FIVE DID NOT FAIL THE CHECK, and that is the part worth
+    -- recording: at +2 the `:1162` anchor landed on `let clock_now = func(...)`
+    -- instead of `let reading = p.clock_now(w0);` — a different expression
+    -- carrying the same substring, so the grep matched and the anchor silently
+    -- re-pointed. Re-baselining only the four that shouted would have frozen a
+    -- green anchor onto the wrong line. All five were re-derived.
+    --
+    -- All five anchored expressions were compared to
+    -- `git show cec2e25~1:src/core/session.ail` character by character and are
+    -- byte-identical: pure offset drift, no site changed identity, routing or
+    -- attribution. The exit-manifest publish reads no clock, so the routed set
+    -- is the same six it was.
+    --
+    -- THE WIDTH WAS MIS-PRICED FIRST AND THE GATE CORRECTED IT. The re-baseline
+    -- note in `anchors.sh` initially claimed a THREE-file cascade on the grounds
+    -- that no fixture-carried anchor moved — true, and not the rule. `make
+    -- driver_only` answered `the attribution table was corrected and driver_only
+    -- was not re-issued (D4)`, which is the six-file form: the three profile
+    -- versions and their refs are pinned to the TABLE, not to the anchors it
+    -- happens to hold. The claim in `anchors.sh` is corrected to match.
     -- WI-D27: recorded for the first time, from the live table at the bound
     -- revision — `driver_only_attribution_ref` and `no_ops_attribution_ref`
     -- carry the same pair and the full re-issue history behind it. This file has
@@ -242,7 +269,7 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +14, pushed by a Z3 contract on
     -- `trace_sensitive_key`. An anchor re-measurement, not a table correction.
     -- See `driver_only_attribution_ref`.
-    content_hash: "sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66" }
+    content_hash: "sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33" }
 }
 
 -- ---------------------------------------------------------------------------

@@ -212,7 +212,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- entries) to the extension's OWN list (`registered_atoms_of`, 4 entries in
 -- all). `check_no_op_profile.py` cross-checks each claim against B2's
 -- enumeration, which is what turned v10 red — as B8 §5 said it would.
-export pure func no_ops_version() -> string { "12" }
+export pure func no_ops_version() -> string { "13" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -220,6 +220,33 @@ export pure func no_ops_version() -> string { "12" }
 -- can be re-issued silently by the other's edit.
 export pure func no_ops_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT ABI 7.0 FOR v13, from
+    -- sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66.
+    -- FIVE anchors moved, all +2 (`1162/1421/1527/3010/3120 ->
+    -- 1164/1423/1529/3012/3122`), and the cause is two import lines in
+    -- `session.ail` for the exit-intent seam (`ext/exit_manifest`,
+    -- `ext/ctx_defaults`), both above every anchor.
+    --
+    -- ONE OF THE FIVE DID NOT FAIL THE CHECK, and that is the part worth
+    -- recording: at +2 the `:1162` anchor landed on `let clock_now = func(...)`
+    -- instead of `let reading = p.clock_now(w0);` — a different expression
+    -- carrying the same substring, so the grep matched and the anchor silently
+    -- re-pointed. Re-baselining only the four that shouted would have frozen a
+    -- green anchor onto the wrong line. All five were re-derived.
+    --
+    -- All five anchored expressions were compared to
+    -- `git show cec2e25~1:src/core/session.ail` character by character and are
+    -- byte-identical: pure offset drift, no site changed identity, routing or
+    -- attribution. The exit-manifest publish reads no clock, so the routed set
+    -- is the same six it was.
+    --
+    -- THE WIDTH WAS MIS-PRICED FIRST AND THE GATE CORRECTED IT. The re-baseline
+    -- note in `anchors.sh` initially claimed a THREE-file cascade on the grounds
+    -- that no fixture-carried anchor moved — true, and not the rule. `make
+    -- driver_only` answered `the attribution table was corrected and driver_only
+    -- was not re-issued (D4)`, which is the six-file form: the three profile
+    -- versions and their refs are pinned to the TABLE, not to the anchors it
+    -- happens to hold. The claim in `anchors.sh` is corrected to match.
     -- WI-D25: re-recorded with `driver_only`'s, from
     -- sha256:4339fef00fff65bcbdaa42374424ec375b4f4329d2f85db5ebaee41b23d44572.
     -- TWO anchors, the narrowest re-issue this pair has taken: `session.ail:2921`
@@ -273,7 +300,7 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- the routed clock set is unchanged. See `driver_only_attribution_ref`,
     -- which carries the full account and the reason a contract cannot dodge this
     -- the way WI-D19 dodged it.
-    content_hash: "sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66" }
+    content_hash: "sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33" }
 }
 
 -- ---------------------------------------------------------------------------

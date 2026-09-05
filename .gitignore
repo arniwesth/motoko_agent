@@ -95,6 +95,18 @@ deepseek-harness/
 # DESIGN-dagr-as-delegation-view.md §5 in .agent/projects/021_herdr_delegation/.
 .dagr/
 
+# The exit-action manifest (ABI 7.0). The AILANG runtime republishes it in full
+# at every turn end and the TUI reads it once, at exit; it is keyed by a session
+# clock that means nothing to any other run, so it is ephemeral by construction
+# in exactly the way `.dagr/` above is. Named by `buildChildEnv` via
+# MOTOKO_EXIT_MANIFEST — see src/tui/src/exit-actions.ts.
+.motoko/exit/
+
+# Scratch state planted by `make verify_exit_intent`'s decoy case. The gate
+# removes the file it writes and asserts that it did, so this covers only the
+# directory it leaves behind and the case where the gate failed before cleanup.
+.tmp-verify-exit-intent/
+
 # Generated Z3 classification probes (tools/verify_classify/classify.py).
 # The register they produce IS tracked; the probe modules are rebuilt each run.
 tools/verify_classify/generated/
