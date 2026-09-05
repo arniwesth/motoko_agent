@@ -27,6 +27,7 @@ import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
 import { initHerdrReporter, reportSessionPath } from "./herdr-agent-state.js";
+import { initExitActions } from "./exit-actions.js";
 import { activeProfile } from "./config.js";
 import { resolveRuntimeModel } from "./models.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
@@ -816,6 +817,13 @@ async function main(): Promise<void> {
   // hidden behind a flag that would then need testing in both positions. It also registers the
   // exit hooks that give the lifecycle authority back, which is why it runs before anything can
   // call process.exit.
+  // Perform whatever extensions asked to have done at session end (ABI 7.0's ExitIntent), read
+  // from the manifest their runtimes published. Registered BEFORE the herdr reporter because Node
+  // runs 'exit' listeners in registration order and handing lifecycle authority back should be the
+  // last thing that happens — after whatever the session still owned has been dealt with. A no-op
+  // when no runtime ever started or no extension declared an intent; see exit-actions.ts.
+  initExitActions();
+
   initHerdrReporter();
 
   if (!isTTY) {

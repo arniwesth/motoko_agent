@@ -4,7 +4,8 @@ import * as path from "path";
 import * as readline from "readline";
 import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
 import { dispatchOhMyPiTool } from "./ohMyPi/dispatcher.js";
-import { sessionStartMs } from "./herdr-owner-token.js";
+import { sessionStartMs } from "./session-identity.js";
+import { exitManifestPath, rememberExitManifestPath } from "./exit-actions.js";
 
 export interface DelegatedExecReq {
   cmd: string;
@@ -315,6 +316,24 @@ function mirrorAbsoluteProfile(workdir: string, profile: string): string {
   return basename;
 }
 
+/**
+ * Name this session's exit manifest, create its directory, and remember it for the exit handler.
+ *
+ * The directory has to exist before the first publish: the runtime writes through
+ * `writeFileResult`, which does not create parents, and a manifest that silently fails to be
+ * written looks exactly like an install where no extension declared an exit intent.
+ */
+function exitManifestPathFor(workdir: string): string {
+  const p = exitManifestPath(workdir);
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+  } catch {
+    // A manifest that cannot be written costs the exit-time courtesy, never the run.
+  }
+  rememberExitManifestPath(p);
+  return p;
+}
+
 export function buildChildEnv(
   workdir: string,
   profile: string,
@@ -342,14 +361,25 @@ export function buildChildEnv(
     MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
     // THE RUN IDENTITY FOR F-5 OWNERSHIP, minted here and nowhere else.
     //
-    // `motoko-ext-herdr` tags every delegate pane it spawns with
-    // `mot-owner=<pane>:<session ms>` so that an orphan can be recognised as THIS session's
-    // without falling back to a name prefix that two concurrent Motokos would both match. The
-    // clock cannot live in the extension: the runtime is spawned per task, so it would mint a new
-    // identity for every task and the exit-time reaper would match none of its own delegates.
-    // This process outlives every runtime it spawns, so `sessionStartMs()` memoizes one value for
-    // the whole session. Format and reasoning: `herdr-owner-token.ts`.
+    // `motoko-ext-herdr` tags every delegate pane it spawns with `<pane>:<session ms>` so that an
+    // orphan can be recognised as THIS session's without falling back to a name prefix that two
+    // concurrent Motokos would both match. The clock cannot live in the extension: the runtime is
+    // spawned per task, so it would mint a new identity for every task and nothing keyed by it
+    // would survive to the next one. This process outlives every runtime it spawns, so
+    // `sessionStartMs()` memoizes one value for the whole session. The token FORMAT is the
+    // extension's and has one definition (`packages/motoko-ext-herdr/types.ail`); this side
+    // supplies only the clock. Reasoning: `session-identity.ts`.
     MOTOKO_SESSION_MS: String(sessionStartMs()),
+    // WHERE THIS TURN'S EXIT ACTIONS GET PUBLISHED (ABI 7.0).
+    //
+    // The host names the file and the runtime reads the name — never the other way round, and
+    // never both. A path derived on both sides of the language boundary is the MOT-118 shape this
+    // project has already paid for twice; here the parent owns the session clock the name is keyed
+    // by, so it owns the name.
+    //
+    // `rememberExitManifestPath` is what lets the exit handler find it: this process reads at exit
+    // what its children wrote at every turn end.
+    MOTOKO_EXIT_MANIFEST: exitManifestPathFor(workdir),
     AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
     AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",
     MOTOKO_COST_INPUT_PER_1M_MILLICENTS:

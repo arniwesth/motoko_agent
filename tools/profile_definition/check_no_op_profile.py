@@ -71,6 +71,7 @@ from check_fixtures import (  # noqa: E402
     ambient_inventory,
     capability_kind_ids,
     capability_payloads,
+    dispatch_kind,
     dispatch_unconditional,
     installable_extension_dirs,
     kind_of,
@@ -164,6 +165,9 @@ def parse_output(path):
 # ---------------------------------------------------------------------------
 
 
+EXPECTED_CAPABILITY_KINDS = 9
+
+
 def abi_slots():
     """capability kind id -> (declared row, outcome type, returns world state).
 
@@ -176,10 +180,14 @@ def abi_slots():
     row (or the reverse) is a FAIL, never a skip.
     """
     kinds = capability_kind_ids()
-    if len(kinds) != 8:
-        fail(f"read {len(kinds)} capability kind ids from {COVERAGE.relative_to(REPO)}, expected 8: "
-             f"{kinds}. The ABI gained or lost a kind and this guard's per-kind checks would "
-             "silently skip it.")
+    # NINE at ABI 7.0 (`ExitIntent`), eight before it. Pinned rather than
+    # derived on purpose: the count is what makes a kind added to the ABI and
+    # forgotten here a FAIL instead of a silent skip, so it moves by hand, once,
+    # with the variant.
+    if len(kinds) != EXPECTED_CAPABILITY_KINDS:
+        fail(f"read {len(kinds)} capability kind ids from {COVERAGE.relative_to(REPO)}, expected "
+             f"{EXPECTED_CAPABILITY_KINDS}: {kinds}. The ABI gained or lost a kind and this "
+             "guard's per-kind checks would silently skip it.")
     payloads = capability_payloads(ABI_TYPES.read_text())
     if set(payloads) != set(kinds):
         fail(f"the coverage artifact's kind table {sorted(kinds)} and the ABI's `Capability` "
@@ -213,7 +221,13 @@ def zero_barrier_set(inv, slots):
     rather than undischarged), and the slot's outcome type returns explicit
     world state.
     """
-    barriers = [s for s, (row, _t, _w) in slots.items() if row and is_unconditional(s)]
+    # ROWED AND REACHABLE, which is not the same as rowed and UNCONDITIONAL.
+    # `Lifecycle` (ABI 7.0's `ExitIntent`) is dispatched at a boundary a profile
+    # may or may not exercise — but when it is exercised it performs its row, so
+    # treating it as barrier-free because it is not `Unconditional` would be the
+    # conservative answer inverted. Only `Gated` is excluded here, on the
+    # narrower ground that a call may never name it.
+    barriers = [s for s, (row, _t, _w) in slots.items() if row and dispatch_class(s) != "Gated"]
     if not barriers:
         fail("no slot is both unconditionally dispatched and rowed, so the barrier set is EMPTY "
              "and every extension trivially clears it. That is WI-C5's trigger and must be "
@@ -233,9 +247,14 @@ def zero_barrier_set(inv, slots):
 
 def is_unconditional(hook_id):
     """B8: one dispatch table. `hook_id` may be an atom id (`tool_provider[0]`)
-    or a kind id; either way the `XKind => Unconditional|Gated` arm of
+    or a kind id; either way the `XKind => Unconditional|Gated|Lifecycle` arm of
     `capability_dispatch` is what answers."""
     return dispatch_unconditional(COVERAGE.read_text(), hook_id)
+
+
+def dispatch_class(hook_id):
+    """The three-valued dispatch class. See `check_fixtures.dispatch_kind`."""
+    return dispatch_kind(COVERAGE.read_text(), hook_id)
 
 
 _HOOK_SCOPE_CACHE = {}

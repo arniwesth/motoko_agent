@@ -30,7 +30,8 @@ import std/json (Json, jo, kv, js, jnum, jb, get, asString)
 
 import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
-  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
+  ExitAction, ExitIntentOutcome, ClosePane, PaneCloseAction,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg, ToolSchema,
   ToolCallEnvelope, ToolResultEnvelope
@@ -39,7 +40,8 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   run_file, run_tmp, refused_marker, pane_marker, load_doc, render, task_title,
   task_kind_or_default, known_task_kinds, task_of_key, can_link_retry, is_empty_run,
   open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
-  add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report
+  add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
+  open_delegate_panes
 )
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
@@ -52,7 +54,7 @@ import pkg/sunholo/motoko_ext_herdr/types (
   handle_pane, handle_name,
   depth_allows, next_depth, argv_env_depth,
   argv_report_owner, argv_pane_list, sweep_stale_panes, sweep_report, live_pane_ids,
-  sweep_sentinel_path, owner_token_value,
+  sweep_sentinel_path, owner_token_value, owner_token_key,
   argv_dagr_pane, plugin_pane_id,
   failure_code, failure_message, means_agent_gone, explain_says_ready,
   split_pane_id, agent_status_of, agent_pane_of, is_settled,
@@ -95,7 +97,15 @@ export type HerdrConfig = {
   -- See `types.argv_wait` for why blocking is the default and not an option the
   -- model has to remember to ask for.
   check_wait_ms: int,
-  max_output_chars: int
+  max_output_chars: int,
+  -- F-5 D2, and it is READ HERE INSTEAD OF AT EXIT because it cannot be read
+  -- at exit: the ExitIntent render carries `! {FS}` and cannot reach `Env`, and
+  -- a `() -> bool` thunk with an env job would be a compile error in that
+  -- position. So the opt-in is resolved once, at registration, like every other
+  -- knob in `register.ail`, and CAPTURED. Off by default: reaping destroys
+  -- in-flight work on every clean exit, including the answer-file case the
+  -- delegation gate exists to honour.
+  reap_on_exit: bool
 }
 
 export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
@@ -538,11 +548,14 @@ func tag_owner(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, pane: string)
 -- $DAGR_RUN when it starts, and pointing it at a path that does not exist yet
 -- shows an empty view until something else touches the file.
 --
--- THE PANE IS TAGGED `mot-owner` LIKE A DELEGATE, which is what makes it clean
--- up for free — `reapOwnedPanes` (src/tui/src/herdr-reap.ts) closes every pane
--- carrying this session's token, not only delegate panes, and the orphan sweep
--- recognises a view left behind by a session that is gone. The tag is worth
--- one call for that; a view pane that outlives its run is a picture of nothing.
+-- THE PANE IS TAGGED `mot-owner` LIKE A DELEGATE, and the tag still earns its
+-- one call — but for a NARROWER reason since ABI 7.0. The old host-side reaper
+-- enumerated panes at exit and closed everything carrying this session's token,
+-- so a tagged view pane cleaned up for free. `exit_actions` renders from the
+-- dagr run file's in-flight ATTEMPTS, and the view pane is not one, so it is no
+-- longer closed at exit. What the tag still buys is the orphan sweep, which
+-- recognises a view left behind by a session that is gone. A view pane that
+-- outlives its run is a picture of nothing, and that is the path that reaps it.
 func ensure_dagr_pane(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string)
   -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
   -- The same refusals `dagr_record` makes, for the same reasons — no run
@@ -1242,6 +1255,69 @@ export func on_tool_handle(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope
   else { decision: Delegate, next_state: ctx.world }
 }
 
+-- ---------------------------------------------------------------------------
+-- THE EXIT INTENT (ABI 7.0): close this session's delegate panes on the way out.
+--
+-- WHAT MOVED, AND WHAT DID NOT. The mechanism moved out of the TUI, where it
+-- had no business being: `herdr-reap.ts` knew the token key, the token format,
+-- the pane-list shape and the opt-in env var, none of which are the host's.
+-- The POLICY is unchanged — opt-in (D2), token-gated, by explicit pane id,
+-- never by name, never another session's pane.
+--
+-- WHY IT DOES NOT ENUMERATE PANES. It cannot: the row is `! {FS}`, and that is
+-- the point rather than a limitation to work around. The run file is already
+-- keyed by producer pane AND session (`run_file_name`), so the panes it names
+-- are this session's by construction, and the host re-checks the ownership
+-- token on each one before closing it. Enumerating live panes here would also
+-- be measuring the wrong moment: this runs at turn end, the close happens at
+-- exit, and only the check at exit can be fresh.
+--
+-- EVERY GUARD IS A REASON TO EMIT NOTHING. No bin, no own pane, no session
+-- clock (`ailang run` without the TUI) or an unreadable run file all yield the
+-- empty list, which the host executes as a silent no-op.
+func close_action(cfg: HerdrConfig, pane: string) -> ExitAction {
+  -- NO `bin`. The host runs the multiplexer it knows about from its own
+  -- environment; this side names the pane and the proof and nothing else. See
+  -- the ABI's `PaneCloseAction` for why that absence is the point.
+  let c: PaneCloseAction = {
+    pane: pane,
+    token_key: owner_token_key(),
+    token_value: owner_token_value(cfg.own_pane, cfg.session_ms)
+  };
+  ClosePane(c)
+}
+
+func close_actions(cfg: HerdrConfig, panes: [string]) -> [ExitAction] {
+  match panes {
+    [] => [],
+    -- NEVER OUR OWN PANE. The run file should not name it, but a delegate that
+    -- somehow recorded its parent would otherwise have Motoko close itself.
+    p :: rest =>
+      if p == cfg.own_pane then close_actions(cfg, rest)
+      else close_action(cfg, p) :: close_actions(cfg, rest)
+  }
+}
+
+-- ROUTED, NOT AMBIENT. The read goes through `ctx.ports.file_read` (WI-D16)
+-- and the successor world comes back out in the outcome. A direct `std/fs`
+-- read would type-check and would be the WI-D1 shape: an effect performed with
+-- no cursor to hand on. `ExtFileRead.present` also answers the missing-file
+-- case without a second `fileExists` call.
+export func exit_actions(cfg: HerdrConfig, ctx: ExtCtx) -> ExitIntentOutcome ! {FS} {
+  if cfg.bin == "" || cfg.own_pane == "" || cfg.session_ms == "" then
+    { actions: [], next_state: ctx.world }
+  else {
+    let path = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+    if path_is_safe(path) == false then { actions: [], next_state: ctx.world }
+    else {
+      let read = ctx.ports.file_read(ctx.world, path);
+      if read.present == false then { actions: [], next_state: read.next_state }
+      else { actions: close_actions(cfg, open_delegate_panes(read.content)),
+             next_state: read.next_state }
+    }
+  }
+}
+
 export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO, Process, FS, Clock} {
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
@@ -1251,10 +1327,17 @@ export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO,
     match tools { [] => [], _ => describe_tools(cfg.allowed_kinds) }
   };
   -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  let at_exit = func(ctx: ExtCtx) -> ExitIntentOutcome ! {FS} { exit_actions(cfg, ctx) };
   [
     DescribeTools(describe),
     -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this list only
     -- carries the decision, so the two can never disagree.
-    ToolProvider(tools, handle)
+    ToolProvider(tools, handle),
+    -- REGISTERED EVEN WHEN THE KNOB IS OFF, and even outside a herdr pane. An
+    -- atom that appears only under one configuration is an atom whose coverage
+    -- disclosure changes with the environment, and the manifest is where "off"
+    -- becomes visible: `enabled: false` with an empty action list says the
+    -- extension is there and was asked, which "no atom at all" cannot say.
+    ExitIntent("delegate-panes", cfg.reap_on_exit, at_exit)
   ]
 }

@@ -20,7 +20,7 @@ import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, FinalizeOutcome,
   FinalizeDecision,
   PreStepDecision,
   DiagnosticField,
-  Capability, ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, -- B8: the 6.0 sum, same line so A5's anchor at :199 holds
+  Capability, ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExitAction, ExitIntentOutcome, -- B8: the 6.0 sum, same line so A5's anchor at :199 holds
   ExtRuntime, ExtWorld, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome -- WI-B2b; on one line to hold A5's anchor at :190
 )
 import src/core/types (Msg)
@@ -529,6 +529,65 @@ export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_te
   -- WI-D24 clears the holder; see `dispatch_pre_step_chain`.
   let out = first_intercept(rt.registry.entries, ctx, response_text, ctx.world);
   { decision: out.decision, next_state: clear_holder(out.next_state) }
+}
+
+-- ============================================================================
+-- 7.0: the ExitIntent fold. UNCONDITIONAL, once per turn end, registry order.
+--
+-- Nothing here runs at exit. This renders each intent to DATA while the
+-- runtime is alive and hands the list to `ext/exit_manifest`, which publishes
+-- it for the TUI's exit handler to execute. The reason is architectural rather
+-- than stylistic: the exit handler lives in a different process, and an async
+-- spawn started inside a Node `exit` handler never runs because the event loop
+-- is already closed. See the ABI's `ExitIntent` header.
+--
+-- THE WORLD IS THREADED, atom to atom and extension to extension, exactly as
+-- `dispatch_pre_step_chain` threads it. The render reads FS-backed state
+-- through `ExtPorts.file_read`, so it has a successor, and dropping it here
+-- would be WI-D1's shape one dispatcher later. The holder is stamped on the
+-- re-seat, so an effect performed during a render is attributed to the
+-- extension that performed it, and cleared once at the end.
+-- ============================================================================
+export type RenderedIntent = { ext: string, label: string, enabled: bool, actions: [ExitAction] }
+export type ExitIntentRendering = { intents: [RenderedIntent], next_state: ExtWorld }
+
+func render_intent_atoms(id: string, caps: [Capability], ctx: ExtCtx, world: ExtWorld) -> ExitIntentRendering ! {FS} {
+  match caps {
+    [] => { intents: [], next_state: world },
+    ExitIntent(label, enabled, f) :: rest => {
+      -- A DISABLED INTENT IS NOT RENDERED. `enabled` is the operator opt-in
+      -- captured at registration, and skipping the call is what makes the
+      -- default rung free: an extension whose knob is off does no FS work per
+      -- turn. It is still DISCLOSED in the manifest, so "off" and "absent" stay
+      -- distinguishable to anyone reading it — which is why the entry is built
+      -- either way and only the CALL is skipped.
+      let out = if enabled
+        then f({ ctx | world: stamp_holder(world, id) })
+        else { actions: [], next_state: world };
+      let tail = render_intent_atoms(id, rest, ctx, out.next_state);
+      { intents: ({ ext: id, label: label, enabled: enabled, actions: out.actions }) :: tail.intents,
+        next_state: tail.next_state }
+    },
+    _ :: rest => render_intent_atoms(id, rest, ctx, world)
+  }
+}
+
+func render_intent_entries(entries: [ExtEntry], ctx: ExtCtx, world: ExtWorld) -> ExitIntentRendering ! {FS} {
+  match entries {
+    [] => { intents: [], next_state: world },
+    e :: rest => {
+      let head = render_intent_atoms(e.id, e.caps, ctx, world);
+      let tail = render_intent_entries(rest, ctx, head.next_state);
+      { intents: head.intents ++ tail.intents, next_state: tail.next_state }
+    }
+  }
+}
+
+-- Registry order, then list order within an extension: the same order every
+-- other dispatcher reads, and the order the host executes the actions in.
+export func dispatch_exit_intents(rt: ExtRuntime, ctx: ExtCtx) -> ExitIntentRendering ! {FS} {
+  let out = render_intent_entries(rt.registry.entries, ctx, ctx.world);
+  { intents: out.intents, next_state: clear_holder(out.next_state) }
 }
 
 -- WI-D7 CASCADE. The `on_solver_candidate` SLOT narrowed to `! {Process}`;

@@ -671,6 +671,85 @@ pure func abandoned_of(ts: [Json], live: [string]) -> [string] {
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- THE EXIT-INTENT QUERY (ABI 7.0). Which panes does this run still hold open?
+--
+-- This is `abandoned_of`'s question with the live-pane half removed, and the
+-- removal is the point: at exit there is no `pane list` to compare against,
+-- because the render runs while the turn is ending and the answer is consumed
+-- much later, in another process. So this returns a CLAIM — "the run file says
+-- these panes were in flight" — and the host re-checks the ownership token on
+-- each one before closing it. The freshness this cannot have is supplied there.
+--
+-- LATEST ATTEMPT ONLY, and terminal states excluded, for `abandoned_of`'s
+-- reason: a task that was retried names its old pane in an earlier attempt, and
+-- that pane belongs to nobody by the time the retry is running.
+--
+-- AND THAT EXCLUSION LOSES A CLEANUP THE PRE-7.0 REAPER CAUGHT. `dagr_settle`
+-- marks the attempt terminal whether or not the pane close SUCCEEDED -- a
+-- failed close adds a note ("so it may still be running", herdr.ail:376) and
+-- nothing more. So a delegate whose close failed for any reason other than
+-- `pane_not_found` is recorded terminal, is excluded here, and is therefore
+-- absent from every later exit render. The old reaper enumerated by TOKEN and
+-- ignored task state entirely, so it would have retried that pane at exit.
+--
+-- This is a behavioural narrowing, not an oversight, and it is recorded rather
+-- than fixed here because the fix belongs on the other side: a cleanup
+-- obligation should survive a failed cleanup, which means the run file needs to
+-- carry "close attempted and failed" as its own fact rather than folding it
+-- into a note on a settled attempt. Until it does, the startup orphan sweep is
+-- what catches these -- the same backstop that catches everything a SIGKILL
+-- skipped.
+--
+-- THE RUN FILE IS ALREADY SESSION-KEYED (`run_file_name`: producer pane plus
+-- session), so every pane named here was spawned by THIS session. That is what
+-- makes reading it a substitute for a separate owned-pane set rather than a
+-- weaker version of one.
+pure func open_panes_of(ts: [Json], seen: [string]) -> [string] {
+  match ts {
+    [] => [],
+    t :: rest =>
+      match last_of(arr_field(t, "attempts")) {
+        None => open_panes_of(rest, seen),
+        Some(a) => {
+          let pane = sfield(field(a, "locator"), "pane");
+          if attempt_is_terminal(sfield(a, "state")) == false
+             && pane != "" && has_str(seen, pane) == false
+          then pane :: open_panes_of(rest, pane :: seen)
+          else open_panes_of(rest, seen)
+        }
+      }
+  }
+}
+
+-- Distinct panes whose latest attempt is still in flight. An unparseable or
+-- absent file yields nothing — the same fail-closed reading `abandoned_tasks`
+-- takes, and here it means "close nothing", which is the safe direction.
+export pure func open_delegate_panes(content: string) -> [string] {
+  match decode(content) {
+    Err(_) => [],
+    Ok(doc) => open_panes_of(tasks_of(doc), [])
+  }
+}
+
+export pure func open_delegate_panes_str(content: string) -> string
+  tests [
+    ("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+     "w1:p8"),
+    -- settled work holds no pane open
+    ("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"done\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+     ""),
+    -- only the LATEST attempt counts: the retried pane is not ours any more
+    ("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"lost\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}",
+     "w1:p9"),
+    -- two tasks sharing a pane name it once
+    ("{\"tasks\":[{\"id\":\"a\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]},{\"id\":\"b\",\"attempts\":[{\"state\":\"queued\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+     "w1:p8"),
+    ("not json", ""),
+    ("", "")
+  ]
+  { join(",", open_delegate_panes(content)) }
+
 -- Tasks in `content` whose latest attempt is still in flight on a pane that is
 -- not in `live`. An unparseable file yields nothing: we are not its writer and
 -- not its validator either.

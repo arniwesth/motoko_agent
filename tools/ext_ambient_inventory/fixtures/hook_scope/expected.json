@@ -173,9 +173,28 @@
       "resolve through the 6.0 list head and how many atoms each holds. Empty on",
       "the 5.x tree by construction; B8 re-pinned it BY HAND with seventeen entries",
       "of eight atoms each. Item 4 (6.0 trimming) re-pinned it BY HAND again: each",
-    "package now lists only the atoms it binds with a real body (39 over 17)."
+    "package now lists only the atoms it binds with a real body (39 over 17).",
+      "",
+      "RE-PINNED BY HAND for EIGHTEEN: `repetition_guard` joined ailang.toml's",
+      "[extensions] packages and every pin here was still describing seventeen. It",
+      "binds ToolPolicy + SolverJudge with real bodies, so `capability_list_atoms`",
+      "gains `repetition_guard: 2` (41 over 18), and it resolves HOOK-PORT-MEDIATED",
+      "-- both its hooks reach `ctx` and the world and neither reaches an ambient",
+      "source -- so it joins that list rather than `hook_ambient`.",
+      "",
+      "`f` JOINS THE DOOR-3 RESIDUE, and it is a DIFFERENT KIND of gap from the two",
+      "already there. `show` and `intToFloat` are language builtins no producer at",
+      "HEAD can classify. `f` is not a builtin at all: it is the function-typed",
+      "PARAMETER of motoko-ext-herdr's higher-order helpers (`dagr_record`'s",
+      "transition callback at herdr.ail:349, `map_task`/`map_last` in dagr.ail), and",
+      "an applied parameter has whatever effects its caller passed. The tool is",
+      "right that it cannot classify it, and closing it would mean unwinding those",
+      "helpers into first-order code -- a worse module for a greener pin. Recorded",
+      "as a known gap with its cause rather than assumed away, which is what this",
+      "pin is for. It predates the 7.0 work; it is fixed here only because the same",
+      "gate was red for the repetition_guard drift."
     ],
-    "extensions": 17,
+    "extensions": 18,
     "closure_port_mediated": [
       "compaction_structural",
       "decision_framework",
@@ -187,6 +206,7 @@
       "empty_stop_guard",
       "mcp",
       "progress_contract_guard",
+      "repetition_guard",
       "test_dummy"
     ],
     "hook_ambient": [
@@ -195,6 +215,7 @@
       "scratchpad"
     ],
     "door_3_residue": [
+      "f",
       "intToFloat",
       "show"
     ],
@@ -218,11 +239,12 @@
       "decision_framework": 1,
       "empty_stop_guard": 1,
       "exa_search": 2,
-      "herdr": 2,
+      "herdr": 3,
       "mcp": 1,
       "microrag": 3,
       "omnigraph": 3,
       "progress_contract_guard": 1,
+      "repetition_guard": 2,
       "scratchpad": 4,
       "test_dummy": 4
     }

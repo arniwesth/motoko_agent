@@ -1127,8 +1127,18 @@ absorb() {  # $1 = effect name, $2 = expected count of ROWS admitting it
 # from the WI-D8 values (14, 12, 7). These are PINS, and the producer of the
 # expected value is the rows in `packages/*/register.ail` -- the next change is
 # a re-measurement, not a re-pin.
-absorb Env 16
-absorb FS 14
+#
+# RE-MEASURED AGAIN for the EIGHTEENTH extension. `repetition_guard` joined
+# ailang.toml's [extensions] packages and declares
+#
+#     export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS}
+#     (packages/motoko-ext-repetition-guard/register.ail:35)
+#
+# so Env moves 16 -> 17 and FS 14 -> 15, and Process does NOT move, because that
+# row does not admit it. The asymmetry is the point of re-measuring rather than
+# bumping all three: a pin that moved uniformly would be a pin nobody read.
+absorb Env 17
+absorb FS 15
 absorb Process 9
 # The one registration that absorbs EVERYTHING, named rather than counted.
 if grep -qE "func register_with_config.*! ?$old_ten" packages/motoko-ext-compaction-ai/register.ail; then

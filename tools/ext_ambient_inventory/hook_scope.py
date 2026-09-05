@@ -106,6 +106,11 @@ CAPABILITY_KINDS: dict[str, tuple[int, tuple[int, ...]]] = {
     "ToolProvider": (2, (1,)),          # (names, handle); names is data, not a binding
     "ResponseInterceptor": (1, (0,)),
     "SolverJudge": (1, (0,)),
+    # 7.0: (label, enabled, render). The first two are DATA -- the intent's name
+    # and the operator opt-in resolved at registration -- and only the third is
+    # a hook binding, exactly as `ToolProvider`'s names are data and its handle
+    # is the binding.
+    "ExitIntent": (3, (2,)),
 }
 
 #: Rejection shapes this module adds to the parent's five.  Each is a REJECTION.
@@ -218,7 +223,18 @@ def keep_interpolations(text: str) -> str:
         ch = text[i]
         if ch == '"':
             j = i + 1
-            blank(i, i + 1)
+            # THE DELIMITERS SURVIVE, and only the TEXT is blanked -- which is
+            # what this function's name and docstring have always claimed.
+            # Blanking the quotes too made a string-literal argument
+            # INDISTINGUISHABLE FROM AN ABSENT ONE, and the capability-list
+            # reader rejects an empty argument as `Kind(, f)`. ABI 7.0's
+            # `ExitIntent("label", enabled, render)` is the first atom in the
+            # tree with a literal in a DATA position, and it was rejected as a
+            # wrong-arity application ("applied to 3 argument(s); the
+            # constructor takes 3" -- the emptiness half of the same check).
+            # Keeping the quotes costs nothing downstream: no matcher here
+            # reads `"` as an identifier, and `balanced`/`split_args` count only
+            # brackets, so offsets and depths are unchanged.
             while j < n and text[j] != '"':
                 if text[j] == "\\":
                     blank(j, j + 2)
@@ -242,7 +258,6 @@ def keep_interpolations(text: str) -> str:
                     continue
                 blank(j, j + 1)
                 j += 1
-            blank(j, j + 1)
             i = j + 1
         elif ch == "-" and text.startswith("--", i):
             j = text.find("\n", i)

@@ -745,6 +745,10 @@ export type FinalizeOutcome = { decision: FinalizeDecision, next_state: ExtWorld
 --                                                 the advertised names
 --   ResponseInterceptor  on_response_intercept    first-intercept
 --   SolverJudge          on_solver_candidate      priority merge (one vote)
+--   ExitIntent           (no 5.x slot; new at 7.0)  concatenated, registry
+--                                                 order, rendered at every
+--                                                 turn end and executed by the
+--                                                 host at clean exit
 --
 -- ATOM IDENTITY is (kind, index-within-kind) in list order (B3/B6); the
 -- holder stamp `"${name}#${idx}"` (A3) stays per EXTENSION and never carries
@@ -998,6 +1002,101 @@ export type FinalizeOutcome = { decision: FinalizeDecision, next_state: ExtWorld
   -- QUALIFIED AT WI-D13, on the same terms as `on_response_intercept`: still a
   -- barrier for the SLOT and for eleven of the fifteen extensions, cleared for
   -- four. See the block above `on_pre_step`.
+-- =========================================================================
+-- 7.0: ExitAction / ExitIntent — the session-end slot the ABI did not have.
+--
+-- WHY THIS IS DATA AND NOT A CLOSURE AT EXIT. A hook that RUNS at process exit
+-- cannot exist in this architecture: the exit handler lives in the TUI
+-- process, where no extension code has ever run, and the per-task AILANG
+-- runtime that holds the closures is normally already gone. Reaching it would
+-- need async IPC, and an async spawn started inside an `exit` handler never
+-- runs — the event loop is already closed. So the intent yields DATA computed
+-- while the runtime is alive: at every turn end the host renders each
+-- `ExitIntent` into `[ExitAction]` and publishes the list; at exit it executes
+-- the published list synchronously, bounded, best-effort, with no AILANG
+-- execution and no IPC in the exit path.
+--
+-- WHAT THE HOST STILL DECIDES AT EXIT, and why that is not a leak of policy:
+-- an action names WHAT to do and WHICH proof to require, never WHOM to
+-- believe. `ClosePane` carries the pane id AND the token the host must find on
+-- that pane before closing it, so the ownership RULE (which key, which value)
+-- is the extension's and the VERIFICATION is the host's.
+--
+-- THE PROOF NARROWS A RACE; IT DOES NOT CLOSE ONE, and the first draft of this
+-- header claimed otherwise ("restores the freshness a cached action would
+-- otherwise lose"). It cannot: the host enumerates panes and then closes them,
+-- and ownership can change between those two calls. Re-listing immediately
+-- before each close would only make the window smaller. Closing it needs an
+-- operation the multiplexer does not offer -- close this pane incarnation if
+-- its token still matches, atomically. The pre-7.0 reaper had the same race;
+-- what the proof actually buys is that a STALE action, rendered turns earlier,
+-- is no worse than a fresh one, which is the property the cache needed and the
+-- only one claimed here.
+--
+-- WHAT THE MANIFEST DELIBERATELY CANNOT SAY, after the 7.0 review. The first
+-- draft of this type also carried `RunArgv({ bin, args })` and
+-- `PublishFile({ tmp, dest })`, and `ClosePane` named its own `bin`. Every one
+-- of those was an arbitrary-execution or arbitrary-write surface reachable by
+-- anything that can write one file under the workdir -- another extension with
+-- FS access, an agent file tool, a delegate sharing the checkout -- executed at
+-- exit with the TUI's privileges, outside the runtime's FS sandbox and outside
+-- its filtered child environment. "No shell" bought nothing when `bin` could be
+-- `/bin/sh` and `args` could be `["-c", ...]`, and an `! {FS}` render could
+-- hand out process instructions without ever holding `{Process}`.
+--
+-- So the surface is now ONE verb with no executable in it. The host resolves
+-- the binary from its own environment and will not take one from the file. A
+-- manifest writer can ask for a tagged pane to be closed and can ask for
+-- nothing else. `PublishFile` was dropped rather than hardened because it had
+-- no consumer; when dagr settle-on-exit needs it, it should arrive with a
+-- host-granted destination and a generation precondition rather than a pair of
+-- free paths.
+--
+-- SIGKILL AND POWER LOSS RUN NOTHING. Nothing published here is a guarantee;
+-- it is a best-effort courtesy on a clean exit, and every consumer needs a
+-- startup-side backstop of its own.
+-- =========================================================================
+
+-- Close one multiplexer pane, by explicit id, only if it still carries the
+-- named token. Never a name, a kind, or an argv pattern: `mot-dlg-*` proves
+-- "a Motoko delegate", not "THIS Motoko's delegate", and two concurrent
+-- sessions both match it.
+--
+-- NO `bin` FIELD, and that absence is the security property. The host runs the
+-- multiplexer it already knows about from its own environment; a manifest that
+-- could name the executable would be a code-execution channel wearing the
+-- shape of a cleanup request.
+--
+-- ALL THREE FIELDS ARE REQUIRED AND NON-EMPTY. An earlier draft read a missing
+-- `token_key` as "" and treated "" as "close any pane that exists" -- so the
+-- deliberate escape hatch was also what MALFORMED input decayed to, which is
+-- the wrong direction for a default to fail in. There is no unproven-close mode
+-- now; if one is ever wanted it needs its own authorization, not an empty
+-- string.
+export type PaneCloseAction = {
+  pane: string,
+  token_key: string,
+  token_value: string
+}
+
+export type ExitAction = ClosePane(PaneCloseAction)
+
+-- The render's answer, and it carries a SUCCESSOR for the same reason the four
+-- other outcome types do (WI-B2b): the render reads FS-backed state, it reads
+-- it through `ExtPorts.file_read` rather than ambiently, and a routed read
+-- returns a world that must not be dropped.
+--
+-- THIS SHAPE WAS NOT THE FIRST DRAFT, and the correction is worth recording.
+-- v1 of this variant returned a bare `[ExitAction]` and read `std/fs` directly.
+-- It type-checked, it passed its own tests, and `make driver_plus_no_ops`
+-- rejected it: the barrier derivation classifies a slot by (rowed, dispatched
+-- unconditionally, returns explicit world state), and a rowed unconditional
+-- slot that returns NO world state makes every extension in the tree
+-- non-zero-barrier at a stroke. The gate was right and the draft was wrong —
+-- an FS-reading hook that cannot return its successor is exactly the shape
+-- WI-D1 found in production.
+export type ExitIntentOutcome = { actions: [ExitAction], next_state: ExtWorld }
+
 -- Neutral hooks for record-update construction. Each result is the identity for
 -- its host dispatcher: empty concatenations/patches, no policy opinion, and
 -- pass/delegate/no-intercept/no-decision for the chaining and first-match folds.
@@ -1017,6 +1116,17 @@ export type Capability
       (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}
     )
   | SolverJudge((ExtCtx, string) -> FinalizeOutcome ! {Process})
+  -- 7.0. POSITIONAL, not a record: a ctor-arg lambda is row-checked in the
+  -- position the compiler sees, while a record payload puts the closure in the
+  -- `smuggle` position B8 measured as unchecked. `label` names the intent in
+  -- the published manifest and in the host's diagnostics; `enabled` is the
+  -- operator opt-in RESOLVED AND CAPTURED AT REGISTRATION (reading env is
+  -- `! {Env}`, which this row does not carry, and a `() -> bool` thunk with an
+  -- env job would be a compile error here or a silent smuggle in a record);
+  -- the render closure returns the actions to execute at exit, computed from
+  -- FS-backed state the extension already owns. `! {FS}` is the whole
+  -- enforcement: a render that wanted to spawn a subprocess could not.
+  | ExitIntent(string, bool, (ExtCtx) -> ExitIntentOutcome ! {FS})
 
 -- The registry entry: D5's owner-bearing shape. `id` is the host's install
 -- stamp (`"${name}#${idx}"`), `caps` the registration list UNCHANGED in list

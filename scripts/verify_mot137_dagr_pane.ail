@@ -198,7 +198,10 @@ func mk_cfg(dagr_pane: bool, session_ms: string) -> HerdrConfig {
     allowed_kinds: "claude", depth: 0, max_depth: 1, motoko_script: "./x.sh",
     session_ms: session_ms, sweep_stale: false, dagr_dir: "/tmp/.dagr",
     dagr_pane: dagr_pane,
-    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000 }
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
+    -- ABI 7.0: the exit intent is declared either way; this says whether it
+    -- renders actions. These gates exercise the tool paths, not the exit path.
+    reap_on_exit: false }
 }
 
 func delegate_call() -> ToolCallEnvelope {

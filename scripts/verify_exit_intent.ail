@@ -1,0 +1,378 @@
+-- scripts/verify_exit_intent.ail
+--
+-- ABI 7.0 / MOT-133 F-5: the extension-declared exit intent, end to end on the
+-- AILANG side of the boundary.
+--
+-- WHAT THIS GATE IS FOR. Through 6.0 the exit-time reap lived in the TUI, and
+-- `src/tui/src/herdr-reap.test.ts` pinned it: opt-in, token-gated, by explicit
+-- pane id, bounded, never another session's pane. That file is gone. Its
+-- semantics did not go with it — they split in two, and both halves need a
+-- gate. The HOST half (verify the proof, perform three kinds of action,
+-- bounded, best-effort) is pinned by `src/tui/src/exit-actions.test.ts`. THIS
+-- half is the extension's: what it declares, when it renders, and what the
+-- rendered actions say.
+--
+-- What is pinned here, and why each case exists:
+--
+--   1. the intent is REGISTERED whether or not the knob is on — an atom that
+--      appears only under one configuration is an atom whose coverage
+--      disclosure changes with the environment
+--   2. with the knob OFF the render is not called and no action is produced,
+--      and the manifest still DISCLOSES the intent (`enabled: false`), because
+--      "off" and "absent" are different facts to whoever is debugging
+--   3. with the knob ON, an in-flight pane in the run file becomes exactly one
+--      `close_pane` naming that pane, this session's token KEY and this
+--      session's token VALUE — the ownership rule crossing the boundary as
+--      data rather than as a second implementation
+--   4. a SETTLED task holds no pane open, so it produces no action
+--   5. the producer's OWN pane is never named, whatever the run file says
+--   6. no run file, an unreadable one, or no session clock (`ailang run`
+--      without the TUI) all produce nothing — the safe direction is "close
+--      nothing"
+--   7. the published manifest is the shape `exit-actions.ts` parses: the
+--      version it refuses to guess past, and one intent entry per atom
+--   8. THE REGRESSION THAT SHIPPED ONCE: a render handed ports that cannot
+--      reach the filesystem produces nothing, silently. `noop_ext_ports()`
+--      answers `present: false` to every path, so an exit ctx built with it
+--      renders an empty action list from a run file that is really there — and
+--      every other case in this gate still passes, because they inject a
+--      scripted `file_read`. Found live on 2026-09-05 (a real delegate on a
+--      real pane, a correct run file on disk, `"actions": []` in the
+--      manifest); the fix is `session.publish_turn_exit_manifest` passing
+--      `ext_ports_of(provider.ports, ...)`. This case cannot catch that wiring
+--      from here — it pins the BEHAVIOUR so the failure mode is named where
+--      someone debugging an empty manifest will look.
+--
+-- The render is driven through the registered `Capability` rather than by
+-- calling `exit_actions` directly, so what is asserted is what the host would
+-- actually dispatch — including the fold's own ordering and the `enabled` gate.
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run \
+--     --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main scripts/verify_exit_intent.ail
+--
+-- Prints one OK/FAIL line per case; exits non-zero on any FAIL.
+module scripts/verify_exit_intent
+
+import std/io (println, exit)
+import std/json (Json, encode, jo, kv, js, ja)
+import std/list as List (length)
+import std/string (contains)
+import std/fs (writeFileResult, mkdirAll, removeFileResult)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtWorld, ExtPorts, ExtFileRead, BudgetPlan, empty_ext_world,
+  Capability, ExitIntent, ExitAction, ClosePane,
+  ExtEntry, ExtRegistry, ExtRuntime, VerificationConfig
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/runtime (dispatch_exit_intents, RenderedIntent)
+import src/core/ext/exit_manifest (manifest_json, manifest_version, manifest_path_var)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+-- This session is pane `w1:p1`, clock `200`, so its token value is `w1:p1:200`
+-- and its run file is `.tmp-verify-exit-intent/.dagr/run-w1-p1-200.json` (relative,
+-- so the decoy plant stays inside the FS sandbox).
+func mk_cfg(reap: bool, session_ms: string) -> HerdrConfig {
+  { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
+    allowed_kinds: "claude", depth: 0, max_depth: 1, motoko_script: "./x.sh",
+    session_ms: session_ms, sweep_stale: false, dagr_dir: ".tmp-verify-exit-intent/.dagr",
+    dagr_pane: false, start_timeout_ms: 1000, check_wait_ms: 1000,
+    max_output_chars: 16000, reap_on_exit: reap }
+}
+
+-- One task in flight on w1:pA, one settled on w1:pB, and one that names the
+-- producer's OWN pane — the three cases the render has to tell apart.
+func run_file_content() -> string {
+  let a = "{\"id\":\"mot-dlg-1\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:pA\"}}]}";
+  let b = "{\"id\":\"mot-dlg-2\",\"attempts\":[{\"state\":\"done\",\"locator\":{\"pane\":\"w1:pB\"}}]}";
+  let c = "{\"id\":\"mot-dlg-3\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p1\"}}]}";
+  "{\"dagr\":3,\"tasks\":[${a},${b},${c}],\"events\":[]}"
+}
+
+func run_file_present(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, "run-w1-p1-200.json")
+  then { present: true, content: run_file_content(), next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+func run_file_absent(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: false, content: "", next_state: world }
+}
+
+func run_file_garbage(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: true, content: "not json at all", next_state: world }
+}
+
+func ports_reading(read: (ExtWorld, string) -> ExtFileRead ! {FS}) -> ExtPorts {
+  let base = noop_ext_ports();
+  { base | file_read: read }
+}
+
+func mk_ctx(ports: ExtPorts) -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-exit-intent", step: 0, model: "test-model", cwd: "/tmp",
+    hybrid_tools: false, budget: budget, mode: "exit", workdir: "/tmp",
+    env_server_url: "", budget_remaining: 4, history_slice: [],
+    state_key: "test", context_limit: 0, ports: ports,
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: empty_ext_world() }
+}
+
+-- The registry the host would build from this extension's registration. Driving
+-- the fold rather than the closure is the point: it exercises the `enabled`
+-- gate and the registry ordering the manifest inherits.
+func mk_runtime(caps: [Capability]) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let entry: ExtEntry = { id: "herdr#0", caps: caps };
+  let reg: ExtRegistry = { entries: [entry] };
+  { registry: reg, strict_mode: false, verification: v }
+}
+
+func hooks(reap: bool, session_ms: string) -> [Capability] ! {IO, Process, FS, Clock} {
+  make_hooks(mk_cfg(reap, session_ms), ["Delegate", "DelegateCheck"])
+}
+
+-- ---------------------------------------------------------------------------
+-- Reading the rendered actions
+-- ---------------------------------------------------------------------------
+
+func count_exit_intents(caps: [Capability]) -> int {
+  match caps {
+    [] => 0,
+    ExitIntent(_, _, _) :: rest => 1 + count_exit_intents(rest),
+    _ :: rest => count_exit_intents(rest)
+  }
+}
+
+func actions_of(intents: [RenderedIntent]) -> [ExitAction] {
+  match intents {
+    [] => [],
+    i :: rest => i.actions ++ actions_of(rest)
+  }
+}
+
+func enabled_flags(intents: [RenderedIntent]) -> [bool] {
+  match intents {
+    [] => [],
+    i :: rest => i.enabled :: enabled_flags(rest)
+  }
+}
+
+-- `pane|token_key|token_value` for a close, and a tag for the other two, so a
+-- case can assert on the whole action rather than on one field of it.
+func action_text(a: ExitAction) -> string {
+  match a {
+    ClosePane(c) => "close:${c.pane}|${c.token_key}|${c.token_value}"
+  }
+}
+
+func action_texts(xs: [ExitAction]) -> [string] {
+  match xs {
+    [] => [],
+    a :: rest => action_text(a) :: action_texts(rest)
+  }
+}
+
+func first_text(xs: [ExitAction]) -> string {
+  match action_texts(xs) {
+    [] => "",
+    t :: _ => t
+  }
+}
+
+func has_string(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == needle then true else has_string(rest, needle)
+  }
+}
+
+func has_text(xs: [ExitAction], needle: string) -> bool {
+  has_string(action_texts(xs), needle)
+}
+
+func render(reap: bool, session_ms: string, read: (ExtWorld, string) -> ExtFileRead ! {FS})
+  -> [RenderedIntent] ! {IO, Process, FS, Clock} {
+  let caps = hooks(reap, session_ms);
+  let ctx = mk_ctx(ports_reading(read));
+  dispatch_exit_intents(mk_runtime(caps), ctx).intents
+}
+
+-- ---------------------------------------------------------------------------
+-- Cases
+-- ---------------------------------------------------------------------------
+
+func report(name: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("OK: ${name}") else println("FAIL: ${name} — ${detail}");
+  ok
+}
+
+func case_registered_either_way() -> bool ! {IO, Process, FS, Clock} {
+  let on = count_exit_intents(hooks(true, "200"));
+  let off = count_exit_intents(hooks(false, "200"));
+  report("the exit intent is registered whether the knob is on or off",
+         on == 1 && off == 1,
+         "on=${show(on)} off=${show(off)}; an atom that appears only under one configuration changes its extension's coverage disclosure with the environment")
+}
+
+func case_off_renders_nothing_but_discloses() -> bool ! {IO, Process, FS, Clock} {
+  let intents = render(false, "200", run_file_present);
+  let acts = actions_of(intents);
+  let flags = enabled_flags(intents);
+  let disclosed = match flags { [] => false, f :: _ => f == false };
+  report("with the knob off: no actions, and the intent is still disclosed",
+         List.length(intents) == 1 && List.length(acts) == 0 && disclosed,
+         "intents=${show(List.length(intents))} actions=${show(List.length(acts))}; 'off' and 'absent' must stay distinguishable in the manifest")
+}
+
+func case_on_closes_the_in_flight_pane_with_the_token() -> bool ! {IO, Process, FS, Clock} {
+  let acts = actions_of(render(true, "200", run_file_present));
+  let want = "close:w1:pA|mot-owner|w1:p1:200";
+  report("with the knob on: one close, by pane id, carrying this session's token",
+         List.length(acts) == 1 && first_text(acts) == want,
+         "got ${show(List.length(acts))} action(s), first `${first_text(acts)}`, wanted `${want}`")
+}
+
+func case_settled_and_own_pane_are_never_named() -> bool ! {IO, Process, FS, Clock} {
+  let acts = actions_of(render(true, "200", run_file_present));
+  let texts = action_texts(acts);
+  let no_settled = has_text(acts, "close:w1:pB|mot-owner|w1:p1:200") == false;
+  let no_own = has_text(acts, "close:w1:p1|mot-owner|w1:p1:200") == false;
+  report("a settled task holds no pane, and the producer's own pane is never closed",
+         no_settled && no_own,
+         "actions were ${show(List.length(texts))}: a `done` attempt's pane belongs to nobody, and closing w1:p1 would be Motoko closing itself")
+}
+
+func case_no_run_file_is_a_silent_no_op() -> bool ! {IO, Process, FS, Clock} {
+  let absent = actions_of(render(true, "200", run_file_absent));
+  let garbage = actions_of(render(true, "200", run_file_garbage));
+  report("an absent or unreadable run file produces nothing",
+         List.length(absent) == 0 && List.length(garbage) == 0,
+         "absent=${show(List.length(absent))} garbage=${show(List.length(garbage))}; the safe direction on an unreadable file is to close nothing")
+}
+
+func case_no_session_clock_produces_nothing() -> bool ! {IO, Process, FS, Clock} {
+  let acts = actions_of(render(true, "", run_file_present));
+  report("without MOTOKO_SESSION_MS the intent produces nothing",
+         List.length(acts) == 0,
+         "got ${show(List.length(acts))}; `ailang run` without the TUI has no session identity, so it can prove nothing about a pane and must claim nothing")
+}
+
+-- The manifest is what crosses the boundary, so its SHAPE is part of the
+-- contract: `exit-actions.ts` refuses a version it does not know and reads one
+-- entry per intent.
+func case_manifest_shape_is_what_the_host_parses() -> bool ! {IO, Process, FS, Clock} {
+  let doc = encode(manifest_json(render(true, "200", run_file_present)));
+  let ok = contains(doc, "\"version\":\"${manifest_version()}\"")
+        && contains(doc, "\"label\":\"delegate-panes\"")
+        && contains(doc, "\"kind\":\"close_pane\"")
+        -- REVIEW FINDING 1: no executable is carried anywhere in the document.
+        && contains(doc, "\"bin\"") == false
+        && contains(doc, "\"pane\":\"w1:pA\"")
+        && contains(doc, "\"token_key\":\"mot-owner\"")
+        && contains(doc, "\"token_value\":\"w1:p1:200\"")
+        && contains(doc, "\"enabled\":true");
+  report("the published manifest is the shape exit-actions.ts parses",
+         ok, "manifest was ${doc}")
+}
+
+-- The env var is one definition read on both sides. Asserted here because a
+-- rename on one side alone is silent in the worst way: the runtime publishes
+-- nowhere the host looks, and the result is indistinguishable from an install
+-- where no extension declared an intent.
+-- See item 8 in the header.
+--
+-- A DECOY ON DISK IS WHAT MAKES THIS A TEST. Every other case here supplies the
+-- run file through a scripted `file_read`, so none of them can tell a render
+-- that goes through the port from one that reads `std/fs` behind its back —
+-- with nothing at the real path, both look identical, and asserting "no-op
+-- ports render nothing" alone would be passed by a fixture that renders nothing
+-- for any reason at all.
+--
+-- So this writes a REAL run file at the path the config names, holding a
+-- DIFFERENT pane (`w1:pDECOY`) from the one the scripted content holds
+-- (`w1:pA`). Three things then have to hold at once, and each kills a distinct
+-- failure:
+--
+--   the routed render names w1:pA      the bytes came from the PORT. If the
+--                                      render ever goes back to an ambient
+--                                      `std/fs` read (the shape §5 Q3 of the
+--                                      design corrected), it names w1:pDECOY
+--                                      and this fails.
+--   the no-op render names NOTHING     the shipped regression: `file_read`
+--                                      answering `present: false` to every
+--                                      path renders an empty list, silently,
+--                                      from a run file that is really there.
+--   the two DISAGREE                   without this the case is vacuous — a
+--                                      broken fixture renders nothing twice
+--                                      and reads as green.
+func decoy_path() -> string { ".tmp-verify-exit-intent/.dagr/run-w1-p1-200.json" }
+
+func decoy_content() -> string {
+  "{\"dagr\":3,\"tasks\":[{\"id\":\"decoy\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:pDECOY\"}}]}],\"events\":[]}"
+}
+
+func plant_decoy() -> bool ! {FS} {
+  let _ = mkdirAll(".tmp-verify-exit-intent/.dagr");
+  match writeFileResult(decoy_path(), decoy_content()) {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+func case_render_reads_through_the_port_and_only_the_port() -> bool ! {IO, Process, FS, Clock} {
+  let planted = plant_decoy();
+  let caps = hooks(true, "200");
+  let routed = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(ports_reading(run_file_present))).intents);
+  let noop = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(noop_ext_ports())).intents);
+  let from_port = first_text(routed) == "close:w1:pA|mot-owner|w1:p1:200";
+  let ok = planted && List.length(routed) == 1 && from_port && List.length(noop) == 0;
+  report("the render reads through the port and only the port, and a blind port renders nothing",
+         ok,
+         "decoy planted=${show(planted)} at ${decoy_path()}; routed gave ${show(List.length(routed))} action(s) `${first_text(routed)}` (w1:pDECOY here means the render bypassed the port and read the filesystem); no-op ports gave ${show(List.length(noop))}")
+}
+
+func case_manifest_var_is_the_agreed_name() -> bool ! {IO} {
+  report("the manifest env var is MOTOKO_EXIT_MANIFEST",
+         manifest_path_var() == "MOTOKO_EXIT_MANIFEST",
+         "got `${manifest_path_var()}`; src/tui/src/runtime-process.ts writes this name")
+}
+
+-- The decoy is a byproduct of the gate, not of the repo: it lives under a
+-- relative scratch dir, and the gate removes it before it reports success, so
+-- a passing run leaves nothing behind. Cleanup failure is loud (a FAIL naming
+-- the path) rather than a stray directory a later run could mistake for state.
+func case_decoy_is_cleaned_up() -> bool ! {IO, FS} {
+  let gone = match removeFileResult(decoy_path()) {
+    Ok(_) => true,
+    Err(_) => false
+  };
+  report("the decoy file is removed so a passing run leaves no scratch state",
+         gone,
+         "could not remove ${decoy_path()}; the next run's decoy plant would still pass (it overwrites), but a stray run file under .tmp-verify-exit-intent is state this gate should not leave")
+}
+
+export func main() -> () ! {IO, Process, FS, Clock, Env} {
+  let r1 = case_registered_either_way();
+  let r2 = case_off_renders_nothing_but_discloses();
+  let r3 = case_on_closes_the_in_flight_pane_with_the_token();
+  let r4 = case_settled_and_own_pane_are_never_named();
+  let r5 = case_no_run_file_is_a_silent_no_op();
+  let r6 = case_no_session_clock_produces_nothing();
+  let r7 = case_manifest_shape_is_what_the_host_parses();
+  let r8 = case_render_reads_through_the_port_and_only_the_port();
+  let r9 = case_manifest_var_is_the_agreed_name();
+  let r10 = case_decoy_is_cleaned_up();
+  let all_ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10;
+  if all_ok then println("verify_exit_intent: 10 cases OK")
+  else {
+    let _ = println("verify_exit_intent: FAILED");
+    exit(1)
+  }
+}

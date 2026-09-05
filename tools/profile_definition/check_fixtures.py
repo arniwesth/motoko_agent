@@ -322,7 +322,14 @@ def check_barrier_count(abi, disp):
         # The dispatch classification is a SECOND producer: it lives in
         # dst_profile_coverage.ail, not in the ABI, and neither derives from
         # the other (S16).
-        if not dispatch_unconditional(disp, slot):
+        #
+        # LIFECYCLE IS NOT GATED, and folding it in here would be the silent
+        # answer this partition exists to avoid. A gated slot is barrier-free
+        # because a call may never name it; a lifecycle slot with a non-empty
+        # row still performs that row whenever its boundary IS exercised, so it
+        # is counted with the barriers rather than waved past with the gated.
+        kind = dispatch_kind(disp, slot)
+        if kind == "Gated":
             gated.append(slot)
         elif row:
             slot_barriers.append((slot, row))
@@ -433,20 +440,44 @@ def capability_payloads(abi):
     return out
 
 
-def dispatch_unconditional(disp, hook_id):
+#: The dispatch classes the coverage artifact may name. THREE since ABI 7.0.
+#: Held here rather than derived so that a fourth arriving in the ABI makes this
+#: reader FAIL on it rather than silently reading it as one of these — the same
+#: discipline `CAPABILITY_KINDS` carries in the hook-scope tool.
+DISPATCH_KINDS = ("Unconditional", "Gated", "Lifecycle")
+
+
+def dispatch_kind(disp, hook_id):
     """The dispatch class of a kind (or atom) id, read from the ONE dispatch
     table B8 left in the coverage artifact: `capability_dispatch`'s
-    `XKind => Unconditional|Gated` arms. The 5.x `hook_dispatch` table is
-    gone, so there is no second answer to agree with."""
+    `XKind => Unconditional|Gated|Lifecycle` arms. The 5.x `hook_dispatch` table
+    is gone, so there is no second answer to agree with.
+
+    THREE-VALUED SINCE 7.0, and the boolean it replaced is why. `ExitIntent` is
+    dispatched at a lifecycle boundary a profile may or may not exercise: not
+    every run (`Unconditional`) and not when a call names it (`Gated`). A
+    two-valued reader had to answer one of those, and both are wrong — the first
+    makes a profile claim something that does not happen, the second files it
+    beside `ToolProvider` for a reason that is not its reason.
+    """
     ctor = kind_ctor(kind_of(hook_id))
     block = re.search(r"func capability_dispatch\(.*?\n\}", disp, re.S)
     if not block:
         fail("could not find `capability_dispatch` in dst_profile_coverage.ail")
-    m = re.search(re.escape(ctor) + r"\s*=>\s*(Unconditional|Gated)", block.group(0))
+    m = re.search(re.escape(ctor) + r"\s*=>\s*(" + "|".join(DISPATCH_KINDS) + r")", block.group(0))
     if not m:
-        fail(f"`{ctor}` has no dispatch arm in dst_profile_coverage.ail's `capability_dispatch`; "
-             f"the dispatch class of {hook_id!r} cannot be read")
-    return m.group(1) == "Unconditional"
+        fail(f"`{ctor}` has no dispatch arm in dst_profile_coverage.ail's `capability_dispatch` "
+             f"naming one of {DISPATCH_KINDS}; the dispatch class of {hook_id!r} cannot be read. "
+             "A dispatch kind added to the coverage artifact must be added here too, not scanned "
+             "around.")
+    return m.group(1)
+
+
+def dispatch_unconditional(disp, hook_id):
+    """`True` only for `Unconditional`. Callers asking "may this be excluded?"
+    want `dispatch_kind(...) != "Unconditional"`; callers asking "is this
+    dispatched on every run?" want this."""
+    return dispatch_kind(disp, hook_id) == "Unconditional"
 
 
 def outcome_returns_world(abi, type_name):

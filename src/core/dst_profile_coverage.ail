@@ -158,8 +158,21 @@ export type CapabilityKind
   | ToolProviderKind
   | ResponseInterceptorKind
   | SolverJudgeKind
+  | ExitIntentKind
 
-export type DispatchKind = Unconditional | Gated
+-- THREE kinds since ABI 7.0, and the third exists because two could only
+-- describe `ExitIntent` by lying in one direction or the other.
+--
+--   Unconditional  every registered atom, every run. Excluding one is a
+--                  rejection: the run WILL dispatch it, so a profile claiming
+--                  otherwise is claiming something false about its own run.
+--   Gated          dispatched only when something names it -- `ToolProvider`
+--                  when a call names one of its advertised tools. Exclusion is
+--                  legitimate because the run may genuinely never reach it.
+--   Lifecycle      dispatched at a lifecycle BOUNDARY that a profile may or
+--                  may not exercise. Not "every run" and not "when a call names
+--                  it": something about the RUN'S SHAPE decides.
+export type DispatchKind = Unconditional | Gated | Lifecycle
 
 -- THE DISPATCH TABLE, read from `ext/runtime.ail`'s per-kind folds: every kind
 -- but ToolProvider is dispatched for every registered atom on every run;
@@ -167,6 +180,36 @@ export type DispatchKind = Unconditional | Gated
 -- advertised tools (`first_handle_atoms`). D5 forbids EXCLUDING an
 -- unconditionally-dispatched atom — the run cannot complete — so the profile's
 -- only move for one it cannot cover is to OMIT the extension.
+-- 7.0 FIRST ANSWERED THIS WRONG, AND THE CORRECTION IS WORTH THE SPACE.
+--
+-- The original argument ran: what is dispatched is the RENDER, the render runs
+-- at every turn end for every registered atom, therefore `Unconditional` -- "the
+-- truth rather than the convenient answer". The premise was false, and the
+-- review that found it was right. The render is gated TWICE, in this tree, by
+-- code the same change introduced:
+--
+--   `ext/runtime.ail` skips the CALL for an atom whose `enabled` is false --
+--   the operator opt-in captured at registration. That was a deliberate choice
+--   (an extension whose knob is off should do no per-turn FS work) and it means
+--   "every registered atom" was never true.
+--
+--   `ext/exit_manifest.ail` returns before the fold runs at all when the host
+--   named no manifest -- `ailang run` without the TUI, and every DST profile.
+--   So "every turn end" was not true either.
+--
+-- `Unconditional` would therefore make a profile's disclosure claim something
+-- that does not happen; `Gated` would file it beside `ToolProvider`, whose
+-- exclusion is legitimate because a CALL may never name it -- a different
+-- reason that would read as the same one. Hence `Lifecycle`: rendered at a
+-- lifecycle boundary the profile may or may not exercise.
+--
+-- WHAT IS NOT IMPLEMENTED, stated rather than implied: exclusion of a Lifecycle
+-- atom is admitted here WITHOUT the harness proving the boundary is unreached.
+-- The honest rule is "legal only when the profile excludes that boundary and
+-- non-dispatch is enforced"; enforcement needs profiles to declare boundaries,
+-- which they cannot yet. Until then a Lifecycle exclusion is an unchecked claim
+-- -- weaker than an `Unconditional` rejection and stronger than silence,
+-- because it is at least named as its own kind.
 export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
   match k {
     DescribeToolsKind => Unconditional,
@@ -176,7 +219,8 @@ export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
     ToolPolicyKind => Unconditional,
     ToolProviderKind => Gated,
     ResponseInterceptorKind => Unconditional,
-    SolverJudgeKind => Unconditional
+    SolverJudgeKind => Unconditional,
+    ExitIntentKind => Lifecycle
   }
 }
 
@@ -189,7 +233,8 @@ export pure func capability_kind_id(k: CapabilityKind) -> string {
     ToolPolicyKind => "tool_policy",
     ToolProviderKind => "tool_provider",
     ResponseInterceptorKind => "response_interceptor",
-    SolverJudgeKind => "solver_judge"
+    SolverJudgeKind => "solver_judge",
+    ExitIntentKind => "exit_intent"
   }
 }
 
@@ -202,12 +247,14 @@ export pure func capability_kind_from_id(id: string) -> Option[CapabilityKind] {
   else if id == "tool_provider" then Some(ToolProviderKind)
   else if id == "response_interceptor" then Some(ResponseInterceptorKind)
   else if id == "solver_judge" then Some(SolverJudgeKind)
+  else if id == "exit_intent" then Some(ExitIntentKind)
   else None
 }
 
 export pure func all_capability_kinds() -> [CapabilityKind] {
   [DescribeToolsKind, PromptShaperKind, BudgetShaperKind, CompactorKind,
-   ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind, SolverJudgeKind]
+   ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind, SolverJudgeKind,
+   ExitIntentKind]
 }
 
 -- THE UNIT: an atom is (kind, index-within-kind) in the registration's list
@@ -367,7 +414,10 @@ pure func unconditional_atom_exclusions(ext_id: string, excluded: [AtomRef]) -> 
     a :: rest => {
       let here = match capability_dispatch(a.kind) {
         Unconditional => [UnconditionalHookExcluded(ext_id, atom_id(a))],
-        Gated => []
+        Gated => [],
+        -- Admitted, and see `capability_dispatch` for what is NOT checked: the
+        -- profile's claim that it does not reach the boundary is taken on trust.
+        Lifecycle => []
       };
       here ++ unconditional_atom_exclusions(ext_id, rest)
     }
@@ -538,25 +588,40 @@ pure func count_unconditional_kinds(ks: [CapabilityKind]) -> int {
   match ks {
     [] => 0,
     k :: rest =>
-      (match capability_dispatch(k) { Unconditional => 1, Gated => 0 }) + count_unconditional_kinds(rest)
+      (match capability_dispatch(k) { Unconditional => 1, Gated => 0, Lifecycle => 0 }) + count_unconditional_kinds(rest)
   }
 }
 
-pure func test_all_capability_kinds_is_eight_distinct() -> bool
+-- contracts: SKIPPED — "calls "all_capability_kinds" whose signature uses an
+-- unencodable type "()"". Every nullary enumerator in this module is blocked the
+-- same way, so every test reading one is too. The assertion is the `tests [...]`
+-- block, run by `ailang test` and by `make profile_coverage`.
+pure func test_all_capability_kinds_is_nine_distinct() -> bool
   tests [((), true)]
   {
-    List.length(all_capability_kinds()) == 8 && distinct_ids(kind_ids(all_capability_kinds()), [])
+    List.length(all_capability_kinds()) == 9 && distinct_ids(kind_ids(all_capability_kinds()), [])
   }
 
 pure func test_one_atom_per_kind_fully_covered_passes() -> bool
   tests [((), true)]
   {
-    List.length(one_per_kind()) == 8
+    List.length(one_per_kind()) == 9
       && capability_install_list_ok([cap_full("ext_a", one_per_kind())])
       && capability_install_list_ok([])
   }
 
-pure func test_seven_kinds_are_unconditional() -> bool
+-- SEVEN unconditional, ONE gated, ONE lifecycle at 7.0 -- and the three-way
+-- split is the assertion, not the seven. A version of this test that only
+-- counted unconditional kinds would pass with `ExitIntent` classified either
+-- way, which is exactly how the first 7.0 answer went in undetected.
+--
+-- Each arm exercises the CONSEQUENCE of its kind rather than the label:
+-- excluding the unconditional one is rejected, excluding the gated one loads
+-- clean, and excluding the lifecycle one loads clean too -- for a different
+-- reason, recorded in `capability_dispatch`.
+-- contracts: SKIPPED — "calls "all_capability_kinds" whose signature uses an
+-- unencodable type "()"". See the note above `test_all_capability_kinds_is_nine_distinct`.
+pure func test_dispatch_kinds_split_seven_one_one() -> bool
   tests [((), true)]
   {
     let gated: CapabilityDisclosure =
@@ -567,10 +632,46 @@ pure func test_seven_kinds_are_unconditional() -> bool
       { extension_id: "u", atoms: one_per_kind(),
         covered: without_kind(one_per_kind(), DescribeToolsKind),
         excluded: [{ kind: DescribeToolsKind, index: 0 }] };
+    let life: CapabilityDisclosure =
+      { extension_id: "l", atoms: one_per_kind(),
+        covered: without_kind(one_per_kind(), ExitIntentKind),
+        excluded: [{ kind: ExitIntentKind, index: 0 }] };
     capability_install_list_ok([gated])
+      && capability_install_list_ok([life])
       && has_rule(validate_capability_disclosure(unc), "unconditional-hook-excluded")
       && count_unconditional_kinds(all_capability_kinds()) == 7
+      && count_gated_kinds(all_capability_kinds()) == 1
+      && count_lifecycle_kinds(all_capability_kinds()) == 1
   }
+
+-- ONE COUNTER PER KIND, in `count_unconditional_kinds`'s exact shape, rather than
+-- one parameterised counter over a `DispatchKind`. The general version needed a
+-- helper comparing two `DispatchKind` values, and a `pure func` taking an ADT
+-- VERIFIES a trivial contract — so ADR-001 §4 requires a real one — while an
+-- `ensures` over an ADT parameter has no generator, so `ailang test` reports
+-- "1 properties never ran (no generator)" and exits 1, failing `make
+-- profile_coverage` whose last step is exactly that. Two policies pulling
+-- opposite ways; the shape that satisfies both is the one already here.
+-- contracts: BLOCKED — RECURSIVE. A synthesised `ensures { true }` ERRORS rather
+-- than skipping; the property worth stating quantifies over the list.
+pure func count_gated_kinds(ks: [CapabilityKind]) -> int {
+  match ks {
+    [] => 0,
+    k :: rest =>
+      (match capability_dispatch(k) { Gated => 1, Unconditional => 0, Lifecycle => 0 })
+        + count_gated_kinds(rest)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE; see `count_gated_kinds`.
+pure func count_lifecycle_kinds(ks: [CapabilityKind]) -> int {
+  match ks {
+    [] => 0,
+    k :: rest =>
+      (match capability_dispatch(k) { Lifecycle => 1, Unconditional => 0, Gated => 0 })
+        + count_lifecycle_kinds(rest)
+  }
+}
 
 pure func test_zero_covered_is_rejected() -> bool
   tests [((), true)]

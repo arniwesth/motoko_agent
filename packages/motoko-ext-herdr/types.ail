@@ -1239,10 +1239,15 @@ export pure func is_settled(status: string) -> bool
 -- is anything to own. Do not paper over the gap with a name-based rule; that is
 -- the rule P2-6 measured going wrong.
 --
--- THE VALUE IS ALSO WRITTEN IN TYPESCRIPT (MOT-118 class). `HERDR_REAP_ON_EXIT`
--- lives in the TUI exit seam (`src/tui/src/herdr-owner-token.ts`), on the far
--- side of a language boundary nothing links, and it must build the SAME string
--- from the SAME two inputs. If this format changes, that file changes with it.
+-- THIS IS NOW THE ONLY DEFINITION OF THE FORMAT, and that is new at ABI 7.0.
+-- Through 6.0 `src/tui/src/herdr-owner-token.ts` held a TypeScript twin,
+-- because the TUI's exit-time reaper had to rebuild the same string on the far
+-- side of a language boundary nothing links — a MOT-118-class duplication with
+-- a hand-written test on each side to keep them honest. The reaper is gone: the
+-- exit intent this package declares CARRIES the key and the value into the
+-- published manifest, and the host only compares strings it was handed. Both
+-- sides of every comparison now come from here. There is nothing to keep in
+-- sync, so there is no twin test either.
 
 export pure func owner_token_key() -> string
   tests [((), "mot-owner")]

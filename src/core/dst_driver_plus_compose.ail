@@ -217,7 +217,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
 -- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
 -- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
-export pure func compose_profile_version() -> string { "4" }
+export pure func compose_profile_version() -> string { "7" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -225,6 +225,45 @@ export pure func compose_profile_version() -> string { "4" }
 -- without re-deriving.
 export pure func compose_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT 7.0 REVIEW FIX FOR v6, from
+    -- sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33.
+    -- TWO anchors moved, +4 (`3012/3122 -> 3016/3126`): the publish-before-`done`
+    -- ordering fix (review finding 4) added four lines inside `c2_loop`'"'"'s success
+    -- arm, which sits between `:1529` and the two `provider.ports.clock_now`
+    -- sites. The other three did not move and were re-derived anyway, on the
+    -- rule the previous re-baseline had to learn the hard way: an anchor that
+    -- still matches is not an anchor that is still right.
+    --
+    -- All five anchored expressions are byte-identical at their offsets. Pure
+    -- offset drift; the routed clock set is unchanged at six sites. The
+    -- exit-manifest publish reads no clock.
+    -- RE-RECORDED AT ABI 7.0 FOR v5, from
+    -- sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66.
+    -- FIVE anchors moved, all +2 (`1162/1421/1527/3010/3120 ->
+    -- 1164/1423/1529/3012/3122`), and the cause is two import lines in
+    -- `session.ail` for the exit-intent seam (`ext/exit_manifest`,
+    -- `ext/ctx_defaults`), both above every anchor.
+    --
+    -- ONE OF THE FIVE DID NOT FAIL THE CHECK, and that is the part worth
+    -- recording: at +2 the `:1162` anchor landed on `let clock_now = func(...)`
+    -- instead of `let reading = p.clock_now(w0);` — a different expression
+    -- carrying the same substring, so the grep matched and the anchor silently
+    -- re-pointed. Re-baselining only the four that shouted would have frozen a
+    -- green anchor onto the wrong line. All five were re-derived.
+    --
+    -- All five anchored expressions were compared to
+    -- `git show cec2e25~1:src/core/session.ail` character by character and are
+    -- byte-identical: pure offset drift, no site changed identity, routing or
+    -- attribution. The exit-manifest publish reads no clock, so the routed set
+    -- is the same six it was.
+    --
+    -- THE WIDTH WAS MIS-PRICED FIRST AND THE GATE CORRECTED IT. The re-baseline
+    -- note in `anchors.sh` initially claimed a THREE-file cascade on the grounds
+    -- that no fixture-carried anchor moved — true, and not the rule. `make
+    -- driver_only` answered `the attribution table was corrected and driver_only
+    -- was not re-issued (D4)`, which is the six-file form: the three profile
+    -- versions and their refs are pinned to the TABLE, not to the anchors it
+    -- happens to hold. The claim in `anchors.sh` is corrected to match.
     -- WI-D27: recorded for the first time, from the live table at the bound
     -- revision — `driver_only_attribution_ref` and `no_ops_attribution_ref`
     -- carry the same pair and the full re-issue history behind it. This file has
@@ -242,7 +281,7 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +14, pushed by a Z3 contract on
     -- `trace_sensitive_key`. An anchor re-measurement, not a table correction.
     -- See `driver_only_attribution_ref`.
-    content_hash: "sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66" }
+    content_hash: "sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -326,8 +365,18 @@ pure func package_of(id: string) -> InstalledPackage {
 -- Compactor or a SolverJudge, so two of these four ids name atoms compose does
 -- not hold — the list stays the ABI FACT (the guard compares its kinds against
 -- types.ail) and `criterion_2_slot_ids` intersects it with the registration.
+-- A FACT ABOUT THE ABI, not a decision: the atoms whose `Capability` payload
+-- declares a non-empty effect row. `exit_intent[0]` joined at 7.0 (`! {FS}`),
+-- and `check_fixtures.py` re-derives this list from types.ail on every run and
+-- fails when the two readings disagree -- which is how it was caught here
+-- rather than silently narrowing what this profile claims to cover.
+--
+-- Listing it does NOT widen coverage: `criterion_2_slot_ids` intersects this
+-- with the atoms compose actually REGISTERS, and compose registers no
+-- `ExitIntent`, so the covered set is unchanged.
 export pure func rowed_slot_ids() -> [string] {
-  ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]"]
+  ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]",
+   "exit_intent[0]"]
 }
 
 -- The one slot this profile excludes. Separate from `rowed_slot_ids` because it
@@ -529,11 +578,18 @@ pure func omit_each(ids: [string], reason: string) -> [OmittedExtension] {
 
 pure func not_installed() -> [OmittedExtension] {
   [{ extension_id: "compaction_ai",
-     reason: "NOT INSTALLED, and it is the sharpest of the sixteen. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. WHAT WI-D27 ADDS: this profile now has a producer that can speak about behaviour rather than rows, so compaction_ai is the extension most likely to be installable in the NEXT profile of this kind — a graded run that dispatches its on_pre_step through ExtPorts.ai_step against a scripted provider would produce exactly the evidence `discovery` reads. That run is not in this item and the omission stands until it exists; naming it here is what stops the possibility from being rediscovered as a surprise." }]
+     reason: "NOT INSTALLED, and it is the sharpest of the seventeen. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. WHAT WI-D27 ADDS: this profile now has a producer that can speak about behaviour rather than rows, so compaction_ai is the extension most likely to be installable in the NEXT profile of this kind — a graded run that dispatches its on_pre_step through ExtPorts.ai_step against a scripted provider would produce exactly the evidence `discovery` reads. That run is not in this item and the omission stands until it exists; naming it here is what stops the possibility from being rediscovered as a surprise." }]
     ++ omit_each(["compaction_structural", "decision_framework", "empty_stop_guard",
                   "progress_contract_guard"], declined_reason())
+    -- `repetition_guard` joined ailang.toml's [extensions] packages and this profile
+    -- named it in neither list -- WI-D7's "decision INHERITED rather than taken". It
+    -- omits on the measured basis the others here share: `make ext_ambient_inventory`
+    -- reports it AMBIENT (1 ambient source, 0 ExtPorts field calls), so criterion 2's
+    -- first clause fails on evidence, and its `SolverJudge` binding declares
+    -- `! {Process}` under unconditional dispatch, so criterion 1 fails on the row.
     ++ omit_each(["a2a", "agentcli", "ailang_docs", "context_mode", "exa_search", "herdr",
-                  "mcp", "microrag", "omnigraph", "scratchpad", "test_dummy"], barrier_reason())
+                  "mcp", "microrag", "omnigraph", "repetition_guard", "scratchpad",
+                  "test_dummy"], barrier_reason())
 }
 
 -- ---------------------------------------------------------------------------
@@ -568,7 +624,7 @@ export pure func driver_plus_compose() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface, ABI 6.0 (B8; was 5.0). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
+        note: "the motoko-ext-abi hook surface, ABI 7.0 (the ExitIntent variant; was 6.0 at B8, 5.0 before it). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
       { boundary_id: "extension.ext_ports", included: true,
         note: "the ExtPorts surface an extension uses to reach the world. **INCLUDED, and this is the whole difference between this profile and both predecessors.** driver_only excluded it because it installs nothing; driver_plus_no_ops excluded it BY MEASUREMENT, classifier 3 reporting 0 ExtPorts field calls in each installed closure, and named it 'the boundary WI-C5's compose-bearing profile would have to include'. This is that profile and it includes it: classifier 3 reports 36 ExtPorts field calls in compose's closure, and the graded session records one of them — a tool_handle — as an origin-tagged interaction in the recorded program" }
     ],
@@ -879,7 +935,7 @@ pure func test_installed_and_omitted_are_disjoint() -> bool
   {
     let d = driver_plus_compose();
     disjoint(omitted_ids(d.omitted_extensions), installed_extension_ids())
-      && List.length(d.omitted_extensions) == 16
+      && List.length(d.omitted_extensions) == 17
   }
 
 pure func omitted_ids(os: [OmittedExtension]) -> [string] {
@@ -890,13 +946,20 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
   match xs { [] => true, x :: rest => if contains_str(ys, x) then false else disjoint(rest, ys) }
 }
 
--- The covered rowed slots are the ABI's rowed set minus this profile's one
--- decision, computed rather than restated. A second literal list would let the
--- decision and the derivation drift.
+-- The covered rowed slots are the ABI's rowed set, restricted to what compose
+-- REGISTERS, minus this profile's one decision — computed rather than restated,
+-- because a second literal list would let the decision and the derivation drift.
+--
+-- FIVE rowed atoms at ABI 7.0, four before it: `exit_intent[0]` declares
+-- `! {FS}`. The covered count is UNCHANGED at one, and that is the property
+-- worth asserting rather than the raw total — compose registers no `ExitIntent`,
+-- so the intersection drops it and the profile's coverage claim is exactly what
+-- it was. A test pinned to the total alone would have gone red on an ABI
+-- addition that changes nothing about this profile.
 pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
   tests [((), true)]
   {
-    List.length(rowed_slot_ids()) == 4
+    List.length(rowed_slot_ids()) == 5
       && List.length(excluded_slot_ids()) == 1
       && List.length(criterion_2_slot_ids()) == 1
       && not contains_str(criterion_2_slot_ids(), "tool_provider[0]")
@@ -907,7 +970,7 @@ pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = compose_manifest("r", "t", "6.0", "{}", ["env_get"], [], "r");
+    let m = compose_manifest("r", "t", "7.0", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_compose().installed_packages)
       && List.length(m.extension_packages) == 1
       && m.profile_id == compose_profile_id()

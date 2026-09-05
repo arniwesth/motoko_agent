@@ -306,8 +306,82 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
+# ABI 7.0 RE-BASELINED THE FIVE session.ail ANCHORS AN EIGHTH TIME, ALL +2 --
+# `1162/1421/1527/3010/3120 -> 1164/1423/1529/3012/3122` -- and the cause is the
+# cheapest one yet: TWO IMPORT LINES. The exit-intent seam needs
+# `src/core/ext/exit_manifest` and `src/core/ext/ctx_defaults` in `session.ail`,
+# both at the top, above everything.
+#
+# THE FIFTH ANCHOR IS WHY THIS NOTE IS LONGER THAN THE CAUSE. Four of the five
+# failed the check; `:1162` PASSED, and it was wrong. At +2 that line stopped
+# being `let reading = p.clock_now(w0);` and became `let clock_now = func(w:
+# ExtWorld) -> ExtClockReading ! {Clock} {` two lines above it -- a different
+# expression that still contains the substring `clock_now`, so the grep matched
+# and the anchor silently re-pointed. A green anchor that names the wrong line is
+# the exact failure this file exists to prevent, and a partial re-baseline (the
+# four that shouted) would have frozen it in place. Every anchor whose file moved
+# was re-derived, not only the ones that complained.
+#
+# THE D4 JUDGEMENT WAS MADE: the routed clock set is unchanged. `grep -n
+# 'clock_now'` over `git show cec2e25~1:src/core/session.ail` and over the
+# working tree yields the same six sites, and all five anchored expressions are
+# byte-identical at their new offsets. Pure offset drift; no site changed
+# identity, routing or attribution. The exit-manifest publish reads no clock.
+#
+# THE WIDTH WAS MIS-PRICED FIRST, AND THE GATE CORRECTED IT -- recorded because
+# the mistake is the useful part. This note first claimed a THREE-file cascade,
+# reasoning that no FIXTURE-carried anchor moved: the four discovered-site
+# fixtures hold `ext/runtime.ail:199` and `tool_phase.ail:318`, and neither did.
+# That is true and it is not the rule. `make driver_only` answered
+#
+#     the attribution table was corrected and driver_only was not re-issued (D4)
+#
+# because the three profiles pin the TABLE -- version plus `content_hash` -- and
+# not the anchors the table happens to hold. Correcting a row re-issues all
+# three whether or not any fixture moved. This is the SIX-file form:
+#
+#   1. this file                                (the check itself)
+#   2. src/core/dst_attribution_table.ail       (5 rows + 1 test literal)
+#   3. scripts/dst/attribution_table_dst.ail    (1 literal, `:1527` in omitted_site)
+#   4. src/core/dst_driver_only.ail             (v24 -> v25 + content hash)
+#   5. src/core/dst_driver_plus_no_ops.ail      (v12 -> v13 + content hash)
+#   6. src/core/dst_driver_plus_compose.ail     (v4  -> v5  + content hash)
+#
+# `src/core/session.ail` itself is the seventh in the sense the older notes mean
+# it -- the edited contract -- but it is the CAUSE rather than a pin.
+#
+# The width claim is now DERIVED rather than argued: `make driver_only`,
+# `make driver_plus_no_ops`, `make driver_plus_compose`, `make profile_definition`
+# and `make attribution_table` were all run after the re-issue.
+#
+# AND THE PLACEMENT DODGE IS AVAILABLE HERE AND WAS DECLINED. Two imports could
+# be squeezed onto existing lines to keep the file line-count-neutral, which is
+# what WI-D19 did and WI-D20 called "a habit" rather than a technique. Paying the
+# re-baseline once is cheaper than a `session.ail` whose import block is written
+# for the anchor checker.
+
+# THE 7.0 REVIEW MOVED TWO OF THE FIVE, +4 -- `3012/3122 -> 3016/3126`. The
+# publish-before-`done` fix (review finding 4) added four lines inside
+# `c2_loop`'s success arm, which sits between `:1529` and the two
+# `provider.ports.clock_now` sites; the first three anchors did not move.
+#
+# ALL FIVE WERE RE-DERIVED ANYWAY, on the rule the +2 re-baseline above had to
+# learn: an anchor that still matches is not an anchor that is still right.
+# `grep -n 'clock_now'` was run over the working tree and each of the five
+# expressions compared to its recorded text. Three were byte-identical at
+# unchanged offsets; two moved by four and are byte-identical at the new ones.
+#
+# THE D4 JUDGEMENT: the routed clock set is unchanged, six sites and six. The
+# exit-manifest publish reads no clock; it is ordered before a ledger emit and
+# performs FS and Process work only.
+#
+# WIDTH: the six-file form again, for the reason the note above records -- the
+# three profiles pin the TABLE, so correcting a row re-issues them whether or
+# not a fixture-carried anchor moved. driver_only v25 -> v26, no_ops v13 -> v14,
+# compose v5 -> v6.
+
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1162 1421 1527 3010 3120; do
+for l in 1164 1423 1529 3016 3126; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

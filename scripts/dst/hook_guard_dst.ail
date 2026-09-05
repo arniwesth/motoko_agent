@@ -161,12 +161,12 @@ pure func atom_ids_of(xs: [AtomRef]) -> [AtomIds] {
   match xs { [] => [], x :: rest => ({ kind: capability_kind_id(x.kind), index: x.index }) :: atom_ids_of(rest) }
 }
 
-pure func eight() -> [AtomIds] { atom_ids_of(atoms_at_zero(all_capability_kinds())) }
+pure func one_per_kind() -> [AtomIds] { atom_ids_of(atoms_at_zero(all_capability_kinds())) }
 
 pure func tool_provider_atom() -> AtomIds { { kind: "tool_provider", index: 0 } }
 
 pure func all_atoms_but_tool_provider() -> [AtomIds] {
-  drop_atom(eight(), tool_provider_atom())
+  drop_atom(one_per_kind(), tool_provider_atom())
 }
 
 pure func drop_atom(xs: [AtomIds], t: AtomIds) -> [AtomIds] {
@@ -179,7 +179,7 @@ pure func drop_atom(xs: [AtomIds], t: AtomIds) -> [AtomIds] {
 -- EXCLUDES the gated atom.
 pure func excluding() -> ProfileDefinition {
   definition_with([{ extension_id: guarded_ext_id(),
-                     atoms: eight(),
+                     atoms: one_per_kind(),
                      covered: all_atoms_but_tool_provider(),
                      excluded: [tool_provider_atom()] }])
 }
@@ -187,8 +187,8 @@ pure func excluding() -> ProfileDefinition {
 -- COVERS every atom. Identical in every other field.
 pure func covering() -> ProfileDefinition {
   definition_with([{ extension_id: guarded_ext_id(),
-                     atoms: eight(),
-                     covered: eight(),
+                     atoms: one_per_kind(),
+                     covered: one_per_kind(),
                      excluded: [] }])
 }
 

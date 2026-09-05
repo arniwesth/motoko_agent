@@ -96,7 +96,10 @@ func mk_cfg() -> HerdrConfig {
     -- MOT-137 off: this gate is about DelegateCheck, and an auto-opened view
     -- pane would put two herdr calls in a log these cases read by position.
     dagr_pane: false,
-    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000 }
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
+    -- ABI 7.0: the exit intent is declared either way; this says whether it
+    -- renders actions. These gates exercise the tool paths, not the exit path.
+    reap_on_exit: false }
 }
 
 func check_call() -> ToolCallEnvelope {
