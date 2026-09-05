@@ -1,0 +1,30 @@
+module tools/driver_leaf_inventory/fixtures/form_witnessed_after_record
+
+-- FORM 3 of the four PLAN §2.1 names: a helped leaf witnessed after a
+-- record construction.
+--
+-- `advance` is called on the successor, but `witness` runs AFTER
+-- `{ world_state: ... }` is built. The script reports
+-- witnessed-after-construction (the one shape the wire cannot see).
+--
+-- `advance`/`witness` are local stubs standing in for the P2 helpers:
+-- the fixture's claim is about ORDER (witness after the record literal),
+-- which the script reads textually, not about the helpers' bodies.
+
+import src/core/ports (Ports, WorldState)
+
+export func advance(world: WorldState, cls: string) -> WorldState {
+  world
+}
+
+export func witness(world: WorldState) -> WorldState {
+  world
+}
+
+export func read_then_publish(ports: Ports, world: WorldState, key: string) -> string ! {Env} {
+  let got = ports.env_get(world, key, "");
+  let w1 = advance(got.next_state, "EnvRead");
+  let rec = { world_state: w1, value: got.value };
+  let out = witness(rec.world_state);
+  rec.value
+}

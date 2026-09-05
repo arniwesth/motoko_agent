@@ -1,0 +1,29 @@
+module tools/driver_leaf_inventory/fixtures/control_clean
+
+-- CONTROL. Not a bypass form: a correctly helped-and-witnessed-in-order
+-- leaf. `advance` runs on the successor, `witness` drains pending BEFORE
+-- any driver record is built. The script reports it clean.
+--
+-- This fixture is what makes the other three falsifiable: a classifier
+-- that reported everything as witnessed-after-construction would pass a
+-- suite of only-bad fixtures while being useless.
+--
+-- `advance`/`witness` are local stubs standing in for the P2 helpers.
+
+import src/core/ports (Ports, WorldState)
+
+export func advance(world: WorldState, cls: string) -> WorldState {
+  world
+}
+
+export func witness(world: WorldState) -> WorldState {
+  world
+}
+
+export func read_clean(ports: Ports, world: WorldState, key: string) -> string ! {Env} {
+  let got = ports.env_get(world, key, "");
+  let w1 = advance(got.next_state, "EnvRead");
+  let out = witness(w1);
+  let rec = { world_state: out, value: got.value };
+  rec.value
+}

@@ -443,7 +443,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   conformance stream_parity latency_pair test_coverage_selftest \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
-  registry_multiplicity
+  registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest
 
 # corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
 #
@@ -2756,6 +2756,20 @@ ext_call_inventory:
 
 ext_call_inventory_selftest:
 	@python3 tools/ext_call_inventory/derive.py --self-test
+
+# ---------------------------------------------------------------------------
+# PLAN-001 P-INV (ADR-001 D2 §2.1): the driver-side leaf inventory — every
+# direct Ports/ContextReader field call by driver-side code with its
+# RequestClass, the aggregate-helper graph, and the ten-field exempt list.
+# RequestClass names frozen here (EnvRead, FileRead, ClockRead, ToolExec,
+# ModelStep); P2 Part 1 consumes the enum.
+# ---------------------------------------------------------------------------
+.PHONY: driver_leaf_inventory driver_leaf_inventory_selftest
+driver_leaf_inventory:
+	@python3 tools/driver_leaf_inventory/derive.py
+
+driver_leaf_inventory_selftest:
+	@python3 tools/driver_leaf_inventory/derive.py --self-test
 
 # ---------------------------------------------------------------------------
 # ADR-001 Amendment A, WI-D12: CLASSIFIER 3 -- the extension-closure
