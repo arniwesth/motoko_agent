@@ -7,6 +7,7 @@
 #   - Bun 1.x
 #   - Node.js 18+ and npm
 #   - DuckDB CLI
+#   - GitHub CLI (gh) — transport for the .agent/github/ PR ops pipeline
 #   - Python data science packages for scratchpad cells (pandas, polars, numpy, SciPy, scikit-learn)
 #   - context-mode CLI
 #   - AILANG runtime (cloned from github.com/sunholo-data/ailang at pinned tag)
@@ -36,9 +37,15 @@ GO_MIN_MINOR=22
 BUN_MIN_MAJOR=1
 NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
-AILANG_REF="v0.24.2"
-AILANG_MIN_VERSION="0.24.2"
+AILANG_REF="v0.33.0"
+AILANG_MIN_VERSION="0.33.0"
 DUCKDB_VERSION="1.1.3"
+# Ubuntu noble's universe carries gh 2.45.0 and will for the life of the release.
+# The PR ops pipeline (.agent/projects/016_github_ops/) needs newer: `gh api
+# --slurp` — how the comment sync pages review threads — landed in 2.51.0. Pin the
+# official release tarball instead, the same way duckdb and ailang are pinned here.
+GH_VERSION="2.97.0"
+GH_MIN_VERSION="2.51.0"
 INSTALL_OMNIGRAPH=0
 INSTALL_LEAN=0
 INSTALL_LEAN_MATHLIB=0
@@ -243,6 +250,13 @@ duckdb_ok() {
   command -v duckdb &>/dev/null
 }
 
+gh_version_ok() {
+  if ! command -v gh &>/dev/null; then return 1; fi
+  local ver
+  ver="$(gh --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  [[ -n "$ver" ]] && version_ge "$ver" "$GH_MIN_VERSION"
+}
+
 context_mode_ok() {
   if ! command -v context-mode &>/dev/null; then return 1; fi
   context-mode doctor &>/dev/null
@@ -264,6 +278,17 @@ ensure_user_local_bin_on_path() {
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
   fi
   export PATH="$HOME/.local/bin:$PATH"
+  # GitHub Actions gives every `run:` step a fresh non-interactive shell, which
+  # reads neither .bashrc nor .profile, so the two lines above reach nothing but
+  # the rest of THIS process. $GITHUB_PATH is the only channel that carries a
+  # PATH entry to the next step; without it a workflow that installs the
+  # toolchain here and calls `ailang` in a later step fails instantly with
+  # "command not found" while the install step reports success.
+  if [[ -n "${GITHUB_PATH:-}" ]]; then
+    if ! grep -qxF "$HOME/.local/bin" "$GITHUB_PATH" 2>/dev/null; then
+      echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -316,6 +341,25 @@ PY
   log_info "Installing polars with pip for the current user..."
   python3 -m pip install --user --break-system-packages polars
   log_ok "polars installed"
+}
+
+chdb_ok() {
+  python3 - <<'PY' >/dev/null 2>&1
+import chdb
+PY
+}
+
+install_chdb() {
+  log_header "chDB embedded ClickHouse"
+
+  if chdb_ok; then
+    log_ok "chDB already installed"
+    return
+  fi
+
+  log_info "Installing chDB with pip for the current user (~712 MB installed footprint)..."
+  python3 -m pip install --user --break-system-packages chdb
+  log_ok "chDB installed"
 }
 
 # ---------------------------------------------------------------------------
@@ -477,6 +521,46 @@ install_duckdb() {
     log_ok "duckdb installed at $(command -v duckdb)"
   else
     log_warn "duckdb installation step finished but binary is not on PATH"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# GitHub CLI (gh)
+# ---------------------------------------------------------------------------
+install_gh() {
+  log_header "GitHub CLI"
+  if gh_version_ok; then
+    log_ok "gh $(gh --version 2>/dev/null | head -1 | awk '{print $3}') already installed (>= ${GH_MIN_VERSION})"
+    return
+  fi
+
+  if [[ "$OS" == "macos" ]]; then
+    log_info "Installing gh via Homebrew..."
+    brew install gh
+  else
+    # Deliberately NOT apt: noble/universe pins 2.45.0, and adding
+    # cli.github.com as a third-party apt source would make every future
+    # `apt-get update` in the image depend on it. A pinned tarball into
+    # ~/.local/bin needs no root and matches how duckdb is handled above.
+    ensure_user_local_bin_on_path
+    local url="https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz"
+    local tmp
+    tmp="$(mktemp -d)"
+    log_info "Downloading gh ${GH_VERSION} (linux/${ARCH})..."
+    if ! curl -fsSL "$url" -o "${tmp}/gh.tar.gz"; then
+      log_warn "Failed to download gh from ${url}. Install gh manually."
+      rm -rf "$tmp"; return
+    fi
+    tar -xzf "${tmp}/gh.tar.gz" -C "$tmp"
+    cp "${tmp}/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" "$HOME/.local/bin/gh"
+    chmod +x "$HOME/.local/bin/gh"
+    rm -rf "$tmp"
+  fi
+
+  if gh_version_ok; then
+    log_ok "gh installed at $(command -v gh)"
+  else
+    log_warn "gh installation step finished but a usable gh is not on PATH"
   fi
 }
 
@@ -663,6 +747,7 @@ print_summary() {
   echo "  npm:     $(npm --version 2>/dev/null || echo 'not found')"
   echo "  ailang:  $(command -v ailang &>/dev/null && echo 'found' || echo 'not found')"
   echo "  duckdb:  $(command -v duckdb &>/dev/null && echo 'found' || echo 'not found')"
+  echo "  gh:      $(command -v gh &>/dev/null && echo 'found' || echo 'not found')"
   echo "  context-mode: $(command -v context-mode &>/dev/null && echo 'found' || echo 'not found')"
   echo "  omnigraph: $(command -v omnigraph &>/dev/null && echo 'found' || echo 'not found')"
   echo "  lean:    $(command -v lean &>/dev/null && echo 'found' || echo 'not found')"
@@ -692,9 +777,11 @@ main() {
   install_bun
   install_node
   install_duckdb
+  install_gh
   if [[ "$OS" == "debian" ]]; then
     install_python_data_science_packages
   fi
+  install_chdb
   install_context_mode
   install_bun_deps
   install_ailang

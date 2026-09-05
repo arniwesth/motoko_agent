@@ -1,0 +1,1328 @@
+-- Phase vocab module
+--
+-- Phase-oriented core vocabulary. Phase A lands this module unused by
+-- production: sealed history/payload types, state/delta/checkpoint shapes,
+-- the typed ledger vocabulary, and schema-v1 projection scaffolding.
+
+module src/core/phase_vocab
+
+import std/ai (Message, ToolCall, StepResult)
+import std/crypto (sha256Hex)
+import std/json (Json, jo, ja, kv, js, jnum, encode)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (contains, substring, replaceMany)
+import std/string as Str (length)
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, output_token_allowance, effective_input_limit, calibrated_tokens_anchored, calibrated_usage_percent_anchored)
+import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
+import src/core/types (Msg)
+import pkg/sunholo/motoko_ext_abi/types (DiagnosticField)
+
+-- ============================================================================
+-- History: sealed. MkHistory is deliberately NOT exported.
+-- ============================================================================
+
+type History = MkHistory([Message])
+
+export func history_from_seed(msgs: [Message]) -> Result[History, string] {
+  if system_is_head_prefix(msgs, true)
+  then Ok(MkHistory(msgs))
+  else Err("history seed: system messages must form a head prefix")
+}
+
+export type CheckpointChain = {
+  initial_digest: string,
+  checkpoints: [CheckpointInfo]
+}
+
+export func history_from_resume(msgs: [Message], chain: CheckpointChain) -> Result[History, string] {
+  if not system_is_head_prefix(msgs, true) then Err("history resume: system messages must form a head prefix")
+  else {
+    let h = MkHistory(msgs);
+    let final_digest = history_digest(h);
+    match validate_checkpoint_chain(chain.initial_digest, chain.checkpoints, final_digest) {
+      Err(e) => Err(e),
+      Ok(_) => Ok(h)
+    }
+  }
+}
+
+export func history_append(h: History, m: Message) -> History {
+  match h { MkHistory(xs) => MkHistory(xs ++ [m]) }
+}
+
+export func history_len(h: History) -> int {
+  match h { MkHistory(xs) => List.length(xs) }
+}
+
+export func history_messages(h: History) -> [Message] {
+  match h { MkHistory(xs) => xs }
+}
+
+export func history_digest(h: History) -> string {
+  match h { MkHistory(xs) => digest_messages(xs) }
+}
+
+export pure func history_digest_matches(h: History, expected: string) -> bool {
+  history_digest(h) == expected
+}
+
+export pure func history_valid_transcript(h: History) -> bool {
+  match h { MkHistory(xs) => valid_message_transcript(xs) }
+}
+
+pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest =>
+      if m.role == "system"
+      then still_head && system_is_head_prefix(rest, true)
+      else system_is_head_prefix(rest, false)
+  }
+}
+
+pure func take_system_prefix(msgs: [Message]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "system" then m :: take_system_prefix(rest) else []
+  }
+}
+
+export pure func system_prefix_chars(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => if m.role == "system" then Str.length(m.content) + system_prefix_chars(rest) else 0
+  }
+}
+
+pure func valid_tool_calls(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => c.id != "" && valid_tool_calls(rest)
+  }
+}
+
+pure func valid_message_transcript(msgs: [Message]) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest =>
+      if m.role == "tool" then m.tool_call_id != "" && valid_message_transcript(rest)
+      else valid_tool_calls(m.tool_calls) && valid_message_transcript(rest)
+  }
+}
+
+-- ============================================================================
+-- Compaction pipeline types: both sealed.
+-- ============================================================================
+
+type CompactableSegment = MkSegment([Message])
+type ProviderPayload = MkPayload([Message])
+
+export type PinnedSplit = { pinned: [Message], segment: CompactableSegment }
+
+export func payload_messages(p: ProviderPayload) -> [Message] {
+  match p { MkPayload(xs) => xs }
+}
+
+pure func take_non_system_tail(msgs: [Message]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "system" then take_non_system_tail(rest) else msgs
+  }
+}
+
+export pure func split_for_compaction(msgs: [Message]) -> PinnedSplit {
+  { pinned: take_system_prefix(msgs), segment: MkSegment(take_non_system_tail(msgs)) }
+}
+
+export pure func segment_messages(segment: CompactableSegment) -> [Message] {
+  match segment { MkSegment(xs) => xs }
+}
+
+export type SealError = SealExhausted(string) | SealSystemPromptEmpty(string)
+
+export pure func seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message], model: string, raw_context_limit: int, require_system_prompt: bool) -> Result[ProviderPayload, SealError] {
+  let payload_msgs = split.pinned ++ chain_msgs;
+  if require_system_prompt && system_prefix_chars(split.pinned) == 0 then
+    Err(SealSystemPromptEmpty("system prompt required but system prefix is 0 chars"))
+  else {
+    let pct = usage_percent_with_limit(payload_msgs, effective_input_limit(raw_context_limit));
+    if pct >= exhaustion_pct() then
+      Err(SealExhausted("compaction_exhausted: context at ${show(pct)}% of ${model} limit after compactor chain"))
+    else Ok(MkPayload(payload_msgs))
+  }
+}
+
+export type ModelRequest = { model: string }
+
+export type TokenTelemetry = {
+  last_input_tokens: int,
+  last_output_tokens: int,
+  -- char/4 estimate of the window that produced last_input_tokens. Lets the
+  -- compaction gate anchor on provider truth: scale the current raw estimate by
+  -- (last_input_tokens / last_estimated_input_tokens). 0 before the first
+  -- provider result (calibration falls back to the raw estimate).
+  last_estimated_input_tokens: int
+}
+
+-- Re-grounded on current compaction.ail. The Phase-A source of truth is the
+-- named exports in src/core/compaction.ail: elide_tier_pct(),
+-- elide_hard_tier_pct(), emergency_pct(), elide_keep_last(),
+-- elide_hard_keep_last(), emergency_keep_last(), emergency_final_keep_last().
+export type CompactionPolicy = {
+  context_limit: int,
+  elide_tier_pct: int,
+  elide_hard_tier_pct: int,
+  emergency_pct: int
+}
+
+-- Pure structural prep for the effectful model-call seal. This pins the system
+-- prefix and identifies the compactable segment; it deliberately does not make
+-- a Fail/exhaustion decision. Context exhaustion is owned by
+-- seal_compacted_payload after the compactor chain has run, and any actual-token
+-- pre-gate is deferred to ABI v3 extension policy. The live driver consumes the
+-- prep directly only after the optional WI-F3 model_phase extraction lands.
+export pure func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
+  -> Result[{ split: PinnedSplit, events: [LedgerEvent] }, string] {
+  match h {
+    MkHistory(xs) => {
+      let split = split_for_compaction(xs);
+      Ok({
+        split: split,
+        events: [ProviderCallPrepared({
+          step: 0,
+          msg_count: List.length(xs),
+          estimated_input_tokens: estimate_tokens_messages(xs),
+          system_prefix_count: List.length(split.pinned),
+          system_prefix_chars: 0,
+          system_prefix_digest: system_prefix_digest_for(split.pinned),
+          payload_digest: payload_digest(xs),
+          model: ""
+        })]
+      })
+    }
+  }
+}
+
+pure func frame(label: string, value: string) -> string {
+  "${label}:${show(Str.length(value))}:${value};"
+}
+
+pure func digest_content(value: string) -> string {
+  replaceMany(value, [
+    ("make[20]", "make[0]"), ("make[19]", "make[0]"), ("make[18]", "make[0]"), ("make[17]", "make[0]"), ("make[16]", "make[0]"),
+    ("make[15]", "make[0]"), ("make[14]", "make[0]"), ("make[13]", "make[0]"), ("make[12]", "make[0]"), ("make[11]", "make[0]"),
+    ("make[10]", "make[0]"), ("make[9]", "make[0]"), ("make[8]", "make[0]"), ("make[7]", "make[0]"), ("make[6]", "make[0]"),
+    ("make[5]", "make[0]"), ("make[4]", "make[0]"), ("make[3]", "make[0]"), ("make[2]", "make[0]"), ("make[1]", "make[0]")
+  ])
+}
+
+pure func canonical_tool_calls(calls: [ToolCall]) -> string {
+  match calls {
+    [] => "tc-end;"
+    c :: rest =>
+      "tc{${frame("id", c.id)}${frame("name", c.name)}${frame("args", c.arguments)}}${canonical_tool_calls(rest)}"
+  }
+}
+
+pure func canonical_messages(msgs: [Message]) -> string {
+  match msgs {
+    [] => "m-end;"
+    m :: rest =>
+      "m{${frame("role", m.role)}${frame("content", digest_content(m.content))}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}}${canonical_messages(rest)}"
+  }
+}
+
+pure func canonical_messages_raw(msgs: [Message]) -> string {
+  match msgs {
+    [] => "m-end;"
+    m :: rest =>
+      "m{${frame("role", m.role)}${frame("content", m.content)}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}}${canonical_messages_raw(rest)}"
+  }
+}
+
+pure func digest_messages(msgs: [Message]) -> string {
+  "sha256:${sha256Hex(canonical_messages(msgs))}"
+}
+
+export pure func payload_digest(msgs: [Message]) -> string {
+  digest_messages(msgs)
+}
+
+export pure func system_prefix_digest_for(msgs: [Message]) -> string {
+  "sha256:${sha256Hex(canonical_messages_raw(msgs))}"
+}
+
+-- ============================================================================
+-- Checkpoint seam.
+-- ============================================================================
+
+export type CheckpointPlan = { reason: string, summary: string }
+
+export func checkpoint(h: History, plan: CheckpointPlan)
+  -> { history: History, event: LedgerEvent } {
+  match h {
+    MkHistory(xs) => {
+      let pinned = take_system_prefix(xs);
+      let summary_msg: Message =
+        { role: "assistant", content: "[CHECKPOINT] ${plan.summary}", tool_calls: [], tool_call_id: "", images: [] };
+      let rebuilt = MkHistory(pinned ++ [summary_msg]);
+      {
+        history: rebuilt,
+        event: CheckpointTaken({
+          reason: plan.reason,
+          before_digest: history_digest(h),
+          after_digest: history_digest(rebuilt)
+        })
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- StepState and deltas.
+-- ============================================================================
+
+export type LoopTotals = {
+  input_tokens: int,
+  output_tokens: int,
+  cost_millicents: int,
+  cost_warned_pct: int
+}
+
+export type StepPolicy = {
+  step_budget: int,
+  max_cost_millicents: int,
+  cost_metered: bool,
+  persist_retries: int,
+  retry_stream_errors: bool,
+  require_system_prompt: bool,
+  model: string,
+  provider_base_url: string,
+  checkpoint_enabled: bool,
+  checkpoint_pct: int,
+  compaction: CompactionPolicy
+}
+
+export type StepState = {
+  step_idx: int,
+  history: History,
+  telemetry: TokenTelemetry,
+  totals: LoopTotals,
+  nudges_used: int,
+  ext_artifacts: Json,
+  pending_tool_calls: [ToolCall],
+  last_finish_reason: string,
+  last_response_text: string
+}
+
+export type StateDelta = {
+  telemetry: Option[TokenTelemetry],
+  totals: Option[LoopTotals],
+  nudges_used: Option[int],
+  ext_artifacts: Option[Json],
+  pending_tool_calls: Option[[ToolCall]],
+  last_finish_reason: Option[string],
+  last_response_text: Option[string]
+}
+
+export pure func empty_delta() -> StateDelta {
+  { telemetry: None, totals: None, nudges_used: None, ext_artifacts: None,
+    pending_tool_calls: None, last_finish_reason: None, last_response_text: None }
+}
+
+export func apply_state_delta(s: StepState, d: StateDelta) -> StepState {
+  {
+    step_idx: s.step_idx,
+    history: s.history,
+    telemetry: match d.telemetry { Some(t) => t, None => s.telemetry },
+    totals: match d.totals { Some(t) => t, None => s.totals },
+    nudges_used: match d.nudges_used { Some(n) => n, None => s.nudges_used },
+    ext_artifacts: match d.ext_artifacts { Some(a) => a, None => s.ext_artifacts },
+    pending_tool_calls: match d.pending_tool_calls { Some(c) => c, None => s.pending_tool_calls },
+    last_finish_reason: match d.last_finish_reason { Some(f) => f, None => s.last_finish_reason },
+    last_response_text: match d.last_response_text { Some(t) => t, None => s.last_response_text }
+  }
+}
+
+export func apply_checkpoint(s: StepState, plan: CheckpointPlan)
+  -> { state: StepState, event: LedgerEvent } {
+  let cp = checkpoint(s.history, plan);
+  {
+    state: {
+      step_idx: s.step_idx,
+      history: cp.history,
+      telemetry: s.telemetry,
+      totals: s.totals,
+      nudges_used: s.nudges_used,
+      ext_artifacts: s.ext_artifacts,
+      pending_tool_calls: s.pending_tool_calls,
+      last_finish_reason: s.last_finish_reason,
+      last_response_text: s.last_response_text
+    },
+    event: cp.event
+  }
+}
+
+export pure func history_usage_percent(h: History, limit: int) -> int {
+  match h { MkHistory(xs) => usage_percent_with_limit(xs, limit) }
+}
+
+-- Calibrated token count for the current window. estimate_tokens_messages is a
+-- char/4 proxy that structurally under-counts dense content (code/JSON tokenize
+-- below 4 chars/token) and ignores provider-side request framing (system
+-- scaffolding, tool schemas). We anchor on provider truth: scale the raw
+-- estimate by the (actual / estimate) ratio observed on the previously-sent
+-- window. Before the first provider result — or if either anchor is 0 — we fall
+-- back to the raw estimate.
+export pure func calibrated_tokens_messages(xs: [Message], t: TokenTelemetry) -> int {
+  calibrated_tokens_anchored(xs, t.last_input_tokens, t.last_estimated_input_tokens)
+}
+
+export pure func calibrated_usage_percent(xs: [Message], limit: int, t: TokenTelemetry) -> int {
+  calibrated_usage_percent_anchored(xs, limit, t.last_input_tokens, t.last_estimated_input_tokens)
+}
+
+export pure func history_usage_percent_calibrated(h: History, limit: int, t: TokenTelemetry) -> int {
+  match h { MkHistory(xs) => calibrated_usage_percent(xs, limit, t) }
+}
+
+export pure func checkpoint_would_relieve(h: History, plan: CheckpointPlan, limit: int, threshold: int, t: TokenTelemetry) -> bool {
+  let projected = checkpoint(h, plan).history;
+  history_usage_percent_calibrated(projected, limit, t) < threshold
+}
+
+-- No anchor yet (last_estimated == 0) => calibration falls back to the raw estimate.
+pure func calibrated_falls_back_without_anchor() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let t: TokenTelemetry = { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 };
+    -- 16 chars => raw estimate 4 tokens; /100 limit *100 == 4%
+    calibrated_usage_percent(msgs, 100, t) == 4
+  }
+
+-- Affine anchor: the last window measured real 200 / est 100, i.e. ~76 tokens of
+-- fixed overhead over density*est. The current tiny 4-token window inherits that
+-- overhead: 1.235*4 + (200 - 1.235*100) ~= 82 => 82% of a 100 limit.
+pure func calibrated_applies_affine_overhead() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let t: TokenTelemetry = { last_input_tokens: 200, last_output_tokens: 0, last_estimated_input_tokens: 100 };
+    calibrated_usage_percent(msgs, 100, t) == 82
+  }
+
+-- Degenerate anchor (huge real for a tiny sent window) is floored at the raw
+-- estimate (4): calibration can only ever raise usage, never suppress compaction
+-- the raw policy would have triggered.
+pure func calibrated_floors_at_raw() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let t: TokenTelemetry = { last_input_tokens: 100, last_output_tokens: 0, last_estimated_input_tokens: 400 };
+    calibrated_usage_percent(msgs, 100, t) == 4
+  }
+
+-- ============================================================================
+-- StepDecision and phase result.
+-- ============================================================================
+
+export type ExecutorKind = ExecNative | ExecDelegated | ExecHandledByExt | ExecWsLoopback | ExecStreamIsland
+
+export type ToolPlanEntry = { call: ToolCall, executor: ExecutorKind }
+export type ToolPlan = { entries: [ToolPlanEntry] }
+
+export type ApprovalRequest = {
+  call: ToolCall,
+  default_allow: bool,
+  reason: string,
+  stream_id: string,
+  remaining: [ToolPlanEntry]
+}
+
+export type FinalizeInfo = { reason: string, output: string }
+export type FailInfo = { code: string, message: string, retryable: bool }
+
+export type StepDecision
+  = CallModel(ModelRequest)
+  | RunTools(ToolPlan)
+  | AwaitApproval(ApprovalRequest)
+  | InjectUserMessage(Message)
+  | TakeCheckpoint(CheckpointPlan)
+  | Finalize(FinalizeInfo)
+  | Fail(FailInfo)
+
+export type PhaseResult = {
+  delta: StateDelta,
+  transcript_append: [Message],
+  events: [LedgerEvent],
+  cost_delta_millicents: int
+}
+
+-- ============================================================================
+-- LedgerEvent: typed/DST-canonical layer. to_schema_v1 targets production wire.
+--
+-- Production schema-v1 inventory — 29 JSONL `type` values (regenerate with:
+--   grep -o 'emit_event(session_id, "[a-z_]*"' src/core/agent_loop_v2.ail
+--   plus the two direct emit_json stream types at :255 and :265):
+--   27 emit_event names:
+--     compaction_exhausted compaction_extension cost_exhausted cost_warning
+--     delegated_tool_deferred done dp7_verifier_rejected error
+--     ext_intercept_handled ext_solver_feedback ext_tool_handled
+--     hybrid_bash_extracted native_tool_calls native_tool_denied
+--     native_tool_results persist_nudge run_summary scratchpad_result
+--     session_start session_suspend stream_error_retry thinking
+--     thinking_stream_end thinking_stream_start tool_pending
+--     v2_tool_dispatch_complete v2_tool_dispatch_start
+--   +2 stream-chunk types emitted via emit_json: thinking_delta reasoning_delta
+--
+-- [prod] constructors project to existing production names. [NEW]
+-- constructors introduce additive names gated in Phase B.
+-- ============================================================================
+
+export type ProviderCallInfo = {
+  step: int,
+  msg_count: int,
+  estimated_input_tokens: int,
+  system_prefix_count: int,
+  system_prefix_chars: int,
+  system_prefix_digest: string,
+  payload_digest: string,
+  model: string
+}
+export type ThinkingInfo = {
+  step: int,
+  text: string,
+  finish_reason: string,
+  tool_calls: int,
+  input_tokens: int,
+  output_tokens: int,
+  cost_usd: float,
+  cache_read_input_tokens: int,
+  cache_creation_input_tokens: int
+}
+export type RunSummaryInfo = {
+  model: string,
+  motoko_commit: string,
+  finish_reason: string,
+  steps_executed: int,
+  input_tokens: int,
+  output_tokens: int,
+  cache_read_input_tokens: int,
+  cache_creation_input_tokens: int,
+  total_cost_usd: float,
+  total_cost_millicents: int,
+  duration_ms: int,
+  error: string
+}
+-- D6.2: the typed internal termination reason, mapped exhaustively onto the
+-- wire `finish_reason` string. It lives beside RunSummaryInfo so the wire
+-- string has one source of truth and the RunSummary goldens below hold it.
+--
+-- The list is DERIVED FROM REACHABLE TERMINAL RETURNS, as D6.2 requires,
+-- rather than inherited from the old integer helper. Two consequences:
+--
+--   * There is no ToolFailure. An unrecovered tool failure is not a terminal
+--     path at HEAD — tool results feed back into the loop as messages and the
+--     run ends through one of the reasons below. Adding the variant would mean
+--     asserting a path that cannot be produced.
+--   * There is no DpSevenRejected. The old helper mapped 2 -> "dp7_rejected",
+--     but no call site ever passed 2: a DP7 rejection re-injects a user message
+--     and the run terminates later via MaxSteps or BudgetExhausted. It was a
+--     stale label, which is exactly what D6.2 says not to preserve.
+--
+-- SystemPromptEmpty is reachable (seal failure) and the ADR's enumeration
+-- omits it; see the cluster 4 note.
+-- Variants carry a Term prefix: the unprefixed names would collide with the
+-- LedgerEvent constructors declared later in this same module (CompactionExhausted
+-- is both a termination reason and a wire event).
+export type TerminationReason =
+  | TermSuccess                 -- wire: "stop"
+  | TermBudgetExhausted         -- wire: "cost_exhausted"
+  | TermMaxSteps                -- wire: "max_steps"
+  | TermCompactionExhausted     -- wire: "compaction_exhausted"
+  | TermProviderFailure         -- wire: "error"
+  | TermSystemPromptEmpty       -- wire: "error"
+  | TermInvalidHistory          -- wire: "error"
+  | TermInternalFailure         -- wire: "error"
+
+-- Exhaustive map onto the wire strings. These strings are a compatibility
+-- surface (project 007): they must not change here. The RunSummary goldens at
+-- the foot of this module are what hold this function to that.
+export pure func finish_reason_wire(r: TerminationReason) -> string {
+  match r {
+    TermSuccess => "stop",
+    TermBudgetExhausted => "cost_exhausted",
+    TermMaxSteps => "max_steps",
+    TermCompactionExhausted => "compaction_exhausted",
+    TermProviderFailure => "error",
+    TermSystemPromptEmpty => "error",
+    TermInvalidHistory => "error",
+    TermInternalFailure => "error"
+  }
+}
+
+export type ScratchpadResultInfo = { tool_call_id: string, request_id: string, step: int, cells_json: string }
+export type ToolCallInfo = { step: int, stream_id: string, tool: string, id: string }
+export type ToolDeniedInfo = { step: int, stream_id: string, tool: string, id: string, reason: string }
+export type ToolHandledInfo = { step: int, stream_id: string, tool: string, id: string, exit_code: int }
+export type ToolDispatchCompleteInfo = { step: int, stream_id: string, id: string }
+export type ToolBatchInfo = { request_id: string, step: int, stream_id: string, payload: Json }
+export type CompactionInfo = { step: int, note: string }
+export type CompactionExhaustedInfo = { step: int, model: string, reason: string }
+export type CostExhaustedInfo = { step: int, total_cost_millicents: int, total_cost_usd: float, cap_millicents: int }
+export type CostWarningInfo = { threshold: string, step: int, pct: int, total_cost_millicents: int, total_cost_usd: float, cap_millicents: int }
+export type Dp7RejectedInfo = { step: int, errors: string }
+export type CheckpointInfo = { reason: string, before_digest: string, after_digest: string }
+export type DoneInfo = { step: int, output: string, source: string }
+export type EmptyStopFinalizeInfo = { step: int, input_tokens: int, estimated_input_tokens: int, context_limit: int }
+export type ErrorInfo = { source: string, code: string, message: string }
+export type FeedbackInfo = { step: int, feedback: string }
+export type HybridBashInfo = { step: int, cmd: string }
+export type PersistNudgeInfo = { step: int, nudge_num: int, budget: int }
+export type SessionStartInfo = { task: string, model: string, mode: string }
+export type SessionSuspendInfo = { session_id: string, target_profile: string }
+export type StreamStartInfo = { step: int, stream_id: string, model: string }
+export type StreamEndInfo = { step: int, stream_id: string, status: string }
+export type StreamErrorRetryInfo = { step: int, error: string }
+export type StreamDeltaInfo = { step: int, stream_id: string, seq: int, kind: string, text: string }
+export type ExtensionDiagnosticInfo = { step: int, extension: string, code: string, fields: [DiagnosticField] }
+
+export type InMemoryStageOutcome = TraceStageApplied(string) | TraceStageRejected(string) | TraceStageObserved(string, [DiagnosticField]) | TraceStagePassed
+export type LedgerRecord
+  = WireRecord(LedgerEvent)
+  | CompactionStageRecord({ step: int, ext_id: string, outcome: InMemoryStageOutcome })
+  | DecisionRecord({ step: int, decision: string })
+export type LedgerTrace = { records: [LedgerRecord] }
+
+export pure func empty_ledger_trace() -> LedgerTrace {
+  { records: [] }
+}
+
+export pure func ledger_append(trace: LedgerTrace, record: LedgerRecord) -> LedgerTrace {
+  { records: trace.records ++ [record] }
+}
+
+export pure func ledger_record_name(record: LedgerRecord) -> string {
+  match record {
+    WireRecord(event) => {
+      match event {
+        ProviderCallPrepared(_) => "provider_call_prepared",
+        ExtCompactionRejected(_) => "ext_compaction_rejected",
+        ExtensionDiagnostic(_) => "extension_diagnostic",
+        _ => "wire"
+      }
+    },
+    CompactionStageRecord(r) =>
+      match r.outcome {
+        TraceStageApplied(_) => "stage_applied",
+        TraceStageRejected(_) => "stage_rejected",
+        TraceStageObserved(_, _) => "stage_observed",
+        TraceStagePassed => "stage_passed"
+      },
+    DecisionRecord(_) => "decision"
+  }
+}
+
+-- D6.1 support: the returned LedgerTrace is authoritative, so the invariant
+-- "exactly one RunSummary, and it is the final record" must be decidable over
+-- the trace ADT itself. ledger_record_name flattens every WireRecord that is
+-- not one of three special cases to "wire", so it cannot answer this.
+export pure func is_run_summary(record: LedgerRecord) -> bool {
+  match record {
+    WireRecord(event) =>
+      match event {
+        RunSummary(_) => true,
+        _ => false
+      },
+    _ => false
+  }
+}
+
+pure func count_run_summaries_rec(records: [LedgerRecord], acc: int) -> int {
+  match records {
+    [] => acc,
+    r :: rest => count_run_summaries_rec(rest, if is_run_summary(r) then acc + 1 else acc)
+  }
+}
+
+export pure func count_run_summaries(trace: LedgerTrace) -> int {
+  count_run_summaries_rec(trace.records, 0)
+}
+
+pure func last_record(records: [LedgerRecord]) -> Option[LedgerRecord] {
+  match records {
+    [] => None,
+    r :: [] => Some(r),
+    _ :: rest => last_record(rest)
+  }
+}
+
+-- The full D6.1 predicate for one established run: exactly one RunSummary in
+-- the returned trace, and it is the last record.
+export pure func has_exactly_one_final_run_summary(trace: LedgerTrace) -> bool {
+  count_run_summaries(trace) == 1
+    && match last_record(trace.records) {
+         None => false,
+         Some(r) => is_run_summary(r)
+       }
+}
+
+-- The RunSummary's own finish_reason, for the D6.3 agreement check between the
+-- returned outcome, the DoneEvent and the RunSummary.
+export pure func run_summary_finish_reason(trace: LedgerTrace) -> Option[string] {
+  match last_record(trace.records) {
+    Some(WireRecord(RunSummary(i))) => Some(i.finish_reason),
+    _ => None
+  }
+}
+
+pure func validate_checkpoint_chain_rec(prev_digest: string, checkpoints: [CheckpointInfo], final_digest: string) -> Result[(), string] {
+  match checkpoints {
+    [] =>
+      if prev_digest == final_digest then Ok(())
+      else Err("checkpoint chain final digest mismatch"),
+    cp :: rest =>
+      if cp.before_digest != prev_digest then Err("checkpoint chain broken before ${cp.reason}")
+      else validate_checkpoint_chain_rec(cp.after_digest, rest, final_digest)
+  }
+}
+
+export pure func validate_checkpoint_chain(initial_digest: string, checkpoints: [CheckpointInfo], final_digest: string) -> Result[(), string] {
+  validate_checkpoint_chain_rec(initial_digest, checkpoints, final_digest)
+}
+
+export type LedgerEvent
+  = ProviderCallPrepared(ProviderCallInfo)   -- [NEW]  provider_call_prepared
+  | ScratchpadResult(ScratchpadResultInfo)   -- [prod] scratchpad_result
+  | RunSummary(RunSummaryInfo)               -- [prod] run_summary
+  | NativeToolDenied(ToolDeniedInfo)         -- [prod] native_tool_denied
+  | ToolPending(ToolDeniedInfo)              -- [prod] tool_pending
+  | ExtToolHandled(ToolHandledInfo)          -- [prod] ext_tool_handled
+  | DelegatedToolDeferred(ToolCallInfo)      -- [prod] delegated_tool_deferred
+  | V2ToolDispatchStart(ToolCallInfo)        -- [prod] v2_tool_dispatch_start
+  | V2ToolDispatchComplete(ToolDispatchCompleteInfo) -- [prod] v2_tool_dispatch_complete
+  | Dp7VerifierRejected(Dp7RejectedInfo)     -- [prod] dp7_verifier_rejected
+  | CostExhausted(CostExhaustedInfo)         -- [prod] cost_exhausted
+  | CompactionApplied(CompactionInfo)        -- [prod] compaction_extension
+  | CompactionExhausted(CompactionExhaustedInfo) -- [prod] compaction_exhausted
+  | ExtCompactionRejected(CompactionInfo)    -- [NEW]  ext_compaction_rejected
+  | ExtensionDiagnostic(ExtensionDiagnosticInfo) -- [NEW] extension_diagnostic
+  | ThinkingStreamStart(StreamStartInfo)     -- [prod] thinking_stream_start
+  | ThinkingStreamEnd(StreamEndInfo)         -- [prod] thinking_stream_end
+  | StreamErrorRetry(StreamErrorRetryInfo)   -- [prod] stream_error_retry
+  | ProviderResult(ThinkingInfo)             -- [prod] thinking
+  | CostWarning(CostWarningInfo)             -- [prod] cost_warning
+  | ExtInterceptHandled(ToolHandledInfo)     -- [prod] ext_intercept_handled
+  | HybridBashExtracted(HybridBashInfo)      -- [prod] hybrid_bash_extracted
+  | DoneEvent(DoneInfo)                      -- [prod] done
+  | EmptyStopFinalize(EmptyStopFinalizeInfo) -- [prod] empty_stop_finalize
+  | ExtSolverFeedback(FeedbackInfo)          -- [prod] ext_solver_feedback
+  | PersistNudge(PersistNudgeInfo)           -- [prod] persist_nudge
+  | NativeToolCalls(ToolBatchInfo)           -- [prod] native_tool_calls
+  | NativeToolResults(ToolBatchInfo)         -- [prod] native_tool_results
+  | SessionSuspend(SessionSuspendInfo)       -- [prod] session_suspend
+  | SessionStart(SessionStartInfo)           -- [prod] session_start
+  | ErrorEvent(ErrorInfo)                    -- [prod] error
+  | TotalsUpdated(ThinkingInfo)              -- [NEW]  loop_totals_updated
+  | CheckpointTaken(CheckpointInfo)          -- [NEW]  history_checkpoint
+  | StreamDelta(StreamDeltaInfo)             -- [prod] thinking_delta | reasoning_delta
+
+func usage_kvs(input_tokens: int, output_tokens: int, cache_read: int, cache_creation: int) -> [{key: string, value: Json}] {
+  let total_tokens = input_tokens + output_tokens;
+  if cache_read > 0 || cache_creation > 0 then
+    [kv("input_tokens", jnum(_int_to_float(input_tokens))),
+     kv("output_tokens", jnum(_int_to_float(output_tokens))),
+     kv("cache_read_input_tokens", jnum(_int_to_float(cache_read))),
+     kv("cache_creation_input_tokens", jnum(_int_to_float(cache_creation))),
+     kv("total_tokens", jnum(_int_to_float(total_tokens)))]
+  else
+    [kv("input_tokens", jnum(_int_to_float(input_tokens))),
+     kv("output_tokens", jnum(_int_to_float(output_tokens))),
+     kv("total_tokens", jnum(_int_to_float(total_tokens)))]
+}
+
+func thinking_usage_kvs(i: ThinkingInfo) -> [{key: string, value: Json}] {
+  let base = [
+    kv("input_tokens", jnum(_int_to_float(i.input_tokens))),
+    kv("output_tokens", jnum(_int_to_float(i.output_tokens))),
+    kv("cost_usd", jnum(i.cost_usd))
+  ];
+  let with_read =
+    if i.cache_read_input_tokens > 0 then
+      base ++ [kv("cache_read_input_tokens", jnum(_int_to_float(i.cache_read_input_tokens)))]
+    else base;
+  if i.cache_creation_input_tokens > 0 then
+    with_read ++ [kv("cache_creation_input_tokens", jnum(_int_to_float(i.cache_creation_input_tokens)))]
+  else with_read
+}
+
+func done_kvs(i: DoneInfo) -> [{key: string, value: Json}] {
+  let base = [
+    kv("type", js("done")),
+    kv("step", jnum(_int_to_float(i.step))),
+    kv("output", js(i.output))
+  ];
+  if i.source == "" then base else base ++ [kv("source", js(i.source))]
+}
+
+func diagnostic_fields_json(fields: [DiagnosticField]) -> [Json] {
+  match fields {
+    [] => [],
+    f :: rest => jo([kv("key", js(f.key)), kv("value", js(f.value))]) :: diagnostic_fields_json(rest)
+  }
+}
+
+export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
+  match e {
+    ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("system_prefix_count", jnum(_int_to_float(i.system_prefix_count))), kv("system_prefix_chars", jnum(_int_to_float(i.system_prefix_chars))), kv("system_prefix_digest", js(i.system_prefix_digest)), kv("payload_digest", js(i.payload_digest)), kv("model", js(i.model))],
+    ScratchpadResult(i) => [kv("type", js("scratchpad_result")), kv("tool_call_id", js(i.tool_call_id)), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("cells_json", js(i.cells_json))],
+    RunSummary(i) => [kv("type", js("run_summary")), kv("model", js(i.model)), kv("motoko_commit", js(i.motoko_commit)), kv("finish_reason", js(i.finish_reason)), kv("steps_executed", jnum(_int_to_float(i.steps_executed))), kv("usage", jo(usage_kvs(i.input_tokens, i.output_tokens, i.cache_read_input_tokens, i.cache_creation_input_tokens))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("duration_ms", jnum(_int_to_float(i.duration_ms))), kv("error", js(i.error))],
+    NativeToolDenied(i) => [kv("type", js("native_tool_denied")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("reason", js(i.reason))],
+    ToolPending(i) => [kv("type", js("tool_pending")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("reason", js(i.reason))],
+    ExtToolHandled(i) => [kv("type", js("ext_tool_handled")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("exit_code", jnum(_int_to_float(i.exit_code)))],
+    DelegatedToolDeferred(i) => [kv("type", js("delegated_tool_deferred")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id))],
+    V2ToolDispatchStart(i) => [kv("type", js("v2_tool_dispatch_start")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id))],
+    V2ToolDispatchComplete(i) => [kv("type", js("v2_tool_dispatch_complete")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("id", js(i.id))],
+    Dp7VerifierRejected(i) => [kv("type", js("dp7_verifier_rejected")), kv("step", jnum(_int_to_float(i.step))), kv("errors", js(i.errors))],
+    CostExhausted(i) => [kv("type", js("cost_exhausted")), kv("step", jnum(_int_to_float(i.step))), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("cap_millicents", jnum(_int_to_float(i.cap_millicents)))],
+    CompactionApplied(i) => [kv("type", js("compaction_extension")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))],
+    CompactionExhausted(i) => [kv("type", js("compaction_exhausted")), kv("step", jnum(_int_to_float(i.step))), kv("model", js(i.model)), kv("reason", js(i.reason))],
+    ExtCompactionRejected(i) => [kv("type", js("ext_compaction_rejected")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))],
+    ExtensionDiagnostic(i) => [kv("type", js("extension_diagnostic")), kv("step", jnum(_int_to_float(i.step))), kv("extension", js(i.extension)), kv("code", js(i.code)), kv("fields", ja(diagnostic_fields_json(i.fields)))],
+    ThinkingStreamStart(i) => [kv("type", js("thinking_stream_start")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("model", js(i.model))],
+    ThinkingStreamEnd(i) => [kv("type", js("thinking_stream_end")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("status", js(i.status))],
+    StreamErrorRetry(i) => [kv("type", js("stream_error_retry")), kv("step", jnum(_int_to_float(i.step))), kv("error", js(i.error))],
+    ProviderResult(i) => [kv("type", js("thinking")), kv("step", jnum(_int_to_float(i.step))), kv("text", js(i.text)), kv("finish_reason", js(i.finish_reason)), kv("tool_calls", jnum(_int_to_float(i.tool_calls)))] ++ thinking_usage_kvs(i),
+    CostWarning(i) => [kv("type", js("cost_warning")), kv("threshold", js(i.threshold)), kv("step", jnum(_int_to_float(i.step))), kv("pct", jnum(_int_to_float(i.pct))), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("cap_millicents", jnum(_int_to_float(i.cap_millicents)))],
+    ExtInterceptHandled(i) => [kv("type", js("ext_intercept_handled")), kv("step", jnum(_int_to_float(i.step))), kv("tool", js(i.tool)), kv("exit_code", jnum(_int_to_float(i.exit_code)))],
+    HybridBashExtracted(i) => [kv("type", js("hybrid_bash_extracted")), kv("step", jnum(_int_to_float(i.step))), kv("cmd", js(i.cmd))],
+    DoneEvent(i) => done_kvs(i),
+    EmptyStopFinalize(i) => [kv("type", js("empty_stop_finalize")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("context_limit", jnum(_int_to_float(i.context_limit)))],
+    ExtSolverFeedback(i) => [kv("type", js("ext_solver_feedback")), kv("step", jnum(_int_to_float(i.step))), kv("feedback", js(i.feedback))],
+    PersistNudge(i) => [kv("type", js("persist_nudge")), kv("step", jnum(_int_to_float(i.step))), kv("nudge_num", jnum(_int_to_float(i.nudge_num))), kv("budget", jnum(_int_to_float(i.budget)))],
+    NativeToolCalls(i) => [kv("type", js("native_tool_calls")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool_calls", i.payload)],
+    NativeToolResults(i) => [kv("type", js("native_tool_results")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("results", i.payload)],
+    SessionSuspend(i) => [kv("type", js("session_suspend")), kv("session_id", js(i.session_id)), kv("target_profile", js(i.target_profile))],
+    SessionStart(i) => [kv("type", js("session_start")), kv("task", js(i.task)), kv("model", js(i.model)), kv("mode", js(i.mode))],
+    ErrorEvent(i) => [kv("type", js("error")), kv("source", js(i.source)), kv("code", js(i.code)), kv("message", js(i.message))],
+    TotalsUpdated(i) => [kv("type", js("loop_totals_updated")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))],
+    CheckpointTaken(i) => [kv("type", js("history_checkpoint")), kv("reason", js(i.reason)), kv("before_digest", js(i.before_digest)), kv("after_digest", js(i.after_digest))],
+    StreamDelta(i) => [kv("type", js(if i.kind == "reasoning" then "reasoning_delta" else "thinking_delta")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("seq", jnum(_int_to_float(i.seq))), kv("text_delta", js(i.text))]
+  }
+}
+
+export func to_schema_v1(e: LedgerEvent) -> Json {
+  jo(to_schema_v1_kvs(e))
+}
+
+-- ============================================================================
+-- Transcript builders.
+-- ============================================================================
+
+-- Convert motoko's [Msg] to upstream [Message]. Since motoko_ext_abi 2.1.0
+-- (M-ABI-MSG-WIRE-PARITY), Msg carries tool_calls + tool_call_id fields
+-- structurally identical to Message — copy them verbatim so on_pre_step
+-- compaction round-trips losslessly. Without this, OpenRouter / OpenAI /
+-- Anthropic reject tool-role messages with empty tool_call_id (422).
+export func msgs_to_messages(msgs: [Msg]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id,
+      images: []
+    } :: msgs_to_messages(rest))
+  }
+}
+
+-- Build a [Message] entry for one assistant turn from the StepResult. Carries
+-- the typed tool_calls verbatim so the model sees its own tool_call IDs on
+-- the next turn (provider correlation).
+export func step_result_to_message(result: StepResult) -> Message {
+  {
+    role: "assistant",
+    content: result.message.content,
+    tool_calls: result.tool_calls,
+    tool_call_id: "",
+    images: []
+  }
+}
+
+pure func cap_tool_message_content(content: string) -> string {
+  let cap = 65536;
+  let n = Str.length(content);
+  if n <= cap then content
+  else {
+    let marker = "\n...[truncated; original ${show(n)} bytes]";
+    let keep = cap - Str.length(marker);
+    "${substring(content, 0, keep)}${marker}"
+  }
+}
+
+pure func test_cap_tool_message_content_keeps_small_content() -> bool
+  tests [((), true)]
+  {
+    cap_tool_message_content("small result") == "small result"
+  }
+
+pure func test_cap_tool_message_content_truncates_oversized_content() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let capped = cap_tool_message_content(x1024);
+    Str.length(capped) == 65536 && contains(capped, "...[truncated; original ")
+  }
+
+export func result_env_model_content(result: ToolResultEnvelope) -> string {
+  cap_tool_message_content(encode(result_to_model_json(result)))
+}
+
+-- Build a tool-role Message containing a dispatcher result. The tool_call_id
+-- field is the load-bearing wire-format requirement: Anthropic / OpenAI /
+-- Gemini all correlate tool_use → tool_result by this id.
+export func tool_result_message(call: ToolCall, content: string) -> Message {
+  {
+    role: "tool",
+    content: cap_tool_message_content(content),
+    tool_calls: [],
+    tool_call_id: call.id,
+    images: []
+  }
+}
+
+-- Build a tool-role Message from a ToolResultEnvelope returned by an
+-- extension's response-intercept (e.g. compose_check_premise). The model
+-- didn't emit a tool_call for these — the extension synthesized one — so
+-- we use the envelope's own tool_call_id (the extension is responsible for
+-- generating one) and JSON-encode the full envelope as the message content.
+export func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
+  {
+    role: "tool",
+    content: result_env_model_content(envelope),
+    tool_calls: [],
+    tool_call_id: envelope.tool_call_id,
+    images: []
+  }
+}
+
+-- Build a tool-role Message for a tool result handled by an extension. Use the
+-- model-emitted call_id instead of the envelope's id for provider correlation;
+-- providers correlate by the model-emitted id, not the extension-internal id.
+export func handled_tool_message(call_id: string, env: ToolResultEnvelope) -> Message {
+  {
+    role: "tool",
+    content: result_env_model_content(env),
+    tool_calls: [],
+    tool_call_id: call_id,
+    images: []
+  }
+}
+
+-- ============================================================================
+-- Inline pure tests.
+-- ============================================================================
+
+pure func mk_msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func test_empty_delta_is_identity_shape() -> bool
+  tests [((), true)]
+  {
+    match empty_delta().telemetry { None => true, Some(_) => false }
+  }
+
+pure func test_history_from_seed_accepts_head_prefix() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Ok(h) => history_len(h) == 2,
+      Err(_) => false
+    }
+  }
+
+pure func test_history_from_seed_rejects_late_system() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("user", "u"), mk_msg("system", "s")]) {
+      Ok(_) => false,
+      Err(_) => true
+    }
+  }
+
+pure func test_split_for_compaction_pins_system_prefix() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([mk_msg("system", "s1"), mk_msg("system", "s2"), mk_msg("user", "u")]);
+    List.length(split.pinned) == 2 && match segment_messages(split.segment) {
+      m :: [] => m.role == "user" && m.content == "u",
+      _ => false
+    }
+  }
+
+pure func mk_msg_with_call(id: string) -> Msg {
+  { role: "assistant", content: "call", tool_calls: [{ id: id, name: "T", arguments: "{}" }], tool_call_id: "" }
+}
+
+pure func mk_tool_msg(id: string) -> Msg {
+  { role: "tool", content: "result", tool_calls: [], tool_call_id: id }
+}
+
+pure func mk_plain_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+pure func result_ok(r: Result[(), string]) -> bool {
+  match r { Ok(_) => true, Err(_) => false }
+}
+
+pure func result_err(r: Result[(), string]) -> bool {
+  match r { Ok(_) => false, Err(_) => true }
+}
+
+pure func digest_shape_ok(d: string) -> bool {
+  Str.length(d) == 71 && substring(d, 0, 7) == "sha256:"
+}
+
+pure func test_payload_digest_is_sha256_content_hash() -> bool
+  tests [((), true)]
+  {
+    let d1 = payload_digest([mk_msg("user", "hello")]);
+    let d2 = payload_digest([mk_msg("user", "hello")]);
+    let d3 = payload_digest([mk_msg("user", "hello!")]);
+    digest_shape_ok(d1) && d1 == d2 && d1 != d3
+  }
+
+pure func test_system_prefix_digest_is_raw_content_hash() -> bool
+  tests [((), true)]
+  {
+    let d1 = system_prefix_digest_for([mk_msg("system", "make[1]")]);
+    let d2 = system_prefix_digest_for([mk_msg("system", "make[1]")]);
+    let d3 = system_prefix_digest_for([mk_msg("system", "make[2]")]);
+    digest_shape_ok(d1) && d1 == d2 && d1 != d3
+  }
+
+pure func test_ledger_trace_records_wire_and_stage_passed() -> bool
+  tests [((), true)]
+  {
+    let t0 = empty_ledger_trace();
+    let t1 = ledger_append(t0, WireRecord(ProviderCallPrepared({ step: 1, msg_count: 2, estimated_input_tokens: 4, system_prefix_count: 1, system_prefix_chars: 3, system_prefix_digest: "sha256:sys", payload_digest: "sha256:abc", model: "m" })));
+    let t2 = ledger_append(t1, CompactionStageRecord({ step: 1, ext_id: "ext", outcome: TraceStagePassed }));
+    let t3 = ledger_append(t2, DecisionRecord({ step: 1, decision: "CallModel" }));
+    List.length(t3.records) == 3
+      && match t2.records {
+        a :: b :: [] => ledger_record_name(a) == "provider_call_prepared" && ledger_record_name(b) == "stage_passed",
+        _ => false
+      }
+      && match t3.records {
+        _ :: _ :: c :: [] => ledger_record_name(c) == "decision",
+        _ => false
+      }
+  }
+
+pure func long_msg(content: string) -> Message {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func test_seal_compacted_payload_repins_and_seals() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([mk_msg("system", "sys"), mk_msg("user", "old")]);
+    match seal_compacted_payload(split, [mk_msg("user", "new")], "m", 1000, false) {
+      Ok(payload) =>
+        match payload {
+          MkPayload(msgs) =>
+            match msgs {
+              a :: b :: [] => a.role == "system" && a.content == "sys" && b.role == "user" && b.content == "new",
+              _ => false
+            }
+        },
+      Err(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_exhausts_with_live_reason() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([]);
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", output_token_allowance() + 10, false) {
+      Err(SealExhausted(reason)) => reason == "compaction_exhausted: context at 100% of test-model limit after compactor chain",
+      Err(_) => false,
+      Ok(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_fail_open_limit_zero() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([]);
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 0, false) {
+      Ok(_) => true,
+      Err(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_fail_open_when_allowance_consumes_window() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([]);
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 32768, false) {
+      Ok(_) => true,
+      Err(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_rejects_empty_system_prompt() -> bool
+  tests [((), true)]
+  {
+    let missing = split_for_compaction([mk_msg("user", "hi")]);
+    let present_empty = split_for_compaction([mk_msg("system", ""), mk_msg("user", "hi")]);
+    let missing_rejected =
+      match seal_compacted_payload(missing, [mk_msg("user", "hi")], "test-model", 1000, true) {
+        Err(SealSystemPromptEmpty(_)) => true,
+        _ => false
+      };
+    let present_empty_rejected =
+      match seal_compacted_payload(present_empty, [mk_msg("user", "hi")], "test-model", 1000, true) {
+        Err(SealSystemPromptEmpty(_)) => true,
+        _ => false
+      };
+    let headless_allowed =
+      match seal_compacted_payload(missing, [mk_msg("user", "hi")], "test-model", 1000, false) {
+        Ok(_) => true,
+        Err(SealSystemPromptEmpty(_)) => false,
+        Err(_) => false
+      };
+    missing_rejected && present_empty_rejected && headless_allowed
+  }
+
+pure func test_checkpoint_preserves_system_prefix() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u"), mk_msg("assistant", "a")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        history_len(cp.history) == 2
+      }
+    }
+  }
+
+pure func test_checkpoint_digest_chain_validates() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        match cp.event {
+          CheckpointTaken(info) =>
+            digest_shape_ok(info.before_digest)
+              && digest_shape_ok(info.after_digest)
+              && result_ok(validate_checkpoint_chain(history_digest(h), [info], history_digest(cp.history)))
+              && result_err(validate_checkpoint_chain("sha256:broken", [info], history_digest(cp.history))),
+          _ => false
+        }
+      }
+    }
+  }
+
+pure func test_history_from_resume_validates_checkpoint_chain() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let before = history_digest(h);
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        match cp.event {
+          CheckpointTaken(info) =>
+            match cp.history {
+              MkHistory(resumed_msgs) => {
+                let good = history_from_resume(resumed_msgs, { initial_digest: before, checkpoints: [info] });
+                let bad = history_from_resume(resumed_msgs, { initial_digest: "sha256:broken", checkpoints: [info] });
+                match good {
+                  Ok(good_h) => history_digest_matches(good_h, history_digest(cp.history)) && match bad { Err(_) => true, Ok(_) => false },
+                  Err(_) => false
+                }
+              }
+            },
+          _ => false
+        }
+      }
+    }
+  }
+
+pure func test_apply_checkpoint_returns_rewrite_with_event() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let s: StepState = {
+          step_idx: 1,
+          history: h,
+          telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+          totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+          nudges_used: 0,
+          ext_artifacts: jo([]),
+          pending_tool_calls: [],
+          last_finish_reason: "",
+          last_response_text: ""
+        };
+        let applied = apply_checkpoint(s, { reason: "test", summary: "summ" });
+        match applied.event {
+          CheckpointTaken(info) =>
+            info.before_digest == history_digest(h)
+              && info.after_digest == history_digest(applied.state.history)
+              && history_len(applied.state.history) == 2,
+          _ => false
+        }
+      }
+    }
+  }
+
+pure func test_stream_delta_projection_names() -> bool
+  tests [((), true)]
+  {
+    let thinking = encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "s", seq: 1, kind: "thinking", text: "t" })));
+    let reasoning = encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "s", seq: 2, kind: "reasoning", text: "r" })));
+    contains(thinking, "\"type\":\"thinking_delta\"")
+      && contains(thinking, "\"text_delta\":\"t\"")
+      && contains(reasoning, "\"type\":\"reasoning_delta\"")
+      && contains(reasoning, "\"text_delta\":\"r\"")
+  }
+
+pure func golden(e: LedgerEvent, want: string) -> bool {
+  encode(to_schema_v1(e)) == want
+}
+
+pure func test_ledger_projection_golden_bytes() -> bool
+  tests [((), true)]
+  {
+    golden(ProviderCallPrepared({ step: 1, msg_count: 2, estimated_input_tokens: 4, system_prefix_count: 1, system_prefix_chars: 3, system_prefix_digest: "s1", payload_digest: "p2", model: "m" }), "{\"type\":\"provider_call_prepared\",\"step\":1,\"msg_count\":2,\"estimated_input_tokens\":4,\"system_prefix_count\":1,\"system_prefix_chars\":3,\"system_prefix_digest\":\"s1\",\"payload_digest\":\"p2\",\"model\":\"m\"}")
+    && golden(ScratchpadResult({ tool_call_id: "tc", request_id: "step-1", step: 1, cells_json: "[]" }), "{\"type\":\"scratchpad_result\",\"tool_call_id\":\"tc\",\"request_id\":\"step-1\",\"step\":1,\"cells_json\":\"[]\"}")
+    && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "" }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"\"}")
+    && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 5, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "err" }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"cache_read_input_tokens\":5,\"cache_creation_input_tokens\":0,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"err\"}")
+    && golden(NativeToolDenied({ step: 1, stream_id: "s", tool: "T", id: "tc", reason: "no" }), "{\"type\":\"native_tool_denied\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"reason\":\"no\"}")
+    && golden(ToolPending({ step: 1, stream_id: "s", tool: "T", id: "tc", reason: "wait" }), "{\"type\":\"tool_pending\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"reason\":\"wait\"}")
+    && golden(ExtToolHandled({ step: 1, stream_id: "s", tool: "T", id: "tc", exit_code: 0 }), "{\"type\":\"ext_tool_handled\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"exit_code\":0}")
+    && golden(DelegatedToolDeferred({ step: 1, stream_id: "s", tool: "T", id: "tc" }), "{\"type\":\"delegated_tool_deferred\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\"}")
+    && golden(V2ToolDispatchStart({ step: 1, stream_id: "s", tool: "T", id: "tc" }), "{\"type\":\"v2_tool_dispatch_start\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\"}")
+    && golden(V2ToolDispatchComplete({ step: 1, stream_id: "s", id: "tc" }), "{\"type\":\"v2_tool_dispatch_complete\",\"step\":1,\"stream_id\":\"s\",\"id\":\"tc\"}")
+    && golden(Dp7VerifierRejected({ step: 1, errors: "bad" }), "{\"type\":\"dp7_verifier_rejected\",\"step\":1,\"errors\":\"bad\"}")
+    && golden(CostExhausted({ step: 4, total_cost_millicents: 65600, total_cost_usd: 0.656, cap_millicents: 50000 }), "{\"type\":\"cost_exhausted\",\"step\":4,\"total_cost_millicents\":65600,\"total_cost_usd\":0.656,\"cap_millicents\":50000}")
+    && golden(CompactionApplied({ step: 1, note: "n" }), "{\"type\":\"compaction_extension\",\"step\":1,\"note\":\"n\"}")
+    && golden(CompactionExhausted({ step: 1, model: "m", reason: "full" }), "{\"type\":\"compaction_exhausted\",\"step\":1,\"model\":\"m\",\"reason\":\"full\"}")
+    && golden(ExtCompactionRejected({ step: 1, note: "invalid" }), "{\"type\":\"ext_compaction_rejected\",\"step\":1,\"note\":\"invalid\"}")
+    && golden(ExtensionDiagnostic({ step: 1, extension: "compaction_ai", code: "compaction_ai.summarizer_failed", fields: [{ key: "attempts", value: "2" }, { key: "pct", value: "81" }] }), "{\"type\":\"extension_diagnostic\",\"step\":1,\"extension\":\"compaction_ai\",\"code\":\"compaction_ai.summarizer_failed\",\"fields\":[{\"key\":\"attempts\",\"value\":\"2\"},{\"key\":\"pct\",\"value\":\"81\"}]}")
+    && golden(ThinkingStreamStart({ step: 1, stream_id: "s", model: "m" }), "{\"type\":\"thinking_stream_start\",\"step\":1,\"stream_id\":\"s\",\"model\":\"m\"}")
+    && golden(ThinkingStreamEnd({ step: 1, stream_id: "s", status: "completed" }), "{\"type\":\"thinking_stream_end\",\"step\":1,\"stream_id\":\"s\",\"status\":\"completed\"}")
+    && golden(StreamErrorRetry({ step: 1, error: "oops" }), "{\"type\":\"stream_error_retry\",\"step\":1,\"error\":\"oops\"}")
+    && golden(ProviderResult({ step: 1, text: "hello", finish_reason: "stop", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.01, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }), "{\"type\":\"thinking\",\"step\":1,\"text\":\"hello\",\"finish_reason\":\"stop\",\"tool_calls\":0,\"input_tokens\":10,\"output_tokens\":5,\"cost_usd\":0.01}")
+    && golden(ProviderResult({ step: 1, text: "hello", finish_reason: "stop", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.01, cache_read_input_tokens: 7, cache_creation_input_tokens: 8 }), "{\"type\":\"thinking\",\"step\":1,\"text\":\"hello\",\"finish_reason\":\"stop\",\"tool_calls\":0,\"input_tokens\":10,\"output_tokens\":5,\"cost_usd\":0.01,\"cache_read_input_tokens\":7,\"cache_creation_input_tokens\":8}")
+    && golden(CostWarning({ threshold: "75pct", step: 2, pct: 80, total_cost_millicents: 800, total_cost_usd: 0.008, cap_millicents: 1000 }), "{\"type\":\"cost_warning\",\"threshold\":\"75pct\",\"step\":2,\"pct\":80,\"total_cost_millicents\":800,\"total_cost_usd\":0.008,\"cap_millicents\":1000}")
+    && golden(ExtInterceptHandled({ step: 1, stream_id: "", tool: "T", id: "", exit_code: 0 }), "{\"type\":\"ext_intercept_handled\",\"step\":1,\"tool\":\"T\",\"exit_code\":0}")
+    && golden(HybridBashExtracted({ step: 1, cmd: "echo hi" }), "{\"type\":\"hybrid_bash_extracted\",\"step\":1,\"cmd\":\"echo hi\"}")
+    && golden(DoneEvent({ step: 1, output: "ok", source: "" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\"}")
+    && golden(DoneEvent({ step: 1, output: "ok", source: "ext_solver_accept" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\",\"source\":\"ext_solver_accept\"}")
+    && golden(EmptyStopFinalize({ step: 96, input_tokens: 22312, estimated_input_tokens: 8600, context_limit: 131072 }), "{\"type\":\"empty_stop_finalize\",\"step\":96,\"input_tokens\":22312,\"estimated_input_tokens\":8600,\"context_limit\":131072}")
+    && golden(ExtSolverFeedback({ step: 1, feedback: "fix" }), "{\"type\":\"ext_solver_feedback\",\"step\":1,\"feedback\":\"fix\"}")
+    && golden(PersistNudge({ step: 1, nudge_num: 2, budget: 3 }), "{\"type\":\"persist_nudge\",\"step\":1,\"nudge_num\":2,\"budget\":3}")
+    && golden(NativeToolCalls({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_calls\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"tool_calls\":[]}")
+    && golden(NativeToolResults({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_results\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"results\":[]}")
+    && golden(SessionSuspend({ session_id: "sid", target_profile: "dogfood" }), "{\"type\":\"session_suspend\",\"session_id\":\"sid\",\"target_profile\":\"dogfood\"}")
+    && golden(SessionStart({ task: "t", model: "m", mode: "v2" }), "{\"type\":\"session_start\",\"task\":\"t\",\"model\":\"m\",\"mode\":\"v2\"}")
+    && golden(ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }), "{\"type\":\"error\",\"source\":\"agent_loop_v2\",\"code\":\"Internal\",\"message\":\"bad\"}")
+    && golden(TotalsUpdated({ step: 1, text: "", finish_reason: "", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }), "{\"type\":\"loop_totals_updated\",\"step\":1,\"input_tokens\":10,\"output_tokens\":5}")
+    && golden(CheckpointTaken({ reason: "r", before_digest: "h2", after_digest: "h1" }), "{\"type\":\"history_checkpoint\",\"reason\":\"r\",\"before_digest\":\"h2\",\"after_digest\":\"h1\"}")
+    && golden(StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "thinking", text: "d" }), "{\"type\":\"thinking_delta\",\"step\":1,\"stream_id\":\"s\",\"seq\":0,\"text_delta\":\"d\"}")
+    && golden(StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "reasoning", text: "r" }), "{\"type\":\"reasoning_delta\",\"step\":1,\"stream_id\":\"s\",\"seq\":0,\"text_delta\":\"r\"}")
+  }
+
+pure func test_msgs_to_messages_copies_wire_fields() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let msgs: [Msg] = [{ role: "assistant", content: "c", tool_calls: [call], tool_call_id: "ignored" }];
+    match msgs_to_messages(msgs) {
+      m :: [] => m.role == "assistant" && m.content == "c" && List.length(m.tool_calls) == 1 && m.tool_call_id == "ignored",
+      _ => false
+    }
+  }
+
+pure func test_step_result_to_message_copies_tool_calls() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let result: StepResult = {
+      message: { role: "assistant", content: "use tool", tool_calls: [], tool_call_id: "", images: [] },
+      tool_calls: [call],
+      finish_reason: "tool_calls",
+      input_tokens: 1,
+      output_tokens: 2,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0
+    };
+    let m = step_result_to_message(result);
+    m.role == "assistant" && m.content == "use tool" && List.length(m.tool_calls) == 1 && m.tool_call_id == ""
+  }
+
+pure func test_tool_result_message_uses_call_id_and_caps_content() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let m = tool_result_message(call, "content");
+    m.role == "tool" && m.content == "content" && List.length(m.tool_calls) == 0 && m.tool_call_id == "tc-1"
+  }
+
+pure func test_envelope_to_tool_message_uses_envelope_id() -> bool
+  tests [((), true)]
+  {
+    let env: ToolResultEnvelope = {
+      tool_call_id: "env-1",
+      tool: "FakeTool",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      metadata: jo([])
+    };
+    let m = envelope_to_tool_message(env);
+    m.role == "tool"
+      && m.tool_call_id == "env-1"
+      && List.length(m.tool_calls) == 0
+      && contains(m.content, "\"tool\":\"FakeTool\"")
+  }
+
+pure func test_handled_tool_message_uses_model_call_id() -> bool
+  tests [((), true)]
+  {
+    let env: ToolResultEnvelope = {
+      tool_call_id: "extension-id",
+      tool: "FakeTool",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      metadata: jo([])
+    };
+    let m = handled_tool_message("model-call-id", env);
+    m.role == "tool"
+      && m.tool_call_id == "model-call-id"
+      && List.length(m.tool_calls) == 0
+      && contains(m.content, "\"tool\":\"FakeTool\"")
+  }

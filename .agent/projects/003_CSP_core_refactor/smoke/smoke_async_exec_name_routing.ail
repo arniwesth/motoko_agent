@@ -1,0 +1,25 @@
+module smoke_async_exec_name_routing
+
+import std/bytes (toString)
+import std/io (println)
+import std/stream (asyncExecProcess, selectEvents)
+import std/array (empty, unsafeGet)
+
+pure func fail_probe() -> bool {
+  let xs: Array[int] = empty();
+  let _ = unsafeGet(xs, 0);
+  false
+}
+
+export func main() -> () ! {Stream, Process, IO} {
+  let p = asyncExecProcess("printf", ["name-routing-ok"], "tool_call_probe", 5, 4096);
+  selectEvents([p], \event. match event {
+    SourceBytes(name, data) => {
+      if name == "tool_call_probe" && toString(data) == "name-routing-ok" then false
+      else fail_probe()
+    },
+    StreamError(_) => fail_probe(),
+    _ => true
+  });
+  println("PASS_SOURCE_NAME_ROUTING")
+}

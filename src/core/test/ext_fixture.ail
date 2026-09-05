@@ -1,0 +1,198 @@
+-- Phase-B deterministic extension fixture.
+--
+-- This is an in-repo test extension, not a package. It exercises the
+-- extension-produced transcript paths before ledger emission is rewired.
+--
+-- ADR-001 Phase B, B7: THE ONE TEST-OWNED CONSTRUCTOR. Every DST/test fixture
+-- that used to write a full `ExtensionHooks` literal now calls
+-- `fixture_hooks(id, overrides)`, and `FixtureOverrides` names its fields by
+-- the 6.0 CAPABILITY KIND (`compact`, `judge`, `provide`, ...) rather than by
+-- the 5.x slot. So the ~20 fixture sites [RK C8] no longer spell the ABI's
+-- record shape at all: when B8 lands the `Capability` list, THIS function (and
+-- the `FixtureHooks` alias) change, and no fixture does. B8 DID THAT: the
+-- constructor now builds the 6.0 `[Capability]` list inside an `ExtEntry`, and
+-- `fixture_defaults()` carries the neutral bindings the ABI's `default_hooks`
+-- used to (byte-for-byte its body, re-keyed) -- the ABI no longer has a
+-- constructor, because a 6.0 registration has no "all eight slots" to fill. A
+-- fixture that overrides one kind still writes `{ fixture_defaults() | judge: f }`.
+
+module src/core/test/ext_fixture
+
+import std/json (jo, kv, js)
+import std/option (None)
+import std/string (contains)
+import src/core/config (VerificationConfig)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  ToolSchema,
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  ExtRuntime,
+  FinalizeDecision,
+  InterceptHandled,
+  ContinueWithFeedback,
+  NoDecision,
+  PassThrough,
+  PreStepDecision,
+  Compacted,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolCallEnvelope,
+  ToolHandleDecision,
+  ToolPolicyDecision,
+  ToolResultEnvelope,
+  Handled
+)
+import src/core/types (Msg)
+import src/core/ext/ctx_defaults (empty_ext_artifacts)
+
+pure func count_system(msgs: [Msg]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => (if m.role == "system" then 1 else 0) + count_system(rest)
+  }
+}
+
+pure func fixture_result(tool_call_id: string, tool: string, stdout: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: tool_call_id,
+    tool: tool,
+    exit_code: 0,
+    stdout: stdout,
+    stderr: "",
+    metadata: jo([kv("fixture", js("phase_b"))])
+  }
+}
+
+pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+pure func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Allow
+}
+
+pure func handle_tool(ctx: ExtCtx, call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+  if call.tool == "FixtureEcho" then
+    Handled(fixture_result("fixture-internal-tool-id", "FixtureEcho", "fixture handled ${call.id}"))
+  else Delegate
+}, next_state: ctx.world } }
+
+pure func intercept_response(ctx: ExtCtx, response: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
+  if contains(response, "[FIXTURE_INTERCEPT]") then
+    InterceptHandled(fixture_result("fixture-intercept-id", "FixtureIntercept", "fixture intercept"))
+  else NoIntercept
+}, next_state: ctx.world } }
+
+pure func solve_candidate(ctx: ExtCtx, candidate: string)
+  -> FinalizeOutcome ! {Process}  { { decision: {
+  if contains(candidate, "[FIXTURE_CONTINUE]") then
+    ContinueWithFeedback("fixture feedback")
+  else NoDecision
+}, next_state: ctx.world } }
+
+pure func pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+  Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}", empty_ext_artifacts())
+}, next_state: ctx.world } }
+
+-- The fixture's own registration, through the constructor below.
+export pure func fixture_rt() -> ExtRuntime {
+  let hooks = fixture_hooks("phase_b_fixture", {
+    tools: ["FixtureEcho"],
+    describe: \_ . [],
+    prompt: empty_prompt_patch,
+    budget: empty_budget_patch,
+    compact: pre_step,
+    policy: allow_policy,
+    provide: handle_tool,
+    intercept: intercept_response,
+    judge: solve_candidate
+  });
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
+}
+
+-- ============================================================================
+-- B7: the test-owned constructor. B8: it spells the 6.0 list -- every fixture
+-- registers all eight kinds, one atom each, in the canonical kind order, so a
+-- fixture's atoms are exactly `(kind, 0)` for each kind.
+-- ============================================================================
+
+-- What a fixture registers, keyed by the 6.0 capability kind. `tools` is the
+-- advertised name list that `ToolProvider(names, handle)` carries at 6.0.
+export type FixtureOverrides = {
+  tools: [string],
+  describe: () -> [ToolSchema],
+  prompt: (ExtCtx) -> PromptPatch,
+  budget: (ExtCtx, BudgetPlan) -> BudgetPatch,
+  compact: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace},
+  policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
+  provide: (ExtCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+  intercept: (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock},
+  judge: (ExtCtx, string) -> FinalizeOutcome ! {Process}
+}
+
+-- The registration value a fixture hands to `ExtRegistry`: D5's `{ id, caps }`
+-- entry (B8). Every `-> FixtureHooks` signature followed without an edit.
+export type FixtureHooks = ExtEntry
+
+-- The neutral bindings, keyed by kind. Each result is the identity for its
+-- host dispatcher: empty concatenations/patches, no policy opinion, and
+-- pass/delegate/no-intercept/no-decision for the chaining and first-match
+-- folds. World-threading kinds preserve the world they receive. (This was
+-- the ABI's `default_hooks` through 5.0, byte-for-byte.)
+export pure func fixture_defaults() -> FixtureOverrides {
+  {
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ctx. { prepend: [], append: [] },
+    budget: \_ctx _plan. {
+      requested_total: None,
+      requested_solver: None,
+      requested_verifier: None
+    },
+    compact: \ctx _msgs. {
+      decision: PassThrough,
+      next_state: ctx.world
+    } ! {AI, IO, Trace},
+    policy: \_ctx _call. NoOpinion,
+    provide: \ctx _call. {
+      decision: Delegate,
+      next_state: ctx.world
+    } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    intercept: \ctx _response_text. {
+      decision: NoIntercept,
+      next_state: ctx.world
+    } ! {IO, Process, FS, Clock},
+    judge: \ctx _candidate. {
+      decision: NoDecision,
+      next_state: ctx.world
+    } ! {Process}
+  }
+}
+
+-- THE CONSTRUCTOR. B8: builds the `Capability` list in the canonical kind
+-- order; nothing that calls it changed.
+export pure func fixture_hooks(id: string, ov: FixtureOverrides) -> FixtureHooks {
+  {
+    id: id,
+    caps: [
+      DescribeTools(ov.describe),
+      PromptShaper(ov.prompt),
+      BudgetShaper(ov.budget),
+      Compactor(ov.compact),
+      ToolPolicy(ov.policy),
+      ToolProvider(ov.tools, ov.provide),
+      ResponseInterceptor(ov.intercept),
+      SolverJudge(ov.judge)
+    ]
+  }
+}

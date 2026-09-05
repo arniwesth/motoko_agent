@@ -1,0 +1,108 @@
+module src/core/ext/ctx_defaults
+
+import std/json (Json, jo)
+import std/result (Result, Err)
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, ExtPorts, Msg, TokenTelemetry)
+
+func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
+  Err("ext ai_step port unavailable")
+}, next_state: world } }
+
+-- WI-D16 widened `ExtPorts.tool_handle` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION and is the correct answer for
+-- exactly `noop_clock_now`'s reason below: this port executes nothing, so there
+-- is no cursor to advance. It would be a silent defect in a binding that DID
+-- something, and no type tells the two apart.
+--
+-- WI-D23 RENAMED THE PARAMETERS, two items after WI-D21 renamed the other
+-- five bindings — this one read `_cmd, _cwd` and was missed by that item's
+-- census. The seam takes a MOTOKO TOOL NAME and that tool's JSON ARGUMENTS —
+-- see the ABI row. Both are `string`, so the wrong reading compiled; this
+-- binding ignores them and was harmless, but it is a template, and a real
+-- implementation written from a `(cmd, cwd)` signature would shell out the
+-- tool name in a directory named by a JSON blob.
+--
+-- `exit_code: -1` (WI-D23), NOT 0: a no-op executes nothing, and -1 is
+-- exactly `ScriptedTool.exit_code`'s "no subprocess ran" value. Writing 0
+-- here would assert a success no process produced — `noop_file_write`'s
+-- judgement below, applied to the exit code.
+func noop_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  { output: "", exit_code: -1, next_state: world }
+}
+
+-- WI-D16's file read seam. `present: false` is the honest answer for a port
+-- with no filesystem behind it, and it is NOT the same claim as `content: ""` —
+-- see `ExtFileRead`'s comment. A no-op that reported `present: true` with empty
+-- contents would tell a caller an empty file exists, which is the branch this
+-- seam was shaped to keep distinguishable.
+func noop_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: false, content: "", next_state: world }
+}
+
+-- WI-D17's filesystem MUTATOR seams. `ok: false` is the honest answer for a port
+-- with no filesystem behind it, and it is the same judgement `noop_file_read`
+-- makes with `present: false`: reporting success for a write that did not happen
+-- tells the caller a fact about the world that is not true. The world token is
+-- returned unchanged, which is S12's identity transition and correct here —
+-- nothing was written, so there is no successor to thread.
+func noop_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+func noop_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+-- WI-D18's DIRECTORY seams. `ExtPathMissing` and `present: false` are the honest
+-- answers for a port with no filesystem behind it — `noop_file_read`'s judgement
+-- exactly. Note that `ExtPathMissing` and not `ExtPathFile` is the one that
+-- cannot mislead: a no-op claiming a path is a file would state something about
+-- the world that is not true, and a caller would then try to read it.
+func noop_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} {
+  { kind: ExtPathMissing, next_state: world }
+}
+
+func noop_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} {
+  { present: false, entries: [], next_state: world }
+}
+
+func noop_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+-- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION, and here it is the correct
+-- answer rather than a silent defect: this clock reads nothing, so there is no
+-- cursor to advance. The distinction matters because the same expression is a
+-- real defect in a port that DID something — S12 exists because no type tells
+-- the two apart.
+func noop_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 0, next_state: world }
+}
+
+func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
+  fallback
+}
+
+export func noop_ext_ports() -> ExtPorts {
+  {
+    ai_step: noop_ai_step,
+    tool_handle: noop_tool_handle,
+    file_read: noop_file_read,
+    file_write: noop_file_write,
+    file_remove: noop_file_remove,
+    path_stat: noop_path_stat,
+    dir_list: noop_dir_list,
+    dir_make: noop_dir_make,
+    clock_now: noop_clock_now,
+    env_get: noop_env_get
+  }
+}
+
+export pure func empty_ext_artifacts() -> Json {
+  jo([])
+}
+
+export pure func zero_token_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}

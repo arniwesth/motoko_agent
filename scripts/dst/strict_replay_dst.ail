@@ -1,0 +1,1141 @@
+-- scripts/dst/strict_replay_dst.ail
+--
+-- WI-A13 stage 3: STRICT REPLAY against `driver_only`. A program discovered
+-- from a real driver run is fed back to the real driver through a world
+-- reconstituted from it, and the two runs must agree on causal identity and on
+-- every recorded projection — under the manifest the program carries.
+--
+-- ---------------------------------------------------------------------------
+-- THE RULE THIS SCRIPT EXISTS TO NOT BREAK
+-- ---------------------------------------------------------------------------
+--
+-- D2's strict-replay contract is a DETERMINISM contract: "the exact program
+-- reproduces the same interaction log, terminal outcome and trace". Determinism
+-- is 0-for-18 across eight clusters here, and the reason it fails at THIS stage
+-- is structural rather than incidental:
+--
+--   STRICT REPLAY RE-USES `recording_ports` — THE VERY RECORDER THAT PRODUCED
+--   THE PROGRAM. So any gap in the recorder is present on both sides of the
+--   comparison, and the comparison passes BECAUSE BOTH SIDES ARE WRONG IN THE
+--   SAME WAY.
+--
+-- Program-versus-log agreement is therefore the recorder grading itself, one
+-- level up. This script answers that by grading the REPLAYED RUN with stage 2's
+-- independent witnesses — a replayed run is a run, with a ledger trace written
+-- by production code, world cursors moved by the response-producing adapters,
+-- and a clock — and by carrying a fixture (axis H) in which the replay MATCHES
+-- THE PROGRAM EXACTLY AND FAILS THE WITNESS BALANCE. That fixture is the
+-- assertion that distinguishes this stage from a tautology; without it, every
+-- other check here is satisfied by a recorder and a reconstitution that are
+-- wrong together.
+--
+-- ---------------------------------------------------------------------------
+-- THE AXES
+-- ---------------------------------------------------------------------------
+--
+--   A. REFUSAL BEFORE REPLAY. D2: "program decoding and a pure structural
+--      validator run before replay". An invalid program, or one whose recorded
+--      outcomes cannot be read back, is a REFUSAL at position -1 carrying A9's
+--      `InvalidProgram` — never a mismatch at position 0.
+--
+--   B. THE MANIFEST. Strict replay runs "under the recorded execution
+--      manifest/profile", so the program's own manifest is validated against
+--      `driver_only()` before the world is built, and A9's `ReplayMetadata` is
+--      PROJECTED from it by `replay_metadata_of` rather than restated — so a
+--      typed failure cannot carry a profile id that disagrees with the manifest
+--      it replayed under.
+--
+--   C. RECONSTITUTION, BOTH DIRECTIONS. `world_state_of` is the one projection
+--      strict replay adds, and `reconstitution_balance` grades it against the
+--      program it was built from — under-filled and over-filled from one
+--      arithmetic site.
+--
+--   D. THE REPLAY ITSELF. Identity, origin, kind, request projection and
+--      outcome, position by position, plus both ends of the walk: an exhausted
+--      program and an unused interaction.
+--
+--   E. MUTATION (C5). Every replay rule demonstrated red against a deliberate
+--      mutation of the REAL replayed log.
+--
+--   F. NEGATIVE CONTROL (S7). The real, unmutated replay must SURVIVE — and the
+--      surviving fixture carries every shape D2 explicitly protects, with no
+--      two of its quantities equal. See `rich` below.
+--
+--   G. WITNESS GRADING OF THE REPLAYED RUN. `check_discovery` over the replay's
+--      own log, against witnesses the recorder did not write.
+--
+--   H. THE TAUTOLOGY CONTROL, and it is this stage's central assertion. A
+--      program and a log that share the same defect agree perfectly and fail
+--      the witness. Asserted, not claimed.
+--
+--   I. DETERMINISM, last and least. Two replays of one program agree.
+--
+--   J. REGRESSION REPLAY (stage 5), D2's SECOND MODE, over the same five real
+--      mutated logs axis E just rejected. D2 permits it to "require compatible
+--      causal identity, record projection differences, and continue" and binds
+--      it with "never weakens tool-call/result correlation or delivers an
+--      outcome to a different logical request". So the two modes must disagree
+--      on EXACTLY TWO of seven rules and agree on the other five, and grading
+--      both over one set of inputs is what makes that legible rather than
+--      claimed. The demotion set itself is asserted in `dst_replay`, where
+--      demoting a third rule goes red on its own — here the risk is different
+--      and worth naming: `replay-unused-interaction` fails SILENTLY without its
+--      rule, so a regression mode that dropped it would report a clean, short
+--      and entirely fictitious "no differences" on every row of this script.
+--
+-- ---------------------------------------------------------------------------
+-- WITNESSES ON THE Err PATH
+-- ---------------------------------------------------------------------------
+--
+-- Stage 2's witnesses for the tool and approval classes are derived from the
+-- driver's returned MESSAGE LIST, which is EMPTY when the run ends in `Err`.
+-- Stage 2 guarded that by asserting each scenario reached its terminator, which
+-- makes the vacuity loud for scenarios that succeed. Stage 3 wants FAILURE-PATH
+-- scenarios, so that guard stops being sufficient and is replaced by a general
+-- one: every witness a scenario's grading consumes is asserted NON-ZERO where
+-- the scenario's control flow reaches that class, on both paths.
+--
+-- What survives `Err`, verified at HEAD — `TracedSessionResult` is
+-- `{ result, trace, world }` and the trace and the world are returned on both
+-- paths:
+--
+--   provider    `ProviderCallPrepared` in the returned ledger trace
+--               (session.ail:1998), written by production driver code and
+--               emitted separately from the `dispatch_step` call. Strong,
+--               cross-component, and unaffected by the outcome.
+--   tool        the world's own `tools` cursor delta. Moved by `world_tool`,
+--               the response-PRODUCING mechanism, while the log is written by
+--               `recording_tool` around it. Medium in cluster 7's sense, and it
+--               survives.
+--   approval    the tool calls carried by the script entries the run CONSUMED,
+--               computed from the initial world's script and the world's own
+--               `script` cursor delta. Neither half is the recorder: one is the
+--               fixture's input and the other is the provider adapter's cursor.
+--               Under a policy that sends every tool call to the approval
+--               channel — which every scenario here uses — that is exactly one
+--               approval read per tool call.
+--   clock       the world's `clock_ms` delta. General across classes.
+--
+--   `V2ToolDispatchStart` (tool_phase.ail:332) is the strongest tool witness and
+--   is emitted BEFORE the port calls, but session.ail passes tool_phase a bare
+--   `\event. ledger_emit(session_id, event)` — it goes to the wire and is never
+--   appended to the returned trace, so no AILANG assertion can read it. `make
+--   strict_replay` consumes it from stdout, which is where that witness lives.
+
+module scripts/dst/strict_replay_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/ai (Message, ToolCall)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderCallPrepared)
+import src/core/test/stub_step (RecordingWorld)
+import src/core/ports (ScriptedStep, WorldState, ScriptedTool, empty_world_state)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/dst_interaction (
+  Interaction,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity,
+  EnvironmentReadIdentity, ClockAdvanceIdentity,
+  OutcomeMissing,
+  identity_kind,
+  identity_projection,
+  interaction_kind,
+  count_kind,
+  outcome_status_id,
+  total_advance_ms,
+  approvals_served
+)
+import src/core/dst_discovery (
+  DiscoveryWitness,
+  EnvExpectation,
+  DiscoveryFinding,
+  check_discovery,
+  discovery_ok,
+  discovery_message,
+  census,
+  census_line
+)
+import src/core/dst_program (
+  ExecutionProgram,
+  validate_program,
+  program_schema_version,
+  validate_bounds
+)
+import src/core/dst_replay (
+  ReplayMismatch,
+  ReconstitutionFinding,
+  RegressionReplay,
+  strict_replay_findings,
+  strict_replay_ok,
+  regression_replay_findings,
+  regression_replay_ok,
+  regression_difference_count,
+  regression_report,
+  replay_message,
+  has_replay_rule,
+  first_replay_message,
+  first_replay_failure,
+  reconstitution_balance,
+  reconstitution_message,
+  refusal_rule,
+  refusal_message,
+  world_state_of,
+  provider_steps_served
+)
+import src/core/dst_result (
+  RunCompleted, RunFailed, harness_failure_kind_name
+)
+import src/core/dst_driver_only (driver_only, driver_only_manifest, driver_only_version)
+import src/core/dst_profile (ExecutionManifest, validate_manifest, replay_metadata_of)
+import src/core/dst_fault_catalogue (required_class_ids)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  BudgetPlan,
+  BudgetPatch,
+  Delegate,
+  ExtCtx,
+  ExtRuntime,
+  FinalizeDecision,
+  NoDecision,
+  NoIntercept,
+  PassThrough,
+  Pending,
+  DenyAfterTimeout,
+  PreStepDecision,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolHandleDecision,
+  ToolPolicyDecision,
+  ToolSchema
+)
+import src/core/test/ext_fixture (fixture_hooks)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func tc(id: string) -> ToolCall { { id: id, name: "T", arguments: "{}" } }
+
+-- A continuer carrying an arbitrary number of tool calls. `tool_step` builds
+-- exactly one; several in one step is what lets a scenario's approval-read
+-- count differ from its provider-call count, which S7 requires of the fixture
+-- that must survive.
+func multi_step(prose: string, calls: [ToolCall], chunks: [string]) -> ScriptedStep {
+  { prose: prose,
+    tool_calls: calls,
+    input_tokens: 200,
+    output_tokens: 100,
+    finish_reason: "tool_calls",
+    chunks: chunks , error_code: "", error_message: "", advance_ms: 0}
+}
+
+func approve_line() -> string { "{\"type\":\"approve\"}" }
+func deny_line(reason: string) -> string { "{\"type\":\"deny\",\"reason\":\"${reason}\"}" }
+
+-- The synthetic environment. Two keys PRESENT so the env class records
+-- `OutcomeOk` reads, while the driver's other five keys are absent and record
+-- `OutcomeMissing` — both statuses in one run, which is what makes the
+-- reconstituted environment's fidelity observable rather than assumed.
+func world_env() -> [{ key: string, value: string }] {
+  [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
+   { key: "MOTOKO_HEADLESS", value: "1" }]
+}
+
+func base_world(script: [ScriptedStep], answers: [string], tools: [ScriptedTool]) -> WorldState {
+  { empty_world_state() | script: script, approvals: answers, env: world_env(), tools: tools }
+}
+
+-- ---------------------------------------------------------------------------
+-- Extension plumbing: every tool call goes to the approval channel
+-- ---------------------------------------------------------------------------
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }
+func no_solver(ctx: ExtCtx, _text: string)
+  -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("strict replay: approval required", DenyAfterTimeout)
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks = fixture_hooks(id, {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: passthrough_pre_step,
+    policy: pending_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  });
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
+}
+
+func run_recording(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    step_budget, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+-- ---------------------------------------------------------------------------
+-- Witnesses
+-- ---------------------------------------------------------------------------
+
+pure func provider_calls_witnessed(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest =>
+      (match r { WireRecord(ProviderCallPrepared(_)) => 1, _ => 0 })
+        + provider_calls_witnessed(rest)
+  }
+}
+
+pure func provider_steps_witnessed(records: [LedgerRecord]) -> [int] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(ProviderCallPrepared(i)) => i.step :: provider_steps_witnessed(rest),
+        _ => provider_steps_witnessed(rest)
+      }
+  }
+}
+
+pure func provider_steps_recorded(xs: [Interaction]) -> [int] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ProviderIdentity(_, step, _) => step :: provider_steps_recorded(rest),
+        _ => provider_steps_recorded(rest)
+      }
+  }
+}
+
+-- How many tool calls the script entries this run CONSUMED carried.
+--
+-- The Err-surviving approval witness. Under `pending_policy` every tool call
+-- goes to the approval channel exactly once, so this is the number of approval
+-- READS the driver performed — the quantity stage 2 established the cursor
+-- delta cannot witness, expressed from two sources that are both independent of
+-- the recorder: the fixture's own script (an INPUT) and the world's `script`
+-- cursor (moved by the provider adapter, not by the log append).
+pure func tool_calls_in_consumed_prefix(initial: [ScriptedStep], remaining: int) -> int {
+  let consumed = List.length(initial) - remaining;
+  tool_calls_in_prefix(initial, consumed)
+}
+
+pure func tool_calls_in_prefix(xs: [ScriptedStep], n: int) -> int {
+  if n <= 0 then 0
+  else match xs {
+    [] => 0,
+    s :: rest => List.length(s.tool_calls) + tool_calls_in_prefix(rest, n - 1)
+  }
+}
+
+-- The Err-surviving witness set. Every field comes from the returned trace or
+-- from a world cursor, so it is identical in shape whether the run ended `Ok`
+-- or `Err` — which is the property the failure-path scenarios need and the
+-- message-derived witnesses do not have.
+func witness_of(initial: WorldState, run: TracedSessionResult, expected_env: [EnvExpectation]) -> DiscoveryWitness {
+  {
+    provider_calls: provider_calls_witnessed(run.trace.records),
+    tool_dispatches: List.length(initial.tools) - List.length(run.world.tools),
+    approval_reads: tool_calls_in_consumed_prefix(initial.script, List.length(run.world.script)),
+    approvals_consumed: List.length(initial.approvals) - List.length(run.world.approvals),
+    clock_delta_ms: run.world.clock_ms - initial.clock_ms,
+    -- WI-D19. These three scenarios route no filesystem mutation, so the
+    -- expectation is the literal zero WI-D17 and WI-D18 pinned in
+    -- `absent_classes` — the field is where that pin now lives, and it is still
+    -- a claim rather than silence. See `DiscoveryWitness` for why the classes
+    -- moved from a hard-coded 0 to a witness at WI-D19, and note that a
+    -- future extension installed into THIS scenario has to change these by
+    -- hand: nothing derives them from the run.
+    file_writes: 0,
+    file_removes: 0,
+    dir_makes: 0,
+    -- WI-D24 added the extension-effect class on the same terms: this scenario
+    -- installs no extension that reaches `ExtPorts.tool_handle`, so the pin holds
+    -- here and the class is still claimed at zero rather than unmentioned.
+    extension_effects: 0,
+    expected_env_reads: expected_env
+  }
+}
+
+-- Session-wide env reads (session_policy_init's four plus derive_session_id's
+-- one), each reached exactly once per traced run — derived from the driver's
+-- source, as `dst_discovery`'s header requires for the one class with no
+-- runtime witness.
+func env_reads_always(resolutions: int) -> [EnvExpectation] {
+  [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
+   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+   { key: "OPENAI_BASE_URL",           count: 1 },
+   { key: "MOTOKO_HEADLESS",           count: 1 },
+   { key: "MOTOKO_SESSION_ID",         count: 1 }]
+    ++ env_reads_per_context_resolution(resolutions)
+}
+
+-- MOTOKO_TOOL_TIMEOUT_MS is read once per NATIVE dispatch (tool_phase.ail:343),
+-- so its count is expressed in terms of the independently witnessed dispatch
+-- count rather than as a literal.
+
+-- WI-D3's four context-resolution keys, and their MULTIPLICITY.
+--
+-- `resolve_context_limit` performs five env requests per call against a world
+-- whose env table does not carry these keys: MOTOKO_PROFILE_DIR, then
+-- MOTOKO_CONFIG, then MOTOKO_REPO (from `profile_dir_path`), then
+-- MOTOKO_MODELS_FILE, then MOTOKO_REPO again (from `catalog_path`). MOTOKO_REPO
+-- is therefore read TWICE per resolution and the other three once, which is why
+-- the rates below are not uniform — a uniform set would be satisfied by a
+-- recorder that lost one of the two MOTOKO_REPO reads.
+--
+-- MEASURED PER SCENARIO, and the resolution count is a PARAMETER because the
+-- first version of this made it a shared constant and that was wrong. WI-D3 set
+-- it to 12 — correct for discovery's approve, deny and eof, read off
+-- `make discovery`'s own census (environment_read=68/65/66 against 8/5/6
+-- accounted for before this item, 60 = 12 x 5 in every case) — and strict
+-- replay's scenarios reject it immediately: `rich` reaches 19 resolutions and
+-- `maxsteps` 8, so the shared literal was over-recorded on one and
+-- under-recorded on the other. The count tracks the loop arms a scenario takes,
+-- not the run length, and no formula over the witnessed quantities fits the
+-- three data points — 12 at provider=4, 19 at provider=5, 8 at provider=1 — so
+-- each scenario states its own measurement rather than deriving a rule from
+-- three observations.
+--
+-- The count is a literal because there is NO runtime witness to anchor it to:
+-- the env class emits no ledger event, which is the same reason this whole set
+-- exists, and deriving it from the log would put both sides of the check on one
+-- producer — the defect S16 names.
+--
+-- It goes RED rather than stale when the driver's loop structure changes the
+-- number of resolutions, and that is the intended failure: a changed count is a
+-- changed env surface and this set is the env class's only independent evidence.
+func env_reads_per_context_resolution(resolutions: int) -> [EnvExpectation] {
+  [{ key: "MOTOKO_PROFILE_DIR", count: resolutions },
+   { key: "MOTOKO_CONFIG",      count: resolutions },
+   { key: "MOTOKO_MODELS_FILE", count: resolutions },
+   { key: "MOTOKO_REPO",        count: resolutions * 2 }]
+}
+
+
+func env_reads_with_dispatch(dispatches: int, resolutions: int) -> [EnvExpectation] {
+  env_reads_always(resolutions) ++ [{ key: "MOTOKO_TOOL_TIMEOUT_MS", count: dispatches }]
+}
+
+-- ---------------------------------------------------------------------------
+-- Reporting
+-- ---------------------------------------------------------------------------
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+func report_replay(ms: [ReplayMismatch]) -> () ! {IO} {
+  match ms {
+    [] => (),
+    m :: rest => { let _ = println("      ${replay_message(m)}"); report_replay(rest) }
+  }
+}
+
+func report_discovery(fs: [DiscoveryFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => { let _ = println("      ${discovery_message(f)}"); report_discovery(rest) }
+  }
+}
+
+func report_reconstitution(fs: [ReconstitutionFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => { let _ = println("      ${reconstitution_message(f)}"); report_reconstitution(rest) }
+  }
+}
+
+-- A mutation row must trip its rule AND TRIP ONLY THAT RULE. Stage 2's
+-- `renumber` established why: a mutant that trips two rules proves neither,
+-- because either rule alone would have satisfied the row. Every mutation below
+-- is therefore a SINGLE-POSITION edit, which a positional walk answers with a
+-- single finding — a class drop would shift every later position and produce a
+-- cascade that names nothing in particular.
+func mutant(label: string, rule: string, program: [Interaction], actual: [Interaction]) -> bool ! {IO} {
+  let ms = strict_replay_findings(program, actual);
+  check("${rule} ← ${label}", has_replay_rule(ms, rule) && List.length(ms) == 1,
+        "expected exactly one ${rule}; got ${show(List.length(ms))} mismatch(es): ${first_replay_message(ms)}")
+}
+
+-- Single-position mutations. Each replaces exactly one interaction and leaves
+-- its ordinal alone, so the walk stays aligned and reports one divergence.
+pure func replace_at(xs: [Interaction], pos: int, f: (Interaction) -> Interaction) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest => if pos == 0 then f(i) :: rest else i :: replace_at(rest, pos - 1, f)
+  }
+}
+
+-- The position of the first interaction of a class, or -1. Used so the
+-- mutations below land on a class that exists in this scenario rather than at a
+-- hard-coded index that a fixture change would silently move off.
+pure func first_index_of(xs: [Interaction], kind: string, at: int) -> int {
+  match xs {
+    [] => -1,
+    i :: rest => if interaction_kind(i) == kind then at else first_index_of(rest, kind, at + 1)
+  }
+}
+
+pure func drop_kind(xs: [Interaction], kind: string) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest => if interaction_kind(i) == kind then drop_kind(rest, kind) else i :: drop_kind(rest, kind)
+  }
+}
+
+pure func renumber(xs: [Interaction], n: int) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest => ({ i | identity: { i.identity | ordinal: n } }) :: renumber(rest, n + 1)
+  }
+}
+
+pure func drop_last(xs: [Interaction]) -> [Interaction] {
+  match xs {
+    [] => [],
+    _ :: [] => [],
+    i :: rest => i :: drop_last(rest)
+  }
+}
+
+-- Rewrite the payload of the first interaction of a class, leaving everything
+-- else — including the identity — untouched. This is the mutation that only the
+-- OUTCOME comparison can see: the request matches at every position.
+pure func blank_first_payload(xs: [Interaction], kind: string) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      if interaction_kind(i) == kind then
+        ({ i | outcome: { i.outcome | payload: "" } }) :: rest
+      else i :: blank_first_payload(rest, kind)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- S7, made executable
+-- ---------------------------------------------------------------------------
+--
+-- The fixture that must SURVIVE has to contain every shape the specification
+-- explicitly protects, with no two of its quantities equal. Both halves are
+-- CLAIMS, and cluster 8 measured that a fixture's stated justification is a
+-- claim worth testing: the first version of `rich` documented a tool FAULT
+-- outcome it did not actually reach, because the only fault entry in its queue
+-- was never consumed. These two checks are what would have said so.
+
+pure func count_status_of_kind(xs: [Interaction], kind: string, status_id: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if interaction_kind(i) == kind && outcome_status_id(i.outcome.status) == status_id then 1 else 0)
+        + count_status_of_kind(rest, kind, status_id)
+  }
+}
+
+pure func count_with_chunks(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if List.length(i.outcome.chunks) > 0 then 1 else 0) + count_with_chunks(rest)
+  }
+}
+
+pure func all_distinct(xs: [int]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => not contains_int(rest, x) && all_distinct(rest)
+  }
+}
+
+pure func contains_int(xs: [int], target: int) -> bool {
+  match xs { [] => false, x :: rest => if x == target then true else contains_int(rest, target) }
+}
+
+pure func eq_ints(a: [int], b: [int]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && eq_ints(xs, ys) }
+  }
+}
+
+pure func join_ints(xs: [int]) -> string {
+  match xs { [] => "", x :: [] => "${x}", x :: rest => "${x},${join_ints(rest)}" }
+}
+
+pure func projections(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      "${identity_projection(i.identity)}|${i.request_projection}|${i.outcome.payload}|${i.outcome.advance_ms}"
+        :: projections(rest)
+  }
+}
+
+pure func eq_list(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && eq_list(xs, ys) }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The program
+-- ---------------------------------------------------------------------------
+
+pure func discovered_manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
+                       ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
+}
+
+pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    -- WI-A13 stage 4 renamed this from "driver_only_discovery". The world this
+    -- program was discovered against is HAND-AUTHORED, and D2's three generator
+    -- axes are required and validated non-blank, so before a generator existed
+    -- these fields necessarily named one that did not. `seed: 0` in particular
+    -- was consulted by nothing. The seeded generator is
+    -- `src/core/dst_generator`, and its programs are produced by
+    -- `scripts/dst/seeded_generator_dst.ail`, which reads these three axes off
+    -- the world's own generator state instead of writing literals.
+    generator_id: "hand_authored_discovery",
+    generator_version: "1",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
+      synthetic_environment: initial.env,
+      -- WI-D22: `execution-program/2` seeds the world's file table from the
+      -- program. This fixture seeds nothing, which is what it did before the
+      -- field existed; the seeded case is exercised in dst_replay and in the
+      -- persistence specimen.
+      files: [],
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_only/${driver_only_version()}"
+    },
+    bounds: {
+      max_interactions: 256,
+      max_chunks_per_interaction: 16,
+      max_payload_bytes: 4096,
+      max_resource_size: 4096,
+      max_clock_advance_ms: 60000,
+      chunk_draw_hi: 3
+    },
+    manifest: discovered_manifest(),
+    interactions: log
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- One scenario, all axes
+-- ---------------------------------------------------------------------------
+
+func run_scenario(
+  label: string,
+  script: [ScriptedStep],
+  answers: [string],
+  tools: [ScriptedTool],
+  step_budget: int,
+  expect_ok: bool,
+  -- Whether this scenario is the one carrying S7's obligation. Only one needs
+  -- to be, and saying which makes the obligation locatable instead of assumed
+  -- of all of them.
+  is_survive_fixture: bool,
+  -- WI-D3 added this as a per-scenario count because `resolve_context_limit` was
+  -- reached once in `session_policy_init` AND again on every loop arm taken, so
+  -- the number genuinely varied with control flow — 12 here, 19 and 8 in strict
+  -- replay. WI-D4 removed the four per-arm resolutions (they re-derived a value
+  -- `session_policy_init` had already stored), so the driver reaches it exactly
+  -- ONCE per run and every scenario's answer is 1.
+  --
+  -- THE PARAMETER STAYS even though every caller now passes the same number, and
+  -- that is deliberate rather than an oversight: what makes the answer 1 is a
+  -- property of the driver's call graph, not of this suite, and the moment
+  -- anything re-resolves per arm the quantity varies again. A parameter that is
+  -- currently constant expresses "this may differ per scenario and today does
+  -- not"; folding it into a shared literal would express "this cannot differ",
+  -- which is the claim WI-D3 measured to be false.
+  context_resolutions: int
+) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let initial = base_world(script, answers, tools);
+
+  -- ---- Discovery: produce the exact program ------------------------------
+  let discovery = run_recording("srdisc_${label}", initial, step_budget);
+  let program = program_of(discovery.world.log, initial);
+
+  let _ = println("");
+  let _ = println("${label}: discovery recorded ${show(List.length(discovery.world.log))} interactions");
+  let _ = println("CENSUS ${label} ${census_line(census(discovery.world.log))}");
+
+  -- The run must have ended the way the scenario intends. For a success
+  -- scenario this is stage 2's terminator guard; for a FAILURE scenario it is
+  -- the inverse, and it is what stops a failure-path fixture from quietly
+  -- becoming another success-path one.
+  let ended_ok = match discovery.result { Ok(_) => true, Err(_) => false };
+  let ok_end = check("${label}: the discovery run ended ${if expect_ok then "Ok" else "Err"} as the scenario intends",
+                     ended_ok == expect_ok,
+                     "expected ${if expect_ok then "Ok" else "Err"}; a scenario that silently changed its terminal outcome is testing a different thing from the one it documents");
+
+  -- ---- Axis B: the manifest, and the metadata projected FROM it ----------
+  let manifest_rejections = validate_manifest(program.manifest, driver_only());
+  let ok_manifest = check("${label}: the program's manifest validates against driver_only/${driver_only_version()}",
+                          List.length(manifest_rejections) == 0,
+                          "${show(List.length(manifest_rejections))} manifest rejection(s) — strict replay runs UNDER the recorded manifest, so a program whose manifest does not describe the profile it names cannot be replayed strictly at all");
+  let meta = replay_metadata_of(program.manifest);
+  let ok_meta = check("${label}: replay metadata is projected from the manifest, not restated",
+                      meta.profile_id == program.manifest.profile_id
+                        && meta.profile_version == program.manifest.profile_version
+                        && meta.source_revision == program.manifest.source_revision,
+                      "replay_metadata_of disagrees with the manifest it was projected from");
+
+  -- ---- Axis A + C: reconstitution ----------------------------------------
+  match world_state_of(program, required_class_ids()) {
+    Err(r) => {
+      let _ = println("      ${refusal_message(r)}");
+      check("${label}: the program reconstitutes a world", false,
+            "refused with ${refusal_rule(r)}")
+    },
+    Ok(replay_world) => {
+      let rec = reconstitution_balance(program, replay_world);
+      let _ = if List.length(rec) > 0 then report_reconstitution(rec) else ();
+      let ok_rec = check("${label}: the reconstituted world accounts for the program, in both directions",
+                         List.length(rec) == 0,
+                         "${show(List.length(rec))} finding(s) above");
+      let _ = println("${label}: reconstituted script=${show(List.length(replay_world.script))} approvals=${show(List.length(replay_world.approvals))} tools=${show(List.length(replay_world.tools))} clock=${show(replay_world.clock_ms)}");
+
+      -- ---- Axis D: the replay ---------------------------------------------
+      let replay = run_recording("srplay_${label}", replay_world, step_budget);
+      let actual = replay.world.log;
+      let ms = strict_replay_findings(program.interactions, actual);
+      let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+      let ok_replay = check("${label}: the exact program replays to an identical interaction log",
+                            List.length(ms) == 0,
+                            "${show(List.length(ms))} mismatch(es) above");
+
+      -- The terminal outcome is part of D2's reproduction contract, and it is
+      -- the one axis the interaction comparison cannot see: a replay that
+      -- reproduced every request and then failed differently has not reproduced
+      -- the run.
+      let replay_ok_end = match replay.result { Ok(_) => true, Err(_) => false };
+      let ok_terminal = check("${label}: the replay reproduces the terminal outcome",
+                              replay_ok_end == ended_ok,
+                              "discovery ended ${if ended_ok then "Ok" else "Err"} and the replay ended ${if replay_ok_end then "Ok" else "Err"}");
+
+      -- ---- Axis G: the replayed run, graded by INDEPENDENT witnesses -------
+      --
+      -- Not the program comparison. This is the check that survives the
+      -- recorder having the same gap on both sides, and it is why this stage is
+      -- not a tautology.
+      let probe = witness_of(replay_world, replay, []);
+      let expected_env = if probe.tool_dispatches > 0
+                         then env_reads_with_dispatch(probe.tool_dispatches, context_resolutions)
+                         else env_reads_always(context_resolutions);
+      let w = { probe | expected_env_reads: expected_env };
+      let _ = println("${label}: replay witness provider=${show(w.provider_calls)} tool=${show(w.tool_dispatches)} approval_reads=${show(w.approval_reads)} approvals_served=${show(w.approvals_consumed)} clock_delta=${show(w.clock_delta_ms)}ms");
+      let fs = check_discovery(actual, w);
+      let _ = if List.length(fs) > 0 then report_discovery(fs) else ();
+      let ok_witness = check("${label}: the REPLAYED run's log accounts for it, against witnesses the recorder did not write",
+                             List.length(fs) == 0,
+                             "${show(List.length(fs))} finding(s) above");
+
+      -- THE VACUITY CONTROL, generalised so it covers the Err path. Stage 2
+      -- asserted "the scenario reached its terminator", which makes the
+      -- message-derived witnesses' emptiness loud only for succeeding runs.
+      -- Every witness this grading consumes is asserted non-zero instead, which
+      -- is the same guarantee on both paths and a stronger one on neither.
+      let ok_nonvacuous = check("${label}: every witness the grading consumes is non-zero",
+                                w.provider_calls > 0 && w.approval_reads > 0
+                                  && w.approvals_consumed > 0 && w.clock_delta_ms > 0
+                                  && w.tool_dispatches > 0,
+                                "provider=${show(w.provider_calls)} tool=${show(w.tool_dispatches)} reads=${show(w.approval_reads)} served=${show(w.approvals_consumed)} clock=${show(w.clock_delta_ms)} — a zero witness grades its class vacuously, and a vacuous check passes");
+
+      -- ---- Axis F: S7's two obligations, asserted rather than described ----
+      let provider_kind = identity_kind(ProviderIdentity("", 0, ""));
+      let tool_kind = identity_kind(ToolIdentity("", "", ""));
+      let approval_kind = identity_kind(ApprovalIdentity("", "", ""));
+      let env_kind = identity_kind(EnvironmentReadIdentity(""));
+      let ok_shapes = not is_survive_fixture || check(
+        "${label}: the surviving fixture carries every shape the specification protects",
+        count_with_chunks(actual) > 0
+          && count_kind(actual, provider_kind) > provider_steps_served(actual)
+          && count_status_of_kind(actual, tool_kind, "ok") > 0
+          && count_status_of_kind(actual, tool_kind, "fault") > 0
+          && count_status_of_kind(actual, approval_kind, "ok") > 0
+          && count_status_of_kind(actual, approval_kind, "missing") > 0
+          && count_status_of_kind(actual, env_kind, "ok") > 0
+          && count_status_of_kind(actual, env_kind, "missing") > 0
+          && count_kind(actual, identity_kind(ClockAdvanceIdentity)) > 0,
+        "chunks=${show(count_with_chunks(actual))} exhausted_providers=${show(count_kind(actual, provider_kind) - provider_steps_served(actual))} tool_ok=${show(count_status_of_kind(actual, tool_kind, "ok"))} tool_fault=${show(count_status_of_kind(actual, tool_kind, "fault"))} approval_ok=${show(count_status_of_kind(actual, approval_kind, "ok"))} approval_missing=${show(count_status_of_kind(actual, approval_kind, "missing"))} env_ok=${show(count_status_of_kind(actual, env_kind, "ok"))} env_missing=${show(count_status_of_kind(actual, env_kind, "missing"))} — a shape the fixture claims and does not reach is a claim, and the fixture's justification is exactly the kind of claim cluster 8 measured to be worth testing");
+      let ok_distinct = not is_survive_fixture || check(
+        "${label}: no two of the surviving fixture's quantities are equal",
+        all_distinct([w.provider_calls, List.length(replay_world.script), w.approval_reads,
+                      w.approvals_consumed, w.tool_dispatches]),
+        "provider=${show(w.provider_calls)} script=${show(List.length(replay_world.script))} reads=${show(w.approval_reads)} served=${show(w.approvals_consumed)} dispatches=${show(w.tool_dispatches)} — a fixture whose quantities are all equal cannot distinguish which quantity a check is reading, which is how stage 2's sites 17 and 18 stayed hidden");
+
+      -- Identity CONTENT: the provider step is the recorder's one DECIDED
+      -- binding (it is derived from log position because the port never
+      -- receives step_idx), so it is compared against the driver's own values
+      -- in the REPLAY run and not only in discovery.
+      let steps_w = provider_steps_witnessed(replay.trace.records);
+      let steps_r = provider_steps_recorded(actual);
+      let ok_steps = check("${label}: the replay's recorded provider steps equal the driver's own",
+                           eq_ints(steps_w, steps_r),
+                           "driver=[${join_ints(steps_w)}] recorded=[${join_ints(steps_r)}]");
+
+      -- ---- Axis H: THE TAUTOLOGY CONTROL ----------------------------------
+      --
+      -- Give the PROGRAM and the LOG the same defect — drop one class from
+      -- both, re-densify both — and the strict comparison agrees perfectly.
+      -- That models exactly the failure this stage is most exposed to, because
+      -- replay re-uses the recorder that produced the program: a recorder gap
+      -- is present on both sides by construction.
+      --
+      -- The witness balance, which is derived from the ledger trace and the
+      -- world's cursors, does NOT agree. This is the assertion that separates
+      -- strict replay from a restatement of itself.
+      -- The two sides are derived INDEPENDENTLY — one from the discovery run's
+      -- log, one from the replay's — and each is given the same gap. They are
+      -- two different objects that agree, which is the situation a shared
+      -- recorder defect actually produces; comparing one list against itself
+      -- would agree by construction and would demonstrate nothing.
+      let gapped_program = renumber(drop_kind(program.interactions, identity_kind(ProviderIdentity("", 0, ""))), 0);
+      let gapped_actual = renumber(drop_kind(actual, identity_kind(ProviderIdentity("", 0, ""))), 0);
+      let ok_tautology_matches = check("${label}: a program and a log with the SAME defect match perfectly",
+                                       strict_replay_ok(gapped_program, gapped_actual)
+                                         && List.length(gapped_actual) < List.length(actual),
+                                       "the shared-defect pair did not match, or the gap was not actually applied — either way the control cannot make its point");
+      let ok_tautology_caught = check("${label}: …and the independent witnesses reject it anyway",
+                                      not discovery_ok(gapped_actual, { w | clock_delta_ms: total_advance_ms(gapped_actual) }),
+                                      "program-versus-log agreement was the ONLY thing checked, and a shared recorder gap passed it — this stage is a tautology");
+
+      -- ---- Axis E: mutation ------------------------------------------------
+      let _ = println("  mutations (each must go red):");
+      let prov_at = first_index_of(actual, identity_kind(ProviderIdentity("", 0, "")), 0);
+      let tool_at = first_index_of(actual, identity_kind(ToolIdentity("", "", "")), 0);
+      let m_unused = mutant("the replay stops one interaction early", "replay-unused-interaction",
+                            program.interactions, drop_last(actual));
+      let m_exhausted = mutant("the replay makes one request more than the program holds",
+                               "replay-program-exhausted",
+                               drop_last(program.interactions), actual);
+      -- The five single-position mutants are BOUND rather than inlined, because
+      -- stage 5's regression axis grades the same real logs. Two gates reading
+      -- one mutant is the arrangement in which the two modes cannot be given
+      -- quietly different inputs and then compared.
+      let wrong_kind_log = replace_at(actual, prov_at,
+                             func(i: Interaction) -> Interaction {
+                               { i | identity: { i.identity | body: ClockAdvanceIdentity }, deadline_ms: -1 } });
+      let wrong_origin_log = replace_at(actual, prov_at,
+                               func(i: Interaction) -> Interaction {
+                                 match i.identity.body {
+                                   ProviderIdentity(_, s, m) =>
+                                     { i | identity: { i.identity | body: ProviderIdentity("other_producer", s, m) } },
+                                   _ => i
+                                 } });
+      let wrong_identity_log = replace_at(actual, tool_at,
+                                 func(i: Interaction) -> Interaction {
+                                   match i.identity.body {
+                                     ToolIdentity(o, _, n) =>
+                                       { i | identity: { i.identity | body: ToolIdentity(o, "some_other_call", n) } },
+                                     _ => i
+                                   } });
+      let drifted_projection_log = replace_at(actual, prov_at,
+                                     func(i: Interaction) -> Interaction { { i | request_projection: "${i.request_projection} (drifted)" } });
+      -- The outcome mutation is the one that matters most for `world_state_of`:
+      -- the identity and the projection still match at every position, so only
+      -- the outcome comparison can see it.
+      let drifted_outcome_log = replace_at(actual, prov_at,
+                                  func(i: Interaction) -> Interaction { { i | outcome: { i.outcome | payload: "" } } });
+
+      let m_kind = mutant("one provider request arrives as a clock advance", "replay-wrong-kind",
+                          program.interactions, wrong_kind_log);
+      let m_origin = mutant("one provider request comes from a different producer", "replay-wrong-origin",
+                            program.interactions, wrong_origin_log);
+      let m_identity = mutant("one tool request carries a different call id", "replay-unsafe-identity-mismatch",
+                              program.interactions, wrong_identity_log);
+      let m_projection = mutant("one request projection differs", "replay-projection-differs",
+                                program.interactions, drifted_projection_log);
+      let m_outcome = mutant("the world served the right request and a different answer",
+                             "replay-outcome-differs",
+                             program.interactions, drifted_outcome_log);
+
+      -- ---- Axis J: REGRESSION REPLAY (stage 5), on those same real logs -----
+      --
+      -- D2's second mode: "require compatible causal identity, record projection
+      -- differences, and continue" — bound by "never weakens tool-call/result
+      -- correlation or delivers an outcome to a different logical request".
+      --
+      -- Every row below is the SAME mutated log the strict row above just
+      -- rejected. That is the whole point: the two modes must disagree on
+      -- exactly two of these seven and agree on the other five, and running them
+      -- over one set of inputs is what makes the disagreement legible instead of
+      -- asserted. The demotion set itself is asserted in `dst_replay`, where a
+      -- third demotion goes red on its own.
+      let _ = println("  regression replay (D2's second mode), on the same real logs:");
+      let r_clean = regression_replay_findings(program.interactions, actual);
+      let ok_r_clean = check("${label}: an exact replay is regression-clean AND records nothing",
+                             regression_replay_ok(program.interactions, actual)
+                               && regression_difference_count(r_clean) == 0,
+                             "${regression_report(r_clean)} — a mode that recorded a difference unconditionally would pass every row below, so this negative control is the load-bearing one");
+
+      let r_proj = regression_replay_findings(program.interactions, drifted_projection_log);
+      let _ = println("      ${regression_report(r_proj)}");
+      let ok_r_proj = check("${label}: a differing request projection is RECORDED and the replay continues",
+                            regression_replay_ok(program.interactions, drifted_projection_log)
+                              && has_replay_rule(r_proj.differences, "replay-projection-differs")
+                              && regression_difference_count(r_proj) == 1,
+                            "${regression_report(r_proj)} — strict mode rejected this same log one row above, which is the difference the mode exists to make");
+
+      let r_out = regression_replay_findings(program.interactions, drifted_outcome_log);
+      let ok_r_out = check("${label}: a differing outcome is RECORDED and the replay continues",
+                           regression_replay_ok(program.interactions, drifted_outcome_log)
+                             && has_replay_rule(r_out.differences, "replay-outcome-differs")
+                             && regression_difference_count(r_out) == 1,
+                           "${regression_report(r_out)}");
+
+      -- The five that stay fatal. `replay-unsafe-identity-mismatch` is the
+      -- correlation guarantee itself; the two walk arms are the pair that fail
+      -- SILENTLY without their rules, and `replay-unused-interaction` is the one
+      -- most easily forgotten because a regression replay that stops early
+      -- otherwise reports a clean, short and entirely fictitious "no
+      -- differences".
+      let r_ident = regression_replay_findings(program.interactions, wrong_identity_log);
+      let r_kind = regression_replay_findings(program.interactions, wrong_kind_log);
+      let r_origin = regression_replay_findings(program.interactions, wrong_origin_log);
+      let r_short = regression_replay_findings(program.interactions, drop_last(actual));
+      let r_long = regression_replay_findings(drop_last(program.interactions), actual);
+      let ok_r_fatal = check("${label}: causal identity and both walk arms stay FATAL in regression mode",
+                             not regression_replay_ok(program.interactions, wrong_identity_log)
+                               && has_replay_rule(r_ident.fatal, "replay-unsafe-identity-mismatch")
+                               && not regression_replay_ok(program.interactions, wrong_kind_log)
+                               && has_replay_rule(r_kind.fatal, "replay-wrong-kind")
+                               && not regression_replay_ok(program.interactions, wrong_origin_log)
+                               && has_replay_rule(r_origin.fatal, "replay-wrong-origin")
+                               && not regression_replay_ok(program.interactions, drop_last(actual))
+                               && has_replay_rule(r_short.fatal, "replay-unused-interaction")
+                               && not regression_replay_ok(drop_last(program.interactions), actual)
+                               && has_replay_rule(r_long.fatal, "replay-program-exhausted"),
+                             "identity=${show(List.length(r_ident.fatal))} kind=${show(List.length(r_kind.fatal))} origin=${show(List.length(r_origin.fatal))} short=${show(List.length(r_short.fatal))} long=${show(List.length(r_long.fatal))} — a zero here is a regression mode that has given up the one thing D2 says it may never give up, and it type-checks");
+
+      -- ...and none of the five was quietly filed as a recorded difference,
+      -- which is the shape a demotion actually takes: the fatal list empties
+      -- while the report grows longer and looks more useful.
+      let ok_r_not_demoted = check("${label}: no fatal rule was quietly recorded as a difference instead",
+                                   regression_difference_count(r_ident) == 0
+                                     && regression_difference_count(r_kind) == 0
+                                     && regression_difference_count(r_origin) == 0
+                                     && regression_difference_count(r_short) == 0
+                                     && regression_difference_count(r_long) == 0,
+                                   "identity=${show(regression_difference_count(r_ident))} kind=${show(regression_difference_count(r_kind))} origin=${show(regression_difference_count(r_origin))} short=${show(regression_difference_count(r_short))} long=${show(regression_difference_count(r_long))}");
+
+      -- ---- Axis A: refusals, on real programs ------------------------------
+      let bad_schema = { program | schema_version: "execution-program/0" };
+      let ok_refuse_schema = match world_state_of(bad_schema, required_class_ids()) {
+        Ok(_) => check("${label}: an undecodable schema version refuses replay", false,
+                       "the program was replayed anyway; D8 forbids silently reinterpreting an old program"),
+        Err(r) => check("${label}: an undecodable schema version refuses replay",
+                        refusal_rule(r) == "replay-refused-invalid-program", refusal_rule(r))
+      };
+      let stage2_payload = { program |
+        interactions: blank_first_payload(program.interactions, identity_kind(ProviderIdentity("", 0, ""))) };
+      let ok_refuse_payload = match world_state_of(stage2_payload, required_class_ids()) {
+        Ok(_) => check("${label}: a provider outcome that cannot be read back refuses replay", false,
+                       "the program reconstituted a world anyway, which would replay a step with no tool calls and terminate early while agreeing with the program at every position it reached"),
+        Err(r) => check("${label}: a provider outcome that cannot be read back refuses replay",
+                        refusal_rule(r) == "replay-refused-provider-outcome-undecodable", refusal_rule(r))
+      };
+
+      -- A mismatch must surface as a TYPED HarnessFailure carrying the position
+      -- and the projection — D2: "not a simulated system fault".
+      let ok_typed = match first_replay_failure(
+                            strict_replay_findings(program.interactions, drop_last(actual)),
+                            replay.trace, meta) {
+        None => check("${label}: a mismatch returns a typed HarnessFailure", false,
+                      "the mismatch produced no typed result"),
+        Some(RunCompleted(_)) => check("${label}: a mismatch returns a typed HarnessFailure", false,
+                                       "the mismatch produced a completed run"),
+        Some(RunFailed(f)) =>
+          check("${label}: a mismatch returns a typed HarnessFailure with position and projection",
+                harness_failure_kind_name(f.kind) == "program_mismatch"
+                  && f.interaction_position >= 0
+                  && f.replay_metadata.profile_id == program.manifest.profile_id
+                  && contains(f.actual_request_projection, "replay-unused-interaction"),
+                "kind=${harness_failure_kind_name(f.kind)} position=${show(f.interaction_position)} profile=${f.replay_metadata.profile_id}")
+      };
+
+      -- ---- Axis I: determinism, last and least -----------------------------
+      let again = run_recording("srplay_${label}", replay_world, step_budget);
+      let ok_det = check("${label}: two replays of one program produce the same log",
+                         eq_list(projections(actual), projections(again.world.log)),
+                         "two replays of one reconstituted world disagree");
+
+      -- ---- The program the REPLAY produced is itself a valid program --------
+      let replayed_program = program_of(actual, replay_world);
+      let ok_valid = check("${label}: the replayed log is itself a structurally valid program",
+                           List.length(validate_program(replayed_program, required_class_ids())) == 0
+                             && List.length(validate_bounds(replayed_program)) == 0,
+                           "the replay produced a log the decoder rejects, so replaying the replay is impossible");
+
+      ok_end && ok_manifest && ok_meta && ok_rec && ok_replay && ok_terminal
+        && ok_witness && ok_nonvacuous && ok_shapes && ok_distinct && ok_steps
+        && ok_tautology_matches && ok_tautology_caught
+        && m_unused && m_exhausted && m_kind && m_origin && m_identity && m_projection && m_outcome
+        && ok_r_clean && ok_r_proj && ok_r_out && ok_r_fatal && ok_r_not_demoted
+        && ok_refuse_schema && ok_refuse_payload && ok_typed && ok_det && ok_valid
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The wire witness, on its own entry point
+-- ---------------------------------------------------------------------------
+--
+-- `V2ToolDispatchStart` is emitted BEFORE the port calls and never appended to
+-- the returned trace, so it is the one tool witness that exists whether or not
+-- the port was reached — and the only one no AILANG assertion in this file can
+-- read. `make strict_replay` runs THIS entry, which performs exactly one
+-- DISCOVERY run and one REPLAY of it, and compares the wire's own counts across
+-- the pair against the census each printed.
+--
+-- One run each, so the comparison is exact equality with no multiplier to keep
+-- in sync when a scenario is added.
+export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let initial = base_world(rich_script(), rich_answers(), rich_tools());
+  let discovery = run_recording("srwire_disc", initial, 12);
+  let program = program_of(discovery.world.log, initial);
+  let _ = println("CENSUS discovery ${census_line(census(discovery.world.log))}");
+  match world_state_of(program, required_class_ids()) {
+    Err(r) => println("REFUSED ${refusal_rule(r)}"),
+    Ok(w) => {
+      let replay = run_recording("srwire_play", w, 12);
+      println("CENSUS replay ${census_line(census(replay.world.log))}")
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The scenarios
+-- ---------------------------------------------------------------------------
+
+-- THE FIXTURE THAT MUST SURVIVE (S7), and every quantity in it is different.
+--
+-- Shapes D2 explicitly protects, all present in one program:
+--
+--   provider served, WITH ordered stream chunks       step "s0"
+--   provider script EXHAUSTED                         the 5th provider call
+--   tool outcome OK                                   the first approved dispatch
+--   tool outcome FAULT (D3's tool_failed class)       the second, code E_BOOM
+--   approval served OK — allowed and DENIED           answers 1-3
+--   approval MISSING (queue drained)                  reads 4, 5 and 6
+--   environment read OK                               MOTOKO_TOOL_TIMEOUT_MS, MOTOKO_HEADLESS
+--   environment read MISSING                          the driver's other five keys
+--   clock advance                                     every routed clock site
+--   a repeated tool NAME at different ordinals        every call is "T"
+--
+-- Not present, and stated rather than implied: `ToolCorrelationMismatch` and
+-- `ToolDeadlineExceeded`. Both travel through the same codec as `ToolFailed`
+-- and are covered by `ports.ail`'s round-trip rows; reaching them here would
+-- need a third and fourth approved dispatch, which is what the counts below
+-- would have to give up.
+--
+-- And the counts, which are the half S7 sharpened after stage 2's sites 17 and
+-- 18 hid behind a fixture whose quantities were all equal:
+--
+--   provider calls        5   (4 script entries served + 1 exhausted)
+--   script entries        4
+--   approval reads        6   (3 tool calls in s0, 1 in each of s1, s2, s3)
+--   approvals consumed    3   (the queue holds three answers and then drains)
+--   tool dispatches       2   (answers 1 and 3 approve; answer 2 denies)
+--
+-- 5, 4, 6, 3, 2 — pairwise distinct, so a check reading the wrong quantity
+-- cannot come out right by coincidence. That property is asserted, not
+-- described: `rich_quantities_are_pairwise_distinct` below fails if a future
+-- edit collapses any two of them.
+func rich_script() -> [ScriptedStep] {
+  [multi_step("s0", [tc("s0a"), tc("s0b"), tc("s0c")], ["chunk-one", "chunk-two"]),
+   multi_step("s1", [tc("s1a")], []),
+   multi_step("s2", [tc("s2a")], []),
+   multi_step("s3", [tc("s3a")], [])]
+}
+
+-- Approve, DENY, approve. The denial in the middle is what makes
+-- `approvals_consumed` (3) differ from `tool_dispatches` (2): stage 2 measured
+-- that a scenario in which every answer approves cannot tell those two witness
+-- fields apart, and that is where its site 18 hid.
+func rich_answers() -> [string] { [approve_line(), deny_line("bravo"), approve_line()] }
+
+-- Three entries against TWO dispatches. The surplus is deliberate: an exhausted
+-- queue makes `world_tool` fall back to the REAL dispatcher, which would
+-- execute a process for a tool named "T" that does not exist, so the discovery
+-- world is kept over-supplied. The replay world is reconstituted from the two
+-- recorded tool interactions and is exactly supplied, which is correct — a
+-- reconstituted world holds what the program records and nothing else.
+func rich_tools() -> [ScriptedTool] {
+  -- WI-D22's `exit_code`. All three are -1 ("nothing said"): these are scripted
+  -- answers for a tool named "T", not process runs.
+  [{ tool_call_id: "", duration_ms: 7,  code: "",       message: "",     content: "OK-ALPHA",   exit_code: -1 },
+   { tool_call_id: "", duration_ms: 11, code: "E_BOOM", message: "boom", content: "",           exit_code: -1 },
+   { tool_call_id: "", duration_ms: 13, code: "",       message: "",     content: "OK-CHARLIE", exit_code: -1 }]
+}
+
+-- THE FAILURE-PATH SCENARIO. A step budget of 1 against a script of three
+-- continuers, so the driver runs one step and then terminates with `Fail`,
+-- returning `Err` — and the returned message list is empty, which makes every
+-- message-derived witness vacuous. This is the scenario stage 2's guard could
+-- not cover and the reason `witness_of` reads only the trace and the world.
+--
+--   provider calls        1
+--   script entries        3   (one consumed)
+--   approval reads        3   (s0's three tool calls)
+--   approvals consumed    2
+--   tool dispatches       1
+--
+-- 1, 3, 3, 2, 1 — reads equals the script length and dispatches equals the
+-- provider count here, which is stated rather than hidden: the fixture that
+-- carries S7's pairwise-distinct obligation is `rich`, and this one exists to
+-- exercise the Err path.
+func failure_answers() -> [string] { [approve_line(), deny_line("bravo")] }
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only");
+
+  let ok_rich = run_scenario("rich", rich_script(), rich_answers(), rich_tools(), 12, true, true, 1);
+  let ok_fail = run_scenario("maxsteps", rich_script(), failure_answers(), rich_tools(), 1, false, false, 1);
+
+  let _ = println("");
+  if ok_rich && ok_fail then
+    println("strict_replay_dst PASS")
+  else {
+    let _ = println("strict_replay_dst FAIL");
+    exit(1)
+  }
+}

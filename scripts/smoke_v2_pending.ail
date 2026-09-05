@@ -21,21 +21,25 @@ module scripts/smoke_v2_pending
 
 import std/io (println)
 import std/option (None)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   ExtCtx,
   ExtRuntime,
   ExtRegistry,
-  ExtensionHooks,
   ToolPolicyDecision,
   ToolHandleDecision,
   ResponseInterceptDecision,
   FinalizeDecision,
   PromptPatch,
   BudgetPatch,
-  PolicyDefault
+	  PolicyDefault,
+	  Msg,
+	  PreStepDecision,
+	  PassThrough
 )
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 import src/core/ext/runtime (dispatch_tool_policy)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
 import std/ai (ToolSchema)
@@ -67,46 +71,50 @@ pure func always_pending_deny_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> 
 }
 
 -- Boilerplate hook fillers (non-policy hooks return neutral values).
-pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func noop_response_intercept(ctx: ExtCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   NoIntercept
-}
+}, next_state: ctx.world } }
 
-pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func nodecision_solver_candidate(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
   NoDecision
-}
+}, next_state: ctx.world } }
 
 pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
   { prepend: [], append: [] }
 }
 
-pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
   Delegate
-}
+}, next_state: ctx.world } }
 
--- Build an ExtensionHooks record with the given policy fn. All other
+pure func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+  PassThrough
+}, next_state: ctx.world } }
+
+-- Build a fixture registration with the given policy fn. All other
 -- hook slots get neutral implementations.
-func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtensionHooks {
-  {
-    id: id,
-    provided_tools: [],
-    on_describe_tools: empty_describe_tools,
-    on_build_system_prompt: empty_prompt_patch,
-    on_budget_plan: empty_budget_patch,
-    on_tool_policy: policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: noop_response_intercept,
-    on_solver_candidate: nodecision_solver_candidate
-  }
+func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
+  fixture_hooks(id, {
+    tools: [],
+    describe: empty_describe_tools,
+    prompt: empty_prompt_patch,
+    budget: empty_budget_patch,
+    compact: pass_pre_step,
+    policy: policy,
+    provide: no_handle,
+    intercept: noop_response_intercept,
+    judge: nodecision_solver_candidate
+  })
 }
 
-func mk_runtime(hooks: [ExtensionHooks]) -> ExtRuntime {
+func mk_runtime(hooks: [FixtureHooks]) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   {
-    registry: { hooks: hooks },
+    registry: { entries: hooks },
     strict_mode: false,
     verification: v
   }
@@ -126,16 +134,20 @@ func mk_ctx() -> ExtCtx {
     env_server_url: "",
     budget_remaining: 4,
     history_slice: [],
-    state_key: "test"
-  }
-}
+	    state_key: "test",
+	    context_limit: 0,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
+	  }
+	}
 
 func mk_envelope() -> ToolCallEnvelope {
   { id: "test-call-1", tool: "BashExec", arguments: jo([]) }
 }
 
 -- Test runner: dispatch policy and assert the variant.
-func run_case(name: string, hooks: [ExtensionHooks], expect: string) -> bool ! {IO} {
+func run_case(name: string, hooks: [FixtureHooks], expect: string) -> bool ! {IO, Clock} {
   let rt = mk_runtime(hooks);
   let ctx = mk_ctx();
   let env = mk_envelope();

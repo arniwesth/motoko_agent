@@ -1,0 +1,400 @@
+# agent_confined — the agent's compose stack.
+#
+# Started and driven from a HOST shell, never by VS Code:
+#   docker compose --env-file .env -f .devcontainer/agent_confined/docker-compose.yml up -d
+#   docker compose --env-file .env -f .devcontainer/agent_confined/docker-compose.yml \
+#       exec -u motoko -w /workspaces/motoko_agent agent herdr
+#
+# There is deliberately no devcontainer.json beside this file. Read README.md before adding one — the whole
+# profile rests on that absence, and checks/r9-container.sh leg 1 asserts it.
+#
+# This profile is ADDITIVE. `.devcontainer/default` is untouched: you keep "Reopen in Container" exactly as
+# before, with its sudo and its VS Code attach, and this is a second container on the same working tree.
+
+# Pinning the project name here rather than relying on `-p` keeps every invocation in the same project and
+# namespaces the network and volume names away from the operator's stack. If your Compose rejects the
+# underscore, use agent-confined (Compose documents [a-z0-9][a-z0-9_-]*).
+name: motoko_agent_confined
+
+services:
+  agent:
+    build:
+      # The repository root, because .devcontainer/agent_confined/Dockerfile copies the tree and runs
+      # scripts/install-prerequisites.sh against it — the same context .devcontainer/docker-compose.yml uses,
+      # and the same root .dockerignore applies.
+      context: ../..
+      dockerfile: .devcontainer/agent_confined/Dockerfile
+      args:
+        # NONE of these have defaults, and that is the design. A `latest` baked into the Dockerfile does not
+        # track latest: the instruction text never changes, so Docker reuses the cached layer and the image
+        # keeps whatever was current the day it was first built, indefinitely and invisibly. agent.sh
+        # resolves each one on the HOST — herdr from https://herdr.dev/latest.json (version AND sha256), the
+        # three CLIs from the npm registry — so the arg VALUE changes when upstream publishes, which is what
+        # invalidates the layer. Building with plain `docker compose` therefore FAILS here rather than
+        # silently producing an unpinned image; that is the point. Reproduce an old image by exporting the
+        # same values (see `agent.sh help`).
+        HERDR_VERSION: ${HERDR_VERSION:?resolved by agent.sh — build through it, or export it yourself}
+        HERDR_SHA256: ${HERDR_SHA256:?resolved by agent.sh from https://herdr.dev/latest.json}
+        AGENT_BROWSER_VERSION: ${AGENT_BROWSER_VERSION:?resolved by agent.sh from the npm registry}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:?resolved by agent.sh from the npm registry}
+        CODEX_VERSION: ${CODEX_VERSION:?resolved by agent.sh from the npm registry}
+        OMP_VERSION: ${OMP_VERSION:?resolved by agent.sh from the npm registry}
+
+    # Own tag. Sharing the operator profile's image name would rebuild that image out from under it.
+    image: motoko_agent_confined/dev:1.0
+
+    command: sleep infinity
+    working_dir: /workspaces/motoko_agent
+
+    # EGRESS BOUNDARY. This service is on an `internal: true` network ONLY, so Docker/OrbStack installs NO
+    # gateway and NO NAT for it: the agent has no route to any private network the host may be attached to
+    # (VPN / mesh-overlay / LAN — 100.64.0.0/10, RFC1918, link-local), to the container host
+    # (0.250.250.0/24), or to the public internet. Its single exit is the egress-proxy sidecar below,
+    # reached by name over this network. This is also what makes the container's NET_RAW harmless — raw
+    # sockets have nowhere to go. checks/r9-container.sh leg 7 asserts the boundary. To roll back: delete
+    # this key (the service returns to the project default network with full egress) and the egress-proxy
+    # service + networks block.
+    networks:
+      - confined_internal
+
+    # Without this, `agent.sh`'s ensure_up (which only checks whether the AGENT service is running) can
+    # leave the proxy behind and the agent comes up with no exit at all. service_started, not
+    # service_healthy, on purpose: a broken proxy must not lock the operator out of the container.
+    depends_on:
+      egress-proxy:
+        condition: service_started
+
+    # Neutralises a NOPASSWD sudoers drop-in per service. This image ships none — the Dockerfile purges sudo
+    # and asserts its absence — so here it is defence in depth against a future image edit rather than the
+    # only control.
+    security_opt:
+      - no-new-privileges:true
+
+    # RESOURCE LIMITS — host-DoS containment. Without these the container's cgroup ceilings are all
+    # UNLIMITED (measured: memory.max / memory.swap.max / pids.max / cpu.max = max), so a runaway or hostile
+    # process can fork-bomb or exhaust memory and take the HOST down, not just itself — the one gap the
+    # codex audit surfaced that the egress/credential work did not. cgroup v2 is real under OrbStack, so
+    # these are enforced. Values are tunable from .env (agent.sh passes --env-file, which interpolates
+    # ${...}); the defaults are generous for THIS workload — herdr + delegate panes + a Chromium driven by
+    # agent-browser + bun/ailang builds — while still stopping the classic denial-of-service:
+    #   * pids_limit halts a fork bomb (a bomb wants millions; 4096 is far above any real pane/Chromium/build
+    #     tree),
+    #   * mem_limit makes a memory leak OOM-kill inside the CONTAINER instead of the Mac, and
+    #     memswap_limit == mem_limit makes it a HARD ceiling (no swap spill past the limit).
+    # Size AGENT_MEM_LIMIT to leave the Mac headroom — roughly half its RAM is a safe start; raise it on a
+    # large machine, lower it on a 16 GB one. CPU exhaustion only slows the host, so cpus is a soft comfort
+    # limit, not a security control. NOT set here: shm_size — agent-browser's Chromium needs /dev/shm, so
+    # the default stands (noted as a known gap instead).
+    mem_limit: ${AGENT_MEM_LIMIT:-8g}
+    memswap_limit: ${AGENT_MEM_LIMIT:-8g}
+    pids_limit: ${AGENT_PIDS_LIMIT:-4096}
+    cpus: ${AGENT_CPUS:-4}
+
+    volumes:
+      # The shared working tree. This is ONE HOST DIRECTORY: isolating a compose service does not isolate
+      # .git/config or .agent/. checks/r7_git_audit.py is what covers the git-config channel; README's
+      # "What is deliberately not absent" states its full strength.
+      - ../..:/workspaces/motoko_agent
+
+      # SECRET-FILE MASK. The mount above would bring the repo-root .env — 11 real secrets (model keys, the
+      # bot PAT, Linear, Bedrock, obsidian, Fireworks/DeepInfra/HF) — into the container as a READABLE file.
+      # That is the one door the curated `environment:` block below cannot close: the block bounds what a
+      # process INHERITS, not what it can `cat`, so without this a delegate or any agent-run script reads
+      # every secret straight off disk regardless of the block. Overlaying /dev/null makes .env read as
+      # EMPTY here. Nothing breaks: the only in-container reader is motoko's allow-listed loader
+      # (src/tui/src/index.ts), which then finds nothing in the file and takes its keys from the environment
+      # instead — and the block below already delivers the ones this profile needs (telemetry, hence
+      # CLICKSTACK_INGESTION_KEY, is not wired here). Host side is untouched: agent.sh's
+      # `--env-file <repo>/.env` reads the REAL file on the host at launch to interpolate the block, which
+      # is what actually delivers the secrets. .env is gitignored, so masking it adds no git noise, and it
+      # is nested under the repo mount exactly as the :ro frozen paths below are.
+      - /dev/null:/workspaces/motoko_agent/.env:ro
+
+      # Frozen paths. Every source below exists in the tree (verified 2026-08-22) — a missing source would be
+      # created empty by create_host_path and would mount over nothing, which is the failure r9 leg 1 checks
+      # for by asserting both existence AND the `:ro` flag.
+      #
+      # .git/hooks is defence in depth, not a boundary: `core.hooksPath` in the agent-writable .git/config
+      # redirects hook lookup anywhere, which is why the r7 audit asserts that key rather than trusting this
+      # mount. Nested gitdirs (ailang/, .emsdk/, deepseek-harness/, code-graph/lib/slicito/) are NOT frozen —
+      # they are separate repositories whose hooks only run when git is invoked inside them; the r7 audit
+      # covers all six configuration files and their hook inventories instead.
+      - ../../.git/hooks:/workspaces/motoko_agent/.git/hooks:ro
+
+      # .git/config, SEALED read-only — the strongest shared-tree channel, now prevented rather than only
+      # audited. This file is agent-writable on the shared tree, and its exec-directive family
+      # (core.fsmonitor/pager/hooksPath, filter.*.clean/smudge, [alias] !cmd, [include] path,
+      # remote.*.url = ext::) runs as the OPERATOR, on the HOST, the next time host-side git touches the
+      # repo — outside every container control. Sealing it costs the agent nothing it uses: its git identity
+      # is container-global (/home/motoko/.gitconfig, off this tree), `git commit`/`checkout -b`/`push` do
+      # not write config (measured), and no agent tooling issues `git config`. checks/r7_git_audit.py stays
+      # the control for the NESTED gitdirs (ailang/, .emsdk/, deepseek-harness/) and host-side tampering.
+      # Single-file ro bind caveat: the HOST rewrites this file (VS Code's branch.*.vscode-merge-base), so
+      # the container's view can lag a host write — harmless here (the agent reads only the stable remotes /
+      # core.* and never depends on fresh branch.* tracking). It reads old content, it does not error.
+      - ../../.git/config:/workspaces/motoko_agent/.git/config:ro
+
+      - ../../.vscode:/workspaces/motoko_agent/.vscode:ro
+      - ../../.devcontainer:/workspaces/motoko_agent/.devcontainer:ro
+
+      # OPERATIONAL CONSEQUENCE of the three above, worth knowing before it bites: a `git checkout` or branch
+      # switch whose content differs under those paths fails part-way with EROFS. Every edit to this
+      # directory — including this file — is made from the operator's container or the host, never from
+      # inside the agent's.
+
+    environment:
+      # A CURATED list, not the whole .env. It mirrors .devcontainer/docker-compose.yml's list plus the two
+      # Bedrock variables omp needs, and agent.sh passes `--env-file <repo>/.env` so these interpolate from
+      # the repository-root file.
+      #
+      # WHAT THIS LIST IS, AND IS NOT. It bounds what a *delegate* (codex, claude) inherits via the
+      # environment — those processes do not read .env, so the environment is their whole world. It is NOT
+      # what stops the agent reading secrets off disk: two separate things do that now.
+      #   1. motoko's own loader (src/tui/src/index.ts:150-208) is ALLOW-LISTED — it copies only
+      #      ANTHROPIC/OPENAI/OPENROUTER/GOOGLE/EXA_API_KEY, CLICKSTACK_INGESTION_KEY and
+      #      OTEL_EXPORTER_OTLP_HEADERS out of .env and ignores every other key. (An earlier version of this
+      #      comment claimed it "holds every secret the file carries" — it does not, and never did once the
+      #      allow-list existed.)
+      #   2. the SECRET-FILE MASK in the volumes block above makes .env read EMPTY in the container, so no
+      #      process — delegate, motoko, or arbitrary agent-run script — can `cat` the raw file at all.
+      # With those two, this list's job is just to DELIVER the keys the container legitimately needs, via the
+      # environment, since the file is now empty here. agent.sh passes `--env-file <repo>/.env`, so each
+      # ${VAR} interpolates from the repo-root file on the HOST at launch.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      OBSIDIAN_MCP_TOKEN: ${OBSIDIAN_MCP_TOKEN:-}
+      # Linear, and the one key here whose consumer is NOT Motoko. Motoko has no Linear access
+      # at all (022 measures why: its MCP surface cannot reach a remote server without the
+      # bridge, and no Linear extension exists). What DOES consume it is a `claude` delegate
+      # running in this container: `.mcp.json` is project-scoped and on the bind mount, so a
+      # delegate picks up the `linear` server and acts with write access as this key's OWNER.
+      # That is 022's F-1 — whose account an autonomous agent acts as — reached through the
+      # delegate rather than by decision. Granted deliberately on 2026-08-22; revisit when F-1
+      # is answered, and remove this line if the answer is a bot seat rather than the operator.
+      LINEAR_API_KEY: ${LINEAR_API_KEY:-}
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      AWS_REGION: ${AWS_REGION:-}
+      # The 016_github_ops machine-user PAT. Deliberately NOT named GH_TOKEN/GITHUB_TOKEN: `gh` prefers those
+      # over the credentials stored by `gh auth login` and says nothing about it, so exporting it under that
+      # name would make the operator's own `make pr` run as the bot and silently invert ADR-001 D1 (identity
+      # follows agency). Pipeline commands map it into GH_TOKEN in the subprocess environment they spawn.
+      MOTOKO_BOT_GH_TOKEN: ${MOTOKO_BOT_GH_TOKEN:-}
+      # ...AND, IN THIS PROFILE ONLY, the same value under the name `gh` actually reads.
+      #
+      # That looks like a direct violation of the rule above, and it is not — the rule protects the
+      # OPERATOR'S OWN `gh` in a container they share with the agent. There is no operator `gh` here.
+      # Nothing but the agent runs in this container, and 016 ADR-001 D1/C9 says what its identity is:
+      # anything a mechanism emits is the bot. So the correct configuration is for every GitHub action
+      # from this container to be `motoko-agent` BY CONSTRUCTION, which is what this line does — and it
+      # is the same conclusion the profile this was adapted from reached for its own agent identity.
+      #
+      # Consequences, both intended: `gh auth status`, `gh api`, `gh pr` and the .agent/github pipeline
+      # all work with no interactive login (which is just as well — ~/.config/gh does not survive a
+      # rebuild, and the agent cannot answer a device-flow prompt). And every delegate spawned in a
+      # pane inherits it, so a codex or claude delegate also acts as the bot rather than as nobody.
+      #
+      # checks/r9-container.sh leg 4 asserts this rather than its opposite: in the OPERATOR's container
+      # GH_TOKEN must be unset, here it must be set AND resolve to motoko-agent.
+      GH_TOKEN: ${MOTOKO_BOT_GH_TOKEN:-}
+      # REAP DELEGATE PANES ON A CLEAN EXIT — this profile only, and by decision (F-5 D2,
+      # .agent/projects/021_herdr_delegation/DESIGN-f5-orphan-ownership.md §6).
+      #
+      # A herdr pane does not die with its caller: a delegate whose Motoko exited keeps working,
+      # keeps burning subscription quota, and keeps unsandboxed write access to the tree. The
+      # default everywhere else is to LEAVE IT RUNNING and say so, because reaping destroys
+      # in-flight work on every clean exit — including the case the answer-file gate exists to
+      # honour, where the delegate finishes after Motoko quits and the next session collects the
+      # answer off disk.
+      #
+      # That trade-off inverts here and only here. This container is disposable, nothing but the
+      # agent runs in it, no operator work lives in a pane, and the quota an unattended delegate
+      # burns is the dominant cost. So the safe default for a throwaway container is set for the
+      # container rather than hard-coded for everyone.
+      #
+      # The reaper closes panes carrying THIS session's `mot-owner` token, by explicit pane id,
+      # never by name or agent kind (P2-6). src/tui/src/herdr-reap.ts.
+      HERDR_REAP_ON_EXIT: "1"
+      # WHICH DELEGATE KINDS THIS CONTAINER PERMITS — this profile only.
+      #
+      # The extension's built-in default is `claude` ALONE (types.default_allowed_kinds), and that
+      # default is right for a workstation: `motoko` delegation means this agent spawning another
+      # copy of itself, which is a capability an operator should grant deliberately rather than
+      # inherit.
+      #
+      # It is granted here, for the same reason HERDR_REAP_ON_EXIT is set here. A `motoko`
+      # delegate is started with `pane run` inside THIS container, so it inherits this compose
+      # file's confinement entire — the internal-only network, the egress proxy, the read-only
+      # .devcontainer mount, the bot PAT. It acquires nothing the parent did not already have.
+      # A `claude` or `codex` delegate, by contrast, goes through `agent start` and depends on a
+      # CLI that may be sitting on a sign-in screen; measured 2026-09-01, herdr matched no screen
+      # rule for such a pane and closed it (.agent/projects/028_verified_runtime_closing_the_loop/
+      # NOTE-005-...md §3). With the coding-agent CLIs unauthenticated, `motoko` is the only
+      # delegate kind that works at all in here, and a confined agent that cannot delegate cannot
+      # run its own gates either — `make check_core` alone outlasts the 35s BashExec ceiling.
+      #
+      # THE RECURSION BOUND IS NOT THIS VARIABLE, and it is already tight. A delegate's pane gets
+      # HERDR_DELEGATE_DEPTH=1, and HERDR_MAX_DELEGATE_DEPTH defaults to 1 (types.default_max_depth),
+      # so a motoko delegate CANNOT ITSELF DELEGATE. This line permits one level of self-delegation,
+      # not a tree; widening the depth is a separate, deliberate change to a separate variable.
+      #
+      # Widening this set is an operator decision by design — the extension refuses an unpermitted
+      # kind and says so rather than falling back (types.kind_allowed, herdr.ail's `do_delegate`).
+      # Narrow it back by removing a name here; nothing in the extension caches it.
+      HERDR_ALLOWED_KINDS: "claude,motoko"
+      # SHOW THE DELEGATION GRAPH, don't just write it — this profile only (MOT-137).
+      #
+      # The extension always PRODUCES `.dagr/run-<pane>-<session>.json`; producing it costs nothing
+      # when nobody reads it, so it is not gated on anything. Opening the pane that READS it is a
+      # different rung: it splits the operator's terminal. `register.ail` therefore leaves it off
+      # and this file turns it on, exactly as HERDR_REAP_ON_EXIT and HERDR_ALLOWED_KINDS above make
+      # their own profile-local calls. In a disposable container with nothing but the agent in it
+      # there is no operator layout to protect, and a delegation nobody can see is the more
+      # expensive mistake — measured 2026-09-01, a session spent twenty minutes and ~90 scratch
+      # panes looking for a view while its own run file sat unread on disk the whole time.
+      #
+      # AT MOST ONE PANE PER SESSION, opened on the first delegation, marked on disk BEFORE the
+      # attempt (`dagr.pane_marker`). That ordering is the guard: the same 2026-09-01 run made its
+      # ~90 panes by opening one per poll with nothing recording that it had already opened one.
+      # The pane is tagged `mot-owner` like a delegate, so HERDR_REAP_ON_EXIT above closes it.
+      #
+      # A DELEGATE INHERITS THIS VARIABLE and it does not matter. `buildChildEnv` forwards the
+      # whole HERDR_ prefix, so a motoko delegate's pane carries HERDR_DAGR_PANE=1 too — but it is
+      # spawned at HERDR_DELEGATE_DEPTH=1 against a max of 1, so it never delegates, never writes a
+      # run file, and never reaches the opener. The recursion bound is what keeps this to one view.
+      #
+      # Turn it off by removing this line; the run file is still written and
+      # `scripts/dagr-pane.sh` still opens the view by hand.
+      HERDR_DAGR_PANE: "1"
+
+
+      # EGRESS PROXY wiring. With the agent on the internal-only network above, its ONLY path off-box is
+      # this proxy. Every proxy-aware client (git, gh, npm, bun, node, curl, and the codex/claude
+      # delegates) honours these. A client that ignores them has no direct route either, so it fails
+      # closed rather than leaking — which is the safe direction. NO_PROXY keeps intra-stack traffic and
+      # loopback off the proxy. The proxy currently forwards to ALL PUBLIC hosts and denies only private
+      # ranges (full GitHub/public egress is intentionally still open — see egress-proxy below); tighten
+      # to a strict allowlist there when ready, no change needed here.
+      HTTP_PROXY: http://egress-proxy:3128
+      HTTPS_PROXY: http://egress-proxy:3128
+      http_proxy: http://egress-proxy:3128
+      https_proxy: http://egress-proxy:3128
+      NO_PROXY: localhost,127.0.0.1,::1,egress-proxy
+      no_proxy: localhost,127.0.0.1,::1,egress-proxy
+
+    # Deliberately absent, each for a reason:
+    #
+    #   * devcontainer.json / VS Code attach — attach injects a credential.helper into /etc/gitconfig AND
+    #     ~/.gitconfig pointing at the remote-containers helper, and exports SSH_AUTH_SOCK,
+    #     REMOTE_CONTAINERS_IPC and VSCODE_IPC_HOOK_CLI. Measured in the operator's container on 2026-08-22:
+    #     all of that is live there, and the forwarded ssh-agent answered as a CONDUIT (0 identities). That
+    #     finding is the reason this profile exists.
+    #   * /var/run/docker.sock and the docker CLI — `docker run -v /:/host` is host root.
+    #   * extra_hosts host.docker.internal:host-gateway — present in .devcontainer/docker-compose.yml:9-10
+    #     and deliberately dropped here. READ THE NEXT PARAGRAPH BEFORE COUNTING THIS AS A CONTROL.
+    #
+    #     WHAT IT ACTUALLY REMOVES IS THE NAME, NOT THE ROUTE (measured 2026-08-22, corrected from an
+    #     earlier version of this comment that claimed otherwise). `extra_hosts` writes an /etc/hosts
+    #     entry; it does not create or withdraw reachability. In the operator's container the name
+    #     resolves to 0.250.250.254 — OrbStack's dedicated host address, NOT the default gateway
+    #     (192.168.107.1) — and connecting to it returns "Connection refused" rather than a timeout,
+    #     which means packets reach the host and are actively rejected. The address is routable. A
+    #     process in THIS container can therefore very likely still reach the host by IP; only the
+    #     convenient hostname is gone. Untested here specifically, because this profile's network has
+    #     never been up — the 2026-08-22 entry in the local-only measurement log has what that leaves
+    #     owed (README, *Where the measurement record lives*).
+    #
+    #     The named cost stands: the obsidian MCP server in .mcp.json (http://host.docker.internal:27200/mcp)
+    #     will not connect from here, because it is addressed by name. The ailang-docs and linear MCP
+    #     servers are public https and are unaffected.
+    #   * an external network join. The source profile joined the operator's stack to share its ClickHouse;
+    #     motoko has no such dependency, so this stack is standalone and the whole network-discovery
+    #     machinery is gone from agent.sh with it. The container still has ordinary outbound access — the
+    #     model APIs, the npm registry and github.com all work.
+    #   * host credential mounts (~/.config/gcloud, ~/.ssh, ~/.claude). Any of them would hand the operator's
+    #     host credentials straight back to the agent.
+    #
+    # NOT ABSENT, and you may want it: nothing mounts /home/motoko, so a `claude` or `codex` subscription
+    # login does not survive `agent.sh stop` or `agent.sh build`. That is a security property — a rebuilt
+    # container has no credential until you give it one — but if you are logging in rather than using the API
+    # keys above, it is a chore every rebuild. The opt-in is these four lines plus a top-level
+    # `volumes: {agent_home_claude: {}, agent_home_codex: {}}`:
+    #
+    #   - agent_home_claude:/home/motoko/.claude
+    #   - agent_home_codex:/home/motoko/.codex
+    #
+    # Nobody has taken that decision; it is written out here so that taking it is one edit and not a design
+    # session.
+
+  # ----------------------------------------------------------------------------------------------------------
+  # egress-proxy — the agent's SINGLE exit to the outside.
+  #
+  # The agent service is on `confined_internal` only (internal: true → no gateway, no NAT). This sidecar is
+  # the one container dual-homed onto both that internal network AND `confined_egress` (a normal, routed
+  # network), so it is the only path off-box. It is a forward proxy: the agent's HTTP(S)_PROXY points here,
+  # clients issue `CONNECT host:443`, and the proxy allows/denies by the destination it is about to reach —
+  # it never decrypts (no CA, no token exposure).
+  #
+  # CURRENT POLICY (see squid.conf): forward to ALL PUBLIC hosts, DENY every private/reserved range. That
+  # deliberately keeps full GitHub + public egress open for now; the ONLY thing removed is reachability of
+  # any private network the host may be attached to (VPN / mesh-overlay / LAN) and of the container host
+  # itself. To tighten to a strict allowlist later, edit squid.conf alone.
+  #
+  # PINNED BY DIGEST, same discipline as HERDR_SHA256, because this container sits on the egress path.
+  # The digest is the multi-arch INDEX for what was tagged `ubuntu/squid:6.6-24.04_edge` on 2026-08-23
+  # (amd64, arm64/v8, ppc64le, s390x), so it resolves on any of them. Re-resolve with:
+  #     docker buildx imagetools inspect ubuntu/squid:6.6-24.04_edge
+  #
+  # The tag is worth distrusting on its own: `6.6-24.04_edge` currently ships squid **6.14**, because the
+  # `_edge` tags are rebuilt with whatever the Ubuntu pocket holds. The version in the tag is a label, not
+  # a pin — which is the whole argument for the digest.
+  egress-proxy:
+    image: ubuntu/squid@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
+    # ARGUMENTS ONLY — no leading "squid". The image's ENTRYPOINT is its own `entrypoint.sh`, which tails
+    # /var/log/squid/*.log to stdout and then runs `/usr/sbin/squid "$@"`; whatever is written here is
+    # appended to THAT, not executed. (Its own CMD is `-f /etc/squid/squid.conf -NYC`.) A leading `squid`
+    # word reaches the binary as a stray positional argument.
+    command: ["-N", "-f", "/etc/squid/squid.conf"]
+    networks:
+      - confined_internal
+      - confined_egress
+    volumes:
+      # squid.conf lives beside this file; it is mounted read-only into the proxy.
+      - ./squid.conf:/etc/squid/squid.conf:ro
+    read_only: true
+    # ONLY /run is a tmpfs, and the two squid directories are DELIBERATELY not.
+    #
+    # A Docker tmpfs is created ROOT-OWNED. squid drops privileges to `proxy` (uid 13) and then opens its
+    # access log; on a root-owned directory that open fails, and an access log squid cannot open is FATAL
+    # — measured on 6.14 for both the default `daemon:` writer and `stdio:`. `restart: unless-stopped`
+    # then makes it a crash loop, the container leaves Docker's embedded DNS, and every client in the
+    # agent sees a HANG rather than a dead proxy. That is exactly what happened here.
+    #
+    # The image already ships /var/log/squid and /var/spool/squid owned by uid 13 AND declares both as
+    # VOLUMEs, so leaving them alone gives squid writable, correctly-owned anonymous volumes. Do not
+    # "tidy" them back into the tmpfs list. /run is fine as a tmpfs: nothing there needs the proxy user
+    # (and squid.conf sets `pid_filename none` anyway). /run, not /var/run — the latter is a symlink to it.
+    tmpfs:
+      - /run
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    # Makes a dead proxy visible in `docker compose ps` instead of only as a client-side timeout. bash is
+    # in the image; /bin/sh there is dash and has no /dev/tcp.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3128"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+# Two networks make the boundary. `confined_internal` has NO route to anything but its own members —
+# that is the wall. `confined_egress` is an ordinary routed network that ONLY the proxy joins, so the
+# proxy is the only container that can reach the outside. Deleting both (and the agent's `networks:` key
+# and the egress-proxy service) restores the previous full-egress behaviour.
+networks:
+  confined_internal:
+    internal: true
+  confined_egress: {}

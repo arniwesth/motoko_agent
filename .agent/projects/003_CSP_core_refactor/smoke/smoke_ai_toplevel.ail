@@ -1,0 +1,14 @@
+-- Control: does std/ai.call work at TOP LEVEL under -ai-stub (no event loop)?
+-- If this prints a reply but smoke_ai_in_handler does not, the difference is
+-- specifically "AI effect inside a stream handler", not "AI stub broken".
+module smoke_ai_toplevel
+
+import std/ai (call)
+import std/io (println)
+
+export func main() -> () ! {AI, IO} {
+  println("TOPLEVEL: calling AI");
+  let reply = call("ping-from-server");
+  println("TOPLEVEL_AI_REPLY: ${reply}");
+  println("TOPLEVEL: done")
+}

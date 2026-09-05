@@ -1,0 +1,1343 @@
+module sunholo/motoko_ext_herdr/herdr
+
+-- DELEGATION AS AN ADDRESSABLE SESSION. Two tools that hand a bounded sub-task
+-- to a coding agent running in its own herdr pane, and then let the model come
+-- back for the answer.
+--
+-- WHY TWO TOOLS AND NOT ONE, and why neither of them waits. 021 §4.1 proposed
+-- an "optimistic-synchronous" `Delegate` that waits up to 25s so that a fast
+-- task completes in a single call. Measured against a running herdr that is the
+-- wrong default: the median delegated task takes 23.1s, the worst case measured
+-- was 91.2s, and HALF of realistic tasks exceed the 25s bound — while
+-- `agent get` costs 4ms and submitting a prompt without `--wait` costs 3-5ms.
+-- A coin-flip is not a fast path: half of all delegations would spend ~25s of
+-- Motoko's 30s process budget and STILL return a handle. So `Delegate` submits
+-- and returns immediately, and `DelegateCheck` is cheap enough to call often.
+-- The model decides when to come back, which is what an agent loop is for.
+--
+-- WHY `on_tool_handle`. It is one of only two ABI slots carrying the whole
+-- `{IO, Process, FS}` row, and the other one runs after the model has produced
+-- text. No new ABI slot is added; 017 prices one at 16 packages.
+--
+-- THIS EXTENSION IS INERT OUTSIDE A HERDR PANE, and that is enforced in
+-- `register.ail` by returning empty `provided_tools` rather than here by
+-- failing at call time. A tool that is offered and then errors costs the model
+-- a turn and teaches it nothing.
+
+import std/option (Option, Some, None)
+import std/string (length, substring, contains)
+import std/json (Json, jo, kv, js, jnum, jb, get, asString)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
+  ExitAction, ExitIntentOutcome, ClosePane, PaneCloseAction,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  PassThrough, PreStepDecision, Msg, ToolSchema,
+  ToolCallEnvelope, ToolResultEnvelope
+)
+import pkg/sunholo/motoko_ext_herdr/dagr (
+  run_file, run_tmp, refused_marker, pane_marker, load_doc, render, task_title,
+  task_kind_or_default, known_task_kinds, task_of_key, can_link_retry, is_empty_run,
+  open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
+  add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
+  open_delegate_panes
+)
+import pkg/sunholo/motoko_ext_herdr/types (
+  delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
+  known_kind, default_kind, kind_allowed, grants_relaxation, kind_model_args,
+  path_is_safe, path_within, argv_is_safe, show_argv,
+  argv_split, argv_start, argv_start_model, argv_prompt, argv_get, argv_explain, argv_close,
+  argv_wait, wait_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
+  is_motoko, motoko_kind, motoko_run_payload, motoko_payload_is_safe,
+  argv_pane_run, argv_wait_until, motoko_handle, handle_is_motoko,
+  handle_pane, handle_name,
+  depth_allows, next_depth, argv_env_depth,
+  argv_report_owner, argv_pane_list, sweep_stale_panes, sweep_report, live_pane_ids,
+  sweep_sentinel_path, owner_token_value, owner_token_key,
+  argv_dagr_pane, plugin_pane_id,
+  failure_code, failure_message, means_agent_gone, explain_says_ready,
+  split_pane_id, agent_status_of, agent_pane_of, is_settled,
+  bash_exec_tool, bash_exec_args, bash_field, bash_exit
+)
+
+export type HerdrConfig = {
+  bin: string,
+  own_pane: string,
+  work_dir: string,
+  kind: string,
+  -- Operator policy: which kinds the MODEL may select. See
+  -- `types.kind_allowed` for why this exists and why it defaults to claude.
+  allowed_kinds: string,
+  -- Recursion control. `depth` is this Motoko's own depth (0 for the
+  -- operator's); `max_depth` is how deep delegation may go. See
+  -- `types.depth_allows`.
+  depth: int,
+  max_depth: int,
+  motoko_script: string,
+  -- OWNERSHIP (F-5). `session_ms` is the run identity that `own_pane` alone
+  -- cannot supply — a Motoko restarted in the same pane would otherwise claim
+  -- the previous run's delegates. It is MINTED BY THE TUI and arrives as
+  -- MOTOKO_SESSION_MS so that the host-side reaper builds the same token; see
+  -- `types.owner_token_value`. Empty disables tagging and the sweep rather than
+  -- inventing a value that only this side would agree with.
+  session_ms: string,
+  -- D3: the sweep reports by default and closes only when the operator says so.
+  sweep_stale: bool,
+  -- Where the dagr run file goes. `${MOTOKO_WORKDIR}/.dagr`, `path_within`-
+  -- guarded at first use for `work_dir`'s reason: a write outside
+  -- AILANG_FS_SANDBOX terminates the run rather than erroring.
+  dagr_dir: string,
+  -- MOT-137: open the dagr view automatically on the first delegation of a
+  -- run. Opt-in, because it splits the operator's terminal — the same rung
+  -- rule that keeps `sweep_stale` opt-in. See `types.argv_dagr_pane`.
+  dagr_pane: bool,
+  start_timeout_ms: int,
+  -- How long DelegateCheck blocks server-side before answering "still working".
+  -- See `types.argv_wait` for why blocking is the default and not an option the
+  -- model has to remember to ask for.
+  check_wait_ms: int,
+  max_output_chars: int,
+  -- F-5 D2, and it is READ HERE INSTEAD OF AT EXIT because it cannot be read
+  -- at exit: the ExitIntent render carries `! {FS}` and cannot reach `Env`, and
+  -- a `() -> bool` thunk with an env job would be a compile error in that
+  -- position. So the opt-in is resolved once, at registration, like every other
+  -- knob in `register.ail`, and CAPTURED. Off by default: reaping destroys
+  -- in-flight work on every clean exit, including the answer-file case the
+  -- delegation gate exists to honour.
+  reap_on_exit: bool
+}
+
+export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
+
+-- The schema names the ALLOWED set, not every kind herdr knows. Advertising a
+-- kind the operator has not permitted costs the model a turn to discover it
+-- cannot have it.
+-- ONE SCHEMA MIGRATION, NOT TWO. `task_kind` and `retry_of` landed together on
+-- purpose: both exist only to feed the dagr view, and a model that has to
+-- learn two new optional parameters in two releases learns neither.
+--
+-- Every property here teaches the model something, so both descriptions are
+-- written to be refused rather than guessed at: `task_kind` is ENUMERATED
+-- because free text means every session invents its own vocabulary, and
+-- `retry_of` says what it is for, because the temptation it invites is linking
+-- merely-similar tasks and the rework count is only worth having if it is true.
+func delegate_params(allowed: string) -> string {
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.\"},\"model\":{\"type\":\"string\",\"description\":\"Model for the delegate CLI (claude `--model`, codex `-m`). Free string; empty means the CLI default. Shell metacharacters are refused and fall back to the default. Applies to claude/codex only; ignored for other kinds.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":[\"prompt\"]}"
+}
+
+func check_params() -> string {
+  "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"The delegate handle returned by Delegate.\"}},\"required\":[\"name\"]}"
+}
+
+export func describe_tools(allowed: string) -> [ToolSchema] {
+  [
+    { name: "Delegate",
+      description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. Poll with DelegateCheck — a typical task takes 20-30s and some take over a minute.",
+      parameters: delegate_params(allowed) },
+    { name: "DelegateCheck",
+      description: "Fetch a delegate's current state and its answer if it has landed. Cheap; call it as often as you like.",
+      parameters: check_params() }
+  ]
+}
+
+func meta(name: string, pane: string) -> Json {
+  jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file"))])
+}
+
+-- A privileged delegate should be legible in the TRANSCRIPT, not only in the
+-- pane label. The operator found the first one by noticing the pane said codex.
+func meta_kind(name: string, pane: string, kind: string) -> Json {
+  jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file")),
+      kv("kind", js(kind)),
+      kv("permissions", js(if grants_relaxation(kind) then "relaxed: sandbox and approvals disabled for this kind" else "default: no relaxation"))])
+}
+
+-- Timing in metadata as well as prose: a caller that wants to compare two
+-- delegates should not have to parse a sentence.
+func meta_timed(name: string, pane: string, now_ms: int, waited_ms: int) -> Json {
+  let started = start_ms_of(name);
+  jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file")),
+      kv("started_ms", jnum(_int_to_float(started))),
+      kv("elapsed_ms", jnum(_int_to_float(if started > 0 then now_ms - started else 0))),
+      kv("waited_ms", jnum(_int_to_float(waited_ms))),
+      kv("elapsed_is_exact", jb(elapsed_is_exact(waited_ms)))])
+}
+
+func relaxation_note(kind: string) -> string {
+  if grants_relaxation(kind) then
+    ", which the operator has permitted to run with its sandbox and approval prompts disabled"
+  else ""
+}
+
+-- The requested model, for the transcript. Empty means the caller said nothing
+-- and the CLI default stands; a non-empty value that yields no argv (wrong kind
+-- or refused metacharacters) is still what was asked, so it is reported as
+-- asked rather than silently normalised.
+func model_note(kind: string, model: string) -> string {
+  if model == "" then ""
+  else if kind == "claude" || kind == "codex" then " with model `${model}`"
+  else " (model `${model}` ignored: applies to claude/codex only)"
+}
+
+func err_result(call_id: string, tool: string, msg: string) -> ToolResultEnvelope {
+  { tool_call_id: call_id, tool: tool, exit_code: 1, stdout: "", stderr: msg,
+    metadata: jo([]) }
+}
+
+func truncate(s: string, limit: int) -> string {
+  if length(s) > limit then substring(s, 0, limit) else s
+}
+
+func arg_str(args: Json, key: string, fallback: string) -> string {
+  match get(args, key) {
+    None => fallback,
+    Some(v) => match asString(v) {
+      Some(s) => if s == "" then fallback else s,
+      None => fallback
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- One herdr call
+-- ---------------------------------------------------------------------------
+
+type HerdrRun = { out: string, err: string, code: int, next_state: ExtWorld }
+
+-- Routed through `ExtPorts.tool_handle`, which is reachable here because the argv
+-- is token-free by construction — see the note in `types.ail`. The guard is not
+-- decoration: if a caller ever manages to get a shell token into an argv
+-- element, sending it would silently drop every argument and run bare `herdr`,
+-- so the call is refused with an explanation instead.
+func run_cmd(p: ExtPorts, w: ExtWorld, cmd: string, argv: [string]) -> HerdrRun ! {IO, Process, FS} {
+  if argv_is_safe(argv) == false then
+    { out: "", err: "refused: the `${cmd}` argv contained a shell metacharacter and would have been mangled by motoko_agent#158 (`${show_argv(argv)}`)",
+      code: 1, next_state: w }
+  else {
+    let r = p.tool_handle(w, bash_exec_tool(), bash_exec_args(cmd, argv));
+    { out: bash_field(r.output, "stdout"),
+      err: bash_field(r.output, "stderr"),
+      code: bash_exit(r.output),
+      next_state: r.next_state }
+  }
+}
+
+func run_herdr(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, argv: [string]) -> HerdrRun ! {IO, Process, FS} {
+  run_cmd(p, w, cfg.bin, argv)
+}
+
+-- The one place both error vocabularies meet. `code == -1` is the tool
+-- runtime's envelope failing to decode, which is neither a herdr error nor a
+-- ProcessError and must not be dressed up as either.
+func explain_failure(step: string, argv: [string], run: HerdrRun) -> string {
+  if run.code == -1 then
+    "${step}: the tool runtime returned no readable result for `herdr ${show_argv(argv)}`. No subprocess outcome is available, so this is not a delegate failure."
+  else
+    "${step} failed (herdr exit ${show(run.code)}, code `${failure_code(run.code, run.err)}`). ${failure_message(run.code, run.err)}"
+}
+
+-- The evidence line for a spawn this code watched fail, and deliberately NOT
+-- the same string as `explain_failure`. That one is prose aimed at the model;
+-- this is a receipt aimed at a reader of the graph, and it says only what was
+-- read off the subprocess.
+func spawn_receipt(run: HerdrRun) -> string {
+  if run.code == -1 then "no subprocess outcome: the tool runtime returned no readable result"
+  else "herdr exit ${show(run.code)}, code `${failure_code(run.code, run.err)}`"
+}
+
+-- ---------------------------------------------------------------------------
+-- The dagr producer's I/O half
+-- ---------------------------------------------------------------------------
+--
+-- The contract mapping is pure and lives in `dagr.ail`. What is left here is a
+-- read-modify-publish transaction, and its two rules:
+--
+-- ENCODE THEN ATOMICALLY PUBLISH — not the shipped skill's validate-then-
+-- publish. This document is produced by deterministic code, so its validity is
+-- established ONCE, in CI, against a pinned v0.3.1 binary, not on every write.
+-- What the rename buys is that the pane never observes a HALF-WRITTEN
+-- document; it cannot, on its own, keep it from observing a wrong one, and no
+-- amount of runtime checking would help against a producer bug that CI missed.
+--
+-- `std/fs` HAS NO RENAME — verified four ways at v0.33.0, including by the
+-- runtime carrying no `_fs_rename` builtin at all, and filed upstream as
+-- ailang#897. `writeFile` truncates in place, so writing the run file directly
+-- is a torn read on every update: dagr reloads on mtime. So the publish is
+-- `file_write(tmp)` + `mv`, measured at ~0.8 ms, through the same routed port
+-- every herdr call uses. Both paths stay in `.dagr/` because `mv` stops being
+-- atomic across a filesystem boundary.
+--
+-- THE VIEW NEVER FAILS THE DELEGATION. Every failure below returns a note and
+-- leaves the live file at its previous version. A delegation that worked is not
+-- reported as broken because its picture is stale, and the next successful
+-- publish catches up on its own — every publish rewrites the whole document.
+
+type DagrWrite = { note: string, next_state: ExtWorld }
+
+-- WHAT A TRANSITION LEARNED, ON ITS WAY BACK TO THE MODEL.
+--
+-- The pure transitions in `dagr.ail` decide things the model needs to hear and
+-- had no way of hearing: whether a `retry_of` link was recorded or refused is
+-- known only inside the closure, against the document on disk. Before this the
+-- refusal existed ONLY as a `note` event in the run file — measured
+-- 2026-09-01, both refused links (steps 6 and 7 of the integration exercise)
+-- returned an ordinary success and the model went on believing it had chained
+-- a retry. Telling the graph and not the caller is its own kind of misreport.
+type DagrStep = { doc: Json, note: string }
+
+func publish(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, doc: Json)
+  -> DagrWrite ! {IO, Process, FS} {
+  let live = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+  let tmp = run_tmp(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+  if path_is_safe(live) == false || path_is_safe(tmp) == false then
+    { note: "", next_state: w }
+  else {
+    let dir = p.dir_make(w, cfg.dagr_dir);
+    let wrote = p.file_write(dir.next_state, tmp, render(doc));
+    if wrote.ok == false then
+      { note: "\n\n(The dagr view is stale: `${tmp}` could not be written — ${wrote.error}.)",
+        next_state: wrote.next_state }
+    else {
+      let mv = run_cmd(p, wrote.next_state, "mv", [tmp, live]);
+      if mv.code != 0 then {
+        -- Leave no half-published candidate behind for the next call to trip
+        -- over; the live file is untouched and still valid.
+        let cleaned = p.file_remove(mv.next_state, tmp);
+        { note: "\n\n(The dagr view is stale: publishing `${live}` failed and the previous version stands.)",
+          next_state: cleaned.next_state }
+      }
+      else { note: "", next_state: mv.next_state }
+    }
+  }
+}
+
+-- One dagr write: read the current document, apply a pure transition, publish.
+--
+-- READ EVERY TIME rather than carrying the document across calls, because the
+-- extension has nowhere to carry it — each tool call is a fresh invocation with
+-- no state but the world token. That the file is the state is also what makes
+-- `settle`'s idempotence meaningful: the transition is computed against what is
+-- actually on disk.
+func dagr_record(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
+                 now_ms: int, f: (Json, int) -> DagrStep) -> DagrWrite ! {IO, Process, FS} {
+  -- No run identity, no run file: the name is keyed by session and a shared
+  -- `.dagr/run.json` is exactly the multi-writer clobber §5 refuses. And the
+  -- same sandbox refusal `do_delegate` makes, for the same reason — a write
+  -- outside AILANG_FS_SANDBOX terminates the run rather than failing.
+  if cfg.session_ms == "" || path_within(workdir, cfg.dagr_dir) == false then
+    { note: "", next_state: w }
+  else {
+    let live = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+    let marker = refused_marker(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+    let refused = p.file_read(w, marker);
+    if refused.present then { note: "", next_state: refused.next_state }
+    else {
+      let cur = p.file_read(refused.next_state, live);
+      match load_doc(cur.present, cur.content, cfg.own_pane, cfg.session_ms, now_ms) {
+        -- A file that exists and does not parse is not ours to replace. Say so
+        -- ONCE — the marker is what makes it once — and stop writing.
+        None => {
+          let dir = p.dir_make(cur.next_state, cfg.dagr_dir);
+          let m = p.file_write(dir.next_state, marker, live);
+          { note: "\n\n(The dagr run file `${live}` exists but does not parse. It has NOT been overwritten and this session will not write to it again.)",
+            next_state: m.next_state }
+        },
+        -- The transition's note leads: it is about what was recorded, and the
+        -- publish note is about whether the recording reached disk.
+        Some(doc) => {
+          let step = f(doc, now_ms);
+          let pub = publish(cfg, p, cur.next_state, step.doc);
+          { note: "${step.note}${pub.note}", next_state: pub.next_state }
+        }
+      }
+    }
+  }
+}
+
+-- The four check-side write points, each a one-liner at its call site so the
+-- lifecycle code stays readable. Every one is keyed by the handle, resolved to
+-- a task id through `task_of_key`; a handle with no task in this run file (a
+-- delegation from a previous session, or from before the producer landed)
+-- resolves to "" and writes nothing.
+
+-- Terminal, and it carries the reap in the same document: the `pane close`
+-- result was ignored on both success paths, and a close that failed means the
+-- locator is NOT stale — the delegate may still be running.
+func dagr_settle(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_ms: int,
+                 key: string, attempt_state: string, task_state: string,
+                 evidence: string, receipt: string, reason: string,
+                 close_failed: bool, close_why: string) -> DagrWrite ! {IO, Process, FS} {
+  dagr_record(cfg, p, w, workdir, now_ms, func(doc: Json, ms: int) -> DagrStep {
+    let id = task_of_key(doc, key);
+    if id == "" then { doc: doc, note: "" }
+    else {
+      let settled = settle(doc, id, attempt_state, task_state, evidence, receipt, reason, ms);
+      if close_failed && close_why != "pane_not_found" then
+        { doc: add_note(settled, id, "the delegate's pane could not be closed (${close_why}), so it may still be running", ms),
+          note: "" }
+      else { doc: settled, note: "" }
+    }
+  })
+}
+
+-- Still working. Latches `prompt_acknowledged` and lifts a `blocked` task that
+-- has come back to life; refuses to touch liveness on an unrecognised status,
+-- because `agent_status_of` returns "" for undecodable output and a decode
+-- failure must not become `working` in the graph.
+func dagr_alive(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_ms: int,
+                key: string, status: string) -> DagrWrite ! {IO, Process, FS} {
+  dagr_record(cfg, p, w, workdir, now_ms, func(doc: Json, ms: int) -> DagrStep {
+    let id = task_of_key(doc, key);
+    let d = if id == "" then doc
+            else if status == "" then touch(doc, ms)
+            else if status == "working" || status == "blocked" || status == "done"
+            then mark_working(latch_ack(doc, id), id, ms)
+            else touch(doc, ms);
+    { doc: d, note: "" }
+  })
+}
+
+func dagr_blocked(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_ms: int,
+                  key: string, pane: string) -> DagrWrite ! {IO, Process, FS} {
+  dagr_record(cfg, p, w, workdir, now_ms, func(doc: Json, ms: int) -> DagrStep {
+    let id = task_of_key(doc, key);
+    { doc: if id == "" then doc else mark_blocked(doc, id, pane, ms), note: "" }
+  })
+}
+
+-- The handle the model holds is `mot-dlg-<ms>` for claude/codex and
+-- `mot-dlg-<ms>@<pane>` for motoko; the run file keys tasks on the pane-free
+-- half either way (§3.1 — pane ids are `locator` data, never ids).
+func run_key(handle: string) -> string {
+  if handle_is_motoko(handle) then handle_name(handle) else handle
+}
+
+-- THE DELEGATION WRITE POINT, and it runs only after the spawn succeeded.
+--
+-- `retry_of` is validated here and REFUSES THE LINKAGE, NEVER THE DELEGATION
+-- (§3.6): a handle this extension did not issue, or one with no task in this
+-- run file, or one whose latest attempt is still in flight, opens ordinary new
+-- work and records why in a `note`. A retry link is a claim about history and a
+-- wrong one is worse than a missing one — the rework count is the single signal
+-- that justified adopting dagr, and it is only worth having if it is true.
+func dagr_open(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_ms: int,
+               key: string, title: string, kind: string, actor: string,
+               pane: string, loc_agent: string, retry_of: string, model: string)
+  -> DagrWrite ! {IO, Process, FS} {
+  dagr_record(cfg, p, w, workdir, now_ms, func(doc0: Json, ms: int) -> DagrStep {
+    -- ONE NOTE PER RUN, SAYING WHAT THIS GRAPH CANNOT DO (§6). `DelegateCheck`
+    -- is the only terminal write point, so a model that delegates and moves on
+    -- leaves a task `working` for ever, with no settle and no stale-liveness
+    -- signal. Nothing here can fix that — there is no ABI slot for "session
+    -- ended" and 017 prices one at 16 packages — so the pane says it in its own
+    -- words rather than looking confident.
+    let doc = if is_empty_run(doc0)
+              then add_note(doc0, key, "this view settles a task only when the model calls DelegateCheck; between polls it is frozen", ms)
+              else doc0;
+    -- ONCE PER RUN, AND IT IS ADDRESSED TO THE OPERATOR. The run file is keyed
+    -- by producer pane and session (§5), and `dagr view` looks for `$DAGR_RUN`,
+    -- then `.dagr/run.json` — so the stock `open-dagr` action cannot find this
+    -- document and renders whatever else is in the directory. Measured
+    -- 2026-09-01: a session burned twenty minutes and ~90 scratch panes
+    -- rediscovering that, with its own run file unread on disk throughout.
+    --
+    -- Phrased as something the OPERATOR can do, not something to go and do: the
+    -- same session's other failure was opening view panes in a loop.
+    --
+    -- SUPPRESSED WHEN THE VIEW OPENS ITSELF (MOT-137). Under HERDR_DAGR_PANE=1
+    -- `ensure_dagr_pane` runs immediately after this publish and reports what
+    -- actually happened — opened, refused, or untaggable. Telling the operator
+    -- to run the script by hand in the same breath as opening the pane for them
+    -- is the kind of stale instruction that teaches a reader to stop reading
+    -- these notes, and the failure case is already covered there.
+    let first = if is_empty_run(doc0) && cfg.dagr_pane == false
+                then " (A dagr pane can show this run live — the operator opens it with `scripts/dagr-pane.sh`. The stock `open-dagr` action will not find it: this run file is keyed by pane and session, and that action looks for `.dagr/run.json`.)"
+                else "";
+    if retry_of == "" then
+      { doc: open_task_model(doc, key, title, kind, actor, pane, loc_agent, ms, model), note: first }
+    else {
+      let target = if owns_name(run_key(retry_of)) then task_of_key(doc, run_key(retry_of)) else "";
+      if target != "" && can_link_retry(doc, target) then
+        { doc: open_retry_model(doc, target, key, actor, pane, loc_agent,
+                                "re-delegated as `${key}`", ms, model),
+          note: first }
+      else {
+        let why =
+          if owns_name(run_key(retry_of)) == false then "it is not a handle this extension issued"
+          else if target == "" then "this run file has no task for it"
+          else "its latest attempt has not settled, so there is nothing yet to retry";
+        -- THE SAME SENTENCE TWICE, ON PURPOSE. The run file gets it as a `note`
+        -- event because the graph must show why the rework count did not move;
+        -- the model gets it in the tool result because the delegation it just
+        -- made is NOT the retry it asked for, and it has no other way to find
+        -- that out. Not an error: §3.6 refuses the linkage, never the work.
+        { doc: add_note(open_task_model(doc, key, title, kind, actor, pane, loc_agent, ms, model), key,
+                        "retry_of `${retry_of}` was not linked (${why}); opened as new work", ms),
+          note: "${first} NOTE: the `retry_of` link to `${retry_of}` was NOT recorded — ${why}. This delegation is on the record as new work, not as a further attempt at that task." }
+      }
+    }
+  })
+}
+
+-- THE FAILED-SPAWN WRITE POINT (F3), and it exists because the run file was
+-- measured lying by omission on 2026-09-01: two `claude` delegations consumed a
+-- pane, an `agent start` and a task file each, failed, and appended nothing.
+--
+-- IT IS CALLED ONLY WHERE SOMETHING WAS ACTUALLY SPENT — after `pane split`
+-- returned a pane id. The refusals above it (an unpermitted kind, the depth
+-- gate, an unsafe path) spend nothing, issue no handle and are already stated
+-- plainly in the tool result; opening a run file to record them would put noise
+-- in a graph whose whole value is that everything in it happened.
+func dagr_failed(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
+                 started_ms: int, now_ms: int,
+                 key: string, title: string, kind: string, actor: string,
+                 pane: string, loc_agent: string, receipt: string, reason: string,
+                 tier: string)
+  -> DagrWrite ! {IO, Process, FS} {
+  dagr_record(cfg, p, w, workdir, now_ms, func(doc: Json, ms: int) -> DagrStep {
+    { doc: open_failed_task(doc, key, title, kind, actor, pane, loc_agent, receipt, reason,
+                            started_ms, ms, tier),
+      note: "" }
+  })
+}
+
+-- ---------------------------------------------------------------------------
+-- Ownership (F-5): tag at spawn, sweep at first call
+-- ---------------------------------------------------------------------------
+
+-- TAGGING IS DEGRADABLE BY DECISION (design D1). A delegate that could not be
+-- tagged is merely unsweepable, which is the status quo this change improves
+-- on; failing the delegation over it would trade a working delegate for a
+-- tidier ledger. So this returns a NOTE, never an error, and the note is
+-- appended to a result the caller already succeeded in producing.
+func tag_owner(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, pane: string)
+  -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  if cfg.session_ms == "" then
+    { note: " This delegate carries no ownership tag (no MOTOKO_SESSION_MS in this run), so an orphan sweep will not recognise it as this session's.",
+      next_state: w }
+  else {
+    let r = run_herdr(cfg, p, w, argv_report_owner(pane, cfg.own_pane, cfg.session_ms));
+    if r.code == 0 then { note: "", next_state: r.next_state }
+    else
+      { note: " Ownership tagging failed (`${failure_code(r.code, r.err)}`); the delegate is running normally but will not be recognisable to an orphan sweep.",
+        next_state: r.next_state }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The dagr view pane (MOT-137)
+-- ---------------------------------------------------------------------------
+--
+-- AT MOST ONCE PER RUN, MARKED BEFORE THE ATTEMPT. Same shape and same reason
+-- as `sweep_once`: the extension carries nothing between tool calls, so the
+-- marker is the state, and a failed attempt that retried on every Delegate call
+-- would be the 2026-09-01 pane storm again at one pane per delegation instead
+-- of one per poll. See `dagr.pane_marker`.
+--
+-- IT NEVER FAILS A DELEGATION, and the note it returns rides on a result the
+-- caller has already succeeded in producing — the same rule as `tag_owner` and
+-- as the producer itself ("the view never fails the delegation"). A missing
+-- plugin, a herdr that refuses, an answer this cannot parse: all of them are a
+-- sentence to the operator and nothing more. That is also why there is NO
+-- pre-flight `plugin list` check — it would cost a second herdr round-trip on
+-- the one call already nearest the 30s process wall to learn something the
+-- open's own exit code says for free.
+--
+-- CALLED AFTER `dagr_open` PUBLISHES, not before: `dagr view` resolves
+-- $DAGR_RUN when it starts, and pointing it at a path that does not exist yet
+-- shows an empty view until something else touches the file.
+--
+-- THE PANE IS TAGGED `mot-owner` LIKE A DELEGATE, and the tag still earns its
+-- one call — but for a NARROWER reason since ABI 7.0. The old host-side reaper
+-- enumerated panes at exit and closed everything carrying this session's token,
+-- so a tagged view pane cleaned up for free. `exit_actions` renders from the
+-- dagr run file's in-flight ATTEMPTS, and the view pane is not one, so it is no
+-- longer closed at exit. What the tag still buys is the orphan sweep, which
+-- recognises a view left behind by a session that is gone. A view pane that
+-- outlives its run is a picture of nothing, and that is the path that reaps it.
+func ensure_dagr_pane(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string)
+  -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  -- The same refusals `dagr_record` makes, for the same reasons — no run
+  -- identity means no run file to point at, and a write outside
+  -- AILANG_FS_SANDBOX terminates the run rather than failing — plus the flag.
+  if cfg.dagr_pane == false || cfg.session_ms == "" || cfg.own_pane == ""
+     || path_within(workdir, cfg.dagr_dir) == false then
+    { note: "", next_state: w }
+  else {
+    let marker = pane_marker(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+    let seen = p.file_read(w, marker);
+    if seen.present then { note: "", next_state: seen.next_state }
+    else {
+      let live = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+      if path_is_safe(live) == false || path_is_safe(workdir) == false then
+        { note: "", next_state: seen.next_state }
+      else {
+        -- MARKER FIRST. Everything below is at-most-once from here on.
+        let dir = p.dir_make(seen.next_state, cfg.dagr_dir);
+        let mark = p.file_write(dir.next_state, marker, "");
+        let op = run_herdr(cfg, p, mark.next_state, argv_dagr_pane(cfg.own_pane, live, workdir));
+        if op.code != 0 then
+          -- The fallback sentence is the point of reporting this at all: the
+          -- operator asked for the view to appear and it did not, and the
+          -- script that opens it by hand is the thing they need to know.
+          { note: " (The dagr view could not be opened automatically — `${failure_code(op.code, op.err)}`. The run file is being written regardless; open the view with `scripts/dagr-pane.sh`.)",
+            next_state: op.next_state }
+        else {
+          let pane = plugin_pane_id(op.out);
+          if pane == "" then
+            -- Opened, but this could not read the id back, so it cannot be
+            -- tagged and cannot be proved ours later. Say so rather than
+            -- leaving an untracked pane silently behind.
+            { note: " (A dagr view pane was opened but herdr's answer carried no pane id, so it is untagged: an orphan sweep will not recognise it and it will not be closed at exit.)",
+              next_state: op.next_state }
+          else {
+            let rec = p.file_write(op.next_state, marker, pane);
+            let tag = run_herdr(cfg, p, rec.next_state, argv_report_owner(pane, cfg.own_pane, cfg.session_ms));
+            -- Name the marker file alongside the pane: `scripts/dagr-pane.sh`
+            -- takes over this same marker when the operator opens the view by
+            -- hand (measured 2026-09-04: auto-opened w1:pX replaced by w1:pY).
+            -- A later "which pane is the view" question is answered by the
+            -- marker's CONTENT, not by this sentence.
+            if tag.code == 0 then
+              { note: " A dagr pane (${pane}) is showing this run live (marker `${marker}`). If a second view is opened by hand, the hand-opened one wins and this one is closed.", next_state: tag.next_state }
+            else
+              { note: " A dagr pane (${pane}) is showing this run live, but ownership tagging failed (`${failure_code(tag.code, tag.err)}`) — it will not be closed at exit.",
+                next_state: tag.next_state }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- BY EXPLICIT PANE ID, one call each, and only for ids the token gate produced.
+-- Never by name, kind or argv — P2-6 is a measured instance of that rule going
+-- wrong.
+func close_panes(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, ids: [string])
+  -> ExtWorld ! {IO, Process, FS} {
+  match ids {
+    [] => w,
+    id :: rest => close_panes(cfg, p, run_herdr(cfg, p, w, argv_close(id)).next_state, rest)
+  }
+}
+
+-- READ-ONLY, ONCE PER RUN, AND IT NEVER TOUCHES ANOTHER SESSION'S FILE. See
+-- `dagr.abandoned_tasks` for why the answer is a sentence and not a repair.
+--
+-- Unbounded in the number of files by choice: `.dagr/` holds one run file per
+-- session, this runs once per run, and a cap would have to pick which stale
+-- records to hide. If the directory ever grows past reading, it wants pruning,
+-- not a silent limit.
+func scan_files(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, names: [string],
+                own: string, live: [string])
+  -> { items: [string], next_state: ExtWorld } ! {FS} {
+  match names {
+    [] => { items: [], next_state: w },
+    n :: rest =>
+      if is_foreign_run_file(n, own) == false then scan_files(cfg, p, w, rest, own, live)
+      else {
+        let rd = p.file_read(w, "${cfg.dagr_dir}/${n}");
+        let here = if rd.present
+                   then prefix_all("${n} — ", abandoned_tasks(rd.content, live))
+                   else [];
+        let more = scan_files(cfg, p, rd.next_state, rest, own, live);
+        { items: here ++ more.items, next_state: more.next_state }
+      }
+  }
+}
+
+-- The file's own name leads each item: with several sessions' records in one
+-- directory, "which document says this" is the first thing a reader needs.
+func prefix_all(pre: string, xs: [string]) -> [string] {
+  match xs { [] => [], x :: rest => "${pre}${x}" :: prefix_all(pre, rest) }
+}
+
+func scan_abandoned(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, live: [string])
+  -> { note: string, next_state: ExtWorld } ! {FS} {
+  -- The same two refusals `dagr_record` makes, for the same two reasons: no run
+  -- identity means no "own file" to exclude, and a read outside
+  -- AILANG_FS_SANDBOX terminates the run rather than failing.
+  if cfg.session_ms == "" || path_within(workdir, cfg.dagr_dir) == false then
+    { note: "", next_state: w }
+  else {
+    let dl = p.dir_list(w, cfg.dagr_dir);
+    if dl.present == false then { note: "", next_state: dl.next_state }
+    else {
+      let own = run_file_name(cfg.own_pane, cfg.session_ms);
+      let r = scan_files(cfg, p, dl.next_state, dl.entries, own, live);
+      { note: abandoned_report(r.items), next_state: r.next_state }
+    }
+  }
+}
+
+-- THE STARTUP SWEEP, run at the first tool call rather than at registration.
+-- `register_with_config` has the effects but not the PORTS: `run_herdr` goes
+-- through `ExtPorts.tool_handle`, which only exists once a hook is invoked with
+-- an `ExtCtx`. The first tool call is the earliest moment the sweep can happen
+-- at all, and it is still "before this session does anything with delegates".
+--
+-- ONCE PER RUN, marked by a sentinel file. The marker goes down BEFORE the
+-- sweep runs, deliberately: a sweep that fails should not retry on every
+-- subsequent tool call and re-report the same panes for the rest of the
+-- session. At-most-once is the correct shape for an advisory report.
+func sweep_once(cfg: HerdrConfig, ctx: ExtCtx)
+  -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  let p = ctx.ports;
+  -- No run identity means no ownership test, and without the test the only
+  -- rule left is a name prefix, which is exactly the rule that must not be
+  -- used. Same refusal as `do_delegate`'s for a work_dir outside the sandbox:
+  -- a write there terminates the run rather than erroring.
+  if cfg.session_ms == "" || path_within(ctx.workdir, cfg.work_dir) == false then
+    { note: "", next_state: ctx.world }
+  else {
+    let sentinel = sweep_sentinel_path(cfg.work_dir, cfg.session_ms);
+    let seen = p.file_read(ctx.world, sentinel);
+    if seen.present then { note: "", next_state: seen.next_state }
+    else {
+      let dir = p.dir_make(seen.next_state, cfg.work_dir);
+      let mark = p.file_write(dir.next_state, sentinel, cfg.session_ms);
+      let ls = run_herdr(cfg, p, mark.next_state, argv_pane_list());
+      -- A sweep that cannot enumerate says nothing. `server_not_running` here
+      -- means herdr is unwell, not that anything is orphaned.
+      if ls.code != 0 then { note: "", next_state: ls.next_state }
+      else {
+        let stale = sweep_stale_panes(ls.out, cfg.own_pane, cfg.session_ms);
+        let panes = match stale {
+          [] => { note: "", next_state: ls.next_state },
+          _  =>
+            if cfg.sweep_stale then
+              { note: sweep_report(stale, true),
+                next_state: close_panes(cfg, p, ls.next_state, stale) }
+            else
+              { note: sweep_report(stale, false), next_state: ls.next_state }
+        };
+        -- THE SECOND HALF OF THE SWEEP, and it looks somewhere else entirely.
+        -- Above enumerates PANES that outlived their session; this reads the
+        -- RECORDS a session left frozen mid-flight. The 2026-09-01 measurement
+        -- hit the second and was told about the first, because only the first
+        -- existed. Same pane list, so it costs no extra herdr call.
+        let ab = scan_abandoned(cfg, p, panes.next_state, ctx.workdir, live_pane_ids(ls.out));
+        { note: "${panes.note}${ab.note}", next_state: ab.next_state }
+      }
+    }
+  }
+}
+
+-- The sweep's note rides on the result the model was already going to read.
+-- On a failed call it belongs with the failure text, not in an empty stdout.
+func with_note(r: ToolResultEnvelope, note: string) -> ToolResultEnvelope {
+  if note == "" then r
+  else if r.exit_code == 0 then { r | stdout: "${r.stdout}${note}" }
+  else { r | stderr: "${r.stderr}${note}" }
+}
+
+-- ---------------------------------------------------------------------------
+-- Delegate
+-- ---------------------------------------------------------------------------
+
+func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+  -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let prompt = arg_str(call.arguments, "prompt", "");
+  let kind = arg_str(call.arguments, "kind", cfg.kind);
+  let cwd = arg_str(call.arguments, "cwd", ctx.workdir);
+  -- View-only, both of them. An unusable value degrades (`task_kind_or_default`
+  -- neutralises an unknown kind; an unlinkable `retry_of` opens a normal task
+  -- and says why in a note) and never fails a delegation over a picture.
+  let task_kind = task_kind_or_default(arg_str(call.arguments, "task_kind", ""));
+  let retry_of = arg_str(call.arguments, "retry_of", "");
+  -- Free string, CLI-default when empty. Token-safety is enforced where the
+  -- argv is built (`kind_model_args` degrades to no flag); the raw ask is kept
+  -- for the transcript and the run file so a refusal is visible, not silent.
+  let model = arg_str(call.arguments, "model", "");
+
+  if prompt == "" then
+    { result: err_result(call.id, "Delegate", "Delegate requires a non-empty `prompt`."), next_state: ctx.world }
+  else if known_kind(kind) == false then
+    { result: err_result(call.id, "Delegate", "`${kind}` is not an agent kind herdr knows at all. The operator permits: ${cfg.allowed_kinds}."), next_state: ctx.world }
+  -- OPERATOR POLICY, CHECKED BEFORE ANYTHING IS SPENT. Refusing here rather
+  -- than at `agent start` also saves a pane and a start timeout for a kind that
+  -- was never going to be permitted.
+  -- RECURSION GATE, BEFORE ANYTHING IS SPENT. Checked for every kind, not just
+  -- motoko: the default limit of 1 means the operator's Motoko may delegate and
+  -- a delegate may not, which is what "recursion default-off" means. It also
+  -- bounds the orphan story — an orphaned delegate at the limit cannot spawn.
+  else if depth_allows(cfg.depth, cfg.max_depth) == false then
+    { result: err_result(call.id, "Delegate",
+        "Delegation is not permitted at this depth. This Motoko is itself a delegate (depth ${show(cfg.depth)}) and the limit is ${show(cfg.max_depth)}, so it must do the work itself rather than delegating further. The operator can raise HERDR_MAX_DELEGATE_DEPTH; recursion is off by default because a tree of agent loops has no budget propagation and nothing would notice it growing."),
+      next_state: ctx.world }
+  else if kind_allowed(cfg.allowed_kinds, kind) == false then
+    { result: err_result(call.id, "Delegate",
+        "`${kind}` is a kind herdr knows, but the operator has not permitted it here. Permitted: ${cfg.allowed_kinds}. This is an operator decision, not something to work around — `${kind}` may require relaxed permissions or be unverified in this container. Use a permitted kind, or ask the operator to widen HERDR_ALLOWED_KINDS."),
+      next_state: ctx.world }
+  else if path_is_safe(cwd) == false then
+    { result: err_result(call.id, "Delegate", "The working directory `${cwd}` contains a shell metacharacter and cannot be passed safely."), next_state: ctx.world }
+  else {
+    -- The name is seeded from the clock so it is unique among live agents and
+    -- monotonic across runs in the same pane.
+    let clock = p.clock_now(ctx.world);
+    let name = delegate_name(clock.now_ms);
+    let task = task_path(cfg.work_dir, name);
+    let answer = answer_path(cfg.work_dir, name);
+
+    if path_is_safe(task) == false || path_is_safe(answer) == false then
+      { result: err_result(call.id, "Delegate", "The delegate work directory `${cfg.work_dir}` contains a shell metacharacter; set HERDR_DELEGATE_DIR to a plain path."), next_state: clock.next_state }
+    -- REFUSE BEFORE TOUCHING THE FILESYSTEM. A path outside AILANG_FS_SANDBOX
+    -- is not an error this handler could catch — it terminates the run — so
+    -- the check has to happen before the first `dir_make`, not around it.
+    else if path_within(ctx.workdir, cfg.work_dir) == false then
+      { result: err_result(call.id, "Delegate", "The delegate work directory `${cfg.work_dir}` is outside Motoko's filesystem sandbox (`${ctx.workdir}`). Reading a file there would terminate the run rather than fail, so the call is refused. Set HERDR_DELEGATE_DIR to a path under the working directory."), next_state: clock.next_state }
+    else {
+      let dir = p.dir_make(clock.next_state, cfg.work_dir);
+      -- THE MODEL-AUTHORED PROMPT NEVER TOUCHES ARGV. This write is the whole
+      -- reason #158 is avoidable here.
+      let wrote = p.file_write(dir.next_state, task, prompt);
+      if wrote.ok == false then
+        { result: err_result(call.id, "Delegate", "Could not write the task file `${task}`: ${wrote.error}"), next_state: wrote.next_state }
+      else {
+        let sp = run_herdr(cfg, p, wrote.next_state, argv_split(cwd, argv_env_depth(cfg.depth)));
+        let pane = split_pane_id(sp.out);
+        if sp.code != 0 || pane == "" then
+          { result: err_result(call.id, "Delegate", explain_failure("Splitting a pane for the delegate", argv_split(cwd, argv_env_depth(cfg.depth)), sp)), next_state: sp.next_state }
+        else if is_motoko(kind) then {
+          -- MOTOKO IS A SECOND LIFECYCLE, NOT A KIND. `agent start --kind` takes
+          -- a fixed list of 22 and motoko is not on it (020 ADR-001 option B).
+          -- It does not need it: Motoko is a lifecycle AUTHORITY (020 D1) and
+          -- announces itself, ~0.8s after `pane run` against 3.9s for
+          -- `agent start --kind claude`.
+          --
+          -- The task arrives as argv[2]. `agent prompt` refuses reported agents
+          -- ("not an active named agent") and `pane send-text` is screen-driving
+          -- that the handoff forbids, so argv is the only channel — and it is a
+          -- better one, since it needs no readiness gate at all.
+          if motoko_payload_is_safe(cfg.motoko_script, task, answer) == false then {
+            let cleaned = run_herdr(cfg, p, sp.next_state, argv_close(pane));
+            let tf = p.clock_now(cleaned.next_state);
+            -- `reported`, not `verified`: herdr was never invoked, so the only
+            -- receipt is this extension's own prose. The row is still recorded
+            -- — a pane was spent — but the tier must not claim a mechanical
+            -- observation that never happened.
+            let rec = dagr_failed(cfg, p, tf.next_state, ctx.workdir, clock.now_ms, tf.now_ms,
+                                  name, task_title(prompt), task_kind, motoko_kind(), pane,
+                                  motoko_kind(),
+                                  "refused before `pane run`: the payload failed this extension's quoting check",
+                                  "the delegate paths or script path contain a single quote; the pane was opened and closed again",
+                                  "reported");
+            { result: err_result(call.id, "Delegate", "The delegate paths or script path contain a single quote, which would break the shell quoting of the `pane run` payload. Refused rather than sent.${rec.note}"), next_state: rec.next_state }
+          }
+          else {
+            let payload = motoko_run_payload(cfg.motoko_script, task, answer);
+            let rn = run_herdr(cfg, p, sp.next_state, argv_pane_run(pane, payload));
+            if rn.code != 0 then {
+              let cleaned = run_herdr(cfg, p, rn.next_state, argv_close(pane));
+              let tf = p.clock_now(cleaned.next_state);
+              let rec = dagr_failed(cfg, p, tf.next_state, ctx.workdir, clock.now_ms, tf.now_ms,
+                                    name, task_title(prompt), task_kind, motoko_kind(), pane,
+                                    motoko_kind(), spawn_receipt(rn),
+                                    "`herdr pane run` did not start a motoko delegate in pane ${pane}; the pane was closed again",
+                                    "verified");
+              { result: err_result(call.id, "Delegate", "${explain_failure("Starting a motoko delegate", argv_pane_run(pane, payload), rn)}${rec.note}"), next_state: rec.next_state }
+            }
+            else {
+              -- THE HANDLE CARRIES THE PANE. The row does not exist yet — it
+              -- appears ~0.8s from now — and `agent wait` will not block for an
+              -- agent that does not exist (measured: agent_not_found in 2ms), so
+              -- there is nothing to rename and nothing to gate on. See
+              -- `types.motoko_handle`.
+              let tag = tag_owner(cfg, p, rn.next_state, pane);
+              let t = p.clock_now(tag.next_state);
+              let h = motoko_handle(clock.now_ms, pane);
+              -- `locator.agent` is `motoko`, not the handle: the row
+              -- self-reports that way (MOT-120) and the locator states what
+              -- herdr knows, not what this extension called it.
+              let rec = dagr_open(cfg, p, t.next_state, ctx.workdir, t.now_ms,
+                                  handle_name(h), task_title(prompt), task_kind,
+                                  motoko_kind(), pane, motoko_kind(), retry_of, model);
+              -- AFTER THE PUBLISH, so the view has a file to read at startup.
+              let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
+              { result: {
+                  tool_call_id: call.id, tool: "Delegate", exit_code: 0,
+                  stdout: "Delegate `${h}` is running motoko in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.${tag.note}${rec.note}${view.note}",
+                  stderr: "", metadata: meta_kind(h, pane, motoko_kind())
+                },
+                next_state: view.next_state }
+            }
+          }
+        }
+        else {
+          let st = run_herdr(cfg, p, sp.next_state, argv_start_model(name, kind, pane, cfg.start_timeout_ms, model));
+          if st.code != 0 then {
+            -- Do not leak the pane we just made. This is the narrowest orphan
+            -- rule that works and it is deliberately not a sweep: it closes the
+            -- one pane this call created, by id.
+            let cleaned = run_herdr(cfg, p, st.next_state, argv_close(pane));
+            let tf = p.clock_now(cleaned.next_state);
+            let rec = dagr_failed(cfg, p, tf.next_state, ctx.workdir, clock.now_ms, tf.now_ms,
+                                  name, task_title(prompt), task_kind, kind, pane, name,
+                                  spawn_receipt(st),
+                                  "`herdr agent start --kind ${kind}` failed in pane ${pane}; the pane was closed again",
+                                  "verified");
+            { result: err_result(call.id, "Delegate", "${explain_failure("Starting a `${kind}` delegate", argv_start_model(name, kind, pane, cfg.start_timeout_ms, model), st)}${rec.note}"), next_state: rec.next_state }
+          }
+          else {
+            -- READINESS GATE. herdr reports `interactive_ready: true` for
+            -- agents that are not usable — measured on an unauthenticated codex
+            -- and on a claude stuck at its API-key modal. Prompting one of
+            -- those is not harmless: in testing it pressed Enter on codex's
+            -- sign-in menu and started an OAuth device flow.
+            let ex = run_herdr(cfg, p, st.next_state, argv_explain(pane));
+            if explain_says_ready(ex.out) == false then {
+              let cleaned = run_herdr(cfg, p, ex.next_state, argv_close(pane));
+              let tf = p.clock_now(cleaned.next_state);
+              let rec = dagr_failed(cfg, p, tf.next_state, ctx.workdir, clock.now_ms, tf.now_ms,
+                                    name, task_title(prompt), task_kind, kind, pane, name,
+                                    "`herdr pane explain` matched no screen rule for pane ${pane}",
+                                    "the `${kind}` agent started but was not at a usable prompt; the pane was closed again",
+                                    "verified");
+              { result: err_result(call.id, "Delegate",
+                  "A `${kind}` agent started in pane ${pane} but is not at a usable prompt — herdr matched no screen rule for it, which in this image means it is sitting on a sign-in screen or a modal. The pane has been closed. Check that `${kind}` is authenticated in this container.${rec.note}"),
+                next_state: rec.next_state }
+            }
+            else {
+              -- NO `--wait`. See the header.
+              let text = task_wrapper_prompt(task, answer);
+              let pr = run_herdr(cfg, p, ex.next_state, argv_prompt(name, text));
+              if pr.code != 0 then {
+                let cleaned = run_herdr(cfg, p, pr.next_state, argv_close(pane));
+                let tf = p.clock_now(cleaned.next_state);
+                let rec = dagr_failed(cfg, p, tf.next_state, ctx.workdir, clock.now_ms, tf.now_ms,
+                                      name, task_title(prompt), task_kind, kind, pane, name,
+                                      spawn_receipt(pr),
+                                      "the `${kind}` agent started and passed the readiness gate, but `herdr agent prompt` refused the task; the pane was closed again",
+                                      "verified");
+                { result: err_result(call.id, "Delegate", "${explain_failure("Submitting the task to the delegate", argv_prompt(name, text), pr)}${rec.note}"), next_state: rec.next_state }
+              }
+              else {
+                -- SETUP IS NOT FREE AND WAS INVISIBLE. `pane split` +
+                -- `agent start` + the readiness gate run sequentially inside
+                -- this one call, and `agent start` alone measured ~3.9s. Two
+                -- Delegate calls in one step were 3.9s apart for exactly this
+                -- reason, and nothing said so.
+                let tag = tag_owner(cfg, p, pr.next_state, pane);
+                let t = p.clock_now(tag.next_state);
+                let rec = dagr_open(cfg, p, t.next_state, ctx.workdir, t.now_ms,
+                                    name, task_title(prompt), task_kind,
+                                    kind, pane, name, retry_of, model);
+                -- AFTER THE PUBLISH, so the view has a file to read at startup.
+                let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
+                { result: {
+                    tool_call_id: call.id,
+                    tool: "Delegate",
+                    exit_code: 0,
+                    stdout: "Delegate `${name}` is running `${kind}`${model_note(kind, model)} in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.${tag.note}${rec.note}${view.note}",
+                    stderr: "",
+                    metadata: meta_kind(name, pane, kind)
+                  },
+                  next_state: view.next_state }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- DelegateCheck
+-- ---------------------------------------------------------------------------
+
+-- THE COMPLETION GATE FOR A MOTOKO DELEGATE IS THE ANSWER FILE, FULL STOP.
+--
+-- Motoko reports `idle` AT STARTUP — 020 D2's deliberate initial report, which
+-- exists so the row appears before the first task. Measured: `motoko idle` 869ms
+-- after `pane run`, with the task not begun. Run through the normal path that
+-- would hit `is_settled("idle")`, take the settled branch, find no answer file
+-- and report P2-3's "finished but never wrote" against a delegate that has not
+-- started. So the agent state is never consulted for completion here; it is used
+-- only to pick which transition to wait on.
+--
+-- It also does not stop after answering (measured: `working` 18s+ later), so
+-- reaping is an explicit close once the file lands, not a wait for a settle that
+-- never comes.
+func do_check_motoko(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope, handle: string)
+  -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let pane = handle_pane(handle);
+  let answer = answer_path(cfg.work_dir, handle_name(handle));
+  let t0 = p.clock_now(ctx.world);
+
+  -- The file first, always. If it is there the delegate is done regardless of
+  -- what its state says, and nothing else needs asking.
+  let early = p.file_read(t0.next_state, answer);
+  if early.present && early.content != "" then {
+    let closed = run_herdr(cfg, p, early.next_state, argv_close(pane));
+    -- `reported`, never `verified`: the answer file's EXISTENCE is a claim by
+    -- the delegate, not proof of its content, and the receipt is the path so a
+    -- reader can tell which envelope was meant (§4.2). This settle is also the
+    -- idempotent one — the file is never consumed, so every later check reaches
+    -- here and must append nothing. `waited` is 0: this check did not wait —
+    -- the file was already there when it looked — so the elapsed figure is an
+    -- upper bound (`types.elapsed_is_exact`), the same reading the claude/codex
+    -- early-answer path uses. A second check on a finished delegate therefore
+    -- says "at most", not a growing "took" figure (measured 2026-09-04:
+    -- 52.4s then 56.5s for the same settlement).
+    let rec = dagr_settle(cfg, p, closed.next_state, ctx.workdir, t0.now_ms,
+                          run_key(handle), "done", "done", "reported", answer, "",
+                          closed.code != 0, failure_code(closed.code, closed.err));
+    { result: {
+        tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+        stdout: "Delegate `${handle}` finished.${elapsed_note(handle, t0.now_ms, 0)}\n\n${truncate(early.content, cfg.max_output_chars)}${rec.note}",
+        stderr: "", metadata: meta_timed(handle, pane, t0.now_ms, 0)
+      },
+      next_state: rec.next_state }
+  }
+  else {
+    let g = run_herdr(cfg, p, early.next_state, argv_get(pane));
+    if g.code != 0 then {
+      -- `agent_not_found` here means gone, and the answer file was already read
+      -- and was not there. Anything else — `server_not_running` above all —
+      -- says herdr is unwell, not that the delegate died: write nothing.
+      let rec = if means_agent_gone(g.code, g.err)
+                then dagr_settle(cfg, p, g.next_state, ctx.workdir, t0.now_ms, run_key(handle),
+                                 "lost", "failed", "heuristic", "",
+                                 "herdr reports agent_not_found for pane ${pane} and no answer file was written",
+                                 false, "")
+                else { note: "", next_state: g.next_state };
+      { result: err_result(call.id, "DelegateCheck", explain_failure("Reading motoko delegate in pane `${pane}`", argv_get(pane), g)),
+        next_state: rec.next_state }
+    }
+    else {
+      -- Which transition to wait on. `working` means it is doing the task, so
+      -- wait for it to go idle. Anything else means it has not begun (the
+      -- startup idle), so wait for it to START. Both are bounded.
+      let status = agent_status_of(g.out);
+      let target = if status == "working" then "idle" else "working";
+      let w = run_herdr(cfg, p, g.next_state, argv_wait_until(pane, target, cfg.check_wait_ms));
+      let t1 = p.clock_now(w.next_state);
+      let waited = t1.now_ms - t0.now_ms;
+      let rd = p.file_read(t1.next_state, answer);
+      if rd.present && rd.content != "" then {
+        let closed = run_herdr(cfg, p, rd.next_state, argv_close(pane));
+        let rec = dagr_settle(cfg, p, closed.next_state, ctx.workdir, t1.now_ms,
+                              run_key(handle), "done", "done", "reported", answer, "",
+                              closed.code != 0, failure_code(closed.code, closed.err));
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${handle}` finished.${elapsed_note(handle, t1.now_ms, waited)}\n\n${truncate(rd.content, cfg.max_output_chars)}${rec.note}",
+            stderr: "", metadata: meta_timed(handle, pane, t1.now_ms, waited)
+          },
+          next_state: rec.next_state }
+      }
+      -- THE WAIT RESULT IS INSPECTED HERE, AND IT WAS NOT BEFORE. This path
+      -- ignored `w` entirely, so an agent that vanished during the wait was
+      -- invisible: the answer file is absent, the agent is gone, and the honest
+      -- reading is `lost`. The model is told the same thing the graph records.
+      else if means_agent_gone(w.code, w.err) then {
+        let rec = dagr_settle(cfg, p, rd.next_state, ctx.workdir, t1.now_ms, run_key(handle),
+                              "lost", "failed", "heuristic", "",
+                              "herdr reports agent_not_found for pane ${pane} and no answer file was written",
+                              false, "");
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 1,
+            stdout: "",
+            stderr: "Delegate `${handle}` is gone: herdr reports `agent_not_found` for pane ${pane} after waiting ${format_ms(waited)}, and no answer file was written to `${answer}`. Nothing was produced; re-delegate, or run the task directly.${rec.note}",
+            metadata: meta_timed(handle, pane, t1.now_ms, waited)
+          },
+          next_state: rec.next_state }
+      }
+      else {
+        -- Report the POST-wait state, not the pre-wait one: when the wait
+        -- succeeded the agent reached `target` (idle after working, or working
+        -- after startup-idle), and echoing the stale pre-wait status would say
+        -- `working` about an agent observed `idle`.
+        let cur_status = if w.code == 0 then target else agent_status_of(g.out);
+        let rec = dagr_alive(cfg, p, rd.next_state, ctx.workdir, t1.now_ms,
+                             run_key(handle), cur_status);
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${handle}` has not written its answer yet (state `${cur_status}`, waited ${format_ms(waited)} for a transition to `${target}`). A motoko delegate reports idle at startup, so its state is not a completion signal — only the answer file is. Check again.${rec.note}",
+            stderr: "", metadata: meta_timed(handle, pane, t1.now_ms, waited)
+          },
+          next_state: rec.next_state }
+      }
+    }
+  }
+}
+
+func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+  -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let name = arg_str(call.arguments, "name", "");
+
+  if name == "" then
+    { result: err_result(call.id, "DelegateCheck", "DelegateCheck requires the `name` returned by Delegate."), next_state: ctx.world }
+  -- POSITIVE OWNERSHIP, not self-exclusion. `agent list` in this workspace
+  -- returns Motoko's own row AND any agent the operator started by hand;
+  -- during Phase A it returned an operator-owned codex pane. "Not me" is not
+  -- enough to justify touching something.
+  else if owns_name(name) == false then
+    { result: err_result(call.id, "DelegateCheck", "`${name}` was not started by this extension. Only handles returned by Delegate can be checked, and nothing else in the session will be touched."), next_state: ctx.world }
+  else if handle_is_motoko(name) then do_check_motoko(cfg, ctx, call, name)
+  else {
+    -- THE FILE FIRST, HERE TOO (MOT-131). `do_check_motoko` has always read
+    -- the answer file before asking herdr anything; this path asked herdr
+    -- first, so a delegate that wrote its answer and whose pane then went away
+    -- — closed by the operator, crashed, or reaped from another session —
+    -- returned `agent_not_found` and the answer on disk was never read. The
+    -- answer file is the completion gate, so its presence settles the check
+    -- regardless of what herdr can still say about the agent.
+    let t_early = p.clock_now(ctx.world);
+    let answer0 = answer_path(cfg.work_dir, name);
+    let early = p.file_read(t_early.next_state, answer0);
+    if early.present && early.content != "" then {
+      -- Reap if the pane can still be found; a delegate whose pane is already
+      -- gone needs no reaping and the lookup failing is not the caller's
+      -- problem. `waited` is 0: this check looked and it had already finished,
+      -- so the elapsed figure is an upper bound (`types.elapsed_is_exact`).
+      let g0 = run_herdr(cfg, p, early.next_state, argv_get(name));
+      let pane0 = agent_pane_of(g0.out);
+      let closed =
+        if g0.code == 0 && pane0 != "" then run_herdr(cfg, p, g0.next_state, argv_close(pane0))
+        else { out: "", err: "", code: 0, next_state: g0.next_state };
+      let rec = dagr_settle(cfg, p, closed.next_state, ctx.workdir, t_early.now_ms,
+                            run_key(name), "done", "done", "reported", answer0, "",
+                            closed.code != 0, failure_code(closed.code, closed.err));
+      { result: {
+          tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+          stdout: "Delegate `${name}` finished.${elapsed_note(name, t_early.now_ms, 0)}\n\n${truncate(early.content, cfg.max_output_chars)}${rec.note}",
+          stderr: "", metadata: meta_timed(name, pane0, t_early.now_ms, 0)
+        },
+        next_state: rec.next_state }
+    }
+    else {
+    -- WAIT FIRST, SERVER-SIDE. Without this the model busy-polls: `agent get`
+    -- returns in 4ms, a model cannot sleep, so the loop runs at whatever rate
+    -- the model can emit tool calls. Measured on a real run: ten DelegateCheck
+    -- steps for an eleven-second delegation.
+    --
+    -- It is unconditional rather than a parameter. The observed failure IS a
+    -- model failing to pace itself, so a knob it has to remember to set would
+    -- reproduce the bug exactly.
+    -- TIMESTAMPED EITHER SIDE OF THE WAIT, not at the end of the handler. See
+    -- `types.elapsed_note`: the naive reading inverts results when two checks
+    -- are dispatched in one step, which is exactly how the defect was found.
+    let t0 = p.clock_now(ctx.world);
+    let w = run_herdr(cfg, p, t0.next_state, argv_wait(name, cfg.check_wait_ms));
+    let t1 = p.clock_now(w.next_state);
+    let waited = t1.now_ms - t0.now_ms;
+    let took = elapsed_note(name, t1.now_ms, waited);
+    -- `timeout` here is the poll interval elapsing, not a failure. Everything
+    -- else non-zero — agent_not_found above all — keeps its own message.
+    if w.code != 0 && wait_elapsed(w.code, w.err) == false then {
+      -- `types.ail` documents that a gone agent surfaces from the WAIT (2 ms),
+      -- so classifying only `agent get` would miss the primary path.
+      let rec = if means_agent_gone(w.code, w.err)
+                then dagr_settle(cfg, p, t1.next_state, ctx.workdir, t1.now_ms, run_key(name),
+                                 "lost", "failed", "heuristic", "",
+                                 "herdr reports agent_not_found and no answer file was written",
+                                 false, "")
+                else { note: "", next_state: t1.next_state };
+      { result: err_result(call.id, "DelegateCheck", explain_failure("Waiting on delegate `${name}`", argv_wait(name, cfg.check_wait_ms), w)),
+        next_state: rec.next_state }
+    }
+    else {
+    -- AND THEN CHECK ANYWAY. The wait settles on the AGENT going idle, which is
+    -- not the same event as the answer file landing — P2-3 measured a delegate
+    -- reaching a clean `done` having written nothing. Wait-then-check, never
+    -- wait-instead-of-check.
+    let g = run_herdr(cfg, p, t1.next_state, argv_get(name));
+    if g.code != 0 then {
+      let rec = if means_agent_gone(g.code, g.err)
+                then dagr_settle(cfg, p, g.next_state, ctx.workdir, t1.now_ms, run_key(name),
+                                 "lost", "failed", "heuristic", "",
+                                 "herdr reports agent_not_found and no answer file was written",
+                                 false, "")
+                else { note: "", next_state: g.next_state };
+      { result: err_result(call.id, "DelegateCheck", explain_failure("Reading delegate `${name}`", argv_get(name), g)),
+        next_state: rec.next_state }
+    }
+    else {
+      let status = agent_status_of(g.out);
+      let pane = agent_pane_of(g.out);
+      let answer = answer_path(cfg.work_dir, name);
+      let rd = p.file_read(g.next_state, answer);
+
+      -- THE ANSWER FILE IS THE EVIDENCE, THE REPLY IS NOT. Measured three
+      -- times: a delegate settles at a clean `done`, replies with exactly the
+      -- path it was asked for, and has written nothing. Reporting that as
+      -- success is the failure mode this branch exists to prevent.
+      if rd.present && rd.content != "" then {
+        let closed = run_herdr(cfg, p, rd.next_state, argv_close(pane));
+        let rec = dagr_settle(cfg, p, closed.next_state, ctx.workdir, t1.now_ms,
+                              run_key(name), "done", "done", "reported", answer, "",
+                              closed.code != 0, failure_code(closed.code, closed.err));
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${name}` finished.${took}\n\n${truncate(rd.content, cfg.max_output_chars)}${rec.note}",
+            stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited)
+          },
+          next_state: rec.next_state }
+      }
+      else if status == "blocked" then {
+        -- Task `blocked` over an attempt that is still `working`: nothing has
+        -- failed and nothing has finished. dagr refuses a blocked node that
+        -- names no unblocker (W205), and here the unblocker is always a human
+        -- at that pane.
+        let rec = dagr_blocked(cfg, p, rd.next_state, ctx.workdir, t1.now_ms, run_key(name), pane);
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${name}` is BLOCKED in pane ${pane}, waiting for someone to answer a prompt on its screen. It will not progress until that is answered. It has not been closed.${took}${rec.note}",
+            stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited)
+          },
+          next_state: rec.next_state }
+      }
+      else if is_settled(status) then {
+        -- Settled with no answer file. Close the pane — it is finished and
+        -- would otherwise be an unattended agent outliving its caller — and
+        -- name the failure honestly.
+        let closed = run_herdr(cfg, p, rd.next_state, argv_close(pane));
+        -- P2-3, and it is `settled_unverified · heuristic`, not a soft `done`
+        -- and not `failed`: nothing observed says the work failed, only that no
+        -- envelope arrived.
+        let rec = dagr_settle(cfg, p, closed.next_state, ctx.workdir, t1.now_ms,
+                              run_key(name), "settled_unverified", "settled_unverified",
+                              "heuristic", "",
+                              "agent settled (state `${status}`) and no answer file was written",
+                              closed.code != 0, failure_code(closed.code, closed.err));
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 1,
+            stdout: "",
+            stderr: "Delegate `${name}` finished (state `${status}`) but never wrote its answer file `${answer}`.${took} The delegate may have replied with the path without writing it, which is a known failure of unsandboxed delegates in this container. Nothing was produced; re-delegate, or run the task directly.${rec.note}",
+            metadata: meta_timed(name, pane, t1.now_ms, waited)
+          },
+          next_state: rec.next_state }
+      }
+      else {
+        -- A WAIT TIMEOUT OBSERVES NOTHING TERMINAL. Refresh liveness and leave
+        -- the task working; stamping `settled_unverified` here would put a
+        -- terminal mark on a delegate that finishes ten seconds later.
+        let rec = dagr_alive(cfg, p, rd.next_state, ctx.workdir, t1.now_ms, run_key(name), status);
+        { result: {
+            tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
+            stdout: "Delegate `${name}` is still `${status}` in pane ${pane} after ${format_ms(t1.now_ms - start_ms_of(name))}. No answer yet — this call already waited ${format_ms(waited)} server-side for it, so check again rather than assuming it is stuck.${rec.note}",
+            stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited)
+          },
+          next_state: rec.next_state }
+      }
+    }
+    }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Hooks
+-- ---------------------------------------------------------------------------
+
+export func on_tool_handle(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, Clock} {
+  -- THE SWEEP RUNS BEFORE EITHER TOOL, not only before `Delegate`. A session
+  -- that only ever polls an existing delegate is still a session that should
+  -- see the orphans a previous one left behind. It is a no-op after the first
+  -- call — see `sweep_once`.
+  if call.tool == "Delegate" then {
+    let sw = sweep_once(cfg, ctx);
+    let r = do_delegate(cfg, { ctx | world: sw.next_state }, call);
+    { decision: Handled(with_note(r.result, sw.note)), next_state: r.next_state }
+  }
+  else if call.tool == "DelegateCheck" then {
+    let sw = sweep_once(cfg, ctx);
+    let r = do_check(cfg, { ctx | world: sw.next_state }, call);
+    { decision: Handled(with_note(r.result, sw.note)), next_state: r.next_state }
+  }
+  else { decision: Delegate, next_state: ctx.world }
+}
+
+-- ---------------------------------------------------------------------------
+-- THE EXIT INTENT (ABI 7.0): close this session's delegate panes on the way out.
+--
+-- WHAT MOVED, AND WHAT DID NOT. The mechanism moved out of the TUI, where it
+-- had no business being: `herdr-reap.ts` knew the token key, the token format,
+-- the pane-list shape and the opt-in env var, none of which are the host's.
+-- The POLICY is unchanged — opt-in (D2), token-gated, by explicit pane id,
+-- never by name, never another session's pane.
+--
+-- WHY IT DOES NOT ENUMERATE PANES. It cannot: the row is `! {FS}`, and that is
+-- the point rather than a limitation to work around. The run file is already
+-- keyed by producer pane AND session (`run_file_name`), so the panes it names
+-- are this session's by construction, and the host re-checks the ownership
+-- token on each one before closing it. Enumerating live panes here would also
+-- be measuring the wrong moment: this runs at turn end, the close happens at
+-- exit, and only the check at exit can be fresh.
+--
+-- EVERY GUARD IS A REASON TO EMIT NOTHING. No bin, no own pane, no session
+-- clock (`ailang run` without the TUI) or an unreadable run file all yield the
+-- empty list, which the host executes as a silent no-op.
+func close_action(cfg: HerdrConfig, pane: string) -> ExitAction {
+  -- NO `bin`. The host runs the multiplexer it knows about from its own
+  -- environment; this side names the pane and the proof and nothing else. See
+  -- the ABI's `PaneCloseAction` for why that absence is the point.
+  let c: PaneCloseAction = {
+    pane: pane,
+    token_key: owner_token_key(),
+    token_value: owner_token_value(cfg.own_pane, cfg.session_ms)
+  };
+  ClosePane(c)
+}
+
+func close_actions(cfg: HerdrConfig, panes: [string]) -> [ExitAction] {
+  match panes {
+    [] => [],
+    -- NEVER OUR OWN PANE. The run file should not name it, but a delegate that
+    -- somehow recorded its parent would otherwise have Motoko close itself.
+    p :: rest =>
+      if p == cfg.own_pane then close_actions(cfg, rest)
+      else close_action(cfg, p) :: close_actions(cfg, rest)
+  }
+}
+
+-- ROUTED, NOT AMBIENT. The read goes through `ctx.ports.file_read` (WI-D16)
+-- and the successor world comes back out in the outcome. A direct `std/fs`
+-- read would type-check and would be the WI-D1 shape: an effect performed with
+-- no cursor to hand on. `ExtFileRead.present` also answers the missing-file
+-- case without a second `fileExists` call.
+export func exit_actions(cfg: HerdrConfig, ctx: ExtCtx) -> ExitIntentOutcome ! {FS} {
+  if cfg.bin == "" || cfg.own_pane == "" || cfg.session_ms == "" then
+    { actions: [], next_state: ctx.world }
+  else {
+    let path = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+    if path_is_safe(path) == false then { actions: [], next_state: ctx.world }
+    else {
+      let read = ctx.ports.file_read(ctx.world, path);
+      if read.present == false then { actions: [], next_state: read.next_state }
+      else { actions: close_actions(cfg, open_delegate_panes(read.content)),
+             next_state: read.next_state }
+    }
+  }
+}
+
+export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO, Process, FS, Clock} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
+    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+      on_tool_handle(cfg, ctx, call)
+    };
+  let describe = func(_u: ()) -> [ToolSchema] {
+    match tools { [] => [], _ => describe_tools(cfg.allowed_kinds) }
+  };
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  let at_exit = func(ctx: ExtCtx) -> ExitIntentOutcome ! {FS} { exit_actions(cfg, ctx) };
+  [
+    DescribeTools(describe),
+    -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this list only
+    -- carries the decision, so the two can never disagree.
+    ToolProvider(tools, handle),
+    -- REGISTERED EVEN WHEN THE KNOB IS OFF, and even outside a herdr pane. An
+    -- atom that appears only under one configuration is an atom whose coverage
+    -- disclosure changes with the environment, and the manifest is where "off"
+    -- becomes visible: `enabled: false` with an empty action list says the
+    -- extension is there and was asked, which "no atom at all" cannot say.
+    ExitIntent("delegate-panes", cfg.reap_on_exit, at_exit)
+  ]
+}

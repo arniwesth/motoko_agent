@@ -1,0 +1,120 @@
+-- scripts/smoke_ports_record.ail
+-- Substrate smoke for the phase-oriented core's Ports design (003_CSP_core_refactor
+-- follow-up): can AILANG v0.26.0 express a record of effectful function fields that
+-- the driver threads into phases, with scripted pure fakes for DST?
+--
+-- Questions answered:
+--   Q1  Record type with effectful function fields          (ExtensionHooks precedent)
+--   Q2  Named top-level effectful funcs as field values
+--   Q3  Pure-bodied implementations annotated with effect rows as fakes
+--       (deny_all_rt precedent), both named and let-bound anonymous
+--   Q4  Scripted-state threading: {value, next} via a variant (StepProvider pattern)
+--   Q5  Runtime caps when fakes never perform declared effects:
+--         ailang run --caps IO --entry main scripts/smoke_ports_record.ail
+--       vs live ports needing real caps:
+--         ailang run --caps IO,Clock,Env --entry main_live scripts/smoke_ports_record.ail
+--
+-- Parse findings (v0.26.0):
+--   - `func() -> ...` as an expression does not parse: `()` lexes as the unit
+--     literal. Zero-arg ports must be named top-level funcs (or take an arg).
+--   - Anonymous `func(...)` expressions are not valid directly as record-literal
+--     field values; let-bind them first (codebase convention, see deny_all_rt).
+--
+-- Verified results (v0.26.0, commit 3b52a24):
+--   - Q1-Q4 all pass; both entries run clean.
+--   - Q5: `--caps IO` suffices for the fakes-only entry even though declared
+--     rows include Clock/Env — caps are checked when an effect is PERFORMED,
+--     not when a row is declared. Pure-fake DST needs only the caps it uses.
+--   - Subsumption: an UNANNOTATED pure lambda is accepted into a field typed
+--     with an effect row (probed separately; pure <= {Env} holds).
+--   - Recursive record types through function fields work (a self-replacing
+--     `Counter = { step: (int) -> {value: int, next: Counter} }` runs fine),
+--     so both scripted-state styles are available; we still prefer the
+--     StepProvider-style external threading for simplicity.
+--
+-- Expected output (main): three [fake] lines, scripted values 7, 11, -1.
+-- Expected output (main_live): one [live] line with real epoch ms and HOME.
+
+module scripts/smoke_ports_record
+
+import std/io (println)
+import std/clock (now)
+import std/env (getEnvOr)
+
+-- Q1: the Ports record. Function fields carry concrete effect rows (max row per
+-- port), matching the ExtensionHooks convention in pkg/sunholo/motoko_ext_abi.
+type Ports = {
+  now_ms: () -> int ! {Clock},
+  env_get: (string, string) -> string ! {Env},
+  emit: (string) -> () ! {IO}
+}
+
+-- Q4: scripted sequencing state cannot mutate inside a closure, so it threads
+-- through returns exactly like StepProvider in src/core/test/stub_step.ail.
+type ScriptedInts = Fixed(int) | Script([int])
+
+pure func scripted_next(p: ScriptedInts) -> { value: int, next: ScriptedInts } {
+  match p {
+    Fixed(n) => { value: n, next: Fixed(n) },
+    Script([]) => { value: -1, next: Script([]) },
+    Script(x :: rest) => { value: x, next: Script(rest) }
+  }
+}
+
+-- Q2: live port implementations over real effect operations.
+func live_now() -> int ! {Clock} { now() }
+func live_env(k: string, d: string) -> string ! {Env} { getEnvOr(k, d) }
+func live_emit(s: string) -> () ! {IO} { println("[live] ${s}") }
+
+func live_ports() -> Ports {
+  { now_ms: live_now, env_get: live_env, emit: live_emit }
+}
+
+-- Q3: fake ports are pure-bodied but declare the field's effect row, same
+-- pattern deny_all_rt uses for ExtensionHooks. IO on emit stays real so the
+-- smoke can print; Clock/Env are never actually performed.
+func fake_now() -> int ! {Clock} { 1234567890 }
+func fake_emit(s: string) -> () ! {IO} { println("[fake] ${s}") }
+
+func fake_ports() -> Ports {
+  -- let-bound anonymous form, to prove lambdas work as fakes too
+  let fenv = func(k: string, d: string) -> string ! {Env} {
+    let _ = k in d
+  };
+  { now_ms: fake_now, env_get: fenv, emit: fake_emit }
+}
+
+-- A phase-shaped consumer: takes Ports, declares the union of the rows it calls.
+func drive(ports: Ports, label: string) -> () ! {Clock, Env, IO} {
+  let t = ports.now_ms();
+  let home = ports.env_get("HOME", "(unset)");
+  ports.emit("${label}: t=${show(t)} home=${home}")
+}
+
+-- A consumer that only touches one field: its row can be narrower than the
+-- record's union, proving phases only declare what they use.
+func emit_only(ports: Ports, msg: string) -> () ! {IO} {
+  ports.emit(msg)
+}
+
+-- Q4 driver: thread scripted state through two steps plus exhaustion.
+func drive_scripted(ports: Ports, script: ScriptedInts) -> () ! {IO} {
+  let s1 = scripted_next(script);
+  let s2 = scripted_next(s1.next);
+  let s3 = scripted_next(s2.next);
+  ports.emit("scripted: ${show(s1.value)}, ${show(s2.value)}, ${show(s3.value)}")
+}
+
+-- Fakes-only entry. Declared rows include Clock/Env via drive(), but no Clock/Env
+-- effect is ever performed. Run with --caps IO to answer Q5.
+export func main() -> () ! {Clock, Env, IO} {
+  let ports = fake_ports();
+  drive(ports, "fake drive");
+  emit_only(ports, "emit-only path ok");
+  drive_scripted(ports, Script([7, 11]))
+}
+
+-- Live entry: requires real Clock/Env/IO caps.
+export func main_live() -> () ! {Clock, Env, IO} {
+  drive(live_ports(), "live drive")
+}

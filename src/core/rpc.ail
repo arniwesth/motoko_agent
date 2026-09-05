@@ -12,19 +12,23 @@ module src/core/rpc
 -- MIGRATION sprint plan + CHANGELOG.md and git log around 2026-05-06.
 
 import src/core/agent_loop_v2 (run_v2_with_conversation)
-import src/core/context_usage (catalog_context_limit_for)
+import src/core/context_usage (resolve_context_limit)
+import src/core/ports (ambient_context_reader, empty_world_state)
 import src/core/test/stub_step (LiveAI)
-import std/io     (println, exit)
-import std/json   (Json, encode, jo, ja, kv, js, jb, jnum)
+import std/io     (println, exit, readLine)
+import std/json   (Json, encode, decode, get, asString, jo, ja, kv, js, jb, jnum)
 import std/list   (foldl)
-import std/string (length)
+import std/string (length, trim)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+import std/env    (getEnv)
 import std/fs     (readFile, fileExists)
 import src/core/types  (Msg, version)
-import src/core/prompts (with_cache_hint, with_agents_context)
-import src/core/cache   (get_hint)
+import src/core/prompts (with_agents_context)
 import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config, CostRates)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime)
 import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, dispatch_build_system_prompt, dispatch_budget_plan)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
 -- RunSettings carries the agent's runtime knobs from RuntimeConfig into
 -- compute_budget_plan and the v2 entry point. Preserved post-M10 because
@@ -46,6 +50,16 @@ type RunSettings = {
   verifier_mode: bool,
   max_cost_millicents: int,
   cost_rates: CostRates
+}
+
+-- What the runtime is about to run: the opening task, the model it runs on,
+-- and whether there is an opening turn at all. `live: false` means the session
+-- ended before one arrived (abort, exit, `/restart`, EOF, or headless with no
+-- TASK) and nothing should be built or called.
+type FirstTask = {
+  task: string,
+  model: string,
+  live: bool
 }
 
 func emit(obj: string) -> () ! {IO} {
@@ -103,7 +117,15 @@ func compute_budget_plan(
   let verifier_mode = settings.verifier_mode;
   let base = default_budget_plan(max_steps, verifier_mode);
   let remaining = if base.total - step < 0 then 0 else base.total - step;
-  let context_limit = catalog_context_limit_for(model);
+  -- WI-D3. The AMBIENT reader, deliberately and not as a fallback: `rpc` is the
+  -- live launcher and reads the host two lines below this in `run_with_config`,
+  -- so a world here would be a world nothing else in this module has.
+  --
+  -- The successor is not threaded, and that costs nothing rather than being
+  -- excused: both ambient bindings return `next_state: state` unchanged — D1's
+  -- identity transition — so there is no successor to lose. A deterministic run
+  -- never reaches this module; it drives `run_v2_session_traced` directly.
+  let context_limit = resolve_context_limit(ambient_context_reader(), empty_world_state(), model).value;
   let ctx = {
     task: task,
     step: step,
@@ -116,9 +138,12 @@ func compute_budget_plan(
     env_server_url: "",
     budget_remaining: remaining,
     history_slice: [],
-    state_key: "core:ext:budget",
-    context_limit: context_limit
-  };
+	    state_key: "core:ext:budget",
+	    context_limit: context_limit,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
+	  };
   let patched = dispatch_budget_plan(ext_runtime, ctx, base);
   clamp_budget_plan(patched, max_steps)
 }
@@ -154,7 +179,66 @@ func reject_if_ohmy_pi_unsupported(cfg: RuntimeConfig) -> () ! {IO} {
   }
 }
 
-export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream, Trace} {
+pure func get_str(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    None    => "",
+    Some(j) => match asString(j) { None => "", Some(s) => s }
+  }
+}
+
+func headless_mode() -> bool ! {Env} {
+  match getEnv("MOTOKO_HEADLESS") {
+    Ok(raw) => trim(raw) == "1",
+    Err(_)  => false
+  }
+}
+
+-- A pre-warm spawn (the TUI boots one so the AILANG module load overlaps with
+-- the user typing) or a `/restart` respawn carries no task. Block here for the
+-- first command rather than handing the empty string to the builders below.
+--
+-- WHY IT HAS TO BE HERE and not after: the system prompt and the budget plan
+-- are BOTH task-conditional and BOTH built exactly once. Extensions shape the
+-- prompt off `ctx.task` -- `motoko-ext-decision-framework` gates its patch on
+-- `task_signals_self_modification(ctx.task)`, `motoko-ext-ailang-docs` builds
+-- its patch from the same field -- and `dispatch_budget_plan` reads it too.
+-- Building them before the task is known hands every shaper "" for the whole
+-- session, including the user's real prompt. Waiting first makes the pre-warm
+-- path identical to the CLI path; the warming that motivates the pre-spawn
+-- (module graph, config, extension init, the system-prompt file read) has all
+-- already happened above.
+--
+-- Only the commands that can reach a task-less runtime are handled:
+-- `model_change` (the TUI sends one on a model switch), `restart` and
+-- abort/exit/EOF (nothing to run -- exit and let the TUI respawn if it wants
+-- one; no SessionSuspend is emitted because no session has started). Anything
+-- else is a mid-task command that cannot arrive before the first task:
+-- discard and keep waiting, matching `conversation_loop_v2_with_policy`'s
+-- fall-through.
+func await_first_task(model: string) -> FirstTask ! {IO} {
+  let raw = readLine();
+  if raw == "" then { task: "", model: model, live: false }
+  else match decode(raw) {
+    Err(_) => await_first_task(model),
+    Ok(obj) => {
+      let cmd_type = get_str(obj, "type");
+      if cmd_type == "abort" || cmd_type == "exit" || cmd_type == "restart"
+      then { task: "", model: model, live: false }
+      else if cmd_type == "model_change" then {
+        let new_model = trim(get_str(obj, "model"));
+        await_first_task(if new_model == "" then model else new_model)
+      }
+      else if cmd_type == "user_message" then {
+        let content = get_str(obj, "content");
+        if trim(content) == "" then await_first_task(model)
+        else { task: content, model: model, live: true }
+      }
+      else await_first_task(model)
+    }
+  }
+}
+
+export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = reject_if_ohmy_pi_unsupported(cfg);
   let env_url = cfg.backend.url;
   let task = inv.task;
@@ -163,8 +247,60 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   let ext_runtime = init_runtime_with_config(cfg);
   let ailang_built = inv.ailang_built;
   let cwd = if inv.workdir_override != "" then inv.workdir_override else cfg.agent.workdir;
+  let bv = version();
+  let _ = emit(encode(jo([
+    kv("type", js("session_start")),
+    kv("task", js(task)),
+    kv("model", js(model)),
+    kv("brainVersion", js(bv)),
+    kv("ailangBuilt", js(ailang_built)),
+    kv("config_profile", js(cfg.profile)),
+    kv("config_dir", js(cfg.profile_dir)),
+    kv("backend_mode", js(cfg.backend.mode)),
+    kv("loaded_extensions", ja(json_string_values(loaded_extension_names(ext_runtime))))
+  ])));
+
+  let system_md_path = cfg.agent.system_prompt;
+  let raw_system =
+    if system_md_path == "" then ""
+    else if fileExists(system_md_path)
+    then readFile(system_md_path)
+    else {
+      let _ = emit(encode(jo([
+        kv("type", js("warning")),
+        kv("message", js("system prompt file not found at '${system_md_path}'; running without a system prompt."))])));
+      ""
+    };
+
+  -- Everything above this line is task-independent warming. Everything below it
+  -- reads the task, so it waits for one: see `await_first_task`.
+  let first =
+    if task != "" then { task: task, model: model, live: true }
+    -- Headless never blocks on stdin -- the AILANG readLine builtin hangs on a
+    -- non-TTY rather than returning EOF, which is the hang MOTOKO_HEADLESS
+    -- exists to avoid -- so there is no task here and there never will be one.
+    -- Say so and exit non-zero rather than falling through: headless makes
+    -- `conversation_loop_v2_with_policy` return () immediately, so the two
+    -- branches would compose into running no turn at all and still exiting 0 --
+    -- a success code for zero work, the one outcome a calling harness cannot
+    -- tell apart from a completed run.
+    else if headless_mode() then {
+      let _ = emit(encode(jo([
+        kv("type", js("error")),
+        kv("error_code", js("headless_without_task")),
+        kv("message", js("MOTOKO_HEADLESS=1 with no task. Headless mode runs one task and exits; it never reads a task from stdin. Pass the task as the last argument or set TASK."))
+      ])));
+      let _ = exit(2);
+      { task: "", model: model, live: false }
+    }
+    else await_first_task(model);
+
+  if not first.live then ()
+  else {
+  let run_task = first.task;
+  let run_model = first.model;
   let settings = {
-    task: task,
+    task: run_task,
     ailang_built: ailang_built,
     snippet_caps: join_csv(cfg.tools.snippet_caps),
     workdir: cwd,
@@ -180,40 +316,15 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     max_cost_millicents: cfg.agent.max_cost_millicents,
     cost_rates: cfg.cost_rates
   };
-  let bv = version();
-  let _ = emit(encode(jo([
-    kv("type", js("session_start")),
-    kv("task", js(task)),
-    kv("model", js(model)),
-    kv("brainVersion", js(bv)),
-    kv("ailangBuilt", js(ailang_built)),
-    kv("config_profile", js(cfg.profile)),
-    kv("config_dir", js(cfg.profile_dir)),
-    kv("backend_mode", js(cfg.backend.mode)),
-    kv("loaded_extensions", ja(json_string_values(loaded_extension_names(ext_runtime))))
-  ])));
-
-  let hint = get_hint(task);
-  let system_md_path = cfg.agent.system_prompt;
-  let raw_system =
-    if system_md_path == "" then ""
-    else if fileExists(system_md_path)
-    then readFile(system_md_path)
-    else {
-      let _ = emit(encode(jo([
-        kv("type", js("warning")),
-        kv("message", js("system prompt file not found at '${system_md_path}'; running without a system prompt."))])));
-      ""
-    };
-  let budget = compute_budget_plan(ext_runtime, task, model, cwd, hybrid_enabled, 0, settings);
+  let budget = compute_budget_plan(ext_runtime, run_task, run_model, cwd, hybrid_enabled, 0, settings);
   let remaining = budget.total;
   let system_with_agents = with_agents_context(raw_system, cwd);
-  let system_with_hint = with_cache_hint(system_with_agents, hint);
-  let context_limit = catalog_context_limit_for(model);
+  -- WI-D3, and see `compute_budget_plan` for why the reader is the ambient one.
+  let context_limit = resolve_context_limit(ambient_context_reader(), empty_world_state(), run_model).value;
   let system_ctx = {
-    task: task,
+    task: run_task,
     step: 0,
-    model: model,
+    model: run_model,
     cwd: cwd,
     hybrid_tools: hybrid_enabled,
     budget: budget,
@@ -222,24 +333,26 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     env_server_url: env_url,
     budget_remaining: remaining,
     history_slice: [],
-    state_key: "core:ext:system",
-    context_limit: context_limit
-  };
-  let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_hint);
+	    state_key: "core:ext:system",
+	    context_limit: context_limit,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
+	  };
+  let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_agents);
 
-  let init: [Msg] = [
-    { role: "system", content: system, tool_calls: [], tool_call_id: "" },
-    { role: "user", content: task, tool_calls: [], tool_call_id: "" }
-  ];
+  let system_msg: Msg = { role: "system", content: system, tool_calls: [], tool_call_id: "" };
+  let init: [Msg] = [system_msg, { role: "user", content: run_task, tool_calls: [], tool_call_id: "" }];
 
   let _ = emit(encode(jo([
     kv("type", js("v2_mode")),
     kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete"))
   ])));
-  run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI)
+  run_v2_with_conversation(ext_runtime, run_task, env_url, hybrid_enabled, budget, run_model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI)
+  }
 }
 
-export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let cfg = load_runtime_config();
   let inv = load_invocation_config();
   run_with_config(cfg, inv)

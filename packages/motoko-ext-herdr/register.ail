@@ -1,0 +1,153 @@
+module sunholo/motoko_ext_herdr/register
+
+-- THE GATE. This extension is inert outside a herdr pane, and this file is the
+-- only place that decides it.
+--
+-- 020 D4 requires that anything touching herdr be inert outside it, and 021
+-- §4.4 says how: `register_with_config` runs with `{Env, FS, IO, Process}` and
+-- `provided_tools` is COMPUTED rather than literal, so the package can return
+-- no tools at all rather than offering tools that fail at call time. The
+-- failure mode being avoided is a quiet one — outside a pane every `herdr` call
+-- fails, and a tool that is advertised and then errors costs the model a turn
+-- and teaches it nothing.
+--
+-- The devcontainer most readers will run this in is exactly that case, so the
+-- silent-and-empty path is the common one, not the exceptional one.
+--
+-- THIS IS THE SECOND COPY OF THE DETECTION RULE, and it cannot be the only one.
+-- `readHerdrEnvironment` in `src/tui/src/herdr-agent-state.ts` is the first: it
+-- makes Motoko VISIBLE to herdr as an agent, this one makes Motoko DRIVE herdr
+-- to run others. Same three variables, same rule, necessarily duplicated across
+-- a TypeScript/AILANG boundary that nothing links. If herdr ever changes what
+-- it injects into a pane process, BOTH have to move. Tracked as MOT-118; the
+-- rule itself lives in `types.herdr_env_ready` so that at least this side has
+-- one definition and a test.
+
+import std/env (getEnvOr)
+import std/string (stringToInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (Capability)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_kind, default_allowed_kinds, default_max_depth)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, tool_names)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None    => fallback
+  }
+}
+
+export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO, Process} {
+  let workdir   = getEnvOr("MOTOKO_WORKDIR", ".");
+  let herdr_env = getEnvOr("HERDR_ENV", "");
+  -- PREFER THE INJECTED PATH OVER A `PATH` LOOKUP. HERDR_BIN_PATH is an
+  -- absolute path to the RUNNING server's own binary; a self-updated `herdr` in
+  -- ~/.local/bin could otherwise shadow it and talk to a different socket.
+  let bin_path  = getEnvOr("HERDR_BIN_PATH", "");
+  let pane_id   = getEnvOr("HERDR_PANE_ID", "");
+
+  let cfg: HerdrConfig = {
+    bin: bin_path,
+    own_pane: pane_id,
+    -- INSIDE THE WORKDIR, NOT /tmp. The obvious default is a temp directory —
+    -- it keeps the tree clean and it is what the first draft used. It cannot be
+    -- one: the TUI pins `AILANG_FS_SANDBOX` to the workdir, and a path outside
+    -- it is a FATAL execution failure rather than a recoverable error, so the
+    -- first `dir_make` killed the whole run with no diagnosis. Measured
+    -- 2026-08-23; `types.path_within` is the guard and the commit message has
+    -- the transcript. `.motoko/herdr-delegates/` is gitignored so answering
+    -- still does not dirty `git status`.
+    work_dir: getEnvOr("HERDR_DELEGATE_DIR", "${workdir}/.motoko/herdr-delegates"),
+    kind: getEnvOr("HERDR_DELEGATE_KIND", default_kind()),
+    -- WHICH KINDS THE MODEL MAY PICK. Operator policy; defaults to claude
+    -- alone. P2-7 recorded codex's relaxed argv as "opt-in", and opt-in a model
+    -- can take unilaterally is opt-out — see `types.kind_allowed`.
+    -- Previous behaviour: HERDR_ALLOWED_KINDS=claude,codex
+    allowed_kinds: getEnvOr("HERDR_ALLOWED_KINDS", default_allowed_kinds()),
+    -- RECURSION IS OFF BY DEFAULT. `depth` is this Motoko's own: unset means 0,
+    -- the operator's own session. A delegate is spawned with
+    -- HERDR_DELEGATE_DEPTH=1 on its pane, which reaches its extension only
+    -- because buildChildEnv forwards the whole HERDR_ prefix. At the default
+    -- max of 1 a delegate cannot delegate — see `types.depth_allows` for why
+    -- that bounds the orphan story and not just the cost.
+    depth: parse_int_or(getEnvOr("HERDR_DELEGATE_DEPTH", "0"), 0),
+    max_depth: parse_int_or(getEnvOr("HERDR_MAX_DELEGATE_DEPTH", ""), default_max_depth()),
+    -- How a motoko delegate is launched. Relative to the pane's cwd, which is
+    -- the delegate's working directory.
+    motoko_script: getEnvOr("HERDR_MOTOKO_SCRIPT", "./scripts/run-agent.sh"),
+    -- THE RUN IDENTITY, AND IT IS NOT MINTED HERE. F-5's ownership token is
+    -- `<own pane>:<session-start-ms>`, and the clock cannot come from this side:
+    -- the runtime is spawned per task, so a local clock would mint a new
+    -- identity for every task in one session and the panes tagged by the first
+    -- would be unrecognisable to the second. One clock, minted once by the TUI
+    -- in `src/tui/src/session-identity.ts` and forwarded as MOTOKO_SESSION_MS by
+    -- `buildChildEnv`. A local clock here would look right and match nothing.
+    --
+    -- THE FORMAT, unlike the clock, is no longer duplicated: at ABI 7.0 the
+    -- exit intent carries the token into the manifest as data, so
+    -- `types.owner_token_value` is the only definition of it in either
+    -- language.
+    --
+    -- Unset is a real case, not a bug: `ailang run` invoked without the TUI.
+    -- Empty disables tagging and the sweep, with a note on the delegation —
+    -- degrading to today's behaviour, which is what D1 asks for.
+    -- This is a MOT-118-class duplicated rule; the format lives in
+    -- `types.owner_token_value` and its TypeScript twin.
+    session_ms: getEnvOr("MOTOKO_SESSION_MS", ""),
+    -- D3, held firmly: reporting is the default and closing is opt-in. This is
+    -- the only rung that can destroy another session's work.
+    sweep_stale: getEnvOr("HERDR_SWEEP_STALE", "") == "1",
+    -- THE dagr RUN FILE'S HOME. Inside the workdir for `work_dir`'s reason —
+    -- AILANG_FS_SANDBOX is pinned there and a write outside it terminates the
+    -- run — and NOT a plain `.dagr/run.json`: the file name carries the pane
+    -- and the session so that two Motokos in one checkout, which is an ordinary
+    -- way to use herdr, cannot clobber each other. Point the dagr pane at it
+    -- with DAGR_RUN; it also finds `.dagr/*.json` on its own.
+    --
+    -- Producing the file costs nothing when nobody reads it, so this is not
+    -- gated on the dagr binary being installed — the same philosophy as the
+    -- tool gate above, one level down: write, and let the view be absent.
+    dagr_dir: getEnvOr("MOTOKO_DAGR_DIR", "${workdir}/.dagr"),
+    -- SHOW THE VIEW, DON'T JUST WRITE IT (MOT-137). Opt-in, and it is the same
+    -- rung rule `sweep_stale` above follows: reporting is the default, and
+    -- anything that mutates the operator's workspace — closing their panes,
+    -- splitting their terminal — waits to be asked. A package that split the
+    -- screen of everyone who inherited it would be making a layout decision on
+    -- their behalf from inside a tool call.
+    --
+    -- This repo's own container sets it (`.devcontainer/agent_confined/
+    -- docker-compose.yml`), which is where "always on for us, inert for
+    -- everyone else" belongs — the same place HERDR_REAP_ON_EXIT and
+    -- HERDR_ALLOWED_KINDS make their profile-local calls.
+    dagr_pane: getEnvOr("HERDR_DAGR_PANE", "") == "1",
+    -- BELOW MOTOKO'S 30s PROCESS WALL BY CONSTRUCTION. herdr's own default for
+    -- `agent start --timeout` is 30000 — exactly Motoko's — so leaving this
+    -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
+    -- generous.
+    start_timeout_ms: parse_int_or(getEnvOr("HERDR_START_TIMEOUT_MS", "20000"), 20000),
+    -- Same 30s wall, same reasoning, and measured with the same caveat: a
+    -- herdr `--timeout` is not a hard wall-clock bound (a 4000ms wait returned
+    -- at 4201ms; M3 saw a 25s bound overrun to 28.3s), so 20000 leaves ~10s of
+    -- margin rather than cutting it fine. One blocking call at this bound
+    -- replaces roughly twenty busy-polls at M6's median.
+    check_wait_ms: parse_int_or(getEnvOr("HERDR_CHECK_WAIT_MS", "20000"), 20000),
+    max_output_chars: parse_int_or(getEnvOr("HERDR_MAX_OUTPUT_CHARS", "16000"), 16000),
+    -- F-5 D2, MOVED HERE FROM THE TUI AT ABI 7.0. The exit-time reap used to be
+    -- host-side TypeScript that read this variable for itself
+    -- (`src/tui/src/herdr-reap.ts`, deleted); it is now an `ExitIntent` this
+    -- package declares, and the host only executes the actions it publishes. The knob
+    -- has to be resolved HERE because the render's row is `! {FS}` and cannot
+    -- reach `Env` — see `HerdrConfig.reap_on_exit`.
+    --
+    -- STILL OFF BY DEFAULT, and for the unchanged reason: reaping destroys
+    -- in-flight work on every clean exit. `agent_confined` sets it for itself,
+    -- because in a disposable container quota burn dominates and no operator
+    -- work lives in a pane.
+    reap_on_exit: getEnvOr("HERDR_REAP_ON_EXIT", "") == "1"
+  };
+
+  -- The whole gate. Empty tools is a silent, correct no-op; it is not an error
+  -- and must not be reported as one.
+  let tools = if herdr_env_ready(herdr_env, bin_path, pane_id) then tool_names() else [];
+  make_hooks(cfg, tools)
+}

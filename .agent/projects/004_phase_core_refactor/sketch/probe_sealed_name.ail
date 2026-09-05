@@ -1,0 +1,14 @@
+-- Can a consumer import the TYPE NAME of an unexported type for use in
+-- its own signatures/records, while the constructor stays sealed?
+module probe_sealed_name
+import std/io (println)
+import hist_opaque (Sealed, mk_sealed, unseal)
+
+type Holder = { tag: string, inner: Sealed }
+
+func hold(s: Sealed) -> Holder { { tag: "held", inner: s } }
+
+export func main() -> () ! {IO} {
+  let h = hold(mk_sealed(9));
+  println("held=${show(unseal(h.inner))}")
+}

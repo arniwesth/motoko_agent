@@ -4,14 +4,14 @@
 -- fixture. Complements the existing layer-1 smokes (smoke_v2_compaction*,
 -- 10/10) and integration_tests#test_compaction_fires_above_70pct (which
 -- exercises compact_step in isolation) by running compaction as part of
--- the live loop_v2 path via run_v2_with_stub.
+-- the live loop_v2 path via run_v2_with_scripted_ports.
 --
 -- Verifies:
 --   1. Light history (~10% usage) → no elision, loop completes Ok.
 --   2. Moderate history (~75% usage, tier 1) → loop still completes Ok;
 --      compaction's elision is silent to the caller.
---   3. Extreme history (~96% usage, tier 3) → loop returns Err with
---      "compaction_exhausted" propagated from DP0 refusing the step.
+--   3. Extreme history (~96% raw usage) → structural elision caps the oversized
+--      tool result and the loop completes Ok.
 --
 -- Run:
 --   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace \
@@ -20,21 +20,24 @@
 
 module scripts/smoke_v2_compaction_full_loop
 
-import std/io (println)
+import std/io (println, exit)
 import std/result (Result, Ok, Err)
-import std/string (repeat, contains)
+import std/string (repeat, contains, concat, substring, length)
 import std/ai (Message, AIError)
-import src/core/config (CostRates)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
-import src/core/agent_loop_v2 (run_v2_with_stub)
-import src/core/test/stub_step (
-  ScriptedStep,
-  empty_rt,
-  prose_step
-)
+import src/core/config (CostRates, VerificationConfig)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
+import src/core/test/scripted_ports (run_v2_with_scripted_world)
+import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_config as register_structural_compaction)
+import src/core/test/stub_step (prose_step)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state)
+-- WI-D18: the file table's entry is kinded. WI-D22 moved `FsNode` down to a
+-- std-only module so the persisted program schema could name it without
+-- importing the port layer.
+import src/core/fs_node (FsNode, FsFile)
 
--- test/tiny model has context_limit_for = 100 tokens = ~400 chars
--- under the (length+3)/4 token estimator. Crossing thresholds:
+-- test/tiny has a synthetic raw window of 65,636 tokens: after the 65,536
+-- provider-output allowance, its working input budget is 100 tokens = ~400
+-- chars under the (length+3)/4 token estimator. Crossing thresholds:
 --   < 70% : <  280 chars total content
 --   70-85%:  280-340 chars
 --   85-95%:  340-380 chars
@@ -44,17 +47,43 @@ import src/core/test/stub_step (
 -- Only `content` length feeds estimate_tokens_messages.
 
 func mk_user(content: string) -> Message {
-  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+  { role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func mk_tool(id: string, content: string) -> Message {
-  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id, images: [] }
+}
+
+func parity_system_message() -> Message {
+  { role: "system", content: "parity system prefix", tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func mk_history(content_chars: int) -> [Message] {
   -- One user msg ("hi", 2 chars) + one tool msg (content_chars - 2).
   let payload = repeat("x", content_chars - 2);
-  [mk_user("hi"), mk_tool("t1", payload)]
+  [parity_system_message(), mk_user("hi"), mk_tool("t1", payload)]
+}
+
+func grow_string(s: string, target: int) -> string {
+  if length(s) >= target then s
+  else grow_string(concat([s, s]), target)
+}
+
+func make_payload(chars: int) -> string {
+  let seed = repeat("x", 100);
+  let big = grow_string(seed, chars);
+  substring(big, 0, chars)
+}
+
+func build_tools(count: int, chars_each: int, idx: int, acc: [Message]) -> [Message] {
+  if idx >= count then acc
+  else build_tools(count, chars_each, idx + 1, acc ++ [mk_tool("mt${show(idx)}", make_payload(chars_each))])
+}
+
+func multi_tool_history() -> [Message] {
+  -- 12 * 50k chars = ~150k estimated tokens against the 200k Sonnet input budget:
+  -- tier 1 (75%), and the first two tool messages are outside keep_last=10.
+  [parity_system_message()] ++ build_tools(12, 50000, 0, [mk_user("multi")])
 }
 
 func no_rates() -> CostRates {
@@ -65,14 +94,57 @@ func mk_budget() -> BudgetPlan {
   { total: 4, solver: 4, verifier: 0 }
 }
 
+func structural_rt() -> ExtRuntime ! {Env, FS} {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { entries: [{ id: "compaction_structural", caps: register_structural_compaction(()) }] }, strict_mode: false, verification: v }
+}
+
+-- WI-D4. THE CATALOGUE THIS SUITE RUNS ON, DECLARED RATHER THAN INHERITED.
+--
+-- `test/tiny`'s 100-token working input budget is what makes every assertion
+-- below mean something — the header's "100 tokens = ~400 chars" arithmetic is
+-- the whole fixture. Until WI-D3 its raw limit came from the CHECKOUT's
+-- `.motoko/model-catalog.json` through an ambient read, so a scripted run's
+-- compaction behaviour depended on a file no scenario declared.
+--
+-- IT WAS LOAD-BEARING AND WI-D3 BROKE IT WITHOUT NOTICING: with the world
+-- serving no file, `resolve_context_limit` returns 0, compaction never fires
+-- structurally, and `make smoke_parity`'s grep for a `"note":"structural:` entry
+-- finds zero. That regression is why this helper exists, and it is the
+-- counterexample to WI-D3's stated basis: that item reported "the DST fixtures
+-- did not depend on the VALUES — their models are absent from the catalogue and
+-- resolve to 0", which held for the four suites it ran and not for this one.
+-- `test/tiny` IS in the catalogue, at 100, and it is the whole arithmetic of the
+-- header above.
+--
+-- The path is the one the driver COMPUTES from an empty env table, not one this
+-- fixture asserts, and both values are the ones the checkout's catalogue carries
+-- — so behaviour is unchanged and only the INPUT moved into the world.
+--
+-- `anthropic/claude-sonnet-4-6` is here for test 5, whose whole point is that the
+-- structural extension EMITS a compaction stage: that is the line
+-- `make smoke_parity` greps for, and it does not appear at a resolved limit of 0.
+-- `totally-unknown-model` in test 4 is deliberately NOT here — with the catalogue
+-- present and the model absent from it, that test asserts what it says it does
+-- rather than passing because no catalogue was found at all.
+func catalog_world(script: [ScriptedStep]) -> WorldState {
+  { empty_world_state() |
+    script: script,
+    -- WI-D18 kinded the entry: `WorldState.files` holds `FsFile(content)` or
+    -- `FsDir`, so that an empty directory is representable and does not read as
+    -- an absent path. See that field for the representation argument.
+    files: [{ path: ".motoko/model-catalog.json",
+              node: FsFile("{\"context_limits\":{\"test/tiny\":65636,\"anthropic/claude-sonnet-4-6\":265536}}") }] }
+}
+
 -- 1. Light history (10 chars total = ~2% usage). Compaction passthrough.
-func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_light_history_completes() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = mk_history(10);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+  let result = run_v2_with_scripted_world(
+    structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
   );
   match result {
     Ok(_) => true,
@@ -83,13 +155,13 @@ func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 -- 2. Moderate history (300 chars total = ~75% usage, tier 1). Elision
 -- fires; the loop should still complete because tier 1 just trims old
 -- tool_results, doesn't refuse the step.
-func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_tier1_history_completes() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = mk_history(300);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+  let result = run_v2_with_scripted_world(
+    structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
   );
   match result {
     Ok(_) => true,
@@ -97,33 +169,52 @@ func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
   }
 }
 
--- 3. Extreme history (385 chars total = ~96.5% usage, tier 3). DP0 refuses
--- the step; run_v2_with_stub returns Err with the compaction_exhausted
--- reason propagated through the loop.
-func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+-- 3. Extreme history (385 chars total = ~96.5% raw usage). With the required
+-- system prefix pinned, structural pre-step compaction caps the oversized tool
+-- result and the loop completes Ok. Before this fixture supplied a system
+-- prefix, the same case returned Err(SystemPromptEmpty) before seal exhaustion;
+-- it was not exercising the intended compaction-exhausted outcome.
+func test_extreme_history_compacts() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = mk_history(385);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+  let result = run_v2_with_scripted_world(
+    structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
   );
   match result {
-    Ok(_) => false,
-    Err(_) => true
+    Ok(_) => true,
+    Err(_) => false
   }
 }
 
 -- 4. Extreme history but cap is disabled by using a model with no entry
 -- in context_limit_for. Should fail-open: compaction skips entirely, loop
 -- completes Ok because no threshold check fires for unknown models.
-func test_unknown_model_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_unknown_model_fail_open() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = mk_history(1000);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+  let result = run_v2_with_scripted_world(
+    structural_rt(), "stub-test", "", false, mk_budget(),
     "totally-unknown-model", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
+  );
+  match result {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+-- 5. Multi-tool Sonnet history at ~75% usage. The structural extension
+-- genuinely rewrites the first two old tool results and emits a compaction
+-- stage before the provider call.
+func test_multi_tool_tier1_elides() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let history = multi_tool_history();
+  let script: [ScriptedStep] = [prose_step("ok")];
+  let result = run_v2_with_scripted_world(
+    structural_rt(), "stub-test", "", false, mk_budget(),
+    "anthropic/claude-sonnet-4-6", history, "/tmp", 4, false,
+    0, no_rates(), catalog_world(script)
   );
   match result {
     Ok(_) => true,
@@ -136,15 +227,21 @@ func report(name: string, ok: bool) -> () ! {IO} {
   else println("  ✗ ${name}")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} = {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} = {
   println("=== smoke_v2_compaction_full_loop ===");
   let r1 = test_light_history_completes();
   report("light history (~2% usage) → Ok",            r1);
   let r2 = test_tier1_history_completes();
   report("tier 1 history (~75% usage) → Ok with elision", r2);
-  let r3 = test_tier3_history_refused();
-  report("tier 3 history (~96% usage) → Err refused",   r3);
+  let r3 = test_extreme_history_compacts();
+  report("extreme history (~96% raw usage) → Ok after elision", r3);
   let r4 = test_unknown_model_fail_open();
   report("unknown model fail-open (no compaction)",     r4);
-  println("done")
+  let r5 = test_multi_tool_tier1_elides();
+  report("multi-tool tier 1 elides via structural extension", r5);
+  if r1 && r2 && r3 && r4 && r5 then println("smoke_v2_compaction_full_loop PASS")
+  else {
+    let _ = println("smoke_v2_compaction_full_loop FAIL");
+    exit(1)
+  }
 }

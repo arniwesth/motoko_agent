@@ -1,0 +1,642 @@
+-- src/core/tool_phase.ail
+--
+-- Phase C approval-planning surface. Full native/delegated execution moves
+-- here later; WI-C4 only inverts the pending-approval protocol into data.
+
+module src/core/tool_phase
+
+import std/ai (Message, ToolCall)
+import std/json (Json, jo, kv, js, jb, jnum, encode, decode, get, asString)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/string (startsWith, trim)
+import std/trace as Trace
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtRuntime, PolicyDefault, ToolPolicyDecision, ToolHandleDecision, ExtEntry)
+import src/core/ext/runtime (dispatch_tool_policy, dispatch_tool_handle)
+import src/core/phase_vocab (
+  ApprovalRequest,
+  ToolPlan,
+  ToolPlanEntry,
+  ToolPending,
+  NativeToolDenied,
+  ExtToolHandled,
+  DelegatedToolDeferred,
+  V2ToolDispatchStart,
+  V2ToolDispatchComplete,
+  ScratchpadResult,
+  ToolDeniedInfo,
+  LedgerEvent,
+  ExecNative,
+  handled_tool_message,
+  tool_result_message
+)
+import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, WorldState, ToolInvocation, ToolExecution, ToolOutcome, ToolCompleted, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded)
+import src/core/dst_fault_catalogue (
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded
+)
+import src/core/tool_contract (ToolResultEnvelope)
+-- WI-D20. The world token's codec, imported HERE because `on_tool_handle` is the
+-- second hook slot to perform world-threading effects and this is the site that
+-- both feeds it a world and receives its successor. See `execute_allowed_tool_call`.
+import src/core/ext_world (world_to_token, token_to_world)
+import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
+import src/core/tool_runtime (backend_for_v2)
+import src/core/types (ToolBackend)
+import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
+
+export type PendingApprovalPlan = {
+  event: LedgerEvent,
+  request: ApprovalRequest
+}
+
+export type ApprovalCommand = ParsedApprove | ParsedDeny(string) | ParsedUnknown | ParsedUnparseable
+
+export pure func tool_pending_event(step: int, stream_id: string, call: ToolCall, reason: string) -> LedgerEvent {
+  ToolPending({ step: step, stream_id: stream_id, tool: call.name, id: call.id, reason: reason })
+}
+
+export pure func plan_pending_approval(step: int, stream_id: string, plan: ToolPlan, default_allow: bool, reason: string) -> Option[PendingApprovalPlan] {
+  match plan.entries {
+    [] => None,
+    first :: rest => Some({
+      event: tool_pending_event(step, stream_id, first.call, reason),
+      request: {
+        call: first.call,
+        default_allow: default_allow,
+        reason: reason,
+        stream_id: stream_id,
+        remaining: rest
+      }
+    })
+  }
+}
+
+export pure func plan_pending_approval_from_calls(step: int, stream_id: string, calls: [ToolCall], default_allow: bool, reason: string) -> Option[PendingApprovalPlan] {
+  plan_pending_approval(step, stream_id, native_plan(calls), default_allow, reason)
+}
+
+export pure func parse_approval_command(raw: string) -> ApprovalCommand {
+  match decode(raw) {
+    Err(_) => ParsedUnparseable,
+    Ok(obj) => {
+      let cmd_type = msg_get_str(obj, "type");
+      if cmd_type == "approve" then ParsedApprove
+      else if cmd_type == "deny" then {
+        let r = msg_get_str(obj, "reason");
+        ParsedDeny(if r == "" then "denied by operator" else r)
+      }
+      else ParsedUnknown
+    }
+  }
+}
+
+export pure func resolve_approval(raw: string, default_allow: bool, eof: bool) -> ApprovalResolution {
+  if eof then {
+    if default_allow then ApprovalAllowed else ApprovalDenied("timeout — no approval received")
+  } else match parse_approval_command(raw) {
+    ParsedApprove => ApprovalAllowed,
+    ParsedDeny(reason) => ApprovalDenied(reason),
+    ParsedUnparseable => if default_allow then ApprovalAllowed else ApprovalDenied("unparseable response — default deny applied"),
+    ParsedUnknown => if default_allow then ApprovalAllowed else ApprovalDenied("unknown approval command — default deny applied")
+  }
+}
+
+export pure func denial_message(call: ToolCall, reason: string) -> Message {
+  let payload = encode(jo([
+    kv("error", jb(true)),
+    kv("denied_by_policy", jb(true)),
+    kv("tool", js(call.name)),
+    kv("reason", js(reason))
+  ]));
+  {
+    role: "tool",
+    content: payload,
+    tool_calls: [],
+    tool_call_id: call.id,
+    images: []
+  }
+}
+
+pure func msg_get_str(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    None => "",
+    Some(j) => match asString(j) { None => "", Some(s) => s }
+  }
+}
+
+export pure func approval_resume_plan(req: ApprovalRequest) -> ToolPlan {
+  { entries: req.remaining }
+}
+
+export pure func execution_order_after_approval(req: ApprovalRequest) -> [string] {
+  req.call.id :: plan_entry_ids(req.remaining)
+}
+
+pure func plan_entry_ids(entries: [ToolPlanEntry]) -> [string] {
+  match entries {
+    [] => [],
+    e :: rest => e.call.id :: plan_entry_ids(rest)
+  }
+}
+
+export pure func native_plan_entry(call: ToolCall) -> ToolPlanEntry {
+  { call: call, executor: ExecNative }
+}
+
+export pure func native_plan(calls: [ToolCall]) -> ToolPlan {
+  match calls {
+    [] => { entries: [] },
+    c :: rest => {
+      let tail = native_plan(rest);
+      { entries: native_plan_entry(c) :: tail.entries }
+    }
+  }
+}
+
+-- WI-D2, AND IT IS WI-A1'S LOSS CHANNEL A SECOND TIME.
+--
+-- `emit` is a multi-fire callback returning `()`, so every event this module
+-- projects was thrown away by the caller — the same shape `on_chunk` had before
+-- A1 widened `ProviderExchange`. The result type carried the messages and the
+-- world and everything EXCEPT what was emitted, which is why seven variants sat
+-- in `d64_gap_register` with "inside the tool dispatch fold" as their reason.
+--
+-- `emitted` is that channel. It is the ordered log of what this fold projected,
+-- and the driver appends it to the returned trace.
+--
+-- WHY A LOG AND NOT A `LedgerTrace`. Threading a trace in here type-checks —
+-- `ledger_append` is in `phase_vocab`, which this module already imports — and
+-- it puts a SECOND APPENDER in the tree. Trace order would then be a function of
+-- two writers and their interleaving, and D6.3's agreement is decidable over the
+-- returned trace ALONE only because the driver is the sole appender. So this
+-- module returns events and appends nothing, deliberately, and there is no
+-- `ledger_append` anywhere below this line.
+export type ToolDispatchOutcome
+  = ToolDispatchDone({ msgs: [Message], world: WorldState, emitted: [LedgerEvent] })
+  | ToolDispatchPending({ request: ApprovalRequest, accumulated: [Message], world: WorldState, emitted: [LedgerEvent] })
+
+pure func policy_default_allow(default: PolicyDefault) -> bool {
+  match default {
+    AllowAfterTimeout => true,
+    DenyAfterTimeout => false
+  }
+}
+
+func is_scratchpad_tool_name(name: string) -> bool {
+  name == "scratchpad" || name == "Scratchpad"
+}
+
+func scratchpad_extension_active(rt: ExtRuntime) -> bool {
+  scratchpad_extension_active_rec(rt.registry.entries)
+}
+
+func scratchpad_extension_active_rec(entries: [ExtEntry]) -> bool {
+  match entries {
+    [] => false,
+    h :: rest => startsWith(h.id, "scratchpad#") || h.id == "scratchpad" || scratchpad_extension_active_rec(rest)
+  }
+}
+
+func scratchpad_cells_arg(args: Json) -> Json {
+  match get(args, "cells") {
+    Some(j) => j,
+    None => jo([])
+  }
+}
+
+func delegated_deferred_message(call: ToolCall) -> Message {
+  let payload = encode(jo([
+    kv("error", jb(true)),
+    kv("delegated_backend_not_wired", jb(true)),
+    kv("tool", js(call.name)),
+    kv("note", js("v2 split_by_backend selected Delegated; the inbox-based ohmy_pi wait is deferred to a follow-up milestone. Re-run with settings.ohmy_pi=false or use a tool that resolves to the Native backend."))
+  ]));
+  {
+    role: "tool",
+    content: payload,
+    tool_calls: [],
+    tool_call_id: call.id,
+    images: []
+  }
+}
+
+-- Returns what it projected (WI-D2). The event is BOUND before it is emitted so
+-- that the wire and the returned log are one value rather than two
+-- constructions — two constructions is how a payload drifts between the two
+-- channels while both counts stay balanced.
+func emit_scratchpad_result_if_present(emit: (LedgerEvent) -> () ! {IO, Trace}, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> [LedgerEvent] ! {IO, Trace} {
+  if is_scratchpad_tool_name(result_env.tool) then
+    match get(result_env.metadata, "cells") {
+      None => [],
+      Some(cells) => {
+        let ev = ScratchpadResult({
+          tool_call_id: tool_call_id,
+          request_id: request_id,
+          step: step_idx,
+          cells_json: encode(cells)
+        });
+        let _ = emit(ev);
+        [ev]
+      }
+    }
+  else []
+}
+
+-- WI-A12's typed tool contract. `ports`/`world` come in and the successor world
+-- goes out, which is why this returns a record rather than a bare `Message`.
+--
+-- Only the Native branch consumes the world today: the scratchpad and
+-- extension-Handled branches are extension-side effects (D5 / WI-C5), and the
+-- Delegated branch performs no execution at all. Each of those returns the
+-- world UNCHANGED rather than pretending otherwise.
+pure func parse_timeout_ms(raw: string) -> int {
+  match _stringToInt(trim(raw)) { Some(n) => if n > 0 then n else 0, None => 0 }
+}
+
+-- Render a typed tool outcome as the tool-result message the model sees.
+--
+-- The success path is byte-identical to the pre-A12 `tool_result_message(call,
+-- content)`, which is what makes this class behaviour-preserving. The three
+-- fault variants are new REACHABLE outcomes, each carrying its own code, so a
+-- model (and a trace reader) can tell an execution failure from a misaddressed
+-- answer from a late one. That discrimination is the whole point of D1's part
+-- 3; a string return collapsed all three into "some text".
+--
+-- WI-A7: the three `fault_class` names are no longer literals here. They are
+-- D3's stable class ids for these three classes, and the catalogue
+-- (src/core/dst_fault_catalogue.ail) is their single source of truth — the
+-- catalogue ADOPTED these exact strings precisely because they already reached
+-- the model through this function, so this is a reference change with no wire
+-- change. Two vocabularies for one concept is the drift D3's "one catalogue is
+-- the single source of truth" exists to prevent, and nothing would have caught
+-- it: both spellings type-check and neither was validated.
+export pure func tool_outcome_message(call: ToolCall, o: ToolOutcome) -> Message {
+  match o {
+    ToolCompleted(c) => tool_result_message(call, c.content),
+    ToolFailed(f) =>
+      tool_fault_message(call, fault_class_tool_failed(), encode(jo([
+        kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))
+      ]))),
+    ToolCorrelationMismatch(m) =>
+      tool_fault_message(call, fault_class_tool_correlation_mismatch(), encode(jo([
+        kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))
+      ]))),
+    ToolDeadlineExceeded(d) =>
+      tool_fault_message(call, fault_class_tool_deadline_exceeded(), encode(jo([
+        kv("tool_call_id", js(d.tool_call_id)),
+        kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))),
+        kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))
+      ])))
+  }
+}
+
+pure func tool_fault_message(call: ToolCall, fault_class: string, detail: string) -> Message {
+  tool_result_message(call, encode(jo([
+    kv("error", jb(true)),
+    kv("tool", js(call.name)),
+    kv("fault_class", js(fault_class)),
+    kv("detail", js(detail))
+  ])))
+}
+
+export func execute_allowed_tool_call(
+  ports: Ports,
+  world: WorldState,
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  call: ToolCall,
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  emit: (LedgerEvent) -> () ! {IO, Trace}
+) -> { msg: Message, next_state: WorldState, emitted: [LedgerEvent] } ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let envelope = tool_call_to_envelope(call);
+  if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
+    let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
+    let result_env: ToolResultEnvelope = {
+      tool_call_id: envelope.id,
+      tool: "scratchpad",
+      exit_code: result_cell.exit_code,
+      stdout: result_cell.stdout,
+      stderr: result_cell.stderr,
+      metadata: result_cell.metadata
+    };
+    let handled_event = ExtToolHandled({
+      step: step_idx,
+      stream_id: stream_id,
+      tool: call.name,
+      id: call.id,
+      exit_code: result_env.exit_code
+    });
+    let _ = emit(handled_event);
+    let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
+    { msg: handled_tool_message(call.id, result_env), next_state: world, emitted: handled_event :: scratch }
+  } else {
+    -- WI-D20. THE `on_tool_handle` SUCCESSOR, IN BOTH DIRECTIONS, AND THE TWO
+    -- HALVES ARE INDEPENDENT DEFECTS THAT ONLY BECOME VISIBLE TOGETHER.
+    --
+    -- WRITE SIDE: this line read `dispatch_tool_handle(rt, ctx, envelope).decision`
+    -- and every arm below returned `next_state: world`. The `.decision`
+    -- projection discarded the successor at the point of use, so unlike WI-D19's
+    -- intercept — which carried it on one arm of four — this slot carried it on
+    -- NONE. `first_handle` in `ext/runtime.ail` threads correctly and has since
+    -- WI-B2b; the drop was entirely here, one call frame above it.
+    --
+    -- READ SIDE, AND THIS IS THE HALF THAT MAKES THE OBVIOUS FIX WRONG: `ctx` is
+    -- built ONCE per batch at `session.ail:2307` and passed unchanged through
+    -- `dispatch_tool_entries_with_builtin`'s fold, while `world` advances per
+    -- entry. From the second tool call in a batch onward `ctx.world` is the
+    -- BATCH-START world. Writing `token_to_world(handled.next_state)` back
+    -- without re-seating would therefore hand the loop a world rewound past
+    -- everything the earlier entries did — a REGRESSION written by the very edit
+    -- that repairs the drop, and it type-checks exactly as readily.
+    --
+    -- So the world is re-seated from the live `world` on the way in. `world` is
+    -- this function's parameter and the fold's accumulator; `ctx.world` is a
+    -- snapshot. Where they disagree the parameter is right by construction.
+    --
+    -- WHY NOTHING SAW EITHER HALF: no `on_tool_handle` binding in this tree
+    -- performed a world-threading effect until WI-D20 routed compose's, and
+    -- under that condition all three answers — drop, re-seat, rewind — produce
+    -- identical worlds. WI-D19 §3.2's argument, one slot over.
+    let handled = dispatch_tool_handle(rt, { ctx | world: world_to_token(world) }, envelope);
+    let handle_world = token_to_world(handled.next_state);
+    match handled.decision {
+      Handled(result_env) => {
+        let handled_event = ExtToolHandled({
+          step: step_idx,
+          stream_id: stream_id,
+          tool: call.name,
+          id: call.id,
+          exit_code: result_env.exit_code
+        });
+        let _ = emit(handled_event);
+        let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
+        { msg: handled_tool_message(call.id, result_env), next_state: handle_world, emitted: handled_event :: scratch }
+      },
+      Delegate => {
+        let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
+        match backend {
+          Delegated => {
+            let deferred_event = DelegatedToolDeferred({
+              step: step_idx,
+              stream_id: stream_id,
+              tool: call.name,
+              id: call.id
+            });
+            let _ = emit(deferred_event);
+            -- `handle_world`, not `world`. A DELEGATING hook still ran — it may
+            -- have performed effects before deciding it had nothing to offer, and
+            -- `first_handle`'s own WI-B2b comment says so at the other end of the
+            -- same seam. Only a hook that was never invoked passes the world
+            -- through untouched, and `first_handle` already handles that case.
+            { msg: delegated_deferred_message(call), next_state: handle_world, emitted: [deferred_event] }
+          },
+          Native => {
+            let start_event = V2ToolDispatchStart({
+              step: step_idx,
+              stream_id: stream_id,
+              tool: call.name,
+              id: call.id
+            });
+            let _ = emit(start_event);
+            -- THE ROUTED SITE. Before A12 this was a bare `dispatch_one`; the
+            -- typed contract now carries the request, the deadline and a
+            -- discriminated result. The deadline budget is read through the ENV
+            -- class, so the world configures it rather than a constant.
+            -- `handle_world`, not `world`: the delegating hook ran before this
+            -- native dispatch, so starting the clock from `world` would discard
+            -- whatever it did and then overwrite it with this call's successor.
+            let started = ports.clock_now(handle_world);
+            let budget = ports.env_get(started.next_state, "MOTOKO_TOOL_TIMEOUT_MS", "0");
+            let invocation: ToolInvocation = {
+              call: tool_call_to_envelope(call),
+              workdir: workdir,
+              timeout_ms: parse_timeout_ms(budget.value),
+              started_at_ms: started.now_ms
+            };
+            let execution = ports.tool_exec(budget.next_state, invocation);
+            let complete_event = V2ToolDispatchComplete({
+              step: step_idx,
+              stream_id: stream_id,
+              id: call.id
+            });
+            let _ = emit(complete_event);
+            {
+              msg: tool_outcome_message(call, execution.outcome),
+              next_state: execution.next_state,
+              -- START then COMPLETE, which is the order they happened in. The
+              -- driver appends this log positionally, so a reversal here is a
+              -- reversal in the returned trace.
+              emitted: [start_event, complete_event]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export func dispatch_tool_entries(
+  ports: Ports,
+  world: WorldState,
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  entries: [ToolPlanEntry],
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  accumulated: [Message],
+  emit: (LedgerEvent) -> () ! {IO, Trace}
+) -> ToolDispatchOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  dispatch_tool_entries_with_builtin(ports, world, rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, [], emit, \_ . None)
+}
+
+export func dispatch_tool_entries_with_builtin(
+  ports: Ports,
+  world: WorldState,
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  entries: [ToolPlanEntry],
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  accumulated: [Message],
+  -- WI-D2. The emitted-event log, threaded exactly like `accumulated` and for
+  -- the same reason: it is an ordered record the fold builds across recursions,
+  -- and a branch that forgets to extend it drops what it emitted. Passing
+  -- `emitted` unchanged past a branch that emitted something is the same class
+  -- of defect as passing `world` where `executed.next_state` belongs, one
+  -- channel over — and the wire gate is what sees it.
+  emitted: [LedgerEvent],
+  emit: (LedgerEvent) -> () ! {IO, Trace},
+  builtin: (ToolCall) -> Option[Message]
+) -> ToolDispatchOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match entries {
+    [] => ToolDispatchDone({ msgs: accumulated, world: world, emitted: emitted }),
+    entry :: rest => {
+      let call = entry.call;
+      match builtin(call) {
+        Some(msg) =>
+          dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emitted, emit, builtin),
+        None => {
+          let envelope = tool_call_to_envelope(call);
+          let policy = dispatch_tool_policy(rt, ctx, envelope);
+          match policy {
+            Deny(reason) => {
+              let denied_event = NativeToolDenied({
+                step: step_idx,
+                stream_id: stream_id,
+                tool: call.name,
+                id: call.id,
+                reason: reason
+              });
+              let _ = emit(denied_event);
+              let denial_msg = denial_message(call, reason);
+              dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emitted ++ [denied_event], emit, builtin)
+            },
+            Pending(reason, default) => {
+              let pending_event = ToolPending({
+                step: step_idx,
+                stream_id: stream_id,
+                tool: call.name,
+                id: call.id,
+                reason: reason
+              });
+              let _ = emit(pending_event);
+              ToolDispatchPending({
+                request: {
+                  call: call,
+                  default_allow: policy_default_allow(default),
+                  reason: reason,
+                  stream_id: stream_id,
+                  remaining: rest
+                },
+                accumulated: accumulated,
+                world: world,
+                -- The suspension carries the log the same way it carries
+                -- `accumulated` and `world`: the batch resumes after the
+                -- approval, and events emitted before the interrupt are still
+                -- events this fold emitted.
+                emitted: emitted ++ [pending_event]
+              })
+            },
+            _ => {
+              -- `executed.next_state`, NOT `world`. Passing `world` here
+              -- type-checks and freezes the tool cursor for the rest of the
+              -- batch — the same defect cluster 1 measured on the provider
+              -- cursor, one seam over. The probe's four-fault sequence is what
+              -- catches it: a frozen queue serves the first outcome four times.
+              let executed = execute_allowed_tool_call(ports, world, rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, emit);
+              dispatch_tool_entries_with_builtin(ports, executed.next_state, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [executed.msg], emitted ++ executed.emitted, emit, builtin)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func call(id: string, name: string) -> ToolCall {
+  { id: id, name: name, arguments: "{}" }
+}
+
+pure func entry(id: string) -> ToolPlanEntry {
+  native_plan_entry(call(id, "BashExec"))
+}
+
+pure func test_plan_pending_approval_preserves_tail() -> bool
+  tests [((), true)]
+  {
+    let plan: ToolPlan = { entries: [entry("a"), entry("b")] };
+    match plan_pending_approval(1, "s", plan, false, "why") {
+      Some(p) => p.request.call.id == "a" && List.length(p.request.remaining) == 1,
+      None => false
+    }
+  }
+
+pure func test_native_plan_builds_entries() -> bool
+  tests [((), true)]
+  {
+    List.length(native_plan([call("a", "BashExec"), call("b", "BashExec")]).entries) == 2
+  }
+
+pure func test_plan_pending_approval_from_calls() -> bool
+  tests [((), true)]
+  {
+    match plan_pending_approval_from_calls(1, "s", [call("a", "BashExec"), call("b", "BashExec")], true, "why") {
+      Some(p) => p.request.call.id == "a" && List.length(p.request.remaining) == 1,
+      None => false
+    }
+  }
+
+pure func test_resolve_approval_defaults() -> bool
+  tests [((), true)]
+  {
+    match resolve_approval("", true, true) {
+      ApprovalAllowed =>
+        match resolve_approval("not-json", false, false) {
+          ApprovalDenied(r) => r == "unparseable response — default deny applied",
+          _ => false
+        },
+      _ => false
+    }
+  }
+
+pure func test_denial_message_uses_tool_role_and_call_id() -> bool
+  tests [((), true)]
+  {
+    let m = denial_message(call("tc", "BashExec"), "no");
+    m.role == "tool"
+      && m.tool_call_id == "tc"
+      && List.length(m.tool_calls) == 0
+      && m.content == "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"reason\":\"no\"}"
+  }
+
+pure func test_resolve_approval_live_protocol() -> bool
+  tests [((), true)]
+  {
+    match resolve_approval("{\"type\":\"approve\"}", false, false) {
+      ApprovalAllowed =>
+        match resolve_approval("{\"type\":\"deny\",\"reason\":\"blocked\"}", true, false) {
+          ApprovalDenied(r1) =>
+            match resolve_approval("{\"type\":\"deny\"}", true, false) {
+              ApprovalDenied(r2) =>
+                match resolve_approval("{\"type\":\"later\"}", false, false) {
+                  ApprovalDenied(r3) =>
+                    match resolve_approval("", false, true) {
+                      ApprovalDenied(r4) =>
+                        r1 == "blocked"
+                          && r2 == "denied by operator"
+                          && r3 == "unknown approval command — default deny applied"
+                          && r4 == "timeout — no approval received",
+                      _ => false
+                    },
+                  _ => false
+                },
+              _ => false
+            },
+          _ => false
+        },
+      _ => false
+    }
+  }
+
+pure func test_execution_order_after_approval() -> bool
+  tests [((), true)]
+  {
+    let plan: ToolPlan = { entries: [entry("a"), entry("b"), entry("c")] };
+    match plan_pending_approval(1, "s", plan, true, "why") {
+      Some(p) =>
+        match execution_order_after_approval(p.request) {
+          "a" :: "b" :: "c" :: [] => true,
+          _ => false
+        },
+      None => false
+    }
+  }

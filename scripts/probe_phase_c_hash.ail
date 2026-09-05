@@ -1,0 +1,19 @@
+-- scripts/probe_phase_c_hash.ail
+--
+-- Minimal in-repo substrate probe for std/crypto.sha256Hex before Phase C
+-- relies on it for checkpoint and provider-payload content digests.
+
+module scripts/probe_phase_c_hash
+
+import std/crypto (sha256Hex)
+import std/io (println, exit)
+
+export func main() -> () ! {IO} {
+  let got = sha256Hex("hello");
+  let want = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+  if got == want then println("phase_c_hash_probe PASS sha256:hello")
+  else {
+    let _ = println("phase_c_hash_probe FAIL got=${got}");
+    exit(1)
+  }
+}

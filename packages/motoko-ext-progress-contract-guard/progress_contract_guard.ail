@@ -1,0 +1,384 @@
+module sunholo/motoko_ext_progress_contract_guard/progress_contract_guard
+
+import std/string (trim, contains, toLower)
+import std/json (Json, jo)
+import std/result (Result, Err)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
+
+export pure func guard_marker() -> string {
+  "[motoko-progress-contract-guard]"
+}
+
+export pure func guard_message() -> string {
+  "You stopped while your own response indicates the task is still in progress. Continue the existing task now. If a progress target or runtime status requirement is present, check it and keep working until the target or stop condition is actually met. ${guard_marker()}"
+}
+
+export pure func budget() -> int {
+  2
+}
+
+-- Count the guard's own injected feedback messages already present in history.
+-- Mirrors the empty-stop guard: only user-role messages carrying the marker count,
+-- so the assistant candidate itself can never inflate the budget.
+export pure func count_markers(history: [Msg]) -> int {
+  match history {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "user" && contains(m.content, guard_marker()) then 1 else 0;
+      here + count_markers(rest)
+    }
+  }
+}
+
+-- Strong, explicit progress-contract indicators. Conservative substring checks on
+-- normalized-lowercase text; no numeric parsing in v1. `at least 200` (not a bare
+-- `at least`) keeps this from firing on arbitrary tasks.
+pure func text_has_contract(s: string) -> bool {
+  let t = toLower(s);
+  contains(t, "do not stop early")
+  || contains(t, "continue until")
+  || contains(t, "at least 200")
+  || contains(t, "/200")
+  || contains(t, "200 phases")
+  || contains(t, "200 model turns")
+  || contains(t, "200 steps")
+  || contains(t, "motokoruntimestatus")
+  || contains(t, "current_step")
+  || contains(t, "step_budget")
+  || contains(t, "below the target")
+}
+
+-- Scan history for a contract, excluding the trailing assistant message when it is
+-- the current candidate. `ctx.history_slice` is `st.msgs ++ [assistant]`, so the
+-- candidate must never be the sole source of its own progress contract (trap #1).
+func history_has_contract(msgs: [Msg], candidate: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => {
+      let is_current_candidate = m.role == "assistant" && m.content == candidate;
+      let counts = not is_current_candidate && text_has_contract(m.content);
+      counts || history_has_contract(rest, candidate)
+    }
+  }
+}
+
+export pure func has_progress_contract(ctx: ExtCtx, candidate: string) -> bool {
+  text_has_contract(ctx.task) || history_has_contract(ctx.history_slice, candidate)
+}
+
+-- Narrow "I am still going" self-report. The triggering candidate contains both
+-- `Continuing Phase 52` and `Step 53/200`, so both branches catch it.
+export pure func candidate_self_reports_incomplete(candidate: string) -> bool {
+  let t = toLower(candidate);
+  contains(t, "continuing")
+  || contains(t, "continue with")
+  || contains(t, "continue to")
+  || contains(t, "next phase")
+  || contains(t, "context is growing")
+  || contains(t, "remaining")
+  || contains(t, "not complete")
+  || contains(t, "not done")
+  || contains(t, "below target")
+  || (contains(t, "step ") && contains(t, "/"))
+}
+
+-- Override: explicit completion or allowed-stop language. `final summary` is only
+-- treated as an override when paired with a stronger marker, because a model can
+-- mention it while saying it is not yet final (trap #3). The live Qwen task allows
+-- stopping after runtime compaction (trap #2), so those phrasings pass through.
+export pure func candidate_claims_complete_or_allowed_stop(candidate: string) -> bool {
+  let t = toLower(candidate);
+  contains(t, "task complete")
+  || contains(t, "complete. final")
+  || contains(t, "final answer")
+  || contains(t, "reached 200/200")
+  || contains(t, "step 200/200")
+  || contains(t, "target met")
+  || contains(t, "runtime compacted")
+  || contains(t, "runtime compaction occurred")
+  || contains(t, "compaction occurred")
+  || contains(t, "compaction has occurred")
+  || (contains(t, "final summary") && (
+        contains(t, "reached")
+        || contains(t, "200/200")
+        || contains(t, "task complete")
+        || contains(t, "runtime compacted")
+        || contains(t, "compaction occurred")
+     ))
+}
+
+export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
+  if trim(candidate) != ""
+     && has_progress_contract(ctx, candidate)
+     && candidate_self_reports_incomplete(candidate)
+     && not candidate_claims_complete_or_allowed_stop(candidate)
+     && count_markers(ctx.history_slice) < max_feedback
+  then ContinueWithFeedback(guard_message())
+  else NoDecision
+}
+
+export pure func decide(ctx: ExtCtx, candidate: string) -> FinalizeDecision {
+  decide_with_budget(ctx, candidate, budget())
+}
+
+-- ---------------------------------------------------------------------------
+-- Test scaffolding + unit tests (mirrors empty_stop_guard.ail)
+-- ---------------------------------------------------------------------------
+
+func user(content: string) -> Msg {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func assistant(content: string) -> Msg {
+  { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
+  Err("ext ai_step port unavailable")
+}, next_state: world } }
+
+-- WI-D16 widened `ExtPorts.tool_handle` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION and is the correct answer for
+-- exactly `noop_clock_now`'s reason below: this port executes nothing, so there
+-- is no cursor to advance. It would be a silent defect in a binding that DID
+-- something, and no type tells the two apart.
+--
+-- WI-D21 RENAMED THE PARAMETERS. They read `_cmd, _cwd` here, and the seam
+-- takes a MOTOKO TOOL NAME and that tool's JSON ARGUMENTS -- see the ABI row.
+-- Both are `string`, so the wrong reading compiled; this binding ignores them
+-- and was harmless, but it is a template, and a real implementation written
+-- from a `(cmd, cwd)` signature would shell out the tool name in a directory
+-- named by a JSON blob. That is why the rename reached bindings that use
+-- neither argument.
+--
+-- `exit_code: -1` (WI-D23), NOT 0: a no-op executes nothing, and -1 is
+-- exactly the "no subprocess ran" value the ABI row's domain names. Writing
+-- 0 here would assert a success no process produced.
+func noop_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  { output: "", exit_code: -1, next_state: world }
+}
+
+-- WI-D16's file read seam. `present: false` is the honest answer for a port
+-- with no filesystem behind it, and it is NOT the same claim as `content: ""` —
+-- see `ExtFileRead`'s comment. A no-op that reported `present: true` with empty
+-- contents would tell a caller an empty file exists, which is the branch this
+-- seam was shaped to keep distinguishable.
+func noop_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: false, content: "", next_state: world }
+}
+
+-- WI-D17's filesystem MUTATOR seams. `ok: false` is the honest answer for a port
+-- with no filesystem behind it, and it is the same judgement `noop_file_read`
+-- makes with `present: false`: reporting success for a write that did not happen
+-- tells the caller a fact about the world that is not true. The world token is
+-- returned unchanged, which is S12's identity transition and correct here —
+-- nothing was written, so there is no successor to thread.
+func noop_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+func noop_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+-- WI-D18's DIRECTORY seams. `ExtPathMissing` and `present: false` for
+-- `noop_file_read`'s reason: this port has no filesystem behind it, and a no-op
+-- claiming a path is a file would state something about the world that is not
+-- true.
+func noop_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} {
+  { kind: ExtPathMissing, next_state: world }
+}
+
+func noop_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} {
+  { present: false, entries: [], next_state: world }
+}
+
+func noop_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+-- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION, and here it is the correct
+-- answer rather than a silent defect: this clock reads nothing, so there is no
+-- cursor to advance. The distinction matters because the same expression is a
+-- real defect in a port that DID something — S12 exists because no type tells
+-- the two apart.
+func noop_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 0, next_state: world }
+}
+
+func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
+  fallback
+}
+
+func noop_ext_ports() -> ExtPorts {
+  {
+    ai_step: noop_ai_step,
+    tool_handle: noop_tool_handle,
+    file_read: noop_file_read,
+    file_write: noop_file_write,
+    file_remove: noop_file_remove,
+    path_stat: noop_path_stat,
+    dir_list: noop_dir_list,
+    dir_make: noop_dir_make,
+    clock_now: noop_clock_now,
+    env_get: noop_env_get
+  }
+}
+
+pure func empty_ext_artifacts() -> Json {
+  jo([])
+}
+
+pure func zero_token_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}
+
+func test_ctx(task: string, history: [Msg]) -> ExtCtx {
+  {
+    task: task,
+    step: 0,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1, solver: 1, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: history,
+    state_key: "k",
+    context_limit: 0,
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
+  }
+}
+
+func contract_task() -> string {
+  "Do not stop early. Complete at least 200 phases. Check MotokoRuntimeStatus current_step and step_budget."
+}
+
+func failure_candidate() -> string {
+  "**Phase 51 complete.** Step 53/200. Context is growing. Continuing Phase 52."
+}
+
+pure func test_marker_count_counts_only_user_messages() -> bool
+  tests [((), true)]
+  {
+    count_markers([
+      user("a ${guard_marker()}"),
+      assistant("b ${guard_marker()}"),
+      user("c")
+    ]) == 1
+  }
+
+pure func test_contract_from_task() -> bool
+  tests [((), true)]
+  {
+    has_progress_contract(test_ctx(contract_task(), []), failure_candidate())
+  }
+
+pure func test_contract_from_user_history() -> bool
+  tests [((), true)]
+  {
+    has_progress_contract(
+      test_ctx("plain task", [user("Do not stop early. Continue until 200 phases.")]),
+      "step 5/200 continuing"
+    )
+  }
+
+pure func test_contract_not_from_candidate_alone() -> bool
+  tests [((), true)]
+  {
+    let cand = "step 5/200 continuing";
+    not has_progress_contract(test_ctx("plain task", [assistant(cand)]), cand)
+  }
+
+pure func test_incomplete_detection() -> bool
+  tests [((), true)]
+  {
+    candidate_self_reports_incomplete(failure_candidate())
+      && not candidate_self_reports_incomplete("All phases done. Final answer: 42.")
+  }
+
+pure func test_allowed_stop_override() -> bool
+  tests [((), true)]
+  {
+    candidate_claims_complete_or_allowed_stop("Runtime compaction occurred. Final summary: state saved.")
+      && candidate_claims_complete_or_allowed_stop("Reached 200/200. Final summary: complete.")
+      && not candidate_claims_complete_or_allowed_stop(failure_candidate())
+  }
+
+pure func test_fires_on_failure_shape() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), []), failure_candidate(), 2) {
+      ContinueWithFeedback(m) => contains(m, guard_marker()),
+      _ => false
+    }
+  }
+
+pure func test_passes_completion() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), []), "Reached 200/200. Final summary: all phases done.", 2) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_passes_allowed_compaction_override() -> bool
+  tests [((), true)]
+  {
+    -- self-reports incomplete ("Continuing is unnecessary") but the allowed-stop
+    -- override must win because runtime compaction is an allowed stop.
+    match decide_with_budget(
+      test_ctx("Continue until done or until the runtime compacts. At least 200 phases.", []),
+      "Runtime compaction occurred. Continuing is unnecessary. Final summary: state saved.",
+      2
+    ) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_passes_no_contract() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx("Write a haiku.", []), "Continuing to refine. Step 1/3.", 2) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_ignores_blank() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), []), "   ", 2) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_continues_under_budget() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), [user("x ${guard_marker()}")]), failure_candidate(), 2) {
+      ContinueWithFeedback(_) => true,
+      _ => false
+    }
+  }
+
+pure func test_budget_exhaustion() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(
+      test_ctx(contract_task(), [user("x ${guard_marker()}"), user("y ${guard_marker()}")]),
+      failure_candidate(),
+      2
+    ) {
+      NoDecision => true,
+      _ => false
+    }
+  }

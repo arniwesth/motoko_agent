@@ -1,0 +1,352 @@
+module sunholo/motoko_ext_compaction_structural/compaction_structural
+
+import std/string (contains, length, substring)
+import std/list (foldl)
+import std/result (Result, Ok, Err)
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, 
+  ExtCtx,
+  Msg,
+  PreStepDecision,
+  PassThrough,
+  Compacted
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+
+export pure func elide_tier_pct() -> int { 70 }
+
+export pure func elide_hard_tier_pct() -> int { 85 }
+
+export pure func emergency_pct() -> int { 95 }
+
+export pure func elide_keep_last() -> int { 10 }
+
+export pure func elide_hard_keep_last() -> int { 5 }
+
+export pure func emergency_keep_last() -> int { 3 }
+
+export pure func emergency_final_keep_last() -> int { 1 }
+
+export pure func result_target_pct() -> int { elide_tier_pct() }
+
+pure func count_tool_msgs(msgs: [Msg]) -> int {
+  foldl(\acc m. acc + (if m.role == "tool" then 1 else 0), 0, msgs)
+}
+
+export pure func estimate_tokens_messages(msgs: [Msg]) -> int {
+  let total = foldl(\acc m. acc + length(m.content), 0, msgs);
+  (total + 3) / 4
+}
+
+export pure func usage_percent_with_limit(msgs: [Msg], limit: int) -> int {
+  if limit == 0 then 0
+  else (estimate_tokens_messages(msgs) * 100) / limit
+}
+
+-- Tokenizer density vs char/4, in permille (~1.235x); see
+-- src/core/compaction.delta_token_density_permille. Applied only to the content
+-- delta, so this is a small error surface.
+pure func delta_token_density_permille() -> int { 1235 }
+
+-- Affine calibration of char/4 against provider truth (mirror of
+-- src/core/compaction.affine_calibrate on [Msg]). Provider tokens are affine,
+-- not a pure ratio: real ~= density*char4 + fixed_overhead (system prompt + tool
+-- schemas). We anchor the overhead on ground truth so it never explodes when the
+-- anchor is a heavily-compacted window:
+--   calibrated = anchor_real + density*(raw - anchor_est)   [= density*raw + overhead]
+-- Floored at raw so calibration only ever raises usage; falls back to raw when
+-- the anchor is absent. anchor_actual = last real input_tokens, anchor_estimate =
+-- char/4 estimate of that same last-sent window.
+export pure func calibrated_usage_percent_with_limit(msgs: [Msg], limit: int, anchor_actual: int, anchor_estimate: int) -> int {
+  if limit == 0 then 0
+  else {
+    let raw = estimate_tokens_messages(msgs);
+    let calibrated =
+      if anchor_actual > 0 && anchor_estimate > 0
+      then {
+        let scaled = anchor_actual + ((raw - anchor_estimate) * delta_token_density_permille()) / 1000;
+        if scaled > raw then scaled else raw
+      }
+      else raw;
+    (calibrated * 100) / limit
+  }
+}
+
+pure func elide_content(content: string) -> string {
+  let n = length(content);
+  if n <= 80 then content
+  else {
+    let preview = substring(content, 0, 80);
+    let elided = "${preview}...[elided ${show(n - 80)} chars]";
+    if length(elided) < n then elided else content
+  }
+}
+
+pure func cap_oversized_tool_results(msgs: [Msg], limit: int) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      let oversized = limit > 0 && m.role == "tool" && ((length(m.content) + 3) / 4) * 100 / limit >= 30;
+      let shortened = elide_content(m.content);
+      let updated = if oversized && length(shortened) < length(m.content) then { m | content: "${shortened}\n[large tool result capped; use grep or offset+limit instead of re-reading in full]" } else m;
+      updated :: cap_oversized_tool_results(rest, limit)
+    }
+  }
+}
+
+pure func elide_walk(msgs: [Msg], total: int, keep_last: int, seen: int) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      if m.role == "tool" then {
+        let keep = total - seen <= keep_last;
+        let new_content = if keep then m.content else elide_content(m.content);
+        let updated: Msg = {
+          role: m.role,
+          content: new_content,
+          tool_calls: m.tool_calls,
+          tool_call_id: m.tool_call_id
+        };
+        updated :: elide_walk(rest, total, keep_last, seen + 1)
+      } else
+        m :: elide_walk(rest, total, keep_last, seen)
+    }
+  }
+}
+
+export pure func elide_old_tool_results(msgs: [Msg], keep_last: int) -> [Msg]
+  requires { keep_last >= 0 }
+  {
+    elide_walk(msgs, count_tool_msgs(msgs), keep_last, 0)
+  }
+
+pure func try_emergency_compaction_with_limit(msgs: [Msg], model: string, limit: int) -> Result[[Msg], string] {
+  let emergency1 = elide_old_tool_results(msgs, emergency_keep_last());
+  let pct1 = usage_percent_with_limit(emergency1, limit);
+  if pct1 < emergency_pct() then Ok(emergency1)
+  else {
+    let emergency2 = elide_old_tool_results(msgs, emergency_final_keep_last());
+    let pct2 = usage_percent_with_limit(emergency2, limit);
+    if pct2 < emergency_pct() then Ok(emergency2)
+    else Err("compaction_exhausted: context at ${show(pct2)}% of ${model} limit after emergency compaction")
+  }
+}
+
+export pure func compact_step_with_limit(msgs: [Msg], model: string, limit: int) -> Result[[Msg], string] {
+  let pct = usage_percent_with_limit(msgs, limit);
+  if pct >= emergency_pct() then try_emergency_compaction_with_limit(msgs, model, limit)
+  else if pct >= elide_hard_tier_pct() then Ok(elide_old_tool_results(msgs, elide_hard_keep_last()))
+  else if pct >= elide_tier_pct() then Ok(elide_old_tool_results(msgs, elide_keep_last()))
+  else Ok(msgs)
+}
+
+pure func same_msgs(a: [Msg], b: [Msg]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs =>
+      match b {
+        [] => false,
+        y :: ys =>
+          x.role == y.role
+            && x.content == y.content
+            && x.tool_call_id == y.tool_call_id
+            && same_msgs(xs, ys)
+      }
+  }
+}
+
+pure func structural_note(tier: string, keep_last: int) -> string {
+  "structural: tier=${tier} keep_last=${show(keep_last)}"
+}
+
+pure func calibrated_ctx_usage(ctx: ExtCtx, msgs: [Msg]) -> int {
+  calibrated_usage_percent_with_limit(msgs, ctx.context_limit, ctx.telemetry.last_input_tokens, ctx.telemetry.last_estimated_input_tokens)
+}
+
+pure func candidate_fits(ctx: ExtCtx, msgs: [Msg]) -> bool {
+  calibrated_ctx_usage(ctx, msgs) < result_target_pct()
+}
+
+export pure func compact_for_pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision {
+  if candidate_fits(ctx, msgs) then PassThrough
+  else {
+    let capped = cap_oversized_tool_results(msgs, ctx.context_limit);
+    let tier1 = elide_old_tool_results(capped, elide_keep_last());
+    if not same_msgs(msgs, tier1) && candidate_fits(ctx, tier1) then
+      Compacted(tier1, structural_note("tier1", elide_keep_last()), ctx.artifacts)
+    else {
+      let hard = elide_old_tool_results(capped, elide_hard_keep_last());
+      if not same_msgs(msgs, hard) && candidate_fits(ctx, hard) then
+        Compacted(hard, structural_note("hard", elide_hard_keep_last()), ctx.artifacts)
+      else {
+        let emergency = elide_old_tool_results(capped, emergency_keep_last());
+        if not same_msgs(msgs, emergency) && candidate_fits(ctx, emergency) then
+          Compacted(emergency, structural_note("emergency", emergency_keep_last()), ctx.artifacts)
+        else {
+          let floor = elide_old_tool_results(capped, emergency_final_keep_last());
+          if same_msgs(msgs, floor) then PassThrough
+          else if candidate_fits(ctx, floor) then
+            Compacted(floor, structural_note("emergency", emergency_final_keep_last()), ctx.artifacts)
+          else
+            Compacted(floor, structural_note("floor", emergency_final_keep_last()), ctx.artifacts)
+        }
+      }
+    }
+  }
+}
+
+func tool(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func user(content: string) -> Msg {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func long_tool_content() -> string {
+  "long tool output that genuinely exceeds eighty characters in length and then keeps on going for a while longer until it definitely passes the elide threshold and triggers actual shortening of the message body"
+}
+
+func very_long_tool_content() -> string {
+  "${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()} ${long_tool_content()}"
+}
+
+func repeated_tools(n: int, content: string) -> [Msg] {
+  if n <= 0 then [] else tool("t${show(n)}", content) :: repeated_tools(n - 1, content)
+}
+
+func test_ctx(limit: int) -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "m",
+    context_limit: limit,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1, solver: 1, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: [],
+    state_key: "k",
+    context_limit: limit,
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
+  }
+}
+
+func count_elided(msgs: [Msg]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => (if m.role == "tool" && length(m.content) < length(long_tool_content()) then 1 else 0) + count_elided(rest)
+  }
+}
+
+func test_elide_preserves_length() -> bool
+  tests [((), true)]
+  {
+    let msgs = [tool("t1", "some tool output"), tool("t2", "some tool output"), tool("t3", "some tool output"), tool("t4", "some tool output"), tool("t5", "some tool output")];
+    _list_length(elide_old_tool_results(msgs, 2)) == 5
+  }
+
+func test_count_tool_messages() -> bool
+  tests [((), true)]
+  {
+    count_tool_msgs([user("q"), { role: "assistant", content: "a", tool_calls: [], tool_call_id: "" }, tool("c1", "r1"), tool("c2", "r2")]) == 2
+  }
+
+func test_elide_all_tool_results() -> bool
+  tests [((), true)]
+  {
+    let original = long_tool_content();
+    let compacted = elide_old_tool_results([user("q"), tool("c1", original)], 0);
+    match compacted {
+      [] => false,
+      u :: t :: [] => u.content == "q" && length(t.content) < length(original),
+      _ => false
+    }
+  }
+
+func test_single_tier_ladder_selects_correctly() -> bool
+  tests [((), true)]
+  {
+    let original = long_tool_content();
+    let msgs = [tool("t1", original), tool("t2", original), tool("t3", original), tool("t4", original), tool("t5", original), tool("t6", original), tool("t7", original), tool("t8", original), tool("t9", original), tool("t10", original), tool("t11", original), tool("t12", original)];
+    match compact_step_with_limit(msgs, "test", 740) {
+      Ok(out) => usage_percent_with_limit(msgs, 740) >= elide_tier_pct() && usage_percent_with_limit(msgs, 740) < elide_hard_tier_pct() && count_elided(out) == 2,
+      Err(_) => false
+    }
+  }
+
+func test_calibrated_usage_affine_and_floor() -> bool
+  tests [((), true)]
+  {
+    let msgs = [tool("t1", "0123456789012345")];
+    -- raw: 16 chars => 4 tokens => 40% of a 10-token limit.
+    -- affine anchor (real 200 / est 100 => ~76 overhead): 1.235*4 + 76 ~= 82 => 820%.
+    -- degenerate anchor (100/400) floors back to raw 40%.
+    -- no anchor (0/0) => raw 40%.
+    calibrated_usage_percent_with_limit(msgs, 10, 200, 100) == 820
+      && calibrated_usage_percent_with_limit(msgs, 10, 100, 400) == 40
+      && calibrated_usage_percent_with_limit(msgs, 10, 0, 0) == 40
+  }
+
+func test_pre_step_passthrough_when_unchanged() -> bool
+  tests [((), true)]
+  {
+    let ctx = test_ctx(1);
+    match compact_for_pre_step(ctx, [tool("t1", "short")]) {
+      PassThrough => true,
+      PassThroughObserved(_, _) => false,
+      Compacted(_, _, _) => false
+    }
+  }
+
+func test_pre_step_passthrough_when_input_under_target() -> bool
+  tests [((), true)]
+  {
+    let ctx = test_ctx(10000);
+    match compact_for_pre_step(ctx, repeated_tools(20, long_tool_content())) {
+      PassThrough => true,
+      PassThroughObserved(_, _) => false,
+      Compacted(_, _, _) => false
+    }
+  }
+
+func test_pre_step_selects_gentlest_result_tier() -> bool
+  tests [((), true)]
+  {
+    let ctx = test_ctx(8500);
+    let msgs = repeated_tools(20, very_long_tool_content());
+    match compact_for_pre_step(ctx, msgs) {
+      Compacted(out, note, _) =>
+        contains(note, "tier=tier1")
+          && contains(note, "keep_last=10")
+          && candidate_fits(ctx, out),
+      PassThrough => false
+      ,PassThroughObserved(_, _) => false
+    }
+  }
+
+func test_oversized_recent_tool_result_is_capped_under_pressure() -> bool
+  tests [((), true)]
+  {
+    let input = [user("context ${very_long_tool_content()}"), tool("recent", very_long_tool_content())];
+    match compact_for_pre_step(test_ctx(300), input) {
+      Compacted(out, _, _) => contains(show(out), "large tool result capped") && length(show(out)) < length(show(input)),
+      PassThrough => false
+      ,PassThroughObserved(_, _) => false
+    }
+  }
+
+func test_small_recent_tool_result_is_untouched() -> bool
+  tests [((), true)]
+  {
+    match compact_for_pre_step(test_ctx(10000), [tool("recent", "small result")]) {
+      PassThrough => true,
+      PassThroughObserved(_, _) => false,
+      Compacted(_, _, _) => false
+    }
+  }

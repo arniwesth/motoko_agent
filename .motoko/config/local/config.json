@@ -2,7 +2,8 @@
   "agent": {
     "model": "openai/deepseek-v4-flash",
     "workdir": ".",
-    "max_steps": 50,
+    "context_limit": 100000,
+    "max_steps": 1010,
     "step_delay_ms": 0,
     "max_retries": 3,
     "retry_base_ms": 1000,
@@ -31,7 +32,7 @@
     "edit_mode": "hashline"
   },
   "extensions": {
-    "order": ["compaction_ai", "context_mode", "exa_search", "scratchpad", "ailang_docs"],
+    "order": ["empty_stop_guard", "progress_contract_guard", "compaction_ai", "context_mode", "exa_search", "compaction_structural"],
     "strict": false
   },
   "verification": {}

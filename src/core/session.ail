@@ -1,0 +1,3813 @@
+-- src/core/session.ail
+-- Phase C live v2 driver: the imperative shell over a pure step machine.
+--
+-- This module owns the real effect row and is the sole emitter of ledger
+-- events. Per step it lifts C2LoopState into a StepState, calls the pure
+-- `decide` (src/core/step_machine.ail), and executes the returned
+-- StepDecision through phases (model_phase / tool_phase / hook_phase) and
+-- ports. State deltas flow through apply_state_delta.
+--
+-- Continuation is state, not a field: `decide` re-derives each
+-- CallModel / RunTools / AwaitApproval / Finalize / Fail decision from
+-- typed StepState fields, and c2_loop tail-recurses with the next state.
+--
+-- This is the only agent loop. The legacy rpc_loop was deleted in the
+-- M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover; rpc.ail is now a thin entry
+-- point that builds config and calls run_v2_with_conversation here.
+-- src/core/agent_loop_v2.ail is a compatibility facade re-exporting
+-- these entry points under the historical import surface.
+--
+-- Companion to: src/core/step_machine.ail (pure decide),
+-- src/core/phase_vocab.ail (sealed types + transcript gate),
+-- src/core/ports.ail (port adapters), src/core/tool_phase.ail.
+--
+-- Companion to: src/core/tool_dispatch_adapter (M1), src/core/tool_catalog (M2)
+
+module src/core/session
+
+import std/ai (step, Message, ToolCall, ToolSchema, AIError, StepResult, StreamChunk, ContentDelta, ThinkingDelta, Usage)
+import std/io (println, readLine)
+import std/clock (now)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
+import std/list as List (length, foldl)
+import std/result (Result, Ok, Err)
+import std/string (trim, startsWith, substring, toLower, contains)
+import std/string as Str (length)
+import std/fs (writeFileResult)
+import std/process (exec, ProcessError, ProcessOutput)
+import std/bytes (toString)
+import std/trace as Trace
+import src/core/tool_catalog (tools_with_extensions)
+import src/core/tool_contract (call_to_json)
+import src/core/parse (extract_bash)
+import src/core/tool_dispatch_adapter (tool_call_to_envelope)
+import src/core/types (Msg)
+import src/core/dst_fault_catalogue (max_steps_discriminator_message)
+import src/core/config (CostRates)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
+import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, effective_input_limit)
+import src/core/context_usage (resolve_context_limit)
+import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/exit_manifest (publish_exit_manifest, manifest_path_var)
+import src/core/ext/runtime (
+  dispatch_response_intercept,
+  dispatch_solver_candidate,
+  dispatch_pre_step_chain,
+  PreStepStage,
+  StageApplied,
+  StageRejected,
+  StageObserved,
+  StagePassed
+)
+import src/core/phase_vocab (
+  LedgerEvent,
+  calibrated_tokens_messages,
+  calibrated_usage_percent,
+  to_schema_v1_kvs,
+  payload_digest,
+  system_prefix_digest_for,
+  msgs_to_messages,
+  split_for_compaction,
+  segment_messages,
+  system_prefix_chars,
+  step_result_to_message,
+  envelope_to_tool_message,
+  ProviderCallPrepared,
+  RunSummary,
+  TerminationReason,
+  TermSuccess,
+  TermBudgetExhausted,
+  TermMaxSteps,
+  TermCompactionExhausted,
+  TermProviderFailure,
+  TermSystemPromptEmpty,
+  TermInvalidHistory,
+  TermInternalFailure,
+  finish_reason_wire,
+  NativeToolDenied,
+  Dp7VerifierRejected,
+  CostExhausted,
+  StreamErrorRetry,
+  CostWarning,
+  CompactionApplied,
+  CompactionExhausted,
+  ExtCompactionRejected,
+  ExtensionDiagnostic,
+  ThinkingStreamStart,
+  ThinkingStreamEnd,
+  ProviderResult,
+  ExtInterceptHandled,
+  HybridBashExtracted,
+  DoneEvent,
+  EmptyStopFinalize,
+  ExtSolverFeedback,
+  PersistNudge,
+  NativeToolCalls,
+  NativeToolResults,
+  StreamDelta,
+  SessionSuspend,
+  SessionStart,
+  ErrorEvent,
+  StepState,
+  StepPolicy,
+  StepDecision,
+  PhaseResult,
+  ApprovalRequest,
+  ToolPlanEntry,
+  LedgerTrace,
+  LedgerRecord,
+  CompactionStageRecord,
+  DecisionRecord,
+  WireRecord,
+  TraceStageApplied,
+  TraceStageRejected,
+  TraceStageObserved,
+  empty_ledger_trace,
+  ledger_append,
+  apply_state_delta,
+  apply_checkpoint,
+  history_from_seed,
+  history_append,
+  history_messages,
+  payload_messages,
+  seal_compacted_payload,
+  SealExhausted,
+  SealSystemPromptEmpty,
+  CallModel,
+  RunTools,
+  AwaitApproval,
+  InjectUserMessage,
+  TakeCheckpoint,
+  Finalize,
+  Fail
+)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
+import src/core/step_machine (decide)
+import src/core/model_phase (phase_from_result)
+import src/core/hook_phase (stage_record)
+import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
+import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
+import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir) -- WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
+
+type SessionPolicy = {
+  step: StepPolicy,
+  headless: bool
+}
+
+-- WI-A13 stage 2 added `world`. A12 gave the world a way IN (`ScriptedWorld`,
+-- so an assertion could seed a cursor); discovery needs the way OUT, because
+-- the interaction log the ports record rides in the world and nothing else in
+-- this result carries it. Without this field stage 2 is not merely harder, it
+-- is impossible: the recorder would have no reader.
+--
+-- It alters nothing the driver requests. `c2_finalize` is the sole construction
+-- site — the structural guard in `make terminal_trace` counts exactly one
+-- terminal record literal — so this is one field at one place, and every
+-- existing consumer reads `.result` and `.trace` and is untouched.
+-- WI-C3 adds the third channel, and it is a D6-level widening rather than a
+-- convenience: `ExecutionUnderTest` needs the returned outcome, the complete
+-- trace AND D6.4's emission witness, and before this the triple carried the
+-- first two. A bridge from a run to an `ExecutionUnderTest` could not be built
+-- without it — `emissions: []` was the only value available, and an empty
+-- witness reads identically to a run that emitted nothing.
+export type TracedSessionResult = {
+  result: Result[[Message], AIError],
+  trace: LedgerTrace,
+  world: WorldState,
+  emissions: [LedgerEvent]
+}
+
+-- Convert Motoko's UI/profile model identifier to the provider API model id
+-- expected by upstream stepWithStream(). The --ai flag already selected the
+-- handler/provider; the model argument passed to step is forwarded to the
+-- upstream API body.
+--
+-- Important: OpenRouter's API model ids are themselves vendor/model strings
+-- such as "anthropic/claude-sonnet-4-6" and "openai/gpt-4o". Strip the
+-- explicit Motoko/OpenRouter routing prefix only for pinned vendor/model ids;
+-- keep "openrouter/auto" intact because AILANG/OpenRouter use it as the
+-- routing-policy model.
+--
+-- Direct provider prefixes are Motoko routing syntax and are stripped before
+-- the provider request. AILANG itself treats vendor/model strings such as
+-- "openai/..." and "anthropic/..." as OpenRouter, so the TS launcher also
+-- strips those prefixes for --ai provider selection.
+pure func provider_api_model(model: string, openai_base_url: string) -> string {
+  if model == "openrouter/auto" then
+    model
+  else if startsWith(model, "openrouter/") then
+    let prefix_len = Str.length("openrouter/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "openai/") then
+    let prefix_len = Str.length("openai/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "anthropic/") then
+    let prefix_len = Str.length("anthropic/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "google/") then
+    let prefix_len = Str.length("google/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else
+    model
+}
+
+-- emit a JSON line to stdout for the TS env-server to forward to the TUI.
+-- Same protocol as src/core/ai_compat (M-AI-CALL-STREAM-HELPER side).
+func emit_json(payload: Json) -> () ! {IO} {
+  println(encode(payload))
+}
+
+pure func trace_event_enabled(event_type: string) -> bool {
+  event_type == "session_start" || event_type == "run_summary"
+}
+
+-- Recall: every key in the list below must be classified sensitive, so that
+-- trace_json_value redacts it. One-directional, like has_shell_tokens in
+-- tool_runtime.ail -- adding a tenth key still verifies, removing one does not
+-- (the solver returns the key as the counterexample). The converse is omitted
+-- deliberately: for an enumeration it is the body restated, and a restatement
+-- would fail the addition edit too. Falsified in CI by verify_mutations; this
+-- predicate has no test and one call site (:262), so the contract and that
+-- mutation case are its only mechanical coverage.
+pure func trace_sensitive_key(key: string) -> bool
+  ensures { (not (key == "task")       || result) && (not (key == "text")    || result)
+         && (not (key == "text_delta") || result) && (not (key == "output")  || result)
+         && (not (key == "content")    || result) && (not (key == "cmd")     || result)
+         && (not (key == "feedback")   || result) && (not (key == "errors")  || result)
+         && (not (key == "message")    || result) }
+  {
+  key == "task"
+    || key == "text"
+    || key == "text_delta"
+    || key == "output"
+    || key == "content"
+    || key == "cmd"
+    || key == "feedback"
+    || key == "errors"
+    || key == "message"
+}
+
+pure func trace_string_value(s: string) -> Json {
+  if Str.length(s) > 256 then
+    js("${substring(s, 0, 256)}...[truncated]")
+  else
+    js(s)
+}
+
+pure func trace_value_for_key(key: string, value: Json) -> Json {
+  if trace_sensitive_key(key) then js("[redacted]")
+  else match value {
+    JString(s) => trace_string_value(s),
+    JArray(_) => js("[array]"),
+    JObject(_) => js("[object]"),
+    _ => value
+  }
+}
+
+pure func trace_extra_kvs(extra: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  match extra {
+    [] => [],
+    item :: rest => kv(item.key, trace_value_for_key(item.key, item.value)) :: trace_extra_kvs(rest)
+  }
+}
+
+func emit_trace_event(session_id: string, event_type: string, extra: [{key: string, value: Json}]) -> () ! {Trace} {
+  if trace_event_enabled(event_type) then
+    Trace.event(event_type, encode(jo([
+      kv("schema_version", js(schema_version())),
+      kv("session_id",     js(session_id)),
+      kv("type",           js(event_type))
+    ] ++ trace_extra_kvs(extra))))
+  else
+    ()
+}
+
+-- M-MOTOKO-EVAL-INSTRUMENTATION (schema v1):
+-- The session JSONL is the single structured-output surface for downstream
+-- consumers (TUI replay, AILANG eval-harness adapter, post-run analysis).
+-- Schema v1 = additive metadata on every event (schema_version + session_id)
+-- + per-step token/cost telemetry + a terminal `run_summary` event with
+-- cumulative totals. Documented at:
+--   design_docs/planned/m-motoko-eval-instrumentation.md
+-- Bumping this string is a breaking change for downstream parsers.
+pure func schema_version() -> string { "1" }
+
+-- Build-time constant injected by `make build` (Makefile sets -ldflags or
+-- equivalent). Falls back to "dev" for local-source runs. Surfaced in
+-- session_start + run_summary so the AILANG eval harness can correlate
+-- benchmark results with the exact motoko commit that produced them
+-- (mitigates "self-referential masking" — see eval-instrumentation design
+-- doc Risk #4).
+pure func motoko_commit() -> string { "dev" }
+
+-- Convert millicents (integer arithmetic, used internally by the cost
+-- tracker) to USD float. 100000 millicents = $1.00.
+pure func millicents_to_usd(mc: int) -> float {
+  _int_to_float(mc) / 100000.0
+}
+
+pure func event_type_from_projected(kvs: [{key: string, value: Json}]) -> string {
+  match kvs {
+    [] => "",
+    x :: _ =>
+      if x.key == "type" then
+        match x.value {
+          JString(s) => s,
+          _ => ""
+        }
+      else ""
+  }
+}
+
+pure func event_extra_from_projected(kvs: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    _ :: rest => rest
+  }
+}
+
+func ledger_emit(session_id: string, e: LedgerEvent) -> () ! {IO, Trace} {
+  let projected = to_schema_v1_kvs(e);
+  let event_type = event_type_from_projected(projected);
+  emit_json(jo([
+    kv("schema_version", js(schema_version())),
+    kv("session_id",     js(session_id))
+  ] ++ projected));
+  emit_trace_event(session_id, event_type, event_extra_from_projected(projected))
+}
+
+func emit_pre_step_stages(session_id: string, step_idx: int, stages: [PreStepStage]) -> () ! {IO, Trace} {
+  match stages {
+    [] => (),
+    s :: rest => {
+      let _ = match s.outcome {
+        StageApplied(note) => ledger_emit(session_id, CompactionApplied({
+          step: step_idx,
+          note: note
+        })),
+        StageRejected(reason) => ledger_emit(session_id, ExtCompactionRejected({
+          step: step_idx,
+          note: reason
+        })),
+        StageObserved(code, fields) => ledger_emit(session_id, ExtensionDiagnostic({
+          step: step_idx,
+          extension: s.ext_id,
+          code: code,
+          fields: fields
+        })),
+        StagePassed => ()
+      };
+      emit_pre_step_stages(session_id, step_idx, rest)
+    }
+  }
+}
+
+-- Cumulative token/cost totals threaded through loop_v2 recursion. Bundled
+-- into a single record (vs 6 extra params) so adding new totals later (e.g.
+-- reasoning tokens) doesn't require touching every call site again.
+type RuntimeLoopTotals = {
+  input_tokens: int,
+  output_tokens: int,
+  cache_read: int,
+  cache_creation: int,
+  cost_millicents: int,
+  cost_warned_pct: int
+}
+
+type C2LoopState = {
+  msgs: [Message],
+  step_idx: int,
+  totals: RuntimeLoopTotals,
+  ext_artifacts: Json,
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
+  provider: Ports,
+  -- D1's `world_state`: ONE explicit field, threaded by the driver, the sole
+  -- home for every effect cursor in the run. Not a closure captured inside the
+  -- Ports value, not a provider ADT payload, and never re-derived from message
+  -- history. WI-A12 landed this by renaming WI-A2's interim `provider_state`
+  -- field, which is how D1's "subsumed and deleted in the same change" reads in
+  -- practice: there is no moment where two homes exist.
+  --
+  -- Every subsequent effect class A12 threads — the clock, approval, env reads,
+  -- runtime randomness, the typed tool contract — adds a field to WorldState
+  -- and consumes it through a port. None of them adds a field HERE.
+  world_state: WorldState,
+  pending_tool_calls: [ToolCall],
+  pending_tool_context: [Message],
+  pending_tool_prefix: [Message],
+  pending_tool_batched: bool,
+  accumulated_tool_msgs: [Message],
+  pending_approval: Option[ApprovalRequest],
+  last_finish_reason: string,
+  last_response_text: string,
+  nudges_used: int,
+  finalize_source: string,
+  prior_counts: RuntimeStatusCounts,
+  trace: LedgerTrace,
+
+  -- WI-C3. D6.4's emission witness: every logical StreamDelta the driver
+  -- projected during a provider callback, in order, across every step of the
+  -- run. `ledger_emit` is `-> () ! {IO, Trace}` and keeps no in-memory log, and
+  -- the callback's row is closed `{IO}` so it cannot accumulate one either —
+  -- this field is where the log the PROVIDER returned is carried instead, which
+  -- is the only in-process observation of the stream that exists (see
+  -- `stream_chunk_events` and the note at the model-step site).
+  --
+  -- It is threaded ALONGSIDE `trace` and deliberately not derived from it. The
+  -- trace has ONE junction after the call (`trace_after_call`); the witness is
+  -- set in each of the branch literals below. That asymmetry is the point: a
+  -- branch that carries one channel forward and drops the other goes red as
+  -- StreamParityCount, which is S12's identity-transition class arriving on a
+  -- pair of channels rather than on a world token.
+  emissions: [LedgerEvent]
+}
+
+type RuntimeStatusCounts = {
+  provider_calls_started: int,
+  provider_calls_completed: int,
+  stage_applied_total: int,
+  stage_rejected_total: int,
+  compaction_ai_applied: int
+}
+
+pure func zero_totals() -> RuntimeLoopTotals {
+  { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0 }
+}
+
+pure func zero_runtime_status_counts() -> RuntimeStatusCounts {
+  {
+    provider_calls_started: 0,
+    provider_calls_completed: 0,
+    stage_applied_total: 0,
+    stage_rejected_total: 0,
+    compaction_ai_applied: 0
+  }
+}
+
+-- THE FOLD IS `foldl` AND NOT HAND-WRITTEN RECURSION, and that is the whole of
+-- the fix for motoko_agent#160. The hand-written version cost ONE INTERPRETER
+-- FRAME PER TRACE RECORD, and `runtime_status_json` calls it once per tool
+-- batch over a trace that only grows — so a long session died at
+-- `RT_REC_003: max recursion depth 10000 exceeded` mid-run, at ~9 865 records,
+-- in code containing no unbounded recursion.
+--
+-- WHY A FRAME AT ALL: AILANG v0.33.0 does not eliminate tail calls, so depth
+-- over a list is the list's length whether the call is in tail position or not.
+-- Measured, and recorded with the upstream half in
+-- `.agent/issues/ailang-no-tail-call-optimization.md`.
+--
+-- WHY `foldl` FIXES IT rather than merely moving the cost: stdlib traversals
+-- are frame-FREE. Measured the same way — a 300-frame descent followed by a
+-- `foldl` over 300 elements completes at a ceiling of 350, as do `++`,
+-- `List.map`, `Str.join` and `std/json.encode`. Depth in this codebase comes
+-- only from recursion we write ourselves.
+--
+-- WHAT THIS DOES NOT DO, stated so the next reader does not assume it: the
+-- traversal is still O(|trace|) in TIME on every batch that reaches it. That is
+-- microseconds at the scale that killed the run, and it is not the fault. The
+-- call site is now lazy as well (see `runtime_builtin` below), so the common
+-- batch does not pay it at all.
+--
+-- REJECTED: threading an incremental `RuntimeStatusCounts` through
+-- `C2LoopState`. It removes the time cost too, but it adds a field to a record
+-- every arm of `c2_loop` constructs, and a counter maintained at the three
+-- sites that append counted records drifts silently the first time a fourth
+-- site appends one. This keeps the count derived from the trace — correct by
+-- construction, which is the property that was never in question.
+pure func runtime_status_count_one(counts: RuntimeStatusCounts, r: LedgerRecord) -> RuntimeStatusCounts {
+  match r {
+        WireRecord(event) => match event {
+          ProviderCallPrepared(_) => {
+            provider_calls_started: counts.provider_calls_started + 1,
+            provider_calls_completed: counts.provider_calls_completed,
+            stage_applied_total: counts.stage_applied_total,
+            stage_rejected_total: counts.stage_rejected_total,
+            compaction_ai_applied: counts.compaction_ai_applied
+          },
+          ProviderResult(_) => {
+            provider_calls_started: counts.provider_calls_started,
+            provider_calls_completed: counts.provider_calls_completed + 1,
+            stage_applied_total: counts.stage_applied_total,
+            stage_rejected_total: counts.stage_rejected_total,
+            compaction_ai_applied: counts.compaction_ai_applied
+          },
+          _ => counts
+        },
+        CompactionStageRecord(stage) => match stage.outcome {
+          TraceStageApplied(_) => {
+            provider_calls_started: counts.provider_calls_started,
+            provider_calls_completed: counts.provider_calls_completed,
+            stage_applied_total: counts.stage_applied_total + 1,
+            stage_rejected_total: counts.stage_rejected_total,
+            compaction_ai_applied: counts.compaction_ai_applied + (if is_compaction_ai_ext_id(stage.ext_id) then 1 else 0)
+          },
+          TraceStageRejected(_) => {
+            provider_calls_started: counts.provider_calls_started,
+            provider_calls_completed: counts.provider_calls_completed,
+            stage_applied_total: counts.stage_applied_total,
+            stage_rejected_total: counts.stage_rejected_total + 1,
+            compaction_ai_applied: counts.compaction_ai_applied
+          },
+          TraceStageObserved(_, _) => counts,
+          _ => counts
+        },
+        _ => counts
+  }
+}
+
+pure func is_compaction_ai_ext_id(ext_id: string) -> bool {
+  ext_id == "compaction_ai" || startsWith(ext_id, "compaction_ai#")
+}
+
+-- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order), the
+-- same trade `compaction.estimate_tokens_messages` makes and for the same
+-- reason. Named rather than silent because §3.1 of
+-- `.agent/projects/011_improve_test_axises/RESEARCH-test-axes-beyond-dst.md`
+-- plans to expand contract coverage, and this is one function it can no longer
+-- reach.
+-- EXPORTED FOR ONE CALLER, and it is a gate rather than a feature:
+-- `scripts/dst/recursion_depth_probe.ail` calls this over a deliberately large
+-- trace at a deliberately low recursion ceiling, so that a future rewrite back
+-- to hand-written recursion fails loudly instead of shipping. The export exists
+-- because the probe must exercise THIS function and not a copy of it — a
+-- replicated fold would pass while production regressed, which is the exact
+-- shape of gate this project refuses.
+export pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
+  List.foldl(runtime_status_count_one, zero_runtime_status_counts(), trace.records)
+}
+
+pure func runtime_status_counts_add(a: RuntimeStatusCounts, b: RuntimeStatusCounts) -> RuntimeStatusCounts {
+  {
+    provider_calls_started: a.provider_calls_started + b.provider_calls_started,
+    provider_calls_completed: a.provider_calls_completed + b.provider_calls_completed,
+    stage_applied_total: a.stage_applied_total + b.stage_applied_total,
+    stage_rejected_total: a.stage_rejected_total + b.stage_rejected_total,
+    compaction_ai_applied: a.compaction_ai_applied + b.compaction_ai_applied
+  }
+}
+
+pure func runtime_status_json(
+  st: C2LoopState,
+  policy: SessionPolicy,
+  tool_step_idx: int
+) -> Json {
+  let counts = runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace));
+  let context_msgs = c2_pending_context(st);
+  let split = split_for_compaction(context_msgs);
+  let pinned = split.pinned;
+  let limit = policy.step.compaction.context_limit;
+  let actual_input_tokens = st.telemetry.last_input_tokens;
+  let actual_pct = if limit == 0 then 0 else (actual_input_tokens * 100) / limit;
+  let estimated_input_tokens = estimate_tokens_messages(context_msgs);
+  let estimated_pct = usage_percent_with_limit(context_msgs, limit);
+  let calibrated_input_tokens = calibrated_tokens_messages(context_msgs, st.telemetry);
+  let calibrated_pct = calibrated_usage_percent(context_msgs, limit, st.telemetry);
+  jo([
+    kv("tool", js("MotokoRuntimeStatus")),
+    kv("current_step", jnum(_int_to_float(tool_step_idx))),
+    kv("provider_calls_started", jnum(_int_to_float(counts.provider_calls_started))),
+    kv("provider_calls_completed", jnum(_int_to_float(counts.provider_calls_completed))),
+    kv("steps_executed_so_far", jnum(_int_to_float(counts.provider_calls_completed))),
+    kv("step_budget", jnum(_int_to_float(policy.step.step_budget))),
+    kv("finish_reason_so_far", js(st.last_finish_reason)),
+    kv("compaction", jo([
+      kv("stage_applied_total", jnum(_int_to_float(counts.stage_applied_total))),
+      kv("stage_rejected_total", jnum(_int_to_float(counts.stage_rejected_total))),
+      kv("compaction_ai_applied", jnum(_int_to_float(counts.compaction_ai_applied)))
+    ])),
+    kv("system_prefix", jo([
+      kv("count", jnum(_int_to_float(count_system_prefix(pinned)))),
+      kv("chars", jnum(_int_to_float(system_prefix_chars(pinned)))),
+      kv("digest", js(system_prefix_digest_for(pinned)))
+    ])),
+    kv("context_window", jo([
+      kv("context_limit", jnum(_int_to_float(limit))),
+      kv("last_sent", jo([
+        kv("input_tokens", jnum(_int_to_float(actual_input_tokens))),
+        kv("usage_pct", jnum(_int_to_float(actual_pct)))
+      ])),
+      kv("uncompacted_pending", jo([
+        kv("estimated_tokens", jnum(_int_to_float(estimated_input_tokens))),
+        kv("estimated_pct", jnum(_int_to_float(estimated_pct))),
+        kv("calibrated_tokens", jnum(_int_to_float(calibrated_input_tokens))),
+        kv("calibrated_pct", jnum(_int_to_float(calibrated_pct)))
+      ])),
+      kv("note", js("last_sent = real provider tokens of the previous compacted request; uncompacted_pending = the full retained history before this step's ephemeral compaction. They measure different windows by design."))
+    ])),
+    kv("usage", jo([
+      kv("input_tokens", jnum(_int_to_float(st.totals.input_tokens))),
+      kv("output_tokens", jnum(_int_to_float(st.totals.output_tokens))),
+      kv("cache_read_input_tokens", jnum(_int_to_float(st.totals.cache_read))),
+      kv("cache_creation_input_tokens", jnum(_int_to_float(st.totals.cache_creation))),
+      kv("total_cost_millicents", jnum(_int_to_float(st.totals.cost_millicents)))
+    ]))
+  ])
+}
+
+pure func runtime_status_tool_message(call: ToolCall, content: string) -> Option[Message] {
+  if call.name == "MotokoRuntimeStatus" then Some({
+    role: "tool",
+    content: content,
+    tool_calls: [],
+    tool_call_id: call.id,
+    images: []
+  }) else None
+}
+
+pure func c2_decision_name(d: StepDecision) -> string {
+  match d {
+    CallModel(_) => "CallModel",
+    RunTools(_) => "RunTools",
+    AwaitApproval(_) => "AwaitApproval",
+    InjectUserMessage(_) => "InjectUserMessage",
+    TakeCheckpoint(_) => "TakeCheckpoint",
+    Finalize(_) => "Finalize",
+    Fail(_) => "Fail"
+  }
+}
+
+pure func c2_append_decision(trace: LedgerTrace, step_idx: int, decision: StepDecision) -> LedgerTrace {
+  ledger_append(trace, DecisionRecord({ step: step_idx, decision: c2_decision_name(decision) }))
+}
+
+pure func c2_trace_stage_records(trace: LedgerTrace, step_idx: int, stages: [PreStepStage]) -> LedgerTrace {
+  match stages {
+    [] => trace,
+    s :: rest => c2_trace_stage_records(ledger_append(trace, stage_record(step_idx, s)), step_idx, rest)
+  }
+}
+
+pure func c2_trace_wire_events(trace: LedgerTrace, events: [LedgerEvent]) -> LedgerTrace {
+  match events {
+    [] => trace,
+    e :: rest => c2_trace_wire_events(ledger_append(trace, WireRecord(e)), rest)
+  }
+}
+
+func c2_emit_events(session_id: string, events: [LedgerEvent]) -> () ! {IO, Trace} {
+  match events {
+    [] => (),
+    e :: rest => {
+      let _ = ledger_emit(session_id, e);
+      c2_emit_events(session_id, rest)
+    }
+  }
+}
+
+pure func c2_tool_plan_calls(entries: [ToolPlanEntry]) -> [ToolCall] {
+  match entries {
+    [] => [],
+    e :: rest => e.call :: c2_tool_plan_calls(rest)
+  }
+}
+
+pure func c2_step_totals(totals: RuntimeLoopTotals) -> {
+  input_tokens: int,
+  output_tokens: int,
+  cost_millicents: int,
+  cost_warned_pct: int
+} {
+  {
+    input_tokens: totals.input_tokens,
+    output_tokens: totals.output_tokens,
+    cost_millicents: totals.cost_millicents,
+    cost_warned_pct: totals.cost_warned_pct
+  }
+}
+
+func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
+  match history_from_seed(st.msgs) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: st.step_idx,
+      history: h,
+      telemetry: st.telemetry,
+      totals: c2_step_totals(st.totals),
+      nudges_used: st.nudges_used,
+      ext_artifacts: st.ext_artifacts,
+      pending_tool_calls: st.pending_tool_calls,
+      last_finish_reason: st.last_finish_reason,
+      last_response_text: st.last_response_text
+    })
+  }
+}
+
+-- WI-A12's clock class made `world` an explicit parameter rather than reading
+-- `provider.world` here. That is not ceremony: the entry point performs two
+-- clock reads (the session id and `started_at_ms`) BEFORE the loop begins, and
+-- taking the initial world from `provider.world` would silently discard both
+-- their successors, starting the loop from an un-advanced clock. That variant
+-- type-checks cleanly and its only symptom is `duration_ms: 0` — which is why
+-- `world_state_probe` asserts the clock advances rather than only that it is
+-- reproducible. A frozen clock is perfectly reproducible.
+func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, world: WorldState, prior_counts: RuntimeStatusCounts) -> C2LoopState {
+  {
+    msgs: history,
+    step_idx: 0,
+    totals: zero_totals(),
+    ext_artifacts: jo([]),
+    telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+    provider: provider.ports,
+    world_state: world,
+    pending_tool_calls: [],
+    pending_tool_context: [],
+    pending_tool_prefix: [],
+    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+    last_finish_reason: "",
+    last_response_text: "",
+    nudges_used: count_persist_nudges(history),
+    finalize_source: "",
+    prior_counts: prior_counts,
+    trace: empty_ledger_trace(),
+    emissions: []
+  }
+}
+
+func c2_initial_state(history: [Message], provider: PortedProvider) -> C2LoopState {
+  c2_initial_state_with_counts(history, provider, provider.world, zero_runtime_status_counts())
+}
+
+-- Serialize the exact [Message] payload a provider rejected, so a
+-- non-retryable ProtocolError (e.g. hy3:free/Novita "invalid request error")
+-- can be inspected/replayed offline. Off by default; enabled by setting
+-- MOTOKO_CAPTURE_FAILED_PAYLOAD (writes .motoko/failing_payload.json). Useful
+-- for diagnosing the intermittent Novita rejections during hy3:free runs.
+func dbg_toolcall_json(c: ToolCall) -> Json {
+  jo([kv("id", js(c.id)), kv("name", js(c.name)), kv("arguments", js(c.arguments))])
+}
+
+func dbg_toolcalls_json(cs: [ToolCall]) -> [Json] {
+  match cs { [] => [], c :: rest => dbg_toolcall_json(c) :: dbg_toolcalls_json(rest) }
+}
+
+func dbg_message_json(m: Message) -> Json {
+  jo([
+    kv("role", js(m.role)),
+    kv("content", js(m.content)),
+    kv("tool_calls", ja(dbg_toolcalls_json(m.tool_calls))),
+    kv("tool_call_id", js(m.tool_call_id))
+  ])
+}
+
+func dbg_messages_json(msgs: [Message]) -> [Json] {
+  match msgs { [] => [], m :: rest => dbg_message_json(m) :: dbg_messages_json(rest) }
+}
+
+func capture_failing_payload(e: AIError, msgs: [Message]) -> () ! {FS} {
+  let payload = encode(jo([
+    kv("error_code", js(e.code)),
+    kv("error_message", js(e.message)),
+    kv("retryable", jb(e.retryable)),
+    kv("messages", ja(dbg_messages_json(msgs)))
+  ]));
+  match writeFileResult(".motoko/failing_payload.json", payload) { Ok(_) => (), Err(_) => () }
+}
+
+-- WI-B2b. THIS IS THE SITE D1's EXTENSION-MODEL EXCLUSION WAS ABOUT, and the
+-- exclusion is lifted here.
+--
+-- What it used to do, and why: it passed `empty_world_state()` and threw the
+-- successor away. Not an oversight — `ExtPorts.ai_step` returned
+-- `Result[string, string]` and the hook results above it were decision-only, so
+-- a successor had no way back to `C2LoopState`. Threading the driver's live
+-- cursor IN and discarding the successor would have recreated F6 (a cursor that
+-- serves the same answer forever while nothing crashes); capturing it in this
+-- closure would have created the second home D1 prohibits. Handing over a fresh
+-- empty world was the only honest option, and the cost was recorded rather than
+-- hidden: against a Scripted provider the empty script served `terminal_step()`
+-- and the extension was told the model had answered.
+--
+-- What it does now: takes the world in and returns the successor out, so the
+-- caller — `ext_ports_of`'s bridge, and through it the hook and the dispatch
+-- fold — can thread it back to `C2LoopState`. The world still has exactly one
+-- home; this function neither captures nor stores it.
+--
+-- STILL DROPPED ON THIS PATH, and named rather than left for a reader to
+-- discover: `exchange.emissions`. WI-C3 gave the DRIVER's own model-step site a
+-- consumer, but this is the EXTENSION bridge and it is unchanged — closing it
+-- means widening `ExtPorts.ai_step` again to carry a chunk log the ABI has no
+-- type for. So an extension's provider call streams into the wire and
+-- contributes nothing to the run's emission witness, which is a narrower gap
+-- than WI-A1's and is still a separate change from this one.
+-- NAMED, not an inline `{ result: ..., next_state: ... }`. Two reasons, and the
+-- second is the one that bites: `derive.py` finds a function's body by taking
+-- the first `{` after its signature that is not an effect row — so an anonymous
+-- RECORD RETURN TYPE is mistaken for the body, no `p.model_step(` is found in
+-- it, and `ai_step` is reported **unrouted**, the tool's fail-open answer. A
+-- named type keeps the signature brace-free up to the body.
+type ExtAiStepResult = { result: Result[string, string], next_state: WorldState }
+
+func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, msgs: [Msg]) -> ExtAiStepResult ! {AI, IO, Trace} {
+  let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
+  -- Resolve the provider API model the same way the main step loop does
+  -- (dispatch_step calls provider_api_model). Extensions (e.g. compaction_ai)
+  -- pass their configured model verbatim, which for OpenRouter still carries
+  -- the "openrouter/" routing prefix; sent raw the provider rejects it with 400
+  -- "not a valid model ID", surfacing as compaction_ai.summarizer_failed /
+  -- provider_error. Strip it here.
+  let exchange = p.model_step(world, provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk);
+  {
+    result: match exchange.result {
+      Ok(result) => Ok(result.message.content),
+      Err(e) => Err("${e.code}: ${e.message}")
+    },
+    next_state: exchange.next_state
+  }
+}
+
+-- The extension-side clock stays UN-ROUTED, deliberately, and this comment is
+-- the whole reason why.
+--
+-- HISTORY, KEPT DELIBERATELY, AND IN THE PAST TENSE (plan rule S15). Everything
+-- below describes the state between WI-A12 and WI-C5. **WI-C5 widened
+-- `ExtPorts.clock_now` to `(ExtWorld) -> ExtClockReading` and the seam is now
+-- ROUTED — see `ext_ports_of` above.** The block is kept rather than deleted
+-- because the measurement in it (what does and does not parse on the pin) is
+-- the evidence for a language limitation that is still true, and a future item
+-- reaching for a zero-argument port will want it. The CONCLUSION it reaches —
+-- "the ambient read is chosen" — is retired.
+--
+-- WI-A12 widened `Ports.clock_now` to be state-threaded. `ExtPorts.clock_now`
+-- WAS `() -> int`, and widening it was the Milestone B ABI major (D1), out of
+-- A12's scope by the plan's own boundary — the eight `motoko-ext-compose` clock
+-- sites and this seam belonged to WI-C5. The seam half is done; the eight
+-- compose sites are NOT, and are reported unrouted at WI-C5 rather than
+-- silently carried.
+--
+-- Bridging the two WOULD HAVE NEEDED a `() -> int` closure capturing the world, and on
+-- pinned AILANG v0.26.0 that CANNOT BE WRITTEN: zero-argument lambdas do not
+-- parse in expression position (`func() ->` lexes `()` as the unit token, and
+-- `func ( ) ->` builds a one-parameter function of unit — "arity mismatch:
+-- 0 vs 1"), and partial application is not supported either ("cannot unify
+-- type constructor int with TFunc2"). Only the top-level declaration form
+-- `func f() -> T` is zero-arity, and a top-level function captures nothing.
+-- Both were measured on the pin, not assumed.
+--
+-- So the choice was between two un-routed options, and the deciding question is
+-- which one FAILS LOUDLY if someone adds the first caller before C5:
+--
+--   * a frozen constant / world snapshot — silently wrong, the exact shape of
+--     cluster 1's pinned cursor, and invisible to every gate; or
+--   * the ambient read below — which makes a deterministic run with `Clock`
+--     withheld DIE the moment a caller appears, turning the world_state poison
+--     probe red and naming the problem.
+--
+-- The ambient read WAS chosen for that reason, and WI-C5 REMOVED IT — the
+-- prediction in the last sentence of this paragraph is the one that came true.
+-- The widening it was waiting on is the one thing that could retire it, because
+-- the obstacle was the port's SHAPE and not its call sites: a two-argument port
+-- could always have been bridged, which is the whole of plan rule S3.
+-- Project a typed tool outcome onto the un-widened `ExtPorts.tool_handle` string
+-- return. Faults are RENDERED rather than dropped: an extension handed "" when
+-- a tool actually failed is the silent-wrong shape this whole item exists to
+-- remove, even on a seam A12 does not own.
+pure func tool_outcome_text(o: ToolOutcome) -> string {
+  match o {
+    ToolCompleted(c) => c.content,
+    ToolFailed(f) => encode(jo([kv("error", jb(true)), kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))])),
+    ToolCorrelationMismatch(m) => encode(jo([kv("error", jb(true)), kv("code", js("ToolCorrelationMismatch")), kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))])),
+    ToolDeadlineExceeded(d) => encode(jo([kv("error", jb(true)), kv("code", js("ToolDeadlineExceeded")), kv("tool_call_id", js(d.tool_call_id)), kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))), kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))]))
+  }
+}
+
+-- The exit-code projection beside the text one (WI-D23), deliberately NOT
+-- folded into `tool_outcome_text`: the string is the model-facing message and
+-- is unchanged; this is the typed half `ExtProcOutcome.exit_code` carries.
+-- `ToolCompleted` hands through the code the dispatcher stated — since WI-D23
+-- that is the real subprocess code on the live arm and the script's on the
+-- scripted one — and the three fault variants project to -1, because none of
+-- them is a process that exited and their discrimination already travels,
+-- rendered, in the text projection above. Without this function the field
+-- WI-D22 put on `ToolCompleted` would die one seam short of the only caller
+-- the seam exists for.
+pure func tool_outcome_exit_code(o: ToolOutcome) -> int {
+  match o {
+    ToolCompleted(c) => c.exit_code,
+    ToolFailed(_) => -1,
+    ToolCorrelationMismatch(_) => -1,
+    ToolDeadlineExceeded(_) => -1
+  }
+}
+
+pure func decode_or_empty(raw: string) -> Json {
+  match decode(raw) { Ok(j) => j, Err(_) => jo([]) }
+}
+
+-- EXPORTED AT WI-D23, for one consumer: `world_state_probe`'s adoption row,
+-- which per S14 must exercise THIS bridge's `tool_handle` closure against a
+-- scripted world — a substrate probe that rebuilds the closure's shape would
+-- measure its own fidelity, not the bridge. Production still has exactly the
+-- four `mk_v2_ext_ctx` call sites below; nothing else should construct an
+-- `ExtPorts` from a driver world.
+export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  -- WI-B2b. The bridge takes the token IN and returns the successor OUT, so
+  -- this closure captures no world at all — which is the point.
+  --
+  -- UPDATED AT WI-D16. This note used to read "`world` below is still captured
+  -- by `env_get` and `tool_handle`, and those two remain classifier-2 members
+  -- precisely because they cannot return a successor." `tool_handle` no longer
+  -- does either: it takes the token now, so `env_get` is the LAST closure in
+  -- this bridge that captures `world`, and it is the last classifier-2 member.
+  -- That is deliberate and its reason is on the ABI row — its problematic
+  -- callers are in `register_with_config`, which has no `ExtCtx` to reach any
+  -- of this through.
+  --
+  -- THE `let w0` IS LOad-BEARING FOR A TOOL, not for the compiler.
+  -- `tools/ext_call_inventory/derive.py` decides whether this field reaches a
+  -- core `Ports` seam by following ONE level of named call that forwards the
+  -- port — and its matcher for that call is `\b(IDENT)\s*\(([^()]*)\)`, which
+  -- cannot match an argument list containing nested parentheses. Written
+  -- inline as `ext_ai_step(p, token_to_world(w), ...)` the tool fails to follow
+  -- the call, reports `ai_step` as **unrouted**, and that is its documented
+  -- FAIL-OPEN answer — "the single most expensive bug in this tool's history",
+  -- in its own words. It looks like a clean result. Keep the conversion in its
+  -- own `let`, and if you must inline it, fix the tool first.
+  let ai_step = func(w: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
+    let w0 = token_to_world(w);
+    let out = ext_ai_step(p, w0, model, base_url, msgs);
+    { result: out.result, next_state: world_to_token(out.next_state) }
+  };
+  let env_get = func(key: string, fallback: string) -> string ! {Env} {
+    p.env_get(world, key, fallback).value
+  };
+  -- WI-D16 widens this seam. HISTORY, in the past tense per plan rule S15: it
+  -- WAS `(string, string) -> string`, and it captured `world` from this bridge's
+  -- parameter rather than taking one — which it could, because two-argument
+  -- fields can capture (plan rule S3). Capturing was never the problem. The
+  -- problem was the RETURN: `p.tool_exec` hands back a `ToolExecution` whose
+  -- `next_state` this closure read and then threw away, so a scripted tool call
+  -- that consumed a `state.tools` entry and advanced the clock advanced a world
+  -- no caller could see. That is the drop classifier 2 selected it for.
+  --
+  -- Written with the SAME `let w0` shape as `ai_step` and `clock_now`, and for
+  -- the same tool reason rather than for symmetry — see `ai_step`'s note above.
+  --
+  -- The typed outcome is PROJECTED TWICE (WI-D23): `tool_outcome_text` renders
+  -- it onto `output` — the model-facing string, unchanged since WI-D16 — and
+  -- `tool_outcome_exit_code` carries the one quantity a caller branches on
+  -- into the typed field WI-D23 added to `ExtProcOutcome`. The four-variant
+  -- fault DISCRIMINATION still does not cross the ABI; faults stay RENDERED
+  -- rather than dropped, so an extension is not handed "" when a tool actually
+  -- failed, and which fault class it was is still a string fact — that residue
+  -- is the catalogue's `extension_effect_fault` coverage-gap entry.
+  --
+  -- =========================================================================
+  -- WI-D21: WHAT THIS SEAM ACTUALLY DOES, MEASURED END TO END AT THE SEAM.
+  -- =========================================================================
+  --
+  -- WI-D19 and WI-D20 both concluded "the seam does not front subprocesses; it
+  -- fronts Motoko's own tool names". That is TRUE ABOUT WHAT IT FRONTS and it
+  -- produced the wrong menu for both of them, so the capability is recorded
+  -- here — at the seam — rather than in two extension packages' comments.
+  --
+  -- The two strings are a MOTOKO TOOL NAME and that tool's JSON ARGUMENTS. The
+  -- parameters were called `name` and `args`, which is why three `noop_tool_handle`
+  -- bindings in the tree call them `_cmd` and `_cwd` instead: the field is named
+  -- `tool_handle`, the ABI row types them `(ExtWorld, string, string)` and
+  -- documented neither, so five sites in the tree read two positional strings two
+  -- INCOMPATIBLE ways and nothing type-checks the difference. Renamed at WI-D21.
+  --
+  -- AND `BashExec` REACHES A REAL SUBPROCESS WITH A REAL EXIT CODE. Followed
+  -- down rather than grepped:
+  --
+  --   `p.tool_exec` -> `world_tool` (`ports.ail:1264`), which on an empty
+  --   `state.tools` delegates to `dispatch_one` -> `run_native_batch` ->
+  --   `run_native_call` (`tool_runtime.ail:165`). That if-chain's `BashExec` arm
+  --   calls `run_process_result`, which `exec`s the command and builds
+  --   `BashExecResult { cmd, stdout, stderr, exit_code, meta }`
+  --   (`tool_runtime.ail:842`). `dispatch_one` then encodes that record to JSON
+  --   (`tool_dispatch_adapter.ail:178`) and it arrives here as
+  --   `ToolCompleted.content`.
+  --
+  -- SO THE EXIT CODE WAS NEVER LOST; THE TYPE WAS — AND WI-D23 CLOSED THAT,
+  -- with the history kept two-part per S15. Through WI-D22 this paragraph
+  -- read: "a caller wanting to branch on it must decode a string and pull
+  -- `exit_code` — the string-parsing path WI-D19 correctly refused... it
+  -- cannot reach `ScriptedTool` without a program-schema version bump, so it
+  -- is scheduled rather than absorbed." WI-D22 shipped the bump and WI-D23
+  -- shipped the remaining live-side links: `dispatch_one_typed` returns the
+  -- code beside the content, `world_tool`'s live arm binds both, and this
+  -- closure projects `ToolCompleted.exit_code` into
+  -- `ExtProcOutcome.exit_code`. A caller branches on a typed field; nothing
+  -- on this path parses `content`'s JSON.
+  --
+  -- TWO FIELDS ARE CONSTANTS AND BOTH ARE CLAIMS. `workdir` is "." and not
+  -- `ctx.workdir` — this bridge is built by `ext_ports_of`, which takes no
+  -- workdir — so a routed subprocess runs where the process was started, not
+  -- where the extension thinks it is. `timeout_ms` is 0, which
+  -- `ToolInvocation.timeout_ms` defines as "no deadline", so this seam can never
+  -- produce `ToolDeadlineExceeded`. Both are stated rather than left for the
+  -- first caller.
+  --
+  -- THE CALL ID IS BLANK, AND WI-D24 MADE THAT LEGITIMATE INSTEAD OF FATAL. The
+  -- history is kept two-part per S15 because the defect is what decided the
+  -- design, and the fix is only legible against it.
+  --
+  -- WHAT THIS BLOCK SAID THROUGH WI-D23, and it was measured and true: "THE CALL
+  -- ID IS BLANK AND THAT IS A REJECTED PROGRAM, NOT A COSMETIC GAP.
+  -- `recording_tool` records `ToolIdentity("loop_v2", inv.call.id, inv.call.tool)`,
+  -- and `dst_program.validate_identity` rejects a blank `ToolIdentity` call id
+  -- with `IdentityComponentMissing(o, "tool call_id")`. So the FIRST extension to
+  -- call this seam in a recorded run makes the recorder emit a program its own
+  -- validator refuses." Nothing called the seam, so the defect was latent; WI-D21
+  -- asserted it rather than describing it.
+  --
+  -- WHAT IS TRUE AT HEAD: this closure no longer calls `tool_exec` at all. It
+  -- calls `Ports.ext_effect_exec`, whose recording adapter is
+  -- `ports.recording_ext_effect` — the EIGHTH — and which writes
+  -- `ExtensionEffectIdentity(holder, extension_effect_fault, "")`. The blank call
+  -- id is now in the one class D2 exempts, the origin names the EXTENSION rather
+  -- than the driver's loop, and the recorded interaction VALIDATES. The defect
+  -- WI-D21 §4 found is closed by measurement, not by argument: the round-trip row
+  -- in `scripts/dst/ext_effect_dst.ail` records through this closure, validates
+  -- the program with zero rejections, and replays it with the dispatch SERVED
+  -- from the world.
+  --
+  -- The blank was never a slip a better `id` would fix. This seam has no call id
+  -- BECAUSE THE EFFECT HAS NONE — the extension is not answering a model tool
+  -- call — and D2 names exactly one class where that is legitimate:
+  -- `ExtensionEffectIdentity`, whose own comment says the call id is "" "where
+  -- the effect has none — the only place a blank component is legitimate rather
+  -- than a missing required value".
+  --
+  -- THE TWO HALVES THE CLASS NEEDED, AND WHERE THEY CAME FROM:
+  --
+  --   THE CLASS ID ALREADY EXISTED. `validate_static_references` requires a
+  --   non-blank `class_id` to be a catalogue row, and A7 declares ELEVEN — five
+  --   provider, three tool, two approval, and `extension_effect_fault`
+  --   (`dst_fault_catalogue.ail`, in `required_class_ids()`). That row's own
+  --   coverage-gap entry has named THIS SEAM since WI-C5. WI-D24 reads it through
+  --   `fault_class_extension_effect()` rather than copying the literal.
+  --
+  --   THE EXT ID CAME FROM THE FOLD, NOT FROM HERE. WI-D21 wrote that "per-extension
+  --   ports, or an `ext_id` on `ExtCtx`, closes it"; measured, neither did. This
+  --   closure is built once per step from a registry it cannot index, and the ONE
+  --   place that knows which extension is about to run is `ext/runtime`'s fold —
+  --   which cannot call back into this module without closing an import cycle
+  --   (`session.ail:52`). An `ExtCtx.ext_id` would tell the hook something it
+  --   already knows and would still not reach this closure, whose ABI signature
+  --   `(ExtWorld, string, string)` is fixed below 6.0. So the fold stamps the id
+  --   into the world token it ALREADY re-seats per hook, and the adapter reads it
+  --   off `WorldState.holder_ext_id`. See that field for the full argument.
+  --
+  -- AND WI-D19'S PIN IN `dst_discovery.absent_classes` MOVED, at last, the way
+  -- D19's three filesystem classes did. Through WI-D23 this block ended: "the pin
+  -- is right and the reason on record is wrong. Reported rather than re-worded in
+  -- place; see WI-D21 §5." WI-D21 declined to re-word it so that the measured
+  -- refutation of D19's "structural" ground stayed visible, and WI-D24 is the item
+  -- that earns the re-wording: the class now has an adapter, so `absent_classes`
+  -- takes a WITNESS instead of a literal zero and the pin survives for every run
+  -- that routes nothing. `RandomDrawIdentity` stays pinned at literal zero — its
+  -- ground is unchanged, and it is still true that no adapter constructs it.
+  let tool_handle = func(w: ExtWorld, tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+    let w0 = token_to_world(w);
+    let inv: ToolInvocation = {
+      call: { id: "", tool: tool, arguments: decode_or_empty(args_json) },
+      workdir: ".",
+      timeout_ms: 0,
+      started_at_ms: 0
+    };
+    -- `ext_effect_exec` AND NOT `tool_exec` SINCE WI-D24. Same shape, different
+    -- class: this dispatch is the extension's, it is served from
+    -- `WorldState.ext_effects`, and it is recorded as
+    -- `ExtensionEffectIdentity(w0.holder_ext_id, extension_effect_fault, "")`.
+    -- The id comes off the world because this closure is built once per step and
+    -- cannot name its caller; `ext/runtime`'s fold stamps it on the re-seat.
+    let execution = p.ext_effect_exec(w0, inv);
+    { output: tool_outcome_text(execution.outcome),
+      exit_code: tool_outcome_exit_code(execution.outcome),
+      next_state: world_to_token(execution.next_state) }
+  };
+  -- WI-D16's file read seam, bridged to WI-D3's `Ports.file_read`. Same `let w0`
+  -- shape, same tool reason.
+  --
+  -- `present` is FORWARDED rather than re-derived from `content`. The core seam
+  -- already carries the distinction explicitly and collapsing it here would
+  -- reintroduce, at the bridge, exactly the empty-file-versus-missing-file
+  -- confusion `FileRead` was shaped to prevent — one layer below where anyone
+  -- would look for it.
+  let file_read = func(w: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+    let w0 = token_to_world(w);
+    let read = p.file_read(w0, path);
+    { present: read.present, content: read.content, next_state: world_to_token(read.next_state) }
+  };
+  -- WI-D17's two filesystem MUTATOR seams, bridged to `Ports.file_write` and
+  -- `Ports.file_remove`. Same `let w0` shape, same tool reason as every seam
+  -- above: `derive.py`'s call matcher cannot follow an argument list with nested
+  -- parentheses, so the conversion stays in its own `let` (S3, and WI-B2b paid
+  -- for discovering it).
+  --
+  -- `ok` and `error` are FORWARDED rather than collapsed, for the reason
+  -- `file_read`'s `present` is: the core seam carries the distinction and
+  -- re-deriving it here — say, `ok: error == ""` — would put the same fact in two
+  -- homes at the bridge, one layer below where anyone would look for it.
+  let file_write = func(w: ExtWorld, path: string, content: string) -> ExtFileMutation ! {FS} {
+    let w0 = token_to_world(w);
+    let done = p.file_write(w0, path, content);
+    { ok: done.ok, error: done.error, next_state: world_to_token(done.next_state) }
+  };
+  let file_remove = func(w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+    let w0 = token_to_world(w);
+    let done = p.file_remove(w0, path);
+    { ok: done.ok, error: done.error, next_state: world_to_token(done.next_state) }
+  };
+  -- WI-D18's three DIRECTORY seams. Same `let w0` shape and the same S3 tool
+  -- reason as every seam above.
+  --
+  -- THE KIND IS TRANSLATED BY AN EXHAUSTIVE MATCH AND NOT BY A STRING. `PathKind`
+  -- and `ExtPathKind` are two three-valued sums, and this is the one place they
+  -- meet; a `path_kind_label` round trip through a string would type-check, would
+  -- collapse an unrecognised label onto some default, and would put the
+  -- vocabulary in two homes on either side of the boundary. The match is what
+  -- makes a fourth constructor on either sum a compile error here.
+  let path_stat = func(w: ExtWorld, path: string) -> ExtPathStat ! {FS} {
+    let w0 = token_to_world(w);
+    let stat = p.path_stat(w0, path);
+    let k = match stat.kind {
+      PathMissing => ExtPathMissing,
+      PathFile => ExtPathFile,
+      PathDir => ExtPathDir
+    };
+    { kind: k, next_state: world_to_token(stat.next_state) }
+  };
+  -- `present` and `entries` are FORWARDED rather than re-derived. Deriving
+  -- `present: List.length(entries) > 0` here would type-check and would erase the
+  -- empty-directory-versus-absent-path distinction that the core class was built
+  -- to carry — one expression away from a silent wrong answer, at the boundary
+  -- rather than in the world.
+  let dir_list = func(w: ExtWorld, path: string) -> ExtDirListing ! {FS} {
+    let w0 = token_to_world(w);
+    let listing = p.dir_list(w0, path);
+    { present: listing.present, entries: listing.entries, next_state: world_to_token(listing.next_state) }
+  };
+  let dir_make = func(w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+    let w0 = token_to_world(w);
+    let done = p.dir_make(w0, path);
+    { ok: done.ok, error: done.error, next_state: world_to_token(done.next_state) }
+  };
+  -- WI-C5 routes the clock. It is written with the SAME `let w0` shape as
+  -- `ai_step` above and for the same tool reason, not for symmetry: the
+  -- inventory's call matcher cannot follow an argument list with nested
+  -- parentheses, so `p.clock_now(token_to_world(w))` written inline would be
+  -- reported UNROUTED — and that is the tool's fail-open answer, which looks
+  -- like a clean result. Keep the conversion in its own `let`.
+  let clock_now = func(w: ExtWorld) -> ExtClockReading ! {Clock} {
+    let w0 = token_to_world(w);
+    let reading = p.clock_now(w0);
+    { now_ms: reading.now_ms, next_state: world_to_token(reading.next_state) }
+  };
+  {
+    ai_step: ai_step,
+    tool_handle: tool_handle,
+    -- WI-D16. Nothing calls it yet — this item ships the seam and routes no
+    -- extension (that is part 2). A seam with no callers is the situation WI-D3
+    -- hit with `clock_now`; it is reported rather than presented as coverage.
+    file_read: file_read,
+    -- WI-D17. Nothing calls these either, and the reason they are here anyway is
+    -- the ordering `derive.py` measures: the core class exists, so they derive
+    -- `returns-it` rather than `unrouted`.
+    file_write: file_write,
+    file_remove: file_remove,
+    -- WI-D18. Nothing calls these three either; they are here because the core
+    -- classes exist, which is what makes them derive `returns-it`.
+    path_stat: path_stat,
+    dir_list: dir_list,
+    dir_make: dir_make,
+    -- WI-C5. Was `ext_unrouted_clock` — an ambient `now()` that plan rule S2
+    -- chose deliberately, because `ExtPorts.clock_now`'s `() -> int` shape
+    -- admitted no world capture and the alternative was a frozen snapshot that
+    -- no gate could see. The ABI widening removed the shape obstacle, so the
+    -- seam is now routed through the world like every other, and the S2
+    -- exception it justified is retired rather than merely unused.
+    clock_now: clock_now,
+    -- `env_get` was routed even before that, because it is two-argument and a
+    -- closure capturing the world could always be written for it. That
+    -- difference — parameter count, nothing else — is the whole of what plan
+    -- rule S3 is about.
+    env_get: env_get
+  }
+}
+
+
+
+pure func ext_token_telemetry(t: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int }) -> TokenTelemetry {
+  { last_input_tokens: t.last_input_tokens, last_output_tokens: t.last_output_tokens, last_estimated_input_tokens: t.last_estimated_input_tokens }
+}
+
+-- Normalise the caller-supplied StepProvider into the Ports seam, once, before
+-- the loop starts. This is the completion of WI-C13c ("Wire model dispatch
+-- through ports"): that commit introduced the normalisation but left
+-- StepProvider in C2LoopState, so `dispatch_step` and `ext_ports_for_provider`
+-- kept LiveAI/Scripted branches that no entry point could reach. Returning
+-- Ports makes the invariant structural instead of conventional.
+--
+-- StepProvider remains the *entry-point argument* type — callers still pass
+-- LiveAI or Scripted(script); it just does not survive into loop state.
+--
+-- WI-A2: it now returns the initial world alongside the Ports. The script rides
+-- in that world rather than being baked into a closure, which is what lets the
+-- driver own the cursor.
+--
+-- WI-A12 deleted the `history` parameter. It existed solely to compute the
+-- `base_assistant_count` that A2 retired — the derived index that WAS the F6
+-- defect — and A2 kept it only because D1 holds this seam stable until
+-- `world_state` replaces it. This is that replacement, so the parameter goes
+-- with it (cluster 1, C5). Six call sites, all of which were passing a message
+-- list nothing read.
+func ported_provider(rt: ExtRuntime, provider: StepProvider) -> PortedProvider ! {AI, Clock, Env, FS, IO, Process, Trace}{
+  match provider {
+    Ported(p) => { ports: p, world: empty_world_state() },
+    LiveAI => { ports: live_ports(rt), world: empty_world_state() },
+    Scripted(script) => { ports: scripted_ports(), world: scripted_world_state(script) },
+    ScriptedWorld(world) => { ports: scripted_ports(), world: world },
+    -- WI-A13 stage 2. Same world, recording adapters. `driver_only` discovery
+    -- is the only caller.
+    RecordingWorld(world) => { ports: recording_ports(rt), world: world },
+    -- WI-A13 stage 4. The recording adapters with D2's seeded generator on top:
+    -- the world's script, approval and tool cursors start EMPTY and each
+    -- response is chosen at the request that asks for it. `make seeded_generator`
+    -- is the only caller.
+    GeneratedWorld(world) => { ports: generating_ports(rt), world: world }
+  }
+}
+
+pure func c2_add_step_totals(totals: RuntimeLoopTotals, result: StepResult, step_cost: int, warned_pct: int) -> RuntimeLoopTotals {
+  {
+    input_tokens: totals.input_tokens + result.input_tokens,
+    output_tokens: totals.output_tokens + result.output_tokens,
+    cache_read: totals.cache_read + result.cache_read_input_tokens,
+    cache_creation: totals.cache_creation + result.cache_creation_input_tokens,
+    cost_millicents: totals.cost_millicents + step_cost,
+    cost_warned_pct: warned_pct
+  }
+}
+
+func c2_emit_cost_warning(
+  session_id: string,
+  step_idx: int,
+  total_cost_millicents: int,
+  max_cost_millicents: int,
+  already_warned_pct: int
+) -> int ! {IO, Trace} {
+  if max_cost_millicents > 0 then {
+    let pct = (total_cost_millicents * 100) / max_cost_millicents;
+    if pct >= 90 && already_warned_pct < 90 then {
+      let _ = ledger_emit(session_id, CostWarning({ threshold: "90pct", step: step_idx, pct: pct, total_cost_millicents: total_cost_millicents, total_cost_usd: millicents_to_usd(total_cost_millicents), cap_millicents: max_cost_millicents }));
+      90
+    } else if pct >= 75 && already_warned_pct < 75 then {
+      let _ = ledger_emit(session_id, CostWarning({ threshold: "75pct", step: step_idx, pct: pct, total_cost_millicents: total_cost_millicents, total_cost_usd: millicents_to_usd(total_cost_millicents), cap_millicents: max_cost_millicents }));
+      75
+    } else if pct >= 50 && already_warned_pct < 50 then {
+      let _ = ledger_emit(session_id, CostWarning({ threshold: "50pct", step: step_idx, pct: pct, total_cost_millicents: total_cost_millicents, total_cost_usd: millicents_to_usd(total_cost_millicents), cap_millicents: max_cost_millicents }));
+      50
+    } else already_warned_pct
+  } else already_warned_pct
+}
+
+pure func c2_done_step(step_idx: int) -> int {
+  if step_idx <= 0 then 0 else step_idx - 1
+}
+
+-- append_stream_delta: dispatch one StreamChunk variant to the ledger.
+-- protocol.
+--
+-- ContentDelta(text) → thinking_delta event (TUI appends to per-stream_id
+--                       buffer in arrival order; this is the assistant's
+--                       visible content as it streams).
+-- ThinkingDelta(text) → reasoning_delta event (NEW v0.18.8; AILANG-side
+--                       API-level thinking from claude-opus-4.5+,
+--                       OpenAI o1/o3, Gemini 2.5+ thinking models). TUI
+--                       renders in a separate panel; never mixed with
+--                       content stream.
+-- Usage(_)            → dropped here (final usage telemetry comes from
+--                       the StepResult.{input,output,cache}_*_input_tokens
+--                       fields after the call returns).
+--
+-- Tag-convention reasoning (glm-5, deepseek-r1: <thinking>...</thinking>
+-- inside ContentDelta) is NOT split here — that belongs in the TUI's
+-- streaming-render path which already strips think-tag bodies for live
+-- render via stripThinkBlocksForLive().
+--
+-- Extracted from agent_loop_v2 because match inside lambda hits a known
+-- AILANG parser bug.
+--
+-- WI-C3: THE MAPPING ITSELF NOW LIVES IN ONE PLACE, `stream_chunk_event`, and
+-- that is load-bearing rather than tidy. D6.4's parity check compares a witness
+-- built from the returned chunk log against the StreamDelta records that reach
+-- the returned trace. Two converters would be two notions of one quantity, and
+-- the disagreement would show up as a parity finding blaming the driver for a
+-- difference the CHECK introduced. In particular `Usage` is RETURNED by
+-- `stepWithStreamRecorded` and is NOT projected, so a witness built by mapping
+-- every chunk to a StreamDelta is off by one on every real run — the naive
+-- version reports StreamParityCount(N+1, N) forever, and the two-line repairs
+-- for that (skip the check when the witness is empty; loosen count to a subset
+-- test) both make the invariant vacuous while looking like fixes.
+func append_stream_delta(session_id: string, step_idx: int, stream_id: string, chunk: StreamChunk) -> () ! {IO, Trace} {
+  match stream_chunk_event(step_idx, stream_id, chunk) {
+    Some(e) => ledger_emit(session_id, e),
+    None => ()
+  }
+}
+
+-- The single StreamChunk -> Option[LedgerEvent] core. `None` is "this chunk is
+-- not a logical emission", which today is exactly `Usage`.
+export pure func stream_chunk_event(step_idx: int, stream_id: string, chunk: StreamChunk) -> Option[LedgerEvent] {
+  match chunk {
+    ContentDelta(text) =>
+      Some(StreamDelta({
+        step: step_idx,
+        stream_id: stream_id,
+        seq: 0,
+        kind: "thinking",
+        text: text
+      })),
+    ThinkingDelta(text) =>
+      Some(StreamDelta({
+        step: step_idx,
+        stream_id: stream_id,
+        seq: 0,
+        kind: "reasoning",
+        text: text
+      })),
+    Usage(_) => None
+  }
+}
+
+-- The same core over a returned chunk log, preserving order and dropping the
+-- non-projected variants. This is what the driver appends to the returned trace
+-- AND what it accumulates as D6.4's emission witness — one function, so the
+-- `Usage` exclusion and the thinking/reasoning selection cannot drift apart.
+--
+-- What parity therefore does NOT test, stated so the green is not over-read:
+-- whether this mapping is RIGHT. Both sides use it, so a wrong `kind` is
+-- invisible here. That is A8's event-vocabulary contract, not D6.4's.
+export pure func stream_chunk_events(step_idx: int, stream_id: string, chunks: [StreamChunk]) -> [LedgerEvent] {
+  match chunks {
+    [] => [],
+    c :: rest =>
+      match stream_chunk_event(step_idx, stream_id, c) {
+        Some(e) => e :: stream_chunk_events(step_idx, stream_id, rest),
+        None => stream_chunk_events(step_idx, stream_id, rest)
+      }
+  }
+}
+
+-- THE OFF-BY-ONE, pinned. `--ai-stub` returns TWO chunks — a ContentDelta and a
+-- Usage — and a live provider's returned log carries Usage too, so a witness
+-- built by mapping every returned chunk yields N+1 against the trace's N and
+-- `stream_parity_findings` reports StreamParityCount on every real run. No
+-- scripted world in this tree plays a Usage chunk, so no acceptance script can
+-- reach this and it would be caught only on a live provider. It is a unit test
+-- for that reason, and the value is the DIFFERENCE rather than the count: a row
+-- asserting `== 2` is also green on an implementation that drops the first
+-- ContentDelta instead.
+pure func test_usage_chunks_are_not_projected() -> bool
+  tests [((), true)]
+  {
+    let with_usage = [ContentDelta("a"), Usage({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }), ContentDelta("b")];
+    let without = [ContentDelta("a"), ContentDelta("b")];
+    List.length(stream_chunk_events(0, "s", with_usage)) + 1 == List.length(with_usage)
+      && List.length(stream_chunk_events(0, "s", with_usage)) == List.length(stream_chunk_events(0, "s", without))
+  }
+
+-- The kind selection, pinned separately from the exclusion. Both live in
+-- `stream_chunk_event` and a single row over a mixed list cannot say which of
+-- the two it read.
+pure func test_thinking_and_reasoning_kinds_are_distinguished() -> bool
+  tests [((), true)]
+  {
+    match stream_chunk_events(3, "sid", [ContentDelta("c"), ThinkingDelta("t")]) {
+      a :: rest =>
+        match rest {
+          b :: [] =>
+            match a {
+              StreamDelta(ia) =>
+                match b {
+                  StreamDelta(ib) =>
+                    ia.kind == "thinking" && ia.text == "c"
+                      && ib.kind == "reasoning" && ib.text == "t"
+                      && ia.step == 3 && ib.stream_id == "sid",
+                  _ => false
+                },
+              _ => false
+            },
+          _ => false
+        },
+      [] => false
+    }
+  }
+
+-- Derive a session_id from MOTOKO_SESSION_ID env var (set by the TS wrapper
+-- to match the JSONL filename) or fall back to a clock-derived id. The
+-- wrapper-set form is preferred so the JSONL session_id matches the
+-- filename consumers grep for.
+--
+-- WI-A12's clock class: the fallback reads the world clock through the port
+-- rather than ambient `now()`, and returns its successor. Returning the
+-- successor matters even though the env-var branch never advances the clock —
+-- the two branches must be interchangeable from the caller's side, and a
+-- read-shaped function that sometimes swallows its successor is how a cursor
+-- silently stops advancing.
+func derive_session_id(ports: Ports, world: WorldState) -> { id: string, next_state: WorldState } ! {Env, Clock} {
+  let env_id = ports.env_get(world, "MOTOKO_SESSION_ID", "");
+  if env_id.value != "" then { id: env_id.value, next_state: env_id.next_state }
+  else {
+    let reading = ports.clock_now(env_id.next_state);
+    { id: "session_${show(reading.now_ms)}", next_state: reading.next_state }
+  }
+}
+
+-- Build the standard kv-list emitted on every per-step event that has
+-- StepResult tokens in scope. `cost_step_mc` is the per-step millicents
+-- (computed from result.input_tokens/output_tokens × cost_rates).
+--
+-- Cache token fields (cache_read_input_tokens / cache_creation_input_tokens)
+-- are emitted ONLY when non-zero — omit-when-absent semantics so consumers
+-- can distinguish "provider doesn't surface caching" from "this turn had
+-- zero cache hits". Anthropic populates both; OpenAI + Gemini populate
+-- cache_read only; other providers omit both.
+func per_step_usage_kvs(result: StepResult, cost_step_mc: int) -> [{key: string, value: Json}] {
+  let base = [
+    kv("input_tokens",  jnum(_int_to_float(result.input_tokens))),
+    kv("output_tokens", jnum(_int_to_float(result.output_tokens))),
+    kv("cost_usd",      jnum(millicents_to_usd(cost_step_mc)))
+  ];
+  let with_read = if result.cache_read_input_tokens > 0 then
+    base ++ [kv("cache_read_input_tokens", jnum(_int_to_float(result.cache_read_input_tokens)))]
+    else base;
+  if result.cache_creation_input_tokens > 0 then
+    with_read ++ [kv("cache_creation_input_tokens", jnum(_int_to_float(result.cache_creation_input_tokens)))]
+    else with_read
+}
+
+-- finish_reason_str(r: int) lived here. It is gone: D6.2 requires a typed
+-- termination reason derived from the reachable terminal returns, and the wire
+-- mapping now lives beside RunSummaryInfo as phase_vocab.finish_reason_wire.
+-- No integer termination code survives at any terminal call site.
+
+-- Build the schema-v1 run_summary event. Split out from the finalizer so the
+-- record that is projected and the record that is appended are provably the
+-- same value, not two constructions that could drift.
+pure func mk_run_summary(
+  model: string,
+  totals: RuntimeLoopTotals,
+  steps_executed: int,
+  reason: TerminationReason,
+  error_msg: string,
+  duration_ms: int,
+  commit: string
+) -> LedgerEvent {
+  RunSummary({
+    model: model,
+    motoko_commit: commit,
+    finish_reason: finish_reason_wire(reason),
+    steps_executed: steps_executed,
+    input_tokens: totals.input_tokens,
+    output_tokens: totals.output_tokens,
+    cache_read_input_tokens: totals.cache_read,
+    cache_creation_input_tokens: totals.cache_creation,
+    total_cost_usd: millicents_to_usd(totals.cost_millicents),
+    total_cost_millicents: totals.cost_millicents,
+    duration_ms: duration_ms,
+    error: error_msg
+  })
+}
+
+-- THE finalizer (D6.1). Every terminal return in the driver goes through here.
+--
+-- It does both halves of the contract in one place: it emits the run_summary
+-- projection (what downstream eval harnesses consume) AND appends the same
+-- record to the returned LedgerTrace (what the invariant oracle consumes).
+-- Before this, only the projection existed — emit_run_summary's sole ledger
+-- operation was ledger_emit, so the returned trace contained no RunSummary on
+-- any path, and the returned trace is what D6 makes authoritative.
+--
+-- Centralizing it is the point: a new terminal path cannot update one channel
+-- and silently miss the other, because there is only one channel to call.
+-- The RunSummary is appended last, so it is the final record of the trace.
+-- WI-A12's clock class: `ports`/`world` replace the ambient `now()` below. This
+-- is the fourth and last driver clock site, and the only one inside the loop.
+--
+-- The successor world is DISCARDED here, uniquely in the driver. That is sound
+-- only because this is the terminal read — nothing observes the world after a
+-- terminal return, since c2_finalize holds the sole terminal record literal
+-- (the structural guard `make terminal_trace` enforces). Any future read added
+-- BEFORE this one must thread its successor rather than copy this pattern.
+--
+-- The guard is a `grep -c` over this file. WI-A13 stage 2 anchored it so that a
+-- comment line cannot satisfy it, which retired the standing obligation to
+-- circumlocute around the pattern in prose here — see `make terminal_trace`.
+func c2_finalize(
+  ports: Ports,
+  world: WorldState,
+  session_id: string,
+  model: string,
+  totals: RuntimeLoopTotals,
+  steps_executed: int,
+  reason: TerminationReason,
+  error_msg: string,
+  started_at_ms: int,
+  trace: LedgerTrace,
+  emissions: [LedgerEvent],
+  result: Result[[Message], AIError]
+) -> TracedSessionResult ! {IO, Clock, Trace} {
+  -- The successor of this read is now THREADED into the returned world rather
+  -- than discarded. Under the recording adapters this final clock read is an
+  -- interaction like any other, and dropping its successor would drop the log
+  -- entry with it — the run would end having recorded one fewer request than it
+  -- made, which is precisely the under-recording defect discovery exists to
+  -- detect. The comment above this function already required a future read to
+  -- thread its successor; this makes the existing one do so too.
+  let reading = ports.clock_now(world);
+  let now_ms = reading.now_ms;
+  let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit());
+  let _ = ledger_emit(session_id, summary);
+  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: reading.next_state, emissions: emissions }
+}
+
+pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openrouter/deepseek/deepseek-v4-flash", "") == "deepseek/deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_openrouter_auto_stays_intact() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openrouter/auto", "") == "openrouter/auto"
+  }
+
+pure func test_provider_api_model_local_openai_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/deepseek-v4-flash", "http://127.0.0.1:8000/v1") == "deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_local_openai_preserves_slashful_id() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/google/gemma-4-26B-A4B-it", "http://127.0.0.1:8000/v1") == "google/gemma-4-26B-A4B-it"
+  }
+
+pure func test_provider_api_model_direct_openai_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/gpt-4o", "") == "gpt-4o"
+  }
+
+pure func test_provider_api_model_direct_anthropic_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("anthropic/claude-sonnet-4-6", "") == "claude-sonnet-4-6"
+  }
+
+pure func test_provider_api_model_direct_google_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("google/gemini-2.5-flash", "") == "gemini-2.5-flash"
+  }
+
+pure func test_provider_api_model_ollama_keeps_routing_prefix_for_provider() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("ollama/qwen3.5:35b-a3b-mxfp8", "") == "ollama/qwen3.5:35b-a3b-mxfp8"
+  }
+
+-- Build the per-turn ExtCtx that motoko's extension hooks receive. Mirrors
+-- mk_ext_ctx in rpc.ail but constructs from v2's typed-loop state instead
+-- of the legacy AgentState shape. history_slice converts upstream Message
+-- to motoko's Msg (text-only) since extensions inspect text not tool_calls.
+func mk_v2_ext_ctx(
+  task: string,
+  step_idx: int,
+  model: string,
+  cwd: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  history: [Message],
+  context_limit: int,
+  ports: ExtPorts,
+  artifacts: Json,
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
+  -- WI-B2b. The driver's CURRENT world, tokenised. Every caller passes
+  -- `world_to_token(st.world_state)` — the live cursor, not a fresh one — which
+  -- is what makes the hook's successor meaningful when it comes back.
+  world: ExtWorld
+) -> ExtCtx {
+  let remaining = if budget.total - step_idx < 0 then 0 else budget.total - step_idx;
+  {
+    task: task,
+    step: step_idx,
+    model: model,
+    cwd: cwd,
+    hybrid_tools: hybrid_tools,
+    budget: budget,
+    mode: "v2",
+    workdir: cwd,
+    env_server_url: env_url,
+    budget_remaining: remaining,
+    history_slice: messages_to_msgs(history),
+    state_key: "core:ext:v2",
+    context_limit: context_limit,
+    ports: ports,
+    artifacts: artifacts,
+    telemetry: ext_token_telemetry(telemetry), world: world
+  }
+}
+
+-- Convert upstream [Message] to motoko's [Msg] for ExtCtx.history_slice
+-- and on_pre_step. Since motoko_ext_abi 2.1.0 (M-ABI-MSG-WIRE-PARITY),
+-- Msg carries tool_calls + tool_call_id, so copy them verbatim. The
+-- compaction round-trip is now lossless: any extension that returns
+-- Compacted([Msg]) preserves wire-format correlation IDs.
+func messages_to_msgs(msgs: [Message]) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id
+    } :: messages_to_msgs(rest))
+  }
+}
+
+func count_system_prefix(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => if m.role == "system" then 1 + count_system_prefix(rest) else 0
+  }
+}
+
+-- TUI wire-format helpers (M-MOTOKO-RPC-LOOP M10 follow-up): the legacy
+-- TUI renderer (src/tui/src/ui.ts) expects BATCHED native_tool_calls /
+-- native_tool_results events with `request_id` and `tool_calls` /
+-- `results` array fields, not the per-call events v2 originally emitted.
+-- These helpers convert v2's typed [ToolCall] and tool-role [Message]
+-- into the array shape the TUI renders. See loop_v2 for the emit calls.
+
+func tool_calls_to_envelope_jsons(calls: [ToolCall]) -> [Json] {
+  match calls {
+    [] => [],
+    c :: rest => call_to_json(tool_call_to_envelope(c)) :: tool_calls_to_envelope_jsons(rest)
+  }
+}
+
+-- Helper: pull a string field from a decoded JSON object with a fallback.
+func json_field_str(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None    => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(s) => s }
+  }
+}
+
+-- Helper: detect whether a JSON object has a boolean field set to true.
+-- Used to detect policy_denied_message / delegated_deferred_message
+-- payloads (both flag themselves with `error: true`).
+func json_field_bool_true(obj: Json, key: string) -> bool {
+  match get(obj, key) {
+    None    => false,
+    Some(j) => match j {
+      JBool(true) => true,
+      _           => false
+    }
+  }
+}
+
+-- Each tool-role Message produced by dispatch_calls has a JSON-encoded
+-- payload in its content (either dispatch_one's tool_result_item JSON,
+-- a policy_denied_message JSON, or a delegated_deferred_message JSON).
+-- The TUI's applyNativeToolResults reads `tool_call_id`, `exit_code`,
+-- `stdout`, `stderr`, `truncated` from each result entry — so we
+-- normalise to that shape, lifting tool_call_id from the Message and
+-- forwarding the inner payload's known fields with safe defaults.
+func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      let inner = match decode(m.content) {
+        Ok(j) => j,
+        Err(_) => jo([])
+      };
+      let stdout_str = json_field_str(inner, "stdout", "");
+      let stderr_str = json_field_str(inner, "stderr", "");
+      -- If the payload flags itself as an error (policy_denied_message
+      -- or delegated_deferred_message both set `error: true`), drive
+      -- the TUI's "failed" rendering by emitting exit_code: 1; otherwise
+      -- treat as success (exit_code: 0). dispatch_one's payloads always
+      -- include exit_code on the wire but parsing JSON numbers from
+      -- typed Json values requires a different accessor than we use here;
+      -- the boolean error gate is a simpler proxy that gets the TUI
+      -- coloring right for the v2-emitted shapes.
+      let is_error = json_field_bool_true(inner, "error");
+      let normalized = jo([
+        kv("tool_call_id", js(m.tool_call_id)),
+        kv("exit_code", jnum(if is_error then 1.0 else 0.0)),
+        kv("stdout", js(stdout_str)),
+        kv("stderr", js(stderr_str)),
+        kv("truncated", jb(false)),
+        kv("payload", inner)
+      ]);
+      normalized :: tool_messages_to_result_jsons(rest)
+    }
+  }
+}
+
+-- M7: Synthesize a BashExec ToolCall from a hybrid-mode shell command
+-- extracted from the assistant's prose. The model emitted no typed
+-- tool_calls (finish_reason != "tool_calls") but its content contained
+-- a fenced shell block (```bash / ```sh / ```shell / ```), so we treat
+-- that block as the canonical hybrid shorthand and pass it through the
+-- M3-M6 dispatch pipeline as if it were a typed BashExec call.
+--
+-- This preserves the full M4 policy gate + M5 tool-handle routing + M6
+-- backend split for hybrid commands (e.g. an extension can still Deny
+-- a hybrid `rm -rf /` just as it would deny a typed call). The
+-- synthetic call uses a "hybrid-step-N" id so it doesn't collide with
+-- model-emitted tool_call_ids on the wire.
+func synthesize_hybrid_bash_call(cmd: string, step_idx: int) -> ToolCall {
+  {
+    id: "hybrid-step-${show(step_idx)}",
+    name: "BashExec",
+    arguments: encode(jo([kv("cmd", js(cmd))]))
+  }
+}
+
+-- Build a structured tool-role Message indicating the ohmy_pi delegation
+-- pathway is not yet wired in v2. M6 plumbs split_by_backend through but
+-- defers the inbox-based wait_for_tool_results to a follow-up — for now
+-- delegated calls return this clear, recoverable error so the model can
+-- adapt (e.g. retry with a non-delegated argument shape, or surface that
+-- ohmy_pi was selected but unavailable).
+-- Build a denial tool-role Message for a ToolCall the policy gate rejected.
+-- The model sees a structured `{denied_by_policy, reason, tool}` JSON in the
+-- tool result, correlated by tool_call_id, so it can correct course on the
+-- next turn without ambiguity.
+func policy_denied_message(call: ToolCall, reason: string) -> Message {
+  let denial_payload = encode(jo([
+    kv("error", jb(true)),
+    kv("denied_by_policy", jb(true)),
+    kv("tool", js(call.name)),
+    kv("reason", js(reason))
+  ]));
+  {
+    role: "tool",
+    content: denial_payload,
+    tool_calls: [],
+    tool_call_id: call.id,
+    images: []
+  }
+}
+
+-- Compute per-step cost in millicents from token counts and provider rates.
+-- Integer division truncates toward zero (conservative — never over-counts).
+-- Returns 0 when rates are zero (unmetered/unknown provider).
+pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: CostRates) -> int {
+  (input_tokens * rates.input_per_1m_millicents +
+   output_tokens * rates.output_per_1m_millicents) / 1000000
+}
+
+-- The v2 loop. Iterates until the model returns finish_reason != "tool_calls"
+-- (and any solver-candidate hooks accept the result) or step_budget hits zero.
+-- Returns the final messages list.
+--
+-- DP0 (pre-step compaction): before each LLM call, extension compactors
+-- transform the provider payload, with the structural compactor registered
+-- last. Core refuses only if the post-chain payload remains critically full.
+--
+-- M3 wiring: between step() and tool dispatch, fires extension hooks at the
+-- two existing decision points motoko's rpc_loop uses (DP1 from the design
+-- doc). NoIntercept / NoDecision are no-ops; the typed-step protocol means
+-- prose-only responses unambiguously stop the loop (no continuation-intent
+-- heuristic needed).
+
+-- DP7: pre-finalize AILANG type-check gate.
+-- Runs make check_core in the project workdir before any done emission.
+-- Fail-open: if check infrastructure is missing (no workdir, no Makefile, or
+-- no check_core target), returns Approve so projects without DP7 setup are not
+-- blocked. Only genuine type errors (exit non-zero with substantive output)
+-- produce Reject.
+type FinalizeVerification
+  = Approve
+  | Reject(string)
+
+-- Detect "infrastructure missing" — the verification command failed because the
+-- project lacks a Makefile/target or the workdir doesn't exist, NOT because the
+-- code under verification has type errors. These cases must fail-open.
+pure func is_missing_infrastructure(output: string) -> bool {
+  let lower = toLower(output);
+  contains(lower, "no rule to make target")
+    || contains(lower, "no targets specified and no makefile found")
+    || contains(lower, "no makefile found")
+    || contains(lower, "make: *** no")
+    || contains(lower, "no such file or directory")
+    || contains(lower, "command not found")
+}
+
+func run_dp7_verifier(rt: ExtRuntime, workdir: string) -> FinalizeVerification ! {Process} {
+  if not rt.verification.enabled then Approve
+  else
+    match exec("bash", ["-c", "cd \"$1\" && ${rt.verification.command} 2>&1", "_dp7", workdir]) {
+      Err(_) => Approve,
+      Ok(out) => {
+        if out.exitCode == 0 then Approve
+        else {
+          let output = toString(out.stdout);
+          if is_missing_infrastructure(output) then Approve
+          else Reject(output)
+        }
+      }
+    }
+}
+
+func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Message] ! {Process, IO, Trace} {
+  match run_dp7_verifier(rt, workdir) {
+    Approve => None,
+    Reject(errors) => {
+      let _ = ledger_emit(session_id, Dp7VerifierRejected({
+        step: step_idx,
+        errors: errors
+      }));
+      Some({
+        role: "user",
+        content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${errors}",
+        tool_calls: [],
+        tool_call_id: "",
+        images: []
+      })
+    }
+  }
+}
+
+-- WI-D2 WIDENED THE RETURN, and it is the same move `ToolDispatchOutcome` took
+-- one file over: this returned the rejection text and dropped the event it had
+-- just projected, so `Dp7VerifierRejected` reached the wire and nothing else.
+-- The caller has the trace; giving it the event is what lets the driver stay the
+-- sole appender.
+--
+-- The re-injection path is NOT terminal — the run continues and terminates later
+-- via max-steps or the budget — so D6.1's ordering constraint does not bind this
+-- append, unlike `CostExhausted` above.
+export type Dp7Rejection = { errors: string, event: LedgerEvent }
+
+func dp7_rejection_errors(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Dp7Rejection] ! {Process, IO, Trace} {
+  match run_dp7_verifier(rt, workdir) {
+    Approve => None,
+    Reject(errors) => {
+      let event = Dp7VerifierRejected({
+        step: step_idx,
+        errors: errors
+      });
+      let _ = ledger_emit(session_id, event);
+      Some({ errors: errors, event: event })
+    }
+  }
+}
+
+-- M-MOTOKO-PERSIST-NUDGE: bounded loop-persistence at the NoDecision boundary.
+-- Root cause (2026-06-18 A/B transcripts): on local models the agent often
+-- DISENGAGES after 0–1 tool calls WITHOUT writing a solution — either answering
+-- in prose (0 tool calls) or making one inspect call (e.g. `cat solution.ail`)
+-- and stopping. The loop then finalizes at NoDecision. These helpers let the loop
+-- inject a bounded nudge to keep going instead. Off by default (MOTOKO_PERSIST_
+-- RETRIES=0); opt-in for A/B so the rotation is unchanged until validated.
+
+-- Marker embedded in injected nudges so we can count them from history alone
+-- (no new loop_v2 state to thread through its 16 recursive call sites).
+func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
+
+-- How many persistence nudges are allowed this run (MOTOKO_PERSIST_RETRIES,
+-- default 0 = feature off).
+pure func parse_persist_retries_budget(raw: string) -> int {
+  match _stringToInt(trim(raw)) {
+    Some(n) => if n > 0 then n else 0,
+    None => 0
+  }
+}
+
+-- WI-A12's env class. Four of the driver's env reads are here, and they are
+-- threaded rather than ambient.
+--
+-- The count this comment used to carry — "four of the driver's SEVEN" — was true
+-- from WI-A12 until WI-D3, which routed `context_usage`'s four keys through the
+-- same port and took the driver's key set from seven to ELEVEN. The authoritative
+-- list is `dst_discovery.driver_env_keys()`, which `make discovery` re-derives
+-- from the call sites rather than trusting; a second count restated here is the
+-- stale-literal class this project has now carried five items running, so this
+-- one names the derivation instead of repeating its answer.
+--
+-- WI-A13 stage 2 CHANGED THE RETURN. A12 discarded the successor at the end,
+-- reasoning that policy init happens once and `scripted_env` returns the world
+-- unchanged, and it noted that each read still takes the previous read's
+-- successor "so that when A13 starts recording reads the order is already
+-- right and nothing has to be re-threaded". The ordering was right; the DISCARD
+-- was not. Once a read appends to the world's interaction log the successor is
+-- no longer the same world, and dropping it dropped all four reads — a quarter
+-- of the driver's env surface, silently, on a path the recorder had no way to
+-- report. The completeness assertion is what found it; nothing else could,
+-- because the log was internally consistent and perfectly reproducible without
+-- them.
+--
+-- The successor is therefore returned and threaded by every caller. Behaviour
+-- is unchanged for every non-recording world, where `scripted_env` and
+-- `live_ports`' env closure both return their input.
+export type SessionPolicyInit = { policy: SessionPolicy, next_state: WorldState }
+
+func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicyInit ! {Env, FS} {
+  let budget_steps = if step_budget <= 0 then 8 else step_budget;
+  let r_persist = ports.env_get(world, "MOTOKO_PERSIST_RETRIES", "0");
+  let r_retry = ports.env_get(r_persist.next_state, "MOTOKO_RETRY_STREAM_ERROR", "1");
+  let r_base = ports.env_get(r_retry.next_state, "OPENAI_BASE_URL", "");
+  let r_headless = ports.env_get(r_base.next_state, "MOTOKO_HEADLESS", "");
+  -- WI-D3's filesystem class. The fifth request this function makes, threaded
+  -- from the fourth's successor exactly like the four env reads above and for
+  -- the same reason A13 stage 2 gave: once a read appends to the world's log,
+  -- discarding the successor drops every read it carried.
+  let r_limit = resolve_context_limit(context_reader_of(ports), r_headless.next_state, model);
+  let persist_retries = parse_persist_retries_budget(r_persist.value);
+  let retry_stream_errors = r_retry.value != "0";
+  let provider_base_url = r_base.value;
+  let headless = r_headless.value == "1";
+  {
+    policy: {
+      step: {
+        step_budget: budget_steps,
+        max_cost_millicents: max_cost_millicents,
+        cost_metered: cost_rates.input_per_1m_millicents > 0,
+        persist_retries: persist_retries,
+        retry_stream_errors: retry_stream_errors,
+        require_system_prompt: not headless,
+        model: model,
+        provider_base_url: provider_base_url,
+        checkpoint_enabled: false,
+        checkpoint_pct: 90,
+        compaction: {
+          context_limit: r_limit.value,
+          elide_tier_pct: 70,
+          elide_hard_tier_pct: 85,
+          emergency_pct: exhaustion_pct()
+        }
+      },
+      headless: headless
+    },
+    next_state: r_limit.next_state
+  }
+}
+
+-- WI-D3 gave it the reader and the world, and it returns the successor for the
+-- same reason `session_policy_init` does. It is no longer `pure func`: it
+-- performs requests through the ports rather than reading ambiently, and the
+-- successor it hands back is what its one caller is free to drop — see there.
+func session_policy_with_model(ports: Ports, world: WorldState, policy: SessionPolicy, model: string) -> SessionPolicyInit ! {Env, FS} {
+  let r_limit = resolve_context_limit(context_reader_of(ports), world, model);
+  {
+    policy: {
+    step: {
+      step_budget: policy.step.step_budget,
+      max_cost_millicents: policy.step.max_cost_millicents,
+      cost_metered: policy.step.cost_metered,
+      persist_retries: policy.step.persist_retries,
+      retry_stream_errors: policy.step.retry_stream_errors,
+      require_system_prompt: policy.step.require_system_prompt,
+      model: model,
+      provider_base_url: policy.step.provider_base_url,
+      checkpoint_enabled: policy.step.checkpoint_enabled,
+      checkpoint_pct: policy.step.checkpoint_pct,
+      compaction: {
+        context_limit: r_limit.value,
+        elide_tier_pct: policy.step.compaction.elide_tier_pct,
+        elide_hard_tier_pct: policy.step.compaction.elide_hard_tier_pct,
+        emergency_pct: policy.step.compaction.emergency_pct
+      }
+    },
+    headless: policy.headless
+    },
+    next_state: r_limit.next_state
+  }
+}
+
+-- Count nudges already injected (user messages carrying the marker) so we never
+-- exceed the budget — the count IS the persistence state, read from history.
+func count_persist_nudges(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "user" && contains(m.content, persist_nudge_marker()) then 1 else 0;
+      here + count_persist_nudges(rest)
+    }
+  }
+}
+
+func tool_calls_have_writefile(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.name == "WriteFile" then true else tool_calls_have_writefile(rest)
+  }
+}
+
+-- True once the model has attempted ANY WriteFile this run — if so it is engaged
+-- with producing a solution, so we let it finalize/fail on its own (don't nudge).
+-- Both disengagement modes (0 calls / 1 inspect call) have zero WriteFile, so
+-- this gates the nudge precisely to the premature-stop case.
+func any_writefile_attempt(msgs: [Message]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if tool_calls_have_writefile(m.tool_calls) then true
+      else any_writefile_attempt(rest)
+  }
+}
+
+-- Map a Fail decision's AIError code onto the typed termination reason.
+-- The three codes `decide` can produce are Internal, BudgetExceeded and
+-- ContextExhausted (src/core/step_machine.ail:57,93,95,99).
+--
+-- The MaxSteps discrimination matches on the message text because that is the
+-- only thing distinguishing the two Internal failures step_machine emits: the
+-- step-budget one and the approval-without-pending-call one share a code.
+--
+-- WI-A7 DECIDED this rather than leaving it as A9's noted fragility. The
+-- message is no longer a literal on either side: both this matcher and the
+-- `Fail` in step_machine reference `max_steps_discriminator_message()` from the
+-- D3 fault catalogue, so an edit to it is a single edit that cannot
+-- desynchronise the two. The `Internal` CODE is deliberately unchanged — A9
+-- declined the code change because it is caller-visible, and grounding it for
+-- A7 found the consequence is larger than that: the code is emitted as an
+-- `error` wire event (`ErrorEvent { code: e.code }`, :2506 and :2576) that the
+-- TUI consumes, so a new code would change a wire event on every max-steps run.
+-- What remains open, stated rather than implied: the discrimination is still by
+-- message rather than by type, so a THIRD Internal failure sharing this message
+-- would be misclassified. Closing that needs the compatibility decision above.
+pure func decision_fail_reason(code: string, message: string) -> TerminationReason {
+  if code == "BudgetExceeded" then TermBudgetExhausted
+  else if code == "ContextExhausted" then TermCompactionExhausted
+  else if code == "Internal" && message == max_steps_discriminator_message() then TermMaxSteps
+  else TermInternalFailure
+}
+
+func c2_fail(
+  ports: Ports,
+  world: WorldState,
+  session_id: string,
+  model: string,
+  totals: RuntimeLoopTotals,
+  step_idx: int,
+  max_cost_millicents: int,
+  started_at_ms: int,
+  code: string,
+  message: string,
+  retryable: bool,
+  trace: LedgerTrace,
+  emissions: [LedgerEvent]
+) -> TracedSessionResult ! {IO, Clock, Trace} {
+  let cost_event = CostExhausted({
+    step: step_idx,
+    total_cost_millicents: totals.cost_millicents,
+    total_cost_usd: millicents_to_usd(totals.cost_millicents),
+    cap_millicents: max_cost_millicents
+  });
+  let _ = if code == "BudgetExceeded" then ledger_emit(session_id, cost_event) else ();
+  -- WI-D2, AND IT IS `DoneEvent`'S EXACT PRECEDENT (WI-A14). This is a terminal
+  -- path, so the append must land BEFORE `c2_finalize` writes the RunSummary or
+  -- D6.1's "the summary is the FINAL record" breaks — which is also row 7's
+  -- first conjunct, and `terminal_summary_findings`' `after_summary` half is
+  -- what says so. Appending after the finalizer type-checks and reddens
+  -- `record-after-terminal` on every capped run.
+  --
+  -- The wire is untouched: `cost_exhausted` still precedes `run_summary` there,
+  -- exactly as it did, so no compatibility surface moves (D8).
+  let trace_with_cost =
+    if code == "BudgetExceeded" then ledger_append(trace, WireRecord(cost_event))
+    else trace;
+  let result: Result[[Message], AIError] = Err({ code: code, message: message, retryable: retryable });
+  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace_with_cost, emissions, result)
+}
+
+pure func c2_pending_context(st: C2LoopState) -> [Message] {
+  if List.length(st.pending_tool_context) > 0 then st.pending_tool_context else st.msgs
+}
+
+pure func c2_pending_prefix(st: C2LoopState) -> [Message] {
+  if List.length(st.pending_tool_prefix) > 0 then st.pending_tool_prefix else st.msgs
+}
+
+func c2_finish_tool_batch(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  started_at_ms: int,
+  st: C2LoopState,
+  trace: LedgerTrace,
+  tool_step_idx: int,
+  stream_id: string,
+  tool_msgs: [Message]
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let request_id = "step-${show(tool_step_idx)}";
+  let results_event = NativeToolResults({
+    request_id: request_id,
+    step: tool_step_idx,
+    stream_id: stream_id,
+    payload: ja(tool_messages_to_result_jsons(tool_msgs))
+  });
+  let _ = if st.pending_tool_batched then ledger_emit(session_id, results_event) else ();
+  -- WI-D2, and the condition is shared with the emission for the reason the
+  -- announcement site gives.
+  let trace_with_results =
+    if st.pending_tool_batched then ledger_append(trace, WireRecord(results_event))
+    else trace;
+  let next_state: C2LoopState = {
+    msgs: c2_pending_prefix(st) ++ tool_msgs,
+	    step_idx: st.step_idx,
+	    totals: st.totals,
+	    ext_artifacts: st.ext_artifacts,
+	    telemetry: st.telemetry,
+	    provider: st.provider,
+	    world_state: st.world_state,
+    pending_tool_calls: [],
+    pending_tool_context: [],
+    pending_tool_prefix: [],
+    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+    last_finish_reason: "tools_complete",
+    last_response_text: "",
+    nudges_used: st.nudges_used,
+    finalize_source: "",
+    prior_counts: st.prior_counts,
+    trace: trace_with_results,
+    emissions: st.emissions
+  };
+  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+}
+
+func c2_continue_tool_batch(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  started_at_ms: int,
+  st: C2LoopState,
+  trace: LedgerTrace,
+  req: ApprovalRequest,
+  accumulated: [Message]
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match req.remaining {
+    [] => c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace, c2_done_step(st.step_idx), req.stream_id, accumulated),
+    _ => {
+      let next_state: C2LoopState = {
+        msgs: st.msgs,
+	        step_idx: st.step_idx,
+	        totals: st.totals,
+	        ext_artifacts: st.ext_artifacts,
+	        telemetry: st.telemetry,
+	        provider: st.provider,
+	        world_state: st.world_state,
+        pending_tool_calls: c2_tool_plan_calls(req.remaining),
+        pending_tool_context: st.pending_tool_context,
+        pending_tool_prefix: st.pending_tool_prefix,
+        pending_tool_batched: st.pending_tool_batched,
+        accumulated_tool_msgs: accumulated,
+        pending_approval: None,
+        last_finish_reason: "approval_resolved",
+        last_response_text: "",
+        nudges_used: st.nudges_used,
+        finalize_source: "",
+        prior_counts: st.prior_counts,
+        trace: trace,
+        emissions: st.emissions
+      };
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+    }
+  }
+}
+
+func c2_after_dp7(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  msgs_with_assistant: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+	  cost_rates: CostRates,
+	  totals: RuntimeLoopTotals,
+	  ext_artifacts: Json,
+	  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
+	  st_provider: Ports,
+	  st_world_state: WorldState,
+  prior_counts: RuntimeStatusCounts,
+  session_id: string,
+  started_at_ms: int,
+  trace: LedgerTrace,
+  emissions: [LedgerEvent],
+  next_step_idx: int,
+  done_step_idx: int,
+  output: string,
+  source: string
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match dp7_rejection_errors(rt, workdir, done_step_idx, session_id) {
+    Some(rejection) => {
+      let errors = rejection.errors;
+      let next_state: C2LoopState = {
+        msgs: msgs_with_assistant,
+	        step_idx: next_step_idx,
+	        totals: totals,
+	        ext_artifacts: ext_artifacts,
+	        telemetry: telemetry,
+	        provider: st_provider,
+	        world_state: st_world_state,
+        pending_tool_calls: [],
+        pending_tool_context: [],
+        pending_tool_prefix: [],
+        pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+        last_finish_reason: "dp7_rejected",
+        last_response_text: errors,
+        nudges_used: count_persist_nudges(msgs_with_assistant),
+        finalize_source: "",
+        prior_counts: prior_counts,
+        trace: ledger_append(trace, WireRecord(rejection.event)),
+        emissions: emissions
+      };
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+    },
+    None => {
+      let next_state: C2LoopState = {
+        msgs: msgs_with_assistant,
+	        step_idx: next_step_idx,
+	        totals: totals,
+	        ext_artifacts: ext_artifacts,
+	        telemetry: telemetry,
+	        provider: st_provider,
+	        world_state: st_world_state,
+        pending_tool_calls: [],
+        pending_tool_context: [],
+        pending_tool_prefix: [],
+        pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+        last_finish_reason: "dp7_approved",
+        last_response_text: output,
+        nudges_used: count_persist_nudges(msgs_with_assistant),
+        finalize_source: source,
+        prior_counts: prior_counts,
+        trace: trace,
+        emissions: emissions
+      };
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+    }
+  }
+}
+
+func c2_loop(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  started_at_ms: int,
+  st: C2LoopState
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match c2_step_state(st) {
+    -- Terminal: invalid history. This path emitted no run_summary at all
+    -- before A9 — it is one of the two terminal returns the ADR's five-call-site
+    -- enumeration missed. It now finalizes like every other.
+    Err(reason) => {
+      let result: Result[[Message], AIError] = Err({ code: "InvalidHistory", message: reason, retryable: false });
+      c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInvalidHistory, reason, started_at_ms, st.trace, st.emissions, result)
+    },
+    Ok(step_state) => {
+      let decision = decide(step_state, policy.step);
+      let trace_with_decision = c2_append_decision(st.trace, st.step_idx, decision);
+      match decision {
+        -- Terminal: budget, max steps, compaction exhaustion or internal,
+        -- discriminated by decision_fail_reason.
+        Fail(info) => c2_fail(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision, st.emissions),
+        Finalize(info) => {
+          let done_step = c2_done_step(st.step_idx);
+          -- WI-D4. READ, not re-resolved. `session_policy_init` already resolved
+          -- this model's limit and stored it here; WI-D3 re-resolved it at this
+          -- and three sibling sites, which put the driver's config reads into
+          -- the recorded interaction log on every loop arm.
+          --
+          -- SAFE BECAUSE IT WAS MEASURED, not because the two look equal: a
+          -- temporary assertion at all four sites, comparing the stored value
+          -- against a fresh resolution and the loop's `model` against
+          -- `policy.step.model`, ran over the WHOLE of `make dst` and reported
+          -- 657 executions and ZERO mismatches — 282 here at `CallModel`, 205 at
+          -- `RunTools`, 75 at this site and 95 at the approval site. The
+          -- structural reason is that `model` and `policy.step.model` move
+          -- together: every `session_policy_init` caller passes the same model it
+          -- passes the loop, and the one model SWITCH,
+          -- `conversation_loop_v2_with_policy`'s `model_change`, rebuilds the
+          -- policy through `session_policy_with_model` and passes BOTH.
+          --
+          -- SUCCESSOR: none is lost. `r_limit.next_state` descended from
+          -- `st.world_state` with nothing between them, so `st.world_state` is
+          -- both the predecessor and — with no read performed — the successor.
+          -- This is NOT the shape WI-D1 found in production, where the discarded
+          -- state was the successor of work that had actually happened.
+          let empty_event = EmptyStopFinalize({
+            step: done_step,
+            input_tokens: st.telemetry.last_input_tokens,
+            estimated_input_tokens: st.telemetry.last_estimated_input_tokens,
+            context_limit: policy.step.compaction.context_limit
+          });
+          let trace_after_empty_floor =
+            if trim(info.output) == "" then {
+              let _ = ledger_emit(session_id, empty_event);
+              ledger_append(trace_with_decision, WireRecord(empty_event))
+            } else trace_with_decision;
+          -- WI-A14 (D6.4 / D7's parity family). The DoneEvent is APPENDED here,
+          -- before c2_finalize appends the RunSummary, and PROJECTED after it.
+          -- Three obligations that could not all hold while it was
+          -- projected-only now do: D6.4 (a Logical event reaches the returned
+          -- trace), D6.1 (the RunSummary is STILL the final record) and D6.3
+          -- (agreement, now decidable over the returned trace alone). The wire
+          -- order is untouched: D6.4 asks for PARITY, not one transition.
+          let done_event = DoneEvent({ step: done_step, output: info.output, source: st.finalize_source });
+          let trace_with_done = ledger_append(trace_after_empty_floor, WireRecord(done_event));
+          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, st.emissions, Ok(st.msgs));
+          -- BEFORE `done`, DELIBERATELY. The TUI exits on `done` without waiting
+          -- for this process, so a manifest published after it is a race this
+          -- code lost under measurement. See `publish_turn_exit_manifest`.
+          let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, st.provider, finalized.world);
+          let _ = ledger_emit(session_id, done_event);
+          finalized
+        },
+        InjectUserMessage(msg) => {
+          let next_msgs = st.msgs ++ [msg];
+          let next_nudges = if st.last_finish_reason == "persist_nudge" then st.nudges_used + 1 else st.nudges_used;
+          let next_state: C2LoopState = {
+            msgs: next_msgs,
+	            step_idx: st.step_idx,
+	            totals: st.totals,
+	            ext_artifacts: st.ext_artifacts,
+	            telemetry: st.telemetry,
+	            provider: st.provider,
+	            world_state: st.world_state,
+            pending_tool_calls: [],
+            pending_tool_context: [],
+            pending_tool_prefix: [],
+            pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+            last_finish_reason: "user_injected",
+            last_response_text: "",
+            nudges_used: next_nudges,
+            finalize_source: "",
+            prior_counts: st.prior_counts,
+            trace: trace_with_decision,
+            emissions: st.emissions
+          };
+          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+        },
+        TakeCheckpoint(plan) => {
+          let cp = apply_checkpoint(step_state, plan);
+          let _ = ledger_emit(session_id, cp.event);
+          let next_state: C2LoopState = {
+            msgs: history_messages(cp.state.history),
+	            step_idx: st.step_idx,
+	            totals: st.totals,
+	            ext_artifacts: cp.state.ext_artifacts,
+	            telemetry: cp.state.telemetry,
+	            provider: st.provider,
+	            world_state: st.world_state,
+            pending_tool_calls: st.pending_tool_calls,
+            pending_tool_context: st.pending_tool_context,
+            pending_tool_prefix: st.pending_tool_prefix,
+            pending_tool_batched: st.pending_tool_batched,
+            accumulated_tool_msgs: st.accumulated_tool_msgs,
+            pending_approval: st.pending_approval,
+            last_finish_reason: st.last_finish_reason,
+            last_response_text: st.last_response_text,
+            nudges_used: st.nudges_used,
+            finalize_source: st.finalize_source,
+            prior_counts: st.prior_counts,
+            trace: ledger_append(trace_with_decision, WireRecord(cp.event)),
+            emissions: st.emissions
+          };
+          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+        },
+        AwaitApproval(_) => {
+          match st.pending_approval {
+            -- Terminal: internal driver failure. The second of the two terminal
+            -- returns that emitted no run_summary before A9.
+            None => {
+              let msg = "approval requested without pending approval state";
+              let result: Result[[Message], AIError] = Err({ code: "Internal", message: msg, retryable: false });
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, st.emissions, result)
+            },
+            Some(req) => {
+              -- WI-A12's approval class. The operator's input comes from the
+              -- world through the port; `resolve_approval` stays here because
+              -- it is pure policy, not an effect. `input.eof` replaces the old
+              -- `raw == ""` inference — behaviour-identical for the live
+              -- adapter, which reports eof exactly when readLine returns "".
+              let input = st.provider.approval_read(st.world_state, req);
+              let resolution = resolve_approval(input.raw, req.default_allow, input.eof);
+              -- `post` carries the advanced approval cursor and is what every
+              -- continuation below uses. Deliberately NOT written as a shadowing
+              -- `let st = ...`: that compiles, but it makes "which `st`" a
+              -- question of line order, and a later edit adding a use above this
+              -- point would silently read the pre-approval world. Passing `st`
+              -- here instead of `post` is the freeze this class's assertion
+              -- catches — the queue would never advance.
+              let post: C2LoopState = { st | world_state: input.next_state };
+              let tool_step_idx = c2_done_step(post.step_idx);
+              -- WI-D4 removed WI-D3's `post_ctx` here, and THIS is the site
+              -- where doing it carelessly would have cost something. `post_ctx`
+              -- was `post` advanced past the resolution's requests; `post` is
+              -- `st` advanced past the APPROVAL READ. Collapsing to `st` — the
+              -- edit the type checker accepts just as readily — would have
+              -- thrown the approval cursor away and frozen the queue, which is
+              -- WI-D1's production defect in miniature and exactly what the
+              -- comment above says this arm is prone to. The successor that
+              -- disappears with the resolution is the resolution's own; the one
+              -- that must survive is `input.next_state`, and it does, in `post`.
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), policy.step.compaction.context_limit, ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
+              match resolution {
+                ApprovalDenied(reason) => {
+                  let denied_event = NativeToolDenied({
+                    step: tool_step_idx,
+                    stream_id: req.stream_id,
+                    tool: req.call.name,
+                    id: req.call.id,
+                    reason: reason
+                  });
+                  let _ = ledger_emit(session_id, denied_event);
+                  let denial_msg = policy_denied_message(req.call, reason);
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, ledger_append(trace_with_decision, WireRecord(denied_event)), req, post.accumulated_tool_msgs ++ [denial_msg])
+                },
+                ApprovalAllowed => {
+                  let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
+                  -- `after` carries BOTH advanced cursors: the approval queue
+                  -- (from `post`) and the tool queue (from this execution).
+                  -- WI-D2 adds a third thing to carry — `executed.emitted` — and
+                  -- this is the site where forgetting it is least visible,
+                  -- because the batch continues and the events would simply
+                  -- never appear.
+                  let after: C2LoopState = { post | world_state: executed.next_state };
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, after, c2_trace_wire_events(trace_with_decision, executed.emitted), req, after.accumulated_tool_msgs ++ [executed.msg])
+                }
+              }
+            }
+          }
+        },
+        RunTools(plan) => {
+          let tool_step_idx = c2_done_step(st.step_idx);
+          let stream_id = "step-${show(tool_step_idx)}";
+          let calls = c2_tool_plan_calls(plan.entries);
+          let request_id = "step-${show(tool_step_idx)}";
+          let ctx_msgs = c2_pending_context(st);
+          -- WI-D4. The stored limit, and WI-D3's `st_ctx` goes with the
+          -- resolution that produced it.
+          --
+          -- SUCCESSOR: nothing is lost. Between `st` and the deleted resolution
+          -- stood only `c2_done_step` and `c2_pending_context`, both pure, so
+          -- `r_limit.next_state` was `st.world_state` plus this resolution's own
+          -- requests and nothing else. The dispatcher below therefore starts
+          -- from the same world it would have started from, and `done.world` —
+          -- the successor that IS load-bearing here — is untouched.
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, policy.step.compaction.context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
+          let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
+          let calls_event = NativeToolCalls({
+            request_id: request_id,
+            step: tool_step_idx,
+            stream_id: stream_id,
+            payload: ja(tool_calls_to_envelope_jsons(calls))
+          });
+          let _ = if emit_calls then ledger_emit(session_id, calls_event) else ();
+          -- WI-D2. Appended under the SAME condition it is emitted under. An
+          -- unconditional append here type-checks and puts a record in the trace
+          -- for a batch that announced nothing on the wire — which the wire gate
+          -- reads as trace > wire, and is why the condition is shared rather
+          -- than restated.
+          let trace_with_calls =
+            if emit_calls then ledger_append(trace_with_decision, WireRecord(calls_event))
+            else trace_with_decision;
+          -- COMPUTED INSIDE THE LAMBDA, AND UNDER THE NAME GUARD. This was a
+          -- `let` above the dispatch, so every tool batch in every session paid
+          -- a full `runtime_status_json` — an O(|trace|) fold and a JSON encode
+          -- — and then discarded it, because the value is only ever read when
+          -- the batch contains a `MotokoRuntimeStatus` call. It was the second
+          -- half of motoko_agent#160: the fold's DEPTH is fixed at its
+          -- definition, this fixes who pays for it.
+          --
+          -- THE PREDICATE IS DUPLICATED ON PURPOSE. `runtime_status_tool_message`
+          -- keeps its own `call.name` check so it stays correct called from
+          -- anywhere; this one exists to keep the ARGUMENT from being evaluated,
+          -- which AILANG's strict application would otherwise do at every call
+          -- in the batch. Deleting either one is a silent regression: dropping
+          -- this guard restores the cost, dropping the inner one makes the
+          -- helper wrong for every other caller.
+          let runtime_builtin = \call.
+            if call.name == "MotokoRuntimeStatus" then
+              runtime_status_tool_message(call, encode(runtime_status_json(st, policy, tool_step_idx)))
+            else None;
+          match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, [], \event. ledger_emit(session_id, event), runtime_builtin) {
+            -- `done.world`, not `st.world_state`. The batch may have executed
+            -- several tools and each one advanced the cursor; taking it off `st`
+            -- type-checks and rewinds the world to before the batch.
+            --
+            -- WI-D2: `done.emitted` is the same rule on the second channel the
+            -- fold now returns. The tool-dispatch events land BETWEEN the batch
+            -- announcement and whatever the batch produces, which is when they
+            -- happened — the same positioning the stream deltas get at the
+            -- provider call, and for the same reason: a block appended in the
+            -- wrong place satisfies a count and fails order.
+            ToolDispatchDone(done) =>
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, { st | world_state: done.world }, c2_trace_wire_events(trace_with_calls, done.emitted), tool_step_idx, stream_id, done.msgs),
+            ToolDispatchPending(pending) => {
+              let next_state: C2LoopState = {
+                msgs: st.msgs,
+	                step_idx: st.step_idx,
+	                totals: st.totals,
+	                ext_artifacts: st.ext_artifacts,
+	                telemetry: st.telemetry,
+	                provider: st.provider,
+	                -- `pending.world`: tools already executed in this batch
+	                -- before the approval interrupted it, and their cursor
+	                -- advances must survive the suspension.
+	                world_state: pending.world,
+                pending_tool_calls: [pending.request.call],
+                pending_tool_context: st.pending_tool_context,
+                pending_tool_prefix: st.pending_tool_prefix,
+                pending_tool_batched: st.pending_tool_batched,
+                accumulated_tool_msgs: pending.accumulated,
+                pending_approval: Some(pending.request),
+                last_finish_reason: "await_approval",
+                last_response_text: pending.request.reason,
+                nudges_used: st.nudges_used,
+                finalize_source: "",
+                prior_counts: st.prior_counts,
+                -- WI-D2: `pending.emitted`, and the suspension is exactly where
+                -- this is easy to drop — the branch already had to remember
+                -- `pending.world` and `pending.accumulated` for the same reason.
+                trace: c2_trace_wire_events(trace_with_calls, pending.emitted),
+                emissions: st.emissions
+              };
+              c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+            }
+          }
+        },
+        CallModel(_) => {
+          let step_idx = st.step_idx;
+          -- WI-D4. The stored limit, and WI-D3's `st_ctx` goes with it.
+          --
+          -- SUCCESSOR: nothing is lost — the deleted resolution was the first
+          -- thing this arm did to the world, so its successor was `st`'s own.
+          -- The two `SealSystemPrompt`/`SealExhausted` finalize sites below
+          -- therefore returned to `st.world_state`, which is where they stood
+          -- before WI-D3 and was NOT a narrowing: WI-D3 pointed them at `st_ctx`
+          -- only so that item did not newly widen them, and with no resolution
+          -- here there was no widening to preserve.
+          --
+          -- WI-D4's LAST SENTENCE HAS EXPIRED, and the history is kept two-part
+          -- per S15 because a documented deferral is only legible against the
+          -- scope that deferred it. It read: "They still ignore
+          -- `chain.next_state`, the pre-step chain's successor, which remains a
+          -- separate un-threaded seam and is out of this item's scope." WI-D25
+          -- is the item whose scope it is. Both sites now take
+          -- `token_to_world(chain.next_state)`, and the deferral's ground did
+          -- not survive re-measurement: it was about WI-D3's deleted
+          -- resolution, which says nothing about the chain.
+          --
+          -- WHY — the `Ok` arm's reason, met on the two failing arms. The chain
+          -- is dispatched BELOW this comment and ABOVE the match, so a pre-step
+          -- hook's `ai_step` calls have already happened on ALL THREE arms.
+          -- Sealing failed; the effects did not. Returning `st.world_state`
+          -- here un-happens whatever the chain consumed, and the run's terminal
+          -- world reports a cursor that never advanced.
+          --
+          -- IT WAS INVISIBLE FOR THE REASON S29 GIVES: every `on_pre_step`
+          -- binding in the tree returned `ctx.world` unchanged, so the drop and
+          -- the thread produced identical worlds. `world_state_probe`'s
+          -- `consuming_pre_step_2`/`_3` are the first bindings that do not, and their
+          -- two seal-terminal rows go red against the reverted argument.
+          let context_limit = policy.step.compaction.context_limit;
+          let split = split_for_compaction(st.msgs);
+          let compactable_msgs = segment_messages(split.segment);
+          let pinned_tokens = estimate_tokens_messages(split.pinned);
+          let ext_context_limit = if effective_input_limit(context_limit) - pinned_tokens < 0 then 0 else effective_input_limit(context_limit) - pinned_tokens;
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
+          let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
+          let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
+          let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
+          match seal_compacted_payload(split, msgs_to_messages(chain.msgs), model, context_limit, policy.step.require_system_prompt) {
+            -- Terminal: the seal could not produce a usable system prompt.
+            -- Reachable, and absent from the ADR's enumeration of termination
+            -- reasons; it maps to the "error" wire string like the other
+            -- non-specific failures.
+            Err(SealSystemPromptEmpty(reason)) => {
+              let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
+              let _ = ledger_emit(session_id, event);
+              let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
+              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
+            },
+            -- Terminal: compaction exhausted.
+            Err(SealExhausted(compaction_reason)) => {
+              let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
+              let _ = ledger_emit(session_id, event);
+              let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
+              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
+            },
+            Ok(payload) => {
+              let compacted_msgs = payload_messages(payload);
+              let stream_id = "step-${show(step_idx)}";
+              let start_event = ThinkingStreamStart({ step: step_idx, stream_id: stream_id, model: model });
+              let _ = ledger_emit(session_id, start_event);
+              let on_chunk: (StreamChunk) -> () ! {IO, Trace} = \chunk. append_stream_delta(session_id, step_idx, stream_id, chunk);
+              let prepared_event = ProviderCallPrepared({
+                step: step_idx,
+                msg_count: List.length(compacted_msgs),
+                estimated_input_tokens: estimate_tokens_messages(compacted_msgs),
+                system_prefix_count: count_system_prefix(compacted_msgs),
+                system_prefix_chars: system_prefix_chars(compacted_msgs),
+                system_prefix_digest: system_prefix_digest_for(split.pinned),
+                payload_digest: payload_digest(compacted_msgs),
+                model: model
+              });
+              let _ = ledger_emit(session_id, prepared_event);
+              -- WI-B2b: `chain.next_state`, not `st.world_state`. The pre-step
+              -- chain runs BEFORE this call and a compaction hook may have made
+              -- provider calls of its own; starting the model step from the
+              -- world the chain was entered with would re-serve whatever the
+              -- chain already consumed. This is the pre-step half of the same
+              -- threading the intercept and solver hooks do below.
+              let exchange = dispatch_step(st.provider, token_to_world(chain.next_state), provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
+              -- WI-C3: THE READER. `exchange.emissions` had no consumer until
+              -- this line; WI-A1 built the channel, WI-C1 made it non-empty on a
+              -- live exchange, and this is where it is spent.
+              --
+              -- Two channels come out of one conversion, and they are threaded
+              -- SEPARATELY on purpose (see `C2LoopState.emissions`):
+              --
+              --   * the returned trace gets these events appended, which closes
+              --     `StreamDelta` in `d64_gap_register` — the driver used to
+              --     ledger_emit every delta and append none, so the returned
+              --     trace held zero StreamDelta records on every path and D6.4's
+              --     parity had no second side to compare against at all;
+              --   * `C2LoopState.emissions` carries the same events forward as
+              --     the run's emission witness, which is what an
+              --     `ExecutionUnderTest` needs and what `emissions: []` could
+              --     never be.
+              --
+              -- WHAT THIS PAIR DOES AND DOES NOT TEST, because a green
+              -- `stream_parity_findings` on a real run must not be over-read.
+              -- Both sides are derived from `exchange.emissions` here, and that
+              -- is not a shortcut — it is the only observation of the stream
+              -- that exists in this process. The callback's own projections go
+              -- to `ledger_emit`, which returns `()`, and the callback's row is
+              -- closed `{IO}` so it cannot accumulate them; D1 rejected the
+              -- scoped recorder and SharedMem explicitly. So in-process parity
+              -- tests that every branch below carries BOTH channels forward —
+              -- the trace has one junction (`trace_after_call`), the witness is
+              -- set in six branch literals, and a branch that keeps one and
+              -- drops the other goes red. It does NOT test that the callback
+              -- projected what the provider returned. That comparison needs the
+              -- WIRE, which is out of process, and it is what
+              -- `make stream_parity` does.
+              let stream_events = stream_chunk_events(step_idx, stream_id, exchange.emissions);
+              let emissions_after_call = st.emissions ++ stream_events;
+              -- The stream deltas sit between the prepared event and whatever
+              -- the outcome produces, which is when they actually happened.
+              let trace_after_call = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), stream_events);
+              match exchange.result {
+                Err(e) => {
+                  let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
+                  let _ = ledger_emit(session_id, end_event);
+                  -- WI-D2 CLOSES THE BRACKET. `ThinkingStreamStart` has been in
+                  -- the returned trace since A8 and its closing half was
+                  -- `ledger_emit`-only — the same code path appending one
+                  -- bracket and projecting the other, which was the sharpest
+                  -- single statement of D6.4's gap. Appended AFTER the deltas
+                  -- and before whatever the outcome produces, because that is
+                  -- when the stream ended.
+                  let trace_after_end = ledger_append(trace_after_call, WireRecord(end_event));
+                  -- WI-A12's env class. This was "the sixth and last driver env
+                  -- read" from WI-A12 until WI-D3; it is the last one IN
+                  -- session.ail and it is no longer the last in the driver —
+                  -- `context_usage` reads four more through the same port.
+                  let _ = if not e.retryable && st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", "").value != "" then capture_failing_payload(e, compacted_msgs) else ();
+                  if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
+                    let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
+                    let _ = ledger_emit(session_id, retry_event);
+                    let next_state: C2LoopState = {
+                      msgs: st.msgs,
+	                      step_idx: step_idx + 1,
+	                      totals: st.totals,
+	                      ext_artifacts: chain.artifacts,
+	                      telemetry: st.telemetry,
+	                      provider: st.provider,
+	                      world_state: exchange.next_state,
+                      pending_tool_calls: [],
+                      pending_tool_context: [],
+                      pending_tool_prefix: [],
+                      pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                      last_finish_reason: "stream_error",
+                      last_response_text: e.message,
+                      nudges_used: st.nudges_used,
+                      finalize_source: "",
+                      prior_counts: st.prior_counts,
+                      trace: ledger_append(trace_after_end, WireRecord(retry_event)),
+                      emissions: emissions_after_call
+                    };
+                    c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                  } else {
+                    -- Terminal: unretried provider/stream failure. WI-D1 made this `exchange.next_state` rather than `st.world_state` — plan rule S12, and the measurement is recorded at `ports.provider_outcome_record`. This edit is deliberately line-count-neutral (S18): the four routed clock anchors below it must not move.
+                    c2_finalize(st.provider, exchange.next_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_end, emissions_after_call, Err(e))
+                  }
+                },
+                Ok(result) => {
+                  let n_calls = List.length(result.tool_calls);
+                  let step_cost = step_cost_millicents(result.input_tokens, result.output_tokens, cost_rates);
+                  let phase = phase_from_result(result, step_idx, n_calls, millicents_to_usd(step_cost), step_cost, estimate_tokens_messages(compacted_msgs));
+                  let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "completed" });
+                  let _ = ledger_emit(session_id, end_event);
+                  let _ = c2_emit_events(session_id, phase.events);
+                  let new_warned_pct = c2_emit_cost_warning(session_id, step_idx, st.totals.cost_millicents + step_cost, max_cost_millicents, st.totals.cost_warned_pct);
+                  let new_totals = c2_add_step_totals(st.totals, result, step_cost, new_warned_pct);
+                  let applied = apply_state_delta(step_state, phase.delta);
+                  let assistant_msg = step_result_to_message(result);
+                  let msgs_with_assistant = st.msgs ++ [assistant_msg];
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
+                  let trace_after_model = c2_trace_wire_events(ledger_append(trace_after_call, WireRecord(end_event)), phase.events);
+                  -- WI-B2b. Bound rather than matched inline, because the
+                  -- successor has to outlive the match: `intercepted.next_state`
+                  -- is what the loop carries forward on EVERY arm, and
+                  -- `exchange.next_state` is stale by what the hook performed.
+                  let intercepted = dispatch_response_intercept(rt, post_ctx, result.message.content);
+                  match intercepted.decision {
+                    InterceptHandled(envelope) => {
+                      let event = ExtInterceptHandled({
+                        step: step_idx,
+                        stream_id: "",
+                        tool: envelope.tool,
+                        id: "",
+                        exit_code: envelope.exit_code
+                      });
+                      let _ = ledger_emit(session_id, event);
+                      let tool_msg = envelope_to_tool_message(envelope);
+                      let next_state: C2LoopState = {
+                        msgs: msgs_with_assistant ++ [tool_msg],
+	                        step_idx: step_idx + 1,
+	                        totals: new_totals,
+	                        ext_artifacts: chain.artifacts,
+	                        telemetry: applied.telemetry,
+	                        provider: st.provider,
+	                        -- WI-B2b: the INTERCEPT's successor, not the model
+	                        -- step's. The hook ran after the exchange, so
+	                        -- `exchange.next_state` is stale by whatever it did.
+	                        world_state: token_to_world(intercepted.next_state),
+                        pending_tool_calls: [],
+                        pending_tool_context: [],
+                        pending_tool_prefix: [],
+                        pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                        last_finish_reason: "intercept_handled",
+                        last_response_text: result.message.content,
+                        nudges_used: applied.nudges_used,
+                        finalize_source: "",
+                        prior_counts: st.prior_counts,
+                        trace: ledger_append(trace_after_model, WireRecord(event)),
+                        emissions: emissions_after_call
+                      };
+                      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                    },
+                    NoIntercept => {
+                      -- Execute tool calls whenever the model emitted any, not
+                      -- only when finish_reason=="tool_calls". Some providers
+                      -- (e.g. hy3:free/Novita) return tool_calls with a
+                      -- different finish_reason; gating on the string alone
+                      -- drops the call and runs the finalize/guard path, which
+                      -- injects a nudge after an unanswered tool_call and ships
+                      -- a malformed [assistant(tool_calls) -> user] payload the
+                      -- provider then rejects (400 invalid_request_error).
+                      if result.finish_reason == "tool_calls" || n_calls > 0 then {
+                        let next_state: C2LoopState = {
+                          msgs: msgs_with_assistant,
+	                          step_idx: step_idx + 1,
+	                          totals: new_totals,
+	                          ext_artifacts: chain.artifacts,
+	                          telemetry: applied.telemetry,
+	                          provider: st.provider,
+	                          world_state: token_to_world(intercepted.next_state), -- WI-D19
+                          pending_tool_calls: applied.pending_tool_calls,
+                          pending_tool_context: msgs_with_assistant,
+                          pending_tool_prefix: msgs_with_assistant,
+                          pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                          last_finish_reason: "tool_calls",
+                          last_response_text: applied.last_response_text,
+                          nudges_used: applied.nudges_used,
+                          finalize_source: "",
+                          prior_counts: st.prior_counts,
+                          trace: trace_after_model,
+                          emissions: emissions_after_call
+                        };
+                        c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                      } else {
+                        let hybrid_attempt: Option[string] = if hybrid_tools then extract_bash(result.message.content) else None;
+                        match hybrid_attempt {
+                          Some(cmd) => {
+                            let event = HybridBashExtracted({ step: step_idx, cmd: cmd });
+                            let _ = ledger_emit(session_id, event);
+                            let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
+                            let augmented_assistant_msg: Message = {
+                              role: "assistant",
+                              content: result.message.content,
+                              tool_calls: [synth_call],
+                              tool_call_id: "",
+                              images: []
+                            };
+                            let next_state: C2LoopState = {
+                              msgs: msgs_with_assistant,
+	                              step_idx: step_idx + 1,
+	                              totals: new_totals,
+	                              ext_artifacts: chain.artifacts,
+	                              telemetry: applied.telemetry,
+	                              provider: st.provider,
+	                              world_state: token_to_world(intercepted.next_state), -- WI-D19
+                              pending_tool_calls: [synth_call],
+                              pending_tool_context: msgs_with_assistant,
+                              pending_tool_prefix: st.msgs ++ [augmented_assistant_msg],
+                              pending_tool_batched: false,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                              last_finish_reason: "hybrid_bash",
+                              last_response_text: result.message.content,
+                              nudges_used: applied.nudges_used,
+                              finalize_source: "",
+                              prior_counts: st.prior_counts,
+                              trace: ledger_append(trace_after_model, WireRecord(event)),
+                              emissions: emissions_after_call
+                            };
+                            c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                          },
+                          None => {
+                            -- WI-B2b. Bound, for the same reason the intercept
+                            -- above is: every branch below carries the world
+                            -- forward, and the solver hook's successor is the
+                            -- current one from here on.
+                            let finalized = dispatch_solver_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content); -- WI-D19
+                            match finalized.decision {
+                              Accept(output) =>
+	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, output, "ext_solver_accept"),
+                              ContinueWithFeedback(feedback) => {
+                                let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
+                                let _ = ledger_emit(session_id, event);
+                                let next_state: C2LoopState = {
+                                  msgs: msgs_with_assistant,
+	                                  step_idx: step_idx + 1,
+	                                  totals: new_totals,
+	                                  ext_artifacts: chain.artifacts,
+	                                  telemetry: applied.telemetry,
+	                                  provider: st.provider,
+	                                  world_state: token_to_world(finalized.next_state),
+                                  pending_tool_calls: [],
+                                  pending_tool_context: [],
+                                  pending_tool_prefix: [],
+                                  pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                                  last_finish_reason: "solver_feedback",
+                                  last_response_text: feedback,
+                                  nudges_used: applied.nudges_used,
+                                  finalize_source: "",
+                                  prior_counts: st.prior_counts,
+                                  trace: ledger_append(trace_after_model, WireRecord(event)),
+                                  emissions: emissions_after_call
+                                };
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                              },
+                              NoDecision => {
+                                if should_inject_persist_nudge(policy.step.persist_retries, st.nudges_used, any_writefile_attempt(msgs_with_assistant)) then {
+                                  let event = PersistNudge({
+                                    step: step_idx,
+                                    nudge_num: st.nudges_used + 1,
+                                    budget: policy.step.persist_retries
+                                  });
+                                  let _ = ledger_emit(session_id, event);
+                                  let next_state: C2LoopState = {
+                                    msgs: msgs_with_assistant,
+	                                    step_idx: step_idx + 1,
+	                                    totals: new_totals,
+	                                    ext_artifacts: chain.artifacts,
+	                                    telemetry: applied.telemetry,
+	                                    provider: st.provider,
+	                                    world_state: token_to_world(finalized.next_state),
+                                    pending_tool_calls: [],
+                                    pending_tool_context: [],
+                                    pending_tool_prefix: [],
+                                    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                                    last_finish_reason: "persist_nudge",
+                                    last_response_text: result.message.content,
+                                    nudges_used: st.nudges_used,
+                                    finalize_source: "",
+                                    prior_counts: st.prior_counts,
+                                    trace: ledger_append(trace_after_model, WireRecord(event)),
+                                    emissions: emissions_after_call
+                                  };
+                                  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                                } else
+	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, result.message.content, "") -- WI-D19
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+func run_v2_from_messages_traced_with_policy(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: PortedProvider
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  run_v2_from_messages_traced_with_policy_and_counts(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, zero_runtime_status_counts())
+}
+
+func run_v2_from_messages_traced_with_policy_and_counts(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: PortedProvider,
+  prior_counts: RuntimeStatusCounts
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  -- WI-A12's clock class. Two of the four driver clock sites are here, both
+  -- BEFORE the loop starts, and both successors must reach the loop's world:
+  -- `started.next_state` is what `c2_initial_state_with_counts` receives, not
+  -- `provider.world`. Taking the latter type-checks and silently discards both
+  -- reads, leaving the loop on an un-advanced clock.
+  let derived = derive_session_id(provider.ports, provider.world);
+  let started = provider.ports.clock_now(derived.next_state);
+  let session_id = derived.id;
+  let started_at_ms = started.now_ms;
+  let session_span = "motoko.session.${session_id}";
+  Trace.spanStart(session_span);
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts));
+  Trace.spanEnd(session_span);
+  result
+}
+
+export func run_v2_session_traced(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  -- WI-A12: the provider is normalised FIRST so policy init can read the env
+  -- through its ports instead of ambiently.
+  let pp = ported_provider(rt, provider);
+  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, init.policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, { pp | world: init.next_state })
+}
+
+export func run_v2_session_traced_with_persist_retries(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  persist_retries: int,
+  provider: StepProvider
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let pp = ported_provider(rt, provider);
+  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  let base = init.policy;
+  let policy: SessionPolicy = {
+    step: {
+      step_budget: base.step.step_budget,
+      max_cost_millicents: base.step.max_cost_millicents,
+      cost_metered: base.step.cost_metered,
+      persist_retries: persist_retries,
+      retry_stream_errors: base.step.retry_stream_errors,
+      require_system_prompt: base.step.require_system_prompt,
+      model: base.step.model,
+      provider_base_url: base.step.provider_base_url,
+      checkpoint_enabled: base.step.checkpoint_enabled,
+      checkpoint_pct: base.step.checkpoint_pct,
+      compaction: base.step.compaction
+    },
+    headless: base.headless
+  };
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
+}
+
+func run_v2_from_messages_with_policy(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: PortedProvider
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  run_v2_from_messages_with_policy_and_counts(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, zero_runtime_status_counts())
+}
+
+func run_v2_from_messages_with_policy_and_counts(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: PortedProvider,
+  prior_counts: RuntimeStatusCounts
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  -- WI-A12's clock class. Two of the four driver clock sites are here, both
+  -- BEFORE the loop starts, and both successors must reach the loop's world:
+  -- `started.next_state` is what `c2_initial_state_with_counts` receives, not
+  -- `provider.world`. Taking the latter type-checks and silently discards both
+  -- reads, leaving the loop on an un-advanced clock.
+  let derived = derive_session_id(provider.ports, provider.world);
+  let started = provider.ports.clock_now(derived.next_state);
+  let session_id = derived.id;
+  let started_at_ms = started.now_ms;
+  let session_span = "motoko.session.${session_id}";
+  Trace.spanStart(session_span);
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts)).result;
+  Trace.spanEnd(session_span);
+  result
+}
+
+export func run_v2(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  initial_msgs: [Msg],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let messages = msgs_to_messages(initial_msgs);
+  let pp = ported_provider(rt, provider);
+  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, init.policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, { pp | world: init.next_state })
+}
+
+-- Run loop_v2 starting from an existing [Message] history (instead of the
+-- legacy [Msg] shape). Used by conversation_loop_v2 to resume after each
+-- user_message arrives — preserves the assistant/tool history accumulated
+-- across the prior task so the model retains context.
+export func run_v2_from_messages(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let pp = ported_provider(rt, provider);
+  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, init.policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, { pp | world: init.next_state })
+}
+
+-- Read a JSON-shaped string field from a decoded Json object, returning
+-- "" when the key is absent or has the wrong type. Mirrors rpc.ail's
+-- get_str helper (kept inline to avoid an import-time circular reference
+-- between rpc.ail and agent_loop_v2.ail).
+func msg_get_str(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    None    => "",
+    Some(j) => match asString(j) { None => "", Some(s) => s }
+  }
+}
+
+-- M8 multi-turn driver: after a v2 task returns, drain stdin for the next
+-- user command and resume. Mirrors rpc.ail's conversation_loop in command
+-- handling (abort/exit/model_change/user_message) but operates on
+-- [Message] history instead of [Msg] + AgentState.
+--
+-- Commands recognized:
+--   abort | exit              → return () (TUI session ends)
+--   model_change { model }    → update model, recurse with same history
+--   user_message { content }  → append user msg, run_v2_from_messages,
+--                                 recurse with returned [Message]
+--   anything else (unparseable
+--     or unknown type)        → discard line, recurse (matches legacy
+--                                 conversation_loop fall-through)
+--
+-- EOF (readLine returns "") cleanly terminates the loop — the env-server
+-- closes stdin when the user exits the TUI.
+func conversation_loop_v2_with_policy(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: PortedProvider,
+  session_id: string,
+  prior_counts: RuntimeStatusCounts
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  -- Headless mode (M-MOTOKO-HEADLESS, 2026-05-08): skip the stdin-polling
+  -- conversation loop entirely when MOTOKO_HEADLESS=1. The TS TUI layer
+  -- (src/tui/src/index.ts) sets this env var when stdin is not a TTY
+  -- (CLI subprocess, eval-harness adapter, MCP-mediated invocation) so
+  -- the agent loop runs the initial task to completion and then exits 0
+  -- instead of hanging on readLine() forever (the AILANG readLine builtin
+  -- blocks on non-TTY stdin instead of returning EOF). This is the
+  -- M-BENCH-MOTOKO Day-1 design that originally got skipped — restored
+  -- after the AILANG eval-harness adapter smoke test surfaced the hang
+  -- on 2026-05-08 (msg_20260508_102147_4f9aa71d).
+  if policy.headless then ()
+  else {
+  -- NOT routed by WI-A12, deliberately. This read is the interactive
+  -- conversation REPL asking for the next USER TURN — it is not approval input,
+  -- and it sits ABOVE `run_v2_session_traced`, outside the traced driver surface
+  -- D1 scopes `world_state` to. A deterministic run drives the traced entry
+  -- point directly and never reaches this loop, which is why withholding a
+  -- capability here changes nothing the poison pair observes. Routing the
+  -- conversation turn belongs with whatever makes multi-turn sessions
+  -- replayable, not with A12.
+  let raw = readLine();
+  if raw == "" then ()
+  else match decode(raw) {
+    Err(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts),
+    Ok(obj) => {
+      let cmd_type = msg_get_str(obj, "type");
+      if cmd_type == "abort" || cmd_type == "exit" then ()
+      else if cmd_type == "model_change" then {
+        let new_model = msg_get_str(obj, "model");
+        -- WI-D3. The ports are the loop's own `PortedProvider`, so the model
+        -- switch resolves its new context limit through whatever seams this run
+        -- bound rather than through an ambient read.
+        --
+        -- The SUCCESSOR IS DROPPED HERE, and that is the same decision the
+        -- comment above this loop already records for the conversation channel:
+        -- this loop threads no world at all, a deterministic run drives the
+        -- traced entry point directly and never reaches it, and world-threading
+        -- the multi-turn session belongs with whatever makes it replayable. The
+        -- successor has nowhere to go until that exists — which is the thing
+        -- that would have to change, not a property of this line.
+        let switched = session_policy_with_model(provider.ports, provider.world, policy, new_model);
+        let next_policy = switched.policy;
+        conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, next_policy, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts)
+      }
+      else if cmd_type == "restart" then {
+        -- Emit session_suspend event and exit cleanly; TUI will respawn
+        let target_profile = msg_get_str(obj, "profile");
+        let _ = ledger_emit(session_id, SessionSuspend({
+          session_id: session_id,
+          target_profile: target_profile
+        }));
+        ()
+      }
+      else if cmd_type == "user_message" then {
+        let content = msg_get_str(obj, "content");
+        let user_msg: Message = {
+          role: "user",
+          content: content,
+          tool_calls: [],
+          tool_call_id: "",
+          images: []
+        };
+        let next_history = history ++ [user_msg];
+        let _ = ledger_emit(session_id, SessionStart({
+          task: content,
+          model: model,
+          mode: "v2"
+        }));
+        let traced = run_v2_from_messages_traced_with_policy_and_counts(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts);
+        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, traced.world);
+        let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
+        match traced.result {
+          Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
+          Err(e) => {
+            let _ = ledger_emit(session_id, ErrorEvent({
+              source: "agent_loop_v2",
+              code: e.code,
+              message: e.message
+            }));
+            conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts)
+          }
+        }
+      }
+      else conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts)
+    }
+  }
+  }
+}
+
+-- ============================================================================
+-- 7.0: the turn-end exit-manifest publish.
+--
+-- THE SEAM IS THE TURN, not the step and not the session. Per step would
+-- re-render on every tool call for a list that only changes when a delegate is
+-- spawned or closed; per session would never run at all, because a session
+-- ends by the process dying. A turn is the coarsest boundary at which the
+-- runtime is reliably still alive, and every intent this publishes was
+-- computed from state that boundary can see.
+--
+-- CALLED FROM TWO PLACES, AND THE ORDERING IS WHY.
+--
+-- The load-bearing call is inside `c2_loop`'s success arm, immediately BEFORE
+-- `ledger_emit(session_id, done_event)`. That position is not tidiness: the TUI
+-- treats `done` as "the turn is over", drains its logger and calls
+-- `process.exit`, WITHOUT waiting for this process. Publishing after `done` was
+-- therefore two comparable few-millisecond paths with no ordering between them,
+-- and it lost. MEASURED 2026-09-05 by injecting a 2s delay into
+-- `publish_exit_manifest` and running a real headless delegation: the TUI
+-- exited with `.motoko/exit/` still empty, the manifest landed a second later
+-- naming exactly the right pane with the right proof, and the delegate survived
+-- with HERDR_REAP_ON_EXIT=1. Two earlier live runs had passed; they won a race
+-- rather than being safe. Emitting `done` only after this returns makes the
+-- ordering a property instead of a timing assumption.
+--
+-- The turn-boundary calls are the BACKSTOP, and they stay because not every
+-- terminal path emits `DoneEvent` -- an errored turn, an exhausted step budget
+-- and a cost cap all finalize without one, and an errored turn is exactly the
+-- one whose delegates are most likely to have been abandoned. Publishing twice
+-- on the common path costs one render, one small write and one `mv` against a
+-- turn that just made a model call; every publish rewrites the whole document,
+-- so the second is idempotent rather than additive.
+--
+-- THE CTX CARRIES LIVE PORTS, and the first draft did not — which is the whole
+-- reason this comment is long. `ExitIntent`'s row is `! {FS}` and its render
+-- reads through `ExtPorts.file_read`, so `noop_ext_ports()` looked defensible
+-- ("a render cannot reach a port it should not need") and was wrong in the one
+-- way nothing caught: the no-op `file_read` answers `present: false` to every
+-- path, so every render read an absent run file and published an empty action
+-- list. Both sides were green — the gate injects a scripted `file_read`, and
+-- the host dispatcher was handed hand-written manifests — and the seam between
+-- them was dead. Found by running it live: a real delegate on a real pane,
+-- a correct run file on disk, and `"actions": []` in the manifest.
+--
+-- `mode` says "exit" rather than "v2" so that anything reading the ctx knows
+-- which boundary it is standing on, and the world is the provider's own cursor
+-- rather than a fresh one, so the render's read descends from the run's state
+-- instead of from nothing.
+func publish_turn_exit_manifest(
+  rt: ExtRuntime,
+  task: string,
+  model: string,
+  cwd: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  ports: Ports,
+  -- THE TURN'S SUCCESSOR WORLD, not the provider's pre-turn one. `TracedSessionResult` carries
+  -- `world` precisely so the state the turn produced can be handed on; passing `provider.world`
+  -- rewinds the render to before the turn it is supposed to be summarising, which under scripted
+  -- or recording ports means files written DURING the turn are invisible to it and replay cursors
+  -- restart from stale state. Live ambient reads hide this by consulting the disk instead, and the
+  -- extension fixture hides it by answering from canned content regardless of the world it is
+  -- given — the same both-sides-mocked shape that hid the no-op ports bug.
+  world: WorldState
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  -- ROUTED, NOT AMBIENT. The manifest's name is read through `Ports.env_get`
+  -- rather than `std/env`, because this now runs INSIDE the deterministic
+  -- driver: `make world_state` rejects an un-routed env read on that path, and
+  -- it is right to -- a replayed run must see the same name the recorded one
+  -- did. The successor is threaded into the ctx the render receives.
+  let named = ports.env_get(world, manifest_path_var(), "");
+  let ctx: ExtCtx = {
+    task: task,
+    step: 0,
+    model: model,
+    cwd: cwd,
+    hybrid_tools: hybrid_tools,
+    budget: budget,
+    mode: "exit",
+    workdir: cwd,
+    env_server_url: env_url,
+    budget_remaining: budget.total,
+    history_slice: [],
+    state_key: "core:ext:exit",
+    context_limit: 0,
+    ports: ext_ports_of(ports, named.next_state, env_url),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(),
+    world: world_to_token(named.next_state)
+  };
+  -- The result says whether the live file was replaced. Discarded on purpose:
+  -- a manifest that could not be published leaves the previous one standing,
+  -- and failing a completed turn over a best-effort courtesy would be the
+  -- wrong trade in the one direction that matters.
+  let _ = publish_exit_manifest(rt, ctx, named.value);
+  ()
+}
+
+export func conversation_loop_v2(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  session_id: string
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let live_provider = ported_provider(rt, provider);
+  let init = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
+  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, { live_provider | world: init.next_state }, session_id, zero_runtime_status_counts())
+}
+
+-- M8 combined entry point: runs the initial task via run_v2, then enters
+-- conversation_loop_v2 for follow-up turns. On error from the initial run,
+-- emits a structured error event and still enters conversation_loop_v2
+-- with the original [Msg] history (translated) so the TUI session stays
+-- responsive — matching the legacy behavior where run_with_config falls
+-- through to conversation_loop after rpc_loop returns.
+export func run_v2_with_conversation(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  initial_msgs: [Msg],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let initial_messages = msgs_to_messages(initial_msgs);
+  let live_provider = ported_provider(rt, provider);
+  let init = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
+  let policy = init.policy;
+  let started_provider = { live_provider | world: init.next_state };
+  -- Ordered after `ported_provider` because WI-A12 made `derive_session_id`
+  -- read the world clock through the port instead of ambient `now()`, so it
+  -- needs the normalised provider. The successor is discarded: this id labels
+  -- the outer conversation loop, and each traced run below derives its own from
+  -- its own world. That is pre-existing behaviour, not a cursor being dropped.
+  let session_id = derive_session_id(started_provider.ports, started_provider.world).id;
+  -- An empty task means there is no opening turn to run. Go straight to the
+  -- conversation loop rather than letting the empty task reach the provider as
+  -- a real model call on an empty user message -- which is what `/restart` did
+  -- before this guard existed.
+  --
+  -- The live launcher no longer reaches this branch: `rpc.run_with_config`
+  -- waits in `await_first_task` for the first real task before it builds
+  -- anything, precisely because the system prompt and the budget plan are both
+  -- task-conditional and both built exactly once. This stays as the guard for
+  -- direct callers (tests, harnesses) that hand an empty task straight in.
+  if task == "" then
+    conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts())
+  else {
+  let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
+  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider.ports, initial_traced.world);
+  let initial_counts = runtime_status_counts(initial_traced.trace);
+  match initial_traced.result {
+    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts),
+    Err(e) => {
+      let _ = ledger_emit(session_id, ErrorEvent({
+        source: "agent_loop_v2",
+        code: e.code,
+        message: e.message
+      }));
+      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts)
+    }
+  }
+  }
+}
+
+-- Run loop_v2 with a scripted provider. No real LLM call made.
+-- Intended for integration tests only; not exported from rpc.ail.
+export func run_v2_with_stub(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  script: [ScriptedStep]
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
+}
+
+-- Phase C compatibility adapter. WI-C6 moves the parity fleet to
+-- scripted-port imports; keep this entry for external callers until they are
+-- audited.
+export func run_v2_with_stub_port_adapter(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  script: [ScriptedStep]
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  run_v2_with_stub(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, script)
+}
+
+-- M-MOTOKO-EVAL-INSTRUMENTATION inline tests (pure-only). Validates the
+-- schema-v1 contract surface that downstream eval harnesses depend on.
+
+pure func test_schema_version_is_one() -> bool
+  tests [((), true)]
+  {
+    schema_version() == "1"
+  }
+
+pure func test_millicents_to_usd_zero() -> bool
+  tests [((), true)]
+  {
+    millicents_to_usd(0) == 0.0
+  }
+
+pure func test_millicents_to_usd_one_dollar() -> bool
+  tests [((), true)]
+  {
+    millicents_to_usd(100000) == 1.0
+  }
+
+pure func test_millicents_to_usd_fraction() -> bool
+  tests [((), true)]
+  {
+    -- 12345678 millicents = $123.45678
+    millicents_to_usd(12345678) == 123.45678
+  }
+
+-- Replaces test_finish_reason_str_table. The integer helper is gone, so the
+-- table is pinned over the typed reason instead. The wire strings are a
+-- compatibility surface and must not change: every string on the right here is
+-- byte-identical to what the integer table produced for the code that reached
+-- that path. "dp7_rejected" is absent because no call site ever produced it.
+pure func test_finish_reason_wire_table() -> bool
+  tests [((), true)]
+  {
+    finish_reason_wire(TermSuccess) == "stop"
+      && finish_reason_wire(TermBudgetExhausted) == "cost_exhausted"
+      && finish_reason_wire(TermCompactionExhausted) == "compaction_exhausted"
+      && finish_reason_wire(TermMaxSteps) == "max_steps"
+      && finish_reason_wire(TermProviderFailure) == "error"
+      && finish_reason_wire(TermSystemPromptEmpty) == "error"
+      && finish_reason_wire(TermInvalidHistory) == "error"
+      && finish_reason_wire(TermInternalFailure) == "error"
+  }
+
+-- The reachable Fail codes map to the reasons the integer helper produced.
+pure func test_decision_fail_reason_mapping() -> bool
+  tests [((), true)]
+  {
+    finish_reason_wire(decision_fail_reason("BudgetExceeded", "cap")) == "cost_exhausted"
+      && finish_reason_wire(decision_fail_reason("ContextExhausted", "r")) == "compaction_exhausted"
+      && finish_reason_wire(decision_fail_reason("Internal", "v2 loop: step budget exhausted")) == "max_steps"
+      && finish_reason_wire(decision_fail_reason("Internal", "something else")) == "error"
+  }
+
+pure func test_zero_totals_initializes_clean() -> bool
+  tests [((), true)]
+  {
+    let z = zero_totals();
+    z.input_tokens == 0
+      && z.output_tokens == 0
+      && z.cache_read == 0
+      && z.cache_creation == 0
+      && z.cost_millicents == 0
+      && z.cost_warned_pct == 0
+  }
+
+-- Cache-token plumbing helpers (M4 from M-MOTOKO-EVAL-INSTRUMENTATION):
+-- shape sanity for a list-of-kv length given a hypothetical StepResult.
+
+pure func kv_len(xs: [{key: string, value: Json}]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + kv_len(rest) }
+}
+
+pure func mk_test_step_result(input: int, output: int, cr: int, cc: int) -> StepResult {
+  {
+    message: { role: "assistant", content: "", tool_calls: [], tool_call_id: "", images: [] },
+    tool_calls: [],
+    finish_reason: "stop",
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_input_tokens: cr,
+    cache_creation_input_tokens: cc
+  }
+}
+
+pure func test_per_step_usage_kvs_no_cache() -> bool
+  tests [((), true)]
+  {
+    -- No cache fields → exactly 3 kv entries (input, output, cost_usd)
+    let r = mk_test_step_result(100, 50, 0, 0);
+    kv_len(per_step_usage_kvs(r, 1500)) == 3
+  }
+
+pure func test_per_step_usage_kvs_cache_read_only() -> bool
+  tests [((), true)]
+  {
+    -- OpenAI / Gemini case: only cache_read populated → 4 kv entries
+    let r = mk_test_step_result(100, 50, 25, 0);
+    kv_len(per_step_usage_kvs(r, 1500)) == 4
+  }
+
+pure func test_per_step_usage_kvs_full_cache() -> bool
+  tests [((), true)]
+  {
+    -- Anthropic case: both cache_read + cache_creation → 5 kv entries
+    let r = mk_test_step_result(100, 50, 25, 12);
+    kv_len(per_step_usage_kvs(r, 1500)) == 5
+  }
+
+func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Trace}
+  tests [((), true)]
+  {
+    let prior: RuntimeStatusCounts = {
+      provider_calls_started: 26,
+      provider_calls_completed: 26,
+      stage_applied_total: 0,
+      stage_rejected_total: 0,
+      compaction_ai_applied: 0
+    };
+    let trace: LedgerTrace = {
+      records: [
+        WireRecord(ProviderCallPrepared({
+          step: 0,
+          msg_count: 2,
+          estimated_input_tokens: 3,
+          system_prefix_count: 1,
+          system_prefix_chars: 3,
+          system_prefix_digest: "sha256:sys",
+          payload_digest: "sha256:payload",
+          model: "m"
+        })),
+        WireRecord(ProviderResult({
+          step: 0,
+          text: "",
+          finish_reason: "tool_calls",
+          tool_calls: 1,
+          input_tokens: 10,
+          output_tokens: 5,
+          cost_usd: 0.0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
+        }))
+      ]
+    };
+    let st: C2LoopState = {
+      msgs: [{ role: "system", content: "sys", tool_calls: [], tool_call_id: "", images: [] }],
+      step_idx: 1,
+      totals: zero_totals(),
+      ext_artifacts: jo([]),
+      telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+      provider: scripted_ports(),
+      world_state: empty_world_state(),
+      pending_tool_calls: [],
+      pending_tool_context: [],
+      pending_tool_prefix: [],
+      pending_tool_batched: true,
+      accumulated_tool_msgs: [],
+      pending_approval: None,
+      last_finish_reason: "tool_calls",
+      last_response_text: "",
+      nudges_used: 0,
+      finalize_source: "",
+      prior_counts: prior,
+      trace: trace,
+      emissions: []
+    };
+    let policy: SessionPolicy = {
+      step: {
+        step_budget: 100,
+        max_cost_millicents: 0,
+        cost_metered: false,
+        persist_retries: 0,
+        retry_stream_errors: false,
+        require_system_prompt: true,
+        model: "m",
+        provider_base_url: "",
+        checkpoint_enabled: false,
+        checkpoint_pct: 90,
+        compaction: {
+          context_limit: 1000,
+          elide_tier_pct: 70,
+          elide_hard_tier_pct: 85,
+          emergency_pct: 95
+        }
+      },
+      headless: false
+    };
+    let encoded = encode(runtime_status_json(st, policy, 0));
+    contains(encoded, "\"provider_calls_started\":27")
+      && contains(encoded, "\"provider_calls_completed\":27")
+      && contains(encoded, "\"steps_executed_so_far\":27")
+  }
+
+func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
+  tests [((), true)]
+  {
+    let st: C2LoopState = {
+      msgs: [{ role: "system", content: "sys", tool_calls: [], tool_call_id: "", images: [] }],
+      step_idx: 1,
+      totals: zero_totals(),
+      ext_artifacts: jo([]),
+      telemetry: { last_input_tokens: 500, last_output_tokens: 20, last_estimated_input_tokens: 0 },
+      provider: scripted_ports(),
+      world_state: empty_world_state(),
+      pending_tool_calls: [],
+      pending_tool_context: [],
+      pending_tool_prefix: [],
+      pending_tool_batched: true,
+      accumulated_tool_msgs: [],
+      pending_approval: None,
+      last_finish_reason: "tool_calls",
+      last_response_text: "",
+      nudges_used: 0,
+      finalize_source: "",
+      prior_counts: zero_runtime_status_counts(),
+      trace: { records: [] },
+      emissions: []
+    };
+    let policy: SessionPolicy = {
+      step: {
+        step_budget: 100,
+        max_cost_millicents: 0,
+        cost_metered: false,
+        persist_retries: 0,
+        retry_stream_errors: false,
+        require_system_prompt: true,
+        model: "m",
+        provider_base_url: "",
+        checkpoint_enabled: false,
+        checkpoint_pct: 90,
+        compaction: {
+          context_limit: 1000,
+          elide_tier_pct: 70,
+          elide_hard_tier_pct: 85,
+          emergency_pct: 95
+        }
+      },
+      headless: false
+    };
+    let encoded = encode(runtime_status_json(st, policy, 0));
+    -- actual = 500 provider tokens against a 1000 limit => 50%
+    contains(encoded, "\"context_limit\":1000")
+      && contains(encoded, "\"last_sent\"")
+      && contains(encoded, "\"input_tokens\":500")
+      && contains(encoded, "\"usage_pct\":50")
+      && contains(encoded, "\"uncompacted_pending\"")
+      && contains(encoded, "\"note\"")
+  }
+
+pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool
+  tests [((), true)]
+  {
+    let trace: LedgerTrace = {
+      records: [
+        CompactionStageRecord({
+          step: 3,
+          ext_id: "compaction_ai#0",
+          outcome: TraceStageApplied("AI-summarized 1 turns")
+        }),
+        CompactionStageRecord({
+          step: 3,
+          ext_id: "compaction_structural#3",
+          outcome: TraceStageApplied("structural: tier=emergency keep_last=3")
+        }),
+        CompactionStageRecord({
+          step: 3,
+          ext_id: "compaction_ai#0",
+          outcome: TraceStageObserved("compaction_ai.summarizer_failed", [{ key: "attempts", value: "2" }])
+        })
+      ]
+    };
+    let counts = runtime_status_counts(trace);
+    counts.stage_applied_total == 2
+      && counts.stage_rejected_total == 0
+      && counts.compaction_ai_applied == 1
+  }

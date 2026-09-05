@@ -1,0 +1,78 @@
+-- src/core/model_phase.ail
+
+module src/core/model_phase
+
+import std/ai (StepResult)
+import std/list as List (length)
+import std/option (Some, None)
+import src/core/phase_vocab (PhaseResult, ModelRequest, empty_delta, StateDelta, ProviderResult, step_result_to_message)
+
+export type ModelPhaseOutput = {
+  result: StepResult,
+  phase: PhaseResult
+}
+
+-- sent_estimate is the char/4 estimate of the window that produced this result;
+-- it is stored so the compaction gate can calibrate against provider truth.
+export pure func result_delta(result: StepResult, sent_estimate: int) -> StateDelta {
+  {
+    telemetry: Some({ last_input_tokens: result.input_tokens, last_output_tokens: result.output_tokens, last_estimated_input_tokens: sent_estimate }),
+    totals: None,
+    nudges_used: None,
+    ext_artifacts: None,
+    pending_tool_calls: Some(result.tool_calls),
+    last_finish_reason: Some(result.finish_reason),
+    last_response_text: Some(result.message.content)
+  }
+}
+
+export pure func phase_from_result(result: StepResult, step: int, tool_calls: int, cost_usd: float, cost_delta_millicents: int, sent_estimate: int) -> PhaseResult {
+  {
+    delta: result_delta(result, sent_estimate),
+    transcript_append: [step_result_to_message(result)],
+    events: [ProviderResult({
+      step: step,
+      text: result.message.content,
+      finish_reason: result.finish_reason,
+      tool_calls: tool_calls,
+      input_tokens: result.input_tokens,
+      output_tokens: result.output_tokens,
+      cost_usd: cost_usd,
+      cache_read_input_tokens: result.cache_read_input_tokens,
+      cache_creation_input_tokens: result.cache_creation_input_tokens
+    })],
+    cost_delta_millicents: cost_delta_millicents
+  }
+}
+
+pure func test_phase_from_result_preserves_live_thinking_fields() -> bool
+  tests [((), true)]
+  {
+    let result: StepResult = {
+      message: { role: "assistant", content: "hello", tool_calls: [], tool_call_id: "", images: [] },
+      tool_calls: [{ id: "tc", name: "ReadFile", arguments: "{}" }],
+      finish_reason: "tool_calls",
+      input_tokens: 11,
+      output_tokens: 7,
+      cache_read_input_tokens: 3,
+      cache_creation_input_tokens: 0
+    };
+    let phase = phase_from_result(result, 4, List.length(result.tool_calls), 0.125, 12500, 9);
+    phase.cost_delta_millicents == 12500
+      && match phase.delta.telemetry {
+        Some(t) => t.last_input_tokens == 11 && t.last_estimated_input_tokens == 9,
+        None => false
+      }
+      && match phase.events {
+        ProviderResult(info) :: [] =>
+          info.step == 4
+            && info.text == "hello"
+            && info.finish_reason == "tool_calls"
+            && info.tool_calls == 1
+            && info.input_tokens == 11
+            && info.output_tokens == 7
+            && info.cost_usd == 0.125
+            && info.cache_read_input_tokens == 3,
+        _ => false
+      }
+  }

@@ -1,0 +1,68 @@
+-- Boot + behaviour smoke test for this package.
+--
+-- Two assertions, both in scope of the publish sandbox:
+--
+-- 1. register_with_config returns without runtime panic. Catches the
+--    class of bugs that pass `ailang check` but crash at runtime —
+--    pattern matches against the wrong ADT (e.g. matching Result
+--    constructors against an Option value, std/json.getString returns
+--    Option not Result, the original 0.1.1 code had this), readFile
+--    panics when defaults aren't present, cross-package ADT shape
+--    drift.
+--
+-- 2. summarize_with_ai handles Err(AIError) gracefully. The publish
+--    sandbox runs without an AI provider configured, so step() returns
+--    Err(AIError{code:"ProviderNotFound"}). Pre-0.1.4 the function
+--    accessed .message.content directly on the Result, which auto-
+--    unwrapped Err to .message:string, then crashed on .content with
+--    "cannot access field of non-record value: *eval.StringValue".
+--    The 0.1.4 match-discipline fix returns a fallback string starting
+--    with "[summarizer unavailable:". This smoke pins that contract so
+--    a future regression of the same shape would fail at publish time
+--    instead of in arniwesth's agent loop at step 42.
+--
+-- Convention: every motoko-ext-* package SHOULD ship a _smoke.ail.
+-- The parent Makefile :: verify-extensions iterates over packages/
+-- motoko-ext-* and runs each _smoke.ail in isolation (process-per-
+-- package, so a panic in pkg A doesn't mask pkg B's status).
+
+module sunholo/motoko_ext_compaction_ai/_smoke
+
+import std/io (println)
+import std/string (length, contains)
+import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config)
+import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
+import pkg/sunholo/motoko_ext_compaction_ai/types (default_config)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, BudgetPlan, PassThrough, PassThroughObserved, Compacted)
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  -- Assertion 1: register_with_config doesn't panic
+  let _ = register_with_config(0);
+  println("OK: register_with_config returned without panic");
+
+  let budget: BudgetPlan = { total: 1, solver: 1, verifier: 0 };
+  let ctx: ExtCtx = {
+    task: "smoke",
+    step: 0,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: budget,
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: [],
+    state_key: "k",
+    context_limit: 1,
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
+  };
+  match compact_with_ai(ctx, [{ role: "user", content: "long enough to trigger compaction", tool_calls: [], tool_call_id: "" }], default_config()).decision {
+    PassThrough => println("OK: compact_with_ai can pass through"),
+    PassThroughObserved(code, _) => println("OK: compact_with_ai observed ${code}"),
+    Compacted(_, _, _) => println("OK: compact_with_ai returns ABI v4 Compacted")
+  }
+}

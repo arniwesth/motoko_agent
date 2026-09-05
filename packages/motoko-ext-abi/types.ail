@@ -1,0 +1,1147 @@
+-- ABI contract for motoko_agent extension packages.
+--
+-- Every motoko-ext-* package depends on this module and must export:
+--   register_with_config(cfg: RuntimeConfig) -> [Capability] ! {...}   (6.0; was -> ExtensionHooks)
+-- from a module named <package-name>/register.
+--
+-- Bumping `Capability` (a variant added, removed or re-rowed) is a major version
+-- of motoko-ext-abi, exactly as bumping `ExtensionHooks` was through 5.0.
+
+module sunholo/motoko_ext_abi/types
+
+import std/option (Option)
+import std/json (Json, jo)
+
+-- Inlined from std/ai to avoid importing AI-effect functions into this pure ABI package.
+export type ToolSchema = { name: string, description: string, parameters: string }
+
+-- Inlined from std/ai.ToolCall — structurally identical so call.id / call.name /
+-- call.arguments work the same across abi-typed and ai-typed values.
+-- Added in motoko_ext_abi 2.1.0 to support Msg.tool_calls.
+export type ToolCall = {
+  id: string,
+  name: string,
+  arguments: string
+}
+
+-- Msg is the lightweight conversation-message type passed to extension
+-- hooks (notably on_pre_step). Structurally compatible with std/ai.Message
+-- so motoko_agent can convert between them losslessly.
+--
+-- v2.0.0 shape (still works for code that destructures only .role / .content):
+--   { role: string, content: string }
+--
+-- v2.1.0 adds tool_calls + tool_call_id (M-ABI-MSG-WIRE-PARITY): assistant
+-- messages with tool dispatch carry tool_calls; tool-role messages carry
+-- the tool_call_id that providers use to correlate tool_use → tool_result.
+-- Without these fields, on_pre_step compaction strips tool_call_id and
+-- providers reject the next request with 422 (OpenRouter / OpenAI /
+-- Anthropic all enforce this).
+export type Msg = {
+  role: string,
+  content: string,
+  tool_calls: [ToolCall],
+  tool_call_id: string
+}
+
+-- Inlined from motoko_agent/src/core/tool_contract
+export type ToolCallEnvelope = { id: string, tool: string, arguments: Json }
+export type ToolResultEnvelope = {
+  tool_call_id: string,
+  tool: string,
+  exit_code: int,
+  stdout: string,
+  stderr: string,
+  metadata: Json
+}
+
+-- Inlined from motoko_agent/src/core/config
+export type VerificationConfig = { enabled: bool, command: string }
+
+export type BudgetPlan = { total: int, solver: int, verifier: int }
+
+-- WI-B2b. THE WORLD TOKEN — D1's successor state, crossing the extension seam.
+--
+-- `token` is OPAQUE and extension code must not read it. It is produced and
+-- consumed only by the host (`src/core/ext_world.ail`); an extension's whole
+-- obligation is to CARRY it — take the one in `ExtCtx.world`, pass it to every
+-- world-threading port call, and return the last one it holds as `next_state`.
+--
+-- WHY OPAQUE, and this is the item's central decided binding. The successor is
+-- `src/core/ports.WorldState`, and this ABI cannot name that type: `motoko_core`
+-- depends on THIS package, so the dependency cannot invert. Three alternatives
+-- were measured and rejected:
+--
+--   1. INLINE IT, the idiom this file already uses for `Msg`, `ToolCall`,
+--      `ToolCallEnvelope` and `ToolResultEnvelope`. Those work because AILANG
+--      unifies records STRUCTURALLY — a probe confirmed a differently-NAMED but
+--      identically-shaped record unifies across modules. It does not extend to
+--      `WorldState`, because `WorldState` transitively contains SUM types
+--      (`IdentityBody`, `OutcomeStatus`, `ToolFaultChoice`) and the same probe
+--      showed sums are NOMINAL: two identically-shaped sums fail to unify with
+--      `cannot unify type constructors: BStatus vs AStatus`. A mirrored world
+--      would therefore not type-check at the seam.
+--   2. PARAMETRISE this ABI over the world type. That changes `ExtCtx` into
+--      `ExtCtx[W]` and so rewrites `on_build_system_prompt` and `on_tool_policy`
+--      — two of D5's three ROWLESS slots, which are its entire coverable
+--      surface and which B1, B2a and B3 all left byte-identical. Rejected.
+--   3. EXTRACT `dst_interaction` (404 lines) and `dst_generator` (1519) into a
+--      leaf package below this one. Both import only `std/*`, so it is feasible
+--      — but it puts the DST generator into all fourteen extension packages'
+--      dependency graphs to serve one seam. Out of proportion.
+--
+-- So the token is a Json carrier, which is exactly why D5 says "explicit/OPAQUE
+-- world token": the dependency direction is what makes opacity necessary, not a
+-- preference. The cost is a real codec, and its guard is S7's record-level rule
+-- — a field-by-field round trip with every field holding a distinct value, at
+-- the foot of `src/core/ext_world.ail`. A field the encoder writes and the
+-- decoder ignores is this design's one silent failure mode; both halves of it
+-- were mutation-tested when the codec landed and both mutants died.
+export type ExtWorld = { token: Json }
+
+-- The empty world, for a context that has no driver behind it — test fixtures,
+-- smoke harnesses, and the no-op ports. It is `jo([])` rather than a sentinel
+-- because the host's decoder is TOTAL: every field falls back, so an empty
+-- object decodes to exactly `empty_world_state()`. That means a fixture using
+-- this is not carrying a special value the host has to recognise; it is
+-- carrying a real, empty world.
+--
+-- It is NOT a default for production code. A hook handed this on a live path
+-- would see an empty script and be told the model answered — which is precisely
+-- the pre-WI-B2b behaviour this widening removed.
+export pure func empty_ext_world() -> ExtWorld { { token: jo([]) } }
+
+-- The result of a world-threading `ai_step`. A RECORD and not a sum, per plan
+-- decision P1 (A12's precedent): a later effect class adds a FIELD here, where a
+-- sum would make it a variant restructuring at every match site.
+--
+-- `next_state` is named for the criterion, not for taste. D5's classifier 2
+-- selects "a field whose call is the extension-side entry to a core seam that D1
+-- requires to thread successor state, AND WHICH CANNOT RETURN IT", and
+-- `tools/ext_call_inventory/derive.py` derives that mechanically by asking
+-- whether the result type has a field literally called `next_state`
+-- (`SUCCESSOR_FIELD`). Renaming this field silently puts `ai_step` back in the
+-- classifier-2 set. That is a DISCOVERED binding, matching `ProviderExchange`,
+-- `EnvRead`, `ToolExecution` and `ClockReading` in `src/core/ports.ail`.
+export type AiStepOutcome = {
+  result: Result[string, string],
+  next_state: ExtWorld
+}
+
+-- The result of a world-threading `clock_now`. WI-C5, and it is the SAME shape
+-- as `AiStepOutcome` above and `ClockReading` in `src/core/ports.ail` for the
+-- same reason: a record, so a later effect class adds a field rather than
+-- restructuring every match site (plan decision P1).
+--
+-- `next_state` is again named for D5's classifier-2 criterion rather than for
+-- taste — `tools/ext_call_inventory/derive.py` looks for that literal field
+-- name. Renaming it puts `clock_now` back in the classifier-2 set silently.
+export type ExtClockReading = {
+  now_ms: int,
+  next_state: ExtWorld
+}
+
+-- The result of a world-threading `tool_handle`. WI-D16, and the same record shape
+-- as `AiStepOutcome` and `ExtClockReading` above for plan decision P1's reason:
+-- a later effect class adds a FIELD, where a sum would restructure every match
+-- site. `next_state` is again named for D5's classifier-2 criterion — the
+-- literal field name `derive.py` looks for — and not for taste.
+--
+-- `output` STAYS A STRING, and that is a deliberate narrowing of what this
+-- widening claims. The core seam behind it, `Ports.tool_exec`, returns a typed
+-- `ToolOutcome` with four variants, and `session.tool_outcome_text` renders
+-- those four onto one string at the bridge. That rendering is UNCHANGED here.
+-- Widening the ABI to carry the discrimination is a SECOND widening on a second
+-- ground — D1's part-3 typed-fault argument, not state threading — exactly as
+-- WI-A2's `next_state` was a second widening of `model_step` beside WI-A1's
+-- emission log. Doing both in one edit would make it impossible to say which
+-- ground moved the pin. The fault text is rendered rather than dropped, so
+-- nothing is silently lost in the interim; what is lost is the ability to MATCH
+-- on it, and that is stated rather than left for a reader to find.
+--
+-- WI-D21 MEASURED WHAT `output` ACTUALLY CARRIES, because "a rendered string"
+-- reads as though the information is gone and it is not. On the `BashExec` and
+-- `RunTests` arms the string is the JSON encoding of a
+-- `BashExecResult { cmd, stdout, stderr, exit_code, meta }`
+-- (`tool_runtime.ail:842` -> `tool_dispatch_adapter.ail:178`), so the exit code
+-- and both streams SURVIVE — as text. What the caller lacks is a typed field to
+-- branch on, and recovering one by parsing this string is the silent-wrong shape
+-- the project exists to remove. The gap is the RENDERING, not the dispatch.
+--
+-- THE SECOND WIDENING WAS TAKEN AT WI-D23, and the paragraph that stood here is
+-- kept two-part per S15. Through WI-D22 it read: "the second widening is still
+-- not taken here — a typed `exit_code` has to be produced on BOTH sides of
+-- `Ports.tool_exec`, and the deterministic side cannot supply it: `ScriptedTool`
+-- carries no exit code and is reconstituted from the persisted interaction
+-- payload, so a new field is a persisted-codec change. An old artifact would
+-- decode a missing `exit_code` as 0 — success — which turns a recorded failing
+-- run into a passing replay. That requires a `program_schema_version` bump."
+-- WI-D22 shipped the bump: `ScriptedTool.exit_code` exists at
+-- `execution-program/2` and a v1 tool payload REFUSES rather than defaulting,
+-- so the reason expired and this item widened the record.
+--
+-- `exit_code`'s domain is `ScriptedTool.exit_code`'s, stated there in full:
+-- >= 0 is what the subprocess exited with and only 0 is success; -1 is "no
+-- subprocess ran, or the producer cannot state one" — the value every in-tree
+-- noop writes, because a port that executes nothing has no code to report and
+-- 0 would assert a success no process produced. The bridge fills it from the
+-- typed outcome: `ToolCompleted` carries the dispatcher's real code, and the
+-- three fault variants project to -1 — they are already discriminated in
+-- `output`'s rendered fault text, and none of them is a process that exited.
+export type ExtProcOutcome = {
+  output: string,
+  exit_code: int,
+  next_state: ExtWorld
+}
+
+-- One extension-side file read and its successor world. WI-D16.
+--
+-- It is `Ports.FileRead`'s shape field for field, and copied rather than
+-- generalised on purpose. `present` is carried EXPLICITLY rather than inferred
+-- from an empty `content` for the reason `FileRead`'s own comment gives: a file
+-- that exists and is empty is a different world from a file that is not there,
+-- and compose branches differently on the two at every site —
+-- `config.ail:39` guards `readFile` with `fileExists`, and
+-- `author_tools.ail:160-163` and `:250-252` do the same. A reader that inferred
+-- absence from "" would turn an empty config into a missing one and silently
+-- take the other branch. That is the silent-wrong shape this project exists to
+-- remove, and it is one field away at every one of those sites.
+export type ExtFileRead = {
+  present: bool,
+  content: string,
+  next_state: ExtWorld
+}
+
+-- One extension-side filesystem MUTATION and its successor world. WI-D17.
+--
+-- `Ports.FileMutation`'s shape field for field, and shared by BOTH mutator
+-- seams, because their answers have identical shape. See that type for why
+-- `error` is carried at all: std/fs offers `writeFileResult` beside the
+-- unit-returning `writeFile`, compose's seven `writeFile` sites are all
+-- `let _ = writeFile(…)`, and a port that also discarded the failure would carry
+-- the drop across the boundary instead of closing it — WI-A1's ordering rule,
+-- applied before the routing item rather than after it.
+export type ExtFileMutation = {
+  ok: bool,
+  error: string,
+  next_state: ExtWorld
+}
+
+-- WI-D18's extension-side PATH KIND, three-valued. `Ports.PathKind`'s shape,
+-- carried as a SUM across the ABI rather than rendered to a string.
+--
+-- The string was the cheaper option and it loses on `ExtFileRead`'s own decided
+-- ground (WI-D16): compose branches on this distinction three ways at
+-- `author_tools.ail:139-142`, `:190` and `:227`, and a `kind: string` admits a
+-- fourth value that no arm handles. `ExtProcOutcome.output` is a rendered string
+-- because nothing downstream matches on it; this is matched on, so it is typed.
+export type ExtPathKind = ExtPathMissing | ExtPathFile | ExtPathDir
+
+export type ExtPathStat = {
+  kind: ExtPathKind,
+  next_state: ExtWorld
+}
+
+-- WI-D18's extension-side DIRECTORY LISTING. `present` is explicit for
+-- `ExtFileRead.present`'s reason applied one class over: an EMPTY directory and
+-- an ABSENT one both have no entries, and `list_dir_impl` turns the difference
+-- into `entries: []` against a `not_found` error. Inferring presence from a
+-- non-empty list would collapse them at the boundary.
+export type ExtDirListing = {
+  present: bool,
+  entries: [string],
+  next_state: ExtWorld
+}
+
+export type ExtPorts = {
+  -- WI-B2b: takes and returns the world token. This is the widening that lifts
+  -- D1's extension-model-path exclusion — `session.ext_ai_step` handed
+  -- `empty_world_state()` and dropped the successor precisely because this
+  -- signature had nowhere to put it.
+  --
+  -- WI-B2a: `+ Trace`. Demanded, not chosen: `Ports.model_step` has carried
+  -- `Trace` since WI-A1, and `session.ext_ports_of` bridges `Ports` to
+  -- `ExtPorts`, so the bridging lambda performs `Trace` and a closed row cannot
+  -- hide it. M2 predicted this row; WI-B1 could not confirm it because the
+  -- module died on `images` first.
+  --
+  -- WI-D8 NARROWED THIS ROW FROM TEN EFFECTS TO THREE, AND NOTHING HAD EVER
+  -- MEASURED IT. Through WI-D7 it read
+  --   ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace}
+  -- and WI-D7's central conclusion about `on_pre_step` rested on that row being
+  -- what the port performs — "whose own port row is exactly those ten". It was
+  -- taken as given. It was over-declared by SEVEN.
+  --
+  -- MEASURED FROM THE BODY, per WI-D7's own method, because a green check after
+  -- narrowing an annotation is not evidence that a body performs less. This
+  -- port's entire effect demand comes from `session.ext_ai_step`, whose whole
+  -- body is one call to `Ports.model_step` — `! {AI, IO, Trace}` since WI-A1 —
+  -- and the effect checker names the row when `ext_ai_step`'s own declaration
+  -- is narrowed:
+  --
+  --   Effect checking failed for function 'ext_ai_step'
+  --   Missing effects: AI, IO, Trace
+  --
+  -- The other seven (`Process`, `FS`, `Env`, `Net`, `SharedMem`, `Clock`,
+  -- `Stream`) are effects `Ports.model_step` CANNOT produce. Of the nine
+  -- bindings of this field in the tree, seven are top-level functions with
+  -- effect-free bodies and both remaining ones are lambdas that reach
+  -- `model_step` and nothing else.
+  --
+  -- WHAT IT DID NOT DO: it did not make `on_pre_step` coverable. See that
+  -- slot's own note below — the narrowing removes the row's contradiction of
+  -- D5 criterion 2 without supplying the vocabulary criterion 2 needs.
+  ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Trace},
+  -- SUPERSEDED AT WI-D16 IN ITS FIRST CLAUSE, and kept in the past tense per
+  -- plan rule S15. Through WI-D15 this row (then named `proc_exec`) read
+  --   proc_exec: (string, string) -> string ! {IO, Process, FS}
+  -- and the note here read: "`proc_exec` and `env_get` stay un-widened and stay
+  -- in the classifier-2 set. They front `Ports.tool_exec` and `Ports.env_get`,
+  -- both of which thread a successor, so both still drop one. Widening them is
+  -- WI-C5's, and leaving them measured-and-named is S2." That debt was owed
+  -- from WI-C5 through WI-D15 and this row is where WI-D16 discharges half of
+  -- it.
+  --
+  -- WI-D16: takes and returns the world token, exactly as `ai_step` and
+  -- `clock_now` do. The seam already CAPTURED the world — two-argument fields
+  -- can, which is the whole of plan rule S3 — so unlike `clock_now`'s widening
+  -- this one removes no shape obstacle. What it removes is the DROP: the bridge
+  -- called `p.tool_exec(world, inv)`, whose `ToolExecution` threads a successor,
+  -- and then discarded `.next_state` because this signature had nowhere to put
+  -- it. A tool call that advances the world's clock arithmetically from the
+  -- scripted duration (`world_tool`, `ports.ail:619`) and consumes one entry
+  -- from `state.tools` therefore advanced a world nobody could observe.
+  --
+  -- CONSEQUENCE FOR THE PIN, stated because it is the point rather than a side
+  -- effect: D5's classifier 2 selects "a field whose call is the extension-side
+  -- entry to a core seam that D1 requires to thread successor state, AND WHICH
+  -- CANNOT RETURN IT". `ExtProcOutcome` can return it, so the criterion no
+  -- longer selects this field and the set goes {env_get, tool_handle} ->
+  -- {env_get}. `tools/ext_call_inventory/fixtures/expected.json` carries that
+  -- membership and goes red on this edit. THAT IS THE PIN WORKING. Editing it
+  -- to restore green without reading the derived membership destroys the one
+  -- signal it exists to give.
+  --
+  -- =========================================================================
+  -- WI-D21: WHAT THE TWO STRINGS ARE. THIS ROW NEVER SAID, AND IT COST TWO ITEMS.
+  -- =========================================================================
+  --
+  --   tool_handle(world, tool, args_json)
+  --
+  -- `tool` is a MOTOKO TOOL NAME — one of `ReadFile`, `Search`, `WriteFile`,
+  -- `EditFile`, `BashExec`, `RunTests` (`tool_runtime.run_native_call:165`) — and
+  -- `args_json` is that tool's arguments as an encoded JSON object. It is NOT a
+  -- binary and a working directory. Nothing in the tree type-checks the
+  -- difference: both are `string`, and at WI-D20 the tree held FIVE bindings
+  -- reading them TWO ways — `session.ail`'s bridge as `(name, args)` and three
+  -- `noop_tool_handle`s as `(_cmd, _cwd)`. A conformance harness whose signature
+  -- says `(cmd, cwd)` is a template for an implementation that shells out the
+  -- first argument in the second; it compiles, and it is wired backwards.
+  -- Renamed at every site at WI-D21; the row is documented here because the row
+  -- is where the reading is decided and positional strings cannot carry it.
+  --
+  -- THE OLD NAME `proc_exec` WAS ITSELF THE MISLEADING PART. It said "execute a
+  -- process" and the seam dispatches a tool; that is what sent WI-D19 and WI-D20
+  -- looking for a subprocess seam. Renaming the FIELD was priced at WI-D21 as a
+  -- breaking change to a PUBLISHED ABI at `5.0` and left for the major. ABI 6.0
+  -- (ADR-001 Phase C, PLAN §B8 item 3) TAKES THE RENAME: `proc_exec` ->
+  -- `tool_handle`, rename only, no semantic change. The name is kept distinct
+  -- from the provider-side `ToolProvider` capability: this field INVOKES a host
+  -- tool through the port; a `ToolProvider` HANDLES a tool as a provider.
+  --
+  -- =========================================================================
+  -- WI-D22 TOOK THE SCHEMA BUMP AND DID NOT TAKE THE RENAME. THE RELEASE
+  -- QUESTION IS ANSWERED HERE RATHER THAN DEFERRED AGAIN.
+  -- =========================================================================
+  --
+  -- WI-D21 handed the rename to whichever item took `execution-program/2`, on the
+  -- ground that the two are one conversation. That ground held for the SCHEMA and
+  -- does not hold for the ABI: the persisted program schema and this package's
+  -- version are two independent compatibility surfaces with two independent
+  -- consumers, and `execution-program/2` shipped without touching this file's
+  -- types. Coupling them would have made a release decision a side effect of a
+  -- codec change.
+  --
+  -- WHAT THE RENAME DOES TO A CONSUMER THAT HAS NOT RE-RELEASED, which is the
+  -- question the deferral kept not answering:
+  --
+  --   `ExtensionHooks`/`ExtPorts` are RECORDS, and every extension constructs an
+  --   `ExtPorts` by writing every label. A renamed label is therefore not a
+  --   soft break that a consumer notices at a call site — it is a construction
+  --   that no longer type-checks, at the one function every extension package is
+  --   required to export (`register_with_config`). The consumer does not get a
+  --   deprecation window, a shim, or a runtime error it can catch: it gets a
+  --   package that will not compile against the new ABI at all, and it cannot
+  --   satisfy both the old and the new ABI from one source.
+  --
+  --   That is categorically different from the fifteen rows and five added types
+  --   deferred through WI-D21. Every one of those is a WIDENING or an ADDITION:
+  --   an unchanged consumer keeps compiling, and A12's P1 argument (records take
+  --   additive fields) is exactly why. This would be the FIRST genuinely
+  --   breaking one.
+  --
+  -- SO: IT FORCES THE MAJOR. Under this package's own rule — line 7, "bumping
+  -- `ExtensionHooks` is a major version of motoko-ext-abi" — a rename that
+  -- invalidates every existing `ExtPorts` literal is a `6.0`, not a row that can
+  -- ride along with the accumulated widenings whenever they are cut. Seven items
+  -- deferred cutting the release on the correct ground that cutting it is a
+  -- release act with consumers outside this project; WI-D22's stop condition was
+  -- to say so rather than to cut it, and this was that report. The major was
+  -- cut at 6.0 and the rename IS applied (`proc_exec` -> `tool_handle`); the
+  -- parameter names (`tool`, `args_json`) and the paragraph above remain the
+  -- reading of the two strings.
+  --
+  -- WHAT IT REACHES, so the next reader does not re-derive it: `BashExec` and
+  -- `RunTests` run a REAL subprocess and return a real exit code, rendered into
+  -- `ExtProcOutcome.output` as JSON and — since WI-D23 — typed into
+  -- `ExtProcOutcome.exit_code`. See that type's note above and `session.ail`'s
+  -- `tool_handle` closure for the measured chain.
+  --
+  -- WHO IT IS ATTRIBUTED TO, since WI-D24: the calling EXTENSION, by name. A
+  -- dispatch through this seam is recorded as D2's `ExtensionEffectIdentity`
+  -- carrying the caller's registry id — not as the driver's own tool call — and
+  -- it is served from its own cursor on replay. Nothing is required of the
+  -- extension for that to work: the id travels in the world token the host
+  -- re-seats before each hook, which is one more reason to pass `ctx.world`
+  -- through rather than a token kept from somewhere else.
+  tool_handle: (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS},
+  -- WI-D16's filesystem read seam. It is a POINT READ — a path in, existence
+  -- and contents out — because it fronts `Ports.file_read` and that seam is
+  -- narrow by construction (WI-D3). Copied, not generalised.
+  --
+  -- WHAT IT DELIBERATELY DOES NOT COVER, named here because the gap is the
+  -- expensive part and a reader will otherwise assume the seam is total over
+  -- `std/fs`. compose's read side also calls `listDir` (`author_tools.ail:192`),
+  -- `isDir` (`:140`, `:190`) and `isFile` (`:141`, `:161`, `:250`).
+  -- `fileExists`/`isFile` collapse onto `present` for a path the caller already
+  -- believes is a file, but `isDir` and `listDir` DO NOT: a directory listing is
+  -- not a point read, and `present && content == ""` cannot tell a directory
+  -- from an empty file.
+  --
+  -- The reason not to add them here is structural rather than budgetary. `Ports`
+  -- HAS NO DIRECTORY SEAM. An `ExtPorts.list_dir` would front no core seam at
+  -- all, so `derive.py` would classify it `unrouted` — a field that looks like
+  -- mediation, is reported as a bypass, and mediates nothing. The core world
+  -- class has to exist before the extension seam can front it, which is the
+  -- ordering WI-D3 followed for this seam and the one a directory class needs
+  -- too. Priced for WI-D16 part 2, which is where it will bite.
+  file_read: (ExtWorld, string) -> ExtFileRead ! {FS},
+  -- WI-D17's filesystem WRITE seam, fronting `Ports.file_write`.
+  --
+  -- IT IS HERE BECAUSE THE CORE CLASS IS, AND IN THAT ORDER. WI-D16 declined to
+  -- add this field in advance of the core seam and stated the reason as a
+  -- measurement rather than a preference: a field fronting no core seam derives
+  -- `unrouted` in `tools/ext_call_inventory/derive.py`, which means the ABI would
+  -- have grown a row that looks like mediation while mediating nothing. That is
+  -- the same objection D16 made against an `ExtPorts.print`, and it is still the
+  -- reason there is no `list_dir` here. `Ports.file_write` exists as of WI-D17,
+  -- so this field derives `returns-it` off it.
+  --
+  -- NOTHING CALLS IT. Route B part 2 routes compose's eighteen write-side sites;
+  -- this item ships the surface and routes nothing, which is the same state
+  -- `file_read` and the widened `tool_handle` were left in at WI-D16 and is
+  -- reported rather than presented as coverage.
+  file_write: (ExtWorld, string, string) -> ExtFileMutation ! {FS},
+  -- WI-D17's filesystem REMOVE seam, fronting `Ports.file_remove`.
+  --
+  -- A separate row and not a mode flag, for `ToolOutcome`'s reason: a boolean
+  -- discriminator in the request would make "remove with a body" representable.
+  -- It is in the ABI on D16's own two-homes argument rather than a new one —
+  -- `removeFile` changes what `fileExists` returns and compose branches on
+  -- exactly that, at the same `if not checked.ok then if fileExists(p) then
+  -- removeFile(p)` arm D16 cited for the write. Five of compose's eighteen
+  -- write-side sites are removes, so shipping the write alone would leave the
+  -- defect standing on all five.
+  --
+  -- `mkdirAll` is NOT here and that is a different answer on a different ground:
+  -- directory existence is observed only through `isDir`/`listDir`, neither of
+  -- which has a core seam, so a mediated `mkdirAll` would mutate a table nothing
+  -- can read. It belongs with the directory seam this file already prices above.
+  file_remove: (ExtWorld, string) -> ExtFileMutation ! {FS},
+  -- WI-D18's DIRECTORY seams, fronting `Ports.path_stat`, `Ports.dir_list` and
+  -- `Ports.dir_make`. Three rows, and the ordering rule this file states twice
+  -- above is why they are here now and were not at WI-D16: the core classes
+  -- landed first, so all three derive `returns-it` rather than `unrouted`.
+  --
+  -- `path_stat` IS THE ROW THAT CLOSES A GAP RATHER THAN ADDING A CAPABILITY.
+  -- compose's `list_dir_impl` guards `fileExists(path)` and then `isDir(path)`,
+  -- so routing that guard through `file_read` asks a two-valued read about a
+  -- DIRECTORY — and the two adapters behind it answer differently. Part 2 routes
+  -- the guard here instead.
+  path_stat: (ExtWorld, string) -> ExtPathStat ! {FS},
+  dir_list: (ExtWorld, string) -> ExtDirListing ! {FS},
+  -- `dir_make` completes the write-side surface. WI-D17 left `mkdirAll` ambient
+  -- on the ground that no core seam observed a directory; `path_stat` and
+  -- `dir_list` are that seam, so the ground expired and the effect is mediated.
+  -- Six of compose's eighteen write-side sites are `mkdirAll`.
+  dir_make: (ExtWorld, string) -> ExtFileMutation ! {FS},
+  -- WI-C5: takes and returns the world token, exactly as `ai_step` does.
+  --
+  -- WHAT THIS WIDENING BOUGHT, precisely, because the shape and the coverage are
+  -- different questions. Before it, this field was `() -> int` — zero-argument,
+  -- and AILANG has no zero-arg lambdas in expression position on the pin, so
+  -- `session.ext_ports_of` could not write a closure capturing the world AT ALL.
+  -- Plan rule S2 therefore bound it to an ambient `now()` deliberately, choosing
+  -- a read that reddens the Clock poison probe over a frozen snapshot that
+  -- nothing could see. That was the ONLY unroutable-by-shape seam in the ABI and
+  -- it is now routed: `ext_ports_of` bridges it to `Ports.clock_now` through the
+  -- same `token_to_world`/`world_to_token` codec `ai_step` uses, and
+  -- `src/core/session.ail:878` has left the declared-unrouted set.
+  --
+  -- It did NOT make any extension coverable. Coverage is D5's per-hook question
+  -- and it is blocked on `on_budget_plan`'s row below, not on this one.
+  -- SUPERSEDED IN ITS SECOND CLAUSE AT WI-D6 (2026-08-06), and the first clause
+  -- stands: this widening still made nothing coverable, but `on_budget_plan`'s
+  -- row below no longer blocks anything — D6 narrowed it. The sentence was true
+  -- when written at WI-C5 and is kept rather than re-dated, per plan rule S15.
+  clock_now: (ExtWorld) -> ExtClockReading ! {Clock},
+  -- NOT WIDENED AT WI-D16, DELIBERATELY, AND THIS IS THE REASON RATHER THAN AN
+  -- OVERSIGHT. It is now the SOLE member of D5's classifier-2 set, and it stays
+  -- one: it fronts `Ports.env_get`, whose `EnvRead` threads a successor that
+  -- this `string` return cannot carry. The classifier keeps reporting it, which
+  -- is plan rule S2 — measured and named beats silently absorbed.
+  --
+  -- Widening it would be motion without progress, and the measurement is
+  -- WI-D15's. The env reads that actually block an extension happen at
+  -- REGISTRATION — `motoko-ext-compose/register.ail:3` imports `std/env
+  -- (getEnvOr)`, and that is compose's ONE registration-only ambient source.
+  -- Registration runs before the world exists, so `register_with_config` has no
+  -- `ExtCtx` and therefore no `ports` to call. A wider `env_get` is a seam whose
+  -- problematic callers cannot reach it however wide it gets, so widening it
+  -- buys exactly zero routed sources and costs another ABI row plus eight
+  -- construction sites.
+  --
+  -- What those registration reads need instead is DISCLOSURE, not mediation —
+  -- the `registration_effects` profile field drafted at WI-D15
+  -- (`DRAFT-amendment-adr-001-registration-effects.md` §3). That draft is not
+  -- applied, so this row's justification currently rests on the measurement and
+  -- not on ADR text; if the amendment is dispositioned the other way, this
+  -- comment is what has to change.
+  --
+  -- Symmetry with the three widened rows above is NOT a reason. Two of them
+  -- (`ai_step`, `tool_handle`) had a demonstrated drop and one (`clock_now`) had a
+  -- shape obstacle; this row has neither on any reachable caller.
+  env_get: (string, string) -> string ! {Env}
+}
+
+export type TokenTelemetry = {
+  last_input_tokens: int,
+  last_output_tokens: int,
+  -- char/4 estimate of the window that produced last_input_tokens. Lets the
+  -- compaction gate anchor on provider truth (last_input_tokens/last_estimated).
+  -- 0 before the first provider result.
+  last_estimated_input_tokens: int
+}
+
+export type ExtCtx = {
+  task: string,
+  step: int,
+  model: string,
+  cwd: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  mode: string,
+  workdir: string,
+  env_server_url: string,
+  budget_remaining: int,
+  history_slice: [Msg],
+  state_key: string,
+  -- v2.2.0: context_limit in tokens for ctx.model. Populated by the host
+  -- via src/core/context_usage.context_limit_for(model). 0 means
+  -- "unknown" — extensions should treat as "skip context-aware behaviour"
+  -- rather than guessing with a stale heuristic. Eliminates the duplicate
+  -- model-registry tables that previously lived in motoko_ext_compaction_ai.
+  context_limit: int,
+  ports: ExtPorts,
+  artifacts: Json,
+  telemetry: TokenTelemetry,
+  -- WI-B2b: the INBOUND half of the world token. The successor travels back out
+  -- on the hook's outcome record; this is where it comes in.
+  --
+  -- It rides on `ExtCtx` rather than being added as a parameter to every hook
+  -- deliberately: `ExtCtx` is a record, so this is an ADDITIVE field (A12's P1
+  -- argument again), and it leaves the type NAME of every hook slot's parameter
+  -- list unchanged. That is what keeps D5's three rowless slots
+  -- (`on_describe_tools`, `on_build_system_prompt`, `on_tool_policy`)
+  -- byte-identical through this ABI major, which B1, B2a and B3 all managed and
+  -- which `make profile_coverage` would otherwise report.
+  --
+  -- A hook that performs no world-threading effect returns this value unchanged
+  -- as its `next_state`. That is D1's identity transition, not a stub.
+  world: ExtWorld
+}
+
+export type PromptPatch = {
+  prepend: [string],
+  append: [string]
+}
+
+export type BudgetPatch = {
+  requested_total: Option[int],
+  requested_solver: Option[int],
+  requested_verifier: Option[int]
+}
+
+export type PolicyDefault
+  = AllowAfterTimeout
+  | DenyAfterTimeout
+  deriving (Eq)
+
+export type ToolPolicyDecision
+  = Allow
+  | Deny(string)
+  | NoOpinion
+  | Pending(string, PolicyDefault)
+  deriving (Eq)
+
+export type ToolHandleDecision
+  = Handled(ToolResultEnvelope)
+  | Delegate
+
+export type ResponseInterceptDecision
+  = InterceptHandled(ToolResultEnvelope)
+  | NoIntercept
+
+export type FinalizeDecision
+  = Accept(string)
+  | ContinueWithFeedback(string)
+  | NoDecision
+  deriving (Eq)
+
+
+-- Decision type for pre-step compaction hooks.
+-- PassThrough: no compaction needed, proceed with original msgs
+-- PassThroughObserved: no compaction, but record one bounded diagnostic
+-- Compacted: extension has compacted the message list, use the new one
+export type DiagnosticField = { key: string, value: string }
+
+export type PreStepDecision
+  = PassThrough
+  | PassThroughObserved(code: string, fields: [DiagnosticField])
+  | Compacted(msgs: [Msg], note: string, artifacts: Json)
+  deriving (Eq)
+
+-- WI-B2b. THE OUTBOUND HALF of the world token, one wrapper per hook result.
+--
+-- The four decision types above are unchanged and stay SUMS — they are genuine
+-- alternatives and a reader matches on them. What is added is a RECORD around
+-- each, carrying the decision beside the successor, which is plan decision P1's
+-- shape: a later effect class adds a field to these four records, where folding
+-- the successor INTO each sum would have meant restructuring every variant and
+-- every match arm in the tree.
+--
+-- `next_state` is named to satisfy `derive.py`'s `SUCCESSOR_FIELD`, exactly as
+-- on `AiStepOutcome` above — see that type's comment.
+--
+-- A hook that performs no world-threading effect writes
+-- `{ decision: <its decision>, next_state: ctx.world }`. Returning a DIFFERENT
+-- world than the one it was given, without having called a world-threading
+-- port, is the F6 defect this whole protocol exists to prevent.
+--
+-- WI-D19 FOUND THE SAME DEFECT ON THE OTHER SIDE OF THE SEAM, IN THE DRIVER, AND
+-- IT HAD BEEN THERE SINCE WI-B2b. The type above is only half of the protocol:
+-- the hook returning a successor means nothing unless the caller CARRIES it, and
+-- `session.c2_loop` carried `ResponseInterceptOutcome.next_state` on exactly ONE
+-- of the four arms it can leave the intercept by.
+--
+-- The four sites, all in `c2_loop` around `dispatch_response_intercept`:
+--
+--   InterceptHandled          carried it. The one that was right.
+--   NoIntercept + tool_calls  carried `exchange.next_state` — the world as it was
+--                             BEFORE the hook ran.
+--   NoIntercept + hybrid bash  the same.
+--   NoIntercept + terminal    dropped it twice: `post_ctx` was reused for
+--                             `dispatch_solver_candidate` (so the SOLVER hook was
+--                             also handed the pre-intercept world) and the
+--                             terminal `c2_after_dp7` then passed
+--                             `exchange.next_state` again, discarding the solver
+--                             hook's successor as well.
+--
+-- WHY IT WAS INVISIBLE FOR SEVEN ITEMS: every hook binding in the tree returned
+-- `ctx.world` unchanged, so dropping the successor and threading it produced
+-- IDENTICAL worlds. Nothing in the type system, the effect checker, the ambient
+-- inventory or the capability trap distinguishes them — the difference only
+-- appears once a hook actually performs a world-threading effect, which no hook
+-- did until WI-D19 routed `on_response_intercept`. The measurement that exposed
+-- it is `discovery_dst`'s routed scenario: the recorder logged four interactions
+-- into worlds the driver then threw away, and `check_discovery` reported the
+-- routed classes as under-recorded 0-against-4.
+--
+-- THE SAME AUDIT IS OWED FOR THE OTHER SLOTS AND WAS NOT DONE HERE. `on_pre_step`,
+-- `on_tool_handle` and `on_solver_candidate` have the same shape and the same
+-- reason for being invisible; part 2b routes `on_tool_handle` and is where its
+-- arms have to be walked.
+-- WI-B4 MEASURED A HOLE IN THE CLOSED-ROW GUARANTEE, and it is recorded here
+-- because this is the file whose rows the guarantee is about.
+--
+-- WI-B2a's argument, which WI-B2b re-confirmed and which this plan leaned on to
+-- excuse 123 sites from mutation testing, is: a closed row admits exactly one
+-- width -- an implementation must EQUAL its ABI field's row, not be a subset or
+-- a superset -- so a lockstep site has no band in which two answers type-check.
+-- That holds for a DIRECT implementation. It does NOT hold through a
+-- FUNCTION-TYPED PARAMETER.
+--
+-- Reproduced at HEAD: `ext/runtime.ail:545`'s
+-- `chain_base_hook(id, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {...})` assigns
+-- `pre` straight into `on_pre_step`, whose row below is closed and includes
+-- `Trace`. Drop `Trace` from that PARAMETER's row and `ailang check` on the file
+-- is green and `make check_core` is green -- 52/52. Two widths type-check, and
+-- the narrower one is silent. WI-B4's mutation loop over the wave's 139 widened
+-- function rows found seven sites of exactly this shape and NO other over-wide
+-- row, so the hole is not hypothetical: it is where every finding landed.
+--
+-- All seven are deliberately held at the FULL row. Do not "tidy" them narrower:
+-- the wide row is the one that matches this ABI, and the compiler will not tell
+-- you when it stops doing so. Relatedly, D5 already records that a declared row
+-- does not bound performed effects through function-valued record fields at all
+-- (`fb_74f53de3ae65854c`); this is the same seam seen from the declaration side.
+export type PreStepOutcome = { decision: PreStepDecision, next_state: ExtWorld }
+export type ToolHandleOutcome = { decision: ToolHandleDecision, next_state: ExtWorld }
+export type ResponseInterceptOutcome = { decision: ResponseInterceptDecision, next_state: ExtWorld }
+export type FinalizeOutcome = { decision: FinalizeDecision, next_state: ExtWorld }
+
+-- =========================================================================
+-- 6.0 (ADR-001 Phase B, B8): CAPABILITY REGISTRATION. The 5.x record
+-- `ExtensionHooks` and its `default_hooks` constructor are GONE. An extension
+-- registers a LITERAL LIST of capability atoms:
+--
+--   register_with_config(cfg) -> [Capability]
+--
+-- and the host wraps it into an owner-bearing `ExtEntry { id, caps }` (D5)
+-- through `registry_normalize.normalize_registration` (D3/D4/D7, D10).
+--
+-- THE PAYLOAD ROWS BELOW ARE COMPILER-ENFORCED AT THE CONSTRUCTOR, AND THAT IS
+-- A B8 MEASUREMENT THAT REVERSES ADR Q3's PREMISE FOR THIS TYPE. ADR Q3 and
+-- B1's constructor-argument probe measured a LOCALLY declared sum: there the
+-- payload row bounds nothing (a wide-rowed named function, an unannotated
+-- inline lambda -- both accepted). This sum is IMPORTED by every consumer,
+-- and for an imported sum AILANG v0.33.0 unifies a constructor argument's row
+-- against the payload row as CLOSED rows, exactly as it does a record field:
+-- a named `Compactor` atom declared `! {AI, IO, Trace, Env}` is REJECTED
+-- (`incompatible closed rows: r2 has extra labels [Env]`), an unannotated
+-- inline atom is rejected at the payload row, and an annotated one at its own
+-- annotation. `make declared_vs_performed`'s IMPORTED-SUM rows pin all of it,
+-- two-sided. WHAT SURVIVES is limitation 1: a lambda bound to a LOCAL record
+-- field is not checked against its declared row, and that field can then be
+-- passed as the atom (the `smuggle` row). So the rows are a claim the
+-- compiler enforces at every direct binding, and the derivation plane -- B1
+-- (`make declared_vs_performed`), B2 (`make ext_hook_scope`, which reads
+-- bodies at binding scope) and classifier 3 -- is what covers the smuggle.
+-- Each row is copied VERBATIM from the 5.x slot it replaces, so every
+-- measurement recorded in the prose kept below still names the right width.
+--
+-- REGISTRATION RULE (B2): the list is a LITERAL list of constructor
+-- applications. A computed tail, a spread, a conditional element or a
+-- delegated `make_caps(cfg)` that the reader cannot follow is
+-- `capability-list-unresolvable` and the extension is not certifiable.
+--
+-- KIND -> 5.x SLOT (the migration table; dispatch semantics unchanged):
+--   DescribeTools        on_describe_tools        concatenated
+--   PromptShaper         on_build_system_prompt   fold, registry order
+--   BudgetShaper         on_budget_plan           fold, last-Some-wins
+--   Compactor            on_pre_step              validated chain
+--   ToolPolicy           on_tool_policy           priority merge (one vote)
+--   ToolProvider         provided_tools + on_tool_handle   first-match over
+--                                                 the advertised names
+--   ResponseInterceptor  on_response_intercept    first-intercept
+--   SolverJudge          on_solver_candidate      priority merge (one vote)
+--   ExitIntent           (no 5.x slot; new at 7.0)  concatenated, registry
+--                                                 order, rendered at every
+--                                                 turn end and executed by the
+--                                                 host at clean exit
+--
+-- ATOM IDENTITY is (kind, index-within-kind) in list order (B3/B6); the
+-- holder stamp `"${name}#${idx}"` (A3) stays per EXTENSION and never carries
+-- it. Multiplicity within one extension is the host's policy at the
+-- registration boundary (D3 decided, D4 signed off at B8), never a dispatcher's.
+--
+-- THE 5.x ROW NOTES ARE KEPT VERBATIM BELOW, per plan rule S15: every sentence
+-- was true of the record row it annotated and each now applies to the payload
+-- of the kind that replaced that row (table above). "This row" reads as "this
+-- payload row".
+-- =========================================================================
+  -- WI-D6 NARROWED THIS ROW, and it is the row that blocked every install in
+  -- the tree from the ABI's first version until 2026-08-06.
+  --
+  -- WAS, through WI-D5: `! {Env, FS}` — closed. Under D5's coverage criteria
+  -- the slot was then coverable under NEITHER: criterion 1 (deterministic and
+  -- effect-free) failed on the declared row, and criterion 2 (world-mediated
+  -- with explicit world state returned) failed because `BudgetPatch` carries no
+  -- successor field. The slot is also UNCONDITIONALLY dispatched, so a profile
+  -- could not exclude it either. Every extension in the tree binds it, so no
+  -- extension was installable in a conformant profile — see WI-D5's verdict,
+  -- which named this row as "the one item that would make the name transfer".
+  --
+  -- IS, from WI-D6 (2026-08-06): no row. The slot is coverable under criterion
+  -- 1, and the empty install list of `driver_only` is now a CHOICE rather than
+  -- a consequence of this line.
+  --
+  -- WHY THIS IS A NARROWING TO THE MEASUREMENT RATHER THAN A RELAXATION.
+  -- `make declared_vs_performed` measures all fifteen bindings against two
+  -- independent producers and NOT ONE of them performs `Env` or `FS`:
+  --   * the runtime capability trap, out of process, witnessed 7 of 15
+  --     directly (the other 8 are unreachable by that instrument because their
+  --     own `register_with_config` reads `Env`/`FS` BEFORE any hook runs — the
+  --     confound is documented in the runner);
+  --   * the effect checker, over all 15, total over inputs — which is what
+  --     licenses the claim for the 8 the runtime producer cannot reach.
+  -- WI-D5's verdict had already concluded from C5's single measurement that
+  -- "the barrier is the rule, not the behaviour". D6 measured the other
+  -- fourteen and moved the rule to the behaviour.
+  --
+  -- THE COMPILER NOW ENFORCES THIS, and that is the point rather than a bonus.
+  -- Record-field rows are CLOSED and admit exactly one width, so a binding that
+  -- performs `Env` or `FS` here no longer type-checks:
+  --   incompatible closed rows: r1 has extra labels [], r2 has extra labels [Env FS]
+  -- An extension that starts reading a config file in its budget hook fails to
+  -- build. Re-widening this row is therefore a deliberate act, not a drift, and
+  -- `make declared_vs_performed` asserts the narrow row on every run.
+  --
+  -- WHAT THIS DID NOT DO: it did not make any profile cover anything.
+  -- `driver_only` still installs nothing, and the axis's extension-model
+  -- coverage is still ZERO. This row removed the blocker; spending it is
+  -- WI-C5's `compose`-bearing profile.
+  --
+  -- QUALIFIED AT WI-D14 (2026-08-07), NOT REWRITTEN, per plan rule S15. The
+  -- two sentences above were true from WI-D6 until that date. A SECOND profile
+  -- now exists — `src/core/dst_driver_plus_no_ops.ail` — which installs four
+  -- extensions and covers THIS SLOT for each of them, under criterion 1, on
+  -- exactly the rowless declaration this edit produced. So the row was spent,
+  -- and not by the profile the last sentence predicted: it was spent by a
+  -- profile whose coverage is entirely of hooks that perform nothing.
+  -- `driver_only` still installs nothing and its own coverage is still zero.
+  -- WI-C5's `compose`-bearing profile is NOT discharged by this — compose
+  -- stands at three barriers and needs Route B.
+  -- WI-B2a: `+ Trace`, and it is the SECOND and last row this item changed.
+  -- It is a CONSEQUENCE of `ExtPorts.ai_step` above, not an independent finding:
+  -- `Trace` reaches the extension surface only through `ai_step`, and the only
+  -- two callers of `ai_step` in the tree — `compaction_ai.summarize_attempt`
+  -- and `reject_fixtures.nocache_pre_step` — are both on the `on_pre_step` path.
+  -- That is why THIS row moved and the other two did not: measured, not assumed.
+  -- WI-D7 MEASURED THIS ROW AND DID NOT MOVE IT. Recorded because "unchanged"
+  -- and "unexamined" are indistinguishable in a diff, and this row is now the
+  -- former.
+  --
+  -- THE MEASUREMENT: all fifteen bindings narrowed to no row at all, tree-wide,
+  -- and `ailang check` run over all 71 files of the fifteen packages derived
+  -- from `registry_generated.ail`. FOURTEEN of fifteen accept the empty row.
+  -- ONE refuses, and the compiler names it:
+  --
+  --   packages/motoko-ext-compaction-ai/register.ail:93
+  --   failed to unify record field 'on_pre_step': incompatible closed rows:
+  --   r1 has extra labels [AI Clock Env FS IO Net Process SharedMem Stream Trace]
+  --
+  -- and the body confirms it independently — narrowing `compact_with_ai`'s own
+  -- annotation gives `Effect checking failed for function 'fresh_compaction'`,
+  -- which is the effect checker inferring from the body over ALL inputs rather
+  -- than comparing two annotations.
+  --
+  -- WHY NO NARROWER ROW IS AVAILABLE, and it is NOT that the behaviour is wide.
+  -- `compaction_ai`'s pre-step reaches every one of those ten effects through a
+  -- SINGLE call — `ctx.ports.ai_step`, whose own port row above is exactly
+  -- those ten. The row here is a consequence of the PORT's row, so narrowing it
+  -- is a port-surface change and not a hook-row change. That is WI-C5/D1 work
+  -- and deliberately not done here.
+  --
+  -- ^ THAT PARAGRAPH IS SUPERSEDED AT WI-D8 AND KEPT PER PLAN RULE S15,
+  -- because it is a record of why the row stood at ten from WI-B2a to WI-D7.
+  -- Its reasoning was sound and its premise was false: it says the row is "a
+  -- consequence of the PORT's row", which is TRUE, and it takes the port's row
+  -- to be ten, which was never measured. WI-D8 measured it — the port performs
+  -- `! {AI, IO, Trace}` — and this row followed it down, by the same
+  -- consequence the paragraph names. The chain's every step was re-derived
+  -- from bodies: `summarize_attempt`, `summarize_with_ai_result`,
+  -- `summarize_with_ai`, `fresh_compaction` and `compact_with_ai` each demand
+  -- `{AI, IO, Trace}` and nothing more, read one at a time off the effect
+  -- checker. Re-measured after the narrowing: still 14 of 15 accepting the
+  -- empty row, still refused by `compaction_ai` alone, now at
+  -- `extra labels [AI IO Trace]` rather than ten.
+  --
+  -- THE PART THAT MATTERS FOR D5'S CRITERIA, and it is a shape finding rather
+  -- than a measurement. `ai_step` IS a D1 world-mediated port — WI-B2b widened
+  -- it to return `AiStepOutcome` with `next_state` — `PreStepOutcome` carries
+  -- `next_state`, and `compact_with_ai` returns `s.next_state` rather than
+  -- `ctx.world`. So criterion 2's SUBSTANCE is already satisfied by the only
+  -- binding that performs anything. What refuses the slot is that criterion 2
+  -- is evaluated against the DECLARED row, and a declared row cannot say
+  -- "these ten arrive through a world-mediated port". THE BARRIER IS THE
+  -- ROW'S VOCABULARY, not the behaviour and not the row's width.
+  --
+  -- WI-D8 RE-ASKED THAT QUESTION AGAINST THE NARROWED ROW AND THE ANSWER IS
+  -- UNCHANGED: THIS IS STILL A BARRIER. The narrowing changes the evidence and
+  -- not the verdict, and the distinction is the whole of WI-D8's decision.
+  --
+  --   BEFORE, at ten effects, the row was positive evidence AGAINST mediation:
+  --   seven of the ten are effects `Ports.model_step` cannot produce, so a
+  --   reader comparing the row against the mediation claim found them in
+  --   contradiction.
+  --
+  --   NOW, at three, every declared effect is exactly what the mediated port
+  --   produces. The row STOPS CONTRADICTING the claim.
+  --
+  -- It does not start SUPPORTING it. D5 criterion 2 admits a hook that is
+  -- "effectful only through D1 world-mediated ports, with explicit world state
+  -- returned to the host". `! {AI, IO, Trace}` is equally consistent with a
+  -- binding that calls `println` and an ambient provider directly, and nothing
+  -- in the row distinguishes the two. D7's conclusion therefore SURVIVES: the
+  -- barrier is the row's vocabulary.
+  --
+  -- AND WI-D8 MEASURED A SECOND REASON THE ROW CANNOT CARRY THAT WEIGHT, which
+  -- D7 could not have known: the declared row is not even an upper bound on
+  -- what a binding performs. AILANG does not check a lambda's declared row
+  -- against its body when the lambda sits in RECORD-FIELD POSITION, which is
+  -- how eight of the fifteen extensions in `registry_generated.ail` bind this
+  -- slot. The effect does propagate to the enclosing `register_with_config`,
+  -- and all fifteen of those declare the ten-effect row, so today it is
+  -- absorbed. Both facts are asserted, two-sided, by
+  -- `make declared_vs_performed`.
+  --
+  -- SO WHAT THE NARROWING BUYS IS WHAT D7'S TWO BOUGHT: the compiler, at the
+  -- seven bindings written as top-level functions. It does not move the
+  -- barrier count, and `make profile_definition` derives that count rather
+  -- than being told it.
+  --
+  -- =========================================================================
+  -- QUALIFIED AT WI-D13 (2026-08-07), AND THE SAME QUALIFICATION APPLIES TO
+  -- `on_response_intercept` AND `on_solver_candidate` BELOW. Kept in place
+  -- rather than rewritten, per plan rule S15: every sentence above was true
+  -- when written and re-dating it here would make it a false claim about
+  -- history.
+  --
+  -- "STILL A BARRIER" IS A CLAIM ABOUT THE SLOT, AND UNTIL WI-D13 THE
+  -- DERIVATION HAD NO OTHER UNIT, so it read as a claim about all fifteen
+  -- extensions. It is not one any more. `check_barrier_count` now derives
+  -- barriers per **(extension, slot)** pair — ADR-001 Amendment A named that
+  -- re-shape as one of the three things that change once classifier 3 exists
+  -- (`ADR:1580`) — and for FOUR of the fifteen extensions all three of these
+  -- slots are CLEARED.
+  --
+  -- WHAT CLEARS THEM IS NOT THE ROW. The rows below are untouched, the
+  -- SLOT-level barrier count is still THREE, and everything the passages above
+  -- say about the vocabulary of a declared row is unchanged and still the
+  -- reason no ROW can clear anything. What clears them is a producer that does
+  -- not read declarations at all: classifier 3
+  -- (`make ext_ambient_inventory`, WI-D12) measures each extension's
+  -- transitive closure and reports `compaction_structural`,
+  -- `decision_framework`, `empty_stop_guard` and `progress_contract_guard`
+  -- PORT-MEDIATED with zero ambient sources and zero `ExtPorts` field calls.
+  --
+  -- AND THE CLEARANCE IS VACUOUS, WHICH IS WHY IT COST NO ABI EDIT. Those four
+  -- perform nothing at these slots, so criterion 2's first two clauses hold
+  -- over an empty set. Amendment A predicted exactly that in advance
+  -- (`ADR:1611`). The four are named in `src/core/dst_driver_only.ail`'s
+  -- `omitted_extensions`, which records the reading and declines to install
+  -- them; `make profile_definition` goes red if a zero-barrier extension is
+  -- left unnamed there.
+  -- =========================================================================
+  -- WI-D7 NARROWED THIS ROW from nine effects to four, and the narrowing is
+  -- to a MEASUREMENT rather than to zero.
+  --
+  -- WAS, through WI-D6: `! {IO, Process, FS, AI, Env, Net, SharedMem, Clock,
+  -- Stream}` — nine, closed, and never measured against any binding.
+  --
+  -- THE MEASUREMENT: all fifteen bindings narrowed to no row at all, tree-wide,
+  -- and checked over all 71 files of the fifteen packages derived from
+  -- `registry_generated.ail`. FOURTEEN of fifteen accept the empty row — every
+  -- one of them returns a constant `NoIntercept` beside `ctx.world`. ONE
+  -- refuses, and the compiler names it:
+  --
+  --   packages/motoko-ext-compose/compose.ail:816
+  --   failed to unify record field 'on_response_intercept': incompatible
+  --   closed rows: r1 has extra labels [Clock FS IO Process]
+  --
+  -- confirmed from the body independently: narrowing `compose`'s own
+  -- `on_response_intercept` annotation gives `Effect checking failed for
+  -- function 'on_response_intercept'`.
+  --
+  -- THIS IS THE ROW WI-C5 PREDICTED WOULD REFUSE, AND IT NAMED THE PATH.
+  -- `make declared_vs_performed` has carried `must_die_on
+  -- compose_intercept_inline FS` since C5 precisely so that a green non-inline
+  -- arm could not be read as "on_response_intercept performs no FS". The
+  -- compiler agrees and is more specific than the runtime witness was: the
+  -- inline path performs `Clock, FS, IO, Process` — `now()` for the snippet
+  -- name, `mkdirAll`/`writeFile`/`removeFile` for the scratch module, and
+  -- `check_snippet`/`run_snippet` spawning the compiler.
+  --
+  -- WHY THIS DOES NOT MAKE THE SLOT COVERABLE. A four-effect row is still a
+  -- non-empty row, so D5's criterion 1 fails exactly as it did at nine. None
+  -- of the four is a world-mediated port, so criterion 2 fails too, even
+  -- though `ResponseInterceptOutcome` carries `next_state`. THE SLOT IS STILL
+  -- A BARRIER. What the narrowing buys is the compiler: a binding that starts
+  -- reading `Env` in this slot now fails to build, where at nine effects it
+  -- would have compiled silently.
+  --
+  -- QUALIFIED AT WI-D13: still a barrier for the SLOT and for eleven of the
+  -- fifteen extensions, and CLEARED for four of them on classifier 3's
+  -- measurement. See the block above `on_pre_step`, which carries the whole
+  -- qualification and applies verbatim here.
+  -- WI-D7 NARROWED THIS ROW from nine effects to one, on the same method.
+  --
+  -- FOURTEEN of fifteen bindings accept the empty row. ONE refuses:
+  --
+  --   packages/motoko-ext-context-mode/register.ail:56
+  --   failed to unify record field 'on_solver_candidate': incompatible closed
+  --   rows: r1 has extra labels [Process]
+  --
+  -- and from the body: narrowing `context_mode.finalize_with_index`'s own
+  -- annotation gives `Effect checking failed for function
+  -- 'finalize_with_index'`. It spawns a `node` bridge fire-and-forget to index
+  -- the final output — a real subprocess, on the default path, not a fixture.
+  --
+  -- THE HANDOFF FOR THIS ITEM PREDICTED ROUTE A HERE — "bindings return
+  -- constants; measure and see". They do not. `context_mode`'s does not, and
+  -- it is in `registry_generated.ail` like the rest. Recorded because the
+  -- prediction was reasonable from reading twelve of the fifteen bindings, and
+  -- that is exactly the failure mode S22 exists for.
+  --
+  -- STILL A BARRIER, for the same reason as `on_response_intercept` above:
+  -- `! {Process}` is non-empty, so criterion 1 fails, and `Process` is not a
+  -- world-mediated port, so criterion 2 fails despite `FinalizeOutcome`
+  -- carrying `next_state`.
+  --
+  -- QUALIFIED AT WI-D13, on the same terms as `on_response_intercept`: still a
+  -- barrier for the SLOT and for eleven of the fifteen extensions, cleared for
+  -- four. See the block above `on_pre_step`.
+-- =========================================================================
+-- 7.0: ExitAction / ExitIntent — the session-end slot the ABI did not have.
+--
+-- WHY THIS IS DATA AND NOT A CLOSURE AT EXIT. A hook that RUNS at process exit
+-- cannot exist in this architecture: the exit handler lives in the TUI
+-- process, where no extension code has ever run, and the per-task AILANG
+-- runtime that holds the closures is normally already gone. Reaching it would
+-- need async IPC, and an async spawn started inside an `exit` handler never
+-- runs — the event loop is already closed. So the intent yields DATA computed
+-- while the runtime is alive: at every turn end the host renders each
+-- `ExitIntent` into `[ExitAction]` and publishes the list; at exit it executes
+-- the published list synchronously, bounded, best-effort, with no AILANG
+-- execution and no IPC in the exit path.
+--
+-- WHAT THE HOST STILL DECIDES AT EXIT, and why that is not a leak of policy:
+-- an action names WHAT to do and WHICH proof to require, never WHOM to
+-- believe. `ClosePane` carries the pane id AND the token the host must find on
+-- that pane before closing it, so the ownership RULE (which key, which value)
+-- is the extension's and the VERIFICATION is the host's.
+--
+-- THE PROOF NARROWS A RACE; IT DOES NOT CLOSE ONE, and the first draft of this
+-- header claimed otherwise ("restores the freshness a cached action would
+-- otherwise lose"). It cannot: the host enumerates panes and then closes them,
+-- and ownership can change between those two calls. Re-listing immediately
+-- before each close would only make the window smaller. Closing it needs an
+-- operation the multiplexer does not offer -- close this pane incarnation if
+-- its token still matches, atomically. The pre-7.0 reaper had the same race;
+-- what the proof actually buys is that a STALE action, rendered turns earlier,
+-- is no worse than a fresh one, which is the property the cache needed and the
+-- only one claimed here.
+--
+-- WHAT THE MANIFEST DELIBERATELY CANNOT SAY, after the 7.0 review. The first
+-- draft of this type also carried `RunArgv({ bin, args })` and
+-- `PublishFile({ tmp, dest })`, and `ClosePane` named its own `bin`. Every one
+-- of those was an arbitrary-execution or arbitrary-write surface reachable by
+-- anything that can write one file under the workdir -- another extension with
+-- FS access, an agent file tool, a delegate sharing the checkout -- executed at
+-- exit with the TUI's privileges, outside the runtime's FS sandbox and outside
+-- its filtered child environment. "No shell" bought nothing when `bin` could be
+-- `/bin/sh` and `args` could be `["-c", ...]`, and an `! {FS}` render could
+-- hand out process instructions without ever holding `{Process}`.
+--
+-- So the surface is now ONE verb with no executable in it. The host resolves
+-- the binary from its own environment and will not take one from the file. A
+-- manifest writer can ask for a tagged pane to be closed and can ask for
+-- nothing else. `PublishFile` was dropped rather than hardened because it had
+-- no consumer; when dagr settle-on-exit needs it, it should arrive with a
+-- host-granted destination and a generation precondition rather than a pair of
+-- free paths.
+--
+-- SIGKILL AND POWER LOSS RUN NOTHING. Nothing published here is a guarantee;
+-- it is a best-effort courtesy on a clean exit, and every consumer needs a
+-- startup-side backstop of its own.
+-- =========================================================================
+
+-- Close one multiplexer pane, by explicit id, only if it still carries the
+-- named token. Never a name, a kind, or an argv pattern: `mot-dlg-*` proves
+-- "a Motoko delegate", not "THIS Motoko's delegate", and two concurrent
+-- sessions both match it.
+--
+-- NO `bin` FIELD, and that absence is the security property. The host runs the
+-- multiplexer it already knows about from its own environment; a manifest that
+-- could name the executable would be a code-execution channel wearing the
+-- shape of a cleanup request.
+--
+-- ALL THREE FIELDS ARE REQUIRED AND NON-EMPTY. An earlier draft read a missing
+-- `token_key` as "" and treated "" as "close any pane that exists" -- so the
+-- deliberate escape hatch was also what MALFORMED input decayed to, which is
+-- the wrong direction for a default to fail in. There is no unproven-close mode
+-- now; if one is ever wanted it needs its own authorization, not an empty
+-- string.
+export type PaneCloseAction = {
+  pane: string,
+  token_key: string,
+  token_value: string
+}
+
+export type ExitAction = ClosePane(PaneCloseAction)
+
+-- The render's answer, and it carries a SUCCESSOR for the same reason the four
+-- other outcome types do (WI-B2b): the render reads FS-backed state, it reads
+-- it through `ExtPorts.file_read` rather than ambiently, and a routed read
+-- returns a world that must not be dropped.
+--
+-- THIS SHAPE WAS NOT THE FIRST DRAFT, and the correction is worth recording.
+-- v1 of this variant returned a bare `[ExitAction]` and read `std/fs` directly.
+-- It type-checked, it passed its own tests, and `make driver_plus_no_ops`
+-- rejected it: the barrier derivation classifies a slot by (rowed, dispatched
+-- unconditionally, returns explicit world state), and a rowed unconditional
+-- slot that returns NO world state makes every extension in the tree
+-- non-zero-barrier at a stroke. The gate was right and the draft was wrong —
+-- an FS-reading hook that cannot return its successor is exactly the shape
+-- WI-D1 found in production.
+export type ExitIntentOutcome = { actions: [ExitAction], next_state: ExtWorld }
+
+-- Neutral hooks for record-update construction. Each result is the identity for
+-- its host dispatcher: empty concatenations/patches, no policy opinion, and
+-- pass/delegate/no-intercept/no-decision for the chaining and first-match folds.
+-- World-threading slots preserve the world they receive.
+export type Capability
+  = DescribeTools(() -> [ToolSchema])
+  | PromptShaper((ExtCtx) -> PromptPatch)
+  | BudgetShaper((ExtCtx, BudgetPlan) -> BudgetPatch)
+  | Compactor((ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})
+  | ToolPolicy((ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision)
+  | ToolProvider(
+      [string],
+      (ExtCtx, ToolCallEnvelope)
+        -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}
+    )
+  | ResponseInterceptor(
+      (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}
+    )
+  | SolverJudge((ExtCtx, string) -> FinalizeOutcome ! {Process})
+  -- 7.0. POSITIONAL, not a record: a ctor-arg lambda is row-checked in the
+  -- position the compiler sees, while a record payload puts the closure in the
+  -- `smuggle` position B8 measured as unchecked. `label` names the intent in
+  -- the published manifest and in the host's diagnostics; `enabled` is the
+  -- operator opt-in RESOLVED AND CAPTURED AT REGISTRATION (reading env is
+  -- `! {Env}`, which this row does not carry, and a `() -> bool` thunk with an
+  -- env job would be a compile error here or a silent smuggle in a record);
+  -- the render closure returns the actions to execute at exit, computed from
+  -- FS-backed state the extension already owns. `! {FS}` is the whole
+  -- enforcement: a render that wanted to spawn a subprocess could not.
+  | ExitIntent(string, bool, (ExtCtx) -> ExitIntentOutcome ! {FS})
+
+-- The registry entry: D5's owner-bearing shape. `id` is the host's install
+-- stamp (`"${name}#${idx}"`), `caps` the registration list UNCHANGED in list
+-- order (the invariant every dispatcher and B5's all-atoms witness read).
+export type ExtEntry = { id: string, caps: [Capability] }
+
+export type ExtRegistry = { entries: [ExtEntry] }
+
+export type ExtRuntime = {
+  registry: ExtRegistry,
+  strict_mode: bool,
+  verification: VerificationConfig
+}
+
+export type ToolDecisionEnvelope = {
+  call: ToolCallEnvelope,
+  decision: ToolPolicyDecision
+}

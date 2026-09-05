@@ -1,0 +1,2298 @@
+-- src/core/dst_profile.ail
+--
+-- WI-A10, under ADR-001 D5: the profile-DEFINITION and EXECUTION-MANIFEST
+-- machinery. This module owns the shapes and the load-time gate. It owns no
+-- profile: `driver_only` is one instance of this machinery and lives in
+-- src/core/dst_driver_only.ail, deliberately in a separate module and a
+-- separate commit, so that the validator's rejections are readable before the
+-- definition that passes them.
+--
+-- ============================================================================
+-- The rule this module exists to obey: COMPOSE, do not RE-DERIVE
+-- ============================================================================
+--
+-- Almost every fact this module needs has already been computed by an artifact
+-- that measured it. Re-deriving one from prose produces an answer that
+-- type-checks and is silently stale. The canonical instance is live in this
+-- repo: D5's prose says SIX of the eight ABI hook slots are unconditionally
+-- dispatched. It is SEVEN — `on_describe_tools` is dispatched from
+-- tool_catalog.ail on every model step, outside the ext/runtime.ail the ADR
+-- surveyed. A validator built from the prose accepts a profile excluding it,
+-- and that profile then fails closed on the first model step.
+--
+-- So this module reads, and never restates:
+--
+--   the seven/one dispatch split  dst_profile_coverage.hook_dispatch
+--   the coverage floor + disclosure dst_profile_coverage.validate_install_list
+--   the attribution gate           dst_attribution_table.validate_at_load
+--   the table identity             dst_attribution_table.table_identity
+--   the reachable core set         dst_attribution_table.reachable_core_sites
+--   the waivable class ids         dst_fault_catalogue.conditional_class_ids
+--   each waiver's condition        dst_fault_catalogue.waiving_condition
+--   the event vocabulary version   dst_event_vocabulary.event_vocabulary_version
+--   the typed failure value        dst_result.RoutingViolation
+--
+-- The one input that CANNOT be read from an AILANG artifact is classifier 2's
+-- call inventory: it is derived by `tools/ext_call_inventory/derive.py` from
+-- the source at scan time. It is therefore an ARGUMENT to every check that
+-- needs it, never a constant here — per plan rule P3, whose worked example is
+-- D4's `4 / 12 / 13` site split describing a tree that moved twice inside one
+-- milestone. A constant in this module would make the check agree with itself.
+-- `make profile_definition` supplies the argument from the tool's own JSON.
+--
+-- ============================================================================
+-- The field list: D5's ten, plus three this item's decisions force
+-- ============================================================================
+--
+-- D5's ten definition fields are all present and separately validated. Three
+-- more are added, each because a stated D5 obligation is otherwise undecidable:
+--
+--   `unrouted_reachable_sites`  DECISION 1 (below). D5 has no field for a
+--                               declared-unrouted site, and without one the
+--                               all-or-nothing routing rule cannot distinguish
+--                               a stated containment from a silent gap.
+--   `scan_roots`                D5 obligation 2's roots, which the scan-root
+--                               rule below validates an install list against.
+--   `exercised_fault_classes`   D3 says a class the profile does not exercise
+--                               must be NAMED waived with its condition. The
+--                               complement is not recoverable from the waiver
+--                               list alone, so an unstated waiver would be
+--                               indistinguishable from an exercised class.
+--
+-- ============================================================================
+-- DECISION 1: is a profile with an unrouted REACHABLE CORE site conformant?
+-- ============================================================================
+--
+-- Cluster 2 left this to A10 as a scope question. ONE such site exists at HEAD,
+-- declared `routed: false` in dst_attribution_table.unconditional_core_sites():
+--
+--   src/core/test/stub_step.ail:203  live_ports' clock adapter — the one place
+--                                    the driver reads a real wall clock, by
+--                                    design, and therefore the one place
+--                                    {Clock} is genuinely load-bearing.
+--
+-- There were TWO until WI-C5. `src/core/session.ail:878` (`ext_unrouted_clock`)
+-- was the other, and it is gone rather than reclassified: widening
+-- `ExtPorts.clock_now` to thread the world token removed the shape obstacle,
+-- and the seam is routed. The decision below is unchanged; its membership
+-- shrank, and the argument in point 1 is now HISTORY rather than a live
+-- constraint — see the tense note there.
+--
+-- ANSWER: conformant, but only when the site is DECLARED and INSTRUMENTED.
+--
+-- Precisely: routing completeness is all-or-nothing over
+-- {routed sites} union {declared-unrouted sites carrying a named instrument}.
+-- A reachable site that is unrouted and undeclared is non-conformant. A
+-- reachable site that is declared but names no instrument is non-conformant.
+-- Both are rejections below, and neither has an escape hatch.
+--
+-- Why not the stricter "any unrouted reachable site is non-conformant":
+--
+--   1. It made conformance UNACHIEVABLE at HEAD by construction, not by
+--      accident. WAS TRUE WHEN A10 DECIDED THIS, AND IS NOT TRUE NOW — stated
+--      with a tense per plan rule S15, because a bare present tense here would
+--      silently re-date itself. At WI-A10 `session.ail:878` could not be routed
+--      on the pin at all (`ExtPorts.clock_now` was `() -> int` and AILANG has
+--      no zero-argument lambdas in expression position), so under the strict
+--      reading no profile could ever load. WI-C5 widened that field and routed
+--      the site. The decision stands on point 2, which is unaffected, and on
+--      the remaining live adapter site.
+--   2. It contradicts standing rule S2, which DELIBERATELY chose the ambient
+--      read over a frozen snapshot precisely so a future caller trips a gate
+--      instead of being served a stale value. A conformance rule that punishes
+--      the loud option and would have rewarded the silent one inverts S2.
+--   3. It would make the `routed` flag A5 added "precisely so the gap is stated
+--      rather than absent" a flag that no profile may ever set to false —
+--      i.e. dead.
+--
+-- Why the weaker reading is not a loophole: the instrument is real and it is
+-- already green. `make world_state` runs the Clock poison PAIR — the
+-- deterministic entry point completes with `Clock` WITHHELD (so it reaches
+-- neither site), and the live world DIES with `Clock` withheld (so the
+-- capability is genuinely load-bearing and the first half is not vacuous).
+-- That pair is stronger evidence than a routing claim would be: it does not
+-- assert the sites are routed, it demonstrates the deterministic profile never
+-- reaches them. Containment, falsifiably.
+--
+-- THE SUB-QUESTION, answered the same way rather than scoped away.
+-- `stub_step.ail:203` (`:202` before WI-D3) sits inside `live_ports`, which is
+-- not the adapter a
+-- deterministic run uses, so it is tempting to say it is not in a deterministic
+-- profile's reachable set at all. That is rejected. D4's "profile-reachable" is
+-- INSTALLATION-scoped, not execution-scoped: a site in a core module is in the
+-- set under clause 1 whether or not any given run reaches it. Carving it out on
+-- execution-scope grounds would introduce an execution-scoped exception into an
+-- installation-scoped rule — a fail-open direction, and one that would have to
+-- be re-litigated for every future site. It stays in the set, and it is
+-- discharged by the same declaration-plus-instrument rule as :796. One rule,
+-- two sites, no exceptions.
+--
+-- ============================================================================
+-- DECISION 2: `driver_only`'s routed-set claim is COMPUTED, never recorded
+-- ============================================================================
+--
+-- Clusters 2 and 6 both routed toward this and neither recorded it. Per P3, no
+-- routed-site COUNT appears in a profile: `routed_set_claim` below derives the
+-- partition from `reachable_core_sites(installed)` at the revision the profile
+-- binds. The one thing a profile records is the DECLARED-UNROUTED set, because
+-- that is a claim about intent that no analysis can recover — and the validator
+-- checks it against the computed set in both directions.
+--
+-- ============================================================================
+-- Not built here, deliberately
+-- ============================================================================
+--
+-- The interprocedural attribution-NECESSITY validator. D4 leaves it unbuilt and
+-- unscheduled, and necessity rests on the recorded named reviewer as a STATED
+-- exception to the automated-gate promise. The ADR withdrew one mechanical
+-- attempt and explains why a check that fails its own worked example is worse
+-- than none.
+
+module src/core/dst_profile
+
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (startsWith)
+
+import src/core/dst_profile_coverage as Cov (
+  CoverageRejection,
+  CapabilityDisclosureIds,
+  CapabilityDisclosure,
+  AtomIds,
+  CapabilityKind,
+  DispatchKind,
+  Unconditional,
+  Gated
+)
+import src/core/dst_attribution_table as Attr (
+  AttributionRejection,
+  CoreSite,
+  TableIdentity
+)
+import src/core/dst_fault_catalogue as Fault (FaultClass)
+import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
+import src/core/dst_result (
+  DstResult,
+  RunFailed,
+  HarnessFailureKind,
+  RoutingViolation,
+  harness_failure_kind_name,
+  ReplayMetadata
+)
+import src/core/phase_vocab (LedgerTrace, empty_ledger_trace)
+
+-- The version of the RULES in this module. D5: changing a semantic scope field
+-- requires a profile-version change; changing what "conformant" MEANS changes
+-- it for every profile, so the rules are versioned on their own footing and the
+-- manifest records this alongside the other artifacts' rule versions.
+--
+-- BUMPED TO /2 AT WI-D14. Two rules were added and both can turn a definition
+-- that loaded clean under /1 into a rejection: `WorldMediated` now requires a
+-- MEASURED basis, and every classification entry must record criterion 2's
+-- three clauses (set for a criterion-2 entry, `NotApplicable` for any other).
+-- That is a change to what "conformant" MEANS, which D5 versions on its own
+-- footing rather than per profile.
+--
+-- NO PROFILE'S VERDICT MOVES WITH IT, and that is checked rather than asserted:
+-- both rules quantify over `hook_classifications`, and `driver_only` has none.
+-- `make driver_only` is what says so, on the same `validate_definition_at_load`
+-- call a runner makes.
+--
+-- BUMPED TO /3 AT WI-D27, AND THE DIRECTION IS THE OPPOSITE OF /2's. Every rule
+-- change before this one could turn a clean definition into a rejection. This
+-- one WIDENS what is admissible: `recognised_producers` gains `discovery`, a
+-- MEASURED producer, so `WorldMediated` may now rest on a dynamic witness over a
+-- recorded run as well as on classifier 3's static closure verdict. A widening
+-- is versioned for the same reason a narrowing is — "conformant" means something
+-- different after it, and a reader comparing two manifests must be able to see
+-- which rules each was judged under. A definition that loaded clean under /2
+-- still loads clean under /3; the converse does not hold, which is exactly what
+-- the version records.
+--
+-- NO EXISTING PROFILE'S VERDICT MOVES, and again it is checked rather than
+-- asserted: neither `driver_only` nor `driver_plus_no_ops` names the new
+-- producer, and both build their manifests from `profile_rules_version()` rather
+-- than from a literal, so neither is re-issued. `make driver_only` and `make
+-- driver_plus_no_ops` are what say so.
+export pure func profile_rules_version() -> string { "profile-rules/3" }
+
+-- ---------------------------------------------------------------------------
+-- D5 field 2: included extension ids, and per-hook classifications
+-- ---------------------------------------------------------------------------
+
+-- D5's three classifications, verbatim. `ExplicitlyExcluded` must agree with
+-- the disclosure's excluded id list — checked below, because the two fields are
+-- separate in D5 and a definition can disagree with itself.
+export type HookClassification = EffectFree | WorldMediated | ExplicitlyExcluded
+
+export pure func classification_id(c: HookClassification) -> string {
+  match c {
+    EffectFree => "effect_free",
+    WorldMediated => "world_mediated",
+    ExplicitlyExcluded => "explicitly_excluded"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D13: the EVIDENTIARY BASIS of a classification
+-- ---------------------------------------------------------------------------
+--
+-- ADR-001 Amendment A closes with a fail-closed default: *"until classifier 3
+-- exists and reports clean for an extension, criterion 2 is evaluated on
+-- declared rows and no profile may record `WorldMediated` on any other basis"*
+-- (`ADR:1548`). WI-D11 measured that the default was UNENFORCED, and the
+-- amendment says so itself: `classification_agrees` below validates a
+-- `WorldMediated` entry against the disclosure's excluded-id list and against
+-- NOTHING ELSE. A profile author could write `WorldMediated` and pass the gate.
+-- What kept that unreachable was the barrier count, not the rule.
+--
+-- So the basis is a FIELD and not prose, and it is checked. Two facts, because
+-- a claim that names a producer without naming when it ran is a claim about a
+-- tree that may no longer exist:
+--
+--   `producer`   the artifact that ESTABLISHED the classification
+--   `revision`   the artifact revision that producer ran at
+--
+-- The acceptance reviewers made this the condition of classifier 3's admission
+-- to the deferred-gate table: due "with or before any change that lowers the
+-- barrier count, whichever comes first". WI-D13 is that change — the barrier
+-- derivation below moves from the slot to the (extension, slot) pair — so the
+-- field lands here first.
+export type ClassificationBasis = {
+  producer: string,
+  revision: string
+}
+
+-- WHY THE KIND IS SEPARATE FROM THE PRODUCER ID, and it is the finding this
+-- field exists to answer: **a MEASURED `WorldMediated` and a READ one are
+-- different claims, and before this field the record could not tell them
+-- apart.** The producer id alone does not say which, so the catalogue says it.
+--
+--   `Measured`  an instrument looked at the source and answered. Its answer can
+--               go stale, and `revision` is what makes that visible.
+--   `Assumed`   the classification was READ off a declaration. ADR:1415 records
+--               the declared-row reading as an interim rule and an ASSUMPTION,
+--               not a measurement, and this vocabulary keeps that visible in
+--               the record rather than only in the prose that justified it.
+export type BasisKind = Measured | Assumed
+
+export pure func basis_kind_id(k: BasisKind) -> string {
+  match k { Measured => "measured", Assumed => "assumed" }
+}
+
+export type ClassificationProducer = {
+  producer_id: string,
+  kind: BasisKind,
+  note: string
+}
+
+-- THE CLOSED SET OF PRODUCERS THIS TREE HAS. An id outside it is a rejection,
+-- on classifier 2's fail-closed discipline: a basis naming an instrument that
+-- does not exist is worse than no basis, because it reads as evidence.
+--
+-- This list is a transcription of facts that live outside AILANG — three Python
+-- tools and one ADR rule — so it is GUARDED rather than trusted:
+-- `tools/profile_definition/check_fixtures.py` re-derives each measured
+-- producer's id from the Makefile and fails if a producer named here has no
+-- target behind it.
+export pure func recognised_producers() -> [ClassificationProducer] {
+  [
+    { producer_id: "ext_ambient_inventory",
+      kind: Measured,
+      note: "classifier 3 (ADR-001 Amendment A). Per registrable extension, decides whether every effect it can perform arrives through an ExtPorts field call, over the extension's transitive module closure, symbol-granular, fail-closed on the unresolvable. This is the ONLY producer in the tree that can establish criterion 2's substance, because criterion 2 is a claim about the CALL PATH and every row-reading instrument is blind to provenance by construction (ADR:1449)." },
+    { producer_id: "ext_call_inventory",
+      kind: Measured,
+      note: "classifier 2. Derives the set of ExtPorts fields whose seam cannot thread successor world state, and every member call site in the tree. It answers 'which extension must be OMITTED', not 'which hook is covered', so it is an admissible basis for ExplicitlyExcluded and for an omission, and never on its own for WorldMediated." },
+    { producer_id: "effect_inventory",
+      kind: Measured,
+      note: "classifier 1. Partitions std modules into effect-bearing and proven effect-free. Module-granular, and at HEAD passing a criterion that no longer certifies what it was written to certify (the acceptance reviewers' reading, ADR gate table) — recognised because it is a real producer, NOT because its answer is currently load-bearing for anything here." },
+    { producer_id: "declared_row",
+      kind: Assumed,
+      note: "the ABI's declared effect row, read from source. This is criterion 1's basis and Amendment A's INTERIM rule for criterion 2 (ADR:1415, ADR:1548). It is an ASSUMPTION and the ADR calls it one: a declared row bounds performed effects in one direction only and cannot distinguish mediation from ambience at any width." },
+    { producer_id: "disclosure",
+      kind: Assumed,
+      note: "the profile's own D5 field 9 excluded-id list. The only admissible basis for ExplicitlyExcluded, which is a DECISION the profile takes rather than a fact about source — and `classification_agrees` below checks the two fields against each other, so this basis is not self-certifying." },
+    -- WI-D27. THE FIRST DYNAMIC PRODUCER, AND THE FIRST ADDITION TO THIS SET
+    -- SINCE IT WAS CLOSED AT WI-D13. Read the note before using it: what it can
+    -- establish is narrow, and the narrowness is the reason it is admissible.
+    --
+    -- WHY IT HAD TO EXIST. Every producer above reads SOURCE. Amendment A's
+    -- fail-closed default (ADR:1548) says criterion 2 may be recorded only on a
+    -- producer that MEASURED it, and named classifier 3 as the one that could.
+    -- Classifier 3 is closure-scoped and whole-extension: it answers "can this
+    -- extension perform ANY effect ambiently ANYWHERE in its transitive
+    -- closure". For `compose` at HEAD the answer is AMBIENT — 8 sources, all of
+    -- them in the three classes ADR-001's goal line disclosed by decision (four
+    -- `println`, registration's three, one AI). So classifier 3 can never clear
+    -- compose, and on its evidence alone no profile could ever install it: the
+    -- three barriers stand and the demonstration clause 1 of the goal line asks
+    -- for would be unreachable by construction rather than by measurement.
+    --
+    -- The goal line already decided the answer, and this entry is its
+    -- machinery: *"the evidence comes from the discovery and witness instruments
+    -- over the recorded run — a DYNAMIC fact, not a classifier verdict"*.
+    --
+    -- WHAT IT MEASURES, EXACTLY, AND IT IS ALL THREE OF CRITERION 2'S CLAUSES:
+    --
+    --   ports       an `ExtensionEffect` interaction EXISTS in the recorded
+    --               program. Only `ExtPorts`'s recording adapter writes that
+    --               class (WI-D24), so its presence is positive evidence that
+    --               the effect arrived through a D1 port. An ambient call
+    --               performs the effect and writes NO interaction.
+    --   origin_tag  the recorded interaction's `identity_origin` is the
+    --               performing extension's own id, stamped by the fold in
+    --               `ext/runtime.ail` rather than by the hook or the recorder.
+    --   world_state the run reached its terminator and the program STRICTLY
+    --               REPLAYS to an identical interaction log, which no chain
+    --               that dropped a successor world can do.
+    --
+    -- WHAT IT CANNOT DO, AND THIS IS WHY IT DOES NOT SUPERSEDE CLASSIFIER 3:
+    -- it is EXISTENTIAL, not universal. It witnesses the effects a run
+    -- performed; it cannot bound the effects a hook COULD perform on an input
+    -- the run did not supply. Classifier 3 quantifies universally over source
+    -- and this one quantifies existentially over one execution, so a profile
+    -- resting a hook on it is claiming "this mediated, here, and the record
+    -- proves it" and NOT "nothing else can happen". A profile that records this
+    -- basis owes the run: `driver_plus_compose_dst` asserts the interaction, the
+    -- origin and the replay of its own graded session, and goes RED if any of
+    -- the three vanishes. Absent that assertion this producer would be the
+    -- fail-open shape `basis` was added to close, one level out.
+    { producer_id: "discovery",
+      kind: Measured,
+      note: "the discovery and witness instruments (src/core/dst_discovery, WI-A13 stage 2; the ExtensionEffect class WI-D24 added) read over a RECORDED, VALIDATED and STRICTLY REPLAYED graded run. DYNAMIC and EXISTENTIAL: it witnesses that a hook's effects arrived through an ExtPorts seam, carried the performing extension's origin tag and threaded successor world state, on the inputs the run supplied. It does NOT bound what the hook could do on other inputs — that is classifier 3's universal question, and this producer neither answers nor replaces it. Admissible for WorldMediated because it measures criterion 2's three clauses directly rather than reading a declaration; admissible only for a profile whose own acceptance script asserts the run, per ADR-001's goal line clause 1." }
+  ]
+}
+
+pure func producer_recognised(ps: [ClassificationProducer], id: string) -> bool {
+  match ps {
+    [] => false,
+    p :: rest => if p.producer_id == id then true else producer_recognised(rest, id)
+  }
+}
+
+-- The kind of a recognised producer, for a consumer asking the question this
+-- field exists to make askable: was this classification MEASURED or READ?
+-- `None` for an unrecognised id, which `validate_classifications` rejects.
+export pure func producer_kind(id: string) -> Option[BasisKind] {
+  kind_of(recognised_producers(), id)
+}
+
+pure func kind_of(ps: [ClassificationProducer], id: string) -> Option[BasisKind] {
+  match ps {
+    [] => None,
+    p :: rest => if p.producer_id == id then Some(p.kind) else kind_of(rest, id)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D14: criterion 2's THREE CLAUSES, recorded per entry
+-- ---------------------------------------------------------------------------
+--
+-- ADR-001 D5 admits a hook under criterion 2 when it is *"effectful only
+-- through D1 world-mediated ports, with origin tagged by extension id and
+-- explicit world state returned to the host"*. WI-B4 read that as a CONJUNCTION
+-- of three clauses and was right; reading it as one test is how it gets passed.
+--
+-- `basis` (WI-D13) records WHAT answered and WHEN. It cannot record HOW MUCH
+-- the answer said, and for criterion 2 that difference is the whole finding:
+-- **an extension that performs nothing satisfies clauses 1 and 2 over an empty
+-- set.** Amendment A predicted it in advance (`ADR:1611`) — *"the first hook
+-- classifier 3 clears will be one that performs nothing, not one that
+-- mediates"* — and WI-D13 measured exactly that for four extensions.
+--
+-- So the vacuity is a FIELD and not prose beside the profile. ADR-001's
+-- acceptance row 3 requires that *"a profile covering only ABI-pure no-op slots
+-- is visible as such"*, and visible-as-such is a property of the RECORD, not of
+-- a comment a reader may never open. Without this field the two claims
+--
+--   "this hook mediates the world through a port, tagged, returning state"
+--   "this hook performs nothing, so there is nothing to mediate or tag"
+--
+-- write the same string `world_mediated` into the same record — which is the
+-- shape `basis` was added to close one level up.
+export type ClauseStatus = Substantively | Vacuously | NotApplicable
+
+export pure func clause_status_id(s: ClauseStatus) -> string {
+  match s {
+    Substantively => "substantively",
+    Vacuously => "vacuously",
+    NotApplicable => "not_applicable"
+  }
+}
+
+-- The three clauses, in D5's own order. Field names say which clause, because
+-- `clause_1` would make a reader count the ADR's commas.
+export type Criterion2Clauses = {
+  ports: ClauseStatus,        -- (1) effectful only through D1 world-mediated ports
+  origin_tag: ClauseStatus,   -- (2) with origin tagged by extension id
+  world_state: ClauseStatus   -- (3) and explicit world state returned to the host
+}
+
+-- `NotApplicable` on all three: the entry does not rest on criterion 2 at all.
+-- Required of every `EffectFree` and `ExplicitlyExcluded` entry below, so a
+-- non-criterion-2 entry cannot carry criterion-2 evidence it does not have.
+export pure func no_criterion_2() -> Criterion2Clauses {
+  { ports: NotApplicable, origin_tag: NotApplicable, world_state: NotApplicable }
+}
+
+export type HookClassificationEntry = {
+  extension_id: string,
+  hook_id: string,
+  classification: HookClassification,
+  basis: ClassificationBasis,
+  clauses: Criterion2Clauses
+}
+
+-- An installed extension, with the resolved path of its AILANG source. The path
+-- is what the scan-root rule below is checked against; D5 obligation 2 scopes
+-- the routing scan to explicit roots, and a package whose source lies outside
+-- them is unscanned, so a profile installing it is claiming coverage over
+-- source nothing looked at.
+export type InstalledPackage = {
+  extension_id: string,
+  package_id: string,
+  version: string,
+  source_path: string
+}
+
+-- ---------------------------------------------------------------------------
+-- D5 fields 3-6
+-- ---------------------------------------------------------------------------
+
+-- D5 field 3. `included: false` is an EXCLUDED boundary and is as much a part
+-- of the definition as an included one — D3's wire-parser exclusion is scoped
+-- by exactly this field, which is why it is not vacuous for an empty install
+-- list.
+export type AdapterBoundary = {
+  boundary_id: string,
+  included: bool,
+  note: string
+}
+
+-- D5 field 4. The logical resource models the profile PROMISES, in D3's sense:
+-- what a fault leaves the logical state as. Not vacuous for an empty install
+-- list — the driver's own tool and provider boundaries have resource models
+-- whether or not any extension is installed.
+export type ResourceModel = {
+  model_id: string,
+  promise: string
+}
+
+-- D5 field 5. D1's collecting sink is bounded by exactly this list: a
+-- projection not named here may not be emitted during execution.
+export type DiagnosticProjection = {
+  projection_id: string,
+  note: string
+}
+
+-- D5 field 6. What A12's poison probes test against. `instrument` names the
+-- check that would go red if the capability were exercised — a forbidden
+-- capability with no instrument is a promise nothing enforces, so the field is
+-- required non-empty below.
+export type ForbiddenCapability = {
+  capability: string,
+  instrument: string
+}
+
+-- ---------------------------------------------------------------------------
+-- D5 fields 7, 8, 10
+-- ---------------------------------------------------------------------------
+
+-- D5 field 7. The condition is checked against A7's `waiving_condition` for the
+-- same class id, so a copy that drifts from the catalogue is a rejection rather
+-- than a stale string nobody reads.
+export type WaivedFaultClass = {
+  class_id: string,
+  condition: string
+}
+
+-- D5 field 8. A REFERENCE to the attribution table, never a copy: table
+-- identity is the (source revision, content hash) pair, and D4 states that a
+-- table correction re-issues every referring profile. Recording the hash is
+-- what makes that mechanical instead of aspirational.
+export type AttributionRef = {
+  source_revision: string,
+  content_hash: string
+}
+
+-- D5 field 10. An extension a classifier-2 call or an unconditionally-dispatched
+-- hook made un-runnable is OMITTED with a reason, not installed-and-excluded.
+export type OmittedExtension = {
+  extension_id: string,
+  reason: string
+}
+
+-- ---------------------------------------------------------------------------
+-- The added field DECISION 1 forces
+-- ---------------------------------------------------------------------------
+
+-- A reachable core site the profile declares unrouted. `site_key` is
+-- `file:line`, matching `dst_attribution_table.site_key`, so the declared set
+-- can be compared against the computed reachable set in both directions.
+--
+-- `instrument` is the check that demonstrates containment. It is required
+-- non-empty: that requirement IS decision 1's teeth, and without it the field
+-- degrades into a way to declare any gap away.
+export type UnroutedSiteDeclaration = {
+  site_key: string,
+  instrument: string,
+  why_unroutable: string
+}
+
+-- ---------------------------------------------------------------------------
+-- Classifier 2's inventory, as an ARGUMENT
+-- ---------------------------------------------------------------------------
+
+-- One call site the classifier found: an extension reaching an `ExtPorts` field
+-- whose core seam threads successor state, which the ext seam cannot carry.
+--
+-- The set is THREE fields at HEAD — `ai_step`, `tool_handle`, `env_get` — since
+-- A12 made `Ports.tool_exec` and `Ports.env_get` thread successor state. It is
+-- not written down here; it arrives with these rows, derived per run by
+-- `tools/ext_call_inventory/derive.py`, which consults no list of its own.
+--
+-- `clock_now` is a distinct UNROUTED state, not a non-member: that bridge
+-- reaches no core seam at all (S2), and the Clock poison probe covers it rather
+-- than this classifier. A check that treated `unrouted` as "not a member" would
+-- silently bless an extension reading an ambient clock.
+export type Classifier2Call = {
+  extension_id: string,
+  field: string,
+  site: string
+}
+
+-- ---------------------------------------------------------------------------
+-- The definition
+-- ---------------------------------------------------------------------------
+
+export type ProfileDefinition = {
+  -- D5 field 1
+  profile_id: string,
+  profile_version: string,
+  -- D5 field 2
+  installed_packages: [InstalledPackage],
+  hook_classifications: [HookClassificationEntry],
+  -- D5 field 9 (separate from field 2 in D5: ids, not classifications).
+  -- B8: per ATOM `{ kind, index }` (D6) -- the registration's atoms are the
+  -- denominator, covered/excluded partition them. A hook id anywhere in this
+  -- file is an atom id, `kind[index]` (e.g. `tool_provider[0]`).
+  disclosures: [CapabilityDisclosureIds],
+  -- D5 fields 3-7
+  adapter_boundaries: [AdapterBoundary],
+  resource_models: [ResourceModel],
+  diagnostic_projections: [DiagnosticProjection],
+  forbidden_capabilities: [ForbiddenCapability],
+  waived_fault_classes: [WaivedFaultClass],
+  exercised_fault_classes: [string],
+  -- D5 field 8
+  attribution_ref: AttributionRef,
+  -- D5 field 10
+  omitted_extensions: [OmittedExtension],
+  -- decision 1, and D5 obligation 2's roots
+  unrouted_reachable_sites: [UnroutedSiteDeclaration],
+  scan_roots: [string]
+}
+
+-- ---------------------------------------------------------------------------
+-- Rejections
+-- ---------------------------------------------------------------------------
+
+-- Every rejection names its rule. The two `*Defect` constructors carry a
+-- foreign artifact's rule name and message verbatim rather than re-phrasing
+-- them: a rejection re-worded here is a second statement of a rule that already
+-- has one, and the two drift.
+export type ProfileRejection
+  = MissingRequiredField(string, string)
+  | CoverageDefect(string, string)
+  | AttributionDefect(string, string)
+  | AttributionIdentityStale(string, string)
+  | UnroutedSiteUndeclared(string)
+  | UnroutedSiteWithoutInstrument(string)
+  | DeclaredSiteNotReachable(string)
+  | Classifier2ExtensionInstalled(string, string, string)
+  | PackageOutsideScanRoots(string, string)
+  | ConditionalClassUnaccounted(string)
+  | WaiverConditionDrifted(string)
+  | WaivedClassNotConditional(string)
+  | ClassificationDisagreesWithDisclosure(string, string)
+  | ExtensionSetDisagrees(string, string)
+  | ClassificationBasisNotRecorded(string, string, string)
+  | ClassificationBasisUnrecognised(string, string, string)
+  | WorldMediatedOnAnAssumedBasis(string, string, string)
+  | Criterion2ClauseUnrecorded(string, string, string)
+  | Criterion2ClausesNotApplicable(string, string, string)
+
+export pure func rejection_rule(r: ProfileRejection) -> string {
+  match r {
+    MissingRequiredField(_, _) => "required-field-missing",
+    CoverageDefect(rule, _) => rule,
+    AttributionDefect(rule, _) => rule,
+    AttributionIdentityStale(_, _) => "attribution-identity-stale",
+    UnroutedSiteUndeclared(_) => "unrouted-site-undeclared",
+    UnroutedSiteWithoutInstrument(_) => "unrouted-site-without-instrument",
+    DeclaredSiteNotReachable(_) => "declared-site-not-reachable",
+    Classifier2ExtensionInstalled(_, _, _) => "classifier-2-extension-installed",
+    PackageOutsideScanRoots(_, _) => "package-outside-scan-roots",
+    ConditionalClassUnaccounted(_) => "conditional-class-unaccounted",
+    WaiverConditionDrifted(_) => "waiver-condition-drifted",
+    WaivedClassNotConditional(_) => "waived-class-not-conditional",
+    ClassificationDisagreesWithDisclosure(_, _) => "classification-disagrees-with-disclosure",
+    ExtensionSetDisagrees(_, _) => "extension-set-disagrees",
+    ClassificationBasisNotRecorded(_, _, _) => "classification-basis-not-recorded",
+    ClassificationBasisUnrecognised(_, _, _) => "classification-basis-unrecognised",
+    WorldMediatedOnAnAssumedBasis(_, _, _) => "world-mediated-on-an-assumed-basis",
+    Criterion2ClauseUnrecorded(_, _, _) => "criterion-2-clause-unrecorded",
+    Criterion2ClausesNotApplicable(_, _, _) => "criterion-2-clauses-not-applicable"
+  }
+}
+
+export pure func rejection_message(r: ProfileRejection) -> string {
+  match r {
+    MissingRequiredField(f, why) =>
+      "[required-field-missing] the definition has no '${f}': ${why} (D5)",
+    CoverageDefect(_, m) => m,
+    AttributionDefect(_, m) => m,
+    AttributionIdentityStale(recorded, live) =>
+      "[attribution-identity-stale] the profile references attribution table '${recorded}' but the table at HEAD is '${live}'; D4 re-issues every referring profile when the table is corrected, so bump the profile version and re-record the identity",
+    UnroutedSiteUndeclared(k) =>
+      "[unrouted-site-undeclared] core site '${k}' is reachable in this profile and is not routed, and the definition does not declare it; routing is all-or-nothing over routed plus declared-and-instrumented sites (D4; A10 decision 1)",
+    UnroutedSiteWithoutInstrument(k) =>
+      "[unrouted-site-without-instrument] the definition declares '${k}' unrouted but names no instrument; a declaration with no check behind it declares the gap away (A10 decision 1)",
+    DeclaredSiteNotReachable(k) =>
+      "[declared-site-not-reachable] the definition declares unrouted site '${k}', which is not in this profile's reachable core set; a stale declaration hides the day the site returns",
+    Classifier2ExtensionInstalled(e, f, site) =>
+      "[classifier-2-extension-installed] extension '${e}' calls the classifier-2 field '${f}' at ${site} and is INSTALLED; every hook it registers would have to be excluded, and an unconditionally-dispatched hook cannot be excluded, so it must be OMITTED from the install list instead (D1/D5)",
+    PackageOutsideScanRoots(e, p) =>
+      "[package-outside-scan-roots] extension '${e}' resolves to AILANG source at '${p}', which lies outside the profile's recorded scan roots; either extend the roots through the resolved lock graph or omit the extension — an unscanned package is coverage claimed over source nothing looked at (D5 obligation 2)",
+    ConditionalClassUnaccounted(c) =>
+      "[conditional-class-unaccounted] D3 class '${c}' is conditional and the definition neither waives it nor claims to exercise it; an unstated waiver is a coverage claim D3 does not grant",
+    WaiverConditionDrifted(c) =>
+      "[waiver-condition-drifted] the waiver recorded for '${c}' does not match the catalogue's condition for that class; the catalogue is the authority and the copy has drifted (D3)",
+    WaivedClassNotConditional(c) =>
+      "[waived-class-not-conditional] '${c}' is waived but is not a conditional class in the catalogue; an unconditional class cannot be waived, and an unknown id cannot be waived at all (D3)",
+    ClassificationDisagreesWithDisclosure(e, h) =>
+      "[classification-disagrees-with-disclosure] extension '${e}' classifies hook '${h}' as explicitly-excluded in one D5 field and not in the other; the two fields are separate and must agree",
+    ExtensionSetDisagrees(f, e) =>
+      "[extension-set-disagrees] '${f}' names extension '${e}', which the other install-list fields do not; the installed set must be one set stated three ways",
+    ClassificationBasisNotRecorded(e, h, field) =>
+      "[classification-basis-not-recorded] extension '${e}' classifies hook '${h}' and records no '${field}' for it; a classification with no evidentiary basis is indistinguishable from one that was measured, which is the fail-open ADR-001 Amendment A's default was written to close (ADR:1548) and which nothing enforced before WI-D13",
+    ClassificationBasisUnrecognised(e, h, p) =>
+      "[classification-basis-unrecognised] extension '${e}' classifies hook '${h}' on the basis of producer '${p}', which is not a producer this tree has; see `recognised_producers`. A basis naming an instrument that does not exist is worse than no basis, because it reads as evidence — fail-closed, on classifier 2's discipline",
+    WorldMediatedOnAnAssumedBasis(e, h, p) =>
+      "[world-mediated-on-an-assumed-basis] extension '${e}' classifies hook '${h}' as world-mediated on producer '${p}', which this tree records as an ASSUMPTION rather than a measurement. ADR-001 Amendment A's fail-closed default (ADR:1548) says criterion 2 may be recorded only on a producer that MEASURED it — a declared row bounds performed effects in one direction only and cannot distinguish mediation from ambience at any width (ADR:1449)",
+    Criterion2ClauseUnrecorded(e, h, clause) =>
+      "[criterion-2-clause-unrecorded] extension '${e}' classifies hook '${h}' as world-mediated and records clause '${clause}' as not-applicable; criterion 2 is a CONJUNCTION of three clauses (D5), so an entry claiming it must say how each one holds — substantively or vacuously. A clause satisfied over an empty set is coverage of a no-op, and ADR-001's acceptance row 3 requires that to be visible in the record",
+    Criterion2ClausesNotApplicable(e, h, clause) =>
+      "[criterion-2-clauses-not-applicable] extension '${e}' classifies hook '${h}' on a criterion OTHER than criterion 2 and records clause '${clause}' as satisfied; the clause record is criterion 2's and an effect-free or excluded entry carries evidence it does not rest on"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Small helpers. `[string]` has no Eq on the pin.
+-- ---------------------------------------------------------------------------
+
+pure func contains_str(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == target then true else contains_str(rest, target)
+  }
+}
+
+pure func blank(s: string) -> bool { s == "" }
+
+pure func require_nonempty_list(n: int, field: string, why: string) -> [ProfileRejection] {
+  if n == 0 then [MissingRequiredField(field, why)] else []
+}
+
+pure func require_nonblank(s: string, field: string, why: string) -> [ProfileRejection] {
+  if blank(s) then [MissingRequiredField(field, why)] else []
+}
+
+-- ---------------------------------------------------------------------------
+-- Field presence
+-- ---------------------------------------------------------------------------
+
+-- "Loads clean" cannot falsify a field the validator was never told to require,
+-- so every D5 field is named here explicitly and a fixture dropping any one of
+-- them is rejected BY NAME.
+--
+-- Which fields may be empty is itself a D5 reading and is stated per field:
+--
+--   installed_packages / hook_classifications / disclosures / omitted_extensions
+--     may be empty. `driver_only` installs nothing, so the floor and the
+--     disclosure hold vacuously — and the vacuity is safe because the
+--     per-extension rules make an UNCHECKED installed extension impossible.
+--     `omitted_extensions` is separately forced non-empty by the classifier-2
+--     rule whenever an installable extension calls a classifier-2 field, which
+--     is what makes `driver_only` name `compaction_ai`.
+--
+--   adapter_boundaries / resource_models / diagnostic_projections /
+--   forbidden_capabilities
+--     may NOT be empty, for ANY profile including an empty-install one. These
+--     are the four cluster 3 identified as non-vacuous: the boundary scopes
+--     D3's wire-parser exclusion, the projections bound D1's collecting sink,
+--     the forbidden capabilities are what A12's poison probes test against, and
+--     the resource models are the driver's own, not an extension's.
+export pure func validate_required_fields(d: ProfileDefinition) -> [ProfileRejection] {
+  require_nonblank(d.profile_id, "profile_id", "D5 field 1; a profile with no id cannot be named in a manifest or a result")
+    ++ require_nonblank(d.profile_version, "profile_version", "D5 field 1; changing a semantic scope field requires a version change, which needs a version")
+    ++ require_nonempty_list(List.length(d.adapter_boundaries), "adapter_boundaries",
+         "D5 field 3; the provider/tool adapter and parser boundaries scope D3's wire-parser exclusion and are not vacuous for an empty install list")
+    ++ require_nonempty_list(List.length(d.resource_models), "resource_models",
+         "D5 field 4; the driver's own tool and provider boundaries have logical resource models whether or not any extension is installed")
+    ++ require_nonempty_list(List.length(d.diagnostic_projections), "diagnostic_projections",
+         "D5 field 5; D1's collecting sink is bounded by this list, so an empty one permits nothing and is never what was meant")
+    ++ require_nonempty_list(List.length(d.forbidden_capabilities), "forbidden_capabilities",
+         "D5 field 6; this is the set A12's poison probes test against, and an empty set forbids nothing")
+    ++ require_nonblank(d.attribution_ref.source_revision, "attribution_ref.source_revision",
+         "D5 field 8; the table reference is a (source revision, content hash) pair and half a pair cannot detect staleness")
+    ++ require_nonblank(d.attribution_ref.content_hash, "attribution_ref.content_hash",
+         "D5 field 8; without the hash a table CORRECTION does not re-issue this profile, which is exactly what D4 requires it to do")
+    ++ require_nonempty_list(List.length(d.scan_roots), "scan_roots",
+         "D5 obligation 2; the routing scan's roots, and the set an installed package's source must lie within")
+    ++ capability_instruments(d.forbidden_capabilities)
+}
+
+-- A forbidden capability whose instrument is blank is a promise with nothing
+-- behind it. Same shape as decision 1's instrument requirement, one field over.
+pure func capability_instruments(cs: [ForbiddenCapability]) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let here =
+        if blank(c.instrument) then
+          [MissingRequiredField("forbidden_capabilities['${c.capability}'].instrument",
+            "D5 field 6; a forbidden capability with no named instrument is enforced by nothing")]
+        else [];
+      here ++ capability_instruments(rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The coverage floor and disclosure: DELEGATED to A6
+-- ---------------------------------------------------------------------------
+
+-- The disclosures arrive as IDS and are parsed by A6's fail-closed parse, so an
+-- unknown hook id is a rejection here rather than a silently dropped entry.
+-- Note what is NOT restated: the seven-unconditional split. `validate_disclosure`
+-- reads `hook_dispatch`, so the `on_describe_tools` correction is inherited
+-- rather than re-derived.
+@allow_empty_ok("an empty disclosures list is a legitimate parse result — no disclosures to parse")
+pure func parse_disclosures(ds: [CapabilityDisclosureIds]) -> Result[[CapabilityDisclosure], CoverageRejection] {
+  match ds {
+    [] => Ok([]),
+    d :: rest =>
+      match Cov.capability_disclosure_from_ids(d) {
+        Err(e) => Err(e),
+        Ok(parsed) =>
+          match parse_disclosures(rest) {
+            Err(e) => Err(e),
+            Ok(tail) => Ok(parsed :: tail)
+          }
+      }
+  }
+}
+
+pure func lift_coverage(rs: [CoverageRejection]) -> [ProfileRejection] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      CoverageDefect(Cov.rejection_rule(r), Cov.rejection_message(r)) :: lift_coverage(rest)
+  }
+}
+
+export pure func validate_coverage(d: ProfileDefinition) -> [ProfileRejection] {
+  match parse_disclosures(d.disclosures) {
+    Err(e) => [CoverageDefect(Cov.rejection_rule(e), Cov.rejection_message(e))],
+    Ok(parsed) => lift_coverage(Cov.validate_capability_install_list(parsed))
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The attribution reference: DELEGATED to A5, plus the identity check D4 adds
+-- ---------------------------------------------------------------------------
+
+pure func lift_attribution(rs: [AttributionRejection]) -> [ProfileRejection] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      AttributionDefect(Attr.rejection_rule(r), Attr.rejection_message(r)) :: lift_attribution(rest)
+  }
+}
+
+pure func identity_str(i: TableIdentity) -> string {
+  "${i.source_revision}/${i.content_hash}"
+}
+
+-- D4: a table correction re-issues every referring profile. That is only true
+-- mechanically if the profile records the CONTENT HASH and something compares
+-- it. `validate_at_load` catches a stale source-revision BINDING; it cannot
+-- catch a table whose rows changed at the same revision, because it has no idea
+-- what the profile recorded. This does.
+export pure func validate_attribution_ref(d: ProfileDefinition) -> [ProfileRejection] {
+  let live = Attr.table_identity();
+  let recorded: TableIdentity =
+    { source_revision: d.attribution_ref.source_revision,
+      content_hash: d.attribution_ref.content_hash };
+  if identity_str(recorded) == identity_str(live) then []
+  else [AttributionIdentityStale(identity_str(recorded), identity_str(live))]
+}
+
+-- ---------------------------------------------------------------------------
+-- DECISION 1, made executable
+-- ---------------------------------------------------------------------------
+
+pure func installed_ids(ps: [InstalledPackage]) -> [string] {
+  match ps {
+    [] => [],
+    p :: rest => p.extension_id :: installed_ids(rest)
+  }
+}
+
+-- The reachable core set at the bound revision, for THIS profile's install
+-- list. Computed, per decision 2 and P3 — never a recorded count.
+export pure func reachable_sites(d: ProfileDefinition) -> [CoreSite] {
+  Attr.reachable_core_sites(installed_ids(d.installed_packages))
+}
+
+pure func unrouted_of(cs: [CoreSite]) -> [CoreSite] {
+  match cs {
+    [] => [],
+    c :: rest => if c.routed then unrouted_of(rest) else c :: unrouted_of(rest)
+  }
+}
+
+pure func routed_of(cs: [CoreSite]) -> [CoreSite] {
+  match cs {
+    [] => [],
+    c :: rest => if c.routed then c :: routed_of(rest) else routed_of(rest)
+  }
+}
+
+-- Decision 2's claim, as a computed value. A profile records no count; the
+-- claim is derived from the table at the revision the profile binds, so a table
+-- correction moves the claim instead of leaving a stale number behind.
+export type RoutedSetClaim = {
+  reachable_total: int,
+  routed: int,
+  declared_unrouted: int
+}
+
+export pure func routed_set_claim(d: ProfileDefinition) -> RoutedSetClaim {
+  let sites = reachable_sites(d);
+  { reachable_total: List.length(sites),
+    routed: List.length(routed_of(sites)),
+    declared_unrouted: List.length(unrouted_of(sites)) }
+}
+
+pure func find_declaration(ds: [UnroutedSiteDeclaration], k: string) -> Option[UnroutedSiteDeclaration] {
+  match ds {
+    [] => None,
+    d :: rest => if d.site_key == k then Some(d) else find_declaration(rest, k)
+  }
+}
+
+-- Forward: every unrouted reachable site must be declared, with an instrument.
+pure func unrouted_declared(ds: [UnroutedSiteDeclaration], cs: [CoreSite]) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let k = Attr.site_key(c.site);
+      let here = match find_declaration(ds, k) {
+        None => [UnroutedSiteUndeclared(k)],
+        Some(decl) =>
+          if blank(decl.instrument) then [UnroutedSiteWithoutInstrument(k)] else []
+      };
+      here ++ unrouted_declared(ds, rest)
+    }
+  }
+}
+
+pure func site_key_in(cs: [CoreSite], k: string) -> bool {
+  match cs {
+    [] => false,
+    c :: rest => if Attr.site_key(c.site) == k then true else site_key_in(rest, k)
+  }
+}
+
+-- Reverse: a declaration for a site that is no longer reachable-and-unrouted is
+-- itself a defect. Without this half, a site that gets ROUTED keeps its
+-- declaration forever and the profile still reads as if the gap were live —
+-- and, worse, a site that MOVES leaves a declaration matching nothing while the
+-- moved site trips the forward check. Both directions, or neither is a set
+-- check.
+pure func declarations_still_apply(ds: [UnroutedSiteDeclaration], unrouted: [CoreSite]) -> [ProfileRejection] {
+  match ds {
+    [] => [],
+    d :: rest => {
+      let here = if site_key_in(unrouted, d.site_key) then [] else [DeclaredSiteNotReachable(d.site_key)];
+      here ++ declarations_still_apply(rest, unrouted)
+    }
+  }
+}
+
+export pure func validate_routing(d: ProfileDefinition) -> [ProfileRejection] {
+  let unrouted = unrouted_of(reachable_sites(d));
+  unrouted_declared(d.unrouted_reachable_sites, unrouted)
+    ++ declarations_still_apply(d.unrouted_reachable_sites, unrouted)
+}
+
+-- ---------------------------------------------------------------------------
+-- Classifier 2: an installed extension that calls a state-threading seam
+-- ---------------------------------------------------------------------------
+
+-- D1/D5: an extension calling a classifier-2 field must have every hook it
+-- registers excluded — and an unconditionally-dispatched hook cannot be
+-- excluded, so in practice it must be OMITTED. The check is stated in the D5
+-- form ("installed while any hook is un-excluded") rather than the shortcut
+-- ("installed at all"), because the shortcut would be wrong the day the ABI
+-- gains a second gated slot, and because the D5 form is the one the ADR's
+-- routing-audit row names.
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest)
+  }
+}
+
+pure func excluded_ids_for(ds: [CapabilityDisclosureIds], ext_id: string) -> [string] {
+  match ds {
+    [] => [],
+    d :: rest => if d.extension_id == ext_id then atom_id_strs(d.excluded) else excluded_ids_for(rest, ext_id)
+  }
+}
+
+-- B8: the extension's OWN registered atoms (the denominator), not a fixed
+-- slot list -- an extension with two Compactor atoms has two things to exclude.
+pure func atom_ids_for(ds: [CapabilityDisclosureIds], ext_id: string) -> [string] {
+  match ds {
+    [] => [],
+    d :: rest => if d.extension_id == ext_id then atom_id_strs(d.atoms) else atom_ids_for(rest, ext_id)
+  }
+}
+
+pure func any_unexcluded(excluded: [string], slots: [string]) -> bool {
+  match slots {
+    [] => false,
+    s :: rest => if contains_str(excluded, s) then any_unexcluded(excluded, rest) else true
+  }
+}
+
+export pure func validate_classifier_2(d: ProfileDefinition, calls: [Classifier2Call]) -> [ProfileRejection] {
+  let installed = installed_ids(d.installed_packages);
+  classifier_2_rec(d, calls, installed)
+}
+
+pure func classifier_2_rec(
+  d: ProfileDefinition,
+  calls: [Classifier2Call],
+  installed: [string]
+) -> [ProfileRejection] {
+  match calls {
+    [] => [],
+    c :: rest => {
+      let here =
+        if contains_str(installed, c.extension_id) then {
+          let excluded = excluded_ids_for(d.disclosures, c.extension_id);
+          let atoms = atom_ids_for(d.disclosures, c.extension_id);
+          -- an installed extension with NO disclosed atoms is caught by the
+          -- coverage gate (`installed-with-no-capabilities`); here it counts as
+          -- "every atom un-excluded" so the classifier-2 rule still fires
+          if List.length(atoms) == 0 || any_unexcluded(excluded, atoms) then
+            [Classifier2ExtensionInstalled(c.extension_id, c.field, c.site)]
+          else []
+        } else [];
+      here ++ classifier_2_rec(d, rest, installed)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scan roots
+-- ---------------------------------------------------------------------------
+
+pure func under_any_root(roots: [string], path: string) -> bool {
+  match roots {
+    [] => false,
+    r :: rest =>
+      if startsWith(path, "${r}/") then true else under_any_root(rest, path)
+  }
+}
+
+-- D5 obligation 2. The live shape is `ailang.toml:9`'s registry-resolved
+-- `sunholo/logging`, which has no path under `src` or `packages` — but it is a
+-- library dependency, not an entry in `[extensions] packages`, so no INSTALLED
+-- extension is outside the roots today and the exposure is nil. The gate exists
+-- for the first registry-resolved EXTENSION, which the resolved lock graph
+-- would otherwise carry into an install list with nothing having scanned it.
+export pure func validate_scan_roots(d: ProfileDefinition) -> [ProfileRejection] {
+  scan_roots_rec(d.scan_roots, d.installed_packages)
+}
+
+pure func scan_roots_rec(roots: [string], ps: [InstalledPackage]) -> [ProfileRejection] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let here =
+        if under_any_root(roots, p.source_path) then []
+        else [PackageOutsideScanRoots(p.extension_id, p.source_path)];
+      here ++ scan_roots_rec(roots, rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- D3 waivers: DELEGATED to A7 for both the id list and each condition
+-- ---------------------------------------------------------------------------
+
+pure func waived_ids(ws: [WaivedFaultClass]) -> [string] {
+  match ws {
+    [] => [],
+    w :: rest => w.class_id :: waived_ids(rest)
+  }
+}
+
+pure func find_waiver(ws: [WaivedFaultClass], id: string) -> Option[WaivedFaultClass] {
+  match ws {
+    [] => None,
+    w :: rest => if w.class_id == id then Some(w) else find_waiver(rest, id)
+  }
+}
+
+-- Every conditional class must be accounted for: waived (with the catalogue's
+-- own condition) or claimed exercised. Set completeness over the CATALOGUE's
+-- ids, not over the profile's — a profile cannot discover a class it omits, and
+-- iterating the profile's list would make an omission invisible.
+pure func conditional_accounted(
+  d: ProfileDefinition,
+  catalogue: [FaultClass],
+  ids: [string]
+) -> [ProfileRejection] {
+  match ids {
+    [] => [],
+    id :: rest => {
+      let here = match find_waiver(d.waived_fault_classes, id) {
+        Some(w) =>
+          match Fault.waiving_condition(catalogue, id) {
+            None => [WaivedClassNotConditional(id)],
+            Some(cond) => if cond == w.condition then [] else [WaiverConditionDrifted(id)]
+          },
+        None =>
+          if contains_str(d.exercised_fault_classes, id) then []
+          else [ConditionalClassUnaccounted(id)]
+      };
+      here ++ conditional_accounted(d, catalogue, rest)
+    }
+  }
+}
+
+-- The other direction: a waiver naming a class the catalogue does not hold as
+-- conditional. Catches both an unknown id and an attempt to waive an
+-- unconditional class.
+pure func waivers_are_conditional(
+  ws: [WaivedFaultClass],
+  catalogue: [FaultClass],
+  conditional: [string]
+) -> [ProfileRejection] {
+  match ws {
+    [] => [],
+    w :: rest => {
+      let here = if contains_str(conditional, w.class_id) then [] else [WaivedClassNotConditional(w.class_id)];
+      here ++ waivers_are_conditional(rest, catalogue, conditional)
+    }
+  }
+}
+
+export pure func validate_waivers(d: ProfileDefinition, catalogue: [FaultClass]) -> [ProfileRejection] {
+  let conditional = Fault.conditional_class_ids(catalogue);
+  conditional_accounted(d, catalogue, conditional)
+    ++ waivers_are_conditional(d.waived_fault_classes, catalogue, conditional)
+}
+
+-- ---------------------------------------------------------------------------
+-- Internal consistency: D5 states the install list three times
+-- ---------------------------------------------------------------------------
+
+pure func disclosure_ids_of(ds: [CapabilityDisclosureIds]) -> [string] {
+  match ds {
+    [] => [],
+    d :: rest => d.extension_id :: disclosure_ids_of(rest)
+  }
+}
+
+pure func classification_ext_ids(cs: [HookClassificationEntry], seen: [string]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      if contains_str(seen, c.extension_id) then classification_ext_ids(rest, seen)
+      else c.extension_id :: classification_ext_ids(rest, c.extension_id :: seen)
+  }
+}
+
+pure func missing_from(field: string, xs: [string], reference: [string]) -> [ProfileRejection] {
+  match xs {
+    [] => [],
+    x :: rest => {
+      let here = if contains_str(reference, x) then [] else [ExtensionSetDisagrees(field, x)];
+      here ++ missing_from(field, rest, reference)
+    }
+  }
+}
+
+-- D5 names the installed set in three fields — the package list, the per-hook
+-- classifications, and the disclosure. They must be one set. A definition that
+-- discloses an extension it does not install, or installs one it does not
+-- disclose, satisfies each field's own rules and is still incoherent.
+export pure func validate_extension_sets(d: ProfileDefinition) -> [ProfileRejection] {
+  let installed = installed_ids(d.installed_packages);
+  let disclosed = disclosure_ids_of(d.disclosures);
+  let classified = classification_ext_ids(d.hook_classifications, []);
+  missing_from("disclosures", disclosed, installed)
+    ++ missing_from("installed_packages", installed, disclosed)
+    ++ missing_from("hook_classifications", classified, installed)
+}
+
+-- The two D5 fields that say the same thing about one hook must agree:
+-- `ExplicitlyExcluded` in field 2, and membership of the excluded id list in
+-- field 9. Both directions, because either alone lets one field carry a hook
+-- the other has never heard of.
+pure func classification_agrees(
+  cs: [HookClassificationEntry],
+  ds: [CapabilityDisclosureIds]
+) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let excluded = contains_str(excluded_ids_for(ds, c.extension_id), c.hook_id);
+      let claims_excluded = match c.classification {
+        ExplicitlyExcluded => true,
+        EffectFree => false,
+        WorldMediated => false
+      };
+      let here =
+        if excluded == claims_excluded then []
+        else [ClassificationDisagreesWithDisclosure(c.extension_id, c.hook_id)];
+      here ++ classification_agrees(rest, ds)
+    }
+  }
+}
+
+-- WI-D13. THE FAIL-CLOSED DEFAULT, ENFORCED RATHER THAN STATED.
+--
+-- `classification_agrees` above is the whole of what validated a classification
+-- before this function existed, and it checks ONE thing: that
+-- `ExplicitlyExcluded` in D5 field 2 agrees with the excluded-id list in field
+-- 9. It says nothing at all about `WorldMediated` or `EffectFree`, so a profile
+-- could assert either on no evidence whatever and load clean. Amendment A
+-- forbids exactly that in prose (`ADR:1548`) and WI-D11 measured that nothing
+-- carried the prohibition.
+--
+-- The rule, applied to EVERY entry rather than only to `WorldMediated`. The
+-- reviewers' condition names `WorldMediated`, and it is the entry that can
+-- launder an unmeasured claim into coverage — but `EffectFree` is criterion 1
+-- and criterion 1's basis is an ASSUMPTION the ADR names as one, and
+-- `ExplicitlyExcluded` is a decision. Each of the three is a different claim
+-- resting on a different kind of evidence, and none of them is self-evident.
+-- Uniform is also strictly stronger, and it costs nothing: `basis` is a record
+-- field, so every entry already has one and the only question is whether
+-- anything reads it.
+--
+-- BOTH HALVES, because either alone is defeated by a one-word entry. A blank
+-- producer is an unstated basis; a recognised producer with a blank revision is
+-- a claim about a tree that may no longer exist, and a stale measurement that
+-- cannot be dated is the failure mode this project has hit twice.
+pure func basis_recorded(cs: [HookClassificationEntry]) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let here =
+        if blank(c.basis.producer) then
+          [ClassificationBasisNotRecorded(c.extension_id, c.hook_id, "basis.producer")]
+        else if blank(c.basis.revision) then
+          [ClassificationBasisNotRecorded(c.extension_id, c.hook_id, "basis.revision")]
+        else if producer_recognised(recognised_producers(), c.basis.producer) then []
+        else [ClassificationBasisUnrecognised(c.extension_id, c.hook_id, c.basis.producer)];
+      here ++ basis_recorded(rest)
+    }
+  }
+}
+
+-- WI-D14. THE KIND OF THE BASIS, ENFORCED FOR `WorldMediated` ONLY.
+--
+-- WI-D13 landed `basis` and checked that the producer is RECOGNISED. It did not
+-- check the producer's KIND, and the catalogue records one precisely so that a
+-- measured claim and a read one can be told apart. So until this item a profile
+-- could record `WorldMediated` on `declared_row` — a recognised producer, an
+-- ASSUMED one — and pass the gate, which is the fail-open Amendment A's
+-- default is written against in so many words: *"no profile may record
+-- `WorldMediated` on any other basis"* than classifier 3's (`ADR:1548`).
+--
+-- SCOPED TO `WorldMediated` DELIBERATELY, where D13's basis rule was
+-- deliberately uniform. The uniform rule asks "is there a basis at all", and
+-- every classification owes that. This one asks "is the basis strong enough for
+-- the claim", and the answer differs per claim: criterion 1's own basis IS an
+-- assumption (`ADR:1415`) and the amendment WITHHELD criterion 1, so requiring
+-- a measurement for `EffectFree` would be this module deciding an ADR-scope
+-- question. `ExplicitlyExcluded` is a decision, and its admissible basis is the
+-- profile's own disclosure, which `classification_agrees` above cross-checks.
+pure func world_mediated_is_measured(cs: [HookClassificationEntry]) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let here = match c.classification {
+        WorldMediated =>
+          match producer_kind(c.basis.producer) {
+            Some(Assumed) => [WorldMediatedOnAnAssumedBasis(c.extension_id, c.hook_id, c.basis.producer)],
+            Some(Measured) => [],
+            -- Unrecognised is `basis_recorded`'s rejection, not this one's. Two
+            -- rules firing on one defect reads as two defects.
+            None => []
+          },
+        EffectFree => [],
+        ExplicitlyExcluded => []
+      };
+      here ++ world_mediated_is_measured(rest)
+    }
+  }
+}
+
+-- WI-D14. THE THREE CLAUSES, REQUIRED OF THE ENTRIES THAT REST ON THEM AND
+-- FORBIDDEN OF THE ENTRIES THAT DO NOT.
+--
+-- Both directions, for the reason every set check in this module has both: one
+-- direction alone lets an entry carry a clause record that means nothing. A
+-- `WorldMediated` entry with a clause left `NotApplicable` has not said how the
+-- conjunct holds; an `EffectFree` entry with a clause SET is claiming
+-- criterion-2 evidence for a criterion-1 classification.
+--
+-- What this does NOT do, stated because the omission is the honest part: it
+-- does not check the clause statuses against a producer. `Vacuously` versus
+-- `Substantively` is a fact about the extension's source, and the instrument
+-- that can decide it is classifier 3 — a Python tool, so per plan rule P3 the
+-- comparison belongs in `tools/profile_definition/` and not in a constant here.
+-- `check_no_op_profile.py` re-derives it and fails if the record disagrees.
+pure func clause_named(cl: Criterion2Clauses, which: string) -> ClauseStatus {
+  if which == "ports" then cl.ports
+  else if which == "origin_tag" then cl.origin_tag
+  else cl.world_state
+}
+
+pure func clause_ids() -> [string] { ["ports", "origin_tag", "world_state"] }
+
+pure func clauses_recorded_rec(
+  c: HookClassificationEntry,
+  rests_on_criterion_2: bool,
+  which: [string]
+) -> [ProfileRejection] {
+  match which {
+    [] => [],
+    w :: rest => {
+      let applicable = match clause_named(c.clauses, w) {
+        NotApplicable => false,
+        Vacuously => true,
+        Substantively => true
+      };
+      let here =
+        if rests_on_criterion_2 && not applicable then
+          [Criterion2ClauseUnrecorded(c.extension_id, c.hook_id, w)]
+        else if not rests_on_criterion_2 && applicable then
+          [Criterion2ClausesNotApplicable(c.extension_id, c.hook_id, w)]
+        else [];
+      here ++ clauses_recorded_rec(c, rests_on_criterion_2, rest)
+    }
+  }
+}
+
+pure func clauses_recorded(cs: [HookClassificationEntry]) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let on_2 = match c.classification {
+        WorldMediated => true,
+        EffectFree => false,
+        ExplicitlyExcluded => false
+      };
+      clauses_recorded_rec(c, on_2, clause_ids()) ++ clauses_recorded(rest)
+    }
+  }
+}
+
+export pure func validate_classifications(d: ProfileDefinition) -> [ProfileRejection] {
+  classification_agrees(d.hook_classifications, d.disclosures)
+    ++ basis_recorded(d.hook_classifications)
+    ++ world_mediated_is_measured(d.hook_classifications)
+    ++ clauses_recorded(d.hook_classifications)
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D14: WHAT THE COVERAGE NUMBER MEANS, computed from the record
+-- ---------------------------------------------------------------------------
+--
+-- ADR-001's acceptance row 3 ends: *"the result reports per-extension
+-- covered/excluded hook **ids**, so a profile covering only ABI-pure no-op
+-- slots is visible as such."* The ids are `DisclosureIds` and have been there
+-- since WI-A6. This is the second half of that sentence — the "as such".
+--
+-- WI-D5 made a caveat MANDATORY for every statement of this axis: *"the axis's
+-- extension-model coverage is ZERO"*. That sentence is FALSE for a profile that
+-- installs something, and deleting it would be the S15 failure mode with the
+-- sign flipped — a caveat dropped the moment it stopped being convenient. So it
+-- is computed instead, and it has three cases rather than one: zero, non-zero
+-- and entirely of no-ops, and non-zero with world mediation in it. The middle
+-- case is a WEAKER claim than a bare number implies and a STRONGER one than
+-- zero, and no number alone distinguishes it from the third.
+export type CoverageSubstance = {
+  installed_extensions: int,
+  covered_hooks: int,
+  excluded_hooks: int,
+  criterion_1_hooks: int,
+  criterion_2_hooks: int,
+  no_op_hooks: int,
+  world_mediating_hooks: int
+}
+
+-- Exported because a profile's own tests ask these questions of their entries,
+-- and a second `match` written over there would be a second reading of the same
+-- three constructors.
+export pure func clause_is_vacuous(s: ClauseStatus) -> bool {
+  match s { Vacuously => true, Substantively => false, NotApplicable => false }
+}
+
+export pure func clause_is_substantive(s: ClauseStatus) -> bool {
+  match s { Substantively => true, Vacuously => false, NotApplicable => false }
+}
+
+pure func substance_rec(cs: [HookClassificationEntry], acc: CoverageSubstance) -> CoverageSubstance {
+  match cs {
+    [] => acc,
+    c :: rest => {
+      let next = match c.classification {
+        ExplicitlyExcluded => { acc | excluded_hooks: acc.excluded_hooks + 1 },
+        EffectFree =>
+          { acc | covered_hooks: acc.covered_hooks + 1,
+                  criterion_1_hooks: acc.criterion_1_hooks + 1 },
+        WorldMediated =>
+          -- A hook whose ports clause holds VACUOUSLY performs nothing through
+          -- a port; one whose ports clause holds SUBSTANTIVELY is the thing the
+          -- world-mediation machinery exists for. The origin-tag clause is read
+          -- with it because a port call with nothing to tag is the same empty
+          -- set seen from the other side.
+          { acc | covered_hooks: acc.covered_hooks + 1,
+                  criterion_2_hooks: acc.criterion_2_hooks + 1,
+                  no_op_hooks:
+                    acc.no_op_hooks
+                      + (if clause_is_vacuous(c.clauses.ports) && clause_is_vacuous(c.clauses.origin_tag) then 1 else 0),
+                  world_mediating_hooks:
+                    acc.world_mediating_hooks + (if clause_is_substantive(c.clauses.ports) then 1 else 0) }
+      };
+      substance_rec(rest, next)
+    }
+  }
+}
+
+export pure func coverage_substance(d: ProfileDefinition) -> CoverageSubstance {
+  let zero: CoverageSubstance =
+    { installed_extensions: List.length(d.installed_packages),
+      covered_hooks: 0, excluded_hooks: 0, criterion_1_hooks: 0,
+      criterion_2_hooks: 0, no_op_hooks: 0, world_mediating_hooks: 0 };
+  substance_rec(d.hook_classifications, zero)
+}
+
+-- The sentence a result carries, derived rather than written. This is the
+-- successor to D5's mandatory zero-coverage caveat, and it says which of the
+-- three cases the profile is in without a reader having to add up ids.
+export pure func coverage_statement(d: ProfileDefinition) -> string {
+  let s = coverage_substance(d);
+  if s.installed_extensions == 0 then
+    "extension-model coverage is ZERO: this profile installs no extension, so every clause of ADR-001's acceptance row 3 that quantifies over installed extensions holds VACUOUSLY."
+  else if s.covered_hooks == 0 then
+    "extension-model coverage is ZERO: ${show(s.installed_extensions)} extension(s) installed and no hook covered."
+  else if s.world_mediating_hooks == 0 then
+    "extension-model coverage is NON-ZERO and ENTIRELY OF NO-OPS: ${show(s.covered_hooks)} hook(s) covered across ${show(s.installed_extensions)} installed extension(s) — ${show(s.criterion_1_hooks)} on criterion 1 and ${show(s.criterion_2_hooks)} on criterion 2, of which ${show(s.no_op_hooks)} satisfy criterion 2's port and origin-tag clauses VACUOUSLY, i.e. over an empty set of performed effects. ZERO covered hooks mediate the world substantively, so this coverage exercises NONE of the world-mediation machinery. It is a weaker claim than the number implies and a stronger one than zero."
+  else
+    "extension-model coverage is NON-ZERO: ${show(s.covered_hooks)} hook(s) covered across ${show(s.installed_extensions)} installed extension(s), of which ${show(s.world_mediating_hooks)} mediate the world SUBSTANTIVELY through a D1 port and ${show(s.no_op_hooks)} satisfy criterion 2 vacuously."
+}
+
+-- ---------------------------------------------------------------------------
+-- The whole load-time gate
+-- ---------------------------------------------------------------------------
+
+-- Everything, in one call, returning EVERY violation rather than the first — a
+-- fixture asserting one rule must not be able to pass because another fired
+-- ahead of it.
+--
+-- `discovered` and `calls` are arguments and not constants, for the same reason
+-- in both cases: they are measurements of the source at a revision, and a copy
+-- kept here would make this gate agree with itself. `catalogue` is an argument
+-- so a fixture can supply a mutated catalogue and see the waiver checks fire.
+export pure func validate_definition_at_load(
+  d: ProfileDefinition,
+  loading_against: string,
+  discovered: [CoreSite],
+  calls: [Classifier2Call],
+  catalogue: [FaultClass]
+) -> [ProfileRejection] {
+  validate_required_fields(d)
+    ++ lift_attribution(Attr.validate_at_load(loading_against, discovered))
+    ++ validate_attribution_ref(d)
+    ++ validate_coverage(d)
+    ++ validate_extension_sets(d)
+    ++ validate_classifications(d)
+    ++ validate_routing(d)
+    ++ validate_classifier_2(d, calls)
+    ++ validate_scan_roots(d)
+    ++ validate_waivers(d, catalogue)
+}
+
+export pure func definition_ok(
+  d: ProfileDefinition,
+  loading_against: string,
+  discovered: [CoreSite],
+  calls: [Classifier2Call],
+  catalogue: [FaultClass]
+) -> bool {
+  List.length(validate_definition_at_load(d, loading_against, discovered, calls, catalogue)) == 0
+}
+
+-- ---------------------------------------------------------------------------
+-- The execution manifest (D5's SEPARATE list)
+-- ---------------------------------------------------------------------------
+
+export type PackageVersion = { package_id: string, version: string }
+
+-- D5's manifest list, plus the three things the plan adds: both derived
+-- classifier sets and the scan-root commit.
+--
+-- The derived sets are recorded because the manifest's job is exact
+-- reproducibility, and classifier 2's membership is a property of the SOURCE at
+-- the scanned revision. Recording the set without the revision it was derived
+-- at would be a number with no referent, which is why `scan_root_commit` sits
+-- beside it rather than being folded into `source_revision`: a scan may lag the
+-- run, and pretending otherwise is how a stale set survives.
+export type ExecutionManifest = {
+  source_revision: string,
+  toolchain: string,
+  extension_packages: [PackageVersion],
+  abi_version: string,
+  profile_id: string,
+  profile_version: string,
+  event_vocabulary_version: string,
+  normalized_configuration: string,
+  classifier_2_set: [string],
+  unrouted_fields: [string],
+  scan_roots: [string],
+  scan_root_commit: string,
+  profile_rules_version: string,
+  coverage_rules_version: string,
+  attribution_rules_version: string,
+  fault_catalogue_version: string
+}
+
+export type ManifestRejection
+  = ManifestFieldMissing(string)
+  | ManifestProfileMismatch(string, string)
+  | ManifestVersionDrifted(string, string, string)
+
+export pure func manifest_rule(r: ManifestRejection) -> string {
+  match r {
+    ManifestFieldMissing(_) => "manifest-field-missing",
+    ManifestProfileMismatch(_, _) => "manifest-profile-mismatch",
+    ManifestVersionDrifted(_, _, _) => "manifest-version-drifted"
+  }
+}
+
+export pure func manifest_message(r: ManifestRejection) -> string {
+  match r {
+    ManifestFieldMissing(f) =>
+      "[manifest-field-missing] the manifest has no '${f}'; D5's manifest is what makes a run exactly reproducible and a blank axis is an unreproducible run (D5)",
+    ManifestProfileMismatch(m, d) =>
+      "[manifest-profile-mismatch] the manifest names profile '${m}' but the definition it was built from is '${d}'; a manifest that pins the wrong profile pins nothing",
+    ManifestVersionDrifted(f, recorded, live) =>
+      "[manifest-version-drifted] the manifest records ${f} '${recorded}' but the artifact at HEAD reports '${live}'; the manifest transcribed a version instead of reading it"
+  }
+}
+
+pure func require_manifest(s: string, field: string) -> [ManifestRejection] {
+  if blank(s) then [ManifestFieldMissing(field)] else []
+}
+
+pure func require_manifest_list(n: int, field: string) -> [ManifestRejection] {
+  if n == 0 then [ManifestFieldMissing(field)] else []
+}
+
+pure func version_matches(field: string, recorded: string, live: string) -> [ManifestRejection] {
+  if recorded == live then [] else [ManifestVersionDrifted(field, recorded, live)]
+}
+
+-- The manifest is validated against the DEFINITION it claims to realize and
+-- against the artifacts' own version functions. A manifest is a transcription
+-- by nature — it is a record of facts gathered elsewhere — so every field that
+-- CAN be read back from an artifact is read back. The four rule versions are
+-- the composition defect's natural home: each one is a string that a manifest
+-- writer would otherwise copy, and a copy is exactly what goes stale.
+export pure func validate_manifest(m: ExecutionManifest, d: ProfileDefinition) -> [ManifestRejection] {
+  require_manifest(m.source_revision, "source_revision")
+    ++ require_manifest(m.toolchain, "toolchain")
+    ++ require_manifest(m.abi_version, "abi_version")
+    ++ require_manifest(m.profile_id, "profile_id")
+    ++ require_manifest(m.profile_version, "profile_version")
+    ++ require_manifest(m.event_vocabulary_version, "event_vocabulary_version")
+    ++ require_manifest(m.normalized_configuration, "normalized_configuration")
+    ++ require_manifest(m.scan_root_commit, "scan_root_commit")
+    ++ require_manifest_list(List.length(m.classifier_2_set), "classifier_2_set")
+    -- `unrouted_fields` is DELIBERATELY NOT required to be non-empty, and this
+    -- is a weakening, stated as one.
+    --
+    -- WI-C5 widened `ExtPorts.clock_now`, which was the set's only member, so
+    -- EMPTY became a legitimate and correct value: there is no unrouted
+    -- extension port at HEAD. The other two lists keep the requirement because
+    -- neither can legitimately be empty — `scan_roots` scopes the routing scan
+    -- and an empty one scans nothing, and `classifier_2_set` still has two
+    -- members (`env_get`, `tool_handle`).
+    --
+    -- THE COST, because it is the shape this project keeps finding: an empty
+    -- `unrouted_fields` no longer distinguishes "nothing is unrouted" from
+    -- "nobody gathered this". The schema cannot tell them apart, and adding a
+    -- gathered-flag is a manifest schema change with its own ripple. What
+    -- stands in for it is `tools/profile_definition/check_fixtures.py`, which
+    -- RE-DERIVES the set from the tool and fails if the recorded one disagrees
+    -- — so an ungathered set reads as a disagreement there rather than as a
+    -- pass here. That is a check in a different artifact, not in this rule, and
+    -- saying so is the point.
+    ++ require_manifest_list(List.length(m.scan_roots), "scan_roots")
+    ++ (if m.profile_id == d.profile_id && m.profile_version == d.profile_version then []
+        else [ManifestProfileMismatch("${m.profile_id}/${m.profile_version}",
+                                      "${d.profile_id}/${d.profile_version}")])
+    ++ version_matches("event_vocabulary_version", m.event_vocabulary_version, Vocab.event_vocabulary_version())
+    ++ version_matches("profile_rules_version", m.profile_rules_version, profile_rules_version())
+    ++ version_matches("coverage_rules_version", m.coverage_rules_version, Cov.coverage_rules_version())
+    ++ version_matches("attribution_rules_version", m.attribution_rules_version, Attr.attribution_rules_version())
+    ++ version_matches("fault_catalogue_version", m.fault_catalogue_version, Fault.fault_catalogue_version())
+}
+
+export pure func manifest_ok(m: ExecutionManifest, d: ProfileDefinition) -> bool {
+  List.length(validate_manifest(m, d)) == 0
+}
+
+-- A9's ReplayMetadata is a projection of the manifest, not a second record of
+-- the same facts. Building it here is what stops a result from carrying a
+-- profile id that disagrees with the manifest that produced it.
+export pure func replay_metadata_of(m: ExecutionManifest) -> ReplayMetadata {
+  { source_revision: m.source_revision,
+    toolchain_version: m.toolchain,
+    profile_id: m.profile_id,
+    profile_version: m.profile_version,
+    event_vocabulary_version: m.event_vocabulary_version }
+}
+
+-- ---------------------------------------------------------------------------
+-- Runtime routing's fail-closed exclusion check (D5, D6.6)
+-- ---------------------------------------------------------------------------
+
+-- D5: "an explicitly excluded hook ... causes a fail-closed HarnessFailure if
+-- dispatch reaches it". This is that check.
+--
+-- IT MUST NOT BE CONFLATED WITH A RAW CAPABILITY BYPASS, and D6.6 requires the
+-- two be distinguishable. The difference is structural rather than a matter of
+-- labelling, which is why it survives an edit:
+--
+--   an EXCLUSION violation  is observed by the runner while the driver is still
+--                           running, so it returns a TYPED value carrying the
+--                           partial ledger trace and the interaction position.
+--   a CAPABILITY BYPASS     terminates evaluation on the pin. No typed value
+--                           and no partial trace can exist, so it stays an
+--                           expected non-zero run. `make terminal_trace` and
+--                           `make world_state` both assert it stays that way.
+--
+-- If you find yourself giving `HarnessFailureKind` a capability-denial variant
+-- so that this function can return one, that is the conflation D6.6 forbids.
+--
+-- Vacuous for `driver_only`, which installs nothing and therefore excludes
+-- nothing. Binding from WI-C5, whose `compose`-bearing profile is the first
+-- that can legitimately exclude a hook — and by the load-time rules above, the
+-- only slot it may exclude is the one GATED slot, which is the only slot whose
+-- dispatch can be reached-or-not at runtime in the first place.
+export pure func is_excluded_hook(d: ProfileDefinition, ext_id: string, hook_id: string) -> bool {
+  contains_str(excluded_ids_for(d.disclosures, ext_id), hook_id)
+}
+
+-- The guard a dispatch site calls before invoking a hook. `None` means proceed.
+--
+-- `position` is the interaction position at the moment of dispatch, so the
+-- failure is locatable in the program that produced it; it is NOT -1, which
+-- D6.7 reserves for a failure that predates any interaction.
+export pure func routing_violation_at(
+  d: ProfileDefinition,
+  ext_id: string,
+  hook_id: string,
+  position: int,
+  partial: LedgerTrace,
+  meta: ReplayMetadata
+) -> Option[DstResult] {
+  if is_excluded_hook(d, ext_id, hook_id) then
+    Some(RunFailed({
+      kind: RoutingViolation,
+      interaction_position: position,
+      actual_request_projection:
+        "dispatch reached excluded hook '${hook_id}' of extension '${ext_id}' under profile '${d.profile_id}/${d.profile_version}'",
+      partial_ledger_trace: partial,
+      replay_metadata: meta
+    }))
+  else None
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. The fixture DEFINITIONS live in
+-- scripts/dst/profile_definition_dst.ail, where a whole definition can be
+-- mutated one field at a time.
+-- ---------------------------------------------------------------------------
+
+pure func has_rule(rs: [ProfileRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if rejection_rule(r) == rule then true else has_rule(rest, rule)
+  }
+}
+
+pure func has_manifest_rule(rs: [ManifestRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if manifest_rule(r) == rule then true else has_manifest_rule(rest, rule)
+  }
+}
+
+-- A minimal well-formed empty-install definition, used only by the tests in
+-- this module. It is NOT `driver_only` — that profile is a separate module and
+-- a separate commit, and reusing it here would make the machinery's tests pass
+-- or fail with the profile's content.
+pure func fixture_base() -> ProfileDefinition {
+  {
+    profile_id: "fixture",
+    profile_version: "1",
+    installed_packages: [],
+    hook_classifications: [],
+    disclosures: [],
+    adapter_boundaries: [{ boundary_id: "b", included: true, note: "n" }],
+    resource_models: [{ model_id: "m", promise: "p" }],
+    diagnostic_projections: [{ projection_id: "d", note: "n" }],
+    forbidden_capabilities: [{ capability: "Clock", instrument: "make world_state" }],
+    waived_fault_classes: [],
+    exercised_fault_classes: [],
+    attribution_ref: { source_revision: "x", content_hash: "y" },
+    omitted_extensions: [],
+    unrouted_reachable_sites: [],
+    scan_roots: ["src", "packages"]
+  }
+}
+
+pure func test_required_fields_name_the_field() -> bool
+  tests [((), true)]
+  {
+    let no_models: ProfileDefinition = { fixture_base() | resource_models: [] };
+    let rs = validate_required_fields(no_models);
+    match rs {
+      [] => false,
+      r :: _ =>
+        match r {
+          MissingRequiredField(f, _) => f == "resource_models",
+          _ => false
+        }
+    }
+  }
+
+-- The negative control for the field checks: the base fixture must have NO
+-- field rejections. A validator that only ever rejects passes a suite of
+-- only-rejecting fixtures while being useless.
+pure func test_base_fixture_has_no_field_defects() -> bool
+  tests [((), true)]
+  {
+    List.length(validate_required_fields(fixture_base())) == 0
+  }
+
+pure func test_forbidden_capability_needs_an_instrument() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition =
+      { fixture_base() | forbidden_capabilities: [{ capability: "Clock", instrument: "" }] };
+    has_rule(validate_required_fields(d), "required-field-missing")
+  }
+
+-- The composition defect this module exists to avoid, asserted directly: the
+-- excluded-hook rule is READ from A6, so `on_describe_tools` — D5's prose
+-- undercount — is rejected here without this module restating anything.
+-- B8 test helpers: atom ids. `one_per_kind()` is the one-atom-per-kind registration
+-- every extension in the tree has at B8; `all_but(ids)` is it minus `ids`.
+pure func ai(kind: string, idx: int) -> AtomIds { { kind: kind, index: idx } }
+pure func kinds_at_zero(ks: [CapabilityKind]) -> [AtomIds] {
+  match ks { [] => [], k :: rest => ai(Cov.capability_kind_id(k), 0) :: kinds_at_zero(rest) }
+}
+-- contracts: SKIPPED — "calls "all_capability_kinds" whose signature uses an
+-- unencodable type "()"". Renamed from `eight()` at ABI 7.0 (the name was a
+-- standing claim about the kind count), so the policy sees it as new; the body is
+-- unchanged and was never contractable either.
+pure func one_per_kind() -> [AtomIds]
+  { kinds_at_zero(Cov.all_capability_kinds()) }
+pure func all_but(ids: [string]) -> [AtomIds] { drop_ids(one_per_kind(), ids) }
+pure func drop_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(ids, Cov.atom_ids_id(x)) then drop_ids(rest, ids) else x :: drop_ids(rest, ids)
+  }
+}
+
+pure func test_describe_tools_exclusion_is_inherited_not_restated() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      installed_packages: [{ extension_id: "x", package_id: "p", version: "1", source_path: "packages/x/x.ail" }],
+      disclosures: [{ extension_id: "x", atoms: one_per_kind(),
+                      covered: all_but(["describe_tools[0]"]),
+                      excluded: [ai("describe_tools", 0)] }] };
+    has_rule(validate_coverage(d), "unconditional-hook-excluded")
+  }
+
+-- Set completeness, at the profile level: seven covered plus one excluded is
+-- eight ENTRIES and the right total, while one slot is classified nowhere.
+-- A6's rule catches it; this asserts the profile gate inherits that and does
+-- not fall back to a row-shape check of its own.
+pure func test_partial_disclosure_is_rejected_through_the_profile_gate() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      installed_packages: [{ extension_id: "p", package_id: "p", version: "1", source_path: "packages/p/p.ail" }],
+      disclosures: [{ extension_id: "p", atoms: one_per_kind(),
+                      covered: ai("describe_tools", 0) :: all_but(["tool_provider[0]", "solver_judge[0]"]),
+                      excluded: [ai("tool_provider", 0)] }] };
+    let rs = validate_coverage(d);
+    has_rule(rs, "atoms-covered-excluded-exhaustive") && has_rule(rs, "atoms-covered-excluded-disjoint")
+  }
+
+pure func test_unknown_hook_id_fails_closed() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      installed_packages: [{ extension_id: "t", package_id: "p", version: "1", source_path: "src/t.ail" }],
+      disclosures: [{ extension_id: "t", atoms: [ai("describe_tool", 0)], covered: [ai("describe_tool", 0)], excluded: [] }] };
+    has_rule(validate_coverage(d), "unknown-capability-kind")
+  }
+
+-- Decision 1, forward half: the two unrouted reachable core sites at HEAD must
+-- be declared. An empty-install definition declaring neither is REJECTED, which
+-- is what stops the weaker reading from being a rubber stamp.
+pure func test_undeclared_unrouted_site_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_routing(fixture_base()), "unrouted-site-undeclared")
+  }
+
+pure func test_declared_unrouted_site_needs_an_instrument() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      unrouted_reachable_sites: [
+        { site_key: "src/core/test/stub_step.ail:203", instrument: "", why_unroutable: "live adapter" }
+      ] };
+    has_rule(validate_routing(d), "unrouted-site-without-instrument")
+  }
+
+-- Decision 1, reverse half: a declaration for a site that is not
+-- reachable-and-unrouted is itself a defect, so a site that gets routed or
+-- moves cannot leave a stale declaration reading as if the gap were live.
+pure func test_stale_declaration_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      unrouted_reachable_sites: [
+        { site_key: "src/core/test/stub_step.ail:203", instrument: "make world_state", why_unroutable: "live adapter" },
+        { site_key: "src/core/gone.ail:1", instrument: "make world_state", why_unroutable: "moved" }
+      ] };
+    let rs = validate_routing(d);
+    has_rule(rs, "declared-site-not-reachable")
+      && not has_rule(rs, "unrouted-site-undeclared")
+  }
+
+-- Decision 2: the claim is COMPUTED. The numbers are not asserted against a
+-- constant here — they are asserted to be a partition of what the table
+-- returns, which is the property that survives the table changing.
+pure func test_routed_set_claim_is_a_partition_of_the_table() -> bool
+  tests [((), true)]
+  {
+    let c = routed_set_claim(fixture_base());
+    c.reachable_total == c.routed + c.declared_unrouted
+      && c.reachable_total == List.length(Attr.reachable_core_sites([]))
+      && c.declared_unrouted > 0
+  }
+
+pure func test_classifier_2_extension_installed_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      installed_packages: [{ extension_id: "compaction_ai", package_id: "p", version: "1",
+                             source_path: "packages/motoko-ext-compaction-ai/compaction_ai.ail" }],
+      disclosures: [{ extension_id: "compaction_ai", atoms: one_per_kind(), covered: one_per_kind(), excluded: [] }] };
+    let calls: [Classifier2Call] =
+      [{ extension_id: "compaction_ai", field: "ai_step",
+         site: "packages/motoko-ext-compaction-ai/compaction_ai.ail:106" }];
+    has_rule(validate_classifier_2(d, calls), "classifier-2-extension-installed")
+  }
+
+-- Negative control for the classifier-2 rule: the same call inventory against a
+-- profile that OMITS the extension is clean. Without this, the rule could be
+-- "reject whenever any call exists" and the test above would not notice.
+pure func test_classifier_2_omitted_extension_is_clean() -> bool
+  tests [((), true)]
+  {
+    let calls: [Classifier2Call] =
+      [{ extension_id: "compaction_ai", field: "ai_step",
+         site: "packages/motoko-ext-compaction-ai/compaction_ai.ail:106" }];
+    List.length(validate_classifier_2(fixture_base(), calls)) == 0
+  }
+
+pure func test_package_outside_scan_roots_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      installed_packages: [{ extension_id: "remote", package_id: "sunholo/remote", version: "1",
+                             source_path: "/home/x/.ailang/registry/sunholo/remote/lib.ail" }],
+      disclosures: [{ extension_id: "remote", atoms: [], covered: [], excluded: [] }] };
+    has_rule(validate_scan_roots(d), "package-outside-scan-roots")
+  }
+
+pure func test_extension_sets_must_agree() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      disclosures: [{ extension_id: "ghost", atoms: [ai("describe_tools", 0)], covered: [ai("describe_tools", 0)], excluded: [] }] };
+    has_rule(validate_extension_sets(d), "extension-set-disagrees")
+  }
+
+pure func test_classification_must_agree_with_disclosure() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      installed_packages: [{ extension_id: "c", package_id: "p", version: "1", source_path: "packages/c/c.ail" }],
+      hook_classifications: [{ extension_id: "c", hook_id: "tool_provider[0]", classification: ExplicitlyExcluded,
+                               basis: { producer: "disclosure", revision: "HEAD" },
+                               clauses: no_criterion_2() }],
+      disclosures: [{ extension_id: "c", atoms: [ai("tool_provider", 0)], covered: [ai("tool_provider", 0)], excluded: [] }] };
+    has_rule(validate_classifications(d), "classification-disagrees-with-disclosure")
+  }
+
+-- ---------------------------------------------------------------------------
+-- WI-D13: the basis check, BOTH SIDES.
+--
+-- A validation that only ever accepts cannot be told from one that does not
+-- run, and this project has shipped that shape twice — classifier 1's
+-- `agree=0 disagree=0`, and this very rule's absence, which read as enforcement
+-- for eleven items because nothing ever tried to write an unbased claim. So
+-- there is a rejecting fixture per arm AND a control that resolves.
+--
+-- The control is the load-bearing one: it is the entry the whole condition was
+-- written about — a `WorldMediated` classification — and it passes only because
+-- it names classifier 3 and the revision it ran at.
+-- ---------------------------------------------------------------------------
+
+-- One entry, well-formed but for the field under test. Every mutation below is
+-- one field from clean, so an unrelated rule firing means the mutation did
+-- something other than what it says.
+pure func based(p: string, rev: string) -> [HookClassificationEntry] {
+  [{ extension_id: "c", hook_id: "compactor[0]", classification: WorldMediated,
+     basis: { producer: p, revision: rev },
+     -- WI-D14: the clause record the entry needs to be well-formed, so that a
+     -- basis fixture fails on its BASIS and not on a clause. This is the
+     -- no-op shape the four cleared extensions carry.
+     clauses: { ports: Vacuously, origin_tag: Vacuously, world_state: Substantively } }]
+}
+
+pure func with_classifications(cs: [HookClassificationEntry]) -> ProfileDefinition {
+  { fixture_base() |
+    installed_packages: [{ extension_id: "c", package_id: "p", version: "1", source_path: "packages/c/c.ail" }],
+    hook_classifications: cs,
+    disclosures: [{ extension_id: "c", atoms: [ai("compactor", 0)], covered: [ai("compactor", 0)], excluded: [] }] }
+}
+
+-- ARM 1. `WorldMediated` on no producer at all — precisely the entry a profile
+-- author could write before WI-D13 and pass the gate.
+pure func test_world_mediated_without_a_producer_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_classifications(with_classifications(based("", "c3de56f"))),
+             "classification-basis-not-recorded")
+  }
+
+-- ARM 2. A real producer, undated. A measurement that cannot be dated cannot be
+-- told from a stale one.
+pure func test_basis_without_a_revision_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_classifications(with_classifications(based("ext_ambient_inventory", ""))),
+             "classification-basis-not-recorded")
+  }
+
+-- ARM 3. A producer this tree does not have. Fail-closed: an id that names no
+-- instrument reads as evidence and is worse than a blank.
+pure func test_unrecognised_producer_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_classifications(with_classifications(based("successor_detector", "c3de56f"))),
+             "classification-basis-unrecognised")
+  }
+
+-- THE CONTROL. Classifier 3, dated: accepted, and by BOTH basis rules — the
+-- assertion is on the rejection count and not merely on the absence of one
+-- rule, so a check that stopped running would fail here rather than pass.
+pure func test_measured_world_mediated_basis_resolves() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(based("ext_ambient_inventory", "c3de56f"));
+    List.length(validate_classifications(d)) == 0
+  }
+
+-- The record can now tell a MEASURED claim from a READ one, which is the whole
+-- finding: before this field both wrote the same three characters into the same
+-- record. `declared_row` is recognised — Amendment A's interim rule permits it
+-- — and it is recognised as an ASSUMPTION.
+pure func test_the_record_distinguishes_measured_from_read() -> bool
+  tests [((), true)]
+  {
+    let measured = match producer_kind("ext_ambient_inventory") {
+      Some(k) => basis_kind_id(k),
+      None => "unrecognised"
+    };
+    let read = match producer_kind("declared_row") {
+      Some(k) => basis_kind_id(k),
+      None => "unrecognised"
+    };
+    let absent = match producer_kind("successor_detector") { Some(_) => false, None => true };
+    measured == "measured" && read == "assumed" && absent
+  }
+
+-- ---------------------------------------------------------------------------
+-- WI-D14: the kind rule and the clause rule, each with a rejecting arm and a
+-- resolving control. Same discipline as D13's above and for the same reason —
+-- a validation that only ever accepts cannot be told from one that does not
+-- run, and both of these rules bind for the FIRST time in this tree at the
+-- profile WI-D14 adds.
+-- ---------------------------------------------------------------------------
+
+pure func mediated_on(p: string, cl: Criterion2Clauses) -> [HookClassificationEntry] {
+  [{ extension_id: "c", hook_id: "compactor[0]", classification: WorldMediated,
+     basis: { producer: p, revision: "c3de56f" }, clauses: cl }]
+}
+
+pure func no_op_clauses() -> Criterion2Clauses {
+  { ports: Vacuously, origin_tag: Vacuously, world_state: Substantively }
+}
+
+-- `declared_row` is RECOGNISED — D13's rule accepts it — and it is an
+-- ASSUMPTION. This is the entry that passed the gate until WI-D14: criterion 2
+-- recorded off a declaration, which cannot distinguish mediation from ambience
+-- at any width (ADR:1449).
+pure func test_world_mediated_on_a_read_basis_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(mediated_on("declared_row", no_op_clauses()));
+    has_rule(validate_classifications(d), "world-mediated-on-an-assumed-basis")
+  }
+
+-- The complement, and it is what keeps the rule scoped: the SAME assumed
+-- producer on an `EffectFree` entry is accepted, because criterion 1's basis IS
+-- an assumption and Amendment A withheld criterion 1 deliberately.
+pure func test_effect_free_on_a_read_basis_is_accepted() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(
+      [{ extension_id: "c", hook_id: "compactor[0]", classification: EffectFree,
+         basis: { producer: "declared_row", revision: "c3de56f" },
+         clauses: no_criterion_2() }]);
+    List.length(validate_classifications(d)) == 0
+  }
+
+-- A criterion-2 entry that leaves a clause unrecorded has not said how the
+-- conjunct holds. The rejection NAMES the clause.
+pure func test_unrecorded_criterion_2_clause_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(mediated_on("ext_ambient_inventory",
+      { ports: Vacuously, origin_tag: NotApplicable, world_state: Substantively }));
+    let rs = validate_classifications(d);
+    match rs {
+      [] => false,
+      r :: _ => match r {
+        Criterion2ClauseUnrecorded(_, _, clause) => clause == "origin_tag",
+        _ => false
+      }
+    }
+  }
+
+-- The other direction: an `EffectFree` entry carrying criterion-2 evidence.
+pure func test_criterion_2_clauses_on_a_criterion_1_entry_are_rejected() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(
+      [{ extension_id: "c", hook_id: "compactor[0]", classification: EffectFree,
+         basis: { producer: "declared_row", revision: "c3de56f" },
+         clauses: no_op_clauses() }]);
+    has_rule(validate_classifications(d), "criterion-2-clauses-not-applicable")
+  }
+
+-- THE CONTROL. The exact entry WI-D14's profile records: classifier 3, dated,
+-- with clauses 1 and 2 VACUOUS and clause 3 substantive. Asserted on the
+-- rejection COUNT, so a rule that stopped running fails here rather than
+-- passing.
+pure func test_the_no_op_criterion_2_entry_resolves() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(mediated_on("ext_ambient_inventory", no_op_clauses()));
+    List.length(validate_classifications(d)) == 0
+  }
+
+-- The record can now tell coverage of a NO-OP from coverage of a MEDIATOR,
+-- which is the whole of ADR-001 row 3's "visible as such". Before this field
+-- both wrote `world_mediated` into the same record.
+pure func test_the_statement_distinguishes_no_ops_from_mediation() -> bool
+  tests [((), true)]
+  {
+    let vacuous = with_classifications(mediated_on("ext_ambient_inventory", no_op_clauses()));
+    let real = with_classifications(mediated_on("ext_ambient_inventory",
+      { ports: Substantively, origin_tag: Substantively, world_state: Substantively }));
+    let sv = coverage_substance(vacuous);
+    let sr = coverage_substance(real);
+    sv.covered_hooks == 1 && sv.no_op_hooks == 1 && sv.world_mediating_hooks == 0
+      && sr.covered_hooks == 1 && sr.no_op_hooks == 0 && sr.world_mediating_hooks == 1
+      && coverage_statement(vacuous) != coverage_statement(real)
+  }
+
+-- And an empty install list still says ZERO, so D5's mandatory caveat is
+-- computed rather than deleted.
+pure func test_the_statement_still_says_zero_for_an_empty_install_list() -> bool
+  tests [((), true)]
+  {
+    let s = coverage_substance(fixture_base());
+    s.installed_extensions == 0 && s.covered_hooks == 0
+      && startsWith(coverage_statement(fixture_base()), "extension-model coverage is ZERO")
+  }
+
+-- The attribution reference is compared against the LIVE table identity, so a
+-- table correction re-issues the profile (D4). The fixture records a made-up
+-- identity and must be rejected.
+pure func test_stale_attribution_identity_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_attribution_ref(fixture_base()), "attribution-identity-stale")
+  }
+
+pure func test_live_attribution_identity_is_accepted() -> bool
+  tests [((), true)]
+  {
+    let live = Attr.table_identity();
+    let d: ProfileDefinition = { fixture_base() |
+      attribution_ref: { source_revision: live.source_revision, content_hash: live.content_hash } };
+    List.length(validate_attribution_ref(d)) == 0
+  }
+
+pure func test_conditional_class_must_be_accounted_for() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_waivers(fixture_base(), Fault.fault_catalogue()), "conditional-class-unaccounted")
+  }
+
+-- The waiver's condition is read back from the catalogue, so a copy that drifts
+-- is a rejection. This is the composition defect one field over: a waiver
+-- condition is exactly the kind of prose a definition would transcribe.
+pure func test_drifted_waiver_condition_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let cat = Fault.fault_catalogue();
+    let ids = Fault.conditional_class_ids(cat);
+    let waived = waivers_from(cat, ids);
+    let drifted = drift_first(waived);
+    let d: ProfileDefinition = { fixture_base() | waived_fault_classes: drifted };
+    has_rule(validate_waivers(d, cat), "waiver-condition-drifted")
+  }
+
+-- Build a correct waiver list by READING each condition from the catalogue.
+-- Every conditional class, so the list cannot go stale when a class is added.
+export pure func waivers_from(cat: [FaultClass], ids: [string]) -> [WaivedFaultClass] {
+  match ids {
+    [] => [],
+    id :: rest =>
+      match Fault.waiving_condition(cat, id) {
+        None => waivers_from(cat, rest),
+        Some(c) => {
+          let w: WaivedFaultClass = { class_id: id, condition: c };
+          w :: waivers_from(cat, rest)
+        }
+      }
+  }
+}
+
+pure func drift_first(ws: [WaivedFaultClass]) -> [WaivedFaultClass] {
+  match ws {
+    [] => [],
+    w :: rest => {
+      let drifted: WaivedFaultClass = { class_id: w.class_id, condition: "a paraphrase" };
+      drifted :: rest
+    }
+  }
+}
+
+pure func test_correct_waivers_are_accepted() -> bool
+  tests [((), true)]
+  {
+    let cat = Fault.fault_catalogue();
+    let d: ProfileDefinition =
+      { fixture_base() | waived_fault_classes: waivers_from(cat, Fault.conditional_class_ids(cat)) };
+    List.length(validate_waivers(d, cat)) == 0
+  }
+
+pure func test_waiving_an_unconditional_class_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: ProfileDefinition = { fixture_base() |
+      waived_fault_classes: [{ class_id: "provider_error_retryable", condition: "because" }] };
+    has_rule(validate_waivers(d, Fault.fault_catalogue()), "waived-class-not-conditional")
+  }
+
+-- ---- manifest ----
+
+pure func fixture_manifest() -> ExecutionManifest {
+  {
+    source_revision: "abc1234",
+    toolchain: "ailang 0.33.0",
+    extension_packages: [],
+    abi_version: "4.0",
+    profile_id: "fixture",
+    profile_version: "1",
+    event_vocabulary_version: Vocab.event_vocabulary_version(),
+    normalized_configuration: "{}",
+    classifier_2_set: ["ai_step", "env_get", "tool_handle"],
+    unrouted_fields: ["some_unrouted_ext_port"],
+    scan_roots: ["src", "packages"],
+    scan_root_commit: "abc1234",
+    profile_rules_version: profile_rules_version(),
+    coverage_rules_version: Cov.coverage_rules_version(),
+    attribution_rules_version: Attr.attribution_rules_version(),
+    fault_catalogue_version: Fault.fault_catalogue_version()
+  }
+}
+
+pure func test_manifest_negative_control() -> bool
+  tests [((), true)]
+  {
+    manifest_ok(fixture_manifest(), fixture_base())
+  }
+
+pure func test_manifest_missing_axis_names_it() -> bool
+  tests [((), true)]
+  {
+    let m: ExecutionManifest = { fixture_manifest() | toolchain: "" };
+    match validate_manifest(m, fixture_base()) {
+      [] => false,
+      r :: _ =>
+        match r {
+          ManifestFieldMissing(f) => f == "toolchain",
+          _ => false
+        }
+    }
+  }
+
+pure func test_manifest_must_name_its_profile() -> bool
+  tests [((), true)]
+  {
+    let m: ExecutionManifest = { fixture_manifest() | profile_version: "2" };
+    has_manifest_rule(validate_manifest(m, fixture_base()), "manifest-profile-mismatch")
+  }
+
+-- A transcribed version is the composition defect in its purest form: the
+-- string type-checks, the manifest looks complete, and the run is pinned to a
+-- vocabulary that no longer exists.
+pure func test_transcribed_version_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let m: ExecutionManifest = { fixture_manifest() | event_vocabulary_version: "event-vocabulary/0" };
+    has_manifest_rule(validate_manifest(m, fixture_base()), "manifest-version-drifted")
+  }
+
+pure func test_manifest_records_both_derived_sets() -> bool
+  tests [((), true)]
+  {
+    let m = fixture_manifest();
+    List.length(m.classifier_2_set) == 3 && List.length(m.unrouted_fields) == 1
+      && contains_str(m.classifier_2_set, "tool_handle")
+      && contains_str(m.unrouted_fields, "some_unrouted_ext_port")
+  }
+
+pure func test_replay_metadata_is_a_projection_not_a_copy() -> bool
+  tests [((), true)]
+  {
+    let m = fixture_manifest();
+    let r = replay_metadata_of(m);
+    r.profile_id == m.profile_id
+      && r.profile_version == m.profile_version
+      && r.event_vocabulary_version == m.event_vocabulary_version
+      && r.source_revision == m.source_revision
+      && r.toolchain_version == m.toolchain
+  }
+
+-- ---- the runtime exclusion check ----
+
+pure func excluding_profile() -> ProfileDefinition {
+  { fixture_base() |
+    installed_packages: [{ extension_id: "compose", package_id: "sunholo/motoko_ext_compose",
+                           version: "0.2.4", source_path: "packages/motoko-ext-compose/compose.ail" }],
+    disclosures: [{ extension_id: "compose", atoms: one_per_kind(),
+                    covered: all_but(["tool_provider[0]"]),
+                    excluded: [ai("tool_provider", 0)] }] }
+}
+
+pure func test_excluded_dispatch_returns_a_typed_routing_violation() -> bool
+  tests [((), true)]
+  {
+    let meta: ReplayMetadata =
+      { source_revision: "r", toolchain_version: "t", profile_id: "fixture",
+        profile_version: "1", event_vocabulary_version: Vocab.event_vocabulary_version() };
+    match routing_violation_at(excluding_profile(), "compose", "tool_provider[0]", 3,
+                               empty_ledger_trace(), meta) {
+      None => false,
+      Some(RunFailed(f)) =>
+        harness_failure_kind_name(f.kind) == "routing_violation"
+          && f.interaction_position == 3
+          && f.actual_request_projection != "",
+      Some(_) => false
+    }
+  }
+
+-- The complement, and the reason this is a guard rather than a predicate: a
+-- COVERED hook must dispatch normally. A check that failed closed on everything
+-- would pass the test above and break every run.
+pure func test_covered_dispatch_proceeds() -> bool
+  tests [((), true)]
+  {
+    let meta: ReplayMetadata =
+      { source_revision: "r", toolchain_version: "t", profile_id: "fixture",
+        profile_version: "1", event_vocabulary_version: Vocab.event_vocabulary_version() };
+    match routing_violation_at(excluding_profile(), "compose", "tool_policy[0]", 3,
+                               empty_ledger_trace(), meta) {
+      None => true,
+      Some(_) => false
+    }
+  }
+
+-- Vacuous for driver_only's shape: nothing installed, so nothing excluded, so
+-- no dispatch can violate. Stated as a test rather than as a comment because
+-- "vacuous" is a claim about the code and this is what makes it falsifiable.
+pure func test_empty_install_list_cannot_violate() -> bool
+  tests [((), true)]
+  {
+    let meta: ReplayMetadata =
+      { source_revision: "r", toolchain_version: "t", profile_id: "fixture",
+        profile_version: "1", event_vocabulary_version: Vocab.event_vocabulary_version() };
+    match routing_violation_at(fixture_base(), "anything", "tool_provider[0]", 0,
+                               empty_ledger_trace(), meta) {
+      None => true,
+      Some(_) => false
+    }
+  }

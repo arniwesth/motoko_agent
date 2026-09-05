@@ -1,0 +1,22 @@
+-- REJECTION: `unknown-callee`.  DOOR 3, and the live one: `show` needs no
+-- import, is declared nowhere, is not `_`-prefixed, and every `show(` in the
+-- stdlib corpus sits inside a COMMENT -- so no cached row anywhere carries
+-- evidence for it.  `derive.py` does not watch this door at all; here it is a
+-- rejection, and the yield says what it costs rather than assuming it away.
+-- B8: eight-atom list, the call in `PromptShaper`.
+module fixture/reject_unknown_callee
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(\_ctx. { prepend: [], append: ["n=${show(1)}"] }),
+    BudgetShaper(\_ctx _plan. { requested_total: None, requested_solver: None, requested_verifier: None }),
+    Compactor(func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } }),
+    ToolPolicy(\_ctx _call. NoOpinion),
+    ToolProvider([], func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } }),
+    ResponseInterceptor(func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } }),
+    SolverJudge(func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } })
+  ]
+}

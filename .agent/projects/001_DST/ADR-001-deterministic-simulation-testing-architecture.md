@@ -2,6 +2,7 @@
 
 Date: 2026-06-27
 Status: Proposed
+As-built: the implemented DST framework is documented in `design_docs/implemented/motoko_agent/m-motoko-dst-framework.md`
 
 ## Context
 
@@ -379,6 +380,18 @@ _Reviewer: GLM 5.2 (model: `z-ai/glm-5.2`), 2026-06-27. Grounded against current
 
 **Open Questions** asks "Should compaction thresholds and output headroom be exported constants?" The ADR's own Constraints warn "Tests will need care to avoid duplicating policy constants that should be exported from source." That is the answer: yes. Today `compaction.ail` inlines `75000` (line 60, 162) and the tier thresholds as literals (lines 146-148, 162-166). Hardcoding these in fixtures creates exactly the duplication the ADR warns against and makes `actual_tokens_select_compaction_tier` untrustworthy. **Action:** promote to Phase 0: export `OUTPUT_HEADROOM=75000`, `ACTUAL_TIERS={60,75,85}`, `ESTIMATE_TIERS={70,85,95}`.
 
+> **AMENDED 2026-07-03** (phase-core ADR-001, review P2-R1/P3-R4 + plan-authoring finding
+> G3): the actual/estimate split this finding was grounded on (2026-06-27) has since been
+> **removed from source** — current `compaction.ail` is a single 70/85/95 estimate ladder
+> (`compact_step_with_limit`, `:134-141`); `OUTPUT_HEADROOM`/`75000`, the 60/75/85 actual
+> tiers, `compact_step_actual`, and `last_input_tokens` have no referent in `src/core`. The
+> export remedy survives **in amended form**: the phase-core Phase A plan exports the single
+> tier table (70/85/95 + keep-lasts 10/5/3/1) as named constants. Actual-token gating is now
+> compactor-extension policy per phase-core D9 (ABI v3 `ExtCtx.telemetry`), not a core
+> constant. Additionally, limits moved to the model catalog in `a7589b8` (2026-06-24):
+> `context_limit_for` returns 0 for every model, so only the limit-parameterized entry
+> points are live.
+
 ### R6. Fixture-format question is already resolved in-body
 
 **Open Questions** asks the fixture format, yet **Core Components** already states "Fixture representation can vary by layer in v1." That is the decision. Re-listing it as a question signals indecision where the text has resolved it. **Action:** remove from Open Questions, or sharpen to "should scenario *ids* carry a version suffix when semantics change?"
@@ -419,9 +432,22 @@ Constraints correctly reject `ailang lock` as sufficient alone, but the follow-u
 
 Listed invariant `emergency_compaction_exhaustion_uses_estimate` is correct but ambiguous. Source shows: *entry* to emergency is path-dependent (actual path: ≥85% of effective; estimate path: ≥95%), while *exit* (exhaustion `Err`) is always estimate-gated via `usage_percent` in `try_emergency_compaction` (`compaction.ail:123-141`). The ADR's phrasing merges the two. **Action:** split into `emergency_entry_path_dependent` and `emergency_exhaustion_always_estimate_gated`, or restate the invariant to distinguish entry from exhaustion.
 
+> **AMENDED 2026-07-03** (with R5, same grounds): the actual entry path no longer exists in
+> source — emergency entry is now solely estimate-gated (≥95%, single ladder), so the
+> entry/exit distinction this finding drew has collapsed to one path and
+> `emergency_entry_path_dependent` is unrepresentable. The surviving invariant is
+> `emergency_exhaustion_always_estimate_gated`. Note also (verified empirically 2026-07-03,
+> `smoke_v2_compaction_tiers.ail` fix): emergency elision *recovers* tool-heavy overload
+> (keep-last 3, then 1); exhaustion `Err` requires non-tool content, which elision never
+> touches — an invariant nuance any successor scenario should encode.
+
 ### What is accurate
 
 Compaction tier facts (60/75/85 actual; 70/85/95 estimate), `last_input_tokens` carry-forward, ephemeral-compaction-vs-uncompacted-history, the rejection of real-provider E2E and arbitrary fuzzing for v1, and the Phase 0 "restore red tests before adding DST" discipline are all correct and well-reasoned. The provider-call payload observation is the right first seam.
+
+> **AMENDED 2026-07-03**: the tier facts above were accurate at this review's grounding
+> (2026-06-27) but the actual/estimate split and `last_input_tokens` carry-forward were
+> subsequently removed from source — see the R5/R15 amendment notes.
 
 ### Recommended pre-implementation actions
 

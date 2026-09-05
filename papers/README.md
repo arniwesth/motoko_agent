@@ -19,7 +19,6 @@ Papers that informed Motoko's design and point to future research directions.
 |---|---|---|
 | The Tsetlin Machine -- A Game Theoretic Bandit Driven Approach to Optimal Pattern Recognition with Propositional Logic | [1804.01508](https://arxiv.org/abs/1804.01508) | Foundation of Tsetlin Machine theory; used for symbolic error classification in Motoko's guard system |
 | LLM-Guided Semantic Bootstrapping for Interpretable Text Classification with Tsetlin Machines | [2604.12223](https://arxiv.org/abs/2604.12223) | LLM+Tsetlin hybrid approaches; future direction for Motoko's symbolic guard architecture |
-| A Neurosymbolic Approach to Natural Language Formalization and Verification | [2511.09008](https://arxiv.org/abs/2511.09008) | Formal verification of natural language; semi-formal verifier mode inspiration |
 
 ## Code & Software Engineering Benchmarks
 
@@ -42,6 +41,14 @@ Papers that informed Motoko's design and point to future research directions.
 | DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models | [2402.03300](https://arxiv.org/abs/2402.03300) | Mathematical reasoning in open models; relevant to formal verification |
 | Information Gain-based Policy Optimization: A Simple and Effective Approach for Multi-Turn Search Agents | [2510.14967](https://arxiv.org/abs/2510.14967) | Multi-turn agent policy optimization; extension budget planning |
 
+## Formal Verification & Hybrid Analysis
+
+| Paper | arXiv ID | Relevance to Motoko |
+|---|---|---|
+| Vulnerability Detection: From Formal Verification to Large Language Models and Hybrid Approaches | [2503.10784](https://arxiv.org/abs/2503.10784) | Survey of formal methods vs. LLM analysis vs. hybrids; ESBMC-AI's counterexample-guided repair loop is the pattern Motoko's DP7 verifier gate (`src/core/session.ail`) already implements with `ailang check` in the oracle slot. Motivates `m-motoko-z3-contracts.md` (raise the oracle from type-checking to Z3 contracts) and supplies the citable hallucination case — 4o/o1/R1 all report CWE-190 on code ESBMC proves safe in 0.73s — for the DST report's vacuity-accounting argument |
+| A Neurosymbolic Approach to Natural Language Formalization and Verification | [2511.09008](https://arxiv.org/abs/2511.09008) | Formal verification of natural language; semi-formal verifier mode inspiration |
+| CSLib: The Lean Computer Science Library | [2602.04846](https://arxiv.org/abs/2602.04846) | White paper, not results — track, do not adopt. Its Pillar-2 architecture (Boole IVL → **Lean goals** → SMT hammers) is the named fix for the failure mode 028 characterised: `ailang verify` fails to *no obligation* (`blocked`), a VC generator fails to *an unproved obligation*. Motoko already runs the consumer side — an axiom-audited Lean 4 kernel with a Mathlib mode (`src/tui/src/scratchpad/lean-session.ts`) — currently dark. Full reading: `.agent/projects/029_cslib_proof_tier/` |
+
 ## Tools & Infrastructure
 
 | Paper | arXiv ID | Relevance to Motoko |
@@ -53,6 +60,7 @@ Papers that informed Motoko's design and point to future research directions.
 
 - **AlphaEvolve** — AlphaEvolve framework for evolutionary optimization; relevant to automated agent improvement
 - **Qwopus3-5-27b — Complete Guide to LLM Fine-tuning** — Fine-tuning methodology reference for model adaptation
+- **Deli_AutoResearch** — [victorchen96.github.io/auto_research](https://victorchen96.github.io/auto_research/framework.html) — Deli Chen's (DeepSeek) protocol for long-horizon autonomous research: orchestrator/worker separation, heartbeat watchdogs, stall detection, and a paper-writing skill with simulated peer review under anti-inflation rules. Polices agent-written papers the way Motoko's DST polices agent-written code; the review protocol's transferable subset is adopted in the DST technical report's freeze checklist (`papers/motoko-dst-report/SCOPE.md`)
 
 ---
 

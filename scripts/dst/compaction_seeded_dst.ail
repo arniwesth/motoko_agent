@@ -1,0 +1,233 @@
+-- Seeded L0 compaction DST gate.
+--
+-- Replay a failure with:
+-- DST_BASE_SEED=<failing seed> DST_SEEDS=1 make dst_seeded
+
+module scripts/dst/compaction_seeded_dst
+
+import std/ai (ToolCall)
+import std/env (getEnvOr)
+import std/io (println, exit)
+import std/list (length)
+import std/option (Some, None)
+import std/rand (rand_seed, rand_int)
+import std/result (Result, Ok, Err)
+import std/string (repeat, stringToInt)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
+  compact_for_pre_step,
+  estimate_tokens_messages,
+  usage_percent_with_limit,
+  elide_tier_pct,
+  elide_hard_tier_pct,
+  emergency_pct
+)
+import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/test/dst_gen (pick_int)
+import src/core/test/dst_harness (
+  ScenarioFailure,
+  failure,
+  ok_or_failure,
+  report_failure
+)
+
+func tool(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func user(content: string) -> Msg {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func assistant(content: string, calls: [ToolCall]) -> Msg {
+  { role: "assistant", content: content, tool_calls: calls, tool_call_id: "" }
+}
+
+func call(id: string, name: string) -> ToolCall {
+  { id: id, name: name, arguments: "{\"ok\":true}" }
+}
+
+func ctx(limit: int) -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "ollama/qwen3.6:35b-a3b-mxfp8",
+    context_limit: limit,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1, solver: 1, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: [],
+    state_key: "k",
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
+  }
+}
+
+func limit_for_pct(msgs: [Msg], pct: int) -> int {
+  (estimate_tokens_messages(msgs) * 100) / pct
+}
+
+func tool_calls(n: int, index: int) -> [ToolCall] {
+  if n <= 0 then []
+  else call("t${show(index)}", "generated_tool") :: tool_calls(n - 1, index + 1)
+}
+
+func tool_results(n: int, index: int, content: string) -> [Msg] {
+  if n <= 0 then []
+  else tool("t${show(index)}", content) :: tool_results(n - 1, index + 1, content)
+}
+
+func tool_heavy_msgs(n_tools: int, content_len: int) -> [Msg] {
+  let content = repeat("x", content_len);
+  [
+    user("generated question"),
+    assistant("call generated tools", tool_calls(n_tools, 0))
+  ] ++ tool_results(n_tools, 0, content)
+}
+
+func run_rng_canary() -> bool ! {IO, Rand} {
+  let _ = rand_seed(12345);
+  let first = rand_int(0, 2147483646);
+  let second = rand_int(0, 2147483646);
+  let third = rand_int(0, 2147483646);
+  let stable =
+    first == 1822635083
+      && second == 1385358943
+      && third == 1585289584;
+  if stable then {
+    let _ = println("scenario=compaction.gen.rng_canary seed=fixed ok");
+    true
+  } else {
+    let f = failure(
+      "std/rand sequence changed — recorded seeds no longer reproduce historical inputs",
+      ["values=${show(first)},${show(second)},${show(third)}"]
+    );
+    let _ = report_failure("compaction.gen.rng_canary", "fixed", f);
+    false
+  }
+}
+
+func check_tool_heavy(
+  input: [Msg],
+  decision: PreStepDecision,
+  pct: int,
+  trace: [string]
+) -> Result[(), ScenarioFailure] {
+  let output = match decision {
+    PassThrough => input,
+    Compacted(out, _, _) => out
+  };
+  let compacted = match decision {
+    PassThrough => false,
+    Compacted(_, _, _) => true
+  };
+  match validate_compactor_output(input, output) {
+    Err(reason) => Err(failure(
+      "validate_compactor_output accepts generated compaction",
+      trace ++ ["reason=${reason}"]
+    )),
+    Ok(_) => match ok_or_failure(
+      estimate_tokens_messages(output) <= estimate_tokens_messages(input),
+      "compaction estimate is monotonic",
+      trace
+    ) {
+      Err(f) => Err(f),
+      Ok(_) => match ok_or_failure(
+        if compacted then length(output) == length(input) else true,
+        "elision preserves message count when compacted",
+        trace
+      ) {
+        Err(f) => Err(f),
+        Ok(_) => ok_or_failure(
+          if pct < elide_tier_pct() then not compacted else true,
+          "usage below elide tier passes through",
+          trace
+        )
+      }
+    }
+  }
+}
+
+func run_tool_heavy(seed: int) -> bool ! {IO, Rand} {
+  let _ = rand_seed(seed);
+  let n_tools = rand_int(3, 30);
+  let content_len = rand_int(40, 400);
+  let pct = pick_int([
+    elide_tier_pct() - 5,
+    elide_tier_pct() + 5,
+    elide_hard_tier_pct() - 5,
+    elide_hard_tier_pct() + 5,
+    emergency_pct() - 3,
+    emergency_pct() + 2
+  ]);
+  let input = tool_heavy_msgs(n_tools, content_len);
+  let limit = limit_for_pct(input, pct);
+  let usage = usage_percent_with_limit(input, limit);
+  let trace = [
+    "param n_tools=${show(n_tools)} content_len=${show(content_len)} pct=${show(pct)} limit=${show(limit)} usage=${show(usage)}"
+  ];
+  let decision = compact_for_pre_step(ctx(limit), input);
+  match check_tool_heavy(input, decision, pct, trace) {
+    Ok(_) => {
+      let _ = println("scenario=compaction.gen.tool_heavy seed=${show(seed)} ok");
+      true
+    },
+    Err(f) => {
+      let _ = report_failure("compaction.gen.tool_heavy", show(seed), f);
+      false
+    }
+  }
+}
+
+func run_seeds(base: int, n: int) -> int ! {IO, Rand} {
+  if n <= 0 then 0
+  else {
+    let ok = run_tool_heavy(base);
+    (if ok then 0 else 1) + run_seeds(base + 1, n - 1)
+  }
+}
+
+func run_config(base: int, seeds: int) -> () ! {IO, Rand} {
+  if seeds < 1 then {
+    let _ = println("compaction_seeded_dst CONFIG ERROR DST_SEEDS must be at least 1");
+    exit(1)
+  } else {
+    let canary_failed = if run_rng_canary() then 0 else 1;
+    let family_failed = run_seeds(base, seeds);
+    let _ =
+      if family_failed == 0 then
+        println("family=compaction.gen.tool_heavy seeds=${show(seeds)} ok")
+      else ();
+    let failed = canary_failed + family_failed;
+    if failed == 0 then
+      println("compaction_seeded_dst PASS families=1 base_seed=${show(base)} seeds=${show(seeds)}")
+    else {
+      let _ = println("compaction_seeded_dst FAIL failed=${show(failed)}");
+      exit(1)
+    }
+  }
+}
+
+export func main() -> () ! {IO, Env, Rand} {
+  let seeds_raw = getEnvOr("DST_SEEDS", "5");
+  let base_raw = getEnvOr("DST_BASE_SEED", "1");
+  match stringToInt(seeds_raw) {
+    None => {
+      let _ = println("compaction_seeded_dst CONFIG ERROR DST_SEEDS must be an integer: ${seeds_raw}");
+      exit(1)
+    },
+    Some(seeds) => match stringToInt(base_raw) {
+      None => {
+        let _ = println("compaction_seeded_dst CONFIG ERROR DST_BASE_SEED must be an integer: ${base_raw}");
+        exit(1)
+      },
+      Some(base) => run_config(base, seeds)
+    }
+  }
+}

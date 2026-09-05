@@ -1,0 +1,53 @@
+module sunholo/motoko_ext_ailang_docs/ailang_docs
+
+import std/option (Option, Some, None)
+import std/fs (fileExists)
+
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  PassThrough, PreStepDecision, Msg,
+  ToolCallEnvelope
+)
+import pkg/sunholo/motoko_ext_mcp/types (McpServerConfig, McpToolMapping)
+import pkg/sunholo/motoko_ext_mcp/exec (run_mcp_tool)
+import pkg/sunholo/motoko_ext_mcp/resolve (resolve_tool, all_tool_names)
+import pkg/sunholo/motoko_ext_ailang_docs/types (mcp_config, tool_mappings, tool_schemas)
+import pkg/sunholo/motoko_ext_ailang_docs/prompts (build_prompt_patch)
+
+-- Workdir gate: only register tools when the workdir is plausibly an
+-- AILANG project. Cheap heuristic — check for ailang.toml at the root.
+-- False negatives (working on AILANG code outside an ailang.toml dir)
+-- are fine: the model can still answer AILANG questions from its own
+-- training, just without the docs tools surfaced. False positives
+-- (toml exists but task is unrelated) are bounded by the prompt-side
+-- task_signals_ailang gate in build_prompt_patch.
+func workdir_is_ailang_project(workdir: string) -> bool ! {FS} {
+  fileExists("${workdir}/ailang.toml")
+}
+
+export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process, FS, Rand}  { { decision: {
+  match resolve_tool(call.tool, mappings) {
+    Some(m) => match run_mcp_tool(call.id, m.canonical, ctx.workdir, cfg, m.mcp_name, call.arguments) {
+      Some(result) => Handled(result),
+      None => Delegate
+    },
+    None => Delegate
+  }
+}, next_state: ctx.world } }
+
+export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> [Capability] ! {FS, Process, Rand} {
+  let active = workdir_is_ailang_project(workdir);
+  let cfg = mcp_config(timeout_ms, max_output_chars);
+  let mappings = tool_mappings();
+  let tools = if active then all_tool_names(mappings) else [];
+  let schemas = if active then tool_schemas() else [];
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(cfg, mappings, ctx, call) };
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    DescribeTools(\_ . schemas),
+    PromptShaper(\ctx. build_prompt_patch(ctx.task)),
+    ToolProvider(tools, handle)
+  ]
+}

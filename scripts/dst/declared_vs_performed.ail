@@ -1,0 +1,1067 @@
+-- scripts/dst/declared_vs_performed.ail
+--
+-- WI-C5's declared-versus-performed detector. D5 names this instrument and
+-- states it is unavailable; this is the first build of it, and what it can and
+-- cannot establish is written here rather than left to be inferred from a green.
+--
+-- ============================================================================
+-- THE TWO PRODUCERS, named at the site because S16 requires it
+-- ============================================================================
+--
+-- S16: a check whose two sides share a PRODUCER tests threading, not the
+-- property. WI-C3 measured that the hard way. So this file names both:
+--
+--   DECLARED  is the effect row written on the hook slot in
+--             `packages/motoko-ext-abi/types.ail` and on the binding site in the
+--             extension. It is a STATIC ANNOTATION, authored by hand, read out
+--             of source. `run_declared_vs_performed.sh` greps it; nothing here
+--             computes it.
+--
+--   PERFORMED is the AILANG RUNTIME's capability enforcement, observed OUT OF
+--             PROCESS as the exit status of `ailang run --caps <row minus X>`.
+--             The interpreter traps a capability only when an effect operation
+--             is actually EVALUATED — `src/core/ports.ail:406` records that
+--             mechanism and `make world_state`'s poison pairs already rely on
+--             it. Nothing in this file, and nothing in the extension, can
+--             influence it.
+--
+-- Neither derives from the other. The annotation is what a human wrote; the
+-- trap is what the interpreter did. That is a genuinely independent second
+-- producer, and it is out of process for the same reason WI-C3's wire gate is.
+--
+-- ============================================================================
+-- WHY EVERY ARM COMES IN A PAIR
+-- ============================================================================
+--
+-- A subject that COMPLETES with a capability withheld proves nothing on its
+-- own: it is indistinguishable from a harness that never reached the hook at
+-- all. That is cluster 4's C1b defect — a green check implying coverage it does
+-- not have — and it is the same vacuity `make world_state` spends a second run
+-- to close. So each capability is measured by a PAIR:
+--
+--   subject + capability withheld -> must EXIT 0     (the hook performs it not)
+--   control + capability withheld -> must EXIT != 0  (the withholding is real,
+--                                                     and the harness does
+--                                                     reach the hook)
+--
+-- The control is dispatched through the SAME fold, from the same entry point
+-- shape, differing only in the hook bound. If the control completed, the
+-- subject's completion would be evidence about the harness rather than about
+-- the extension.
+--
+-- ============================================================================
+-- WHAT THIS DETECTOR CANNOT ESTABLISH, stated because a green must not be
+-- read as more than it is
+-- ============================================================================
+--
+-- 1. IT IS A WITNESS OVER EXERCISED PATHS, NOT A PROOF OVER ALL INPUTS. A hook
+--    that reads Env only on a branch this arm does not take completes with Env
+--    withheld and is reported as not performing it. `compose_intercept_inline`
+--    exists to make that limit VISIBLE rather than to hide it: the same hook,
+--    the same declared row, and two different performed answers selected by an
+--    argument. Any future reader who wants "performed" to mean "over all
+--    inputs" needs a static analysis, and this is not one.
+--
+-- 2. IT CANNOT SEE AN EFFECT THAT IS NOT CAPABILITY-GUARDED. The detector's
+--    resolution is exactly the capability set AILANG enforces
+--    (IO, FS, Net, Env, Process, and the rest of the row). An effect the
+--    runtime does not gate is invisible here.
+--
+-- 3. IT ESTABLISHES OVER-DECLARATION ONLY, NEVER UNDER-DECLARATION. A hook that
+--    completes with X withheld is over-declared in X. A hook that dies proves
+--    it performs X, which its row already said. The dangerous direction B4
+--    found — a WIDER row on a function-typed PARAMETER type-checking silently —
+--    is not addressed by this instrument and is not claimed to be.
+--
+-- Arms are selected by `--entry`, deliberately, NOT by an environment variable.
+-- `Env` is one of the capabilities under test, so an env-var arm selector would
+-- kill every Env-withheld run before it reached the subject and every one of
+-- those deaths would read as a performed effect.
+
+module scripts/dst/declared_vs_performed
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/fs (readFile)
+import std/json (Json, jo, kv, js, get, asString)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+
+import src/core/config (VerificationConfig)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/ext/runtime as Rt (
+  PreStepStage,
+  dispatch_budget_plan,
+  dispatch_pre_step_chain,
+  dispatch_solver_candidate,
+  dispatch_response_intercept
+)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  ExtCtx, ExtPorts, ExtWorld, ExtRuntime,
+  BudgetPlan, BudgetPatch, PromptPatch, ToolSchema,
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  PreStepDecision, ToolPolicyDecision, ToolHandleDecision,
+  ResponseInterceptDecision, FinalizeDecision,
+  AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation,
+  ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, TokenTelemetry,
+  PassThrough, Allow, Delegate, NoIntercept, NoDecision,
+  InterceptHandled, Accept, ContinueWithFeedback,
+  empty_ext_world
+)
+
+import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
+import pkg/sunholo/motoko_ext_compose/compose as Compose (register_with_config)
+
+-- WI-D6. Every extension the generated registry can install, imported through
+-- the SAME entry point the host uses (`register_with_config` in each package's
+-- `register` module). The subject list is not hand-written: it is
+-- `src/core/ext/registry_generated.ail`'s import block, and the runner asserts
+-- the two lists agree member for member so an extension added to the host
+-- cannot silently escape measurement.
+import pkg/sunholo/motoko_ext_test_dummy/register as TestDummy (register_with_config)
+import pkg/sunholo/motoko_ext_omnigraph/register as Omnigraph (register_with_config)
+import pkg/sunholo/motoko_ext_context_mode/register as ContextMode (register_with_config)
+import pkg/sunholo/motoko_ext_mcp/register as Mcp (register_with_config)
+import pkg/sunholo/motoko_ext_exa_search/register as ExaSearch (register_with_config)
+import pkg/sunholo/motoko_ext_ailang_docs/register as AilangDocs (register_with_config)
+import pkg/sunholo/motoko_ext_compose/register as ComposeReg (register_with_config)
+import pkg/sunholo/motoko_ext_a2a/register as A2a (register_with_config)
+import pkg/sunholo/motoko_ext_decision_framework/register as DecisionFramework (register_with_config)
+import pkg/sunholo/motoko_ext_microrag/register as Microrag (register_with_config)
+import pkg/sunholo/motoko_ext_compaction_ai/register as CompactionAi (register_with_config)
+import pkg/sunholo/motoko_ext_scratchpad/register as Scratchpad (register_with_config)
+import pkg/sunholo/motoko_ext_compaction_structural/register as CompactionStructural (register_with_config)
+import pkg/sunholo/motoko_ext_empty_stop_guard/register as EmptyStopGuard (register_with_config)
+import pkg/sunholo/motoko_ext_progress_contract_guard/register as ProgressContractGuard (register_with_config)
+import pkg/sunholo/motoko_ext_repetition_guard/register as RepetitionGuard (register_with_config)
+import pkg/sunholo/motoko_ext_agentcli/register as Agentcli (register_with_config)
+import pkg/sunholo/motoko_ext_herdr/register as Herdr (register_with_config)
+
+-- ---------------------------------------------------------------------------
+-- A context with no driver behind it
+-- ---------------------------------------------------------------------------
+
+-- SUPERSEDED IN ITS FIRST CLAUSE AT WI-D19, and kept in the past tense per plan
+-- rule S15. This note READ: "These ports are never CALLED by any arm below".
+-- That was true from WI-C5 through WI-D18 and it is now false — WI-D19 routed
+-- compose's `on_response_intercept`, so `compose_intercept_inline` calls
+-- `clock_now`, `dir_make`, `file_write`, `path_stat` and `file_remove` on the way
+-- through. Five of these ten stubs acquired their first caller in this file, and
+-- a reader who trusted the old sentence would mis-read the FS rows below.
+--
+-- The SECOND clause still holds and is why the rows stay valid: every one of them
+-- is a constant, so binding them cannot contribute a performed effect and cannot
+-- make a subject die for the harness's reasons rather than the hook's. That is
+-- precisely why `compose_intercept_inline` stopped dying on FS — see the runner.
+--
+-- Because they are constants they answer nothing about THREADING, which is a
+-- different question and has its own ports below (`trace_*`).
+func probe_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
+  { result: { Ok("unused") }, next_state: world }
+}
+
+-- `_tool, _args_json` per the ABI row (WI-D23 renamed this probe's `_cmd, _args`
+-- with the census's other stragglers); `exit_code: -1` because a constant probe
+-- executes nothing and 0 would assert a success no process produced.
+func probe_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", exit_code: -1, next_state: world } }
+func probe_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: world } }
+func probe_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+func probe_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+func probe_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} { { kind: ExtPathMissing, next_state: world } }
+func probe_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} { { present: false, entries: [], next_state: world } }
+func probe_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+func probe_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: 0, next_state: world } }
+func probe_env_get(_key: string, fallback: string) -> string ! {Env} { fallback }
+
+func probe_ports() -> ExtPorts {
+  { ai_step: probe_ai_step,
+    tool_handle: probe_tool_handle,
+    file_read: probe_file_read,
+    file_write: probe_file_write,
+    file_remove: probe_file_remove,
+    path_stat: probe_path_stat,
+    dir_list: probe_dir_list,
+    dir_make: probe_dir_make,
+    clock_now: probe_clock_now,
+    env_get: probe_env_get }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D19: THE THREADING PORTS, and the question they answer that the constant
+-- stubs above cannot
+-- ---------------------------------------------------------------------------
+--
+-- PER PLAN RULE S24, REACHABILITY IS ASSERTED SEPARATELY FROM VERDICT. A routed
+-- call that type-checks and never executes proves nothing, and this project has
+-- counted 74 sites across forty-two runs where two answers type-checked and the
+-- silent one was wrong. `on_response_intercept` has that shape twice over:
+--
+--   * `let made = p.dir_make(...)` whose `.next_state` is never read compiles
+--     clean and routes nothing;
+--   * `next_state: ctx.world` instead of `next_state: cleaned.next_state`
+--     compiles clean, satisfies the closed row, and silently discards every
+--     successor the five seams produced. That is F6, and it is the exact defect
+--     the whole world-token protocol exists to prevent.
+--
+-- Neither is visible to the compiler, to `ext_ambient_inventory` (which counts
+-- CALL SITES, so both mutants are green there) or to the `must_die_on` rows
+-- (which observe a capability, not a value). These ports make both observable by
+-- writing their own name into the world token they are handed and returning it,
+-- so the world that comes back out of the dispatcher IS the list of seams that
+-- were called, in the order they were called.
+--
+-- `trace_path_stat` answers `ExtPathFile` DELIBERATELY. `ExtPathMissing` would
+-- send `remove_if_file` down its no-op arm, `file_remove` would never be called,
+-- and the arm would witness four seams while its label claimed five — WI-D18's
+-- mutant 5 exactly, where a word in a row's label turned out to be pinned by
+-- nothing.
+pure func trace_of(w: ExtWorld) -> string {
+  match get(w.token, "trace") {
+    Some(v) => match asString(v) { Some(s) => s, None => "" },
+    None => ""
+  }
+}
+
+pure func with_step(w: ExtWorld, step: string) -> ExtWorld {
+  { token: jo([kv("trace", js("${trace_of(w)}${step};"))]) }
+}
+
+func trace_clock_now(w: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 7, next_state: with_step(w, "clock_now") }
+}
+func trace_dir_make(w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: with_step(w, "dir_make(${path})") }
+}
+func trace_file_write(w: ExtWorld, path: string, _content: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: with_step(w, "file_write(${path})") }
+}
+func trace_path_stat(w: ExtWorld, path: string) -> ExtPathStat ! {FS} {
+  { kind: ExtPathFile, next_state: with_step(w, "path_stat(${path})") }
+}
+func trace_file_remove(w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: with_step(w, "file_remove(${path})") }
+}
+
+func trace_ports() -> ExtPorts {
+  { ai_step: probe_ai_step,
+    tool_handle: probe_tool_handle,
+    file_read: probe_file_read,
+    file_write: trace_file_write,
+    file_remove: trace_file_remove,
+    path_stat: trace_path_stat,
+    dir_list: probe_dir_list,
+    dir_make: trace_dir_make,
+    clock_now: trace_clock_now,
+    env_get: probe_env_get }
+}
+
+pure func zero_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}
+
+pure func plan() -> BudgetPlan { { total: 100, solver: 60, verifier: 40 } }
+
+func probe_ctx(mode: string) -> ExtCtx {
+  { task: "declared_vs_performed",
+    step: 1,
+    model: "probe-model",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: plan(),
+    mode: mode,
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 100,
+    history_slice: [],
+    state_key: "probe",
+    context_limit: 0,
+    ports: probe_ports(),
+    artifacts: jo([]),
+    telemetry: zero_telemetry(),
+    world: empty_ext_world() }
+}
+
+pure func no_verification() -> VerificationConfig { { enabled: false, command: "" } }
+
+pure func stage_ids(ss: [PreStepStage]) -> [string] {
+  match ss {
+    [] => [],
+    s :: rest => s.ext_id :: stage_ids(rest)
+  }
+}
+
+pure func join_ids(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}+${join_ids(rest)}"
+  }
+}
+
+func rt_of(h: ExtEntry) -> ExtRuntime {
+  { registry: { entries: [h] }, strict_mode: false, verification: no_verification() }
+}
+
+-- ---------------------------------------------------------------------------
+-- The subject: compose, built the way the host builds it
+-- ---------------------------------------------------------------------------
+
+-- The config is a LITERAL rather than `read_compose_host_config`, which is
+-- `! {FS}` and would read a file — under an FS-withheld run that read would die
+-- in the harness and be scored as a performed effect of the hook. The literal
+-- is the only construction that keeps the measurement about compose.
+--
+-- `mode` is a parameter because it SELECTS what `on_response_intercept`
+-- performs; see limitation 1 in the header.
+pure func compose_cfg(mode: string) -> ComposeHostConfig {
+  { compose: { mode: mode,
+               subagent_model: "probe-model",
+               max_attempts: 1,
+               effect_guard: "off",
+               certificate_template: false,
+               authoring: { structured: false,
+                            author_tools: false,
+                            author_tools_budget: 0,
+                            author_tools_max_bytes: 0,
+                            author_tools_max_turns: 0,
+                            author_tools_deny_globs: [],
+                            authoring_budget: 0,
+                            fallback_after: 0,
+                            min_observed_chars: 0,
+                            stdout_max_bytes: 0 },
+               claimcheck: { enabled: false,
+                             informalizer_model: "",
+                             comparator_model: "",
+                             timeout_ms: 0,
+                             max_invocations: 0,
+                             stdout_max_bytes: 0,
+                             ledger_in_informalizer: false } },
+    snippet_caps: [] }
+}
+
+-- ---------------------------------------------------------------------------
+-- The controls: hooks that genuinely perform the capability under test
+-- ---------------------------------------------------------------------------
+
+-- WI-D6 MOVED THESE CONTROLS FROM `on_budget_plan` TO `on_pre_step`, AND THE
+-- REASON IS THE ITEM'S RESULT RATHER THAN A CONVENIENCE.
+--
+-- At WI-C5 both controls were bound into `on_budget_plan`, whose row was then
+-- the ABI's closed `! {Env, FS}`, so a performing body fitted the slot. D6
+-- narrowed that row to `! {}` — and the compiler IMMEDIATELY REJECTED both
+-- controls:
+--
+--   incompatible closed rows: r1 has extra labels [], r2 has extra labels [Env]
+--
+-- That rejection is the narrowing's own strongest evidence: after D6 it is not
+-- merely true that no binding performs Env or FS in this slot, it is
+-- UNWRITABLE. But it also means the runtime vacuity control can no longer live
+-- in the slot under test, so it moves to the nearest slot that still admits the
+-- capability — `on_pre_step`, dispatched through its own unconditional fold in
+-- the same `ext/runtime.ail`. The control still answers the question it existed
+-- to answer (is the withholding real, and does the harness reach a dispatched
+-- hook), from the same registry shape and the same process.
+--
+-- The control that is LOST — a performing body in this exact slot — is not
+-- lost, it is PROMOTED: it is now a compile-time control in
+-- `run_declared_vs_performed.sh`'s producer-3 section, where a mutant binding
+-- that performs Env under the narrowed row must be REJECTED by the effect
+-- checker. That control is strictly stronger than the runtime one it replaces,
+-- because it is total over inputs where the capability trap is a witness over
+-- one path.
+
+-- WI-D8 MOVED THESE CONTROLS AGAIN, ONE SLOT LATER, AND THE MOVE IS NOT THE
+-- SAME KIND OF MOVE D6 MADE. D6 relocated them from `on_budget_plan` to
+-- `on_pre_step` because narrowing the first slot made a performing body
+-- unwritable there. D8 narrowed `on_pre_step` to `! {AI, IO, Trace}` — the row
+-- `ExtPorts.ai_step` actually performs — and a body reading `Env` or `FS` no
+-- longer fits this slot EITHER, when it is written as a top-level function:
+--
+--   Effect checking failed for function 'env_reading_pre_step'
+--   Missing effects: Env
+--
+-- SO THERE IS NOWHERE LEFT TO MOVE THEM TO, and the thing that keeps them
+-- alive is a LIMITATION rather than a slot. MEASURED AT WI-D8 across four
+-- syntactic positions, because the first reading of it was WRONG in the
+-- permissive direction and a single probe would have shipped that reading:
+--
+--   top-level `func`,    row ! {IO},  body reads Env  -> REJECTED
+--   `let`-bound lambda,  row ! {IO},  body reads Env  -> REJECTED
+--   argument lambda,     row ! {IO},  body reads Env  -> REJECTED
+--   RECORD-FIELD lambda, row ! {IO},  body reads Env  -> ACCEPTED   <-- the gap
+--
+-- and separately, at ANY position:
+--
+--   lambda,              row ! {},    body performs   -> ACCEPTED
+--
+-- because an EMPTY row on a lambda is read as "unannotated, infer" rather than
+-- as the claim "performs nothing".
+--
+-- RECORD-FIELD POSITION IS EXACTLY WHERE EVERY HOOK IN THIS TREE IS BOUND —
+-- eight of the fifteen extensions in `registry_generated.ail` bind THIS slot
+-- that way. Both facts are asserted as their own rows in
+-- `run_declared_vs_performed.sh`, so if either is fixed upstream these
+-- controls go RED rather than silently ceasing to perform.
+--
+-- AND THE EFFECT IS NOT LOST, IT MOVES — which is the half that matters and
+-- the half a reader would otherwise get backwards. The lambda's OWN annotation
+-- is not checked against its body, but the body's effects still propagate to
+-- the ENCLOSING top-level function, whose row IS checked. So the enforcement
+-- D6 and D7 recorded is real and it lives one level up from where those
+-- reports put it:
+--
+--   narrowing a HOOK SLOT's row constrains a binding written as a top-level
+--   function, and constrains NOTHING about a binding written inline in the
+--   record — for that one, the constraint is `register_with_config`'s row.
+--
+-- MEASURED, in `empty_stop_guard`: an inline `on_pre_step` reading `Env` under
+-- `! {AI, IO, Trace}` compiles while `register_with_config` carries a row that
+-- admits `Env`, and is REJECTED the moment that row is narrowed past it —
+-- `Effect checking failed for function 'register_with_config' … Missing
+-- effects: Env`.
+--
+-- SO THE ABSORPTION IS PER EFFECT, NOT GLOBAL, and the first draft of this note
+-- said "all fifteen carry the wide row and absorb anything", which the
+-- derivation refuted on sight. DERIVED, and asserted in the runner:
+--
+--   Env      admitted by 14 of the 14 registration ROWS
+--   FS       admitted by 12 of 14
+--   Process  admitted by  7 of 14
+--
+-- and the denominator is ROWS rather than extensions because the two differ:
+-- fifteen extensions declare fourteen rows between them. `decision_framework`
+-- and `microrag` declare NO registration row at all — so an inline hook there
+-- that performs anything is caught — and `compose` declares two, a wrapper in
+-- `register.ail` and the real one in `compose.ail`, which is also the file
+-- that binds the hook.
+--
+-- `Env` is admitted by every row that exists, which is the sharp end: an
+-- inline hook that begins reading `Env` is absorbed wherever a registration
+-- row exists at all.
+--
+-- Exactly ONE registration, `compaction_ai`'s, still carries the full
+-- ten-effect row and therefore absorbs everything. This item reports that and
+-- does NOT act on it: WI-D6 measured that nine of fifteen genuinely read `Env`
+-- at registration, so narrowing those rows is its own measurement item rather
+-- than an ABI edit.
+--
+-- These two builders declare `! {Env}` and `! {FS}` for exactly that reason —
+-- the leak reaches them, and they are honest about it.
+--
+-- The controls are therefore written in the SAME FORM THE SUBJECTS USE, which
+-- is what S16 asks of an instrument: a control bound as a top-level function
+-- would be measuring a construct no extension in this tree writes.
+-- The performing body is INLINE IN THE RECORD FIELD in each of the two
+-- builders below, and it has to be: passing it in as a parameter puts the
+-- lambda in ARGUMENT position, where the effect checker does fire, and the
+-- control stops compiling. That is why `control_hooks` is no longer
+-- parameterised over the hook.
+-- B8: THE CONTROLS GO THROUGH LIMITATION 1'S DOOR, AND THAT IS A MEASUREMENT.
+-- Through 5.x an inline lambda declaring the slot row and performing Env
+-- compiled in RECORD-FIELD position because the enclosing row absorbed it. At
+-- 6.0 the same body in CONSTRUCTOR-ARGUMENT position of the IMPORTED
+-- `Capability` sum is REJECTED in every shape B1 measured on a LOCAL sum as
+-- accepted: a named function declared `! {AI, IO, Trace, Env}` is refused
+-- (`incompatible closed rows: r2 has extra labels [Env]`), an unannotated
+-- inline lambda is refused at the payload row, and an annotated one at its own
+-- annotation. The runner's IMPORTED-SUM rows pin all four verdicts. So the
+-- ONLY way to build a performing control atom is the record-field smuggle:
+-- bind the lambda to a field of a LOCAL record type (where its row is not
+-- checked against its body -- limitation 1), then pass the field. Which is
+-- exactly the door the ADR feared and the runner's `smuggle` row pins.
+type ControlBody = { f: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace} }
+
+func env_control_body() -> ControlBody ! {Env} {
+  { f: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+      let _ = getEnvOr("PATH", "");
+      { decision: { PassThrough }, next_state: ctx.world }
+    } }
+}
+
+func fs_control_body() -> ControlBody ! {FS} {
+  { f: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+      let _ = readFile("ailang.toml");
+      { decision: { PassThrough }, next_state: ctx.world }
+    } }
+}
+
+func env_control_hooks() -> ExtEntry ! {Env} {
+  { id: "dvp_control", caps: [Compactor(env_control_body().f), ToolPolicy(\_ctx _call. Allow)] }
+}
+
+func fs_control_hooks() -> ExtEntry ! {FS} {
+  { id: "dvp_control", caps: [Compactor(fs_control_body().f), ToolPolicy(\_ctx _call. Allow)] }
+}
+
+pure func budget_sentinel() -> int { 4242 }
+pure func solver_sentinel() -> string { "dvp-solver-witness" }
+pure func intercept_sentinel() -> string { "dvp-intercept-witness" }
+pure func witness_id() -> string { "dvp_witness" }
+
+-- MIGRATED TO `default_hooks` AT ADR-001 Phase A (A5), AND TO THE 6.0 LIST AT B8 (only the atoms that carry a sentinel are registered now). Only the three slots
+-- that carry a sentinel are written here; the neutral five come from the ABI.
+-- `on_tool_policy: Allow` is kept as an override for the same reason as in
+-- `control_base` — the old literal said `Allow`, the ABI default says
+-- `NoOpinion`, and this file's arms must keep measuring what they measured.
+func witness_hooks() -> ExtEntry {
+  { id: witness_id(), caps: [
+    -- a pass-through Compactor, so the chain's stage list names the witness
+    -- after the subject (compose_pre_step's `compose+dvp_witness`)
+    Compactor(\ctx _msgs. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace}),
+    BudgetShaper(func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+      { requested_total: Some(budget_sentinel()), requested_solver: None, requested_verifier: None }
+    }),
+    ToolPolicy(\_ctx _call. Allow),
+    ResponseInterceptor(func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+      { decision: { InterceptHandled({ tool_call_id: intercept_sentinel(), tool: "dvp", exit_code: 0,
+                                       stdout: "", stderr: "", metadata: jo([]) }) },
+        next_state: ctx.world }
+    }),
+    SolverJudge(func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} {
+      { decision: { Accept(solver_sentinel()) }, next_state: ctx.world }
+    })
+  ] }
+}
+
+func compose_then_witness(mode: string) -> ExtRuntime ! {AI, Clock, Env, FS, IO, Process, Rand} {
+  let caps = Compose.register_with_config(compose_cfg(mode));
+  { registry: { entries: [{ id: "compose", caps: caps }, witness_hooks()] }, strict_mode: false, verification: no_verification() }
+}
+
+-- ---------------------------------------------------------------------------
+-- The arms. Each prints a value DERIVED FROM ITS DISPATCH; the runner asserts
+-- the exact sentinel. Exit status alone is not the measurement — see the
+-- witness note above for the mutant that established why.
+-- ---------------------------------------------------------------------------
+
+func reached(arm: string, witnessed: string) -> () ! {IO} {
+  println("declared_vs_performed[${arm}] REACHED COMPLETION witness=${witnessed}")
+}
+
+-- SUBJECT. compose's `on_budget_plan`, dispatched through the production fold.
+-- Declared `! {Env, FS}` by the ABI row at types.ail:298 and by compose's own
+-- `budget_hook`. Run with Env and FS withheld.
+export func compose_budget() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_budget_plan(compose_then_witness("tool"), probe_ctx("tool"), plan());
+  reached("compose_budget", show(out.total))
+}
+
+-- SUBJECT. compose's `on_pre_step`. Declared `! {AI, IO, Trace}` at the
+-- binding site (ten effects until WI-D8 measured `ExtPorts.ai_step` and the
+-- slot followed the port down); the body was `PassThrough` beside `ctx.world`.
+-- `PreStepChainResult.stages` carries one entry PER ATOM, each tagged with
+-- `ext_id`, so until item 4 this arm named compose directly (`compose+dvp_witness`).
+-- ITEM 4 (6.0 trimming): compose registers only what it binds and its constant
+-- Compactor is gone, so the production fold SKIPS compose by construction and
+-- the stage list names the witness alone. The row keeps certifying that compose
+-- is in the registry it was handed by printing, beside the stages, the
+-- runtime's own `loaded_extension_names` of that registry — removing compose
+-- from `compose_then_witness` still reddens this row and no other.
+export func compose_pre_step() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let rt = compose_then_witness("tool");
+  let out = Rt.dispatch_pre_step_chain(rt, probe_ctx("tool"), []);
+  reached("compose_pre_step", "${join_ids(stage_ids(out.stages))}|installed=${join_ids(Rt.loaded_extension_names(rt))}")
+}
+
+-- SUBJECT. compose's `on_solver_candidate`. Declared with nine effects; the
+-- body is `no_finalize_decision()` beside `ctx.world`.
+export func compose_solver() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_solver_candidate(compose_then_witness("tool"), probe_ctx("tool"), "candidate");
+  let seen = match out.decision { Accept(s) => s, ContinueWithFeedback(_) => "continue", NoDecision => "none" };
+  reached("compose_solver", seen)
+}
+
+-- SUBJECT, and the honest one. compose's `on_response_intercept` with
+-- `mode != "inline"`, which short-circuits to `NoIntercept` before touching the
+-- filesystem. Completes with FS and Process withheld.
+-- The witness sentinel appearing here means compose returned `NoIntercept` and
+-- `first_intercept` recursed PAST it — which is exactly "compose's
+-- on_response_intercept was invoked and did not perform".
+export func compose_intercept_noninline() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_response_intercept(compose_then_witness("tool"), probe_ctx("tool"), "no fence here");
+  let seen = match out.decision { InterceptHandled(r) => r.tool_call_id, NoIntercept => "none" };
+  reached("compose_intercept_noninline", seen)
+}
+
+-- THE LIMIT, MADE EXECUTABLE. The SAME hook, the SAME declared row, and the
+-- same withheld capabilities as the arm above — differing only in `mode` and in
+-- the response carrying an AILANG fence. This one reaches `mkdirAll`/`writeFile`
+-- and DIES.
+--
+-- The runner asserts this arm fails. That assertion is what stops
+-- `compose_intercept_noninline`'s green from being read as "compose's
+-- `on_response_intercept` performs no FS", which is false. Per header
+-- limitation 1: performed is a property of a hook AND ITS INPUTS, and a
+-- detector that reported only the first arm would be reporting a per-hook fact
+-- that does not exist.
+export func compose_intercept_inline() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_response_intercept(compose_then_witness("inline"), probe_ctx("inline"),
+            "here is code\n```ailang\nexport func main() -> () ! {IO} { () }\n```\n");
+  let seen = match out.decision { InterceptHandled(r) => r.tool_call_id, NoIntercept => "none" };
+  reached("compose_intercept_inline", seen)
+}
+
+-- WI-D19. THE REACHABILITY ARM, and per plan rule S24 it is separate from every
+-- verdict above on purpose: nothing else in this file — nor in
+-- `ext_ambient_inventory`, nor in the effect checker — can tell a routed call
+-- that RAN from a routed call that merely compiled.
+--
+-- It runs the same hook on the same input as `compose_intercept_inline`, with
+-- the threading ports substituted, and prints the world token that came back out
+-- of the production dispatcher. The runner compares that string against the
+-- sequence written out LITERALLY, because a witness derived from the run would
+-- be satisfied by a run that did nothing.
+--
+-- The expected value is
+--   clock_now;dir_make(tmp);file_write(tmp/inline_7.ail);path_stat(...);file_remove(...)
+-- and every part of it is load-bearing:
+--
+--   * `dir_make(tmp)` — not `dir_make(./tmp)` and not an absolute path. This is
+--     the assertion for WI-D19's SPELLING FIX: the create and the write must name
+--     ONE path key, which is the rule WI-D18 §5 wrote at `WorldState.files` and
+--     the defect `world_state_probe` row 8 pins. If the create ever goes back to
+--     `"${ctx.workdir}/tmp"` this row names both spellings side by side.
+--   * `inline_7` — `7` is `trace_clock_now`'s reading, so the name is derived
+--     from the ROUTED clock. An `on_response_intercept` that kept the ambient
+--     `now()` produces a wall-clock millisecond here and cannot match.
+--   * `file_remove` present at all — the routed `fileExists` guard took its
+--     removing arm, so `path_stat` is genuinely deciding and not merely called.
+--   * the whole string surviving to the end — every seam threaded its successor
+--     into the next, and the hook returned the LAST one. `next_state: ctx.world`
+--     yields the empty token, which is the same answer a hook that routed
+--     nothing gives.
+export func compose_intercept_threading() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_response_intercept(compose_then_witness("inline"),
+            { probe_ctx("inline") | ports: trace_ports() },
+            "here is code\n```ailang\nexport func main() -> () ! {IO} { () }\n```\n");
+  reached("compose_intercept_threading", trace_of(out.next_state))
+}
+
+-- WI-D20. THE `on_tool_handle` REACHABILITY ARM, and it witnesses LESS than its
+-- intercept sibling for a structural reason that is stated rather than hidden.
+--
+-- `compose_intercept_threading` above can trace `on_response_intercept`'s whole
+-- routed chain because that hook reaches its filesystem seams without a model.
+-- `on_tool_handle` cannot: `handle_compose_tool` -> `run_attempts` ->
+-- `one_attempt` calls `callStreamResult`, which is AMBIENT AI from `ai_compat`
+-- and not `ExtPorts.ai_step`, so `trace_ports` has nothing to substitute for it.
+-- With no provider the author returns no snippet, `one_attempt` takes its early
+-- `NeedRetry`, and the seventeen routed FS sites below that point are never
+-- reached in this process.
+--
+-- SO THIS ARM PINS TWO LINKS OF THE SPINE, AND EXACTLY TWO. The first draft of
+-- this comment claimed three; the third was measured and found NOT pinned, and
+-- the label is narrowed here rather than the claim left standing.
+--
+-- WHAT IT PINS, each confirmed by running the mutant:
+--
+--   * `on_tool_handle` returning `handled.next_state` rather than `ctx.world`.
+--     Mutated, the witness comes back EMPTY — the same answer a hook that routed
+--     nothing gives.
+--   * `handle_compose_tool` passing `started.next_state` into `run_attempts`
+--     rather than its own `w`. Mutated, the witness is `clock_now;` — the entry
+--     clock's successor is discarded and the exhaust clock starts from a fresh
+--     token.
+--
+-- WHAT IT DOES NOT PIN, AND WHY NO IN-PROCESS FIXTURE CAN: `run_attempts`
+-- recursing on `w2` (the attempt's successor) rather than on `w`. Mutated, this
+-- witness is UNCHANGED — because without a model `one_attempt` reaches its early
+-- `NeedRetry` before any routed seam, so `w2` and `w` are the SAME WORLD and the
+-- two answers agree by construction. That is WI-D18's empty-directory shape and
+-- WI-D19's populated-directory shape a third time: the distinguishing input is an
+-- attempt that actually performed something, which needs the model this process
+-- does not have. Named as a gap rather than covered by a row that would pass
+-- either way.
+--
+-- The graded end of this is `discovery_dst`'s `batch_handle_scenario`, which
+-- drives the production driver rather than the dispatcher alone. The two are
+-- complementary and neither subsumes the other: that one grades the DRIVER's
+-- threading with a compose-shaped hook, this one grades COMPOSE's threading with
+-- a driver-shaped dispatch.
+export func compose_tool_handle_threading() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_tool_handle(compose_then_witness("subagent"),
+            { probe_ctx("subagent") | ports: trace_ports() },
+            { id: "probe-handle", tool: "Compose", arguments: jo([]) });
+  reached("compose_tool_handle_threading", trace_of(out.next_state))
+}
+
+-- CONTROL for Env. Must die with Env withheld. Dispatched through the pre-step
+-- fold — see the note above `env_reading_pre_step` for why this control no
+-- longer lives in `on_budget_plan`.
+export func control_env() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_pre_step_chain(rt_of(env_control_hooks()), probe_ctx("tool"), []);
+  reached("control_env", join_ids(stage_ids(out.stages)))
+}
+
+-- CONTROL for FS. Must die with FS withheld.
+export func control_fs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_pre_step_chain(rt_of(fs_control_hooks()), probe_ctx("tool"), []);
+  reached("control_fs", join_ids(stage_ids(out.stages)))
+}
+
+
+-- ===========================================================================
+-- WI-D6: THE OTHER FOURTEEN BINDINGS, and the confound that makes the pairing
+-- non-optional
+-- ===========================================================================
+--
+-- WI-C5 measured ONE binding of `on_budget_plan` — compose's. Fifteen
+-- extensions bind the slot, and D6's mission is a row narrowed to what is
+-- HONESTLY performed, which cannot be decided from one of fifteen.
+--
+-- THE CONFOUND, MEASURED BEFORE THE ARMS WERE WRITTEN AND THE REASON THEY COME
+-- IN PAIRS. `register_with_config` is not effect-free for most of these
+-- packages: nine of fourteen read `Env` (a `getEnvOr` for a workdir or profile
+-- directory) and seven of those also read `FS` (a config file, or a
+-- portability gate probing for a marker file). Those reads happen at
+-- REGISTRATION, before any hook is dispatched.
+--
+-- So the naive arm — install the extension, dispatch the hook, capability
+-- withheld — DIES for nine of fifteen subjects, and every one of those deaths
+-- would be scored as "the hook performs Env". That is a FALSE POSITIVE in the
+-- direction that blocks the narrowing, and it would have been indistinguishable
+-- from the real thing in exit status alone.
+--
+-- The fix is a differential. Each extension gets TWO arms run under the SAME
+-- withheld capabilities:
+--
+--   reg_<ext>     registration only, no dispatch
+--   budget_<ext>  the same registration, then the dispatch
+--
+-- and the runner reads the PAIR rather than either arm:
+--
+--   reg completes, budget completes  -> the HOOK performs neither. MEASURED.
+--   reg completes, budget dies       -> the HOOK performs it.     BLOCKING.
+--   reg dies                         -> registration performed it first; the
+--                                       hook was never reached.  CONFOUNDED,
+--                                       and this instrument cannot settle it.
+--
+-- The confounded subjects are settled by a SECOND producer that has no such
+-- blind spot — the compiler's effect inference over the binding's body, which
+-- is total over inputs where the capability trap is a witness over the one path
+-- an arm exercises. See `run_declared_vs_performed.sh`'s producer-3 section and
+-- the mutant control that proves the narrowed row is load-bearing.
+--
+-- WHY THESE ARMS USE `register_with_config` WHERE compose's USES A LITERAL
+-- CONFIG. compose's arm above deliberately bypasses `read_compose_host_config`
+-- so its measurement is about the hook rather than about config IO. These arms
+-- deliberately do the opposite and take the host's real route, because the
+-- question they answer is different: not "can this hook be reached effect-free"
+-- but "what happens when the host installs this extension". The two are
+-- complementary, and the difference is stated here rather than left for a
+-- reader to infer from the call.
+
+-- test_dummy — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_test_dummy() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = TestDummy.register_with_config(0);
+  reached("reg_test_dummy", show(List.length(h)))
+}
+
+-- test_dummy — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked test_dummy's `on_budget_plan` first.
+export func budget_test_dummy() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = TestDummy.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_test_dummy", show(out.total))
+}
+
+-- omnigraph — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_omnigraph() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Omnigraph.register_with_config(0);
+  reached("reg_omnigraph", show(List.length(h)))
+}
+
+-- omnigraph — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked omnigraph's `on_budget_plan` first.
+export func budget_omnigraph() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Omnigraph.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_omnigraph", show(out.total))
+}
+
+-- context_mode — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_context_mode() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ContextMode.register_with_config(0);
+  reached("reg_context_mode", show(List.length(h)))
+}
+
+-- context_mode — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked context_mode's `on_budget_plan` first.
+export func budget_context_mode() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ContextMode.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_context_mode", show(out.total))
+}
+
+-- mcp — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_mcp() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Mcp.register_with_config(0);
+  reached("reg_mcp", show(List.length(h)))
+}
+
+-- mcp — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked mcp's `on_budget_plan` first.
+export func budget_mcp() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Mcp.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_mcp", show(out.total))
+}
+
+-- exa_search — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_exa_search() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ExaSearch.register_with_config(0);
+  reached("reg_exa_search", show(List.length(h)))
+}
+
+-- exa_search — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked exa_search's `on_budget_plan` first.
+export func budget_exa_search() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ExaSearch.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_exa_search", show(out.total))
+}
+
+-- ailang_docs — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_ailang_docs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = AilangDocs.register_with_config(0);
+  reached("reg_ailang_docs", show(List.length(h)))
+}
+
+-- ailang_docs — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked ailang_docs's `on_budget_plan` first.
+export func budget_ailang_docs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = AilangDocs.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_ailang_docs", show(out.total))
+}
+
+-- compose — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_compose() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ComposeReg.register_with_config(0);
+  reached("reg_compose", show(List.length(h)))
+}
+
+-- compose — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked compose's `on_budget_plan` first.
+export func budget_compose() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ComposeReg.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_compose", show(out.total))
+}
+
+-- a2a — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_a2a() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = A2a.register_with_config(0);
+  reached("reg_a2a", show(List.length(h)))
+}
+
+-- a2a — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked a2a's `on_budget_plan` first.
+export func budget_a2a() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = A2a.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_a2a", show(out.total))
+}
+
+-- decision_framework — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_decision_framework() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = DecisionFramework.register_with_config(0);
+  reached("reg_decision_framework", show(List.length(h)))
+}
+
+-- decision_framework — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked decision_framework's `on_budget_plan` first.
+export func budget_decision_framework() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = DecisionFramework.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_decision_framework", show(out.total))
+}
+
+-- microrag — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_microrag() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Microrag.register_with_config(0);
+  reached("reg_microrag", show(List.length(h)))
+}
+
+-- microrag — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked microrag's `on_budget_plan` first.
+export func budget_microrag() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Microrag.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_microrag", show(out.total))
+}
+
+-- compaction_ai — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_compaction_ai() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = CompactionAi.register_with_config(0);
+  reached("reg_compaction_ai", show(List.length(h)))
+}
+
+-- compaction_ai — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked compaction_ai's `on_budget_plan` first.
+export func budget_compaction_ai() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = CompactionAi.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_compaction_ai", show(out.total))
+}
+
+-- scratchpad — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_scratchpad() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Scratchpad.register_with_config(0);
+  reached("reg_scratchpad", show(List.length(h)))
+}
+
+-- scratchpad — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked scratchpad's `on_budget_plan` first.
+export func budget_scratchpad() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Scratchpad.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_scratchpad", show(out.total))
+}
+
+-- compaction_structural — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_compaction_structural() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = CompactionStructural.register_with_config(0);
+  reached("reg_compaction_structural", show(List.length(h)))
+}
+
+-- compaction_structural — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked compaction_structural's `on_budget_plan` first.
+export func budget_compaction_structural() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = CompactionStructural.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_compaction_structural", show(out.total))
+}
+
+-- empty_stop_guard — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_empty_stop_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = EmptyStopGuard.register_with_config(0);
+  reached("reg_empty_stop_guard", show(List.length(h)))
+}
+
+-- empty_stop_guard — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked empty_stop_guard's `on_budget_plan` first.
+export func budget_empty_stop_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = EmptyStopGuard.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_empty_stop_guard", show(out.total))
+}
+
+-- progress_contract_guard — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ProgressContractGuard.register_with_config(0);
+  reached("reg_progress_contract_guard", show(List.length(h)))
+}
+
+-- progress_contract_guard — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked progress_contract_guard's `on_budget_plan` first.
+export func budget_progress_contract_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = ProgressContractGuard.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_progress_contract_guard", show(out.total))
+}
+
+-- agentcli — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Agentcli.register_with_config(0);
+  reached("reg_agentcli", show(List.length(h)))
+}
+
+-- agentcli — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked agentcli's `on_budget_plan` first.
+export func budget_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Agentcli.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_agentcli", show(out.total))
+}
+
+-- herdr — REGISTER arm. Witness is the registered record's own `id`, a value
+-- obtainable only by having called the registration.
+export func reg_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Herdr.register_with_config(0);
+  reached("reg_herdr", show(List.length(h)))
+}
+
+-- repetition_guard — REGISTER arm. Added when the extension joined ailang.toml's
+-- [extensions] packages: the host could install it and this probe had no arm for
+-- it, so it was a subject the gate skipped in silence — the exact drift the
+-- member-for-member check above exists to catch.
+export func reg_repetition_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = RepetitionGuard.register_with_config(0);
+  reached("reg_repetition_guard", show(List.length(h)))
+}
+
+-- repetition_guard — DISPATCH arm. It binds ToolPolicy and SolverJudge and NO
+-- BudgetShaper, so the 4242 comes from the witness alone — which is the same
+-- shape `budget_herdr` and `budget_agentcli` already use, and it still
+-- discriminates: the witness is registered AFTER the subject in one ordered
+-- unconditional fold, so the value is unobtainable unless that fold ran over
+-- the subject's entry first.
+export func budget_repetition_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = RepetitionGuard.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_repetition_guard", show(out.total))
+}
+
+-- herdr — DISPATCH arm. The witness hook is registered AFTER the subject in
+-- the same unconditional, ordered fold, so `total == 4242` is unobtainable
+-- unless the fold ran and invoked herdr's `on_budget_plan` first.
+export func budget_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Herdr.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_herdr", show(out.total))
+}

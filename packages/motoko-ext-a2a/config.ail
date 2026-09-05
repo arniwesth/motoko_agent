@@ -1,0 +1,88 @@
+module sunholo/motoko_ext_a2a/config
+
+import std/fs (fileExists, readFile)
+import std/json (Json, decode, jo, getString, get, asArray, asString)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_a2a/types (A2AAgent, A2AConfig)
+
+func jstr(j: Json, key: string, fallback: string) -> string {
+  match getString(j, key) { Some(s) => s, None => fallback }
+}
+
+func parse_agent(j: Json) -> A2AAgent {
+  {
+    name:        jstr(j, "name",        ""),
+    url:         jstr(j, "url",         ""),
+    description: jstr(j, "description", ""),
+    skill_id:    jstr(j, "skill_id",    "")
+  }
+}
+
+func parse_agents_rec(xs: [Json]) -> [A2AAgent] {
+  match xs {
+    [] => [],
+    j :: rest => parse_agent(j) :: parse_agents_rec(rest)
+  }
+}
+
+func parse_a2a_json(root: Json) -> A2AConfig {
+  match get(root, "agents") {
+    Some(arr) => match asArray(arr) {
+      Some(xs) => { agents: parse_agents_rec(xs) },
+      None     => { agents: [] }
+    },
+    None => { agents: [] }
+  }
+}
+
+export func read_a2a_config(profile_dir: string) -> A2AConfig ! {FS} {
+  let path = "${profile_dir}/a2a.json";
+  if not fileExists(path) then { agents: [] }
+  else
+    match decode(readFile(path)) {
+      Ok(j)  => parse_a2a_json(j),
+      Err(_) => { agents: [] }
+    }
+}
+
+func agent_count(xs: [A2AAgent]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + agent_count(rest) }
+}
+
+pure func empty_config_has_no_agents() -> bool
+  tests [((), true)]
+  {
+    agent_count(parse_a2a_json(jo([])).agents) == 0
+  }
+
+pure func single_agent_parsed() -> bool
+  tests [((), true)]
+  {
+    let raw = "{\"agents\":[{\"name\":\"hello\",\"url\":\"http://localhost:8080\",\"description\":\"Hello agent\",\"skill_id\":\"main.handle_hello\"}]}";
+    match decode(raw) {
+      Err(_) => false,
+      Ok(j)  => {
+        let cfg = parse_a2a_json(j);
+        match cfg.agents {
+          [] => false,
+          a :: _ => a.name == "hello" && a.url == "http://localhost:8080" && a.skill_id == "main.handle_hello"
+        }
+      }
+    }
+  }
+
+pure func skill_id_defaults_to_empty() -> bool
+  tests [((), true)]
+  {
+    let raw = "{\"agents\":[{\"name\":\"legacy\",\"url\":\"http://localhost:8080\",\"description\":\"\"}]}";
+    match decode(raw) {
+      Err(_) => false,
+      Ok(j)  => {
+        let cfg = parse_a2a_json(j);
+        match cfg.agents {
+          [] => false,
+          a :: _ => a.skill_id == ""
+        }
+      }
+    }
+  }

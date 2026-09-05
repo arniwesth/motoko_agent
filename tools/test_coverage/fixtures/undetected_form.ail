@@ -1,0 +1,13 @@
+module tools/test_coverage/fixtures/undetected_form
+
+export pure func abs_int(n: int) -> int
+  requires { true }
+  {
+    if n < 0 then 0 - n else n
+  }
+
+export pure func at_least_zero(n: int) -> int
+  requires { true }
+  {
+    if n < 0 then 0 else n
+  }

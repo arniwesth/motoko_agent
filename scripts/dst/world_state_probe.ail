@@ -1,0 +1,1123 @@
+-- scripts/dst/world_state_probe.ail
+--
+-- WI-A12's advancement-and-completeness instrument. It exists BEFORE the
+-- threading it watches, which is the binding sequencing rule in the plan, and
+-- the rule exists because two clusters measured the failure rather than
+-- predicting it:
+--
+--   * Cluster 1 (WI-A2) threaded thirteen `C2LoopState` successor literals. The
+--     compiler forces the new field to be PRESENT at all thirteen but accepts
+--     the carry-forward value `st.<field>` at every one, while six are
+--     downstream of the dispatch call and must carry the successor. Flipping
+--     those six type-checks clean (`✓ No errors found!`) and serves
+--     [s0,s0,s0,…] in every scenario — a total freeze.
+--
+--   * Cluster 4 (WI-A9) found the same hazard one level worse, in TRACE
+--     arguments: handing `c2_finalize` `st.trace` instead of the trace carrying
+--     the decision record type-checks, silently drops the record, and STILL
+--     SATISFIES the one-RunSummary invariant. A cursor-only assertion is green
+--     while the evidence is being dropped.
+--
+-- A12 threads `world_state` through those same literals AND through a finalizer
+-- taking a trace argument, so this probe asserts BOTH axes:
+--
+--   A. ADVANCEMENT — the cursor moves, per scenario.
+--   B. COMPLETENESS — every record the run appends survives into the returned
+--      trace, asserted by counting records against an independently known
+--      quantity rather than by re-reading the trace's own summary.
+--   C. DETERMINISM — two runs of the same scripted world produce identical
+--      served sequences AND identical record-kind sequences. This is the axis
+--      that catches an UN-ROUTED effect read: an ambient reader varies between
+--      two runs of the same world, a routed one cannot.
+--
+-- Axis C is why this file is not just `scripted_cursor_probe` with more
+-- assertions. That probe compares two DIFFERENT scenarios against each other,
+-- so a defect consistent across both is invisible to it — exactly the blind
+-- spot `smoke_parity` has, which diffs a build against itself.
+--
+-- Scenarios:
+--   advance  — clean 5-step script, no compaction. Cursor must advance and the
+--              trace must be complete.
+--   fold     — the F6 shape: an on_pre_step hook folds older turns into a
+--              summary, capping the assistant count. A cursor derived from
+--              message history PINS here; a threaded one does not.
+--   exhaust  — a script of continuers under a step budget it cannot meet, so
+--              the run takes the FAIL terminal path. This is the path where
+--              cluster 4's trace-argument hazard lives: the decision record and
+--              the RunSummary must BOTH be in the returned trace.
+
+module scripts/dst/world_state_probe
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/ai (Message, ToolCall)
+import std/json (Json, jo, kv, js)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/compaction (output_token_allowance)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/phase_vocab (
+  LedgerRecord,
+  WireRecord,
+  DecisionRecord,
+  CompactionStageRecord,
+  ProviderResult,
+  RunSummary,
+  DoneEvent,
+  ErrorEvent,
+  LedgerTrace
+)
+import src/core/test/stub_step (Scripted, ScriptedWorld, tool_step, prose_step, scripted_ports)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state,
+  -- WI-D17's write class, exercised at the ADAPTER rather than through the
+  -- driver, because nothing routes it yet — see `assert_file_write_class`.
+  scripted_file, scripted_file_write, scripted_file_remove,
+  recording_file_write, recording_file_remove,
+  -- WI-D18's directory class, same reason and the same shape of instrument.
+  -- WI-D22 moved these to src/core/fs_node; see the import below.
+  PathKind, PathMissing, PathFile, PathDir, path_kind_label,
+  scripted_path_stat, scripted_dir_list, scripted_dir_make, recording_dir_make,
+  -- WI-D23's exit-code witness — see `exit_code_witness` at the bottom.
+  world_tool, ToolInvocation, ToolCompleted, ScriptedTool)
+import src/core/ext_world (world_to_token)
+import src/core/tool_dispatch_adapter (dispatch_one, dispatch_one_typed)
+import src/core/fs_node (FsNode, FsFile, FsDir)
+import src/core/dst_interaction (Interaction, interaction_kind, count_kind)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  -- WI-D25: the ONE `ExtPorts` field `on_pre_step`'s row admits. See
+  -- `consume_steps` below.
+  ExtPorts,
+  ExtWorld,
+  BudgetPlan,
+  BudgetPatch,
+  Compacted,
+  Delegate,
+  ExtCtx,
+  ExtRuntime,
+  FinalizeDecision,
+  NoDecision,
+  NoIntercept,
+  NoOpinion,
+  Deny,
+  Allow,
+  PassThrough,
+  DenyAfterTimeout,
+  Pending,
+  PreStepDecision,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolHandleDecision,
+  ToolPolicyDecision,
+  ToolSchema
+)
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func step_named(name: string) -> ScriptedStep {
+  { tool_step("T", "{}", name) | prose: name }
+}
+
+-- Four continuers then a terminator: under a correctly advancing cursor the
+-- driver serves s0..s3 then "done" and stops.
+func script() -> [ScriptedStep] {
+  [step_named("s0"), step_named("s1"), step_named("s2"), step_named("s3"), prose_step("done")]
+}
+
+-- All continuers and no terminator: the run cannot stop on its own and must
+-- take the max-steps FAIL path.
+func endless_script() -> [ScriptedStep] {
+  [step_named("e0"), step_named("e1"), step_named("e2"), step_named("e3"),
+   step_named("e4"), step_named("e5"), step_named("e6"), step_named("e7")]
+}
+
+-- ---------------------------------------------------------------------------
+-- Extension plumbing
+-- ---------------------------------------------------------------------------
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }
+func no_solver(ctx: ExtCtx, _text: string)
+  -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+func deny_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Deny("probe: tools denied") }
+
+pure func summary_msg() -> Msg {
+  { role: "assistant", content: "[SUMMARY] folded", tool_calls: [], tool_call_id: "" }
+}
+
+pure func drop_first(n: int, xs: [Msg]) -> [Msg] {
+  if n <= 0 then xs
+  else match xs { [] => [], _ :: rest => drop_first(n - 1, rest) }
+}
+
+pure func fold(msgs: [Msg]) -> [Msg] {
+  let n = List.length(msgs);
+  if n <= 4 then msgs else summary_msg() :: drop_first(n - 2, msgs)
+}
+
+func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+  let folded = fold(msgs);
+  if List.length(folded) == List.length(msgs) then PassThrough
+  else Compacted(folded, "probe: folded older turns into one summary", jo([]))
+}, next_state: ctx.world } }
+
+func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
+
+-- ---------------------------------------------------------------------------
+-- WI-D25: THE FIRST `on_pre_step` BINDING IN THE TREE THAT PERFORMS
+-- ---------------------------------------------------------------------------
+--
+-- S29 says a dropped hook successor is invisible until a hook actually does
+-- something, because every binding in this tree returns `ctx.world` unchanged
+-- and a drop then produces a world byte-identical to a thread. The two hooks
+-- above are exactly that shape, and so are the fifteen extensions'. This one is
+-- not: it CONSUMES scripted provider steps, so the world it hands back differs
+-- from the world it was given by a countable amount, and a caller that discards
+-- it un-counts them.
+--
+-- `ai_step` IS THE ONLY SEAM AVAILABLE HERE, and that is a measurement rather
+-- than a choice of instrument. `on_pre_step` declares `! {AI, IO, Trace}`
+-- (`motoko-ext-abi/types.ail:882`) and `ExtPorts.ai_step`'s row is identical
+-- (`:293`); every other field of `ExtPorts` demands `FS`, `Env`, `Clock` or
+-- `Process`, none of which this row admits, so no other port call type-checks
+-- in this position at all. The four compiler verdicts that state this — and the
+-- companion bound for `on_solver_candidate`, which admits NO field — are
+-- `run_declared_vs_performed.sh`'s `port_accepts`/`port_rejects` rows.
+--
+-- IT CONSUMES RATHER THAN OBSERVES ON PURPOSE. `ai_step` threads the provider
+-- seam (`session.ext_ports_of` -> `ext_ai_step` -> `Ports.model_step`), so under
+-- a scripted world each call takes the head of `WorldState.script`. The count of
+-- what is LEFT in the terminal world is therefore a quantity the driver's own
+-- bookkeeping never writes, which is what makes the seal-terminal rows below
+-- evidence and not an identity.
+func consume_steps(n: int, w: ExtWorld, p: ExtPorts) -> ExtWorld ! {AI, IO, Trace} {
+  if n <= 0 then w
+  else consume_steps(n - 1, p.ai_step(w, "phase-c-model", []).next_state, p)
+}
+
+-- TWO BINDINGS AND NOT ONE PARAMETERISED BY THE SCENARIO: the two seal
+-- terminals are two independent arguments at two call sites, and a single hook
+-- reused across both would let one crossed wire satisfy the pair. The counts (2
+-- and 3) are distinct from each other and from both scripts' lengths (6 and 5)
+-- and from both remainders (4 and 2), per S7.
+func consuming_pre_step_2(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: consume_steps(2, ctx.world, ctx.ports) } }
+
+func consuming_pre_step_3(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: consume_steps(3, ctx.world, ctx.ports) } }
+
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> FixtureHooks {
+  hooks_with(id, pre, deny_policy)
+}
+
+-- B7: the policy is a parameter rather than a record update on the result, so
+-- no site outside ext_fixture.ail spells a slot name.
+func hooks_with(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
+  fixture_hooks(id, {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: pre,
+    policy: policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  })
+}
+
+func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { entries: [hooks(id, pre)] }, strict_mode: false, verification: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Projections
+-- ---------------------------------------------------------------------------
+
+-- Axis A. Which scripted step the provider served, in order, read off the
+-- trace rather than the message list so it works on the Err path too.
+pure func served_from_trace(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e {
+          ProviderResult(i) => (if i.text == "" then "stop" else i.text) :: served_from_trace(rest),
+          _ => served_from_trace(rest)
+        },
+        _ => served_from_trace(rest)
+      }
+  }
+}
+
+-- Axis B/C. A coarse but total kind projection over the returned trace. Every
+-- record maps to something, so a DROPPED record shortens this list — which is
+-- the whole point. The named kinds are exactly the ones cluster 4 showed can
+-- vanish while every existing assertion stays green.
+pure func record_kind(r: LedgerRecord) -> string {
+  match r {
+    DecisionRecord(_) => "decision",
+    CompactionStageRecord(_) => "stage",
+    WireRecord(e) => match e {
+      ProviderResult(_) => "provider_result",
+      RunSummary(_) => "run_summary",
+      DoneEvent(_) => "done",
+      ErrorEvent(_) => "error",
+      _ => "wire"
+    }
+  }
+}
+
+pure func kinds(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest => record_kind(r) :: kinds(rest)
+  }
+}
+
+-- Axis A/C for the CLOCK cursor. `duration_ms` on the RunSummary is
+-- `finalize_now - started_at`, so it is a difference of two driver clock reads
+-- and is the cheapest observable that both of them produce. Read off the
+-- RETURNED trace, so it also rides the completeness axis.
+pure func duration_from_trace(records: [LedgerRecord]) -> Option[int] {
+  match records {
+    [] => None,
+    r :: rest =>
+      match r {
+        WireRecord(RunSummary(i)) => Some(i.duration_ms),
+        _ => duration_from_trace(rest)
+      }
+  }
+}
+
+pure func count_of(target: string, xs: [string]) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x == target then 1 else 0) + count_of(target, rest)
+  }
+}
+
+pure func join(xs: [string]) -> string {
+  match xs { [] => "", x :: [] => x, x :: rest => "${x},${join(rest)}" }
+}
+
+pure func eq_list(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && eq_list(xs, ys) }
+  }
+}
+
+pure func strictly_advancing(xs: [string]) -> bool {
+  match xs {
+    [] => true,
+    _ :: [] => true,
+    a :: rest => match rest { b :: _ => a != b && strictly_advancing(rest), [] => true }
+  }
+}
+
+pure func last_of(xs: [string]) -> string {
+  match xs { [] => "", x :: [] => x, _ :: rest => last_of(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Assertions
+-- ---------------------------------------------------------------------------
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+-- WI-D17's write class, asserted at the ADAPTER and not through the driver.
+--
+-- WHY THIS SHAPE AND NOT THE PROVENANCE SHAPE THE FILE READ GOT. The `files:`
+-- block below is a provenance assertion: it seeds the world, runs the driver,
+-- and shows the run's terminal outcome branching on what the world supplied.
+-- That is available for the read because the driver READS files. It is not
+-- available for the write, because nothing in the driver's call graph writes
+-- one — Route B part 2 is what routes compose's eighteen write-side sites, and
+-- until it lands there is no run whose behaviour can branch on a write.
+--
+-- So this asserts the class against the only thing that exists: the adapters.
+-- That is a weaker instrument than the provenance pair and it is named as such
+-- rather than presented as coverage.
+--
+-- WHAT IT MUST CATCH, because this is the one defect the class is shaped around:
+-- `scripted_file_write` returning `next_state: state`. Every other deterministic
+-- adapter in `ports.ail` legitimately does exactly that, and so does
+-- `ambient_file_write` one screen away, so it is a copy-paste away at all times.
+-- It type-checks. And the observation it produces — a later `file_read`
+-- reporting `present: false` — is BYTE-IDENTICAL to the observation produced if
+-- the write was never routed at all.
+--
+-- Which is why every row below asserts the CONTENT and not the presence, and
+-- why row 1 has a control asserting the path is absent BEFORE the write: an
+-- assertion that only reads `present: true` after a write is satisfied by a
+-- world that was seeded with the path and never written to.
+func assert_file_write_class() -> bool ! {FS, IO} {
+  let p = "/w/tmp/snippet.ail";
+  let w0 = empty_world_state();
+
+  -- 1. THE MUTANT ROW. Absent before, content-identical after.
+  let before = scripted_file(w0, p);
+  let wrote = scripted_file_write(before.next_state, p, "ALPHA");
+  let after = scripted_file(wrote.next_state, p);
+  let r1 = check("file_write: the path is absent before the write",
+                 not before.present,
+                 "the control failed, so the row below proves nothing");
+  let r2 = check("file_write: a write is read back BY CONTENT through file_read",
+                 after.present && after.content == "ALPHA",
+                 "present=${show(after.present)} content='${after.content}' — a `next_state: state` adapter produces exactly present=false, which is also what an unrouted write produces");
+
+  -- 2. THE ORDERING ROW. `lookup_file` is first-match, so an adapter that
+  --    APPENDED would serve the stale entry here and pass row 1 unchanged.
+  let over = scripted_file_write(wrote.next_state, p, "BRAVO");
+  let re_read = scripted_file(over.next_state, p);
+  let r3 = check("file_write: an overwrite serves the NEW content, not the first-written one",
+                 re_read.content == "BRAVO",
+                 "content='${re_read.content}' — appending to `files` instead of prepending gives stale-read-wins, which is a one-token difference with the opposite semantics");
+
+  -- 3. THE MAP ROW. Two writes to one path leave one entry. This is what pins
+  --    the `remove_path` call inside the write, which rows 1 and 2 do not: with
+  --    the prepend alone they both still pass and the table grows forever.
+  let r4 = check("file_write: the table stays a map — two writes to one path leave one entry",
+                 List.length(over.next_state.files) == 1,
+                 "files holds ${show(List.length(over.next_state.files))} entries after two writes to one path");
+
+  -- 4. THE SEEDED ROW. A write over a path the world was SEEDED with replaces
+  --    the seeded value. Seeded input and produced output share one table, so
+  --    an adapter that only prepended to a table it thought was empty is wrong
+  --    here and nowhere else.
+  let seeded = { empty_world_state() | files: [{ path: p, node: FsFile("SEEDED") }] };
+  let over_seed = scripted_file_write(seeded, p, "CHARLIE");
+  let seed_read = scripted_file(over_seed.next_state, p);
+  let r5 = check("file_write: a write over a SEEDED path replaces the seeded content",
+                 seed_read.content == "CHARLIE" && List.length(over_seed.next_state.files) == 1,
+                 "content='${seed_read.content}' entries=${show(List.length(over_seed.next_state.files))}");
+
+  -- 5. THE REMOVE ROWS. Remove makes the read absent, and removing a path that
+  --    is not there reports `ok: false` — which is what makes the deterministic
+  --    adapter agree with `removeFileResult`'s `Err` rather than inventing a
+  --    success the live half does not have.
+  let removed = scripted_file_remove(over.next_state, p);
+  let gone = scripted_file(removed.next_state, p);
+  let r6 = check("file_remove: the path is absent after the remove and the world reports ok",
+                 removed.ok && not gone.present && List.length(removed.next_state.files) == 0,
+                 "ok=${show(removed.ok)} present=${show(gone.present)}");
+  let absent = scripted_file_remove(empty_world_state(), p);
+  let r7 = check("file_remove: removing an absent path is NOT reported as a success",
+                 not absent.ok,
+                 "ok=true for a path the world does not hold — the live adapter's removeFileResult returns Err here, so the two would disagree");
+
+  -- 6. THE RECORDING ROW. `recording_file_write` must do BOTH jobs: append the
+  --    interaction AND perform the same state update. A recorder that logged the
+  --    write and forgot to wrap `scripted_file_write` would produce a log that
+  --    looks complete over a world that never changed — the two-homes failure
+  --    with the homes swapped, and the census would report it as covered.
+  let rec_w = recording_file_write(empty_world_state(), p, "DELTA");
+  let rec_read = scripted_file(rec_w.next_state, p);
+  let r8 = check("recording_file_write: the interaction is logged AND the table grew",
+                 List.length(rec_w.next_state.log) == 1
+                   && count_kind(rec_w.next_state.log, "file_write") == 1
+                   && rec_read.content == "DELTA",
+                 "log=${show(List.length(rec_w.next_state.log))} content='${rec_read.content}'");
+  let rec_r = recording_file_remove(rec_w.next_state, p);
+  let r9 = check("recording_file_remove: the second interaction takes ordinal 1 from the global counter",
+                 List.length(rec_r.next_state.log) == 2
+                   && count_kind(rec_r.next_state.log, "file_remove") == 1,
+                 "log=${show(List.length(rec_r.next_state.log))}");
+
+  r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9
+}
+
+-- WI-D18's DIRECTORY class, asserted at the ADAPTER for `assert_file_write_class`'s
+-- reason unchanged: nothing routes it, so there is no run whose behaviour can
+-- branch on a directory. Weaker than the file read's provenance pair, and named
+-- as such rather than presented as coverage.
+--
+-- ROW 3 IS WHY THE ITEM EXISTS. An empty directory and an absent path must be
+-- DISTINGUISHABLE. Every other row here passes under the prefix-derived
+-- representation that was rejected; row 3 is the only one that does not, because
+-- under that design an empty directory has no entries and therefore no evidence.
+-- If a future change makes `WorldState.files` unable to hold a childless
+-- directory, this is the row that says so.
+--
+-- Per S24 reachability is asserted separately from verdict throughout: every
+-- "after" row has a "before" control, because "present after mkdir" is satisfied
+-- by a world that always said present.
+func assert_directory_class() -> bool ! {FS, IO} {
+  let d = "/w/tmp";
+  let f = "/w/tmp/snippet.ail";
+  let w0 = empty_world_state();
+
+  -- 1. THE DERIVATION ROW. A directory exists because something is under it,
+  --    with no `mkdirAll` anywhere. This is what keeps the deterministic adapter
+  --    agreeing with the ambient one for a fixture that seeds a file directly:
+  --    a host has no way to hold `/w/tmp/snippet.ail` without `/w/tmp` being a
+  --    directory.
+  let before_d = scripted_path_stat(w0, d);
+  let wrote = scripted_file_write(w0, f, "ALPHA");
+  let after_d = scripted_path_stat(wrote.next_state, d);
+  let after_f = scripted_path_stat(wrote.next_state, f);
+  let r1a = check("path_stat: the parent is MISSING before anything is written under it",
+                  path_kind_label(before_d.kind) == "missing",
+                  "kind=${path_kind_label(before_d.kind)} — the control failed, so the row below proves nothing");
+  let r1 = check("path_stat: a write under a path makes that path a DIRECTORY, with no mkdir",
+                 path_kind_label(after_d.kind) == "dir" && path_kind_label(after_f.kind) == "file",
+                 "parent=${path_kind_label(after_d.kind)} child=${path_kind_label(after_f.kind)}");
+
+  -- 2. THE THREE-VALUED ROW. `normalize_type` needs dir / file / missing, and
+  --    `FileRead.present` has two values. This is the assertion that the third
+  --    value exists and is reachable.
+  let missing = scripted_path_stat(wrote.next_state, "/w/nope");
+  let r2 = check("path_stat: the class is genuinely THREE-valued — dir, file and missing all occur in one world",
+                 path_kind_label(after_d.kind) == "dir"
+                   && path_kind_label(after_f.kind) == "file"
+                   && path_kind_label(missing.kind) == "missing",
+                 "dir=${path_kind_label(after_d.kind)} file=${path_kind_label(after_f.kind)} missing=${path_kind_label(missing.kind)}");
+
+  -- 3. THE ROW THE ITEM IS SHAPED AROUND. An EMPTY directory is distinguishable
+  --    from an ABSENT one. `dir_list` answers `present: true, entries: []` for
+  --    the first and `present: false, entries: []` for the second, and
+  --    `list_dir_impl` turns that difference into `entries: []` against a
+  --    `not_found` error — two different tool results a session can branch on.
+  --
+  --    An adapter deriving `present` from `List.length(entries) > 0` type-checks
+  --    and passes every other row in this function.
+  let made = scripted_dir_make(w0, "/w/empty");
+  let empty_listing = scripted_dir_list(made.next_state, "/w/empty");
+  let absent_listing = scripted_dir_list(made.next_state, "/w/never-made");
+  let r3 = check("dir_list: an EMPTY directory is distinguishable from an ABSENT path",
+                 made.ok
+                   && empty_listing.present && List.length(empty_listing.entries) == 0
+                   && not absent_listing.present && List.length(absent_listing.entries) == 0,
+                 "empty: present=${show(empty_listing.present)} n=${show(List.length(empty_listing.entries))}; absent: present=${show(absent_listing.present)} — if these two agree the world cannot hold a childless directory and `list_dir` on one replies not_found");
+
+  -- 4. THE LISTING ROW. Immediate children only, as NAMES, deduped and sorted.
+  --    Two files in one subdirectory both yield that subdirectory's name, and a
+  --    real directory holds it once; the sort is what makes the listing a
+  --    function of the SET rather than of the write order, which matters because
+  --    `scripted_file_write` prepends.
+  --    THE WRITE ORDER HERE IS CHOSEN AND NOT INCIDENTAL, and a mutant is what
+  --    said so: written the other way round (`b/x`, `b/y`, then `a.ail`) the
+  --    prepend leaves `a.ail` at the head and the derived names come out
+  --    ALREADY SORTED, so dropping the sort passed this row and the claim in the
+  --    label was pinned by nothing. `a.ail` is written FIRST so that the
+  --    unsorted answer is `[b, a.ail]` and the sort has something to do.
+  let many = scripted_file_write(
+               scripted_file_write(
+                 scripted_file_write(w0, "/w/p/a.ail", "3").next_state,
+                 "/w/p/b/x.ail", "1").next_state,
+               "/w/p/b/y.ail", "2");
+  let listing = scripted_dir_list(many.next_state, "/w/p");
+  let r4 = check("dir_list: immediate children only, deduped and SORTED — not grandchildren, not write order",
+                 listing.present && show(listing.entries) == show(["a.ail", "b"]),
+                 "entries=${show(listing.entries)} — expected [a.ail, b]; two files under b must yield b once, and the order must not depend on which was written first");
+
+  -- 5. THE MKDIR ROWS. Idempotent over an existing directory, refused over an
+  --    existing FILE — both of which the host does, and the second of which is
+  --    the one input where a bare table insertion would have invented a state
+  --    the live world cannot reach.
+  let again = scripted_dir_make(made.next_state, "/w/empty");
+  let over_file = scripted_dir_make(wrote.next_state, f);
+  let r5 = check("dir_make: creating an existing directory succeeds and does not grow the table",
+                 again.ok && List.length(again.next_state.files) == List.length(made.next_state.files),
+                 "ok=${show(again.ok)} entries ${show(List.length(made.next_state.files))} -> ${show(List.length(again.next_state.files))}");
+  let r6 = check("dir_make: creating a directory over an existing FILE is refused",
+                 not over_file.ok,
+                 "ok=true — a table insertion here would put a directory and a file at one key, which no host can produce");
+
+  -- 6. THE KIND-EXCLUSION ROW. A path is a file or a directory and never both,
+  --    which the ONE KINDED TABLE gets by construction and a `dirs`-beside-`files`
+  --    design would have had to police. `file_read` on a directory is absent, and
+  --    `file_write` over one is refused.
+  let read_dir = scripted_file(made.next_state, "/w/empty");
+  let write_over_dir = scripted_file_write(made.next_state, "/w/empty", "X");
+  let r7 = check("the table is kinded: a directory is not a readable file and cannot be overwritten by one",
+                 not read_dir.present && not write_over_dir.ok,
+                 "present=${show(read_dir.present)} write_ok=${show(write_over_dir.ok)}");
+
+  -- 7. THE PATH-KEY ROW. WI-D18 keys the world on RAW STRINGS and does not
+  --    normalise; `WorldState.files` states the rule and the reason. This
+  --    reproduces compose's own live shape — `compose.ail:769` creates
+  --    `"${ctx.workdir}/tmp"` and `:771` writes `"tmp/${name}.ail"` — and pins
+  --    what the world does with it.
+  --
+  --    IT IS NOT A BUG ROW. It asserts the decided behaviour, and the point is
+  --    the SECOND clause: the aliased directory is left EMPTY rather than absent,
+  --    so a routed run's `list_dir` reports `entries: []` where a correct run
+  --    reports the file. Under the prefix-derived representation this state would
+  --    have read as "the mkdir never happened", which is indistinguishable from
+  --    the effect not having been routed at all. Representing the empty directory
+  --    is what makes the key rule's consequence observable, and that is the
+  --    finding the two decisions produce together.
+  let aliased = scripted_file_write(scripted_dir_make(w0, "/w/tmp").next_state,
+                                    "tmp/x.ail", "BODY");
+  let abs_listing = scripted_dir_list(aliased.next_state, "/w/tmp");
+  let rel_listing = scripted_dir_list(aliased.next_state, "tmp");
+  let r8 = check("path key: an absolute mkdir and a relative write are TWO directories, and the created one is observably empty",
+                 abs_listing.present && List.length(abs_listing.entries) == 0
+                   && rel_listing.present && show(rel_listing.entries) == show(["x.ail"]),
+                 "abs: present=${show(abs_listing.present)} n=${show(List.length(abs_listing.entries))}; rel entries=${show(rel_listing.entries)} — the world compares path keys, it does not resolve them, and Route B part 2 must supply one spelling per path");
+
+  -- 8. THE RECORDING ROW. `recording_dir_make` must do BOTH jobs — append the
+  --    interaction AND perform the state update — for `recording_file_write`'s
+  --    reason: a recorder that logged and did not act produces a log that looks
+  --    complete over a world that never changed.
+  let rec = recording_dir_make(empty_world_state(), d);
+  let rec_stat = scripted_path_stat(rec.next_state, d);
+  let r9 = check("recording_dir_make: the interaction is logged AND the directory exists",
+                 List.length(rec.next_state.log) == 1
+                   && count_kind(rec.next_state.log, "dir_make") == 1
+                   && path_kind_label(rec_stat.kind) == "dir",
+                 "log=${show(List.length(rec.next_state.log))} kind=${path_kind_label(rec_stat.kind)}");
+
+  r1a && r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9
+}
+
+-- Axis A + B for one run. `expect_served` is the served sequence an advancing
+-- cursor must produce; it is written out literally rather than derived from the
+-- run, so a frozen cursor cannot satisfy it by agreeing with itself.
+func assert_run(label: string, traced: TracedSessionResult, expect_served: [string]) -> bool ! {IO} {
+  let served = served_from_trace(traced.trace.records);
+  let ks = kinds(traced.trace.records);
+  let _ = println("${label}: served=[${join(served)}] kinds=${show(List.length(ks))} records");
+
+  let a1 = check("${label}: cursor advances", strictly_advancing(served),
+                 "served=[${join(served)}] — a repeat means the cursor froze");
+  let a2 = check("${label}: served sequence is exactly the script", eq_list(served, expect_served),
+                 "expected [${join(expect_served)}] got [${join(served)}]");
+  -- Completeness. One provider_result per served step, and the trace ENDS with
+  -- exactly one run_summary (D6.1). Counting rather than re-reading the summary
+  -- is deliberate: a dropped record must change a number here.
+  let a3 = check("${label}: one provider_result per served step",
+                 count_of("provider_result", ks) == List.length(expect_served),
+                 "provider_result=${show(count_of("provider_result", ks))} expected ${show(List.length(expect_served))}");
+  let a4 = check("${label}: exactly one run_summary, and it is last",
+                 count_of("run_summary", ks) == 1 && last_of(ks) == "run_summary",
+                 "run_summary=${show(count_of("run_summary", ks))} last=${last_of(ks)}");
+  a1 && a2 && a3 && a4
+}
+
+-- Axis C. Two runs of the SAME scripted world must be indistinguishable. This
+-- is the assertion that fails on an un-routed ambient read, and it is the one
+-- the later effect classes lean on.
+func assert_deterministic(label: string, a: TracedSessionResult, b: TracedSessionResult) -> bool ! {IO} {
+  let sa = served_from_trace(a.trace.records);
+  let sb = served_from_trace(b.trace.records);
+  let ka = kinds(a.trace.records);
+  let kb = kinds(b.trace.records);
+  let c1 = check("${label}: served sequence is reproducible", eq_list(sa, sb),
+                 "[${join(sa)}] vs [${join(sb)}]");
+  let c2 = check("${label}: record-kind sequence is reproducible", eq_list(ka, kb),
+                 "[${join(ka)}] vs [${join(kb)}]");
+  -- THE CLOCK CURSOR'S ADVANCEMENT ASSERTION (WI-A12, clock class).
+  --
+  -- `duration_ms` is the difference between two driver clock reads. Under the
+  -- routed world clock it is a function of the world alone, so two runs of the
+  -- same scripted world must agree EXACTLY. Under an ambient `now()` it is wall
+  -- time and the two runs disagree by however long the machine took.
+  --
+  -- This is the assertion that fails on an UN-ROUTED clock site, and unlike a
+  -- "the value is present" check it cannot be satisfied by carrying a stale
+  -- cursor forward. It is paired with the non-zero check below because a
+  -- world clock that never advances is also perfectly reproducible — a frozen
+  -- cursor and a routed one are indistinguishable on determinism alone, which
+  -- is cluster 1's freeze hazard restated for the clock.
+  let da = duration_from_trace(a.trace.records);
+  let db = duration_from_trace(b.trace.records);
+  let c3 = match da {
+    None => check("${label}: run_summary carries a duration", false, "no RunSummary in the returned trace"),
+    Some(x) => match db {
+      None => check("${label}: run_summary carries a duration", false, "no RunSummary in the second run"),
+      Some(y) =>
+        check("${label}: clock reads are reproducible across runs", x == y,
+              "duration_ms ${show(x)} vs ${show(y)} — an ambient clock varies between two runs of the same world")
+        && check("${label}: the world clock advances", x > 0,
+                 "duration_ms=${show(x)} — a clock that never advances is reproducible but frozen")
+    }
+  };
+  c1 && c2 && c3
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenarios
+-- ---------------------------------------------------------------------------
+
+func run_with(rt: ExtRuntime, steps: int, s: [ScriptedStep]) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    rt, "task", "", false, budget(), "phase-c-model", history(), ".",
+    steps, false, 0, zero_rates(), Scripted(s)
+  )
+}
+
+-- ---------------------------------------------------------------------------
+-- Approval class (WI-A12)
+-- ---------------------------------------------------------------------------
+
+-- A policy that sends every tool call to the approval channel, so the driver
+-- performs one approval read per call.
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("probe: approval required", DenyAfterTimeout)
+}
+
+func approval_hooks(id: string) -> FixtureHooks {
+  hooks_with(id, passthrough_pre_step, pending_policy)
+}
+
+func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow }
+
+func allow_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { entries: [hooks_with(id, passthrough_pre_step, allow_policy)] }, strict_mode: false, verification: v }
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { entries: [approval_hooks(id)] }, strict_mode: false, verification: v }
+}
+
+-- The denial each approval read produced, in order — the approval cursor's
+-- equivalent of `served_from_trace`.
+--
+-- Read off the RETURNED MESSAGES, not the trace, and that is not a shortcut.
+-- The tool result message IS the production-visible
+-- consequence — it is what the model sees on the next turn — so asserting on it
+-- tests the thing that matters rather than the thing that is convenient.
+--
+--   TENSED AT WI-D2. The original note gave a second reason that has expired:
+--   `NativeToolDenied` WAS `ledger_emit`-only at cluster 4, which measured the
+--   emit/append imbalance at 37 against 15, and WI-D2 closed it — the denial now
+--   reaches the returned trace on both the policy path and the approval path.
+--   The reason above is the one that never depended on that, and it is why this
+--   assertion is not moved to the trace now that it could be: the returned
+--   message is what the next turn actually consumes.
+pure func tool_message_contents(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" then m.content :: tool_message_contents(rest)
+      else tool_message_contents(rest)
+  }
+}
+
+-- Positional containment: reason[i] must appear in tool message[i].
+pure func reasons_in_order(expected: [string], contents: [string]) -> bool {
+  match expected {
+    [] => true,
+    e :: erest => match contents {
+      [] => false,
+      c :: crest => contains(c, e) && reasons_in_order(erest, crest)
+    }
+  }
+}
+
+func run_world(rt: ExtRuntime, steps: int, w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  run_world_history(rt, steps, w, history())
+}
+
+func run_world_history(rt: ExtRuntime, steps: int, w: WorldState, h: [Message]) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    rt, "task", "", false, budget(), "phase-c-model", h, ".",
+    steps, false, 0, zero_rates(), ScriptedWorld(w)
+  )
+}
+
+-- The RunSummary's finish_reason, off the returned trace.
+pure func finish_from_trace(records: [LedgerRecord]) -> string {
+  match records {
+    [] => "(none)",
+    r :: rest =>
+      match r {
+        WireRecord(RunSummary(i)) => i.finish_reason,
+        _ => finish_from_trace(rest)
+      }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("world_state_probe: WI-A12 advancement + trace completeness");
+
+  -- advance: the clean path.
+  let advance = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
+  let ok_advance = assert_run("advance", advance, ["s0", "s1", "s2", "s3", "done"]);
+
+  -- fold: the F6 shape. A history-derived cursor pins here.
+  let folding = run_with(rt_with(folding_pre_step, "probe_fold"), 12, script());
+  let ok_fold = assert_run("fold", folding, ["s0", "s1", "s2", "s3", "done"]);
+
+  -- exhaust: the FAIL terminal path, where cluster 4's trace-argument hazard
+  -- lives. The decision record AND the run_summary must both survive.
+  let exhaust = run_with(rt_with(passthrough_pre_step, "probe_exhaust"), 3, endless_script());
+  let ex_kinds = kinds(exhaust.trace.records);
+  let ex_served = served_from_trace(exhaust.trace.records);
+  let _ = println("exhaust: served=[${join(ex_served)}]");
+  let ok_ex_cursor = check("exhaust: cursor advances to the budget",
+                           eq_list(ex_served, ["e0", "e1", "e2"]),
+                           "expected [e0,e1,e2] got [${join(ex_served)}]");
+  let ok_ex_outcome = check("exhaust: run took the failure path",
+                            match exhaust.result { Ok(_) => false, Err(_) => true },
+                            "expected Err from a script with no terminator");
+  let ok_ex_decision = check("exhaust: the decision record survives into the returned trace",
+                             count_of("decision", ex_kinds) > 0,
+                             "kinds=[${join(ex_kinds)}] — a finalizer handed the wrong trace drops it silently");
+  let ok_ex_summary = check("exhaust: exactly one run_summary, and it is last",
+                            count_of("run_summary", ex_kinds) == 1 && last_of(ex_kinds) == "run_summary",
+                            "kinds=[${join(ex_kinds)}]");
+
+  -- approval: THE APPROVAL CURSOR'S ADVANCEMENT ASSERTION.
+  --
+  -- Three tool calls, three seeded approval inputs carrying DISTINCT deny
+  -- reasons. The driver must serve them in order, so the recorded denial
+  -- reasons are [alpha, bravo, charlie]. A frozen approval cursor serves
+  -- [alpha, alpha, alpha]; an un-routed one reads stdin, hits EOF, and serves
+  -- the default-deny reason three times. Both are caught, and neither is
+  -- distinguishable from correct behaviour on the determinism axis alone —
+  -- every one of those failures is perfectly reproducible.
+  let approval_world: WorldState = {
+    empty_world_state() |
+    script: [step_named("a0"), step_named("a1"), step_named("a2"), prose_step("done")],
+    approvals: [
+      "{\"type\":\"deny\",\"reason\":\"alpha\"}",
+      "{\"type\":\"deny\",\"reason\":\"bravo\"}",
+      "{\"type\":\"deny\",\"reason\":\"charlie\"}"
+    ]
+  };
+  let appr = run_world(approval_rt("probe_approval"), 12, approval_world);
+  let appr_tools = match appr.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let _ = println("approval: ${show(List.length(appr_tools))} tool results returned");
+  let ok_appr = check("approval: the approval cursor advances through its queue",
+                      reasons_in_order(["alpha", "bravo", "charlie"], appr_tools),
+                      "expected alpha/bravo/charlie in the first three tool results — a repeat means the cursor froze, a 'timeout' reason means it is un-routed and reading stdin");
+
+  let appr2 = run_world(approval_rt("probe_approval"), 12, approval_world);
+  let appr2_tools = match appr2.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let ok_appr_det = check("approval: the served approvals are reproducible",
+                          eq_list(appr_tools, appr2_tools),
+                          "two runs of the same world disagreed");
+
+  -- env: THE ENV CLASS'S ASSERTION.
+  --
+  -- Env reads are a keyed lookup, not a cursor, so "advancement" is the wrong
+  -- test — there is no position to freeze. The right test is PROVENANCE: does
+  -- the value the driver acted on come from the world or from the process?
+  --
+  -- `MOTOKO_HEADLESS` makes that decidable through behaviour rather than
+  -- through a reported value. It sets `require_system_prompt: not headless`, so
+  -- with a history carrying NO system message the two answers diverge into
+  -- different terminal outcomes:
+  --
+  --   headless "1"  -> the run proceeds and reaches its scripted terminator
+  --   headless ""   -> the run seals with system-prompt-empty
+  --
+  -- CI's process environment does not set MOTOKO_HEADLESS, so an un-routed read
+  -- yields "" and the first case FAILS. The world cannot fake this by agreeing
+  -- with the ambient environment, which is what makes it evidence.
+  let no_system: [Message] = [msg("user", "u")];
+  let headless_world: WorldState = {
+    empty_world_state() |
+    script: [prose_step("done")],
+    env: [{ key: "MOTOKO_HEADLESS", value: "1" }]
+  };
+  let plain_world: WorldState = { empty_world_state() | script: [prose_step("done")] };
+  let with_headless = run_world_history(approval_rt("probe_env_h"), 4, headless_world, no_system);
+  let without_headless = run_world_history(approval_rt("probe_env_p"), 4, plain_world, no_system);
+  let fin_h = finish_from_trace(with_headless.trace.records);
+  let fin_p = finish_from_trace(without_headless.trace.records);
+  let _ = println("env: headless-from-world finish=${fin_h}, headless-unset finish=${fin_p}");
+  let ok_env = check("env: the driver read MOTOKO_HEADLESS from the world, not the process",
+                     fin_h == "stop",
+                     "finish_reason=${fin_h}, expected stop — an un-routed read sees the process env, where MOTOKO_HEADLESS is unset");
+  let ok_env_ctl = check("env: the same world without the key takes the other branch",
+                         fin_p == "error",
+                         "finish_reason=${fin_p}, expected error — if this also passes, the assertion above proves nothing");
+
+  -- files: THE FILESYSTEM CLASS'S ASSERTION (WI-D3).
+  --
+  -- The poison pair in `make world_state` establishes that a deterministic run
+  -- performs no ambient file read and that a live one dies without the
+  -- capability. It CANNOT see the other failure: a `scripted_file` that is bound
+  -- and whose table the driver never consults. Both halves of the pair stay
+  -- green over a world whose `files` are ignored — the deterministic run reads
+  -- nothing either way, and the live run still dies on `ambient_file`. So the
+  -- class needs the same PROVENANCE assertion the env class needed, for the same
+  -- reason and in the same shape: a value the world supplies, a behaviour that
+  -- branches on it, and a control proving the branches differ.
+  --
+  -- The discriminator is the profile's `agent.context_limit`. Seeded one token
+  -- above the output allowance, it leaves a one-token effective input window,
+  -- so compaction fires and exhausts and the run seals; absent, the limit
+  -- resolves to 0 ("unknown") and compaction is skipped entirely:
+  --
+  --   files seeded -> compaction exhausted -> finish_reason "compaction_exhausted"
+  --   files empty  -> limit 0, no compaction -> the scripted terminator, "stop"
+  --
+  -- The path is the one the driver COMPUTES rather than one this probe asserts:
+  -- with an empty env table `profile_dir_path` resolves MOTOKO_PROFILE_DIR to
+  -- "", MOTOKO_CONFIG to "default" and MOTOKO_REPO to "", giving
+  -- `.motoko/config/default/config.json`. That file exists in this checkout and
+  -- carries NO `agent.context_limit`, so an un-routed read yields 0 and the
+  -- seeded case fails — the world cannot pass by agreeing with the host.
+  let files_world: WorldState = {
+    empty_world_state() |
+    script: [prose_step("done")],
+    files: [{ path: ".motoko/config/default/config.json",
+              node: FsFile("{\"agent\":{\"context_limit\":${show(output_token_allowance() + 1)}}}") }]
+  };
+  let no_files_world: WorldState = { empty_world_state() | script: [prose_step("done")] };
+  let with_files = run_world(approval_rt("probe_files_s"), 4, files_world);
+  let without_files = run_world(approval_rt("probe_files_c"), 4, no_files_world);
+  let fin_f = finish_from_trace(with_files.trace.records);
+  let fin_n = finish_from_trace(without_files.trace.records);
+  let _ = println("files: limit-from-world finish=${fin_f}, no-file finish=${fin_n}");
+  let ok_files = check("files: the driver read the context limit from the world's file table, not the host's",
+                       fin_f == "compaction_exhausted",
+                       "finish_reason=${fin_f}, expected compaction_exhausted — an un-routed read sees .motoko/config/default/config.json, which declares no agent.context_limit");
+  let ok_files_ctl = check("files: the same world without the file takes the other branch",
+                           fin_n == "stop",
+                           "finish_reason=${fin_n}, expected stop — if this also fails the assertion above proves nothing");
+
+  -- =========================================================================
+  -- WI-D25: THE TWO SEAL-TERMINAL SUCCESSOR ROWS
+  -- =========================================================================
+  --
+  -- WHAT THEY ASSERT. `c2_loop`'s `CallModel` arm dispatches the pre-step chain
+  -- and then seals. The seal has three arms; the `Ok` arm has carried
+  -- `chain.next_state` into `dispatch_step` since WI-B2b, and the two `Err`
+  -- arms — `SealSystemPromptEmpty` and `SealExhausted` — passed `st.world_state`
+  -- to `c2_finalize` instead, which is the chain's successor dropped one frame
+  -- above the dispatcher exactly as S29 describes. WI-D4 named the drop in a
+  -- comment and deferred it on stated scope; WI-D25 is the item whose scope it
+  -- is, and these are the rows that make the difference observable.
+  --
+  -- WHY THE COUNTS ARE THE ASSERTION AND NOT A finish_reason. Both terminals
+  -- were ALREADY reachable in this file — the env row above drives
+  -- `SealSystemPromptEmpty` and the files row drives `SealExhausted` — and both
+  -- were green across the drop, because a non-performing hook makes the two
+  -- worlds identical. The quantity that separates them is what the hook
+  -- CONSUMED: 6 scripted steps minus 2 leaves 4, and 5 minus 3 leaves 2. Under
+  -- the drop the terminal world is the STEP-START world and both remainders are
+  -- the full script.
+  --
+  -- THE REACHABILITY CLAUSE IS ASSERTED SEPARATELY (S24). A run that never
+  -- reached its seal terminal would leave the script untouched too, which is
+  -- byte-identical to the drop — so each row states the terminal it took.
+  let seal_sp_script: [ScriptedStep] =
+    [step_named("p0"), step_named("p1"), step_named("p2"),
+     step_named("p3"), step_named("p4"), step_named("p5")];
+  let seal_sp_world: WorldState = { empty_world_state() | script: seal_sp_script };
+  let seal_sp = run_world_history(rt_with(consuming_pre_step_2, "probe_seal_sp"), 4, seal_sp_world, no_system);
+  let seal_sp_ctl = run_world_history(rt_with(passthrough_pre_step, "probe_seal_sp_c"), 4, seal_sp_world, no_system);
+  let fin_sp = finish_from_trace(seal_sp.trace.records);
+  let left_sp = List.length(seal_sp.world.script);
+  let left_sp_ctl = List.length(seal_sp_ctl.world.script);
+  let _ = println("seal: SystemPromptEmpty finish=${fin_sp} script left=${show(left_sp)} of 6 (control ${show(left_sp_ctl)})");
+  let ok_sp_reached = check("seal(SystemPromptEmpty): the run took the seal terminal",
+                            fin_sp == "error",
+                            "finish_reason=${fin_sp}, expected error — a run that sealed successfully never reaches the dropped argument, and the count below would prove nothing");
+  let ok_sp_thread = check("seal(SystemPromptEmpty): the terminal world carries the pre-step chain's successor",
+                           left_sp == 4,
+                           "the hook consumed 2 of 6 scripted steps, so the terminal world must hold 4 — got ${show(left_sp)}. 6 means c2_finalize was handed st.world_state and the consumption un-happened");
+  let ok_sp_ctl = check("seal(SystemPromptEmpty): a NON-performing hook leaves the script whole",
+                        left_sp_ctl == 6,
+                        "control left ${show(left_sp_ctl)} of 6 — if the driver consumes steps on this path the row above is not attributable to the hook");
+
+  let seal_ex_script: [ScriptedStep] =
+    [step_named("q0"), step_named("q1"), step_named("q2"), step_named("q3"), step_named("q4")];
+  let seal_ex_world: WorldState = {
+    empty_world_state() |
+    script: seal_ex_script,
+    files: [{ path: ".motoko/config/default/config.json",
+              node: FsFile("{\"agent\":{\"context_limit\":${show(output_token_allowance() + 1)}}}") }]
+  };
+  let seal_ex = run_world_history(rt_with(consuming_pre_step_3, "probe_seal_ex"), 4, seal_ex_world, history());
+  let seal_ex_ctl = run_world_history(rt_with(passthrough_pre_step, "probe_seal_ex_c"), 4, seal_ex_world, history());
+  let fin_ex = finish_from_trace(seal_ex.trace.records);
+  let left_ex = List.length(seal_ex.world.script);
+  let left_ex_ctl = List.length(seal_ex_ctl.world.script);
+  let _ = println("seal: CompactionExhausted finish=${fin_ex} script left=${show(left_ex)} of 5 (control ${show(left_ex_ctl)})");
+  let ok_ex_reached = check("seal(CompactionExhausted): the run took the seal terminal",
+                            fin_ex == "compaction_exhausted",
+                            "finish_reason=${fin_ex}, expected compaction_exhausted — the world seeds a one-token effective input window so any history exhausts");
+  let ok_ex_thread = check("seal(CompactionExhausted): the terminal world carries the pre-step chain's successor",
+                           left_ex == 2,
+                           "the hook consumed 3 of 5 scripted steps, so the terminal world must hold 2 — got ${show(left_ex)}. 5 means the successor was dropped");
+  let ok_ex_ctl = check("seal(CompactionExhausted): a NON-performing hook leaves the script whole",
+                        left_ex_ctl == 5,
+                        "control left ${show(left_ex_ctl)} of 5 — the row above would not be attributable to the hook");
+
+  -- tools: THE TYPED TOOL CONTRACT'S ASSERTION.
+  --
+  -- All four behaviours the plan names, through one production adapter
+  -- contract, in one run: ordinary success, a typed execution error, a
+  -- wrong-call-id correlation fault, and completion after the deadline.
+  --
+  -- Each is a DISTINCT typed outcome, and the point of the class is that a
+  -- `(string, string) -> string` port could not tell three of them apart — they
+  -- would all have arrived as some string. So the assertion checks that each
+  -- fault reaches the model as its own discriminated payload, in order, which
+  -- is simultaneously the advancement check for the tool cursor: a frozen queue
+  -- serves the first outcome four times.
+  --
+  -- MOTOKO_TOOL_TIMEOUT_MS is read through the ENV class landed earlier, so the
+  -- deadline is configured by the world too, not by a constant.
+  let tool_world: WorldState = {
+    empty_world_state() |
+    script: [step_named("t0"), step_named("t1"), step_named("t2"), step_named("t3"), prose_step("done")],
+    env: [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "50" }],
+    tools: [
+      -- WI-D22's `exit_code`, all -1 ("nothing said"). Note the SECOND entry's
+      -- `code: "ExitCode"` is D3's typed tool fault class id and is a different
+      -- quantity from this field: the fault class says which failure, the exit
+      -- code says what a process returned, and this world runs no process.
+      { tool_call_id: "", duration_ms: 1,  code: "",         message: "",             content: "OK-ALPHA", exit_code: -1 },
+      { tool_call_id: "", duration_ms: 1,  code: "ExitCode", message: "boom-bravo",   content: "",         exit_code: -1 },
+      { tool_call_id: "WRONG-ID", duration_ms: 1, code: "",  message: "",             content: "",         exit_code: -1 },
+      { tool_call_id: "", duration_ms: 999, code: "",        message: "",             content: "OK-DELTA", exit_code: -1 }
+    ]
+  };
+  let tools_run = run_world(allow_rt("probe_tools"), 12, tool_world);
+  let tool_msgs = match tools_run.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let _ = println("tools: ${show(List.length(tool_msgs))} tool results returned");
+  let ok_tool_ok = check("tools: ordinary success carries the tool's own output",
+                         reasons_in_order(["OK-ALPHA"], tool_msgs),
+                         "first tool result did not carry OK-ALPHA");
+  let ok_tool_err = check("tools: a typed execution error is discriminated, not a string",
+                          reasons_in_order(["OK-ALPHA", "boom-bravo"], tool_msgs),
+                          "second tool result did not carry the typed ExitCode fault");
+  let ok_tool_corr = check("tools: a wrong-call-id answer is a correlation fault",
+                           reasons_in_order(["OK-ALPHA", "boom-bravo", "WRONG-ID"], tool_msgs),
+                           "third tool result did not report the correlation mismatch");
+  let ok_tool_dl = check("tools: completion after the deadline is its own outcome",
+                         reasons_in_order(["OK-ALPHA", "boom-bravo", "WRONG-ID", "ToolDeadlineExceeded"], tool_msgs),
+                         "fourth tool result did not report a deadline fault — the run took 999ms against a 50ms timeout");
+
+  -- file_write / file_remove: WI-D17's class, at the adapter.
+  let ok_write = assert_file_write_class();
+
+  -- path_stat / dir_list / dir_make: WI-D18's class, at the adapter.
+  let ok_dir = assert_directory_class();
+
+  -- determinism: same world twice.
+  let again = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
+  let ok_det = assert_deterministic("repeat", advance, again);
+
+  if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
+     && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_files && ok_files_ctl && ok_write && ok_dir
+     && ok_sp_reached && ok_sp_thread && ok_sp_ctl && ok_ex_reached && ok_ex_thread && ok_ex_ctl
+     && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det then
+    println("world_state_probe PASS")
+  else {
+    let _ = println("world_state_probe FAIL");
+    exit(1)
+  }
+}
+
+-- =============================================================================
+-- WI-D23: THE EXIT-CODE WITNESS. Its own entry point, deliberately NOT part of
+-- `main`: the Makefile's typed-tool poison pair requires `main` to COMPLETE
+-- with Process withheld ("fully-seeded world completes with Process withheld"),
+-- and two of these three rows drive a REAL subprocess to a chosen exit code —
+-- which is the only kind of row that can see the live arm's binding at all.
+-- Every in-process fixture stays green when that arm stamps -1, because the
+-- scripted arm already worked and the fixtures exercise it.
+--
+-- The three rows and the mutant each exists to kill (restore by file copy, S17):
+--
+--   live       `world_tool`'s [] arm on a command that exits 7. RED when the
+--              arm's binding is reverted to `exit_code: -1`.
+--   adoption   `session.ext_ports_of`'s OWN `tool_handle` closure — not a
+--              substrate probe, per S14's two-subjects rule — against a
+--              scripted world whose `ScriptedTool` carries 5. RED when the
+--              bridge's projection is dropped or wired to the wrong variant.
+--   projection `dispatch_one` and `dispatch_one_typed` on one call that exits
+--              3: byte-identical content, and the code is 3. RED when the
+--              sibling's exit code is hardwired to 0 (the arm the other two
+--              rows cannot pin alone) or the projection stops being one.
+--
+-- 7, 5 and 3 are pairwise distinct, distinct from each other's duration (11)
+-- and from the semantically loaded -1/0/1; 137 is WI-D22's round-trip row. Per
+-- S7, no two quantities here are equal, so a crossed wire cannot cancel out.
+export func exit_code_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let _ = println("exit_code_witness: WI-D23 — the typed exit code reaches the caller");
+
+  -- live: a real subprocess, driven to a code no default can imitate.
+  let live_inv: ToolInvocation = {
+    call: { id: "d23-live", tool: "BashExec", arguments: jo([kv("cmd", js("exit 7"))]) },
+    workdir: ".",
+    timeout_ms: 0,
+    started_at_ms: 0
+  };
+  let live = world_tool(empty_world_state(), live_inv);
+  let ok_live = check("live arm: a real BashExec exiting 7 carries typed exit_code 7",
+                      match live.outcome { ToolCompleted(c) => c.exit_code == 7, _ => false },
+                      "expected ToolCompleted with exit_code 7 — not -1 (the pre-D23 stamp), not 0, not 1");
+
+  -- adoption: the bridge itself, fed a scripted world. This is the row that
+  -- catches the `ExtProcOutcome` projection being dropped, because the seam
+  -- was built across four items with no caller at all and this is its first.
+  let scripted_tool: ScriptedTool =
+    { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "d23-scripted", exit_code: 5 };
+  -- `ext_effects` AND NOT `tools` SINCE WI-D24, and this line is the D23 row
+  -- being MOVED rather than rewritten. The bridge's dispatch is an extension
+  -- effect: it is served from its own cursor and recorded under its own identity
+  -- class, so a world seeding `tools` here leaves this queue empty and the
+  -- closure delegates to the real dispatcher — which is exactly what this row
+  -- reported when WI-D24 landed (got exit_code 1, the defensive arm's code, from
+  -- a real `BashExec {}`). The row's subject is unchanged: it is still
+  -- `ext_ports_of`'s OWN closure against a scripted world, per S14.
+  let w5 = { empty_world_state() | ext_effects: [scripted_tool] };
+  let eports = Session.ext_ports_of(scripted_ports(), w5, "");
+  let adopted = eports.tool_handle(world_to_token(w5), "BashExec", "{}");
+  let ok_adopt = check("adoption: ext_ports_of's tool_handle closure hands the scripted exit code 5 through ExtProcOutcome",
+                       adopted.exit_code == 5 && adopted.output == "d23-scripted",
+                       "expected exit_code 5 with output 'd23-scripted' — got exit_code ${show(adopted.exit_code)}");
+
+  -- projection: one call, both faces. The content must be byte-identical and
+  -- the code must be the subprocess's own, so a sibling hardwired to 0 — the
+  -- one mutant the 7-row and 5-row cannot pin alone — goes red here.
+  let proj_call: ToolCall = { id: "d23-proj", name: "BashExec", arguments: "{\"cmd\":\"echo proj-out; exit 3\"}" };
+  let typed = dispatch_one_typed(".", proj_call);
+  let plain = dispatch_one(".", proj_call);
+  let ok_proj = check("projection: dispatch_one is byte-identical to the sibling's content, and the code is 3",
+                      plain == typed.content && typed.exit_code == 3,
+                      "expected byte-identical content and exit_code 3 — got ${show(typed.exit_code)}");
+
+  if ok_live && ok_adopt && ok_proj then
+    println("exit_code_witness PASS")
+  else {
+    let _ = println("exit_code_witness FAIL");
+    exit(1)
+  }
+}

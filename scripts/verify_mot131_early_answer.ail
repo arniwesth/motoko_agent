@@ -1,0 +1,134 @@
+-- scripts/verify_mot131_early_answer.ail
+--
+-- MOT-131: `do_check` (the claude/codex path of DelegateCheck) must read the
+-- answer file BEFORE asking herdr about the agent, exactly as
+-- `do_check_motoko` always has. The failure being pinned: a delegate writes
+-- its answer, its pane then goes away (operator close, crash, reaping from
+-- another session), `agent wait` returns `agent_not_found`, and the answer
+-- sitting on disk was never read.
+--
+-- Two cases, driven through the exported `on_tool_handle` with scripted ports
+-- (no herdr, no filesystem):
+--
+--   answer-present + agent gone  -> exit 0, stdout carries the answer
+--   answer-absent  + agent gone  -> exit 1 (the pre-fix behaviour is still
+--                                   correct when there is nothing to read)
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run \
+--     --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main scripts/verify_mot131_early_answer.ail
+--
+-- Prints one OK/FAIL line per case; exits non-zero on any FAIL.
+module scripts/verify_mot131_early_answer
+
+import std/io (println, exit)
+import std/json (Json, jo, kv, js, jnum, encode)
+import std/string (contains)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtClockReading,
+  ToolCallEnvelope, ToolResultEnvelope, ToolHandleOutcome, ToolHandleDecision,
+  Handled, Delegate, BudgetPlan, empty_ext_world
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle)
+
+-- ---------------------------------------------------------------------------
+-- Scripted ports
+-- ---------------------------------------------------------------------------
+
+-- Every herdr invocation fails the way a vanished agent fails: exit 1 with
+-- herdr's agent_not_found envelope on stderr (measured shape, types.ail
+-- `failure_code` tests). This covers `agent wait`, `agent get` and any close
+-- attempt alike — after MOT-131 none of them may stand between an answer on
+-- disk and the caller.
+func gone_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  let stderr = encode(jo([kv("error", jo([kv("code", js("agent_not_found")), kv("message", js("agent target mot-dlg-1 not found"))]))]));
+  let out = encode(jo([kv("stdout", js("")), kv("stderr", js(stderr)), kv("exit_code", jnum(1.0))]));
+  { output: out, exit_code: 1, next_state: world }
+}
+
+func answer_file_read(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, "answer-mot-dlg-1.md")
+  then { present: true, content: "ANSWER-42: the delegate delivered.", next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+func no_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: false, content: "", next_state: world }
+}
+
+func fixed_clock(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 1787475040757, next_state: world }
+}
+
+func ports_with(read: (ExtWorld, string) -> ExtFileRead ! {FS}) -> ExtPorts {
+  let base = noop_ext_ports();
+  { ai_step: base.ai_step,
+    tool_handle: gone_tool_handle,
+    file_read: read,
+    file_write: base.file_write,
+    file_remove: base.file_remove,
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: base.dir_make,
+    clock_now: fixed_clock,
+    env_get: base.env_get }
+}
+
+func mk_ctx(ports: ExtPorts) -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-mot131", step: 0, model: "test-model", cwd: "/tmp",
+    hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
+    env_server_url: "", budget_remaining: 4, history_slice: [],
+    state_key: "test", context_limit: 0, ports: ports,
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: empty_ext_world() }
+}
+
+func mk_cfg() -> HerdrConfig {
+  -- `session_ms: ""` deliberately: with no run identity the F-5 sweep is a
+  -- no-op, so these cases keep asserting the MOT-131 behaviour and nothing
+  -- else. The sweep has its own script (`verify_mot133_owner_tag.ail`).
+  { bin: "herdr", own_pane: "w1:p0", work_dir: "/tmp/mot", kind: "claude",
+    allowed_kinds: "claude", depth: 0, max_depth: 1, motoko_script: "./x.sh",
+    session_ms: "", sweep_stale: false, dagr_dir: "/tmp/.dagr",
+    -- MOT-137 off: this gate is about DelegateCheck, and an auto-opened view
+    -- pane would put two herdr calls in a log these cases read by position.
+    dagr_pane: false,
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
+    -- ABI 7.0: the exit intent is declared either way; this says whether it
+    -- renders actions. These gates exercise the tool paths, not the exit path.
+    reap_on_exit: false }
+}
+
+func check_call() -> ToolCallEnvelope {
+  { id: "c1", tool: "DelegateCheck",
+    arguments: jo([kv("name", js("mot-dlg-1"))]) }
+}
+
+func run_case(label: string, ports: ExtPorts, expect_exit: int, expect_in_stdout: string) -> bool ! {IO, Process, FS, Clock} {
+  let out = on_tool_handle(mk_cfg(), mk_ctx(ports), check_call());
+  match out.decision {
+    Handled(r) =>
+      if r.exit_code == expect_exit && (expect_in_stdout == "" || contains(r.stdout, expect_in_stdout)) then {
+        println("OK: ${label}");
+        true
+      } else {
+        println("FAIL: ${label} — exit ${show(r.exit_code)} (wanted ${show(expect_exit)}); stdout: ${r.stdout}; stderr: ${r.stderr}");
+        false
+      },
+    Delegate => {
+      println("FAIL: ${label} — on_tool_handle delegated a DelegateCheck call");
+      false
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let a = run_case("answer on disk + agent gone -> answer returned (MOT-131)",
+                   ports_with(answer_file_read), 0, "ANSWER-42");
+  let b = run_case("no answer + agent gone -> still an error",
+                   ports_with(no_file_read), 1, "");
+  if a && b then () else exit(1)
+}

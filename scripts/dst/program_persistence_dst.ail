@@ -1,0 +1,1819 @@
+-- scripts/dst/program_persistence_dst.ail
+--
+-- WI-A13 stage 6: the acceptance suite for D8's persistence obligations.
+--
+-- Stage 6 lands in two commits and this file grows with them. This is the
+-- FIRST: D8's persistence safety — "Programs contain synthetic values only.
+-- Environment maps and interaction artifacts must reject or redact
+-- secret-shaped/live credentials before persistence."
+--
+-- THE SUITE'S CENTRAL CLAIM, and it is the one S8's complement forces.
+--
+-- A redactor tested only against shapes the redactor was written to catch
+-- certifies nothing. So the fixture's environment surface is not invented here:
+-- `synthetic_env()`'s keys are asserted EQUAL to `driver_env_keys()`, which
+-- `make discovery` re-derives from the driver's own `ports.env_get` call sites.
+-- The suite then proves two things about that real surface:
+--
+--   1. Every one of the driver's seven keys is NAME-CLEAN, so the name axis is
+--      green on all of them and reaches nothing. A redactor built only from key
+--      names is, against this driver, a no-op that looks like a control.
+--   2. A live credential placed in the VALUE under each of those clean names is
+--      caught anyway. That is the axis that does the work here.
+--
+-- Row 1 is the row that would be a comment in a weaker suite, and it is the one
+-- that goes red the day somebody adds `MOTOKO_API_TOKEN` to the driver — at
+-- which point the claim in `dst_secrets`'s header has changed and must be
+-- re-read rather than silently inherited.
+--
+-- THE NEGATIVE CONTROL is checked first and everything else is derived from it
+-- (stage 1's discipline). A suite made only of credential fixtures is passed
+-- perfectly by a detector that flags everything, and the one thing it cannot
+-- establish is that an honest synthetic program survives untouched — which is
+-- the property the whole persistence path depends on.
+
+module scripts/dst/program_persistence_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string as Str (contains, toUpper, replace, substring, length, split, join, startsWith)
+import std/fs as FS (readFileResult, fileExists, removeFile)
+import std/result (Result, Ok, Err)
+
+import src/core/dst_secrets (
+  SecretFinding,
+  SecretSite,
+  EnvKeySite, InitialWorldSite, RequestProjectionSite, PayloadSite,
+  ChunkSite, IdentityComponentSite,
+  SecretReason,
+  CredentialBearingName, ProviderTokenLiteral, UrlUserinfo,
+  PrivateKeyBlock, JsonWebToken, OpaqueHighEntropy,
+  Redaction,
+  ReplayImpact, RedactionDemoted, RedactionChangesTrajectory,
+  RedactedEnvMap, RedactedInteractions,
+  credential_name_tokens,
+  name_axis,
+  scan_text,
+  scan_env_entry,
+  scan_env_map,
+  scan_interaction,
+  scan_interactions,
+  redact_env_map,
+  redact_interactions,
+  redaction_marker,
+  redaction_is_reportable,
+  reportable_redactions,
+  replay_impact_id,
+  site_impact,
+  secret_rule,
+  secret_message,
+  has_secret_rule,
+  all_secret_rules,
+  longest_opaque_run
+)
+import src/core/dst_discovery (driver_env_keys)
+import src/core/dst_persistence (
+  DecodeRefusal,
+  ProgramDecode, ProgramDecoded, ProgramDecodeRefused,
+  EncodeOutcome, Encoded, EncodeRefused,
+  PersistOutcome, Persisted, PersistRefusedSecrets, PersistCollision, PersistIoError,
+  LoadOutcome, Loaded, LoadRefused, LoadIoError,
+  encode_artifact,
+  decode_artifact,
+  program_digest,
+  artifact_path,
+  artifact_identity,
+  persist_program,
+  load_program,
+  persist_rule,
+  persist_message,
+  decode_rule,
+  decode_message,
+  has_decode_rule,
+  first_decode_message,
+  differing_lines,
+  line_count
+)
+import src/core/dst_program (
+  ExecutionProgram,
+  InitialWorld,
+  ProgramRejection,
+  program_schema_version,
+  program_message,
+  validate_program
+)
+import src/core/dst_generator (GeneratorBounds)
+-- WI-D22: the seeded initial file table is kinded, and `fs_kind_id` /
+-- `fs_content_of` are the vocabulary the codec itself writes — used here so the
+-- instrument cannot drift from the thing it measures.
+import src/core/fs_node (FsNode, FsFile, FsDir, fs_kind_id, fs_content_of)
+import src/core/dst_profile (ExecutionManifest, PackageVersion)
+import src/core/dst_fault_catalogue (required_class_ids)
+import src/core/dst_replay (
+  RegressionReplay,
+  regression_replay_findings,
+  regression_difference_count,
+  regression_report
+)
+import src/core/dst_interaction (
+  Interaction,
+  CausalIdentity,
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  StreamChunkRecord,
+  TimedOutcome,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  ok_outcome,
+  interaction_kind,
+  all_interaction_kinds,
+  count_kind,
+  identity_body_eq,
+  identity_projection,
+  outcome_status_id
+)
+
+-- ---------------------------------------------------------------------------
+-- The surviving fixture
+-- ---------------------------------------------------------------------------
+
+-- The environment map, with the driver's OWN keys and plausible synthetic
+-- values. `scenario_the_surface_is_the_drivers` asserts the key list is exactly
+-- `driver_env_keys()`, so this is a copy that is checked rather than trusted —
+-- `tools/profile_definition/check_fixtures.py`'s pattern, applied to a list
+-- that is otherwise very easy to let drift.
+pure func synthetic_env() -> [{ key: string, value: string }] {
+  [{ key: "MOTOKO_SESSION_ID", value: "dst-session-0001" },
+   { key: "MOTOKO_PERSIST_RETRIES", value: "3" },
+   { key: "MOTOKO_RETRY_STREAM_ERROR", value: "0" },
+   { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
+   { key: "MOTOKO_HEADLESS", value: "1" },
+   { key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", value: "0" },
+   { key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
+   -- WI-D3's four. They are here because scenario 3 asserts this list IS
+   -- `driver_env_keys()` — routing `context_usage` put four more keys into the
+   -- recorded interaction log, and therefore into every persisted artifact, so
+   -- they are part of the surface the redaction detector has to cover. Values
+   -- are paths by nature and carry no credential shape, which is what the
+   -- name-axis row below then confirms rather than assumes.
+   { key: "MOTOKO_PROFILE_DIR", value: "/srv/motoko/.motoko/config/default" },
+   { key: "MOTOKO_CONFIG", value: "default" },
+   { key: "MOTOKO_REPO", value: "/srv/motoko" },
+   { key: "MOTOKO_MODELS_FILE", value: "/srv/motoko/.motoko/model-catalog.json" }]
+}
+
+pure func chunk(offset: int, text: string) -> StreamChunkRecord {
+  { offset_ms: offset, text: text }
+}
+
+pure func inter(ord: int, b: IdentityBody, rq: string, deadline: int,
+                out: TimedOutcome) -> Interaction {
+  { identity: { ordinal: ord, body: b },
+    request_projection: rq,
+    deadline_ms: deadline,
+    outcome: out }
+}
+
+pure func streamed(advance: int, payload: string, cs: [StreamChunkRecord]) -> TimedOutcome {
+  { advance_ms: advance, chunks: cs, payload: payload,
+    status: OutcomeOk, fault_class_id: "" }
+}
+
+-- Nine interactions across five of the seven classes, carrying three stream
+-- chunks between them.
+--
+-- S7's no-two-equal rule, applied to the quantities this suite reads:
+-- 9 interactions, 7 environment entries, 5 distinct kinds, 3 stream chunks.
+-- Pairwise distinct on purpose, and asserted below — a fixture whose counts
+-- coincide cannot distinguish a check that reads "how many interactions" from
+-- one that reads "how many chunks", and both type-check.
+pure func synthetic_interactions() -> [Interaction] {
+  [inter(0, ProviderIdentity("driver_only", 0, "stub/echo"),
+         "provider origin=driver_only step=0 model=stub/echo", -1,
+         streamed(12, "the stub replies", [chunk(0, "the stub "), chunk(6, "replies")])),
+   inter(1, ToolIdentity("loop_v2", "call_1", "BashExec"),
+         "tool call_1 BashExec {\"cmd\":\"echo hi\"}", 5000,
+         ok_outcome(7, "hi")),
+   inter(2, EnvironmentReadIdentity("OPENAI_BASE_URL"),
+         "env_read key=OPENAI_BASE_URL", -1,
+         ok_outcome(0, "https://api.example.com/v1")),
+   inter(3, ApprovalIdentity("loop_v2", "call_1", "BashExec"),
+         "approval call_1 BashExec", 5000,
+         ok_outcome(0, "approve")),
+   inter(4, ClockAdvanceIdentity, "advance_clock", -1, ok_outcome(4, "")),
+   inter(5, ProviderIdentity("driver_only", 1, "stub/echo"),
+         "provider origin=driver_only step=1 model=stub/echo", -1,
+         streamed(9, "done", [chunk(3, "done")])),
+   inter(6, EnvironmentReadIdentity("MOTOKO_TOOL_TIMEOUT_MS"),
+         "env_read key=MOTOKO_TOOL_TIMEOUT_MS", -1,
+         ok_outcome(0, "5000")),
+   inter(7, ToolIdentity("loop_v2", "call_2", "ReadFile"),
+         "tool call_2 ReadFile {\"path\":\"notes.md\"}", 5000,
+         ok_outcome(3, "notes")),
+   inter(8, EnvironmentReadIdentity("MOTOKO_SESSION_ID"),
+         "env_read key=MOTOKO_SESSION_ID", -1,
+         ok_outcome(0, "dst-session-0001"))]
+}
+
+pure func total_chunks(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => List.length(i.outcome.chunks) + total_chunks(rest)
+  }
+}
+
+pure func kinds_present(ks: [string], xs: [Interaction]) -> int {
+  match ks {
+    [] => 0,
+    k :: rest => (if count_kind(xs, k) > 0 then 1 else 0) + kinds_present(rest, xs)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The credential shapes, each a MUTATION of the surviving fixture
+-- ---------------------------------------------------------------------------
+
+-- One credential of each shape the specification protects. These are the values
+-- that go INTO the fixture one at a time; none of them is a key name, which is
+-- the point — every one lands under a name-clean driver key.
+pure func credential_values() -> [{ label: string, rule: string, value: string }] {
+  [{ label: "a provider token in the value",
+     rule: "secret-provider-token-literal",
+     value: "sk-live-4kQ9mZ2pR7vX1nB8" },
+   { label: "a base URL carrying userinfo",
+     rule: "secret-url-userinfo",
+     value: "https://svc:s3cr3t@api.example.com/v1" },
+   { label: "a PEM private key",
+     rule: "secret-private-key-block",
+     value: "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----" },
+   { label: "a JSON web token",
+     rule: "secret-json-web-token",
+     value: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcHMifQ.dBjftJeZ4CVPmB92K27uhbUJU1p1r1wa" },
+   { label: "an opaque high-entropy token",
+     rule: "secret-opaque-high-entropy",
+     value: "Zk3Rj9QpLm2XtVb7Nc4Hs8Wd1Fg6Ya0Ue5Ti" }]
+}
+
+pure func set_env_value(es: [{ key: string, value: string }], key: string, v: string)
+  -> [{ key: string, value: string }] {
+  match es {
+    [] => [],
+    e :: rest =>
+      (if e.key == key then [{ key: e.key, value: v }] else [e])
+        ++ set_env_value(rest, key, v)
+  }
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+pure func str_eq_list(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && str_eq_list(xs, ys) }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 1 — the negative control, checked first
+-- ---------------------------------------------------------------------------
+
+func scenario_the_synthetic_fixture_survives() -> bool ! {IO} {
+  let env_findings = scan_env_map(synthetic_env());
+  let log_findings = scan_interactions(synthetic_interactions());
+  let redacted_env = redact_env_map(synthetic_env());
+  let redacted_log = redact_interactions(synthetic_interactions());
+  let env_clean = List.length(env_findings) == 0;
+  let log_clean = List.length(log_findings) == 0;
+  -- Redaction of a clean artifact must be the IDENTITY. A redactor that
+  -- rewrote a value it did not flag would change a replay input while
+  -- reporting nothing, which is the silent half of D8's tension.
+  let env_untouched = List.length(redacted_env.redactions) == 0
+                        && str_eq_list(values_of(redacted_env.entries),
+                                       values_of(synthetic_env()));
+  let log_untouched = List.length(redacted_log.redactions) == 0
+                        && str_eq_list(payloads_of(redacted_log.interactions),
+                                       payloads_of(synthetic_interactions()));
+  let _ = if env_clean then println("  ✓ the synthetic environment map produces no finding (${show(List.length(synthetic_env()))} driver keys)")
+          else { let _ = println("  ✗ the synthetic environment map was flagged — the detector rejects honest artifacts"); report(env_findings) };
+  let _ = if log_clean then println("  ✓ the synthetic interaction log produces no finding (9 interactions)")
+          else { let _ = println("  ✗ the synthetic interaction log was flagged"); report(log_findings) };
+  let _ = if env_untouched then println("    ✓ redacting a clean environment map is the identity")
+          else println("    ✗ redaction rewrote a value it did not flag");
+  let _ = if log_untouched then println("    ✓ redacting a clean interaction log is the identity")
+          else println("    ✗ redaction rewrote a payload it did not flag");
+  env_clean && log_clean && env_untouched && log_untouched
+}
+
+pure func values_of(es: [{ key: string, value: string }]) -> [string] {
+  match es { [] => [], e :: rest => [e.value] ++ values_of(rest) }
+}
+
+pure func payloads_of(xs: [Interaction]) -> [string] {
+  match xs { [] => [], i :: rest => [i.outcome.payload] ++ payloads_of(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 2 — S7's pairwise-distinct quantities on the surviving fixture
+-- ---------------------------------------------------------------------------
+
+func scenario_no_two_fixture_quantities_are_equal() -> bool ! {IO} {
+  let xs = synthetic_interactions();
+  let n_inter = List.length(xs);
+  let n_env = List.length(synthetic_env());
+  let n_kinds = kinds_present(all_interaction_kinds(), xs);
+  let n_chunks = total_chunks(xs);
+  let distinct = n_inter != n_env && n_inter != n_kinds && n_inter != n_chunks
+                   && n_env != n_kinds && n_env != n_chunks && n_kinds != n_chunks;
+  let nonzero = n_inter > 0 && n_env > 0 && n_kinds > 0 && n_chunks > 0;
+  let _ = if distinct && nonzero then
+            println("  ✓ no two fixture quantities are equal (interactions=${show(n_inter)}, env entries=${show(n_env)}, kinds=${show(n_kinds)}, chunks=${show(n_chunks)})")
+          else
+            println("  ✗ two fixture quantities coincide (interactions=${show(n_inter)}, env entries=${show(n_env)}, kinds=${show(n_kinds)}, chunks=${show(n_chunks)}) — a check reading the wrong one cannot be distinguished");
+  distinct && nonzero
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 3 — the surface is the DRIVER'S, and the name axis cannot reach it
+-- ---------------------------------------------------------------------------
+
+func scenario_the_surface_is_the_drivers() -> bool ! {IO} {
+  let declared = driver_env_keys();
+  let fixture = keys_of(synthetic_env());
+  let same = str_eq_list(declared, fixture);
+  let _ = if same then println("  ✓ the fixture's environment surface IS driver_env_keys() (${show(List.length(declared))} keys, re-derived from the driver's source by make discovery)")
+          else println("  ✗ the fixture's environment keys have drifted from driver_env_keys() — this suite is no longer testing the driver's surface");
+  let clean = all_name_clean(declared);
+  let _ = if clean then
+            println("    ✓ every one of those keys is NAME-clean, so the name axis reaches none of them")
+          else
+            println("    ✗ a driver key now matches a credential name token — dst_secrets's header claim has changed and must be re-read, not inherited");
+  same && clean
+}
+
+pure func keys_of(es: [{ key: string, value: string }]) -> [string] {
+  match es { [] => [], e :: rest => [e.key] ++ keys_of(rest) }
+}
+
+pure func all_name_clean(ks: [string]) -> bool {
+  match ks {
+    [] => true,
+    k :: rest => List.length(name_axis(k)) == 0 && all_name_clean(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 4 — a credential under EVERY name-clean driver key is still caught
+-- ---------------------------------------------------------------------------
+
+-- The sweep is over the driver's keys rather than over one chosen key, because
+-- "the value axis catches it" is a claim about the whole surface. One key
+-- passing would leave six untested and reading identically to seven passing.
+func scenario_every_driver_key_is_covered_by_the_value_axis() -> bool ! {IO} {
+  let leaked = "https://svc:s3cr3t@api.example.com/v1";
+  let missed = keys_missing_a_finding(driver_env_keys(), leaked);
+  let ok = List.length(missed) == 0;
+  let _ = if ok then
+            println("  ✓ a live credential in the VALUE is caught under all ${show(List.length(driver_env_keys()))} name-clean driver keys")
+          else
+            println("  ✗ ${show(List.length(missed))} driver key(s) carried a credential past the detector: ${join_keys(missed)}");
+  ok
+}
+
+pure func keys_missing_a_finding(ks: [string], v: string) -> [string] {
+  match ks {
+    [] => [],
+    k :: rest => {
+      let fs = scan_env_map(set_env_value(synthetic_env(), k, v));
+      (if has_secret_rule(fs, "secret-url-userinfo") then [] else [k])
+        ++ keys_missing_a_finding(rest, v)
+    }
+  }
+}
+
+pure func join_keys(ks: [string]) -> string {
+  match ks {
+    [] => "",
+    k :: [] => k,
+    k :: rest => "${k}, ${join_keys(rest)}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 5 — the mutation rows, one credential shape at a time
+-- ---------------------------------------------------------------------------
+
+-- Each row takes the SURVIVING fixture, changes exactly one environment value,
+-- and requires the detector to name the specific rule that change violates.
+-- Asserting the rule and not merely a non-empty list is what makes a deleted
+-- or short-circuited detector turn its own row red (cluster 5, C5).
+func scenario_credential_shape_mutants() -> bool ! {IO} {
+  let _ = println("  mutation rows — one credential shape at a time, under OPENAI_BASE_URL");
+  row_each(credential_values())
+}
+
+func row_each(cs: [{ label: string, rule: string, value: string }]) -> bool ! {IO} {
+  match cs {
+    [] => true,
+    c :: rest => {
+      let mutated = set_env_value(synthetic_env(), "OPENAI_BASE_URL", c.value);
+      let fs = scan_env_map(mutated);
+      let named = has_secret_rule(fs, c.rule);
+      let _ = if named then println("    ✓ ${c.rule} ← ${c.label}")
+              else println("    ✗ ${c.rule} was NOT reported for ${c.label}; rules seen: ${show(List.length(fs))}");
+      let tail = row_each(rest);
+      named && tail
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 6 — every rule the detector can produce is reached by a fixture
+-- ---------------------------------------------------------------------------
+
+-- S8's complement in its cheapest form. A detector variant that no fixture
+-- reaches is not pinned by this suite; it is ABSENT from it, and absent reads
+-- identically to unchanged. The list is derived from the reason constructors
+-- (`all_secret_rules`), so adding one and forgetting a fixture turns this red.
+func scenario_every_rule_is_reached() -> bool ! {IO} {
+  let reached = reached_rules();
+  let missing = rules_not_in(all_secret_rules(), reached);
+  let ok = List.length(missing) == 0;
+  let _ = if ok then
+            println("  ✓ all ${show(List.length(all_secret_rules()))} detector rules are reached by a fixture in this suite")
+          else
+            println("  ✗ ${show(List.length(missing))} detector rule(s) are reached by no fixture: ${join_keys(missing)} — they are untested branches, not passing ones");
+  ok
+}
+
+-- Every rule this suite's fixtures actually produce. Built by running the
+-- fixtures, not by listing what they are believed to cover.
+pure func reached_rules() -> [string] {
+  let named = scan_env_map(set_env_value(synthetic_env(), "MOTOKO_SESSION_ID", "x")
+                             ++ [{ key: "EXT_SERVICE_TOKEN", value: "x" }]);
+  from_values(credential_values()) ++ secret_rules_of(named)
+}
+
+pure func from_values(cs: [{ label: string, rule: string, value: string }]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let fs = scan_env_map(set_env_value(synthetic_env(), "OPENAI_BASE_URL", c.value));
+      secret_rules_of(fs) ++ from_values(rest)
+    }
+  }
+}
+
+pure func secret_rules_of(fs: [SecretFinding]) -> [string] {
+  match fs { [] => [], f :: rest => [secret_rule(f)] ++ secret_rules_of(rest) }
+}
+
+pure func rules_not_in(want: [string], have: [string]) -> [string] {
+  match want {
+    [] => [],
+    w :: rest =>
+      (if contains_str(have, w) then [] else [w]) ++ rules_not_in(rest, have)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 7 — interaction artifacts, and every site the scan reaches
+-- ---------------------------------------------------------------------------
+
+-- D8 names environment maps AND interaction artifacts. The sites differ in what
+-- a redaction COSTS, so each is exercised at its own position rather than
+-- through one representative.
+func scenario_interaction_sites() -> bool ! {IO} {
+  let leaked = "sk-live-4kQ9mZ2pR7vX1nB8";
+  let base = synthetic_interactions();
+  let in_payload = scan_interaction(with_payload(base, 1, leaked));
+  let in_chunk = scan_interaction(with_chunk(base, 0, leaked));
+  let in_projection = scan_interaction(with_projection(base, 7, leaked));
+  let in_identity = scan_interaction(
+    inter(3, ToolIdentity("loop_v2", "call_1", leaked), "tool call_1", 5000, ok_outcome(0, "")));
+  let p = site_is(in_payload, "payload");
+  let c = site_is(in_chunk, "stream chunk");
+  let r = site_is(in_projection, "request projection");
+  let d = site_is(in_identity, "identity component");
+  let _ = if p then println("    ✓ a credential in an outcome payload is found at the payload site")
+          else println("    ✗ a credential in an outcome payload was not found at the payload site");
+  let _ = if c then println("    ✓ a credential in a stream chunk is found at the chunk site")
+          else println("    ✗ a credential in a stream chunk was not found at the chunk site");
+  let _ = if r then println("    ✓ a credential in a request projection is found at the projection site")
+          else println("    ✗ a credential in a request projection was not found at the projection site");
+  let _ = if d then println("    ✓ a credential in an identity component is found at the identity site")
+          else println("    ✗ a credential in an identity component was not found at the identity site");
+  p && c && r && d
+}
+
+pure func site_is(fs: [SecretFinding], label: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest =>
+      if Str.contains(secret_message(f), label) then true else site_is(rest, label)
+  }
+}
+
+pure func nth(xs: [Interaction], n: int) -> Interaction {
+  match xs {
+    [] => inter(-1, ClockAdvanceIdentity, "", -1, ok_outcome(0, "")),
+    i :: rest => if n <= 0 then i else nth(rest, n - 1)
+  }
+}
+
+pure func with_payload(xs: [Interaction], n: int, v: string) -> Interaction {
+  let i = nth(xs, n);
+  { i | outcome: { i.outcome | payload: v } }
+}
+
+pure func with_chunk(xs: [Interaction], n: int, v: string) -> Interaction {
+  let i = nth(xs, n);
+  { i | outcome: { i.outcome | chunks: [chunk(0, v)] } }
+}
+
+pure func with_projection(xs: [Interaction], n: int, v: string) -> Interaction {
+  let i = nth(xs, n);
+  { i | request_projection: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 8 — D8's unresolved tension, reported rather than decided silently
+-- ---------------------------------------------------------------------------
+
+-- "Reject or redact" reads as a free choice and is not one: the environment map
+-- is a replay input, so redacting a value the run consumed changes the
+-- trajectory of the replay. This suite does not resolve that — it asserts the
+-- persistence path can TELL THE DIFFERENCE, which is what stops the choice from
+-- being silent. See dst_secrets's header.
+func scenario_redaction_reports_its_trajectory_cost() -> bool ! {IO} {
+  let leaked = "https://svc:s3cr3t@api.example.com/v1";
+  let env = redact_env_map(set_env_value(synthetic_env(), "OPENAI_BASE_URL", leaked));
+  let log = redact_interactions([with_projection(synthetic_interactions(), 7, leaked)]);
+  let env_reportable = List.length(reportable_redactions(env.redactions)) == 1;
+  let log_reportable = List.length(log.redactions) == 1
+                         && List.length(reportable_redactions(log.redactions)) == 0;
+  let gone = List.length(scan_env_map(env.entries)) == 0;
+  let _ = if env_reportable then
+            println("    ✓ redacting an environment VALUE is reported: it is a replay input, so the replay may diverge (D8 finding, carried in ReplayImpact)")
+          else
+            println("    ✗ redacting an environment value was not reported as changing the trajectory");
+  let _ = if log_reportable then
+            println("    ✓ redacting a request PROJECTION is not reported: D2 demotes it, so regression replay records it and strict replay fails closed — neither is silent")
+          else
+            println("    ✗ a request-projection redaction was classified as changing the trajectory");
+  let _ = if gone then println("    ✓ the credential is absent from the redacted environment map")
+          else println("    ✗ the credential survived redaction");
+  env_reportable && log_reportable && gone
+}
+
+
+-- ===========================================================================
+-- PART 2 — the encoding, the compatibility policy, and the store
+-- ===========================================================================
+
+-- THE SPECIMEN. This is the program whose bytes are frozen in
+-- `scripts/dst/fixtures/execution-program-v1.artifact`, and it is built rather
+-- than swept for one reason worth stating: stage 4's technique — sweep the
+-- generator and filter — cannot supply this fixture, because the generator
+-- provably cannot reach every shape the SCHEMA admits. The provider fault class
+-- is still unreachable by a generated program (cluster 10's correction 2) and
+-- `approval_deadline_exceeded` is unreachable by a discovered, generated or
+-- replayed one (stages 2, 3 and 4). A swept specimen would certify exactly the
+-- shapes the generator happens to produce today, and S8's complement is that
+-- the shapes it does not produce would not be pinned — they would be ABSENT,
+-- which reads identically to unchanged.
+--
+-- So it is constructed, and its coverage is ASSERTED against
+-- `all_interaction_kinds()` rather than described in this comment
+-- (`scenario_specimen_covers_every_shape`). Adding an eighth identity class
+-- turns that row red instead of leaving a codec path nobody has encoded.
+--
+-- Every field holds a DISTINCT value. That is S7's record-level form and it is
+-- the only thing that catches a codec whose encoder writes a field its decoder
+-- ignores: with two fields equal, swapping them round-trips perfectly.
+
+pure func specimen_fault_class() -> string { "ToolFailed" }
+
+pure func specimen_manifest() -> ExecutionManifest {
+  -- WI-B4 REVERTED ITS OWN EDIT HERE, and the gate is why. This is the FROZEN
+  -- v1 specimen: a historical artifact that a later build must decode to the
+  -- same program, not a live claim about the current toolchain. WI-B4's sweep of
+  -- the 14 stale `ailang 0.26.0` manifest strings rewrote this one too, and
+  -- `program_persistence` went red with exactly the right complaint — "the
+  -- frozen v1 specimen decodes to a DIFFERENT program: manifest.toolchain
+  -- ('ailang 0.33.0 (pinned)' vs 'ailang 0.26.0 (pinned)') — this build silently
+  -- reinterprets an old artifact, which is what D8 forbids". It is pinned to
+  -- v0.26.0 forever. Do not "update" it with the others.
+  { source_revision: "rev-aa11",
+    toolchain: "ailang 0.26.0 (pinned)",
+    extension_packages: [{ package_id: "pkg.alpha", version: "1.2.3" },
+                         { package_id: "pkg.beta", version: "4.5.6" }],
+    abi_version: "abi-7",
+    profile_id: "profile-eight",
+    profile_version: "pv-9",
+    event_vocabulary_version: "vocab-10",
+    normalized_configuration: "{\"cfg\":11}",
+    classifier_2_set: ["cls.one", "cls.two", "cls.three"],
+    unrouted_fields: ["unrouted.alpha"],
+    scan_roots: ["root/a", "root/b"],
+    scan_root_commit: "commit-12",
+    profile_rules_version: "prv-13",
+    coverage_rules_version: "crv-14",
+    attribution_rules_version: "arv-15",
+    fault_catalogue_version: "fcv-16" }
+}
+
+-- The initial world carries the escaping surface on purpose: a tab and a
+-- newline inside `messages_and_policy`, and a backslash inside an environment
+-- value. Those are the three characters the line format is built out of, so a
+-- specimen without them would freeze bytes that never exercise the escape.
+--
+-- WI-D22 SPLIT THIS THE SAME WAY WI-D17 SPLIT THE INTERACTIONS, and for the
+-- identical reason one level up: `InitialWorld` gained a `files` field at
+-- execution-program/2, and a field added after a freeze CANNOT BE IN THE FROZEN
+-- BYTES. Putting the seeded table into this function would have changed the
+-- world `frozen_v1_program()` is built from, and the v1 fixture would have
+-- decoded to a different program — which the row would have reported, correctly,
+-- as this build silently reinterpreting an old artifact.
+--
+-- So `frozen_v1_world()` is pinned at what v1 contained, `specimen_world()` adds
+-- what came after, and the two frozen-bytes rows take the one that matches their
+-- own bytes.
+pure func frozen_v1_world() -> InitialWorld {
+  { messages_and_policy: "role=user\tmsg=hello\nrole=system\tmsg=be brief",
+    synthetic_environment: [
+      { key: "MOTOKO_SESSION_ID", value: "dst-session-0001" },
+      { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
+      { key: "MOTOKO_HEADLESS", value: "headless-on" },
+      { key: "PATH_WITH_BACKSLASH", value: "C:\\tmp\\dir" }],
+    files: [],
+    clock_epoch: 17,
+    extension_profile: "profile.specimen" }
+}
+
+-- WI-D22's seeded file table, and it is built to freeze the CODEC rather than to
+-- look like a filesystem. Four entries, one per case the encoding has to keep
+-- apart:
+--
+--   1. an ordinary file with a body;
+--   2. a PRESENT-BUT-EMPTY file, whose content is "" — the entry that a decoder
+--      inferring the kind from an empty content would read back as a directory;
+--   3. an explicit EMPTY DIRECTORY, which serialises to the same `content: ""`
+--      as (2) and differs ONLY in the kind field. This pair is the whole reason
+--      `kind` is written explicitly, and freezing them adjacent is what makes a
+--      codec that drops the kind visible in the bytes rather than only in a
+--      round trip;
+--   4. a path carrying a TAB and a body carrying a NEWLINE and a BACKSLASH,
+--      because the escape is per-line and these three characters are what the
+--      line format is built out of. `world.file` is a three-field line, so it is
+--      the first tag in this schema where a mid-field tab could split a record
+--      into the wrong arity.
+pure func post_v1_files() -> [{ path: string, node: FsNode }] {
+  [{ path: "/w/seed/catalog.json", node: FsFile("{\"context_limits\":{\"m\":71}}") },
+   { path: "/w/seed/present-but-empty.json", node: FsFile("") },
+   { path: "/w/seed/empty-dir", node: FsDir },
+   { path: "/w/seed/tab\tin path", node: FsFile("line one\nline two\\end") }]
+}
+
+pure func specimen_world() -> InitialWorld {
+  { frozen_v1_world() | files: post_v1_files() }
+}
+
+-- WI-1 ADDED `chunk_draw_hi: 20`, AND 20 RATHER THAN 3 IS THE POINT. Every field
+-- in this record holds a distinct value — `specimen_ints` asserts it — because a
+-- codec whose encoder writes one field and whose decoder reads another
+-- round-trips perfectly when the two are equal. 20 is the gap in the 18/19/21/22
+-- run, so it collides with nothing here and with neither the seed (23) nor the
+-- clock epoch (17).
+--
+-- These are NOT the bounds the frozen v1 and v2 bytes hold. Those predate the
+-- field; see `bounds_before_v3`.
+pure func specimen_bounds() -> GeneratorBounds {
+  { max_interactions: 18, max_chunks_per_interaction: 19, max_payload_bytes: 4096,
+    max_resource_size: 21, max_clock_advance_ms: 22, chunk_draw_hi: 20 }
+}
+
+-- What the pre-v3 frozen bytes' `bounds` line MEANS when this build reads it.
+--
+-- WI-D22 SPLIT `frozen_v1_world` FROM `specimen_world` FOR EXACTLY THIS REASON
+-- ONE LAYER UP, and the reason is not a preference: a field added after a freeze
+-- CANNOT BE IN THE FROZEN BYTES. The v1 and v2 bounds lines carry five fields,
+-- and `dst_persistence.chunk_draw_hi_of` decodes the absent sixth to 3 — the value
+-- those versions' own `choose_provider` drew from. So the frozen programs declare
+-- 3 and the live specimen declares 20, and the two frozen-bytes rows take the
+-- bounds that match their own bytes.
+pure func bounds_before_v3() -> GeneratorBounds {
+  { specimen_bounds() | chunk_draw_hi: 3 }
+}
+
+-- Eight interactions: the seven identity classes THAT EXISTED WHEN THE BYTES
+-- WERE FROZEN, all three outcome statuses, chunks present and absent, a deadline
+-- present and absent, a fault class id present and blank, and the one blank
+-- component D2 makes legitimate — an extension effect with no call id.
+--
+-- WI-D17 SPLIT THIS FUNCTION FROM `specimen_interactions()` AND THE SPLIT IS THE
+-- INTERESTING PART OF THE EDIT. Two rows in this file were in direct
+-- contradiction the moment `IdentityBody` gained a constructor:
+--
+--   `scenario_specimen_covers_every_shape` says every identity class must be in
+--     the specimen, "or their codec paths are frozen by nothing", and it derives
+--     the class list from `all_interaction_kinds()` so a new class reddens it.
+--   `scenario_the_frozen_v1_specimen_still_decodes` says the specimen must equal
+--     what the frozen bytes hold, and says in its own comment that regenerating
+--     the file "is the response that is not available, because it destroys the
+--     evidence".
+--
+-- Both are right, and they conflict only because ONE program was serving both.
+-- The resolution is not a judgement call about which row matters more: A CLASS
+-- ADDED AFTER THE FREEZE CANNOT BE IN THE FROZEN BYTES, by construction. So the
+-- frozen program is pinned here, forever, at what v1 actually contained, and
+-- `specimen_interactions()` below grows — carrying every class through the
+-- encoder, the digest, the diffability floor, the store and the secret scanner,
+-- which is what the coverage row is actually asking for.
+--
+-- WHAT THIS COSTS, stated rather than buried: the two new classes' codec paths
+-- are round-tripped, not FROZEN. Nothing in the tree can freeze them, because
+-- there are no historical bytes containing them. The next encoding change is
+-- pinned for the original seven and unpinned for these two, and the only fix is
+-- time — a future freeze taken at a future schema version.
+pure func frozen_v1_interactions() -> [Interaction] {
+  [inter(0, ProviderIdentity("origin.alpha", 0, "model.one"),
+         "rq.provider.zero", -1,
+         { advance_ms: 31, chunks: [chunk(0, "first "), chunk(5, "second")],
+           payload: "payload.provider.zero", status: OutcomeOk, fault_class_id: "" }),
+   inter(1, ToolIdentity("origin.beta", "call.alpha", "tool.name"),
+         "rq.tool.one", 5000,
+         { advance_ms: 32, chunks: [], payload: "payload.tool.one",
+           status: OutcomeOk, fault_class_id: "" }),
+   -- An approval whose queue is exhausted. D2's `missing` status widened to the
+   -- approval class by stage 2, and the specimen is what keeps that decodable.
+   inter(2, ApprovalIdentity("origin.gamma", "call.beta", "approval.name"),
+         "rq.approval.two", 6000,
+         { advance_ms: 0, chunks: [], payload: "", status: OutcomeMissing,
+           fault_class_id: "" }),
+   -- The blank call id, which is the ONLY legitimate blank identity component.
+   inter(3, ExtensionEffectIdentity("ext.delta", specimen_fault_class(), ""),
+         "rq.extension.three", 7000,
+         { advance_ms: 33, chunks: [], payload: "payload.extension.three",
+           status: OutcomeFault, fault_class_id: specimen_fault_class() }),
+   inter(4, EnvironmentReadIdentity("PATH_WITH_BACKSLASH"),
+         "rq.env.four", -1,
+         { advance_ms: 0, chunks: [], payload: "", status: OutcomeMissing,
+           fault_class_id: "" }),
+   inter(5, RandomDrawIdentity("draw in 0..3"),
+         "rq.random.five", -1,
+         { advance_ms: 34, chunks: [], payload: "payload.random.five",
+           status: OutcomeOk, fault_class_id: "" }),
+   inter(6, ClockAdvanceIdentity, "rq.clock.six", -1,
+         { advance_ms: 35, chunks: [], payload: "", status: OutcomeOk,
+           fault_class_id: "" }),
+   -- The escaping surface inside an interaction as well as inside the world.
+   inter(7, ProviderIdentity("origin.alpha", 1, "model.two"),
+         "rq.provider.seven\twith a tab", -1,
+         { advance_ms: 36, chunks: [], payload: "line one\nline two\\end",
+           status: OutcomeOk, fault_class_id: "" })]
+}
+
+-- The frozen eight PLUS every class added since. This is what every row in this
+-- file except the two frozen-bytes rows uses.
+pure func specimen_interactions() -> [Interaction] {
+  frozen_v1_interactions() ++ post_v1_interactions()
+}
+
+pure func post_v1_interactions() -> [Interaction] {
+  [-- WI-D17's two filesystem mutators. The specimen carries every identity class
+   -- so that each one's codec path is frozen by something, and the completeness
+   -- check that names the omission is derived from `all_interaction_kinds()` —
+   -- which is why adding the classes reddened this file without anyone pointing
+   -- at it.
+   --
+   -- The write's path carries a SPACE and the remove's carries a BACKSLASH,
+   -- deliberately: a path is the one identity component that routinely holds
+   -- characters the line-oriented encoding has to escape, and a specimen whose
+   -- paths are all `/w/tmp/x.ail` would freeze the codec without freezing the
+   -- escaping. `PATH_WITH_BACKSLASH` above makes the same point for the env key.
+   inter(8, FileWriteIdentity("/w/tmp/dir with space/snippet.ail"),
+         "rq.file_write.eight", -1,
+         { advance_ms: 37, chunks: [], payload: "", status: OutcomeOk,
+           fault_class_id: "" }),
+   inter(9, FileRemoveIdentity("/w/tmp/back\\slash/snippet.ail"),
+         "rq.file_remove.nine", -1,
+         { advance_ms: 38, chunks: [], payload: "", status: OutcomeMissing,
+           fault_class_id: "" }),
+   -- WI-D18's directory create, added to the SAME post-freeze list rather than
+   -- to `frozen_v1_interactions()`, for the reason that split exists: a class
+   -- added after the freeze cannot be in the frozen bytes.
+   --
+   -- Its path carries a TRAILING-SEGMENT UNICODE character where the two above
+   -- carry a space and a backslash. A directory path is the identity component
+   -- most likely to hold a byte the line-oriented encoding has to think about,
+   -- and three specimens covering three different awkward characters freeze more
+   -- of the escaping than three copies of `/w/tmp` would.
+   --
+   -- `OutcomeOk` and not `OutcomeMissing`: `dst_program.validate_outcome` admits
+   -- `missing` for `file_remove` and for nothing else, and `mkdirAll` has no
+   -- missing state because it is idempotent. A `dir_make`/`missing` specimen
+   -- would be rejected by the validator, which is what mutant 12e asserts.
+   inter(10, DirMakeIdentity("/w/tmp/naïve dir"),
+         "rq.dir_make.ten", -1,
+         { advance_ms: 39, chunks: [], payload: "", status: OutcomeOk,
+           fault_class_id: "" })]
+}
+
+pure func specimen_program() -> ExecutionProgram {
+  { schema_version: program_schema_version(),
+    generator_id: "gen.specimen",
+    generator_version: "gv-2",
+    seed: 23,
+    initial_world: specimen_world(),
+    bounds: specimen_bounds(),
+    manifest: specimen_manifest(),
+    interactions: specimen_interactions() }
+}
+
+pure func encoded_specimen() -> string {
+  match encode_artifact(specimen_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
+}
+
+-- What the frozen v1 bytes actually contain. Identical to `specimen_program()`
+-- in every field EXCEPT the interaction list, which stops at the seven classes
+-- that existed at the freeze — see `frozen_v1_interactions()` for why the split
+-- exists and what it costs.
+-- WI-D22 ADDED THE TWO OVERRIDES BESIDE THE INTERACTION LIST, and the
+-- `schema_version` one turned a comparison that had been vacuous since the
+-- encoding landed into a real one. `program_diff`'s first row compares
+-- `schema_version`; through WI-D21 both sides of that comparison were
+-- `program_schema_version()` — the specimen stamped it and `dst_persistence`'s
+-- `project` stamped it back on decode — so the field could not disagree however
+-- wrong the artifact was. `project` now carries the version the BYTES declared,
+-- so this record has to declare v1 to match, and a build that started
+-- reinterpreting v1 bytes as v2 would be named by that row.
+-- WI-1 ADDED THE `bounds` OVERRIDE, for the reason the `schema_version` one is
+-- here: `chunk_draw_hi` arrived at execution-program/3 and the v1 bytes carry a
+-- five-field bounds line, so what those bytes MEAN is `bounds_before_v3()`. Left
+-- inheriting `specimen_bounds()` this record would claim the v1 artifact declared
+-- a draw range of 20, and the row below would report — correctly — that this build
+-- decodes an old artifact to a different program.
+pure func frozen_v1_program() -> ExecutionProgram {
+  { specimen_program() |
+    schema_version: "execution-program/1",
+    initial_world: frozen_v1_world(),
+    bounds: bounds_before_v3(),
+    interactions: frozen_v1_interactions() }
+}
+
+pure func encoded_frozen_v1() -> string {
+  match encode_artifact(frozen_v1_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
+}
+
+-- What the frozen v2 bytes hold: `specimen_program()` entire — the v2 freeze was
+-- taken at the full eleven interactions — with the two facts the bytes carry that
+-- this build no longer writes. WI-1's `bounds` override is the substantive one; see
+-- `bounds_before_v3`.
+pure func frozen_v2_program() -> ExecutionProgram {
+  { specimen_program() |
+    schema_version: "execution-program/2",
+    bounds: bounds_before_v3() }
+}
+
+-- The same shape as `encoded_frozen_v1`, and it will not match the v2 file: this
+-- build stamps `program_schema_version()` on every artifact it encodes and writes
+-- a six-field bounds line, so the v2 bytes are now unreproducible by construction.
+-- The comparison is kept rather than deleted because "this build can no longer
+-- write these bytes" is a claim worth printing at every version that predates the
+-- encoder — it is the same ⓘ the v1 row has carried since WI-D22.
+pure func encoded_frozen_v2() -> string {
+  match encode_artifact(frozen_v2_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
+}
+
+-- WI-D22'S FROZEN v2 BYTES, AND WHAT THEY CLOSE.
+--
+-- WI-D17 §7b recorded the debt in one sentence: the classes added after the v1
+-- freeze have codec paths that are ROUND-TRIPPED AND NOT FROZEN, "nothing in the
+-- tree can freeze them, because there are no historical bytes containing them,
+-- and the only fix is a future freeze at a future schema version." Three classes
+-- were in that state — `file_write`, `file_remove` (WI-D17) and `dir_make`
+-- (WI-D18) — and this is that version, so this is that freeze.
+--
+-- It is FREE with the bump and it was not free without one: freezing them at v1
+-- would have meant either regenerating the v1 bytes, which WI-D17's row forbids
+-- because it destroys the only artifact predating the current encoder, or
+-- shipping a second v1 artifact whose schema version claimed a content v1 never
+-- had.
+--
+-- WHAT IS IN IT: `specimen_program()` entire — all eleven interactions, so every
+-- identity class this build defines is in frozen bytes for the first time, plus
+-- WI-D22's seeded `world.file` table, which is the new section the v1 bytes have
+-- no line for.
+--
+-- THE v1 BYTES ARE NOT REGENERATED and must never be. Both fixtures are checked,
+-- against different programs, by two rows that cannot be satisfied by one file.
+--
+-- WI-1 MADE THAT TWO INTO THREE, AND MOVED WHAT THE v2 ROW ASSERTS.
+--
+-- `chunk_draw_hi` appended a sixth field to the `bounds` line, so this build
+-- writes execution-program/3 and CANNOT reproduce the v2 bytes. The comment below
+-- said byte identity was asserted for v2 and merely informed about for v1 because
+-- "the v2 bytes were frozen BY this encoder" — that sentence stopped being true at
+-- this bump, and the asymmetry it justifies moves with it rather than being
+-- deleted. So: v1 and v2 are both artifacts that PREDATE the current encoder, both
+-- are checked for decoding to the program their own bytes hold, and both report a
+-- byte difference as the permitted backward-compatible change it now is. The
+-- strict "the encoder still produces these exact bytes" assertion moves to v3,
+-- which was frozen BY this encoder and where the only two readings of a mismatch
+-- are still an unversioned encoding change or a regenerated file.
+--
+-- The v3 bytes were produced once, by a throwaway outside the tree, and the row
+-- that reads them asserts they equal `encoded_specimen()` — so the file is checked
+-- against the encoder rather than trusted. That is the same discipline WI-D22 used
+-- for these bytes and stage 5 uses for its canary pins.
+pure func v3_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v3.artifact" }
+
+pure func v2_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v2.artifact" }
+
+pure func v1_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v1.artifact" }
+pure func v0_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v0.artifact" }
+pure func store_root() -> string { ".ailang/dst-artifacts" }
+
+-- ---------------------------------------------------------------------------
+-- Field-by-field comparison — S7's record-level form
+-- ---------------------------------------------------------------------------
+
+-- The names of the fields on which two programs differ. A boolean "the round
+-- trip succeeded" is passed by a codec that loses a field and gains an equal
+-- one; a NAMED list is what turns that into a readable failure.
+pure func program_diff(a: ExecutionProgram, b: ExecutionProgram) -> [string] {
+  let aw = a.initial_world; let bw = b.initial_world;
+  let am = a.manifest; let bm = b.manifest;
+  let ab = a.bounds; let bb = b.bounds;
+  d("schema_version", a.schema_version, b.schema_version)
+    ++ d("generator_id", a.generator_id, b.generator_id)
+    ++ d("generator_version", a.generator_version, b.generator_version)
+    ++ di("seed", a.seed, b.seed)
+    ++ d("world.messages_and_policy", aw.messages_and_policy, bw.messages_and_policy)
+    ++ di("world.clock_epoch", aw.clock_epoch, bw.clock_epoch)
+    ++ d("world.extension_profile", aw.extension_profile, bw.extension_profile)
+    ++ env_diff(aw.synthetic_environment, bw.synthetic_environment)
+    -- WI-D22. Compared by PATH AND KIND AND CONTENT, not by length: a codec that
+    -- dropped the kind would round-trip an empty directory back as a
+    -- present-but-empty file, and the table's length, its paths and its contents
+    -- would all still match. That is the exact pair `post_v1_files()` entries 2
+    -- and 3 exist to hold.
+    ++ files_diff(aw.files, bw.files)
+    ++ di("bounds.max_interactions", ab.max_interactions, bb.max_interactions)
+    ++ di("bounds.max_chunks_per_interaction", ab.max_chunks_per_interaction, bb.max_chunks_per_interaction)
+    ++ di("bounds.max_payload_bytes", ab.max_payload_bytes, bb.max_payload_bytes)
+    ++ di("bounds.max_resource_size", ab.max_resource_size, bb.max_resource_size)
+    ++ di("bounds.max_clock_advance_ms", ab.max_clock_advance_ms, bb.max_clock_advance_ms)
+    -- WI-1. The draw range, not a sixth limit — and it is compared here rather
+    -- than trusted because it is the one bounds field whose decoded value depends
+    -- on the artifact's schema version.
+    ++ di("bounds.chunk_draw_hi", ab.chunk_draw_hi, bb.chunk_draw_hi)
+    ++ d("manifest.source_revision", am.source_revision, bm.source_revision)
+    ++ d("manifest.toolchain", am.toolchain, bm.toolchain)
+    ++ d("manifest.abi_version", am.abi_version, bm.abi_version)
+    ++ d("manifest.profile_id", am.profile_id, bm.profile_id)
+    ++ d("manifest.profile_version", am.profile_version, bm.profile_version)
+    ++ d("manifest.event_vocabulary_version", am.event_vocabulary_version, bm.event_vocabulary_version)
+    ++ d("manifest.normalized_configuration", am.normalized_configuration, bm.normalized_configuration)
+    ++ d("manifest.scan_root_commit", am.scan_root_commit, bm.scan_root_commit)
+    ++ d("manifest.profile_rules_version", am.profile_rules_version, bm.profile_rules_version)
+    ++ d("manifest.coverage_rules_version", am.coverage_rules_version, bm.coverage_rules_version)
+    ++ d("manifest.attribution_rules_version", am.attribution_rules_version, bm.attribution_rules_version)
+    ++ d("manifest.fault_catalogue_version", am.fault_catalogue_version, bm.fault_catalogue_version)
+    ++ package_diff(am.extension_packages, bm.extension_packages)
+    ++ list_diff("manifest.classifier_2_set", am.classifier_2_set, bm.classifier_2_set)
+    ++ list_diff("manifest.unrouted_fields", am.unrouted_fields, bm.unrouted_fields)
+    ++ list_diff("manifest.scan_roots", am.scan_roots, bm.scan_roots)
+    ++ interactions_diff(a.interactions, b.interactions)
+}
+
+pure func d(name: string, a: string, b: string) -> [string] {
+  if a == b then [] else ["${name} ('${a}' vs '${b}')"]
+}
+
+pure func di(name: string, a: int, b: int) -> [string] {
+  if a == b then [] else ["${name} (${show(a)} vs ${show(b)})"]
+}
+
+pure func list_diff(name: string, a: [string], b: [string]) -> [string] {
+  if List.length(a) != List.length(b) then
+    ["${name} length (${show(List.length(a))} vs ${show(List.length(b))})"]
+  else if str_eq_list(a, b) then [] else ["${name} contents"]
+}
+
+pure func env_diff(a: [{ key: string, value: string }], b: [{ key: string, value: string }]) -> [string] {
+  if List.length(a) != List.length(b) then
+    ["world.synthetic_environment length (${show(List.length(a))} vs ${show(List.length(b))})"]
+  else if str_eq_list(keys_of(a), keys_of(b)) && str_eq_list(values_of(a), values_of(b)) then []
+  else ["world.synthetic_environment contents"]
+}
+
+-- One entry rendered so that all three of its distinguishing components are in
+-- the compared string. `fs_kind_id` rather than a literal, so this instrument
+-- reads the same vocabulary the codec writes.
+pure func file_labels(xs: [{ path: string, node: FsNode }]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => ["${x.path}|${fs_kind_id(x.node)}|${fs_content_of(x.node)}"] ++ file_labels(rest)
+  }
+}
+
+pure func files_diff(a: [{ path: string, node: FsNode }], b: [{ path: string, node: FsNode }]) -> [string] {
+  list_diff("world.files", file_labels(a), file_labels(b))
+}
+
+pure func package_ids(ps: [PackageVersion]) -> [string] {
+  match ps { [] => [], p :: rest => ["${p.package_id}@${p.version}"] ++ package_ids(rest) }
+}
+
+pure func package_diff(a: [PackageVersion], b: [PackageVersion]) -> [string] {
+  list_diff("manifest.extension_packages", package_ids(a), package_ids(b))
+}
+
+pure func interactions_diff(a: [Interaction], b: [Interaction]) -> [string] {
+  if List.length(a) != List.length(b) then
+    ["interactions length (${show(List.length(a))} vs ${show(List.length(b))})"]
+  else interaction_pairs(a, b)
+}
+
+pure func interaction_pairs(a: [Interaction], b: [Interaction]) -> [string] {
+  match a {
+    [] => [],
+    x :: xs =>
+      match b {
+        [] => [],
+        y :: ys => one_interaction_diff(x, y) ++ interaction_pairs(xs, ys)
+      }
+  }
+}
+
+pure func one_interaction_diff(x: Interaction, y: Interaction) -> [string] {
+  let o = x.identity.ordinal;
+  di("#${o}.ordinal", x.identity.ordinal, y.identity.ordinal)
+    ++ (if identity_body_eq(x.identity.body, y.identity.body) then []
+        else ["#${o}.identity ('${identity_projection(x.identity)}' vs '${identity_projection(y.identity)}')"])
+    ++ d("#${o}.request_projection", x.request_projection, y.request_projection)
+    ++ di("#${o}.deadline_ms", x.deadline_ms, y.deadline_ms)
+    ++ di("#${o}.advance_ms", x.outcome.advance_ms, y.outcome.advance_ms)
+    ++ d("#${o}.payload", x.outcome.payload, y.outcome.payload)
+    ++ d("#${o}.status", outcome_status_id(x.outcome.status), outcome_status_id(y.outcome.status))
+    ++ d("#${o}.fault_class_id", x.outcome.fault_class_id, y.outcome.fault_class_id)
+    ++ chunks_diff(o, x.outcome.chunks, y.outcome.chunks)
+}
+
+pure func chunk_labels(cs: [StreamChunkRecord]) -> [string] {
+  match cs { [] => [], c :: rest => ["${show(c.offset_ms)}:${c.text}"] ++ chunk_labels(rest) }
+}
+
+pure func chunks_diff(o: int, a: [StreamChunkRecord], b: [StreamChunkRecord]) -> [string] {
+  list_diff("#${o}.chunks", chunk_labels(a), chunk_labels(b))
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 9 — the specimen is valid and covers every shape the schema admits
+-- ---------------------------------------------------------------------------
+
+func scenario_specimen_covers_every_shape() -> bool ! {IO} {
+  let p = specimen_program();
+  let xs = p.interactions;
+  let rejections = validate_program(p, required_class_ids());
+  let valid = List.length(rejections) == 0;
+  let missing_kinds = kinds_absent(all_interaction_kinds(), xs);
+  let all_kinds = List.length(missing_kinds) == 0;
+  let statuses = has_status(xs, "ok") && has_status(xs, "fault") && has_status(xs, "missing");
+  let chunked = any_with_chunks(xs) && any_without_chunks(xs);
+  let deadlines = any_deadline(xs, true) && any_deadline(xs, false);
+  let faults = any_fault_id(xs, true) && any_fault_id(xs, false);
+  let blank_call_id = has_blank_extension_call_id(xs);
+  let escapes = Str.contains(specimen_world().messages_and_policy, "\t")
+                  && Str.contains(specimen_world().messages_and_policy, "\n")
+                  && any_payload_with(xs, "\\")
+                  && any_projection_with(xs, "\t");
+  let lists = List.length(specimen_manifest().extension_packages) > 0
+                && List.length(specimen_manifest().classifier_2_set) > 0
+                && List.length(specimen_manifest().unrouted_fields) > 0
+                && List.length(specimen_manifest().scan_roots) > 0;
+  let known_class = contains_str(required_class_ids(), specimen_fault_class());
+  let _ = if valid then println("  ✓ the specimen is a structurally valid program (stage 1's validator, ${show(List.length(required_class_ids()))} known class ids)")
+          else { let _ = println("  ✗ the specimen does not validate — a frozen artifact that is not a program certifies nothing"); report_program(rejections) };
+  let _ = if all_kinds then println("    ✓ all ${show(List.length(all_interaction_kinds()))} identity classes appear, checked against all_interaction_kinds()")
+          else println("    ✗ the specimen omits ${show(List.length(missing_kinds))} identity class(es): ${join_keys(missing_kinds)} — their codec paths are frozen by nothing");
+  let _ = if statuses then println("    ✓ all three outcome statuses appear (ok, fault, missing)")
+          else println("    ✗ an outcome status is missing from the specimen");
+  let _ = if chunked && deadlines && faults && blank_call_id then
+            println("    ✓ chunks present and absent, deadline present and absent, fault id present and blank, and D2's one legitimate blank call id")
+          else println("    ✗ a structural alternative is missing from the specimen");
+  let _ = if escapes then println("    ✓ the escaping surface is present: a tab, a newline and a backslash inside frozen values")
+          else println("    ✗ the specimen contains no escaped character, so the frozen bytes never exercise the escape");
+  let _ = if lists && known_class then println("    ✓ every manifest list is non-empty and the fault class is one required_class_ids() defines")
+          else println("    ✗ a manifest list is empty or the fault class is not in the catalogue");
+  valid && all_kinds && statuses && chunked && deadlines && faults && blank_call_id
+    && escapes && lists && known_class
+}
+
+pure func kinds_absent(ks: [string], xs: [Interaction]) -> [string] {
+  match ks {
+    [] => [],
+    k :: rest => (if count_kind(xs, k) > 0 then [] else [k]) ++ kinds_absent(rest, xs)
+  }
+}
+
+pure func has_status(xs: [Interaction], s: string) -> bool {
+  match xs {
+    [] => false,
+    i :: rest => if outcome_status_id(i.outcome.status) == s then true else has_status(rest, s)
+  }
+}
+
+pure func any_with_chunks(xs: [Interaction]) -> bool {
+  match xs { [] => false, i :: rest => if List.length(i.outcome.chunks) > 0 then true else any_with_chunks(rest) }
+}
+
+pure func any_without_chunks(xs: [Interaction]) -> bool {
+  match xs { [] => false, i :: rest => if List.length(i.outcome.chunks) == 0 then true else any_without_chunks(rest) }
+}
+
+pure func any_deadline(xs: [Interaction], present: bool) -> bool {
+  match xs {
+    [] => false,
+    i :: rest => if (i.deadline_ms >= 0) == present then true else any_deadline(rest, present)
+  }
+}
+
+pure func any_fault_id(xs: [Interaction], present: bool) -> bool {
+  match xs {
+    [] => false,
+    i :: rest => if (i.outcome.fault_class_id != "") == present then true else any_fault_id(rest, present)
+  }
+}
+
+pure func has_blank_extension_call_id(xs: [Interaction]) -> bool {
+  match xs {
+    [] => false,
+    i :: rest =>
+      match i.identity.body {
+        ExtensionEffectIdentity(_, _, c) => if c == "" then true else has_blank_extension_call_id(rest),
+        _ => has_blank_extension_call_id(rest)
+      }
+  }
+}
+
+pure func any_payload_with(xs: [Interaction], t: string) -> bool {
+  match xs { [] => false, i :: rest => if Str.contains(i.outcome.payload, t) then true else any_payload_with(rest, t) }
+}
+
+pure func any_projection_with(xs: [Interaction], t: string) -> bool {
+  match xs { [] => false, i :: rest => if Str.contains(i.request_projection, t) then true else any_projection_with(rest, t) }
+}
+
+func report_program(rs: [ProgramRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => { let _ = println("      ${program_message(r)}"); report_program(rest) }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 10 — the round trip, FIELD BY FIELD, with every field distinct
+-- ---------------------------------------------------------------------------
+
+-- A codec's failure mode is a field the encoder writes and the decoder ignores.
+-- Both halves type-check and the loss is silent until a replay serves a
+-- different response while every count still balances. So the row asserts a
+-- NAMED empty diff, and separately asserts that the specimen's scalar fields
+-- are pairwise distinct — because with two fields equal, a codec that swapped
+-- them would round-trip perfectly.
+func scenario_round_trip() -> bool ! {IO} {
+  let bytes = encoded_specimen();
+  let decoded = decode_artifact(bytes);
+  match decoded {
+    ProgramDecodeRefused(rs) => {
+      let _ = println("  ✗ the specimen did not decode: ${first_decode_message(rs)}");
+      false
+    },
+    ProgramDecoded(back) => {
+      let diff = program_diff(specimen_program(), back);
+      let clean = List.length(diff) == 0;
+      let distinct = all_distinct_strings(specimen_scalars(), [])
+                       && all_distinct_ints(specimen_ints(), []);
+      let _ = if clean then println("  ✓ the specimen round-trips field by field (${show(List.length(specimen_scalars()))} header scalars, ${show(List.length(specimen_interactions()))} interactions × 9 fields)")
+              else println("  ✗ ${show(List.length(diff))} field(s) did not survive the round trip: ${join_keys(diff)}");
+      let _ = if distinct then println("    ✓ no two of the specimen's scalar fields hold the same value, so a codec that swapped two of them would be visible")
+              else println("    ✗ two of the specimen's scalar fields are equal — a swap between them round-trips perfectly and this row cannot see it");
+      clean && distinct
+    }
+  }
+}
+
+-- Every scalar string the header carries, in encode order.
+pure func specimen_scalars() -> [string] {
+  let w = specimen_world(); let m = specimen_manifest(); let p = specimen_program();
+  [p.generator_id, p.generator_version, w.messages_and_policy, w.extension_profile,
+   m.source_revision, m.toolchain, m.abi_version, m.profile_id, m.profile_version,
+   m.event_vocabulary_version, m.normalized_configuration, m.scan_root_commit,
+   m.profile_rules_version, m.coverage_rules_version, m.attribution_rules_version,
+   m.fault_catalogue_version]
+    ++ keys_of(w.synthetic_environment) ++ values_of(w.synthetic_environment)
+    -- WI-D22: the seeded file PATHS, which are pairwise distinct. The seeded
+    -- CONTENTS are deliberately NOT here and could not be: two of the four
+    -- legitimately hold "" — a present-but-empty file and an empty directory —
+    -- and that collision is the whole point of the pair. Their
+    -- distinguishability is asserted by `files_diff`, which compares the kind
+    -- too, rather than by a pairwise-distinctness row that they cannot satisfy.
+    ++ file_paths(w.files)
+    ++ package_ids(m.extension_packages)
+    ++ m.classifier_2_set ++ m.unrouted_fields ++ m.scan_roots
+}
+
+pure func specimen_ints() -> [int] {
+  let b = specimen_bounds();
+  [specimen_program().seed, specimen_world().clock_epoch,
+   b.max_interactions, b.max_chunks_per_interaction, b.max_payload_bytes,
+   b.max_resource_size, b.max_clock_advance_ms, b.chunk_draw_hi]
+}
+
+pure func file_paths(xs: [{ path: string, node: FsNode }]) -> [string] {
+  match xs { [] => [], x :: rest => [x.path] ++ file_paths(rest) }
+}
+
+pure func all_distinct_strings(xs: [string], seen: [string]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_str(seen, x) then false else all_distinct_strings(rest, seen ++ [x])
+  }
+}
+
+pure func contains_int(xs: [int], t: int) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_int(rest, t) }
+}
+
+pure func all_distinct_ints(xs: [int], seen: [int]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_int(seen, x) then false else all_distinct_ints(rest, seen ++ [x])
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 11 — deterministic AND diffable, both as numbers
+-- ---------------------------------------------------------------------------
+
+pure func encode_of(p: ExecutionProgram) -> string {
+  match encode_artifact(p) { Encoded(s) => s, EncodeRefused(_) => "" }
+}
+
+pure func with_env_value(p: ExecutionProgram, key: string, v: string) -> ExecutionProgram {
+  let es = set_env_value(p.initial_world.synthetic_environment, key, v);
+  { p | initial_world: { p.initial_world | synthetic_environment: es } }
+}
+
+pure func payload_at_ordinal(xs: [Interaction], ord: int, v: string) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      (if i.identity.ordinal == ord then [{ i | outcome: { i.outcome | payload: v } }] else [i])
+        ++ payload_at_ordinal(rest, ord, v)
+  }
+}
+
+-- The `let` is not a style choice. A call in the FIELD-VALUE position of a
+-- record update is not registered as a dependency by AILANG v0.26.0's
+-- declaration sorter, so `{ p | interactions: payload_at_ordinal(...) }` reports
+-- "undefined variable: payload_at_ordinal" whenever anything else in the module
+-- forward-references this function — an ordering the author cannot see. Binding
+-- the call first is the workaround. Written up in
+-- .agent/issues/ailang-record-update-field-call-is-not-a-dependency.md.
+pure func with_payload_at(p: ExecutionProgram, ord: int, v: string) -> ExecutionProgram {
+  let xs = payload_at_ordinal(p.interactions, ord, v);
+  { p | interactions: xs }
+}
+
+func scenario_deterministic_and_diffable() -> bool ! {IO} {
+  let a = encoded_specimen();
+  let b = encoded_specimen();
+  let deterministic = a == b && a != "";
+  let n = line_count(a);
+  -- Three single-field changes at three different depths: a header scalar, an
+  -- environment value, and one interaction's payload. Each must move exactly
+  -- two lines — its own, and the digest. A single-line JSON encoding scores
+  -- `n` here, which is what "diffable" is FOR and why this is a number.
+  let head_change = encode_of({ specimen_program() | generator_version: "gv-3" });
+  let env_change = encode_of(with_env_value(specimen_program(), "MOTOKO_HEADLESS", "headless-off"));
+  let deep_change = encode_of(with_payload_at(specimen_program(), 7, "line one\nline two\\END"));
+  let d1 = differing_lines(a, head_change);
+  let d2 = differing_lines(a, env_change);
+  let d3 = differing_lines(a, deep_change);
+  -- The line floor is DERIVED from the program rather than picked: every
+  -- interaction costs at least four lines (identity, outcome, projection,
+  -- payload), so an encoding of this specimen that has fewer is not
+  -- line-oriented at all. Without it the diff count alone cannot tell a
+  -- diffable encoding from a single-line one — a one-line body also "differs
+  -- in two lines", and that is how N4 would have passed.
+  let floor = 4 * List.length(specimen_interactions());
+  let diffable = d1 == 2 && d2 == 2 && d3 == 2 && n >= floor;
+  let _ = if deterministic then println("  ✓ the same program encodes byte-identically twice (${show(Str.length(a))} bytes, ${show(n)} lines)")
+          else println("  ✗ two encodings of one program differ — the encoding is not deterministic");
+  let _ = if diffable then
+            println("    ✓ a one-field change moves exactly 2 of ${show(n)} lines — the field's own line and the digest (header=${show(d1)}, env value=${show(d2)}, interaction #7 payload=${show(d3)})")
+          else
+            println("    ✗ a one-field change moved header=${show(d1)}, env=${show(d2)}, deep=${show(d3)} of ${show(n)} lines, against a floor of ${show(floor)} lines for ${show(List.length(specimen_interactions()))} interactions; a whole-file churn is what a single-line encoding produces and is what this encoding was chosen to avoid");
+  deterministic && diffable
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 12 — THE COMPATIBILITY POLICY, against frozen bytes from the tree
+-- ---------------------------------------------------------------------------
+
+-- The row this whole stage exists for. `scripts/dst/fixtures/…v1.artifact` was
+-- frozen when this encoding landed and THERE IS NO TARGET THAT REGENERATES IT.
+-- Encoder and decoder were written in the same commit and agree by
+-- construction, so every other row here would pass against a compatibility
+-- policy that exists only as prose. These bytes are the policy.
+--
+-- If a future edit breaks this row, the available responses are: keep the v1
+-- decode path, or bump `program_schema_version()` and pin a runner for v1.
+-- Regenerating the file is the response that is not available, because it
+-- destroys the evidence.
+func scenario_the_frozen_v1_specimen_still_decodes() -> bool ! {IO, FS} {
+  match FS.readFileResult(v1_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen v1 specimen could not be read (${e}); the compatibility policy has no artifact and asserts nothing"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_frozen_v1();
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN v1 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          let _ = println("      This build changed the encoding. D8 requires a migration to preserve old-program");
+          let _ = println("      decoding OR pin a runner. Add a v1 decode path, or bump program_schema_version()");
+          let _ = println("      and record the pinned runner for 'execution-program/1'. Do NOT regenerate this file:");
+          let _ = println("      it is the only artifact in this project that predates the current encoder.");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(frozen_v1_program(), back);
+          let ok = List.length(diff) == 0;
+          let _ = if ok then println("  ✓ the frozen v1 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v1 specimen decodes to a DIFFERENT program: ${join_keys(diff)} — this build silently reinterprets an old artifact, which is what D8 forbids");
+          let _ = if matches_encoder then println("    ✓ the current encoder still produces those exact bytes")
+                  else println("    ⓘ the current encoder produces different bytes from the frozen artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted");
+          ok
+        }
+      }
+    }
+  }
+}
+
+-- WI-D22. THE SAME ROW FOR v2, AND WHAT WI-1 MOVED IN IT.
+--
+-- WI-D22 asserted byte-for-byte identity here and only INFORMED about it for v1,
+-- because "the v1 bytes predate the current encoder, so 'the encoder still
+-- produces them' is a fact about history that a permitted backward-compatible
+-- change can falsify. The v2 bytes were frozen BY this encoder." WI-1's bump to
+-- execution-program/3 made the second sentence false: this build appends
+-- `chunk_draw_hi` to the `bounds` line and writes a /3 header, so it can no longer
+-- produce these bytes, and the difference is a permitted backward-compatible
+-- change of exactly the kind the v1 row already reports as ⓘ.
+--
+-- So the assertion MOVED rather than being dropped: `scenario_the_frozen_v3_...`
+-- carries it, against bytes this encoder did produce. Weakening this row without
+-- putting the assertion somewhere is how a compatibility gate becomes prose, and
+-- the check that the pair is complete is that the strict row is now the one at the
+-- version `program_schema_version()` returns.
+--
+-- WHAT THIS ROW STILL ASSERTS, and it is the half that matters more: that a v2
+-- artifact decodes to THE PROGRAM ITS OWN BYTES HOLD. `bounds_before_v3()` is that
+-- program's bounds, and the explicit `chunk_draw_hi == 3` row below is the
+-- migration decision executed rather than described — `int_at` would have answered
+-- 0 here, and 0 is a program that never draws chunks.
+--
+-- And the count is asserted, because that is the debt: ZERO identity classes may
+-- be round-tripped-but-not-frozen once this row passes. `kinds_absent` is run
+-- against the classes in the FROZEN bytes rather than against
+-- `specimen_interactions()`, which is what makes a twelfth class added later
+-- redden this row instead of quietly rejoining the two-tier surface.
+func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
+  match FS.readFileResult(v2_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen v2 specimen could not be read (${e}); WI-D17's two-tier compatibility surface is still open and nothing says so"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_frozen_v2();
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN v2 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          let _ = println("      This build changed the encoding and dropped v2's decode path, or removed");
+          let _ = println("      'execution-program/2' from decodable_schema_versions(). Restore the decode");
+          let _ = println("      path and bump to execution-program/4. Do NOT regenerate this file.");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(frozen_v2_program(), back);
+          let ok = List.length(diff) == 0;
+          let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
+          let none_unfrozen = List.length(unfrozen) == 0;
+          -- WI-1. The migration's one substantive claim, asserted on real historical
+          -- bytes rather than on a hand-built record: a five-field bounds line
+          -- decodes its absent sixth field to the value v2 MEANT.
+          let ok_default = back.bounds.chunk_draw_hi == 3;
+          let _ = if ok then println("  ✓ the frozen v2 specimen decodes to the program its own bytes hold, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v2 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if ok_default then println("    ✓ its five-field bounds line decodes to chunk_draw_hi = 3 — v2's own semantics, not int_at's 0, which would be a program that never draws chunks")
+                  else println("    ✗ the v2 bounds line decoded to chunk_draw_hi = ${show(back.bounds.chunk_draw_hi)}, and 3 is what v2 MEANT: choose_provider drew from a literal 0,3 at that version. A 0 here is int_at answering a migration question — see dst_persistence.chunk_draw_hi_of");
+          let _ = if matches_encoder then println("    ✓ this build can still write these exact bytes")
+                  else println("    ⓘ the current encoder produces different bytes from the frozen v2 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v3 row, at the version this build writes");
+          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen — WI-D17's two-tier compatibility surface is CLOSED (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes)")
+                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are still frozen by nothing: ${join_keys(unfrozen)} — a class added after this freeze reopens WI-D17 §7b's two-tier surface, and the fix is a further schema version, not an edit to these bytes");
+          ok && ok_default && none_unfrozen
+        }
+      }
+    }
+  }
+}
+
+-- WI-1'S FROZEN v3 BYTES, AND WHY THEY ARE NOT A CONVENIENCE.
+--
+-- This carries the assertion the v2 row can no longer make: that the encoder in
+-- this tree produces these exact bytes. Both readings of a mismatch here are
+-- defects — an encoding change that did not move `program_schema_version()`, or a
+-- regenerated fixture — so it is a `✗` and not an `ⓘ`, exactly as the v2 row was
+-- before the bump moved it.
+--
+-- It is also what makes the pair non-vacuous in the other direction. The v2 row
+-- proves this build reads bytes it cannot write; this one proves it writes the
+-- bytes it reads. Neither alone catches an encoder and decoder that drifted
+-- together, which is the failure this module exists for and the reason there is no
+-- regeneration target for any of these four files.
+func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
+  match FS.readFileResult(v3_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen v3 specimen could not be read (${e}); nothing then asserts that this build's encoder produces the bytes it claims to"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_specimen();
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN v3 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          let _ = println("      This build changed the encoding without moving program_schema_version().");
+          let _ = println("      Add a decode path and bump to execution-program/4. Do NOT regenerate this file.");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(specimen_program(), back);
+          let ok = List.length(diff) == 0;
+          let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
+          let none_unfrozen = List.length(unfrozen) == 0;
+          let _ = if ok then println("  ✓ the frozen v3 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v3 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if matches_encoder then println("    ✓ the current encoder still produces those exact bytes")
+                  else println("    ✗ the current encoder no longer produces the frozen v3 bytes; these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/4 rather than regenerating the file");
+          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes at the version this build writes)")
+                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are frozen by nothing: ${join_keys(unfrozen)} — the fix is a further schema version, not an edit to these bytes");
+          ok && matches_encoder && none_unfrozen
+        }
+      }
+    }
+  }
+}
+
+-- The fail-closed half, against real bytes rather than a hand-built record.
+func scenario_an_unknown_schema_fails_closed() -> bool ! {IO, FS} {
+  match FS.readFileResult(v0_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the unknown-schema specimen could not be read (${e}); the fail-closed row would be vacuous"); false },
+    Ok(bytes) =>
+      match decode_artifact(bytes) {
+        ProgramDecoded(_) => {
+          let _ = println("  ✗ an artifact whose schema version this build does not know was DECODED ANYWAY — this is exactly the silent reinterpretation D8 forbids");
+          false
+        },
+        ProgramDecodeRefused(rs) => {
+          let named = has_decode_rule(rs, "artifact-unknown-schema-version");
+          let _ = if named then println("  ✓ an artifact at an unknown schema version fails closed by name, pointing at the pinned runner")
+                  else println("  ✗ the unknown-schema artifact was refused for the wrong reason: ${first_decode_message(rs)}");
+          let _ = if named then println("      ${first_decode_message(rs)}") else ();
+          named
+        }
+      }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 13 — the decode mutation rows
+-- ---------------------------------------------------------------------------
+
+-- Every refusal is exercised by taking the VALID artifact and corrupting
+-- exactly one thing about it, then requiring the decoder to name the rule that
+-- corruption violates. Asserting the rule rather than a non-empty refusal list
+-- is what makes a deleted or short-circuited check turn its own row red.
+func scenario_decode_mutants() -> bool ! {IO} {
+  let good = encoded_specimen();
+  rows([{ rule: "artifact-digest-mismatch",
+          label: "one byte of the body edited, digest untouched",
+          bytes: Str.replace(good, "payload.tool.one", "payload.tool.ONE") },
+        { rule: "artifact-not-an-execution-program",
+          label: "the trailing newline removed (a truncated file)",
+          bytes: Str.substring(good, 0, Str.length(good) - 1) },
+        { rule: "artifact-not-an-execution-program",
+          label: "the digest line replaced by something else",
+          bytes: Str.replace(good, "\ndigest\t", "\nnotdigest\t") },
+        { rule: "artifact-unknown-schema-version",
+          label: "a schema version this build does not know",
+          -- WI-D22: this reads `program_schema_version()` rather than the
+          -- literal it used to hold. `good` is what THIS build encodes, so a
+          -- transcribed "execution-program/1" stopped matching the moment the
+          -- version moved and the row would have gone green while replacing
+          -- nothing — a mutant that mutates nothing is refused for the reason
+          -- the UNMUTATED artifact is refused, which is never.
+          bytes: Str.replace(good, "${program_schema_version()}\n", "execution-program/9\n") },
+        -- WI-D22's two initial-world file rules. Both take a VALID `world.file`
+        -- line and corrupt exactly the component the rule is about, so a decoder
+        -- that stopped checking one of them turns its own row red by name.
+        { rule: "artifact-unknown-file-kind",
+          label: "an initial-world file entry whose kind this build does not define",
+          bytes: retag(good, "\tfile\t{\"context_limits", "\tsymlink\t{\"context_limits") },
+        { rule: "artifact-directory-carries-content",
+          label: "a directory entry carrying a file body",
+          bytes: retag(good, "empty-dir\tdir\t", "empty-dir\tdir\tSURPRISE") },
+        { rule: "artifact-unknown-tag",
+          label: "a line whose tag this schema does not define",
+          bytes: retag(good, "generator_id\t", "generator_idx\t") },
+        { rule: "artifact-missing-section",
+          label: "a required line deleted",
+          bytes: without_line(good, "manifest.abi_version") },
+        { rule: "artifact-repeated-section",
+          label: "a required line written twice",
+          bytes: duplicate_line(good, "manifest.abi_version") },
+        { rule: "artifact-wrong-arity",
+          label: "a line truncated to fewer fields than its tag declares",
+          -- WI-1: six fields at execution-program/3, truncated to five. FIVE and
+          -- not four, deliberately: five is exactly what a v2 bounds line holds,
+          -- so this row asserts that the arity check reads the ARTIFACT'S version
+          -- rather than accepting any historically-valid width. `good` declares /3,
+          -- so five fields is short there and is a refusal.
+          bytes: retag(good, "bounds\t18\t19\t4096\t21\t22\t20", "bounds\t18\t19\t4096\t21\t22") },
+        { rule: "artifact-not-an-integer",
+          label: "an integer field holding text",
+          bytes: retag(good, "seed\t23", "seed\ttwenty-three") },
+        { rule: "artifact-malformed-escape",
+          label: "an escape this schema never emits",
+          bytes: retag(good, "rq.provider.zero", "rq.provider\\qzero") },
+        { rule: "artifact-unknown-interaction-kind",
+          label: "an eighth identity class",
+          bytes: retag(good, "\texpect_tool\t", "\texpect_telepathy\t") },
+        { rule: "artifact-unknown-outcome-status",
+          label: "a fourth outcome status",
+          bytes: retag(good, "\tmissing\t", "\tmaybe\t") },
+        { rule: "artifact-incomplete-interaction",
+          label: "an interaction whose payload line is deleted",
+          bytes: without_line(good, "p\tpayload.tool.one") }])
+}
+
+-- Corruption helpers. Each rebuilds the artifact WITHOUT recomputing the
+-- digest, except `retag`/`without_line`/`duplicate_line`, which do — otherwise
+-- every row below would be caught by the digest check first and none of the
+-- structural refusals would ever be reached. That is S8's complement again: a
+-- mutation the first guard swallows leaves every later guard unwalked.
+pure func rebuild(body: string) -> string {
+  "${program_schema_version()}\ndigest\t${program_digest(body)}\n${body}\n"
+}
+
+pure func body_of_artifact(bytes: string) -> string {
+  let lines = drop_last_str(Str.split(bytes, "\n"));
+  Str.join("\n", drop_first_str(drop_first_str(lines)))
+}
+
+pure func drop_last_str(xs: [string]) -> [string] {
+  match xs { [] => [], _ :: [] => [], x :: rest => [x] ++ drop_last_str(rest) }
+}
+
+pure func drop_first_str(xs: [string]) -> [string] {
+  match xs { [] => [], _ :: rest => rest }
+}
+
+pure func retag(bytes: string, from: string, to: string) -> string {
+  rebuild(Str.replace(body_of_artifact(bytes), from, to))
+}
+
+pure func without_line(bytes: string, prefix: string) -> string {
+  rebuild(Str.join("\n", drop_lines_with(Str.split(body_of_artifact(bytes), "\n"), prefix)))
+}
+
+pure func drop_lines_with(ls: [string], prefix: string) -> [string] {
+  match ls {
+    [] => [],
+    l :: rest => (if Str.startsWith(l, prefix) then [] else [l]) ++ drop_lines_with(rest, prefix)
+  }
+}
+
+pure func duplicate_line(bytes: string, prefix: string) -> string {
+  rebuild(Str.join("\n", dup_lines_with(Str.split(body_of_artifact(bytes), "\n"), prefix)))
+}
+
+pure func dup_lines_with(ls: [string], prefix: string) -> [string] {
+  match ls {
+    [] => [],
+    l :: rest => (if Str.startsWith(l, prefix) then [l, l] else [l]) ++ dup_lines_with(rest, prefix)
+  }
+}
+
+func rows(ms: [{ rule: string, label: string, bytes: string }]) -> bool ! {IO} {
+  match ms {
+    [] => true,
+    m :: rest => {
+      let got = match decode_artifact(m.bytes) {
+        ProgramDecoded(_) => false,
+        ProgramDecodeRefused(rs) => has_decode_rule(rs, m.rule)
+      };
+      let _ = if got then println("    ✓ ${m.rule} ← ${m.label}")
+              else println("    ✗ ${m.rule} was NOT reported for: ${m.label}");
+      let tail = rows(rest);
+      got && tail
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 14 — redaction BEFORE persistence, asserted on the bytes on disk
+-- ---------------------------------------------------------------------------
+
+-- The ordering obligation. Redact-then-write and write-then-redact both
+-- type-check, and only the first is D8-compliant — the second has already
+-- leaked by the time it runs. A suite that inspected the in-memory record could
+-- not tell them apart, so this row reads THE FILE SYSTEM: it asks the store to
+-- persist a credential-bearing program and then asserts that no file exists at
+-- the path it would have been written to.
+func scenario_secrets_are_refused_before_any_bytes_exist() -> bool ! {IO, FS} {
+  -- A DIFFERENT seed from the store scenario's, on purpose. If the two shared a
+  -- path, this row's "no file exists" check would depend on which scenario ran
+  -- first, and a future reorder would weaken it silently while staying green.
+  let leaked = { with_env_value(specimen_program(), "OPENAI_BASE_URL",
+                                "https://svc:s3cr3t@api.example.com/v1") | seed: 99 };
+  let path = artifact_path(store_root(), leaked);
+  let _ = if FS.fileExists(path) then FS.removeFile(path) else ();
+  let outcome = persist_program(store_root(), leaked);
+  let refused = persist_rule(outcome) == "artifact-refused-secrets";
+  let no_file = not FS.fileExists(path);
+  let no_bytes = match encode_artifact(leaked) {
+    EncodeRefused(_) => true,
+    Encoded(_) => false
+  };
+  let _ = if refused then println("  ✓ persisting a credential-bearing program is refused by name")
+          else println("  ✗ a credential-bearing program was persisted (${persist_rule(outcome)})");
+  let _ = if no_file then println("    ✓ NO FILE EXISTS at ${path} — the refusal happened before any bytes were written, which is the half a redact-after-write arrangement fails")
+          else println("    ✗ a file was written for a program carrying a credential; redaction after the bytes exist has already leaked");
+  let _ = if no_bytes then println("    ✓ encode_artifact itself returns a refusal rather than a string, so the ordering is structural rather than asserted")
+          else println("    ✗ encode_artifact produced bytes for a credential-bearing program");
+  refused && no_file && no_bytes
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 15 — the store, and the collision the triple cannot avoid
+-- ---------------------------------------------------------------------------
+
+func scenario_the_store_round_trips_and_refuses_a_collision() -> bool ! {IO, FS} {
+  let p = specimen_program();
+  let path = artifact_path(store_root(), p);
+  let _ = if FS.fileExists(path) then FS.removeFile(path) else ();
+  let first = persist_program(store_root(), p);
+  let wrote = persist_rule(first) == "artifact-persisted";
+  let loaded = match load_program(path) {
+    Loaded(back) => List.length(program_diff(p, back)) == 0,
+    LoadRefused(_) => false,
+    LoadIoError(_) => false
+  };
+  -- Writing the SAME program again is idempotent.
+  let again = persist_rule(persist_program(store_root(), p)) == "artifact-persisted";
+  -- ...and writing a DIFFERENT program at the same (id, version, seed) is
+  -- refused rather than silently overwriting. The triple is not unique — it
+  -- omits the manifest D8 conditions reproduction on, and cluster 11's site 22
+  -- measured a second way it collides — so the store checks instead of
+  -- assuming. See dst_persistence's choice 3.
+  let other = { p | manifest: { specimen_manifest() | source_revision: "rev-bb22" } };
+  let collision = persist_program(store_root(), other);
+  let refused = persist_rule(collision) == "artifact-path-collision";
+  let survived = match load_program(path) {
+    Loaded(back) => back.manifest.source_revision == "rev-aa11",
+    LoadRefused(_) => false,
+    LoadIoError(_) => false
+  };
+  let _ = if wrote && loaded then println("  ✓ the store writes and reads back the specimen field by field (${path})")
+          else println("  ✗ the store did not round-trip the specimen (${persist_message(first)})");
+  let _ = if again then println("    ✓ writing the same program twice is idempotent")
+          else println("    ✗ re-writing an identical program was refused");
+  let _ = if refused && survived then
+            println("    ✓ a DIFFERENT program at the same (generator_id, generator_version, seed) is refused by name and the existing artifact survives")
+          else
+            println("    ✗ a second program overwrote the first at a path D8's triple does not make unique (${persist_rule(collision)})");
+  let _ = if refused then println("      ${persist_message(collision)}") else ();
+  wrote && loaded && again && refused && survived
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 16 — RegressionReplay consumes the persisted program
+-- ---------------------------------------------------------------------------
+
+-- Cluster 11 named `RegressionReplay` "the natural consumer of a persisted
+-- program from an older build", and this row is that claim executed rather than
+-- repeated: the program comes off the frozen v1 artifact, not out of memory.
+--
+-- D8's third reproducibility clause is the one being demonstrated — "Under a
+-- newer revision, the program remains the same regression input...
+-- Compatibility-aware regression mode may continue across recorded
+-- request-projection differences, but stops on unsafe causal mismatch."
+func scenario_regression_replay_consumes_the_frozen_program() -> bool ! {IO, FS} {
+  match FS.readFileResult(v1_fixture_path()) {
+    Err(_) => { let _ = println("  ✗ the frozen artifact could not be read, so this row is vacuous"); false },
+    Ok(bytes) =>
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(_) => { let _ = println("  ✗ the frozen artifact did not decode, so this row is vacuous"); false },
+        ProgramDecoded(p) => {
+          let identical = regression_replay_findings(p.interactions, p.interactions);
+          let clean = List.length(identical.fatal) == 0
+                        && regression_difference_count(identical) == 0;
+          -- A newer build whose request projection has been re-worded: D2
+          -- demotes it, so regression mode RECORDS it and continues.
+          let reworded = replace_projection(p.interactions, 1, "rq.tool.one (reworded by a newer build)");
+          let drifted = regression_replay_findings(p.interactions, reworded);
+          let recorded = List.length(drifted.fatal) == 0
+                           && regression_difference_count(drifted) == 1;
+          -- ...and a causal mismatch is still fatal in both modes.
+          let swapped = replace_projection(swap_first_two(p.interactions), 1, "rq.tool.one");
+          let stopped = List.length(regression_replay_findings(p.interactions, swapped).fatal) > 0;
+          let _ = if clean then println("  ✓ the frozen program replays against itself with no fatal and no recorded difference")
+                  else println("  ✗ the frozen program does not replay against itself: ${regression_report(identical)}");
+          let _ = if recorded then println("    ✓ a re-worded request projection in a newer build is RECORDED and the replay continues (D2's demotion set)")
+                  else println("    ✗ a demoted difference was not recorded exactly once: ${regression_report(drifted)}");
+          let _ = if stopped then println("    ✓ an unsafe causal mismatch still stops regression replay")
+                  else println("    ✗ a causal mismatch did not stop regression replay — the demotion set has swallowed a fatal rule");
+          clean && recorded && stopped
+        }
+      }
+  }
+}
+
+pure func replace_projection(xs: [Interaction], ord: int, v: string) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      (if i.identity.ordinal == ord then [{ i | request_projection: v }] else [i])
+        ++ replace_projection(rest, ord, v)
+  }
+}
+
+pure func swap_first_two(xs: [Interaction]) -> [Interaction] {
+  match xs {
+    a :: b :: rest =>
+      [{ a | identity: { ordinal: a.identity.ordinal, body: b.identity.body } }]
+        ++ [{ b | identity: { ordinal: b.identity.ordinal, body: a.identity.body } }]
+        ++ rest,
+    _ => xs
+  }
+}
+
+-- ---------------------------------------------------------------------------
+
+func report(fs: [SecretFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => {
+      let _ = println("      ${secret_message(f)}");
+      report(rest)
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS} {
+  let _ = println("program_persistence_dst  (D8 persistence safety)");
+  let a = scenario_the_synthetic_fixture_survives();
+  let b = scenario_no_two_fixture_quantities_are_equal();
+  let c = scenario_the_surface_is_the_drivers();
+  let d = scenario_every_driver_key_is_covered_by_the_value_axis();
+  let e = scenario_credential_shape_mutants();
+  let f = scenario_every_rule_is_reached();
+  let _ = println("  interaction artifact sites");
+  let g = scenario_interaction_sites();
+  let _ = println("  the reject-or-redact tension");
+  let h = scenario_redaction_reports_its_trajectory_cost();
+  let _ = println("program_persistence_dst  (D8 encoding, compatibility policy and store)");
+  let i = scenario_specimen_covers_every_shape();
+  let j = scenario_round_trip();
+  let k = scenario_deterministic_and_diffable();
+  let l = scenario_the_frozen_v1_specimen_still_decodes();
+  let l2 = scenario_the_frozen_v2_specimen_still_decodes();
+  let l3 = scenario_the_frozen_v3_specimen_still_decodes();
+  let m = scenario_an_unknown_schema_fails_closed();
+  let _ = println("  decode mutation rows — one corruption at a time");
+  let n = scenario_decode_mutants();
+  let _ = println("  the ordering obligation, read off the file system");
+  let o = scenario_secrets_are_refused_before_any_bytes_exist();
+  let _ = println("  the store");
+  let q = scenario_the_store_round_trips_and_refuses_a_collision();
+  let _ = println("  regression replay over the frozen program");
+  let r = scenario_regression_replay_consumes_the_frozen_program();
+  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && l3 && m && n && o && q && r
+  then println("program_persistence_dst PASS")
+  else {
+    let _ = println("program_persistence_dst FAIL");
+    exit(1)
+  }
+}

@@ -19,12 +19,15 @@
 //   SYSTEM_MD — path to a SYSTEM.md file whose content replaces the built-in system prompt
 import * as fs from "fs";
 import * as path from "path";
+import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-prompt.js";
 import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
 import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
+import { initHerdrReporter, reportSessionPath } from "./herdr-agent-state.js";
+import { initExitActions } from "./exit-actions.js";
 import { activeProfile } from "./config.js";
 import { resolveRuntimeModel } from "./models.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
@@ -406,47 +409,6 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
   }
 }
 
-function systemPromptForWorkspace(projectRoot: string, workdir: string): string {
-  const configured = (process.env.SYSTEM_MD ?? "").trim();
-  const candidate = configured !== ""
-    ? (path.isAbsolute(configured) ? configured : path.resolve(workdir, configured))
-    : path.join(projectRoot, "SYSTEM.md");
-  if (!fs.existsSync(candidate)) return "";
-
-  const absWorkdir = path.resolve(workdir);
-  const rel = path.relative(absWorkdir, path.resolve(candidate));
-  if (rel === "") return ".";
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return "";
-  return rel;
-}
-
-// materializeSystemPromptArg copies the CONTENT of an external --system-prompt
-// file into a managed in-workspace file and returns its absolute path. This lets
-// a headless caller inject a system prompt from ANY path (absolute or outside the
-// workspace) — motoko copies it in, so systemPromptForWorkspace's workdir-relative
-// contract (the supervisor reads the prompt via a path relative to workdir) stays
-// intact. Returns null if the source path is empty, missing, or unreadable, in
-// which case the caller falls back to SYSTEM_MD / the default SYSTEM.md.
-function materializeSystemPromptArg(flagValue: string, workdir: string): string | null {
-  const src = flagValue.trim();
-  if (src === "") return null;
-  const srcAbs = path.isAbsolute(src) ? src : path.resolve(process.cwd(), src);
-  let content: string;
-  try {
-    content = fs.readFileSync(srcAbs, "utf8");
-  } catch (err) {
-    console.error(`[motoko] --system-prompt: cannot read ${srcAbs}: ${String(err)}`);
-    return null;
-  }
-  const dest = path.join(path.resolve(workdir), ".motoko-system-prompt.md");
-  try {
-    fs.writeFileSync(dest, content, "utf8");
-  } catch (err) {
-    console.error(`[motoko] --system-prompt: cannot write ${dest}: ${String(err)}`);
-    return null;
-  }
-  return dest;
-}
 
 // ---------------------------------------------------------------------------
 // PlainLogger — used when stdout is not a TTY (CI, pipes, devcontainers).
@@ -845,6 +807,24 @@ async function main(): Promise<void> {
   // exits (unexpected crash after an error), we recover by showing the task
   // prompt instead of exiting the TUI.
   let errorOccurred = false;
+  // True while a runtime spawned only to warm the AILANG module graph is up and
+  // no prompt has been submitted against it yet. Its exit must not be treated as
+  // "the session ended".
+  let preWarmIdle = false;
+
+  // Announce Motoko to herdr, if this process was launched in a herdr pane. Everything about this
+  // is a no-op outside one — see herdr-agent-state.ts — so it is unconditional here rather than
+  // hidden behind a flag that would then need testing in both positions. It also registers the
+  // exit hooks that give the lifecycle authority back, which is why it runs before anything can
+  // call process.exit.
+  // Perform whatever extensions asked to have done at session end (ABI 7.0's ExitIntent), read
+  // from the manifest their runtimes published. Registered BEFORE the herdr reporter because Node
+  // runs 'exit' listeners in registration order and handing lifecycle authority back should be the
+  // last thing that happens — after whatever the session still owned has been dealt with. A no-op
+  // when no runtime ever started or no extension declared an intent; see exit-actions.ts.
+  initExitActions();
+
+  initHerdrReporter();
 
   if (!isTTY) {
     // Non-TTY: prompt for task first, then run with PlainLogger.
@@ -852,9 +832,21 @@ async function main(): Promise<void> {
       process.argv[2] ??
       process.env.TASK ??
       (await promptForTask());
+    // Non-TTY means one task, run to completion, then exit — the runtime never
+    // reads a task from stdin in headless mode. An empty one has nothing to
+    // run, so fail here instead of spawning a runtime that exits having done
+    // nothing. Reachable with an empty argv[2] or TASK (`??` only falls through
+    // on null/undefined) and when promptForTask() reads a closed stdin.
+    if (task.trim() === "") {
+      process.stderr.write(
+        "No task given. Pass it as the first argument or set TASK=... (stdin is not a TTY, so there is nothing to prompt).\n",
+      );
+      process.exit(2);
+    }
     const ui = jsonlOutput ? new JsonlLogger() : new PlainLogger();
     const logger = new SessionLogger(projectRoot, pkgVersion);
     sessionLogger = logger;
+    reportSessionPath(logger.filePath);
     logger.logUserInput(task);
     ui.onModelChange = (newModel) => {
       process.env.MODEL = newModel;
@@ -910,6 +902,7 @@ async function main(): Promise<void> {
     errorOccurred = false;
     const logger = new SessionLogger(projectRoot, pkgVersion);
     sessionLogger = logger;
+    reportSessionPath(logger.filePath);
     if (logPrompt) logger.logUserInput(task);
     runtimeProcess = new RuntimeProcess(
       task,
@@ -942,16 +935,47 @@ async function main(): Promise<void> {
           // Reset interrupted flag for clean restart
           interrupted = false;
           errorOccurred = false;
+          // The respawn carries an empty task, which rpc.ail now treats as "no
+          // opening turn" — it blocks on stdin instead of burning a model call on
+          // a blank user message. So the UI has to go back to awaiting a task, or
+          // shouldLockPlainInput would refuse the user's next prompt.
+          ui.setAwaitingTask(true);
+          preWarmIdle = true;
           // Small delay before respawn
-          setTimeout(() => spawnRuntimeProcess("", false), 100);
+          setTimeout(() => {
+            // The user can submit a prompt inside this window; onInitialTask then
+            // spawns a runtime for it because the old one is dead. Respawning here
+            // too would overwrite `runtimeProcess` and orphan the one actually
+            // running their task.
+            if (runtimeProcess && !runtimeProcess.isDead) return;
+            spawnRuntimeProcess("", false);
+          }, 100);
         } else if (interrupted) {
           // ESC was pressed — don't exit; let the user submit a new task.
           interrupted = false;
+          preWarmIdle = false;
+          errorOccurred = false;
           ui.setAwaitingTask(true);
         } else if (errorOccurred) {
           // Process crashed after emitting an error (unexpected exit on the
-          // normal error path).  Recover rather than exiting the TUI.
+          // normal error path).  Recover rather than exiting the TUI. The error
+          // event has already been rendered, so there is nothing to add here.
+          //
+          // Ordered BEFORE the pre-warm branch: a boot pre-spawn that dies of
+          // bad config is the cheapest failure signal the user ever gets, and
+          // relabelling it "it will be restarted when you submit one" hides the
+          // reason at exactly the moment it is most useful.
           errorOccurred = false;
+          preWarmIdle = false;
+          ui.setAwaitingTask(true);
+        } else if (preWarmIdle) {
+          // A pre-warm runtime exited before any prompt was submitted, without
+          // saying why. Stay in the TUI and keep awaiting a task — exiting here
+          // would look like Motoko refusing to start. The next prompt spawns a
+          // fresh runtime through the onInitialTask fallback, which is where
+          // the failure becomes visible.
+          preWarmIdle = false;
+          ui.addHistoryText("Runtime exited before the first prompt; it will be restarted when you submit one.", "red");
           ui.setAwaitingTask(true);
         } else {
           void closing.then(() => {
@@ -972,7 +996,21 @@ async function main(): Promise<void> {
     sessionLogger?.logUserInput(content);
     runtimeProcess?.sendUserMessage(content);
   };
-  ui.onAbort = () => { if (runtimeProcess) { runtimeProcess.abort(); } else { ui.stop(); process.exit(0); } };
+  ui.onAbort = () => {
+    // Ctrl+C quits unless a live runtime is actually working on a task. The
+    // boot pre-spawn and a `/restart` respawn both leave a warm runtime in
+    // `runtimeProcess` with no task attached (`preWarmIdle`): aborting that one
+    // exits into the preWarmIdle branch above, which deliberately keeps the TUI
+    // up, and the next Ctrl+C is then swallowed by RuntimeProcess.send()'s
+    // dead-child guard — leaving no way out of the TUI at all.
+    if (runtimeProcess && !runtimeProcess.isDead && !preWarmIdle) {
+      runtimeProcess.abort();
+      return;
+    }
+    runtimeProcess?.kill();
+    ui.stop();
+    process.exit(0);
+  };
   ui.onInterrupt = () => { interrupted = true; runtimeProcess?.kill(); };
 
   // Restart handler — respawn the runtime process with optional new profile
@@ -987,13 +1025,35 @@ async function main(): Promise<void> {
     }
   };
 
+  // Hand the first prompt to the runtime. Normally the pre-spawn below has one
+  // up and warm already, so this is a stdin write and the user sees output
+  // almost immediately. The spawn is the fallback for when that process is gone
+  // (startup failure, ESC interrupt, an error the runtime exited on).
+  ui.onInitialTask = (task: string) => {
+    preWarmIdle = false;
+    if (runtimeProcess && !runtimeProcess.isDead) {
+      sessionLogger?.logUserInput(task);
+      runtimeProcess.sendUserMessage(task);
+      return;
+    }
+    spawnRuntimeProcess(task, true);
+  };
+
   const taskFromArgs = process.argv[2] ?? process.env.TASK;
   if (taskFromArgs) {
     spawnRuntimeProcess(taskFromArgs, false);
   } else {
     // No task provided — let the user type it into the TUI input.
     ui.setAwaitingTask(true);
-    ui.onInitialTask = (task) => spawnRuntimeProcess(task, true);
+    // Pre-spawn the runtime now, with an empty task, so the AILANG module load
+    // overlaps with the user typing their first prompt instead of landing after
+    // they press Enter. Measured on this repo: ~1.2s with a warm compile cache,
+    // ~15s after editing a widely-imported core module, ~20s fully cold (the
+    // cache key includes the compiler commit, so rebuilding `ailang` invalidates
+    // it). rpc.ail runs no opening turn for an empty task, so this costs no
+    // model call — it only pays the compile early.
+    spawnRuntimeProcess("", false);
+    preWarmIdle = true;
   }
 }
 

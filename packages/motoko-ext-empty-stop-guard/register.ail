@@ -1,0 +1,23 @@
+module sunholo/motoko_ext_empty_stop_guard/register
+
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  FinalizeOutcome,
+  PassThrough, NoOpinion, Delegate, NoIntercept
+)
+import pkg/sunholo/motoko_ext_empty_stop_guard/empty_stop_guard (decide)
+
+func finalize(ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: decide(ctx, candidate), next_state: ctx.world }
+}
+
+-- B8: 6.0 Capability list. The former `default_hooks` neutral bodies are
+-- inlined verbatim; only the judge slot is this extension's own.
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS} {
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    SolverJudge(finalize)
+  ]
+}

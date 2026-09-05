@@ -1,0 +1,211 @@
+module sunholo/motoko_ext_agentcli/agentcli
+
+-- Delegate a bounded sub-task to a CLI coding agent that authenticates against
+-- a SUBSCRIPTION rather than a metered key. One handler, one tool per provider,
+-- descriptors in `providers.ail`.
+--
+-- WHAT THIS IS AND IS NOT. This moves DELEGATED work onto subscription quota; it
+-- does not move motoko's own driver loop. There is no `on_model_call` seam —
+-- `src/core/model_phase.ail` dispatches no hook — so the loop's AI-effect calls
+-- keep billing whatever `agent.model` points at. The split is deliberate and is
+-- the one AILANG's mission loop already runs: a cheap metered orchestrator, an
+-- expensive subscription worker.
+--
+-- WHY `on_tool_handle`. Of the eight ABI slots, exactly TWO can reach
+-- `ExtPorts.tool_handle`, which demands the whole row `{IO, Process, FS}`: this
+-- one (the widest in the ABI) and `on_response_intercept`, which runs after the
+-- model has already produced text and so cannot be a delegation seam. The row
+-- algebra is `src/core/ext/runtime.ail:273-283`.
+--
+-- WHY AMBIENT `exec` AND NOT THAT PORT, despite the slot being chosen for
+-- reaching it. `tool_runtime.ail:50` flips to a shell wrap when ANY argv element
+-- contains one of `| > < && || ; $( ` `, and `:888`'s wrap builds its command
+-- from `req.cmd` ALONE — `req.args` is silently dropped. One argv element here
+-- is a model-authored prompt, which carries backticks as a matter of course, so
+-- the routed path runs the bare binary and fails as "stdin is not a terminal".
+-- Measured through the real loop 2026-08-16; filed as motoko_agent#158. What is
+-- given up by going ambient is WI-D24's holder stamping.
+--
+-- THE BILLING GUARD IS NOT THIS MODULE'S TO INSTALL. Both CLIs prefer an API key
+-- when one is present in the environment and fall back to the subscription login
+-- otherwise, so a stray `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` silently bills
+-- metered dollars through these tools while looking identical from here. The
+-- unset belongs in whatever launches motoko, for the reason
+-- `mission-control.sh:76` gives: subscription-or-nothing has to be true by
+-- CONSTRUCTION, not by intent.
+
+import std/option (Option, Some, None)
+import std/string (substring)
+import std/json (Json, jo, kv, js, get, asString)
+import std/process (exec, ProcessOutput, ProcessError)
+import std/bytes (toString)
+import std/result (Ok, Err)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  PassThrough, PreStepDecision, Msg, ToolSchema,
+  ToolCallEnvelope, ToolResultEnvelope,
+  ExtPathKind, ExtPathMissing
+)
+import pkg/sunholo/motoko_ext_agentcli/providers (
+  Provider, all_providers, tool_names, provider_for_tool, argv_for, failure_text
+)
+
+export type AgentCliConfig = {
+  providers: [Provider],
+  lock_path: string,
+  max_output_chars: int
+}
+
+func params_schema() -> string {
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate sees none of this conversation, so it must stand alone.\"},\"model\":{\"type\":\"string\",\"description\":\"Optional model override for this provider.\"}},\"required\":[\"prompt\"]}"
+}
+
+export func describe_tools(ps: [Provider]) -> [ToolSchema] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let schema = { name: p.tool, description: p.description, parameters: params_schema() };
+      schema :: describe_tools(rest)
+    }
+  }
+}
+
+-- OpenAI's CI/CD guidance requires that "only one machine or serialized job
+-- stream will use a given auth.json copy", so codex takes this and claude does
+-- not (`Provider.needs_lock`).
+--
+-- IT IS ADVISORY AND STATED AS SUCH: stat-then-write is not atomic, so two
+-- callers racing inside one tick can both see a free lock. It serializes the
+-- sequential case this extension actually produces and fails CLOSED for the
+-- rest. An atomic create needs an `ExtPorts` door that does not exist yet.
+func lock_held(p: ExtPorts, w: ExtWorld, path: string) -> { held: bool, next_state: ExtWorld } ! {FS} {
+  let st = p.path_stat(w, path);
+  match st.kind {
+    ExtPathMissing => { held: false, next_state: st.next_state },
+    _ => { held: true, next_state: st.next_state }
+  }
+}
+
+func truncate(s: string, limit: int) -> string {
+  if _str_len(s) > limit then substring(s, 0, limit) else s
+}
+
+-- NO DOLLAR FIGURE IS REPORTED, and the absence is deliberate for BOTH
+-- providers though they misreport differently. Codex returns token counts only.
+-- Claude Code returns a populated `total_cost_usd` (0.144036 on a measured
+-- one-word subscription run) — that is an API-EQUIVALENT price, not money spent,
+-- because the run billed plan quota. Passing either through as cost would put
+-- invented spend in the cost record, which is the failure mode Critical
+-- Principle 2 names.
+func billing_metadata(p: Provider, model: string) -> Json {
+  jo([
+    kv("provider", js(p.id)),
+    kv("billing", js("subscription-quota")),
+    kv("cost_usd_reported", js("none: subscription auth consumes plan quota; any cost field the CLI emits is an API-equivalent estimate, not spend")),
+    kv("model", js(if model == "" then "<provider default>" else model))
+  ])
+}
+
+func busy_result(p: Provider, call_id: string, lock_path: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: call_id,
+    tool: p.tool,
+    exit_code: 1,
+    stdout: "",
+    stderr: "${p.bin} is already running for this profile (lock: ${lock_path}). Its credential must not be used concurrently; retry when the in-flight call finishes.",
+    metadata: billing_metadata(p, "")
+  }
+}
+
+func error_result(p: Provider, call_id: string, msg: string) -> ToolResultEnvelope {
+  { tool_call_id: call_id, tool: p.tool, exit_code: 1, stdout: "", stderr: msg,
+    metadata: billing_metadata(p, "") }
+}
+
+func run_delegate(
+  cfg: AgentCliConfig,
+  prov: Provider,
+  ports: ExtPorts,
+  w: ExtWorld,
+  call_id: string,
+  model: string,
+  prompt: string
+) -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS} {
+  let taken = if prov.needs_lock then ports.file_write(w, cfg.lock_path, prov.id).next_state else w;
+  let ran = match exec(prov.bin, argv_for(prov, model, prompt)) {
+    -- A spawn failure never reaches a process, so it takes -1 rather than
+    -- inventing an exit code.
+    Err(_) => { code: -1, out: "", err: "${prov.bin} could not be spawned; is the CLI installed and on PATH?" },
+    Ok(o)  => { code: o.exitCode, out: toString(o.stdout), err: toString(o.stderr) }
+  };
+  let released = if prov.needs_lock then ports.file_remove(taken, cfg.lock_path).next_state else taken;
+  {
+    result: {
+      tool_call_id: call_id,
+      tool: prov.tool,
+      -- THE TYPED FIELD DECIDES, NOT THE TEXT. -1 is "no subprocess ran" and
+      -- lands in the failure direction, which is the only honest reading.
+      exit_code: ran.code,
+      stdout: truncate(ran.out, cfg.max_output_chars),
+      stderr: if ran.code == 0 then truncate(ran.err, cfg.max_output_chars)
+              else truncate(failure_text(prov, ran.out, ran.err), cfg.max_output_chars),
+      metadata: billing_metadata(prov, model)
+    },
+    next_state: released
+  }
+}
+
+export func on_tool_handle(cfg: AgentCliConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS} {
+  match provider_for_tool(cfg.providers, call.tool) {
+    [] => { decision: Delegate, next_state: ctx.world },
+    prov :: _ => {
+      let prompt = arg_str(call.arguments, "prompt", "");
+      if prompt == "" then
+        { decision: Handled(error_result(prov, call.id, "${prov.tool} requires a non-empty `prompt`.")),
+          next_state: ctx.world }
+      else {
+        let model = arg_str(call.arguments, "model", prov.model);
+        if prov.needs_lock then {
+          let gate = lock_held(ctx.ports, ctx.world, cfg.lock_path);
+          if gate.held then
+            { decision: Handled(busy_result(prov, call.id, cfg.lock_path)), next_state: gate.next_state }
+          else {
+            let run = run_delegate(cfg, prov, ctx.ports, gate.next_state, call.id, model, prompt);
+            { decision: Handled(run.result), next_state: run.next_state }
+          }
+        } else {
+          let run = run_delegate(cfg, prov, ctx.ports, ctx.world, call.id, model, prompt);
+          { decision: Handled(run.result), next_state: run.next_state }
+        }
+      }
+    }
+  }
+}
+
+-- Read one string argument out of the model-authored tool call.
+func arg_str(args: Json, key: string, fallback: string) -> string {
+  match get(args, key) {
+    None => fallback,
+    Some(v) => match asString(v) {
+      Some(s) => if s == "" then fallback else s,
+      None => fallback
+    }
+  }
+}
+
+export func make_hooks(cfg: AgentCliConfig) -> [Capability] ! {IO, Process, FS} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
+    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+      on_tool_handle(cfg, ctx, call)
+    };
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    DescribeTools(\_ . describe_tools(cfg.providers)),
+    ToolProvider(tool_names(cfg.providers), handle)
+  ]
+}

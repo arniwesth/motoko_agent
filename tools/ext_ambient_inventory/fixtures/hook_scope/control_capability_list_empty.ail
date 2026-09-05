@@ -1,0 +1,9 @@
+-- The EMPTY registration, `[]`.  The reader resolves it with ZERO atoms and
+-- says so in the pinned count; whether zero atoms may be installed is D7's
+-- question and lives in dst_profile_coverage (B3), not here.  A green with
+-- atoms=0 is honest only because the count is pinned beside the verdict.
+module fixture/control_capability_list_empty
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  []
+}

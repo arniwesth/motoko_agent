@@ -1,0 +1,206 @@
+-- src/core/ext/exit_manifest.ail
+--
+-- 7.0: the EXIT-ACTION MANIFEST — the file that carries an extension's exit
+-- intent across the boundary its closure cannot cross.
+--
+-- ============================================================================
+-- WHY A FILE AND NOT A CALL
+-- ============================================================================
+--
+-- The exit handler that must run these actions lives in the TUI process
+-- (`src/tui/src/herdr-agent-state.ts`, `process.on('exit')`), and no extension
+-- code has ever run there. The AILANG runtime that holds the closures is a
+-- CHILD of that process and is normally already gone by the time it exits —
+-- and even when it is not, an async spawn started inside a Node `exit` handler
+-- never runs, because the event loop is already closed. So there is no call to
+-- make: not a hook, not IPC, not a subprocess.
+--
+-- What CAN cross is data written earlier. This module renders every registered
+-- `ExitIntent` at the end of every turn and publishes the result to the path
+-- the host names in `MOTOKO_EXIT_MANIFEST`. At exit the TUI reads that one
+-- file and executes what it finds, synchronously and bounded. "Computed from
+-- already-known data" stops being a rule anyone has to remember and becomes a
+-- consequence of where the code runs.
+--
+-- ============================================================================
+-- WHY THE PATH COMES FROM THE HOST AND IS NOT DERIVED HERE
+-- ============================================================================
+--
+-- A derived path would be a second copy of a naming rule across a language
+-- boundary — the MOT-118 shape this project has already paid for twice
+-- (`herdr_env_ready`, `owner_token_value`). The TUI owns the session identity
+-- it mints, so it also names the file and forwards the name; this side reads
+-- the name and never computes one. UNSET IS THE ORDINARY CASE, not an error:
+-- `ailang run` invoked without the TUI has no exit handler to serve, so it
+-- publishes nothing and says nothing.
+--
+-- ============================================================================
+-- WHY THE PUBLISH IS write-tmp + mv
+-- ============================================================================
+--
+-- The reader is a process that may start reading at any moment, including
+-- while this one is writing, and it has exactly one chance to get it right.
+-- `writeFile` truncates in place, so a direct write is a torn read whenever the
+-- two overlap. `std/fs` HAS NO RENAME at v0.33.0 (ailang#897), so the rename is
+-- `mv` through `std/process` — the same transaction, and for the same reason,
+-- as `motoko-ext-herdr`'s dagr publish.
+--
+-- FAILURE IS SILENT AND THE PREVIOUS MANIFEST STANDS. A manifest that cannot
+-- be written must not fail a turn: the actions in it are a best-effort
+-- courtesy on a clean exit, and the previous version is a strictly better
+-- fallback than none. The one thing this must never do is leave a half-written
+-- file where the live one was.
+
+module src/core/ext/exit_manifest
+
+import std/fs (writeFileResult)
+import std/json (Json, encode, jo, ja, kv, js, jb, jnum)
+import std/process (exec)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx,
+  ExtRuntime,
+  ExitAction,
+  ClosePane
+)
+import src/core/ext/runtime (RenderedIntent, dispatch_exit_intents)
+
+-- The manifest's own version, read by the TUI dispatcher and refused when it
+-- does not match. A shape change that the reader silently half-understood
+-- would execute a subset of the actions and report a complete sweep.
+export pure func manifest_version() -> string
+  ensures { result != "" }
+  tests [((), "exit-actions/1")]
+  { "exit-actions/1" }
+
+-- The env var the host names the file in. One definition, read here, written
+-- by `buildChildEnv`.
+-- The contract is `result != ""` rather than the literal, and the difference is
+-- the point: the reader refuses a manifest whose version does not match, and an
+-- EMPTY name would make `Ports.env_get` read a variable nobody sets and publish
+-- nowhere -- silently, since "no manifest named" is the ordinary no-TUI case.
+-- Pinning the literal instead would be spec-equals-body: a regression test
+-- wearing a contract's clothes (ADR-001 §1).
+export pure func manifest_path_var() -> string
+  ensures { result != "" }
+  tests [((), "MOTOKO_EXIT_MANIFEST")]
+  { "MOTOKO_EXIT_MANIFEST" }
+
+-- One action, as the TUI reads it. `kind` is the tag the dispatcher switches
+-- on; an unknown kind is skipped there rather than guessed at.
+-- contracts: SKIPPED — the fragment cannot encode `Json`. Verified by
+-- synthesising `ensures { true }`: "SMT declaration closure could not resolve a
+-- required sort ... "Record_key_value" referenced in declaration of "Json" is not
+-- declared". Every function below that builds or folds Json is blocked the same
+-- way; the shape assertions live in `verify_exit_intent` and
+-- `exit-actions.test.ts`, which read the encoded document instead.
+export pure func action_json(a: ExitAction) -> Json {
+  match a {
+    ClosePane(c) => jo([
+      kv("kind", js("close_pane")),
+      kv("pane", js(c.pane)),
+      -- The proof the host must find on the pane before closing it: what makes
+      -- a CACHED action no more dangerous than a fresh one, since a pane id
+      -- recycled between the render and the exit fails the check. It is a
+      -- snapshot check and not an atomic one -- see `PaneCloseAction` in the
+      -- ABI for the race it narrows rather than closes. No executable is named
+      -- here and none is read from here.
+      kv("token_key", js(c.token_key)),
+      kv("token_value", js(c.token_value))
+    ])
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the action list. A synthesised
+-- `ensures { true }` ERRORS rather than skipping, which is the fragment saying it
+-- cannot unroll this at all.
+pure func actions_json(xs: [ExitAction]) -> [Json] {
+  match xs {
+    [] => [],
+    a :: rest => action_json(a) :: actions_json(rest)
+  }
+}
+
+-- contracts: SKIPPED — builds `Json`; see `action_json`.
+pure func intent_json(i: RenderedIntent) -> Json {
+  jo([
+    kv("ext", js(i.ext)),
+    kv("label", js(i.label)),
+    -- DISCLOSED, not filtered out. "Registered and switched off" and "never
+    -- registered" are different facts, and an operator debugging why nothing
+    -- was reaped needs to tell them apart from the manifest alone.
+    kv("enabled", jb(i.enabled)),
+    kv("actions", ja(actions_json(i.actions)))
+  ])
+}
+
+-- contracts: BLOCKED — RECURSIVE; see `actions_json`.
+pure func intents_json(xs: [RenderedIntent]) -> [Json] {
+  match xs {
+    [] => [],
+    i :: rest => intent_json(i) :: intents_json(rest)
+  }
+}
+
+-- The whole document. `count` is the number of intents, not of actions: it is
+-- a shape check for the reader, not a summary of the work.
+-- contracts: SKIPPED — "calls "manifest_version" whose signature uses an
+-- unencodable type "()"", and builds `Json` besides. The nullary signature is the
+-- first blocker the verifier reports and the Json sort is the second.
+export pure func manifest_json(intents: [RenderedIntent]) -> Json {
+  jo([
+    kv("version", js(manifest_version())),
+    kv("count", jnum(_int_to_float(count_intents(intents)))),
+    kv("intents", ja(intents_json(intents)))
+  ])
+}
+
+-- contracts: BLOCKED — RECURSIVE. The property worth stating (the count equals
+-- the list length) quantifies over the list, which is the shape the fragment
+-- rejects; a synthesised `ensures { true }` ERRORS rather than skipping.
+pure func count_intents(xs: [RenderedIntent]) -> int {
+  match xs {
+    [] => 0,
+    _ :: rest => 1 + count_intents(rest)
+  }
+}
+
+-- Publish the manifest for THIS turn. Idempotent by construction: every
+-- publish rewrites the whole document, so a turn that renders nothing publishes
+-- an empty list and the exit handler correctly does nothing.
+--
+-- Returns whether the live file was replaced, for the gate to assert on. Every
+-- caller in the tree discards it.
+-- `dest` IS A PARAMETER, and it stopped being an ambient `getEnv` here for a
+-- measured reason. Once the publish moved inside `c2_loop` (the ordering fix
+-- for review finding 4), reading the path through `std/env` put an AMBIENT env
+-- read on the deterministic driver path, and `make world_state` rejected it:
+-- "the deterministic entry point needs Env -- a driver env read or a
+-- context_usage read is un-routed". The caller now reads the name through
+-- `Ports.env_get`, which is world-mediated and replayable, and hands the value
+-- down. This function's row lost `Env` entirely as a result.
+export func publish_exit_manifest(rt: ExtRuntime, ctx: ExtCtx, dest: string) -> bool ! {FS, IO, Process} {
+  if dest == "" then false
+  else {
+    -- The successor is discarded HERE and nowhere deeper, and this is the one
+    -- place in the tree where that is right: `publish_exit_manifest` is called
+    -- at a TURN BOUNDARY, after the driver's own world has already been
+    -- finalised, so there is no later reader to hand it to. The fold itself
+    -- threads it atom to atom, which is what keeps an intent's read visible to
+    -- the intent after it.
+    let rendered = dispatch_exit_intents(rt, ctx);
+    let intents = rendered.intents;
+    let tmp = "${dest}.tmp";
+    match writeFileResult(tmp, encode(manifest_json(intents))) {
+      Err(_) => false,
+      Ok(_) =>
+        -- Same directory, so the rename is atomic; `mv` across a filesystem
+        -- boundary is not, which is why the tmp path is the destination plus a
+        -- suffix rather than anything in /tmp.
+        match exec("mv", [tmp, dest]) {
+          Err(_) => false,
+          Ok(out) => out.exitCode == 0
+        }
+    }
+  }
+}

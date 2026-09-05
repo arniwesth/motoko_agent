@@ -12,34 +12,61 @@
 -- with deny_all_rt() so the tool calls don't actually run.
 module src/core/test/stub_step
 
-import std/ai (step, stepWithCache, stepWithStream, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk)
+import std/ai (step, stepWithCache, stepWithStream, stepWithStreamRecorded, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk, ContentDelta)
+import std/trace as Trace
+import std/clock (now)
+import std/io (readLine)
+import std/env (getEnvOr)
+import src/core/phase_vocab (ApprovalRequest)
 import std/list as List (length)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
+import std/string (length as string_length)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
-import pkg/sunholo/motoko_ext_abi/types (
-  ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
+import src/core/ports (
+  Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
+  ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
+  ambient_env, ambient_file, ambient_file_write, ambient_file_remove, ambient_path_stat, ambient_dir_list, ambient_dir_make, -- WI-D18's directory trio, widened onto THIS line rather than a new one: stub_step.ail:203 is an A5 attribution anchor (S18)
+  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, recording_ext_effect, recording_file_write, recording_file_remove, recording_dir_make, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
+)
+import src/core/dst_interaction (
+  Interaction, StreamChunkRecord, TimedOutcome,
+  ProviderIdentity, OutcomeOk, generator_authored_count
+)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  ExtRuntime, ExtRegistry, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision,
-  ResponseInterceptDecision, FinalizeDecision,
-  PreStepDecision, PassThrough
+  ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PassThrough
 )
+import src/core/test/ext_fixture (fixture_hooks)  -- B7; joined the line above so anchors.sh's :203 does not move
 import src/core/types (Msg)
+-- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
+-- `WorldState` can carry it without either the port module or the driver
+-- closing an LDR002 module cycle. It WAS re-exported here, as `export type
+-- ScriptedStep = ScriptedStep`; WI-B2a removed that — see `dst_program.ail`,
+-- which carried the identical form. Importers now take it from `ports`.
 
--- A scripted LLM turn: what the "model" returns for one step() call.
-export type ScriptedStep = {
-  prose: string,
-  tool_calls: [ToolCall],
-  input_tokens: int,
-  output_tokens: int,
-  finish_reason: string
-}
-
--- Step provider: either the live AI or a scripted sequence.
+-- Step provider: either the live AI, a scripted sequence, or a port-backed
+-- provider used by the Phase C2 driver while preserving old entrypoints.
 -- Scripted([]) emits a terminal "stop" result so the loop exits cleanly.
-export type StepProvider = LiveAI | Scripted([ScriptedStep])
+-- `ScriptedWorld` (WI-A12) is `Scripted` with the rest of the world supplied
+-- too, rather than defaulted. It exists because the later effect classes have
+-- cursors that CANNOT be exercised otherwise: an approval queue that is always
+-- empty is a cursor that never advances, and a probe over one of those asserts
+-- nothing — the precise weakness the plan's advancement rule exists to prevent.
+--
+-- It is the same `scripted_ports()` adapter; only the initial world differs.
+-- `RecordingWorld` (WI-A13 stage 2) is `ScriptedWorld` with the RECORDING
+-- adapters installed instead of the plain deterministic ones. It exists for the
+-- same reason `ScriptedWorld` did — an assertion needs a seam that cannot be
+-- reached otherwise — and it is a separate variant rather than a flag on the
+-- world so that every existing target keeps the exact adapters it had. Nothing
+-- that runs today changes behaviour; the interaction log is empty in every
+-- world but this one.
+export type StepProvider = LiveAI | Scripted([ScriptedStep]) | ScriptedWorld(WorldState) | RecordingWorld(WorldState) | GeneratedWorld(WorldState) | Ported(Ports) -- GeneratedWorld: WI-A13 stage 4, explained at `generating_ports` below
 
 -- Convert a ScriptedStep to the StepResult shape loop_v2 expects.
 export pure func scripted_to_step_result(s: ScriptedStep) -> StepResult {
@@ -52,7 +79,8 @@ export pure func scripted_to_step_result(s: ScriptedStep) -> StepResult {
       role: "assistant",
       content: s.prose,
       tool_calls: [],
-      tool_call_id: ""
+      tool_call_id: "",
+      images: []
     },
     tool_calls: s.tool_calls,
     finish_reason: finish,
@@ -70,7 +98,8 @@ export pure func terminal_step() -> StepResult {
       role: "assistant",
       content: "stub: script exhausted",
       tool_calls: [],
-      tool_call_id: ""
+      tool_call_id: "",
+      images: []
     },
     tool_calls: [],
     finish_reason: "stop",
@@ -78,6 +107,36 @@ export pure func terminal_step() -> StepResult {
     output_tokens: 0,
     cache_read_input_tokens: 0,
     cache_creation_input_tokens: 0
+  }
+}
+
+-- WI-C3: `play_chunks` now takes the CHUNKS rather than their texts, and the
+-- two scripted providers build that list ONCE and both play it and report it as
+-- `emissions`. Before this they played `ContentDelta(x)` per text and returned
+-- `emissions: []` — a provider that streams and reports no stream, which is the
+-- same loss channel `live_ports` had one layer up, and it made every seeded run
+-- produce a witness of zero against a trace of N. A second `[string] ->
+-- [StreamChunk]` conversion at the reporting site would have been two notions of
+-- one quantity; there is one list and it cannot drift from itself.
+func play_chunks(chunks: [StreamChunk], on_chunk: (StreamChunk) -> () ! {IO, Trace}) -> () ! {IO, Trace} {
+  match chunks {
+    [] => (),
+    x :: rest => {
+      let _ = on_chunk(x);
+      play_chunks(rest, on_chunk)
+    }
+  }
+}
+
+-- The scripted world models a provider without native reasoning: every scripted
+-- chunk is a ContentDelta, which is what `play_chunks` played before this and is
+-- behaviour-preserving. `Usage` is deliberately absent — a scripted step has no
+-- streamed usage chunk, and manufacturing one would put a chunk in the returned
+-- log that the run did not observe.
+pure func scripted_chunks(cs: [string]) -> [StreamChunk] {
+  match cs {
+    [] => [],
+    c :: rest => ContentDelta(c) :: scripted_chunks(rest)
   }
 }
 
@@ -97,44 +156,560 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
   [{ position: "system", ttl: "ephemeral" }]
 }
 
--- Dispatch one step call through the provider.
--- Returns both the step result and the updated provider (tail of script for Scripted).
--- Loop callers thread next_provider into their recursive call.
--- rt is forwarded to tools_with_extensions so extension tools appear in the LLM catalog.
+-- WI-C1: this is the one closure the recorded-stream adoption had to fill, and
+-- it is filled. `stepWithStreamRecorded` (AILANG v0.33.0) fires `on_chunk` at
+-- each chunk's arrival exactly as `stepWithStream` did, and ALSO returns the
+-- ordered chunks beside the final outcome. Widening the port first (WI-A1) is
+-- what shrank that adoption to this closure instead of a migration.
+--
+-- THE ONE THING NOT TO WRITE HERE, and it type-checks: do not `match` on
+-- `rec.outcome` and rebuild the exchange per branch. `chunks` is populated on
+-- BOTH outcomes — the API's own docstring says a stream that fails part-way
+-- still returns every chunk observed before the failure — and the natural
+-- error branch drops them. That version compiles, passes `check_core` and
+-- passes `driver_only`, and defeats exactly the clause D1 names:
+-- partial-stream-then-error parity. `rec.outcome` is threaded through
+-- unmatched so there is no branch in which the chunks can be lost.
+--
+-- THAT IS GUARDED, NOT MERELY WRITTEN CORRECTLY ONCE. `make recorded_stream`
+-- (WI-C2) drives THIS closure against a real native SSE stream that fails
+-- part-way, and its `C1 err_branch_keeps_chunks` row asserts the emission log
+-- is still non-empty on the `Err` outcome. Measured against the mutant above:
+-- `ailang check` green, `make check_core` 52/52, `make driver_only` exit 0,
+-- and every substrate row of the C2 probe green — because those all watch
+-- `std/ai` rather than this closure. Only the adoption rows go red, and only in
+-- partial_error mode. If you are reading this because you want to restructure
+-- the closure, run that target; nothing else in the tree can see the defect.
+--
+-- It is also stateless, so it returns its input state unchanged. That identity
+-- transition is D1's specified answer, not a decision left to construction sites.
+export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
+  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> ProviderExchange ! {AI, IO, Trace} {
+      let rec = stepWithStreamRecorded(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
+      { emissions: rec.chunks, result: rec.outcome, next_state: state }
+    };
+  -- The live clock: read ambient wall time, return the world unchanged. The
+  -- world's `clock_ms` is ignored here by design — D1's identity transition —
+  -- which is what makes this the ONE place a real clock is read in the driver's
+  -- call graph, and therefore the one place `{Clock}` is genuinely needed.
+  --
+  -- Overriding by record update rather than by constructor parameter: see
+  -- `ports_shape_probe`, which cannot take a second function-typed parameter on
+  -- this pin.
+  let clock_now: (WorldState) -> ClockReading ! {Clock} =
+    func(state: WorldState) -> ClockReading ! {Clock} {
+      { now_ms: now(), next_state: state }
+    };
+  -- The live approval channel: the operator's stdin. `eof` is `raw == ""`,
+  -- which is exactly the inference the driver used to make inline, so this is
+  -- behaviour-preserving. The world is returned unchanged — D1's identity
+  -- transition; a live run's approvals are not a replayable cursor.
+  let approval_read: (WorldState, ApprovalRequest) -> ApprovalInput ! {IO} =
+    func(state: WorldState, _req: ApprovalRequest) -> ApprovalInput ! {IO} {
+      let raw = readLine();
+      { raw: raw, eof: raw == "", next_state: state }
+    };
+  -- The live environment: the process environment, world returned unchanged.
+  --
+  -- WI-D3 moved the body to `ports.ambient_env` and binds the named function
+  -- here. The closure and the function were identical, and keeping two copies
+  -- meant the seam a host-env poison run exercises and the seam a live session
+  -- exercises could drift — which would make the pair's live half evidence about
+  -- something the driver does not do.
+  { ports_shape_probe(model_step) |
+    clock_now: clock_now,
+    approval_read: approval_read,
+    env_get: ambient_env,
+    -- WI-D3's filesystem class, live half. The ONE binding in the whole Ports
+    -- surface that performs a filesystem read, which is what the host-env poison
+    -- pair points at: withhold `FS` and this dies, withhold it from a
+    -- deterministic run bound to `scripted_file` and nothing notices.
+    file_read: ambient_file,
+    -- WI-D17's write class, live half. These are the only bindings in the Ports
+    -- surface that MUTATE a filesystem, and they do it through
+    -- `writeFileResult`/`removeFileResult` rather than the unit-returning forms,
+    -- so a live failure arrives at the port instead of being discarded one layer
+    -- below it. They return the world UNCHANGED, which is correct here and wrong
+    -- in `scripted_file_write` — see that function.
+    file_write: ambient_file_write,
+    file_remove: ambient_file_remove,
+    -- WI-D18's directory class, live half. `ambient_path_stat` and
+    -- `ambient_dir_list` ask the host; `ambient_dir_make` performs the effect
+    -- through `mkdirAllResult` rather than the unit-returning `mkdirAll`, for
+    -- the same reason the two mutators above use the Result forms.
+    --
+    -- WATCH THE ASYMMETRY AND DO NOT "FIX" IT: the two READS return the world
+    -- unchanged AND so does the create, because a live run's directory questions
+    -- go to the real filesystem and never consult `state.files`. Threading a
+    -- successor here would be maintaining a second copy of a fact the live world
+    -- already owns. In `scripted_dir_make` the opposite is true and returning
+    -- `state` is the defect.
+    path_stat: ambient_path_stat,
+    dir_list: ambient_dir_list,
+    dir_make: ambient_dir_make }
+}
+
+-- The scripted adapter, WI-A2's fix for F6.
+--
+-- It consumes the cursor the driver threads in and returns its successor. It
+-- takes no `history` and no `script`, because it holds neither: the remaining
+-- script is `state.script`, whose sole persistent copy is the driver's one
+-- explicit `C2LoopState.world_state` field.
+--
+-- What this replaces is the arrangement D1 prohibits by name — deriving the
+-- replay position from mutable message history, as
+-- `assistant_count(payload) - assistant_count(initial_history)`. That was not
+-- merely inelegant. `payload` is the POST-compaction message list, so a
+-- compactor that folds turns into a summary caps its assistant count; the index
+-- then PINS rather than rewinds, the same step is served forever, and the run
+-- dies of budget exhaustion instead of reaching its terminator. A pin is the
+-- worse of the two failures: nothing crashes and no invariant fires, so it is
+-- close to indistinguishable from a real result. See F6, and
+-- scripts/dst/scripted_cursor_probe.ail, which is its executable statement.
+export func scripted_ports() -> Ports ! {IO, Trace} {
+  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, _model: string, _msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> ProviderExchange ! {AI, IO, Trace} {
+      match state.script {
+        [] => { emissions: [], result: Ok(terminal_step()), next_state: state },
+        s :: rest => {
+          let played = scripted_chunks(s.chunks);
+          -- The chunks are played BEFORE the outcome is decided, faulted or
+          -- not, and that ordering is the whole of
+          -- `provider_partial_stream_then_error`: a stream that fails part-way
+          -- is one whose emissions reached the callback and whose result did
+          -- not. Deciding the outcome first and skipping the play on a fault
+          -- would type-check, keep every count balanced, and make the class
+          -- unreachable while the fault classes still looked covered.
+          let _ = play_chunks(played, on_chunk);
+          {
+            emissions: played,
+            -- WI-D1. WI-B2b gave `ScriptedStep` `error_code`/`error_message`
+            -- and wired them through the EXTENSION seam only; this closure and
+            -- `recording_model_step` below still wrapped every entry in
+            -- `Ok(...)`, so nothing above the transport could serve `Err` and
+            -- the provider fault classes had no delivery on the core
+            -- `Ports.model_step` path at all. This is that branch.
+            result: if scripted_step_faults(s) then Err(scripted_step_ai_error(s))
+                    else Ok(scripted_to_step_result(s)),
+            -- The cursor advances on BOTH paths. A faulted entry is CONSUMED —
+            -- the world served it and the provider call happened — so leaving
+            -- the script unadvanced would re-serve the same fault forever and
+            -- turn a retryable error into an infinite retry loop, which is F6's
+            -- pinned cursor wearing a fault.
+            next_state: { state | script: rest }
+          }
+        }
+      }
+    };
+  -- The deterministic clock is `virtual_clock`, shared with every other
+  -- non-live adapter rather than reimplemented here. No ambient read, which is
+  -- why a scripted run completes with `Clock` withheld while `live_ports` dies
+  -- — the poison pair `make world_state` asserts exactly that.
+  ports_shape_probe(model_step)
+}
+
+-- Opt-in provider capacity for deterministic integration tests. This belongs
+-- to the provider adapter rather than ScriptedStep: a context window constrains
+-- every request to an endpoint, while a scripted step describes one response.
+export type ScriptedProviderCapacity = {
+  context_window: int,
+  max_output_tokens: int
+}
+
+-- A provider-side request estimate kept deliberately separate from core's
+-- compaction estimator. The deterministic char/4 model makes exact boundary
+-- fixtures cheap while ensuring the adapter can still falsify driver policy
+-- instead of invoking the policy function under test.
+pure func scripted_provider_content_chars(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => string_length(m.content) + scripted_provider_content_chars(rest)
+  }
+}
+
+export pure func scripted_provider_input_tokens(msgs: [Message]) -> int {
+  (scripted_provider_content_chars(msgs) + 3) / 4
+}
+
+export pure func scripted_provider_over_capacity(capacity: ScriptedProviderCapacity, msgs: [Message]) -> bool {
+  capacity.context_window > 0
+    && capacity.max_output_tokens >= 0
+    && scripted_provider_input_tokens(msgs) + capacity.max_output_tokens > capacity.context_window
+}
+
+-- Shared-window provider wrapper for deterministic tests. A derived capacity
+-- rejection has no emissions and does not consume state.script: the base
+-- provider never served that response, and a repeated identical request must
+-- deterministically reject again. Accepted and disabled/malformed-capacity
+-- requests delegate to scripted_ports unchanged.
+export func bounded_scripted_ports(capacity: ScriptedProviderCapacity) -> Ports ! {AI, IO, Trace} {
+  let base = scripted_ports();
+  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> ProviderExchange ! {AI, IO, Trace} {
+      if scripted_provider_over_capacity(capacity, msgs) then {
+        emissions: [],
+        result: Err({
+          code: "E_PROVIDER_CONTEXT_LENGTH",
+          message: "scripted provider: input plus max output tokens exceeds context window",
+          retryable: false
+        }),
+        next_state: state
+      }
+      else base.model_step(state, model, msgs, on_chunk)
+    };
+  { base | model_step: model_step }
+}
+
+-- WI-A13 stage 2: the recording provider, and the recording adapter set.
+--
+-- `recording_model_step` WRAPS the scripted provider's cursor logic rather than
+-- reimplementing it, the same discipline `recording_clock` follows against
+-- `virtual_clock`: a second copy of "serve the head, advance past it" is a
+-- second chance for the recorded log and the served script to disagree, and a
+-- log that disagrees with the run it claims to record is the whole defect class
+-- this stage exists to detect.
+--
+-- TWO BINDINGS HERE COULD NOT BE READ AND HAD TO BE DECIDED. Both are recorded
+-- because S6's second term says that is where an item's risk lives.
+--
+-- 1. THE PROVIDER IDENTITY'S `step`. D2 gives a provider identity an origin, a
+--    step and a model. The port receives the model but NOT the driver's
+--    `step_idx` — `Ports.model_step` takes `(WorldState, string, [Message],
+--    callback)` and widening it to carry the step is the one thing this stage
+--    was told not to do. The step recorded is therefore the count of provider
+--    interactions ALREADY in the log, i.e. this call's position in the provider
+--    class. On every path `driver_only` reaches, that equals `step_idx`,
+--    including the stream-error retry path, because each retry issues exactly
+--    one further provider call. It would diverge only if the driver ever made
+--    two provider calls within one step, which no path does today. The
+--    alternative — leaving the step blank — is worse: stage 1's validator has
+--    no blank-step rejection, so it would be silently accepted, and strict
+--    replay would then match step 2's outcome to step 1's request.
+--
+-- 2. THE ORIGIN STRING. D2 fixes the identity's shape and not its vocabulary.
+--    "loop_v2" is used for every driver-issued request, matching the name stage
+--    1's inline test already assumed, so that a future second producer is a
+--    NEW origin rather than a redefinition of this one.
+func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {IO, Trace} {
+  func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  -> ProviderExchange ! {AI, IO, Trace} {
+    -- NOT named `step`: this module imports `std/ai (step, ...)`, and a local
+    -- binding of that name does not shadow the import on this pin — the
+    -- reference resolves to the imported FUNCTION and fails unification against
+    -- the identity's int field. A loud failure, and worth naming here so the
+    -- next reader does not rediscover it.
+    let provider_step = provider_calls_in(state.log, 0);
+    match state.script {
+      [] => {
+        emissions: [],
+        result: Ok(terminal_step()),
+        next_state: record_interaction(
+          state,
+          ProviderIdentity("loop_v2", provider_step, model),
+          "model_step model=${model} msg_count=${show(List.length(msgs))} script=exhausted",
+          -1,
+          -- WI-A13 stage 3. The payload is a structured projection rather than
+          -- the prose, so that `dst_replay.world_state_of` can reconstitute the
+          -- script from the interaction list — which is what `dst_program`'s
+          -- design note 3 requires of it, since the program deliberately does
+          -- not carry the script. This arm records that the world served
+          -- NOTHING from the script, which is a different fact from serving an
+          -- empty step and must stay distinguishable from it.
+          { advance_ms: 0, chunks: [], payload: encode_exhausted_provider_outcome(),
+            status: OutcomeOk, fault_class_id: "" })
+      },
+      s :: rest => {
+        let played = scripted_chunks(s.chunks);
+        let _ = play_chunks(played, on_chunk);
+        {
+          emissions: played,
+          -- WI-D1, and the SAME expression as `scripted_ports` above rather
+          -- than a second copy of the branch: this closure exists to wrap that
+          -- cursor logic rather than reimplement it, for the reason the header
+          -- gives — a second copy is a second chance for the served response
+          -- and the recorded one to disagree, and a faulted step recorded as a
+          -- success is exactly that defect.
+          result: if scripted_step_faults(s) then Err(scripted_step_ai_error(s))
+                  else Ok(scripted_to_step_result(s)),
+          next_state: record_interaction(
+            { state | script: rest },
+            ProviderIdentity("loop_v2", provider_step, model),
+            "model_step model=${model} msg_count=${show(List.length(msgs))}",
+            -1,
+            -- The whole step, not `s.prose`. D2 says a provider timed outcome
+            -- carries "a final StepResult or AIError", and the prose alone
+            -- dropped the TOOL CALLS — which are what cause the next production
+            -- tool request, so a program discovered from a run with tool calls
+            -- reconstituted a script that made none and the replay terminated
+            -- at step 0 while agreeing with the program at every position it
+            -- reached. The chunks stay in `chunks` and are NOT duplicated into
+            -- the payload; `world_state_of` reads them from there.
+            --
+            -- WI-D1 replaced the inline literal with `provider_outcome_record`,
+            -- which is where the status and the class id are now decided. The
+            -- literal was `status: OutcomeOk, fault_class_id: ""` on EVERY
+            -- path, so a served fault recorded as an ok outcome with no class —
+            -- which D11's class-reached counter cannot see, and which stage 1's
+            -- validator would have rejected the other way round but not this
+            -- one. The payload expression is unchanged; only the two graded
+            -- fields moved.
+            provider_outcome_record(s, chunk_records(s.chunks, state.clock_ms)))
+        }
+      }
+    }
+  }
+}
+
+-- Every chunk is stamped with the world clock at the moment of the exchange.
+-- The scripted provider plays its chunks without advancing the clock, so the
+-- offsets are equal rather than increasing — which satisfies D2's
+-- NON-DECREASING requirement exactly, and states truthfully that this world
+-- models no inter-chunk latency. Manufacturing spread here would record a
+-- timing the run did not have.
+pure func chunk_records(cs: [string], at_ms: int) -> [StreamChunkRecord] {
+  match cs {
+    [] => [],
+    c :: rest => ({ offset_ms: at_ms, text: c }) :: chunk_records(rest, at_ms)
+  }
+}
+
+pure func provider_calls_in(log: [Interaction], acc: int) -> int {
+  match log {
+    [] => acc,
+    i :: rest =>
+      match i.identity.body {
+        ProviderIdentity(_, _, _) => provider_calls_in(rest, acc + 1),
+        _ => provider_calls_in(rest, acc)
+      }
+  }
+}
+
+-- The recording adapter set: `scripted_ports()`'s seams, each wrapped by its
+-- recording counterpart. Built by record update over `ports_shape_probe` for
+-- the reason `live_ports` is — a second function-typed constructor parameter
+-- does not compile on this pin.
+-- WI-D3's file READ class is deliberately absent from this list, so it INHERITS
+-- `scripted_file` from `ports_shape_probe`: a recording run serves file reads
+-- from the world's table, like every other deterministic seam, and does not log
+-- them as interactions. WI-D17's two file MUTATORS are present. That asymmetry
+-- is this item's durable decision and the argument for it is below.
+--
+-- =========================================================================
+-- WHY THE WRITE IS RECORDED AND THE READ IS NOT
+-- =========================================================================
+--
+-- WI-D3's original reason was a measurement (S15): recorded runs read three
+-- paths per `resolve_context_limit` call against a table that every fixture in
+-- this tree leaves EMPTY, so every read is `present: false`, and
+-- `dst_replay.world_state_of` reconstitutes `files: []` — which is the world
+-- those runs actually had. It also named its own expiry: "until a fixture seeds
+-- `WorldState.files`, a replay cannot lose what no run put there."
+--
+-- WI-D17 IS WHAT MAKES A RUN SEED `WorldState.files`, so that expiry had to be
+-- re-examined rather than inherited. It was, and the answer is that the reason
+-- SURVIVES but the reason given for it was the wrong one. The right one:
+--
+--   `InitialWorld` CARRIES `synthetic_environment` AND HAS NO `files`
+--   COUNTERPART. So an env read is a read of a value the PROGRAM supplies, and
+--   a file read is a read of a value the program does not. That is the whole
+--   difference between the two classes, and it is why the log records one and
+--   not the other.
+--
+-- Follow it through and the write lands on the recorded side of the same line.
+-- `world_state_of` derives `script`, `approvals` and `tools` from the log
+-- because those are the world's SUPPLY: values the driver cannot compute and a
+-- replay therefore has to be handed. A write is not supply — it is the driver's
+-- own act, and a REPLAYED DRIVER PERFORMS IT AGAIN through this same adapter.
+-- So `files` is rebuilt by the run rather than restored from the artifact, and
+-- `world_state_of` correctly continues to reconstitute `files: []`.
+--
+-- Which means the write is recorded for GRADING and not for reconstitution, and
+-- that is a real difference in kind from the other four recorded classes. It is
+-- stated here rather than left to be inferred from the adapter list.
+--
+-- WHAT RECORDING THE READ WOULD ACTUALLY COST, MEASURED, since "close D3's
+-- asymmetry" is the obvious alternative and it is the wrong move:
+--
+--   1. It would not close it. The gap is that a SEEDED read table cannot
+--      survive a round trip, and it cannot survive one whether or not the reads
+--      are logged, because there is no `InitialWorld.files` to put it in.
+--      Logging the reads would produce a log describing observations whose
+--      source the artifact still cannot rebuild — the two-homes shape one level
+--      up, which is the thing this whole class exists to remove.
+--   2. It would re-baseline every recorded corpus in the tree. Three reads per
+--      `resolve_context_limit` call at eight driver call sites is a log that
+--      grows on every profile at once, and WI-D4 measured what a changed driver
+--      read count does to a fixed seed bank. Recording the write changes NO
+--      existing log, because nothing in the tree writes a file yet.
+--
+-- WHAT IS THEREFORE OWED, named rather than located: `InitialWorld.files`, a
+-- `world_state_of` that reads it, and `program_schema_version`
+-- "execution-program/1" -> "/2" with the old decode path kept. That is a
+-- program-schema change and a re-attestation, which is a broader act than a
+-- world class, so it is not taken here.
+export func recording_ports(rt: ExtRuntime) -> Ports ! {Clock, Env, FS, IO, Process, Trace} {
+  { ports_shape_probe(recording_model_step(rt)) |
+    clock_now: recording_clock,
+    approval_read: recording_approval,
+    env_get: recording_env,
+    file_write: recording_file_write,
+    file_remove: recording_file_remove,
+    -- WI-D18. The CREATE is recorded and the two directory READS are not, which
+    -- is the same line WI-D17 drew and is drawn again here rather than inherited
+    -- silently: `path_stat` and `dir_list` observe a table `InitialWorld` cannot
+    -- carry, so a log entry for one describes an observation the artifact still
+    -- cannot rebuild. They stay on `ports_shape_probe`'s deterministic defaults.
+    dir_make: recording_dir_make,
+    tool_exec: recording_tool,
+    -- WI-D24's EIGHTH RECORDING ADAPTER. It is here and not on
+    -- `ports_shape_probe`'s default for the reason every line above it is: a
+    -- recording run records, and an extension-initiated dispatch that this set
+    -- served but did not log is a `world_state_of` that reconstitutes an empty
+    -- `ext_effects` queue — so the replay's first extension effect performs a
+    -- real subprocess. Recording the class and serving it are one decision
+    -- (S27) and this binding is half of it.
+    ext_effect_exec: recording_ext_effect }
+}
+
+-- WI-A13 stage 4: the generating provider, and the generating adapter set.
+--
+-- `GeneratedWorld` is `RecordingWorld` with these installed on top. Its initial
+-- world carries an installed `WorldState.gen` and EMPTY script, approval and
+-- tool cursors: nothing is authored in advance, and every response is chosen at
+-- the moment the driver asks for it. That is D2's "discovery chooses only at
+-- requests the real driver actually makes. It never invents a tool, approval,
+-- or extension-effect request disconnected from production control flow" — made
+-- structural, because a generator consulted only from inside a port has no way
+-- to invent a request that the port was not called for.
+--
+-- A separate `StepProvider` variant and not a flag on the world, for the reason
+-- `RecordingWorld` was one: every existing target keeps the exact adapters it
+-- had, and a generating run is something a caller ASKS for rather than
+-- something a world falls into.
+--
+-- `generating_model_step` SUPPLIES a script entry and then calls
+-- `recording_model_step`, which is the same wrap-do-not-reimplement discipline
+-- `recording_model_step` itself follows against the scripted provider and
+-- `recording_clock` follows against `virtual_clock`. The recorded interaction
+-- is therefore written by the stage-2 recorder, unchanged — which is what lets
+-- a GENERATED program reconstitute and replay through stage 3's path with no
+-- generator in scope at all (D2: "replay receives that resolved program and
+-- never calls the generator").
+--
+-- THE SCRIPT IS REPLACED, NOT APPENDED TO. `{ state | script: [entry] }` rather
+-- than `script: state.script ++ [entry]`: the generating provider is reached
+-- only when the cursor is empty, and appending would leave a tail behind if
+-- that ever stopped being true. A leftover tail is a response the world can
+-- serve that the generator did not choose for this request, which is the
+-- anonymous-response-queue shape D2's ordered protocol exists to replace.
+func generating_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {AI, IO, Trace} {
+  func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  -> ProviderExchange ! {AI, IO, Trace} {
+    let seeded =
+      match state.script {
+        [] => {
+          let salt = "model_step model=${model} msg_count=${show(List.length(msgs))} at=${state.clock_ms} n=${show(generator_authored_count(state.log))}";
+          let entry = generated_provider_entry(state, salt);
+          { state | script: [entry.step], gen: entry.gen }
+        },
+        _ :: _ => state
+      };
+    recording_model_step(rt)(seeded, model, msgs, on_chunk)
+  }
+}
+
+-- The generating adapter set. The clock and the environment are the RECORDING
+-- adapters unchanged, and that is a decision rather than an omission:
+--
+--   clock  D4 gives the world one monotonic clock whose tick is `virtual_clock`
+--          and whose LATENCY is the recorded advance on each outcome. The
+--          generator chooses those advances at the provider and tool seams, so
+--          a generating clock would be a second place time is decided and the
+--          two could disagree.
+--   env    an env read is a KEYED LOOKUP and not a cursor (`WorldState.env`),
+--          so choosing at the request would let one key read differently on two
+--          reads in one run — a world no replay could reproduce, since
+--          `world_state_of` restores a map. The environment is chosen UP FRONT
+--          by `dst_generator.choose_environment`, which D2 permits explicitly:
+--          "Generation may also choose ordinary configuration and message
+--          inputs."
+--   files  WI-D17's mutators are the RECORDING adapters, for the env row's
+--          reason with the direction reversed: a generator that chose whether a
+--          write landed would be choosing an outcome no `world_state_of` can
+--          restore, since the file table is rebuilt by the replayed run rather
+--          than read out of the program. There is nothing to generate here —
+--          the path and the body come from the caller — so a generating
+--          variant would be a second place a write is decided and the two could
+--          disagree, which is exactly the clock row's objection.
+export func generating_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  { ports_shape_probe(generating_model_step(rt)) |
+    clock_now: recording_clock,
+    approval_read: generating_approval,
+    env_get: recording_env,
+    file_write: recording_file_write,
+    file_remove: recording_file_remove,
+    -- WI-D18, and NO generating variant, for the write's reason with the
+    -- direction reversed: the path comes from the caller, so there is nothing to
+    -- generate.
+    dir_make: recording_dir_make,
+    tool_exec: generating_tool,
+    -- WI-D24, and the RECORDING adapter rather than a generating one, on the
+    -- `dir_make` row's reasoning: the tool name and the arguments come from the
+    -- extension, so there is nothing for a generator to choose that it does not
+    -- already choose at the tool seam. What matters here is that a GENERATED
+    -- program is still a valid one — an extension effect this set served and
+    -- did not record is an interaction missing from the program, which is the
+    -- density defect `dst_program` rejects.
+    ext_effect_exec: recording_ext_effect }
+}
+
+-- The initial world for a scripted run: the whole script, uncounted, and every
+-- other cursor at its empty-world default.
+--
+-- Built by UPDATING `empty_world_state()` rather than by writing a fresh record
+-- literal. The difference is not stylistic: a fresh literal must name every
+-- field, so each effect class A12 adds forces an edit here, and the edit that
+-- type-checks most easily is the one that hard-codes a default and silently
+-- diverges from the empty world. Updating cannot diverge.
+export pure func scripted_world_state(script: [ScriptedStep]) -> WorldState {
+  { empty_world_state() | script: script }
+}
+
+-- Run one provider exchange through the ports seam: world state in, its
+-- successor out, alongside the emission log and the outcome.
 --
 -- on_chunk fires per StreamChunk during the SSE drain (M-AI-STEP-STREAMING,
 -- AILANG v0.18.7). Live providers (Anthropic / OpenAI / OpenRouter / Gemini)
 -- stream content deltas natively; Ollama and config-driven providers fire
 -- one synthetic ContentDelta(full_text) + one Usage at end-of-call. The
 -- callback is wired by agent_loop_v2 to emit thinking_delta events.
+--
+-- This was a three-way match on StepProvider. WI-C13c ("Wire model dispatch
+-- through ports") made `ported_provider` normalise every caller-supplied
+-- provider into Ports before the loop starts, which left the LiveAI and
+-- Scripted branches here unreachable from every session entry point — while
+-- still looking like the live provider seam, because the LiveAI branch held the
+-- only `stepWithStream` call in the driver's call graph. Taking Ports directly
+-- makes the invariant structural: there is one path, and it is this one.
+--
+-- There is no `next_provider` to return: a Ports is immutable, and the old
+-- Ported branch returned it unchanged.
+--
+-- The whole exchange is propagated rather than unwrapped here. This function is
+-- a pass-through of the port, so unwrapping `.result` would recreate the very
+-- loss channel WI-A1 just closed, one line above the port.
 export func dispatch_step(
-  provider: StepProvider,
+  ports: Ports,
+  state: WorldState,
   model: string,
   msgs: [Message],
-  rt: ExtRuntime,
-  on_chunk: (StreamChunk) -> () ! {IO}
-) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO} {
-  match provider {
-    LiveAI => {
-      { result: stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk), next_provider: LiveAI }
-    },
-    Scripted(script) => {
-      -- M-MOTOKO-V021-EFFECT-ROW-MIGRATION: reference on_chunk in this branch
-      -- too. Scripted is the test-path (no real streaming) so we don't actually
-      -- invoke it, but AILANG v0.21+ narrows the parameter's effect row to {}
-      -- if neither branch references it, conflicting with the declared {IO}.
-      -- The `let _ = on_chunk in` keeps the parameter's declared row pinned.
-      let _ = on_chunk in
-      match script {
-        [] => {
-          { result: Ok(terminal_step()), next_provider: Scripted([]) }
-        },
-        s :: rest => {
-          { result: Ok(scripted_to_step_result(s)), next_provider: Scripted(rest) }
-        }
-      }
-    }
-  }
+  on_chunk: (StreamChunk) -> () ! {IO, Trace}
+) -> ProviderExchange ! {AI, IO, Trace} {
+  ports.model_step(state, model, msgs, on_chunk)
 }
 
 -- Constructor helpers for test scripts
@@ -145,7 +720,19 @@ export pure func prose_step(text: string) -> ScriptedStep {
     tool_calls: [],
     input_tokens: 100,
     output_tokens: 50,
-    finish_reason: "stop"
+    finish_reason: "stop",
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
+  }
+}
+
+export pure func chunked_prose_step(text: string, chunks: [string]) -> ScriptedStep {
+  {
+    prose: text,
+    tool_calls: [],
+    input_tokens: 100,
+    output_tokens: 50,
+    finish_reason: "stop",
+    chunks: chunks, error_code: "", error_message: "", advance_ms: 0
   }
 }
 
@@ -155,8 +742,16 @@ export pure func tool_step(tool: string, args_json: string, step_id: string) -> 
     tool_calls: [{ id: step_id, name: tool, arguments: args_json }],
     input_tokens: 200,
     output_tokens: 100,
-    finish_reason: "tool_calls"
+    finish_reason: "tool_calls",
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
   }
+}
+
+-- Like tool_step but with a caller-chosen finish_reason. Exercises providers
+-- (e.g. hy3:free/Novita) that return tool_calls with finish_reason != "tool_calls";
+-- the loop must still run the tools rather than dropping them and finalizing.
+export pure func tool_step_finish(tool: string, args_json: string, step_id: string, finish: string) -> ScriptedStep {
+  { tool_step(tool, args_json, step_id) | finish_reason: finish }
 }
 
 export pure func token_step(prose: string, input_tok: int, output_tok: int) -> ScriptedStep {
@@ -165,7 +760,8 @@ export pure func token_step(prose: string, input_tok: int, output_tok: int) -> S
     tool_calls: [],
     input_tokens: input_tok,
     output_tokens: output_tok,
-    finish_reason: "stop"
+    finish_reason: "stop",
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
   }
 }
 
@@ -179,15 +775,16 @@ export pure func continuing_token_step(input_tok: int, output_tok: int, step_id:
     tool_calls: [tc],
     input_tokens: input_tok,
     output_tokens: output_tok,
-    finish_reason: "tool_calls"
+    finish_reason: "tool_calls",
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
   }
 }
 
 -- No-op ExtRuntime for integration tests.
--- Returns an empty extension registry with no hooks.
+-- Returns an empty extension registry with no entries.
 export pure func empty_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 -- ExtRuntime for integration tests that denies all tool calls.
@@ -197,34 +794,33 @@ export func deny_all_rt() -> ExtRuntime {
   let deny_policy = func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
     Deny("test: all tools denied")
   };
-  let no_handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope)
-    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let no_handle = func(ctx: ExtCtx, _call: ToolCallEnvelope)
+    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
     Delegate
-  };
-  let no_intercept = func(_ctx: ExtCtx, _text: string)
-    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let no_intercept = func(ctx: ExtCtx, _text: string)
+    -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
     NoIntercept
-  };
-  let no_solver = func(_ctx: ExtCtx, _text: string)
-    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let no_solver = func(ctx: ExtCtx, _text: string)
+    -> FinalizeOutcome ! {Process}  { { decision: {
     NoDecision
-  };
-  let hooks: ExtensionHooks = {
-    id: "test_deny_all",
-    provided_tools: [],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  }, next_state: ctx.world } };
+  let hooks = fixture_hooks("test_deny_all", {
+    tools: [],
+    describe: \_ . [],
+    prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
-    },
-    on_tool_policy: deny_policy,
-    on_tool_handle: no_handle,
-    on_response_intercept: no_intercept,
-    on_solver_candidate: no_solver
-  };
+    }, next_state: ctx.world } },
+    policy: deny_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  });
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }

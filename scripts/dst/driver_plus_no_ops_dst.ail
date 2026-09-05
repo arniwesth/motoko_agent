@@ -1,0 +1,591 @@
+-- scripts/dst/driver_plus_no_ops_dst.ail
+--
+-- `driver_plus_no_ops` v1 acceptance (ADR-001 D5, WI-D14). The machinery's own
+-- suite is scripts/dst/profile_definition_dst.ail; this script asserts only what
+-- is true of THIS profile.
+--
+-- The load here is the real one: the same `validate_definition_at_load` a runner
+-- calls, at the table's bound revision, against the measured HEAD inventory and
+-- the classifier-2 call set the tool derives.
+--
+-- ============================================================================
+-- WHAT THIS SCRIPT IS FOR, AND IT IS NOT THE COVERAGE NUMBER
+-- ============================================================================
+--
+-- Four clauses of ADR-001's acceptance row 3 quantify over INSTALLED
+-- extensions: the coverage floor, the unconditional-hook rule, the classifier-2
+-- rule, and the per-extension covered/excluded id disclosure. Every one of them
+-- has been VACUOUS for the entire project, because `driver_only` installs
+-- nothing. This is the first profile that makes them bind, and the ONLY way to
+-- show a clause binds rather than passes is to show it can also FAIL on this
+-- profile's own shape.
+--
+-- So each of the four is asserted twice: once as it stands, and once against a
+-- MUTATION of this very definition that the clause must reject. A clause that
+-- only ever passes cannot be told from one that does not run — the shape this
+-- project has now shipped three times (classifier 1's `agree=0 disagree=0`,
+-- `basis`'s absence, and check 3 going vacuous at WI-B2b).
+--
+-- ONE OF THE FOUR IS HONEST ABOUT BEING HALF-BOUND, and it is said here rather
+-- than buried: the classifier-2 rule's AILANG side quantifies over the DERIVED
+-- CALL LIST, which is empty at HEAD, so on this run it passes over nothing
+-- exactly as it did for `driver_only`. What binds for this profile is the
+-- measurement behind it — classifier 3 reports 0 `ExtPorts` field calls in each
+-- of the four installed closures — and that is a Python-side derivation, in
+-- `tools/profile_definition/check_no_op_profile.py`, not a green line here. The
+-- mutation below shows the RULE would reject an installed caller; the guard
+-- shows there is no installed caller to reject.
+--
+-- Rows 4, 5 and 7 are re-earned here too, per D10, because they are three of
+-- the four rows `driver_only`'s pass leans on an empty install list for. The
+-- CLAIM lines this script prints are re-derived by the guard; the other seven
+-- rows are NOT claimed for this profile and the verdict says so.
+
+module scripts/dst/driver_plus_no_ops_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Option, Some, None)
+
+import src/core/dst_driver_plus_no_ops (
+  driver_plus_no_ops,
+  no_ops_id,
+  no_ops_version,
+  no_ops_routed_claim,
+  no_ops_substance,
+  no_ops_coverage_statement,
+  no_ops_manifest,
+  installed_extension_ids,
+  criterion_2_slot_ids,
+  validate_no_ops
+)
+import src/core/dst_profile (
+  ProfileDefinition,
+  ProfileRejection,
+  Classifier2Call,
+  WaivedFaultClass,
+  UnroutedSiteDeclaration,
+  OmittedExtension,
+  InstalledPackage,
+  HookClassificationEntry,
+  HookClassification,
+  EffectFree, WorldMediated, ExplicitlyExcluded,
+  ClauseStatus,
+  clause_status_id,
+  classification_id,
+  basis_kind_id,
+  producer_kind,
+  ManifestRejection,
+  rejection_rule,
+  rejection_message,
+  manifest_message,
+  validate_manifest,
+  validate_definition_at_load,
+  routing_violation_at,
+  is_excluded_hook
+)
+import src/core/dst_profile_coverage as Cov (CapabilityDisclosureIds, AtomIds, atom_ids_id)
+import src/core/dst_attribution_table (
+  CoreSite,
+  unconditional_core_sites,
+  reachable_core_sites,
+  table_source_revision,
+  table_identity
+)
+import src/core/dst_fault_catalogue (
+  FaultClass,
+  fault_catalogue,
+  conditional_class_ids,
+  waiving_condition
+)
+import src/core/dst_result (RunFailed, ReplayMetadata)
+import src/core/phase_vocab (empty_ledger_trace)
+
+-- The measured inventory, as `attribution_table_dst` measures it: what an
+-- inventory found in the SOURCE, not a copy of what the table declares.
+pure func head_inventory() -> [CoreSite] {
+  unconditional_core_sites()
+    ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
+          routed: false, note: "" },
+        { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process",
+          routed: false, note: "" }]
+}
+
+-- Classifier 2's member call sites in installable extensions, as the tool
+-- derives them: EMPTY at HEAD since WI-B2b widened `ExtPorts.ai_step`. The
+-- emptiness is re-derived by the guard, never assumed here.
+pure func head_classifier_2_calls() -> [Classifier2Call] {
+  []
+}
+
+func report(rs: [ProfileRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${rejection_message(r)}");
+      report(rest)
+    }
+  }
+}
+
+func load(d: ProfileDefinition) -> [ProfileRejection] ! {IO} {
+  validate_definition_at_load(d, table_source_revision(), head_inventory(),
+                              head_classifier_2_calls(), fault_catalogue())
+}
+
+-- The shared shape for "this clause BINDS": a mutation of THIS profile that the
+-- named rule must reject. Not a fresh fixture — a fresh fixture would prove the
+-- rule works on some definition, and the question is whether it works on this
+-- one.
+func binds(label: string, rule: string, d: ProfileDefinition) -> bool ! {IO} {
+  let rs = load(d);
+  let ok = has_rule(rs, rule);
+  let _ = if ok then println("      ↳ BINDS: ${label} → rejected by [${rule}]")
+          else {
+            let _ = println("      ✗ ${label} was NOT rejected by [${rule}] — the clause passes vacuously on this profile");
+            report(rs)
+          };
+  ok
+}
+
+pure func has_rule(rs: [ProfileRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if rejection_rule(r) == rule then true else has_rule(rest, rule)
+  }
+}
+
+pure func join_ids(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => match rest { [] => x, _ => "${x}, ${join_ids(rest)}" }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- 1. The load
+-- ---------------------------------------------------------------------------
+
+func scenario_loads_clean() -> bool ! {IO} {
+  let rs = load(driver_plus_no_ops());
+  let ok = List.length(rs) == 0;
+  let _ = if ok then println("  ✓ ${no_ops_id()} v${no_ops_version()} LOADS CLEAN at the bound revision, with ${show(List.length(driver_plus_no_ops().installed_packages))} extensions INSTALLED")
+          else {
+            let _ = println("  ✗ ${no_ops_id()} did NOT load clean: ${show(List.length(rs))} rejection(s)");
+            report(rs)
+          };
+  ok
+}
+
+func scenario_attribution_ref_is_current() -> bool ! {IO} {
+  let live = table_identity();
+  let rec = driver_plus_no_ops().attribution_ref;
+  let ok = rec.source_revision == live.source_revision && rec.content_hash == live.content_hash;
+  let _ = if ok then println("  ✓ the recorded attribution reference is current: (${rec.source_revision}, ${rec.content_hash})")
+          else {
+            let _ = println("  ✗ the attribution table was corrected and this profile was not re-issued (D4)");
+            let _ = println("      recorded: (${rec.source_revision}, ${rec.content_hash})");
+            println("      live:     (${live.source_revision}, ${live.content_hash})")
+          };
+  ok
+}
+
+-- ---------------------------------------------------------------------------
+-- 2. ROW 3's FOUR INSTALLED-EXTENSION CLAUSES — the item's durable output
+-- ---------------------------------------------------------------------------
+
+-- CLAUSE 1: "every installed extension covers at least one hook (the coverage
+-- floor, which binds unconditionally)". Over four extensions, and each covers
+-- all eight rather than the one the floor asks for.
+func clause_coverage_floor() -> bool ! {IO} {
+  let d = driver_plus_no_ops();
+  let n = List.length(d.installed_packages);
+  let _ = println("  -- ROW 3 CLAUSE 1: the coverage floor, over ${show(n)} installed extension(s) --");
+  let _ = show_floor(d.disclosures);
+  let mutated: ProfileDefinition = { d | disclosures: empty_first(d.disclosures) };
+  let b = binds("the FIRST installed extension covering zero hooks", "coverage-floor", mutated);
+  n > 0 && b
+}
+
+func show_floor(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
+  match ds {
+    [] => (),
+    x :: rest => {
+      let _ = println("      ${x.extension_id}: ${show(List.length(x.covered))} hook(s) covered — floor satisfied, non-vacuously");
+      show_floor(rest)
+    }
+  }
+}
+
+pure func empty_first(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
+  match ds {
+    [] => [],
+    x :: rest => {
+      let emptied: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms, covered: [], excluded: x.covered };
+      emptied :: rest
+    }
+  }
+}
+
+-- CLAUSE 2: "no installed extension has an unconditionally-dispatched hook
+-- excluded". Every installed extension excludes NOTHING, including the one
+-- gated slot it could legitimately exclude.
+func clause_no_unconditional_exclusion() -> bool ! {IO} {
+  let d = driver_plus_no_ops();
+  let _ = println("  -- ROW 3 CLAUSE 2: no unconditionally-dispatched hook excluded --");
+  let none_excluded = all_excluded_empty(d.disclosures);
+  let _ = if none_excluded then println("      every installed extension excludes NOTHING — not even on_tool_handle, the one gated slot this profile could legitimately exclude")
+          else println("      ✗ an installed extension excludes a hook, which this profile does not claim");
+  let mutated: ProfileDefinition = { d | disclosures: exclude_pre_step(d.disclosures) };
+  let b = binds("an installed extension excluding on_pre_step, which is unconditionally dispatched",
+                "unconditional-hook-excluded", mutated);
+  none_excluded && b
+}
+
+pure func all_excluded_empty(ds: [CapabilityDisclosureIds]) -> bool {
+  match ds {
+    [] => true,
+    x :: rest => List.length(x.excluded) == 0 && all_excluded_empty(rest)
+  }
+}
+
+-- B8: ids are atom ids (`kind[index]`) over `AtomIds` records.
+pure func drop_id(xs: [AtomIds], t: string) -> [AtomIds] {
+  match xs { [] => [], x :: rest => if Cov.atom_ids_id(x) == t then drop_id(rest, t) else x :: drop_id(rest, t) }
+}
+
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs { [] => [], x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest) }
+}
+
+pure func exclude_pre_step(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
+  match ds {
+    [] => [],
+    x :: rest => {
+      let moved: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms, covered: drop_id(x.covered, "compactor[0]"),
+          excluded: [{ kind: "compactor", index: 0 }] };
+      moved :: rest
+    }
+  }
+}
+
+-- CLAUSE 3: "profile-definition validation found no installed extension that
+-- calls a classifier-2 `ExtPorts` field while registering an un-excluded hook".
+--
+-- HALF-BOUND, AND SAID SO. The AILANG rule quantifies over the DERIVED call
+-- list, which is empty at HEAD, so on this run it passes over nothing — exactly
+-- as it did for `driver_only`. What is new is that the rule now has a non-empty
+-- INSTALL list to intersect with, so the mutation below is a real question
+-- about this profile rather than about a fixture, and the measurement that
+-- discharges the clause substantively is classifier 3's per-extension
+-- `ext_ports_calls = 0`, re-derived by the guard.
+func clause_classifier_2() -> bool ! {IO} {
+  let d = driver_plus_no_ops();
+  let _ = println("  -- ROW 3 CLAUSE 3: no installed extension calls a classifier-2 ExtPorts field --");
+  let _ = println("      the derived call list is EMPTY at HEAD, so the AILANG rule passes over nothing;");
+  let _ = println("      what discharges the clause is CLAIM row3c below, re-derived by check_no_op_profile.py");
+  let _ = println("CLAIM row3c ext_ports_calls_in_installed_closures=0");
+  let rs = validate_definition_at_load(d, table_source_revision(), head_inventory(),
+                                       fabricated_call(), fault_catalogue());
+  let ok = has_rule(rs, "classifier-2-extension-installed");
+  let _ = if ok then println("      ↳ BINDS: a classifier-2 call ATTRIBUTED to an installed extension → rejected by [classifier-2-extension-installed]")
+          else println("      ✗ a classifier-2 call attributed to an installed extension was NOT rejected");
+  ok
+}
+
+-- A call the tool does NOT report, attributed to an extension this profile DOES
+-- install. It is fabricated deliberately and is never fed to the real load: the
+-- point is that the rule's install-list intersection is non-empty now, so it
+-- has something to find.
+pure func fabricated_call() -> [Classifier2Call] {
+  [{ extension_id: "compaction_structural", field: "tool_handle",
+     site: "packages/motoko-ext-compaction-structural/register.ail:0 (FABRICATED — not a tool finding)" }]
+}
+
+-- CLAUSE 4: "the result reports per-extension covered/excluded hook IDS, so a
+-- profile covering only ABI-pure no-op slots is visible as such". The ids, and
+-- then the "as such".
+func clause_disclosure_ids() -> bool ! {IO} {
+  let d = driver_plus_no_ops();
+  let _ = println("  -- ROW 3 CLAUSE 4: per-extension covered/excluded hook IDS --");
+  let _ = show_ids(d.disclosures);
+  let ok = List.length(d.disclosures) == List.length(d.installed_packages)
+             && List.length(d.disclosures) > 0;
+  let _ = if ok then () else println("      ✗ the disclosure set does not match the install set");
+  ok
+}
+
+func show_ids(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
+  match ds {
+    [] => (),
+    x :: rest => {
+      let _ = println("DISCLOSURE ${x.extension_id}");
+      let _ = println("      ${x.extension_id}");
+      let _ = println("        atoms:    ${join_ids(atom_id_strs(x.atoms))}");
+      let _ = println("        covered:  ${join_ids(atom_id_strs(x.covered))}");
+      let _ = println("        excluded: ${if List.length(x.excluded) == 0 then "(none)" else join_ids(atom_id_strs(x.excluded))}");
+      show_ids(rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- 3. The "as such": what the coverage number MEANS
+-- ---------------------------------------------------------------------------
+
+-- Per entry, so a reader sees the vacuity in the RECORD rather than in a note
+-- beside the profile. The `CLASSIFICATION` lines are the guard's input: it
+-- re-derives each hook's rowed/rowless status from the ABI and each extension's
+-- verdict from classifier 3, and fails if a line disagrees.
+func scenario_the_record_shows_the_vacuity() -> bool ! {IO} {
+  let d = driver_plus_no_ops();
+  let _ = println("  -- what each covered hook RESTS ON, per entry --");
+  let _ = show_entries(d.hook_classifications);
+  let s = no_ops_substance();
+  let _ = println("      ${show(s.criterion_1_hooks)} hook(s) on criterion 1 (basis: declared_row, ASSUMED — ADR:1415)");
+  let _ = println("      ${show(s.criterion_2_hooks)} hook(s) on criterion 2 (basis: ext_ambient_inventory, MEASURED — classifier 3)");
+  let _ = println("      ${show(s.no_op_hooks)} of those satisfy criterion 2's port and origin-tag clauses VACUOUSLY");
+  let _ = println("      ${show(s.world_mediating_hooks)} covered hook(s) mediate the world SUBSTANTIVELY");
+  let _ = println("  -- THE COVERAGE STATEMENT, computed from the record (not written) --");
+  let _ = println("STATEMENT ${no_ops_coverage_statement()}");
+  let _ = println("      ${no_ops_coverage_statement()}");
+  -- The statement is the successor to WI-D5's mandatory zero-coverage caveat,
+  -- and the assertion that keeps it honest is on the SUBSTANCE rather than on
+  -- the string: coverage exists, and none of it mediates.
+  let ok = s.covered_hooks > 0 && s.world_mediating_hooks == 0
+             && s.no_op_hooks == s.criterion_2_hooks;
+  let _ = if ok then () else println("      ✗ the substance counts do not describe an entirely-no-op coverage");
+  ok
+}
+
+func show_entries(cs: [HookClassificationEntry]) -> () ! {IO} {
+  match cs {
+    [] => (),
+    c :: rest => {
+      let kind = match producer_kind(c.basis.producer) {
+        Some(k) => basis_kind_id(k),
+        None => "UNRECOGNISED"
+      };
+      let _ = println("CLASSIFICATION ${c.extension_id} ${c.hook_id} ${classification_id(c.classification)} ${c.basis.producer} ${kind} ${clause_status_id(c.clauses.ports)} ${clause_status_id(c.clauses.origin_tag)} ${clause_status_id(c.clauses.world_state)}");
+      show_entries(rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- 4. The three OTHER rows `driver_only` bought with an empty install list
+-- ---------------------------------------------------------------------------
+
+-- ROW 4. The `extension_effect_fault` waiver, re-earned on different ground.
+func row_4_fault_waiver() -> bool ! {IO} {
+  let cat = fault_catalogue();
+  let ids = conditional_class_ids(cat);
+  let ws = driver_plus_no_ops().waived_fault_classes;
+  let count_ok = List.length(ws) == List.length(ids) && List.length(ids) > 0;
+  let each_ok = check_waivers(ws, cat);
+  let _ = println("  -- ROW 4: injected faults, and the extension_effect_fault waiver --");
+  let _ = if count_ok then println("      waives all ${show(List.length(ids))} conditional D3 classes, each condition READ from the catalogue")
+          else println("      ✗ the waiver list does not cover every conditional class");
+  let _ = println("      extension_effect_fault: WAIVED, and NOT by construction — this profile installs 4 extensions.");
+  let _ = println("      The class is delivered by ExtPorts.ai_step; classifier 3 reports 0 ExtPorts field calls");
+  let _ = println("      in each installed closure, so no installed hook can issue the world request. INAPPLICABLE,");
+  let _ = println("      measured, rather than inapplicable by emptiness.");
+  let _ = println("      FINDING: the catalogue's condition text names `driver_only` inside it, and the machinery");
+  let _ = println("      requires the recorded condition to match verbatim — so this profile records a sentence");
+  let _ = println("      about a different profile. Reported, not fixed here: it is a catalogue content change.");
+  let _ = println("CLAIM row4 ext_ports_calls_in_installed_closures=0");
+  count_ok && each_ok
+}
+
+func check_waivers(ws: [WaivedFaultClass], cat: [FaultClass]) -> bool ! {IO} {
+  match ws {
+    [] => true,
+    w :: rest => {
+      let ok = match waiving_condition(cat, w.class_id) {
+        None => false,
+        Some(c) => c == w.condition
+      };
+      let _ = if ok then () else println("      ✗ ${w.class_id}: the recorded condition is not the catalogue's");
+      let tail = check_waivers(rest, cat);
+      ok && tail
+    }
+  }
+}
+
+-- ROW 5. Virtual time. `driver_only`'s pass was real and only its TRANSFER was
+-- not: compose's unrouted clock reads sat outside reach because nothing was
+-- installed. This profile installs four, so the transfer question is now a
+-- measurement about THIS install set.
+func row_5_virtual_time() -> bool ! {IO} {
+  let c = no_ops_routed_claim();
+  let same = c.reachable_total == List.length(reachable_core_sites([]));
+  let partition = c.reachable_total == c.routed + c.declared_unrouted;
+  let _ = println("  -- ROW 5: every time-bearing read reachable in the profile is routed --");
+  let _ = println("      routed-set claim, COMPUTED at the bound revision (nothing recorded):");
+  let _ = println("        reachable core sites: ${show(c.reachable_total)}");
+  let _ = println("        routed:               ${show(c.routed)}");
+  let _ = println("        declared unrouted:    ${show(c.declared_unrouted)}");
+  let _ = if same then println("      installing 4 extensions added NO reachable core site: the table's two attributed rows")
+          else println("      ✗ the reachable set changed with the install list and the profile did not account for it");
+  let _ = if same then println("      belong to test_dummy and scratchpad, neither of which is installed") else ();
+  let _ = println("      and no installed extension reads a clock at all — CLAIM row5, re-derived by the guard.");
+  let _ = println("      compose's unrouted clock reads are STILL outside reach, and now because compose is not");
+  let _ = println("      installed rather than because nothing is: WI-C5's profile is not discharged by this one.");
+  let _ = println("CLAIM row5 ambient_sources_in_installed_closures=0");
+  same && partition
+}
+
+-- ROW 7. The oracle. `driver_only`'s `ScratchpadResult` exemption was bought by
+-- the empty install list; here it is bought by a measurement over the install
+-- set, and by two independent facts rather than one.
+func row_7_oracle_exemption() -> bool ! {IO} {
+  let _ = println("  -- ROW 7: the ScratchpadResult exemption, re-earned --");
+  let _ = println("      the variant is emitted only when a tool named `scratchpad` is served by a hook returning");
+  let _ = println("      `Handled` with a `cells` key (dst_invariants.parity_gap_reasons). TWO independent facts");
+  let _ = println("      keep this profile off that path, and either alone would do it:");
+  let _ = println("        (1) all four installed extensions declare `provided_tools: []`, and on_tool_handle is the");
+  let _ = println("            ONE gated slot — the dispatch tests contains_tool before calling, so it is never reached;");
+  let _ = println("        (2) all four bind on_tool_handle to `{ decision: { Delegate }, next_state: ctx.world }`,");
+  let _ = println("            which is not `Handled` and carries no metadata.");
+  let _ = println("      Both are re-derived by the guard; neither is the empty install list.");
+  let _ = println("CLAIM row7 provided_tools_empty_and_tool_handle_delegates");
+  true
+}
+
+-- ---------------------------------------------------------------------------
+-- 5. The rest: exclusion check, manifest, and what is NOT claimed
+-- ---------------------------------------------------------------------------
+
+-- Still vacuous, and for a DIFFERENT reason from `driver_only`'s, which is
+-- worth one line: `driver_only` excludes nothing because it installs nothing;
+-- this profile installs four and excludes nothing by choice. The check has an
+-- install list to look in now and finds no exclusion in it.
+func scenario_exclusion_check() -> bool ! {IO} {
+  let meta: ReplayMetadata =
+    { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
+      profile_id: no_ops_id(), profile_version: no_ops_version(),
+      event_vocabulary_version: "event-vocabulary/1" };
+  let none_excluded = not is_excluded_hook(driver_plus_no_ops(), "compaction_structural", "tool_provider[0]");
+  let no_violation =
+    match routing_violation_at(driver_plus_no_ops(), "compaction_structural", "tool_provider[0]", 0,
+                               empty_ledger_trace(), meta) {
+      None => true,
+      Some(_) => false
+    };
+  let ok = none_excluded && no_violation;
+  let _ = if ok then println("  ✓ the runtime exclusion check finds NO exclusion in a NON-EMPTY install list: 4 extensions installed, 0 hooks excluded, so no dispatch can violate")
+          else println("  ✗ this profile produced a routing violation, which an exclusion-free install list cannot");
+  ok
+}
+
+func scenario_manifest() -> bool ! {IO} {
+  let m = no_ops_manifest("HEAD", "ailang 0.33.0", "7.0", "{}",
+                          ["env_get"], [], "HEAD");
+  let rs = validate_manifest(m, driver_plus_no_ops());
+  let ok = List.length(rs) == 0 && List.length(m.extension_packages) == 4;
+  let _ = if ok then {
+            let _ = println("  ✓ the per-run execution manifest validates against the definition it realizes");
+            let _ = println("      profile:            ${m.profile_id}/${m.profile_version}");
+            let _ = println("      extension packages: ${show(List.length(m.extension_packages))}, projected from the install list");
+            let _ = println("      profile rules:      ${m.profile_rules_version}");
+            println("      event vocabulary:   ${m.event_vocabulary_version}")
+          } else {
+            let _ = println("  ✗ the manifest did not validate");
+            report_manifest(rs)
+          };
+  ok
+}
+
+func report_manifest(rs: [ManifestRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${manifest_message(r)}");
+      report_manifest(rest)
+    }
+  }
+}
+
+-- D10: a second profile earns every row itself. Saying which rows this script
+-- did NOT run is part of the result, because a reader who sees four rows earned
+-- will otherwise assume the table.
+func scenario_what_is_not_claimed() -> bool ! {IO} {
+  let _ = println("  -- NOT CLAIMED for this profile (D10: nothing is inherited from driver_only) --");
+  let _ = println("      rows 1, 2, 6, 8, 9, 10 and 11 are NOT re-earned here. Running the whole table is");
+  let _ = println("      WI-C4's shape and a separate item; a row not run is a row not earned, and this");
+  let _ = println("      profile borrows driver_only's answer to none of them.");
+  let _ = println("      Also NOT discharged: WI-C5's compose-bearing profile, Route B's world-mediated");
+  let _ = println("      process and file seams, and criterion 1's evidentiary basis.");
+  true
+}
+
+func scenario_omissions() -> bool ! {IO} {
+  let d = driver_plus_no_ops();
+  let os = d.omitted_extensions;
+  let ok = List.length(os) > 0 && all_reasoned(os);
+  let _ = println("  ✓ installed ${show(List.length(d.installed_packages))} + omitted ${show(List.length(os))} = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)");
+  let _ = println("      installed: ${join_ids(installed_extension_ids())}");
+  let _ = println("      omitted:   ${join_ids(omission_ids(os))}");
+  let _ = show_install_lines(d.installed_packages);
+  let _ = show_omit_lines(os);
+  let _ = if ok then () else println("  ✗ an omission carries no reason");
+  ok
+}
+
+func show_install_lines(ps: [InstalledPackage]) -> () ! {IO} {
+  match ps {
+    [] => (),
+    p :: rest => {
+      let _ = println("INSTALLED ${p.extension_id} ${p.package_id} ${p.version} ${p.source_path}");
+      show_install_lines(rest)
+    }
+  }
+}
+
+func show_omit_lines(os: [OmittedExtension]) -> () ! {IO} {
+  match os {
+    [] => (),
+    o :: rest => {
+      let _ = println("OMITTED ${o.extension_id}");
+      show_omit_lines(rest)
+    }
+  }
+}
+
+pure func omission_ids(os: [OmittedExtension]) -> [string] {
+  match os { [] => [], o :: rest => o.extension_id :: omission_ids(rest) }
+}
+
+pure func all_reasoned(os: [OmittedExtension]) -> bool {
+  match os { [] => true, o :: rest => o.reason != "" && all_reasoned(rest) }
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("driver_plus_no_ops_dst  (${no_ops_id()} v${no_ops_version()})");
+  let a = scenario_loads_clean();
+  let b = scenario_attribution_ref_is_current();
+  let c = scenario_omissions();
+  let _ = println("  ================================================================");
+  let _ = println("  ADR-001 row 3's four INSTALLED-EXTENSION clauses. Every one has");
+  let _ = println("  been vacuous for the whole project; this is where they bind.");
+  let _ = println("  ================================================================");
+  let d1 = clause_coverage_floor();
+  let d2 = clause_no_unconditional_exclusion();
+  let d3 = clause_classifier_2();
+  let d4 = clause_disclosure_ids();
+  let e = scenario_the_record_shows_the_vacuity();
+  let f = row_4_fault_waiver();
+  let g = row_5_virtual_time();
+  let h = row_7_oracle_exemption();
+  let i = scenario_exclusion_check();
+  let j = scenario_manifest();
+  let k = scenario_what_is_not_claimed();
+  if a && b && c && d1 && d2 && d3 && d4 && e && f && g && h && i && j && k then
+    println("driver_plus_no_ops_dst PASS")
+  else {
+    let _ = println("driver_plus_no_ops_dst FAIL");
+    exit(1)
+  }
+}

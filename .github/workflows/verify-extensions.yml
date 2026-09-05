@@ -2,8 +2,8 @@ name: verify-extensions
 
 # Catches two classes of AILANG version drift:
 #
-# 1. "Pin drift" (PR #16): AILANG_REF in install-prerequisites.sh lagged
-#    behind what extensions actually required.
+# 1. "Pin drift" (PR #16): the installer AILANG_REF lagged behind what
+#    extensions actually required.
 #
 # 2. "Dev-build gap" (PR #33): PR was verified locally against a dev build
 #    (v0.21.0-99-g...) while the released v0.22.0 had stricter type
@@ -11,7 +11,7 @@ name: verify-extensions
 #
 # Fix: CI derives the AILANG version to build from ailang.toml's floor
 # constraint (e.g. `ailang = ">=0.22.0"` → build v0.22.0). The floor and
-# AILANG_REF in install-prerequisites.sh must both be kept in sync — a
+# installer AILANG_REF must both be kept in sync — a
 # mismatch causes this job to fail on the "versions must match" check.
 
 on:
@@ -33,15 +33,25 @@ concurrency:
   group: verify-extensions-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The development trunk. main is a release mirror that main_dst is merged into
+  # periodically, so anything keyed on "what is new" must compare against
+  # main_dst -- see the new_contract_policy step.
+  TRUNK: main_dst
+
 jobs:
   verify_extensions:
     name: verify_extensions + check_core + smoke_no_delegated_storm
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # new_contract_policy diffs against the PR base, which a depth-1
+          # checkout does not have.
+          fetch-depth: 0
 
       - name: Read AILANG floor from ailang.toml (single source of truth)
         id: pin
@@ -55,14 +65,6 @@ jobs:
           ref="v${version}"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "ailang.toml floor: $ref"
-
-          # Sanity-check: install-prerequisites.sh must reference the same version
-          # so local devs install exactly what CI tests against.
-          script_ref=$(grep -E '^AILANG_REF=' scripts/install-prerequisites.sh | head -n1 | cut -d'"' -f2)
-          if [[ "$script_ref" != "$ref" ]]; then
-            echo "::error::Version mismatch: ailang.toml floor=$ref but install-prerequisites.sh AILANG_REF=$script_ref — bump them together." >&2
-            exit 1
-          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -91,14 +93,169 @@ jobs:
       - name: Confirm ailang version
         run: ailang --version
 
-      - name: Sync extension packages
-        run: ./scripts/sync-extension-packages.sh
+      # `ailang verify` shells out to Z3; without it EVERY module errors. That
+      # went unnoticed for as long as verify_core ran under continue-on-error,
+      # which discarded the exit code -- so the target has never actually
+      # verified anything here. Installing the solver is what makes the step
+      # mean what its name says. scripts/install-prerequisites.sh names z3 for
+      # the same reason; this job builds ailang directly and so must too.
+      - name: Install Z3
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends z3
+          z3 --version
 
-      - name: ailang lock
-        run: ailang lock
+      - name: Hydrate extension packages
+        run: make CI=1 sync_packages
+
+      # verify_dagr_producer's contract leg -- the ONLY place a published dagr
+      # document is checked against the real schema -- runs only if a dagr
+      # binary is on PATH, and skips green otherwise. No step installed one, so
+      # that leg has never run in CI. Herdr is not installed here either, so
+      # this fetches the same checksum-verified release asset the plugin's own
+      # install.sh would, at the pin the Makefile names. DAGR_REQUIRED=1 on the
+      # step below is the other half: without it, a fetch that quietly fails
+      # would put the skip back and CI would be green for a check that did not
+      # run.
+      - name: Install pinned dagr (the contract checker)
+        run: |
+          set -euo pipefail
+          version=$(sed -nE 's/^DAGR_VERSION \?= ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' Makefile | head -n1)
+          if [[ -z "$version" ]]; then
+            echo "::error::Could not parse DAGR_VERSION from Makefile" >&2
+            exit 1
+          fi
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)               target="x86_64-unknown-linux-musl" ;;
+            Linux-aarch64 | Linux-arm64) target="aarch64-unknown-linux-musl" ;;
+            *)
+              echo "::error::no pinned dagr build for $(uname -s)-$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          base="https://github.com/aemrebarut/herdr-dagr/releases/download/v${version}"
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+            "$base/dagr-$target.tar.gz" -o "$tmp/dagr.tar.gz"
+          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+            "$base/dagr-$target.sha256" -o "$tmp/dagr.sha256"
+          expected=$(awk 'NR == 1 {print $1}' "$tmp/dagr.sha256")
+          actual=$(sha256sum "$tmp/dagr.tar.gz" | awk '{print $1}')
+          if [[ "$expected" != "$actual" ]]; then
+            echo "::error::dagr checksum mismatch (expected $expected, got $actual)" >&2
+            exit 1
+          fi
+          tar -xzf "$tmp/dagr.tar.gz" -C "$tmp"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$tmp/dagr" "$HOME/.local/bin/dagr"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/dagr" --version
 
       - name: check_core (verify_extensions + type-check src/core/*.ail)
+        env:
+          # Refuse the skip: no binary is a red check here, not a quiet pass.
+          DAGR_REQUIRED: '1'
         run: make check_core
 
       - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)
         run: make smoke_no_delegated_storm
+
+      - name: DST AILANG gates
+        run: make --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver
+
+      - name: DST seeded gate
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            DST_SEEDS=500 DST_BASE_SEED=$(date +%Y%m%d) make dst_seeded
+          else
+            DST_SEEDS=5 DST_BASE_SEED=1 make dst_seeded
+          fi
+
+      - name: smoke_parity
+        run: make smoke_parity
+
+      # The second coverage axis (WI-A17). check_core above type-checks
+      # src/core and never runs its inline tests; this runs every one of them.
+      # It is a separate step rather than another name in the DST gates list so
+      # a coverage regression is legible as its own red check.
+      - name: test_coverage (run every inline test under src/core)
+        run: make test_coverage_selftest test_coverage
+
+      # Enforcing since MOT-130. verify_core no longer ticks a file that proves
+      # nothing, and a `requires` with no `ensures` exits non-zero (ADR-001 §3).
+      # A ratchet nothing reads is not a ratchet, so the advisory flag came off
+      # in the same change that gave the gate something true to say. Contracts
+      # the Z3 fragment rejects are reported as `blocked` and never fail here.
+      - name: verify_core
+        run: make verify_core
+
+      # VERIFIED proves a contract holds of its body, not that it would notice
+      # the body changing. This falsifies each guard contract by deleting a
+      # disjunct and asserting VIOLATION (PLAN P5).
+      - name: verify_mutations
+        run: make verify_mutations
+
+      # The class of each contract is computed by Z3 and pinned. This fails if
+      # the tree and contracts.register disagree in either direction, including
+      # a class edited by hand while the solver computes something else -- the
+      # direction a hand-maintained register cannot check (ADR-001 §2).
+      - name: verify_classify_check
+        run: make verify_classify_check
+
+      # Every new pure func in src/core carries a contract or a checked excuse.
+      # Keyed on the incoming diff, not the tree. PRs compare with their base
+      # branch; pushes compare with the pre-push commit (origin/main is already
+      # at HEAD after checkout and would make every push look empty).
+      #
+      # TRUNK is main_dst, not main. main is a release mirror that main_dst is
+      # periodically merged into, so it runs months behind: on 2026-08-30 it was
+      # still at PR #78 while main_dst was at #177. A main_dst -> main
+      # integration PR therefore diffs the whole trunk, and the gate that is
+      # keyed on the diff *precisely because* ~1545 declarations predate the rule
+      # (ADR-001 §4) turns back into the tree-wide gate it was designed not to
+      # be -- PR #154 reported 1565 of 1577 "new" declarations unjustified, every
+      # one of them old. Every commit on such a PR was already gated when it
+      # landed on main_dst, so gate the trunk against itself and get the empty
+      # diff that is the honest answer.
+      - name: new_contract_policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.head_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$PR_HEAD" == "$TRUNK" ]]; then
+              contract_base="origin/$TRUNK"
+            else
+              contract_base="origin/$PR_BASE"
+            fi
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            contract_base="$PUSH_BEFORE"
+          else
+            contract_base="origin/$TRUNK"
+          fi
+          echo "new_contract_policy base: $contract_base"
+          make new_contract_policy BASE="$contract_base"
+
+  dst_l2:
+    name: dst_l2
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install TUI dependencies
+        working-directory: src/tui
+        run: bun install --frozen-lockfile
+
+      - name: Layer-2 DST
+        run: make dst_l2

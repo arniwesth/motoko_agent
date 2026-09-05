@@ -1,0 +1,111 @@
+{
+  "_": [
+    "Classifier 3's fixture expectations, hand-derived.  Each of the five",
+    "unresolvable shapes the ADR's acceptance criterion names has a fixture that",
+    "must be REJECTED, and each is paired with a RESOLVING CONTROL that must come",
+    "back clean or ambient.  The pairing is the point: a rejection-only suite is",
+    "passed by a classifier that resolves nothing, which is the `agree=0",
+    "disagree=0` shape that has cost this project two items.",
+    "",
+    "`verdicts` is the sorted list of verdicts `inventory_module` must report for",
+    "the fixture.  An empty list means the file must resolve entirely clean."
+  ],
+  "fixtures": {
+    "shape_module_alias.ail": {
+      "form": "alias (whole module)",
+      "verdicts": ["module-alias"]
+    },
+    "shape_bare_module.ail": {
+      "form": "computed/unqualified access",
+      "verdicts": ["bare-module"]
+    },
+    "shape_no_cached_interface.ail": {
+      "form": "producer gap (precondition)",
+      "verdicts": ["no-cached-interface"]
+    },
+    "shape_symbol_not_in_interface.ail": {
+      "form": "re-export / wrapper",
+      "verdicts": ["symbol-not-in-interface"]
+    },
+    "shape_effect_variable.ail": {
+      "form": "effect-variable row",
+      "verdicts": ["effect-variable"]
+    },
+    "shape_unknown_builtin.ail": {
+      "form": "builtin, effects unknown",
+      "verdicts": ["unknown-builtin"]
+    },
+
+    "control_pure_unannotated.ail": {
+      "form": "CONTROL closed empty row",
+      "verdicts": []
+    },
+    "control_type_in_effect_module.ail": {
+      "form": "CONTROL type, effectful mod",
+      "verdicts": []
+    },
+    "control_pure_builtin.ail": {
+      "form": "CONTROL builtin, proven pure",
+      "verdicts": []
+    },
+    "control_prose_only.ail": {
+      "form": "CONTROL prose and literals",
+      "verdicts": []
+    },
+    "control_ambient_import.ail": {
+      "form": "CONTROL ambient import",
+      "verdicts": ["AMBIENT"]
+    },
+    "control_ambient_builtin.ail": {
+      "form": "CONTROL ambient builtin",
+      "verdicts": ["AMBIENT"]
+    },
+    "control_renamed_symbol.ail": {
+      "form": "CONTROL symbol rename",
+      "verdicts": ["AMBIENT"]
+    },
+    "control_multiline_import.ail": {
+      "form": "CONTROL wrapped symbol list",
+      "verdicts": ["AMBIENT"]
+    }
+  },
+
+  "yield": {
+    "_": [
+      "The yield is pinned in BOTH directions -- a new clean extension is as much",
+      "a finding as a lost one.  4 of 15 was derived independently three times:",
+      "by the amendment review, by the acceptance reviewers, and by this tool.",
+      "",
+      "`package_dirs` asserts the RESOLUTION rather than the count, per plan rule",
+      "S22 with the review's strengthening.  `scratchpad` lives at",
+      "`packages/motoko_scratchpad`, so a directory-name resolver returns 16 of 17",
+      "-- and 14 is a plausible-looking answer that nothing downstream contradicts."
+    ],
+    "extensions": 17,
+    "port_mediated": [
+      "compaction_structural",
+      "decision_framework",
+      "empty_stop_guard",
+      "progress_contract_guard"
+    ],
+    "package_dirs": {
+      "a2a": "packages/motoko-ext-a2a",
+      "agentcli": "packages/motoko-ext-agentcli",
+      "ailang_docs": "packages/motoko-ext-ailang-docs",
+      "compaction_ai": "packages/motoko-ext-compaction-ai",
+      "compaction_structural": "packages/motoko-ext-compaction-structural",
+      "compose": "packages/motoko-ext-compose",
+      "context_mode": "packages/motoko-ext-context-mode",
+      "decision_framework": "packages/motoko-ext-decision-framework",
+      "empty_stop_guard": "packages/motoko-ext-empty-stop-guard",
+      "exa_search": "packages/motoko-ext-exa-search",
+      "herdr": "packages/motoko-ext-herdr",
+      "mcp": "packages/motoko-ext-mcp",
+      "microrag": "packages/motoko-ext-microrag",
+      "omnigraph": "packages/motoko-ext-omnigraph",
+      "progress_contract_guard": "packages/motoko-ext-progress-contract-guard",
+      "scratchpad": "packages/motoko_scratchpad",
+      "test_dummy": "packages/motoko-ext-test-dummy"
+    }
+  }
+}

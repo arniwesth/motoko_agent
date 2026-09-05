@@ -1,0 +1,1957 @@
+-- src/core/dst_invariants.ail
+--
+-- WI-A14 piece 1, under ADR-001 D7: the invariant set.
+--
+-- D7 lists TWELVE obligations and one more that is not per-execution:
+--
+--   "The runner applies reusable invariants to the returned outcome and
+--    complete trace."
+--
+-- The twelve families below are each a runnable function over ONE execution —
+-- outcome plus complete trace, never per step. D7's thirteenth statement ("the
+-- discovery contract is itself an invariant") is over a PAIR of executions and
+-- is `discovery_contract_findings` at the bottom, kept separate rather than
+-- folded into a family, because an invariant that needs two runs cannot be
+-- evaluated by a runner that has one.
+--
+-- ============================================================================
+-- Every rule is its own constructor, and that is load-bearing
+-- ============================================================================
+--
+-- Cluster 12 measured why: thirteen decode-mutation rows each asserting a
+-- SPECIFIC refusal survived a corruption that would have made eleven of them
+-- report a different rule, because each row asserts its own rule rather than a
+-- non-empty finding list. A suite that asserts `length(findings) > 0` passes on
+-- the wrong evidence and reads identically to one that does not. So: one
+-- constructor per rule, `violation_rule` is total, and every acceptance row
+-- names the rule it expects.
+--
+-- ============================================================================
+-- THE PARITY FAMILY, AND THE ONE-LINE WRONG ANSWER (D6.4)
+-- ============================================================================
+--
+-- D6.4 requires every LOGICAL `LedgerEvent` to reach the returned trace. At
+-- WI-A8, when this module was written, 28 of 34 variants were classified
+-- Logical and 13 reached the trace, so 15 did not —
+-- `logical_variants_not_in_trace()`, which
+-- WI-A8 exposed for exactly this invariant to consume. **At WI-D2 the same
+-- count reads 26 reaching and 2 not**; the paragraphs below are kept in A8's
+-- tense because they describe why the artifact was built this way, not what it
+-- currently measures.
+--
+-- A parity invariant written against that is RED, and there is a one-line way
+-- to make it green that destroys the point: reclassify the fifteen as
+-- DisplayOnly. That type-checks, the vocabulary still validates, every count
+-- balances, and D6.4's obligation becomes vacuous — it blesses the exact gap it
+-- exists to close. WI-A8 refused it deliberately and left the evidence in a
+-- SEPARATE field (`reaches_trace_today`) so a classification could never be
+-- confused with a measurement.
+--
+-- This module makes the wrong answer LOUD rather than merely discouraged, with
+-- three checks that fail in different directions:
+--
+--   1. `display_only_baseline()` pins the six display-only variants BY NAME.
+--      Reclassifying anything into that set turns `display-only-set-changed`
+--      red. Reclassification is now a deliberate edit to a pinned artifact
+--      under D8's compatibility rule, not a quiet field flip.
+--   2. `d64_gap_register()` pins the variants that do not reach the trace, and
+--      `parity_register_findings()` asserts the register EQUALS
+--      `logical_variants_not_in_trace(event_vocabulary())` in both directions.
+--      A variant that starts reaching the trace and is still registered is
+--      `parity-gap-register-stale` — so the register can only SHRINK, and
+--      closing a gap is forced to be recorded.
+--   3. `parity_findings()` asserts, over a real returned trace, that every
+--      record in it is a LOGICAL variant. That is the runtime half, and it is
+--      the one D6.4 calls authoritative: "an external `ledger_emit` call is not
+--      evidence that the event is in `LedgerTrace`".
+--
+-- WI-A14 CLOSED ONE OF THE FIFTEEN; WI-C3 CLOSED A SECOND (`StreamDelta`);
+-- **WI-D2 CLOSED ELEVEN MORE, and the register is now TWO.** See
+-- `d64_gap_register`.
+--
+--   AND THE THREE CHECKS ABOVE WERE NOT ENOUGH ON THEIR OWN, which WI-D2
+--   measured rather than argued. Checks 1 and 2 both compare the register
+--   against `reaches_trace_today` — a hand-maintained SURVEY. Flipping the
+--   survey and the register together, with no production change, satisfies
+--   both: they agree with each other about a claim neither of them checks.
+--   Check 3 does not close it either; it rules out a DisplayOnly record being
+--   IN the trace, not a Logical event being absent from it.
+--
+--   The fourth check is out of process. `scripts/dst/run_ledger_parity_wire.sh`
+--   reads `d64_gap_register()` and, for every Logical variant it does not list,
+--   compares what the driver PROJECTED to the wire against what it APPENDED to
+--   the returned trace. That is S16's rule applied to this family: the two
+--   sides have different producers only across the process boundary.
+--
+-- ============================================================================
+-- What the parity family can and cannot do — measured at WI-C3
+-- ============================================================================
+--
+-- D6.4's obligation is parity between logical emissions and returned records.
+-- `ledger_emit` is `-> () ! {IO, Trace}` and keeps no in-memory log, so there is
+-- still no general per-run emission witness: the runtime half compares the trace
+-- against the VOCABULARY, and the emission-vs-trace half is discharged for the
+-- one class D6.4 names as its explicit exception — streams — through
+-- `ExecutionUnderTest.emissions`.
+--
+-- WI-C3 CHANGED WHAT THAT CHANNEL CARRIES, and both sides of it moved.
+--
+--   * Before: `session.ail`'s `exchange.emissions` had no reader, so the witness
+--     was `[]` on every path; AND the driver appended no StreamDelta record to
+--     the returned trace, so `stream_records` was `[]` on every path too. BOTH
+--     sides were empty, which is why a constructed fixture was the only way to
+--     exercise this check and why a real run could not be routed through it.
+--   * After: the driver converts the returned chunk log once
+--     (`session.stream_chunk_events`), appends the events to the returned trace,
+--     and threads the same events forward as the run's witness. A real run now
+--     produces an `ExecutionUnderTest` this check can select among — the bridge
+--     is `src/core/dst_execution.execution_of`, and
+--     `scripts/dst/stream_parity_dst.ail` drives it.
+--
+-- WHAT IT STILL CANNOT DO, stated because a green run must not be over-read.
+-- Both sides derive from `ProviderExchange.emissions`, because that is the ONLY
+-- in-process observation of the stream: the callback's own projections go to
+-- `ledger_emit` and its row is closed `{IO}`, so it cannot report what it saw
+-- and D1 rejected the scoped recorder that would let it. In-process,
+-- `stream_parity_findings` therefore tests that the driver carries the trace and
+-- the witness forward together on EVERY branch — six post-call branches against
+-- one trace junction, which is S12's identity-transition class — and not that
+-- the callback projected what the provider returned. The second comparison needs
+-- the WIRE against the trace, which is out of process; `make stream_parity`
+-- does it in the shell and is the only place it is done.
+
+module src/core/dst_invariants
+
+import std/list as List (length)
+import std/string as Str (startsWith)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+
+import src/core/phase_vocab (
+  LedgerTrace,
+  LedgerRecord, WireRecord, CompactionStageRecord, DecisionRecord,
+  LedgerEvent, RunSummary, TotalsUpdated, CostExhausted, DoneEvent, CheckpointTaken,
+  StreamDelta,
+  CheckpointInfo,
+  is_run_summary,
+  count_run_summaries,
+  validate_checkpoint_chain
+)
+
+import src/core/dst_result (
+  DstResult, RunCompleted, RunFailed,
+  SystemRun, HarnessFailure,
+  harness_failure_kind_name
+)
+
+import src/core/dst_event_vocabulary (
+  EventRow,
+  event_vocabulary,
+  event_vocabulary_version,
+  event_variant_id,
+  is_logical,
+  display_only_variants,
+  logical_variants_not_in_trace
+)
+
+import src/core/dst_interaction (
+  Interaction,
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  StreamChunkRecord,
+  interaction_kind,
+  identity_projection,
+  class_has_deadline,
+  class_may_stream,
+  total_advance_ms
+)
+
+import src/core/dst_replay (
+  ReplayMismatch,
+  replay_rule,
+  replay_message,
+  RegressionReplay,
+  strict_replay_findings,
+  regression_replay_findings
+)
+
+import src/core/dst_fault_catalogue (
+  required_class_ids
+)
+
+import src/core/dst_generator (
+  GeneratorState,
+  BoundFailure,
+  generator_installed
+)
+
+import src/core/ports (
+  WorldState,
+  ToolOutcomeRecord, ToolRecordDecoded, ToolRecordUndecodable,
+  decode_tool_outcome
+)
+
+-- D8's compatibility rule applies to this artifact exactly as it does to the
+-- fault catalogue and the event vocabulary: a change to a family, a rule id or
+-- a pinned baseline is a version change.
+export pure func invariant_set_version() -> string { "invariant-set/1" }
+
+-- ============================================================================
+-- PART 1 — the twelve families, and D7's own words for each
+-- ============================================================================
+
+export type InvariantFamily
+  = TerminalSummary
+  | EmissionParity
+  | PhaseTransitions
+  | ToolPairing
+  | BudgetAccounting
+  | BoundedProgress
+  | CheckpointHistory
+  | OutcomeAgreement
+  | ReplayConsistency
+  | WorldTransitions
+  | VirtualTime
+  | HarnessHygiene
+
+export pure func family_id(f: InvariantFamily) -> string {
+  match f {
+    TerminalSummary => "terminal-summary",
+    EmissionParity => "emission-parity",
+    PhaseTransitions => "phase-transitions",
+    ToolPairing => "tool-pairing",
+    BudgetAccounting => "budget-accounting",
+    BoundedProgress => "bounded-progress",
+    CheckpointHistory => "checkpoint-history",
+    OutcomeAgreement => "outcome-agreement",
+    ReplayConsistency => "replay-consistency",
+    WorldTransitions => "world-transitions",
+    VirtualTime => "virtual-time",
+    HarnessHygiene => "harness-hygiene"
+  }
+}
+
+-- D7's twelve bullets, transcribed. Carried as data rather than as comments so
+-- the acceptance script can assert that every family it runs is a family D7
+-- names, and so a family added here without an obligation is visible.
+export pure func family_obligation(f: InvariantFamily) -> string {
+  match f {
+    TerminalSummary =>
+      "exactly one final RunSummary for every SystemRun, and none synthesized for a harness failure",
+    EmissionParity =>
+      "parity between all logical ledger emissions and returned trace records",
+    PhaseTransitions =>
+      "legal phase/state transitions",
+    ToolPairing =>
+      "valid tool-call/tool-result pairing, including denial and failure paths",
+    BudgetAccounting =>
+      "monotonically valid budget/cost accounting",
+    BoundedProgress =>
+      "bounded retry and progress behavior under the modeled fault catalogue",
+    CheckpointHistory =>
+      "checkpoint/compaction history invariants already owned by the framework",
+    OutcomeAgreement =>
+      "agreement between returned outcome and terminal summary",
+    ReplayConsistency =>
+      "strict-replay request equality, safe regression-replay compatibility, and complete interaction consumption",
+    WorldTransitions =>
+      "valid logical-world transitions, including declared commit/no-commit behavior under faults",
+    VirtualTime =>
+      "monotonic virtual time and deadline derivation",
+    HarnessHygiene =>
+      "zero discovery-generator failures, matcher mismatches, forbidden effects, and ambient RNG reads"
+  }
+}
+
+-- The enumeration. AILANG has no constructor enumeration on the pin, so this is
+-- hand-written and `make invariants` counts the declared variants of
+-- `InvariantFamily` against it — the same structural guard `all_hook_slots()`
+-- carries in WI-A6, for the same reason: an artifact that validates while
+-- incomplete is the failure mode of every hand-written set in this project.
+export pure func all_families() -> [InvariantFamily] {
+  [TerminalSummary, EmissionParity, PhaseTransitions, ToolPairing,
+   BudgetAccounting, BoundedProgress, CheckpointHistory, OutcomeAgreement,
+   ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene]
+}
+
+-- ============================================================================
+-- PART 2 — the rules
+-- ============================================================================
+
+export type Violation
+  -- F1 terminal summary
+  = SummaryNotFinal(int)
+  | SummaryOnHarnessFailure(string, int)
+  -- F2 emission parity
+  | DisplayOnlyInTrace(int, string)
+  | ParityGapRegisterMissing(string)
+  | ParityGapRegisterStale(string)
+  | DisplayOnlySetChanged(string)
+  | StreamParityCount(int, int)
+  | StreamParityOrder(int, string, string)
+  -- F3 phase / state transitions
+  | RecordAfterTerminal(int, string)
+  | StepRegression(string, int, int)
+  -- F4 tool pairing
+  | ToolCallUnpaired(int, string)
+  | ToolResultUncorrelated(int, string)
+  | DeniedCallDispatched(string)
+  -- F5 budget / cost accounting
+  | TokenRegression(string, int, int)
+  | CostRegression(int, int)
+  | NegativeCost(int)
+  -- F6 bounded retry and progress
+  | DecisionBudgetExceeded(int, int)
+  | RetryBoundExceeded(int, int)
+  | ProviderStepRepeated(int, int)
+  -- F7 checkpoint / compaction history
+  | CheckpointChainBroken(string)
+  | CompactionAfterExhausted(int)
+  -- F8 outcome / summary agreement
+  | OutcomeSummaryDisagree(string, string)
+  | DoneEventDisagrees(string, string)
+  | SummaryAbsentForOutcome(string)
+  -- F9 replay consistency
+  | ReplayRuleViolated(string, string)
+  | InteractionsUnconsumed(int, int)
+  -- F10 logical world transitions
+  | FaultWithoutClass(int, string)
+  | FaultClassUnknown(int, string)
+  | CommitUnderFault(int, string)
+  -- F11 virtual time
+  | NegativeAdvance(int, int)
+  | ChunkOffsetRegression(int, int, int)
+  | DeadlineDerivation(int, string)
+  | ClockBalance(int, int)
+  -- F12 harness hygiene
+  | GeneratorBoundFailure(string, int, int)
+  | HarnessFailureObserved(string, int)
+  | AmbientRngRead(int)
+  | ForbiddenEffectSite(string)
+
+export pure func violation_family(v: Violation) -> InvariantFamily {
+  match v {
+    SummaryNotFinal(_) => TerminalSummary,
+    SummaryOnHarnessFailure(_, _) => TerminalSummary,
+    DisplayOnlyInTrace(_, _) => EmissionParity,
+    ParityGapRegisterMissing(_) => EmissionParity,
+    ParityGapRegisterStale(_) => EmissionParity,
+    DisplayOnlySetChanged(_) => EmissionParity,
+    StreamParityCount(_, _) => EmissionParity,
+    StreamParityOrder(_, _, _) => EmissionParity,
+    RecordAfterTerminal(_, _) => PhaseTransitions,
+    StepRegression(_, _, _) => PhaseTransitions,
+    ToolCallUnpaired(_, _) => ToolPairing,
+    ToolResultUncorrelated(_, _) => ToolPairing,
+    DeniedCallDispatched(_) => ToolPairing,
+    TokenRegression(_, _, _) => BudgetAccounting,
+    CostRegression(_, _) => BudgetAccounting,
+    NegativeCost(_) => BudgetAccounting,
+    DecisionBudgetExceeded(_, _) => BoundedProgress,
+    RetryBoundExceeded(_, _) => BoundedProgress,
+    ProviderStepRepeated(_, _) => BoundedProgress,
+    CheckpointChainBroken(_) => CheckpointHistory,
+    CompactionAfterExhausted(_) => CheckpointHistory,
+    OutcomeSummaryDisagree(_, _) => OutcomeAgreement,
+    DoneEventDisagrees(_, _) => OutcomeAgreement,
+    SummaryAbsentForOutcome(_) => OutcomeAgreement,
+    ReplayRuleViolated(_, _) => ReplayConsistency,
+    InteractionsUnconsumed(_, _) => ReplayConsistency,
+    FaultWithoutClass(_, _) => WorldTransitions,
+    FaultClassUnknown(_, _) => WorldTransitions,
+    CommitUnderFault(_, _) => WorldTransitions,
+    NegativeAdvance(_, _) => VirtualTime,
+    ChunkOffsetRegression(_, _, _) => VirtualTime,
+    DeadlineDerivation(_, _) => VirtualTime,
+    ClockBalance(_, _) => VirtualTime,
+    GeneratorBoundFailure(_, _, _) => HarnessHygiene,
+    HarnessFailureObserved(_, _) => HarnessHygiene,
+    AmbientRngRead(_) => HarnessHygiene,
+    ForbiddenEffectSite(_) => HarnessHygiene
+  }
+}
+
+export pure func violation_rule(v: Violation) -> string {
+  match v {
+    SummaryNotFinal(_) => "summary-not-final",
+    SummaryOnHarnessFailure(_, _) => "summary-on-harness-failure",
+    DisplayOnlyInTrace(_, _) => "display-only-in-trace",
+    ParityGapRegisterMissing(_) => "parity-gap-register-missing",
+    ParityGapRegisterStale(_) => "parity-gap-register-stale",
+    DisplayOnlySetChanged(_) => "display-only-set-changed",
+    StreamParityCount(_, _) => "stream-parity-count",
+    StreamParityOrder(_, _, _) => "stream-parity-order",
+    RecordAfterTerminal(_, _) => "record-after-terminal",
+    StepRegression(_, _, _) => "step-regression",
+    ToolCallUnpaired(_, _) => "tool-call-unpaired",
+    ToolResultUncorrelated(_, _) => "tool-result-uncorrelated",
+    DeniedCallDispatched(_) => "denied-call-dispatched",
+    TokenRegression(_, _, _) => "token-regression",
+    CostRegression(_, _) => "cost-regression",
+    NegativeCost(_) => "negative-cost",
+    DecisionBudgetExceeded(_, _) => "decision-budget-exceeded",
+    RetryBoundExceeded(_, _) => "retry-bound-exceeded",
+    ProviderStepRepeated(_, _) => "provider-step-repeated",
+    CheckpointChainBroken(_) => "checkpoint-chain-broken",
+    CompactionAfterExhausted(_) => "compaction-after-exhausted",
+    OutcomeSummaryDisagree(_, _) => "outcome-summary-disagree",
+    DoneEventDisagrees(_, _) => "done-event-disagrees",
+    SummaryAbsentForOutcome(_) => "summary-absent-for-outcome",
+    ReplayRuleViolated(_, _) => "replay-rule-violated",
+    InteractionsUnconsumed(_, _) => "interactions-unconsumed",
+    FaultWithoutClass(_, _) => "fault-without-class",
+    FaultClassUnknown(_, _) => "fault-class-unknown",
+    CommitUnderFault(_, _) => "commit-under-fault",
+    NegativeAdvance(_, _) => "negative-advance",
+    ChunkOffsetRegression(_, _, _) => "chunk-offset-regression",
+    DeadlineDerivation(_, _) => "deadline-derivation",
+    ClockBalance(_, _) => "clock-balance",
+    GeneratorBoundFailure(_, _, _) => "generator-bound-failure",
+    HarnessFailureObserved(_, _) => "harness-failure-observed",
+    AmbientRngRead(_) => "ambient-rng-read",
+    ForbiddenEffectSite(_) => "forbidden-effect-site"
+  }
+}
+
+export pure func violation_message(v: Violation) -> string {
+  match v {
+    SummaryNotFinal(n) =>
+      "[summary-not-final] the returned trace of a completed SystemRun carries ${n} RunSummary record(s) and the last record is not one; D6.1 requires exactly one and requires it to be FINAL, because the returned trace is the oracle and a summary that is not last means something was appended after the run ended",
+    SummaryOnHarnessFailure(kind, n) =>
+      "[summary-on-harness-failure] the partial trace of a '${kind}' harness failure carries ${n} RunSummary record(s); D6.6 makes the two result classes DISJOINT, and a synthesized summary on a failure path is precisely the dressing-up D6.7 forbids",
+    DisplayOnlyInTrace(pos, variant) =>
+      "[display-only-in-trace] record ${pos} of the returned trace is '${variant}', which the event vocabulary classifies DISPLAY-ONLY; D6.4 excludes display-only telemetry from the ledger, and an invariant that can read it can be changed by it",
+    ParityGapRegisterMissing(variant) =>
+      "[parity-gap-register-missing] '${variant}' is a Logical variant that does not reach the returned trace, and d64_gap_register() does not list it; the register is the declared D6.4 gap and a gap outside it is an undeclared one",
+    ParityGapRegisterStale(variant) =>
+      "[parity-gap-register-stale] d64_gap_register() lists '${variant}' but the vocabulary no longer reports it as a gap; the register may only SHRINK, so either the gap was closed and the register was not updated, or the variant was reclassified — and the second is the one-line wrong answer this module exists to make loud",
+    DisplayOnlySetChanged(detail) =>
+      "[display-only-set-changed] the vocabulary's display-only set no longer equals the pinned baseline (${detail}); reclassifying a Logical variant as DisplayOnly makes D6.4's parity obligation vacuous for it, so the set is pinned and moving it is a deliberate edit under D8's compatibility rule and a vocabulary version bump — never a field flip that turns a red invariant green",
+    StreamParityCount(emitted, in_trace) =>
+      "[stream-parity-count] ${emitted} stream emission(s) were projected during the provider call and ${in_trace} reached the returned trace; D6.4 names streams as the ONE class where a shared append/project transition is impossible, and discharges the obligation with this parity check instead — an omission or a duplicate is the whole failure mode",
+    StreamParityOrder(pos, projected, returned) =>
+      "[stream-parity-order] at stream position ${pos} the projected sequence holds '${projected}' and the returned trace holds '${returned}'; D6.4 requires the two to match in ORDER and CONTENT, and a check on counts alone is green on a reordering",
+    RecordAfterTerminal(pos, name) =>
+      "[record-after-terminal] record ${pos} ('${name}') follows the RunSummary in the returned trace; the summary is the terminal record (D6.1), so a later record is a transition out of a terminal state",
+    StepRegression(lane, prev, seen) =>
+      "[step-regression] the '${lane}' lane of the returned trace reports step ${seen} after step ${prev}; steps are a monotone phase coordinate and a regression is an illegal transition, not a re-ordering of the report",
+    ToolCallUnpaired(pos, call_id) =>
+      "[tool-call-unpaired] the tool interaction at position ${pos} for call '${call_id}' records OutcomeMissing; every dispatched call must pair with a result, a denial or a typed fault, and 'the world had no opinion' is none of those for a class the driver actually invoked",
+    ToolResultUncorrelated(pos, detail) =>
+      "[tool-result-uncorrelated] the tool interaction at position ${pos} carries a result the request did not ask for (${detail}); D2 never weakens tool-call/result correlation, and an uncorrelated answer recorded as an ordinary success is a silent substitution",
+    DeniedCallDispatched(call_id) =>
+      "[denied-call-dispatched] call '${call_id}' was denied at the approval boundary and a tool interaction for it appears afterwards; D3's approval_denied transition is 'no tool executes, so no logical update occurs', and this is the denial path failing open",
+    TokenRegression(field, prev, seen) =>
+      "[token-regression] '${field}' reports ${seen} after ${prev} in the returned trace; token totals are cumulative, so D7's monotone budget accounting makes a decrease a defect rather than a smaller step",
+    CostRegression(prev, seen) =>
+      "[cost-regression] total cost reports ${seen} millicents after ${prev}; cost accumulates and the cap is compared against it, so a decrease can retire an exhaustion that already fired",
+    NegativeCost(seen) =>
+      "[negative-cost] a cost record reports ${seen} millicents; negative cost is not a small cost, it is an accounting error that a monotonicity check alone cannot see on the first record",
+    DecisionBudgetExceeded(budget, seen) =>
+      "[decision-budget-exceeded] the run made ${seen} decisions against a declared bound of ${budget}; D7 requires liveness claims to be BOUNDED and operational — 'terminates or reaches a named retry bound within N decisions' — rather than resting on an unbounded run",
+    RetryBoundExceeded(budget, seen) =>
+      "[retry-bound-exceeded] the run recorded ${seen} provider retries against a declared bound of ${budget}; D3's provider_error_retryable transition consumes step budget on every retry, so an unbounded retry loop is the shape D7's bounded-retry family exists to catch",
+    ProviderStepRepeated(step, times) =>
+      "[provider-step-repeated] provider step ${step} appears ${times} times in the interaction log; the cursor did not advance, which is cluster 1's frozen-cursor defect and F6's pinned index — a failure that crashes nothing and fires no other invariant",
+    CheckpointChainBroken(detail) =>
+      "[checkpoint-chain-broken] the checkpoint digest chain in the returned trace does not validate: ${detail}; the chain is what makes a resumed history the same history, and D7 keeps this family because the framework already owns it",
+    CompactionAfterExhausted(pos) =>
+      "[compaction-after-exhausted] a compaction stage record appears at position ${pos} after CompactionExhausted, which is a TERMINAL cause and not a stage outcome; compacting after exhaustion is a transition out of a terminal state",
+    OutcomeSummaryDisagree(outcome, summary) =>
+      "[outcome-summary-disagree] the returned outcome is '${outcome}' and the terminal RunSummary reports '${summary}'; D6.3 requires them to AGREE, and a run that returns Ok while its summary records an error is two answers to one question",
+    DoneEventDisagrees(done, summary) =>
+      "[done-event-disagrees] the DoneEvent reports '${done}' and the terminal state reports '${summary}'; D6.3 makes the DoneEvent's content an invariant-bearing quantity — which is exactly why it is Logical rather than DisplayOnly — so the two may not drift",
+    SummaryAbsentForOutcome(outcome) =>
+      "[summary-absent-for-outcome] the run returned '${outcome}' and the trace carries no terminal RunSummary to agree with; D6.3's agreement obligation is undecidable without one, and an undecidable invariant is not a satisfied one",
+    ReplayRuleViolated(rule, detail) =>
+      "[replay-rule-violated] replay reported '${rule}': ${detail}",
+    InteractionsUnconsumed(total, consumed) =>
+      "[interactions-unconsumed] the program holds ${total} interaction(s) and the run consumed ${consumed}; D7 requires COMPLETE interaction consumption, because a replay that stops early agrees with the program at every position it reached and proves nothing about the rest",
+    FaultWithoutClass(pos, kind) =>
+      "[fault-without-class] the '${kind}' interaction at position ${pos} records OutcomeFault with a blank fault class id; a fault with no class is uncountable by D11's class-reached counter and unmappable to D3's declared logical transition",
+    FaultClassUnknown(pos, class_id) =>
+      "[fault-class-unknown] the interaction at position ${pos} records fault class '${class_id}', which D3's catalogue does not declare; every downstream counter reads its ids from that artifact and cannot discover a class the artifact omits",
+    CommitUnderFault(pos, class_id) =>
+      "[commit-under-fault] the interaction at position ${pos} records fault class '${class_id}' and a COMPLETED payload; D3 requires every write-like fault to state whether the all-or-nothing logical update occurred, and the tool fault classes all state that it did NOT — a completed payload under a fault status is the simulator's logical state being ambiguous, which D3 forbids by name",
+    NegativeAdvance(pos, advance) =>
+      "[negative-advance] the interaction at position ${pos} records an advance of ${advance} ms; D4 gives the world ONE monotonic virtual clock, and a negative advance is not a small one",
+    ChunkOffsetRegression(pos, prev, seen) =>
+      "[chunk-offset-regression] within the interaction at position ${pos} a stream chunk is stamped ${seen} ms after one stamped ${prev} ms; D2 requires chunk offsets to be NON-DECREASING, which permits equal offsets in a world that models no inter-chunk latency and forbids going backwards",
+    DeadlineDerivation(pos, detail) =>
+      "[deadline-derivation] the interaction at position ${pos} derives its deadline wrongly: ${detail}; D2 gives ExpectTool, ExpectApproval and ExpectExtensionEffect a deadline and the other four classes none, so -1 and 0 are different statements and may not be interchanged",
+    ClockBalance(advanced, logged) =>
+      "[clock-balance] the world clock advanced ${advanced} ms and the interaction log accounts for ${logged} ms; every class may advance the clock, so a world that spent time the log cannot see has an effect no replay can reproduce",
+    GeneratorBoundFailure(bound, limit, requested) =>
+      "[generator-bound-failure] the generator was about to choose ${requested} for '${bound}', whose declared limit is ${limit}; D2 makes exceeding a declared bound a generator failure, and D7 requires the count to be ZERO for the run to be a valid observation",
+    HarnessFailureObserved(kind, pos) =>
+      "[harness-failure-observed] the run ended as a '${kind}' harness failure at interaction position ${pos}; D7 requires zero matcher mismatches, so this is reported as an invariant violation and not merely as the run's result",
+    AmbientRngRead(n) =>
+      "[ambient-rng-read] the run performed ${n} ambient RNG read(s); D7 requires zero, because an unrouted source of randomness is a determinism failure that no seed can reproduce",
+    ForbiddenEffectSite(site) =>
+      "[forbidden-effect-site] the run reached '${site}', which the profile declares forbidden; D5's exclusion is the profile's whole claim and a reached exclusion retires it"
+  }
+}
+
+export pure func has_rule(vs: [Violation], rule: string) -> bool {
+  match vs {
+    [] => false,
+    v :: rest => if violation_rule(v) == rule then true else has_rule(rest, rule)
+  }
+}
+
+export pure func rules_of(vs: [Violation]) -> [string] {
+  match vs {
+    [] => [],
+    v :: rest => violation_rule(v) :: rules_of(rest)
+  }
+}
+
+export pure func first_message(vs: [Violation]) -> string {
+  match vs {
+    [] => "",
+    v :: _ => violation_message(v)
+  }
+}
+
+export pure func violations_in(vs: [Violation], f: InvariantFamily) -> [Violation] {
+  match vs {
+    [] => [],
+    v :: rest =>
+      if family_id(violation_family(v)) == family_id(f)
+      then v :: violations_in(rest, f)
+      else violations_in(rest, f)
+  }
+}
+
+-- ============================================================================
+-- PART 3 — the execution an invariant is evaluated over
+-- ============================================================================
+--
+-- D7: "the returned outcome and complete trace". Both live in `DstResult`. The
+-- rest of this record is the context the twelve families need that the result
+-- type does not carry, and every field is something a runner HAS rather than
+-- something it would have to derive.
+
+-- What a run owes its program, if anything. A discovery run owes nothing; the
+-- two replay modes owe different things, and D2 makes the difference the
+-- specification rather than a flag on a shared walk.
+export type ReplayObligation
+  = NoReplay
+  | StrictAgainst([Interaction])
+  | RegressionAgainst([Interaction])
+
+export pure func obligation_id(o: ReplayObligation) -> string {
+  match o {
+    NoReplay => "no-replay",
+    StrictAgainst(_) => "strict",
+    RegressionAgainst(_) => "regression"
+  }
+}
+
+export type ExecutionUnderTest = {
+  -- D6's two disjoint result classes: the returned outcome and the complete
+  -- trace, together.
+  result: DstResult,
+
+  -- The world the run ended in: its interaction log, its clock, and its
+  -- generator state. The log is the authoritative one — `SystemRun`'s
+  -- `interaction_log` is a projection for reporting, and reasoning over a
+  -- projection is how a recorder and a checker drift into two notions of the
+  -- same quantity.
+  world: WorldState,
+
+  -- The clock the world STARTED at. Without it the clock-balance rule has to
+  -- assume zero, and a world seeded at a non-zero epoch would then read as
+  -- having spent time it did not.
+  initial_clock_ms: int,
+
+  -- D6.4's named exception: the run's stream-emission witness, to be compared
+  -- against what reached the returned trace.
+  --
+  -- WI-C3 gave it a producer. It is `TracedSessionResult.emissions` — the
+  -- ordered logical events derived from every provider exchange's returned chunk
+  -- log — and `dst_execution.execution_of` is the only thing that should fill
+  -- this field from a run. A hand-authored `[]` here is still legal and is what
+  -- the mutation fixture uses, but on a REAL run `[]` now means the witness was
+  -- dropped rather than that none exists, and `StreamParityCount(0, N)` says so.
+  emissions: [LedgerEvent],
+
+  replay: ReplayObligation,
+
+  -- D7's liveness bounds. "Terminates or reaches a named retry bound within N
+  -- decisions" — N is declared per run rather than picked here, because a bound
+  -- this module chose would be a bound no profile agreed to.
+  decision_budget: int,
+  retry_budget: int,
+
+  -- D5's audit results, REPORTED into the invariant set rather than derived by
+  -- it. The derivation is the routing audit's and lives in `dst_profile` and
+  -- the effect inventory; what D7 asks of an invariant is that the counts be
+  -- zero, and a family that recomputed them would be a second opinion about
+  -- somebody else's artifact.
+  ambient_rng_reads: int,
+  forbidden_effect_sites: [string]
+}
+
+-- ============================================================================
+-- PART 4 — the pinned parity baselines (see the module header)
+-- ============================================================================
+
+-- The six display-only variants, BY NAME. This is the anti-reclassification
+-- pin: the one-line way to make the parity family green is to move a variant
+-- into this set, and that turns `display-only-set-changed` red.
+--
+-- The list is sorted the way `display_only_variants(event_vocabulary())`
+-- returns it — vocabulary order — because comparing two sets without a sort
+-- would make a reordering of the vocabulary look like a reclassification.
+export pure func display_only_baseline() -> [string] {
+  ["CompactionApplied",
+   "ExtCompactionRejected",
+   "ExtensionDiagnostic",
+   "CostWarning",
+   "SessionStart",
+   "TotalsUpdated"]
+}
+
+-- D6.4's DECLARED GAP: Logical variants the driver does not append to the
+-- returned trace. WI-A8 measured fifteen; this register carries TWO.
+--
+-- `DoneEvent` is the one WI-A14 closed, and it is the decision this item was
+-- handed by name.
+--
+--   The tension WI-A8 recorded: D6.3 requires the returned outcome, the
+--   DoneEvent and the RunSummary to AGREE — an invariant over the DoneEvent's
+--   content, which is exactly what DisplayOnly denies — while D6.1 requires the
+--   RunSummary to be the FINAL record, and the driver projected the DoneEvent
+--   AFTER c2_finalize had appended the summary. Both cannot hold by APPENDING
+--   it where it is emitted.
+--
+--   The resolution, and why it costs nothing: D6.4's obligation is PARITY, not
+--   a shared transition — it says so in as many words, and names streams as the
+--   case where a shared transition is impossible. So the append and the
+--   projection are separated at this one site: the DoneEvent is appended to the
+--   trace BEFORE c2_finalize (session.ail's Finalize arm), and projected AFTER,
+--   unchanged. The returned trace therefore holds ... DoneEvent, RunSummary,
+--   with the summary still final (D6.1); the wire still carries run_summary
+--   before done, so NO WIRE ORDER CHANGES (D8's compatibility rule is not
+--   engaged); and D6.3's agreement is now decidable over the returned trace
+--   alone, which is what `done_event_agreement` reads.
+--
+--   The alternative — classifying it DisplayOnly — was refused for the reason
+--   the header gives: it would make D6.3's agreement obligation unstatable,
+--   since DisplayOnly means "cannot change invariant results" and D6.3 is an
+--   invariant over precisely this event's content.
+--
+-- WI-D2 TOOK THE REGISTER FROM THIRTEEN TO TWO, and the eleven it closed are the
+-- ones acceptance row 7 actually turned on.
+--
+--   The tool-dispatch fold — seven of the ten — was WI-A1's loss channel a
+--   second time. `tool_phase.ail` contains no reference to `LedgerTrace` and
+--   never did; it took a multi-fire `emit` callback returning `()` and returned
+--   a `ToolDispatchOutcome` carrying the messages and the world and nothing
+--   about what it had emitted. The fix is the move this project has now made
+--   three times: WIDEN THE RETURN (A1), FILL IT (C1), GIVE IT A READER (C3).
+--   `ToolDispatchOutcome` gained an `emitted: [LedgerEvent]` log on both
+--   variants, the fold accumulates into it, and the driver appends it with
+--   `c2_trace_wire_events` — the same function C3 built for stream deltas, so
+--   this added a second caller rather than a mechanism.
+--
+--   `ThinkingStreamEnd` was one line: `ThinkingStreamStart` was already
+--   appended at the same site and the closing bracket was `ledger_emit`-only.
+--
+--   `CostExhausted` took `DoneEvent`'s treatment exactly, for `DoneEvent`'s
+--   reason: it is a terminal path, so the append lands BEFORE `c2_finalize` or
+--   D6.1's final-record rule breaks. `Dp7VerifierRejected` is on the
+--   re-injection path, which is not terminal, so nothing constrains its order.
+--
+-- WHAT WAS DELIBERATELY NOT DONE: no `LedgerTrace` was threaded into
+-- `tool_phase`. It type-checks — `ledger_append` is in `phase_vocab`, which that
+-- module already imports — and it puts a SECOND APPENDER in the tree, after
+-- which trace order is a function of two writers and D6.3's "agreement
+-- decidable over the returned trace alone" depends on their interleaving. The
+-- driver is the sole appender and that is load-bearing.
+--
+-- The remaining two are NOT waived and are NOT reclassified. They are what is
+-- left of the work list, and `parity_register_findings` pins this list against
+-- the vocabulary's gap in BOTH directions: a gap nobody registered is
+-- `parity-gap-register-missing`, and a registered variant that is no longer a
+-- gap is `parity-gap-register-stale`. Closing one without editing this list is
+-- red, and so is editing this list without closing one.
+--
+-- THE THIRD PIN IS NEW AT WI-D2 AND IT IS THE ONE THAT MAKES THE OTHER TWO
+-- MEAN SOMETHING. Both of the above compare this list against
+-- `reaches_trace_today`, which is a hand-maintained SURVEY — a claim, not an
+-- observation. `scripts/dst/run_ledger_parity_wire.sh` reads this register, and
+-- for every Logical variant NOT in it compares the count the driver PROJECTED
+-- to the wire against the count it APPENDED to the returned trace, out of
+-- process. So removing a name from this list is what makes that gate demand the
+-- append, and a survey flipped without the production change is red there even
+-- though both in-process pins agree with each other.
+-- TWO, NOT THREE. `ExtToolHandled` was expected to survive here on the grounds
+-- that it needs an installed extension. It does not: `dispatch_tool_handle`
+-- returning `Handled` reaches it, which any hook can do without an install and
+-- without the `on_budget_plan` ABI change (which WI-D6 has since made, on
+-- 2026-08-06 — the sentence was written before it and is kept as written; the
+-- point it makes is unaffected, since it was about NOT needing that change),
+-- and
+-- `scripts/dst/long_qwen_compaction_dst.ail` had been doing it since long before
+-- WI-D2. MEASURED: 47 `ext_tool_handled` lines on the wire across one `make dst`
+-- run at HEAD before this item. A variant emitted 47 times is not a variant no
+-- run reaches, so it is closed and witnessed by `make ledger_parity`'s `handled`
+-- subject rather than excused.
+export pure func d64_gap_register() -> [string] {
+  ["ScratchpadResult",
+   "SessionSuspend"]
+}
+
+-- Why each registered variant is still a gap, so the register is a work list
+-- rather than a list of names. D3's rule for a waived fault class applied to a
+-- parity gap: a gap recorded without its reason is a gap nothing can plan
+-- against.
+export type ParityGap = { variant: string, why: string }
+
+-- THE REASONS ARE MEASUREMENTS, NOT DIAGNOSES, and that is S15's practical form
+-- rather than a style preference. WI-D1 found SEVEN stale reasons in this
+-- project's registers and measured the discriminator: of four entries, the three
+-- that named a STRUCTURAL cause ("the type has no such field") were false within
+-- an item or two of being written, and the one that quoted a NUMBER ("measured 0
+-- of 260") was still true four items later. A structural claim goes stale the
+-- moment someone adds the field and nothing tells the reason.
+--
+-- WI-D2 paid that bill immediately: of the thirteen entries this function
+-- carried, ELEVEN gave a structural reason and NINE of those were already
+-- obsolete or wrong when this item read them — seven said "inside the tool
+-- dispatch fold" as though the fold were the obstacle when the obstacle was the
+-- fold's RETURN TYPE, and one asserted `ExtToolHandled` was unreachable without
+-- an installed extension while `make dst` was emitting it 47 times a run.
+--
+-- So both surviving entries below quote a count, and both name the run the count
+-- came from.
+export pure func parity_gap_reasons() -> [ParityGap] {
+  [{ variant: "ScratchpadResult",
+     why: "MEASURED 0 `scratchpad_result` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Its two emission sites are in `tool_phase.execute_allowed_tool_call` and both are now inside the returned `emitted` log, so this is a REACHABILITY gap and not a parity one: if a run emits it, it reaches the trace. Closing it needs a run that emits it, and the only such run is one where a tool named `scratchpad` is served by a hook returning `Handled` with a `cells` key in its metadata. WI-D2 declined to construct one — a constructed scenario would close this register entry while establishing nothing about a profile." },
+   { variant: "SessionSuspend",
+     why: "MEASURED 0 `session_suspend` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Emitted on the suspend control path; no profile in this tree has a suspend trigger, so the count is 0 rather than small. Same shape as ScratchpadResult: a coverage gap, not a parity one." }]
+}
+
+-- ============================================================================
+-- PART 5 — small shared helpers
+-- ============================================================================
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+export pure func join_str(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}, ${join_str(rest)}"
+  }
+}
+
+pure func str_set_eq(a: [string], b: [string]) -> bool {
+  List.length(a) == List.length(b) && all_in(a, b) && all_in(b, a)
+}
+
+pure func all_in(xs: [string], ys: [string]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_str(ys, x) then all_in(rest, ys) else false
+  }
+}
+
+pure func trace_of(r: DstResult) -> LedgerTrace {
+  match r {
+    RunCompleted(run) => run.ledger_trace,
+    RunFailed(f) => f.partial_ledger_trace
+  }
+}
+
+export pure func record_variant(r: LedgerRecord) -> string {
+  match r {
+    WireRecord(e) => event_variant_id(e),
+    CompactionStageRecord(_) => "<compaction-stage>",
+    DecisionRecord(_) => "<decision>"
+  }
+}
+
+-- ============================================================================
+-- FAMILY 1 — terminal summary (D6.1 / D6.6 over the result)
+-- ============================================================================
+
+pure func after_summary(rs: [LedgerRecord], seen: bool, pos: int) -> [Violation] {
+  match rs {
+    [] => [],
+    r :: rest => {
+      let here = if seen then [RecordAfterTerminal(pos, record_variant(r))] else [];
+      here ++ after_summary(rest, seen || is_run_summary(r), pos + 1)
+    }
+  }
+}
+
+export pure func terminal_summary_findings(x: ExecutionUnderTest) -> [Violation] {
+  match x.result {
+    RunCompleted(run) => {
+      let n = count_run_summaries(run.ledger_trace);
+      -- The FINAL half, not only the count: `after_summary` reports any record
+      -- that follows the summary, and a count of one with a record after it is
+      -- the arrangement D6.1 rules out.
+      let trailing = after_summary(run.ledger_trace.records, false, 0);
+      if n == 1 then trailing else [SummaryNotFinal(n)] ++ trailing
+    },
+    RunFailed(f) => {
+      let n = count_run_summaries(f.partial_ledger_trace);
+      if n == 0 then []
+      else [SummaryOnHarnessFailure(harness_failure_kind_name(f.kind), n)]
+    }
+  }
+}
+
+-- ============================================================================
+-- FAMILY 2 — emission parity (D6.4)
+-- ============================================================================
+
+-- The ARTIFACT half. Independent of any run, and the half that makes the
+-- one-line wrong answer loud. Exported separately because a runner should be
+-- able to fail on it before it has an execution at all.
+export pure func parity_register_findings() -> [Violation] {
+  let rows = event_vocabulary();
+  let display = display_only_variants(rows);
+  let gap = logical_variants_not_in_trace(rows);
+  let reg = d64_gap_register();
+  let set_check =
+    if str_set_eq(display, display_only_baseline()) then []
+    else [DisplayOnlySetChanged("pinned ${List.length(display_only_baseline())}: ${join_str(display_only_baseline())} / actual ${List.length(display)}: ${join_str(display)}")];
+  set_check ++ missing_from_register(gap, reg) ++ stale_in_register(reg, gap)
+}
+
+pure func missing_from_register(gap: [string], reg: [string]) -> [Violation] {
+  match gap {
+    [] => [],
+    v :: rest =>
+      (if contains_str(reg, v) then [] else [ParityGapRegisterMissing(v)])
+        ++ missing_from_register(rest, reg)
+  }
+}
+
+pure func stale_in_register(reg: [string], gap: [string]) -> [Violation] {
+  match reg {
+    [] => [],
+    v :: rest =>
+      (if contains_str(gap, v) then [] else [ParityGapRegisterStale(v)])
+        ++ stale_in_register(rest, gap)
+  }
+}
+
+-- The RUNTIME half over one returned trace. D6.4: "the returned trace is
+-- authoritative".
+pure func display_only_in(rs: [LedgerRecord], rows: [EventRow], pos: int) -> [Violation] {
+  match rs {
+    [] => [],
+    r :: rest => {
+      let here = match r {
+        WireRecord(e) => {
+          let v = event_variant_id(e);
+          if is_logical(rows, v) then [] else [DisplayOnlyInTrace(pos, v)]
+        },
+        _ => []
+      };
+      here ++ display_only_in(rest, rows, pos + 1)
+    }
+  }
+}
+
+-- D6.4's named exception, discharged as the decision requires: "the projected
+-- sequence and the returned emission log must match exactly in order and
+-- content, with no duplicate and no omission."
+export pure func stream_parity_findings(
+  emissions: [LedgerEvent], trace: LedgerTrace
+) -> [Violation] {
+  let projected = stream_names(emissions);
+  let returned = stream_records(trace.records);
+  let count =
+    if List.length(projected) == List.length(returned) then []
+    else [StreamParityCount(List.length(projected), List.length(returned))];
+  -- The ORDER check is not implied by the count and that is the whole reason it
+  -- is separate: a reordering leaves the count identical, which is S7's
+  -- no-two-equal rule arriving on a sequence instead of a record.
+  count ++ stream_order(projected, returned, 0)
+}
+
+pure func stream_names(es: [LedgerEvent]) -> [string] {
+  match es {
+    [] => [],
+    e :: rest => stream_content(e) :: stream_names(rest)
+  }
+}
+
+-- The comparison key is the variant tag AND the payload projection, because
+-- D6.4 requires order AND CONTENT. A key that was the tag alone would be green
+-- on two deltas whose text differs, which is the whole content half.
+pure func stream_content(e: LedgerEvent) -> string {
+  "${event_variant_id(e)}|${ledger_event_key(e)}"
+}
+
+pure func ledger_event_key(e: LedgerEvent) -> string {
+  match e {
+    -- THE ARM THE CHECK EXISTS FOR, and it was missing on the first run. With
+    -- StreamDelta falling through to "<opaque>" every delta had the same key,
+    -- so the count row and the omission row were both green while a REORDERING
+    -- and any content drift produced no finding at all — a stream-parity check
+    -- that compares tags. Cluster 12's site 24 exactly: the right quantity,
+    -- insufficient on its own. Caught by the constructed reordering row.
+    StreamDelta(i) => "${i.step}|${i.stream_id}|${i.seq}|${i.kind}|${i.text}",
+    RunSummary(i) => "${i.finish_reason}|${i.steps_executed}|${i.error}",
+    DoneEvent(i) => "${i.step}|${i.output}|${i.source}",
+    TotalsUpdated(i) => "${i.step}|${i.input_tokens}|${i.output_tokens}",
+    CostExhausted(i) => "${i.step}|${i.total_cost_millicents}|${i.cap_millicents}",
+    CheckpointTaken(i) => "${i.reason}|${i.before_digest}|${i.after_digest}",
+    _ => "<opaque>"
+  }
+}
+
+pure func stream_records(rs: [LedgerRecord]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) =>
+          if event_variant_id(e) == "StreamDelta"
+          then stream_content(e) :: stream_records(rest)
+          else stream_records(rest),
+        _ => stream_records(rest)
+      }
+  }
+}
+
+pure func stream_order(a: [string], b: [string], pos: int) -> [Violation] {
+  match a {
+    [] => [],
+    x :: xs =>
+      match b {
+        [] => [],
+        y :: ys =>
+          (if x == y then [] else [StreamParityOrder(pos, x, y)])
+            ++ stream_order(xs, ys, pos + 1)
+      }
+  }
+}
+
+export pure func parity_findings(x: ExecutionUnderTest) -> [Violation] {
+  let trace = trace_of(x.result);
+  parity_register_findings()
+    ++ display_only_in(trace.records, event_vocabulary(), 0)
+    ++ stream_parity_findings(x.emissions, trace)
+}
+
+-- ============================================================================
+-- FAMILY 3 — legal phase / state transitions
+-- ============================================================================
+--
+-- Read over the returned trace's own coordinates rather than over a phase ADT,
+-- because the trace is what D6 makes authoritative and a phase machine
+-- reconstructed here would be a second opinion about the driver's state. Two
+-- rules: nothing follows the terminal record (shared with family 1, which is
+-- where the rule is raised), and the step coordinate never goes backwards on
+-- either record channel that carries one.
+
+pure func decision_steps(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        DecisionRecord(d) => d.step :: decision_steps(rest),
+        _ => decision_steps(rest)
+      }
+  }
+}
+
+pure func stage_steps(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        CompactionStageRecord(c) => c.step :: stage_steps(rest),
+        _ => stage_steps(rest)
+      }
+  }
+}
+
+pure func non_decreasing(lane: string, xs: [int], prev: int) -> [Violation] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      (if x < prev then [StepRegression(lane, prev, x)] else [])
+        ++ non_decreasing(lane, rest, if x > prev then x else prev)
+  }
+}
+
+export pure func phase_transition_findings(x: ExecutionUnderTest) -> [Violation] {
+  let trace = trace_of(x.result);
+  non_decreasing("decision", decision_steps(trace.records), 0)
+    ++ non_decreasing("compaction-stage", stage_steps(trace.records), 0)
+}
+
+-- ============================================================================
+-- FAMILY 4 — tool-call / tool-result pairing, denial and failure paths
+-- ============================================================================
+--
+-- Evaluated over the interaction log, which is where a dispatch and its answer
+-- both are. The trace records the driver's view; the log records the world's,
+-- and correlation is a property of the pair.
+
+pure func tool_call_id(b: IdentityBody) -> string {
+  match b {
+    ToolIdentity(_, id, _) => id,
+    ApprovalIdentity(_, id, _) => id,
+    _ => ""
+  }
+}
+
+pure func is_tool(b: IdentityBody) -> bool {
+  match b { ToolIdentity(_, _, _) => true, _ => false }
+}
+
+pure func is_approval(b: IdentityBody) -> bool {
+  match b { ApprovalIdentity(_, _, _) => true, _ => false }
+}
+
+-- A tool interaction whose recorded outcome is `OutcomeMissing` is a dispatch
+-- with no answer at all — not a completion, not a denial, not a typed fault.
+-- `world_tool` cannot produce it (its queue-empty arm performs the real
+-- dispatch and returns `ToolCompleted`), so the rule fires on a REPLAY that was
+-- handed one, which is exactly where an unpaired call can enter.
+pure func unpaired_tools(xs: [Interaction]) -> [Violation] {
+  match xs {
+    [] => [],
+    i :: rest => {
+      let here =
+        if is_tool(i.identity.body) then
+          match i.outcome.status {
+            OutcomeMissing => [ToolCallUnpaired(i.identity.ordinal, tool_call_id(i.identity.body))],
+            _ => []
+          }
+        else [];
+      here ++ unpaired_tools(rest)
+    }
+  }
+}
+
+-- The correlation half. A recorded tool outcome decodes to the `ScriptedTool`
+-- that reproduces it; a decoded `tool_call_id` is non-blank only on the
+-- correlation-mismatch branch (`encode_tool_outcome` records the SCRIPT's id
+-- there and nothing anywhere else). So a non-blank decoded id on an outcome
+-- whose status is not a fault is the world answering an id nobody asked for
+-- while the record calls it a success.
+pure func uncorrelated_tools(xs: [Interaction]) -> [Violation] {
+  match xs {
+    [] => [],
+    i :: rest => {
+      let here =
+        if is_tool(i.identity.body) then
+          match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
+            ToolRecordUndecodable(why) =>
+              [ToolResultUncorrelated(i.identity.ordinal, why)],
+            ToolRecordDecoded(t) =>
+              if t.tool_call_id == "" then []
+              else match i.outcome.status {
+                OutcomeFault => [],
+                _ => [ToolResultUncorrelated(i.identity.ordinal,
+                        "the world answered id '${t.tool_call_id}' and the outcome is recorded as ${outcome_status_name(i.outcome.status)}")]
+              }
+          }
+        else [];
+      here ++ uncorrelated_tools(rest)
+    }
+  }
+}
+
+export pure func outcome_status_name(s: OutcomeStatus) -> string {
+  match s {
+    OutcomeOk => "ok",
+    OutcomeFault => "fault",
+    OutcomeMissing => "missing"
+  }
+}
+
+-- The DENIAL path. An approval read whose payload is a denial must not be
+-- followed by a tool dispatch for the same call id — D3's approval_denied
+-- transition is "no tool executes, so no logical update occurs", and a denial
+-- path that fails open is the one failure mode a count of denials cannot see.
+--
+-- The denial test reads the raw operator input the world served, which is what
+-- `recording_approval` records as the payload, and matches the two forms
+-- `tool_phase.resolve_approval` treats as a denial that the WORLD can express:
+-- an explicit deny command, and end-of-input (recorded as OutcomeMissing).
+pure func denied_call_ids(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      if is_approval(i.identity.body) && approval_is_denial(i)
+      then tool_call_id(i.identity.body) :: denied_call_ids(rest)
+      else denied_call_ids(rest)
+  }
+}
+
+pure func approval_is_denial(i: Interaction) -> bool {
+  match i.outcome.status {
+    OutcomeMissing => true,
+    _ => starts_with_deny(i.outcome.payload)
+  }
+}
+
+-- Deliberately narrow, and narrow in the SAFE direction: it recognises the
+-- forms the world can serve for a denial, and anything it does not recognise is
+-- treated as an approval, so the rule under-reports rather than inventing
+-- denials. A rule that over-recognised would redden runs that approved.
+pure func starts_with_deny(raw: string) -> bool {
+  raw == "deny" || raw == "n" || raw == "no"
+}
+
+pure func dispatched_after_denial(xs: [Interaction], denied: [string]) -> [Violation] {
+  match xs {
+    [] => [],
+    i :: rest => {
+      let id = tool_call_id(i.identity.body);
+      let here =
+        if is_tool(i.identity.body) && contains_str(denied, id)
+        then [DeniedCallDispatched(id)]
+        else [];
+      here ++ dispatched_after_denial(rest, denied)
+    }
+  }
+}
+
+export pure func tool_pairing_findings(x: ExecutionUnderTest) -> [Violation] {
+  let log = x.world.log;
+  let denied = denied_call_ids(log);
+  unpaired_tools(log) ++ uncorrelated_tools(log) ++ dispatched_after_denial(log, denied)
+}
+
+-- ============================================================================
+-- FAMILY 5 — monotone budget / cost accounting
+-- ============================================================================
+
+export type CostPoint = { step: int, input_tokens: int, output_tokens: int, millicents: int }
+
+pure func cost_points(rs: [LedgerRecord]) -> [CostPoint] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) =>
+          match e {
+            TotalsUpdated(i) =>
+              ({ step: i.step, input_tokens: i.input_tokens,
+                 output_tokens: i.output_tokens, millicents: -1 }) :: cost_points(rest),
+            CostExhausted(i) =>
+              ({ step: i.step, input_tokens: -1, output_tokens: -1,
+                 millicents: i.total_cost_millicents }) :: cost_points(rest),
+            RunSummary(i) =>
+              ({ step: i.steps_executed, input_tokens: i.input_tokens,
+                 output_tokens: i.output_tokens,
+                 millicents: i.total_cost_millicents }) :: cost_points(rest),
+            _ => cost_points(rest)
+          },
+        _ => cost_points(rest)
+      }
+  }
+}
+
+-- -1 is "this record does not report the quantity", which is why the fold skips
+-- it rather than treating it as a decrease. Encoding "absent" as a sentinel and
+-- then comparing it would produce a regression on every CostExhausted record.
+pure func cost_walk(ps: [CostPoint], in_prev: int, out_prev: int, cost_prev: int) -> [Violation] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let neg = if p.millicents < -1 then [NegativeCost(p.millicents)] else [];
+      let vi = if p.input_tokens >= 0 && p.input_tokens < in_prev
+               then [TokenRegression("input_tokens", in_prev, p.input_tokens)] else [];
+      let vo = if p.output_tokens >= 0 && p.output_tokens < out_prev
+               then [TokenRegression("output_tokens", out_prev, p.output_tokens)] else [];
+      let vc = if p.millicents >= 0 && p.millicents < cost_prev
+               then [CostRegression(cost_prev, p.millicents)] else [];
+      neg ++ vi ++ vo ++ vc
+        ++ cost_walk(rest,
+             if p.input_tokens > in_prev then p.input_tokens else in_prev,
+             if p.output_tokens > out_prev then p.output_tokens else out_prev,
+             if p.millicents > cost_prev then p.millicents else cost_prev)
+    }
+  }
+}
+
+export pure func budget_findings(x: ExecutionUnderTest) -> [Violation] {
+  cost_walk(cost_points(trace_of(x.result).records), 0, 0, 0)
+}
+
+-- ============================================================================
+-- FAMILY 6 — bounded retry and progress
+-- ============================================================================
+
+pure func count_variant(rs: [LedgerRecord], variant: string) -> int {
+  match rs {
+    [] => 0,
+    r :: rest =>
+      (match r {
+         WireRecord(e) => if event_variant_id(e) == variant then 1 else 0,
+         _ => 0
+       }) + count_variant(rest, variant)
+  }
+}
+
+pure func count_decisions(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest =>
+      (match r { DecisionRecord(_) => 1, _ => 0 }) + count_decisions(rest)
+  }
+}
+
+-- The ADVANCEMENT half, and it is the one S1 says never to leave out. A frozen
+-- provider cursor serves the same script step forever: the run terminates on
+-- budget, every count balances, determinism is perfect, and the only visible
+-- trace is that one provider step ordinal repeats. Cluster 1 lost an item to
+-- this exact shape.
+pure func provider_steps(xs: [Interaction]) -> [int] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ProviderIdentity(_, s, _) => s :: provider_steps(rest),
+        _ => provider_steps(rest)
+      }
+  }
+}
+
+pure func count_int(xs: [int], t: int) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x == t then 1 else 0) + count_int(rest, t)
+  }
+}
+
+pure func repeated_steps(all: [int], xs: [int], seen: [int]) -> [Violation] {
+  match xs {
+    [] => [],
+    s :: rest => {
+      let n = count_int(all, s);
+      let here = if n > 1 && not contains_int(seen, s) then [ProviderStepRepeated(s, n)] else [];
+      here ++ repeated_steps(all, rest, s :: seen)
+    }
+  }
+}
+
+pure func contains_int(xs: [int], t: int) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_int(rest, t)
+  }
+}
+
+export pure func bounded_progress_findings(x: ExecutionUnderTest) -> [Violation] {
+  let trace = trace_of(x.result);
+  let decisions = count_decisions(trace.records);
+  let retries = count_variant(trace.records, "StreamErrorRetry");
+  let steps = provider_steps(x.world.log);
+  let d = if x.decision_budget >= 0 && decisions > x.decision_budget
+          then [DecisionBudgetExceeded(x.decision_budget, decisions)] else [];
+  let r = if x.retry_budget >= 0 && retries > x.retry_budget
+          then [RetryBoundExceeded(x.retry_budget, retries)] else [];
+  d ++ r ++ repeated_steps(steps, steps, [])
+}
+
+-- ============================================================================
+-- FAMILY 7 — checkpoint / compaction history
+-- ============================================================================
+--
+-- The checkpoint chain is validated by the FRAMEWORK's own function, not by a
+-- second copy of the rule. D7 says this family is "already owned by the
+-- framework", and a reimplementation here would be a chain that agrees with
+-- itself.
+
+pure func checkpoints_in(rs: [LedgerRecord]) -> [CheckpointInfo] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) =>
+          match e {
+            CheckpointTaken(i) => i :: checkpoints_in(rest),
+            _ => checkpoints_in(rest)
+          },
+        _ => checkpoints_in(rest)
+      }
+  }
+}
+
+pure func first_before(cps: [CheckpointInfo]) -> string {
+  match cps { [] => "", c :: _ => c.before_digest }
+}
+
+pure func last_after(cps: [CheckpointInfo]) -> string {
+  match cps { [] => "", c :: [] => c.after_digest, _ :: rest => last_after(rest) }
+}
+
+pure func compaction_after_exhausted(rs: [LedgerRecord], exhausted: bool, pos: int) -> [Violation] {
+  match rs {
+    [] => [],
+    r :: rest => {
+      let here = match r {
+        CompactionStageRecord(_) => if exhausted then [CompactionAfterExhausted(pos)] else [],
+        _ => []
+      };
+      let now_exhausted = exhausted || match r {
+        WireRecord(e) => event_variant_id(e) == "CompactionExhausted",
+        _ => false
+      };
+      here ++ compaction_after_exhausted(rest, now_exhausted, pos + 1)
+    }
+  }
+}
+
+export pure func checkpoint_findings(x: ExecutionUnderTest) -> [Violation] {
+  let rs = trace_of(x.result).records;
+  let cps = checkpoints_in(rs);
+  let chain =
+    if List.length(cps) == 0 then []
+    else match validate_checkpoint_chain(first_before(cps), cps, last_after(cps)) {
+      Ok(_) => [],
+      Err(e) => [CheckpointChainBroken(e)]
+    };
+  chain ++ compaction_after_exhausted(rs, false, 0)
+}
+
+-- ============================================================================
+-- FAMILY 8 — returned outcome / terminal summary agreement (D6.3)
+-- ============================================================================
+
+pure func terminal_summary_of(rs: [LedgerRecord]) -> Option[LedgerEvent] {
+  match rs {
+    [] => None,
+    r :: rest => {
+      let tail = terminal_summary_of(rest);
+      match tail {
+        Some(_) => tail,
+        None => match r {
+          WireRecord(e) => match e { RunSummary(_) => Some(e), _ => None },
+          _ => None
+        }
+      }
+    }
+  }
+}
+
+pure func done_event_of(rs: [LedgerRecord]) -> Option[LedgerEvent] {
+  match rs {
+    [] => None,
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e { DoneEvent(_) => Some(e), _ => done_event_of(rest) },
+        _ => done_event_of(rest)
+      }
+  }
+}
+
+export pure func outcome_label(r: DstResult) -> string {
+  match r {
+    RunFailed(f) => "harness:${harness_failure_kind_name(f.kind)}",
+    RunCompleted(run) =>
+      match run.outcome { Ok(_) => "ok", Err(_) => "err" }
+  }
+}
+
+-- D6.3's agreement, made decidable. `error` is the RunSummary field that
+-- carries the failure, so "Ok with a non-empty error" and "Err with an empty
+-- one" are the two disagreements, and both are readable off the returned trace
+-- alone — which is what D6.4's authoritativeness clause requires of an
+-- invariant.
+export pure func outcome_agreement_findings(x: ExecutionUnderTest) -> [Violation] {
+  match x.result {
+    RunFailed(_) => [],
+    RunCompleted(run) => {
+      let rs = run.ledger_trace.records;
+      match terminal_summary_of(rs) {
+        None => [SummaryAbsentForOutcome(outcome_label(x.result))],
+        Some(summary) => {
+          let err = summary_error(summary);
+          let fin = summary_finish(summary);
+          let agree = match run.outcome {
+            Ok(_) => if err == "" then [] else [OutcomeSummaryDisagree("ok", "error='${err}'")],
+            Err(_) => if err == "" then [OutcomeSummaryDisagree("err", "error=''")] else []
+          };
+          agree ++ done_agreement(rs, fin, err)
+        }
+      }
+    }
+  }
+}
+
+pure func summary_error(e: LedgerEvent) -> string {
+  match e { RunSummary(i) => i.error, _ => "" }
+}
+
+pure func summary_finish(e: LedgerEvent) -> string {
+  match e { RunSummary(i) => i.finish_reason, _ => "" }
+}
+
+pure func done_output(e: LedgerEvent) -> string {
+  match e { DoneEvent(i) => i.output, _ => "" }
+}
+
+-- The DoneEvent half, and this is the check the terminal-path change was made
+-- FOR. Before WI-A14 the DoneEvent was projected and never appended, so this
+-- arm could only ever take the `None` branch — the invariant would have been
+-- present, green, and blind, which is S8's complement inside an invariant
+-- rather than inside a digest.
+--
+-- A DoneEvent means the run finalized as a success, so it may not coexist with
+-- a summary that records an error.
+pure func done_agreement(rs: [LedgerRecord], finish: string, err: string) -> [Violation] {
+  match done_event_of(rs) {
+    None => [],
+    Some(d) =>
+      if err == ""
+      then []
+      else [DoneEventDisagrees("output='${done_output(d)}'",
+              "finish_reason='${finish}' error='${err}'")]
+  }
+}
+
+-- ============================================================================
+-- FAMILY 9 — replay consistency
+-- ============================================================================
+
+pure func lift_replay(ms: [ReplayMismatch]) -> [Violation] {
+  match ms {
+    [] => [],
+    m :: rest => ReplayRuleViolated(replay_rule(m), replay_message(m)) :: lift_replay(rest)
+  }
+}
+
+export pure func replay_findings(x: ExecutionUnderTest) -> [Violation] {
+  let actual = x.world.log;
+  match x.replay {
+    NoReplay => [],
+    StrictAgainst(program) => {
+      -- Complete consumption is asserted SEPARATELY from the walk even though
+      -- the walk already reports an unused interaction, because the two carry
+      -- different information: the walk names the first position that diverged,
+      -- and this names how much of the program the run never reached. D7 lists
+      -- them as separate obligations and merging them reports one fact twice.
+      let consumed = List.length(actual);
+      let total = List.length(program);
+      let c = if consumed < total then [InteractionsUnconsumed(total, consumed)] else [];
+      lift_replay(strict_replay_findings(program, actual)) ++ c
+    },
+    RegressionAgainst(program) => {
+      -- Regression mode fails ONLY on the fatal set. The demoted differences
+      -- are recorded and the run continues, which is D2's whole distinction
+      -- between the two modes; reporting them as violations here would collapse
+      -- regression replay into strict replay.
+      let r = regression_replay_findings(program, actual);
+      lift_replay(r.fatal)
+    }
+  }
+}
+
+-- The demoted differences, reported rather than raised. A runner prints these;
+-- D8 requires the difference to be RECORDED when regression replay proceeds
+-- past it, and a mode that computed them and dropped them would satisfy every
+-- count and tell nobody.
+export pure func regression_differences(x: ExecutionUnderTest) -> [ReplayMismatch] {
+  match x.replay {
+    RegressionAgainst(program) => regression_replay_findings(program, x.world.log).differences,
+    _ => []
+  }
+}
+
+-- ============================================================================
+-- FAMILY 10 — logical world transitions under faults (D3)
+-- ============================================================================
+
+pure func fault_findings(xs: [Interaction], known: [string]) -> [Violation] {
+  match xs {
+    [] => [],
+    i :: rest => {
+      let here = match i.outcome.status {
+        OutcomeFault =>
+          if i.outcome.fault_class_id == "" then
+            [FaultWithoutClass(i.identity.ordinal, interaction_kind(i))]
+          else if not contains_str(known, i.outcome.fault_class_id) then
+            [FaultClassUnknown(i.identity.ordinal, i.outcome.fault_class_id)]
+          else
+            commit_under_fault(i),
+        _ => []
+      };
+      here ++ fault_findings(rest, known)
+    }
+  }
+}
+
+-- D3's commit/no-commit obligation, made decidable on the class where the
+-- catalogue states it: all three tool fault classes say the all-or-nothing
+-- logical update did NOT occur. `world_tool` returns the fault WITHOUT reaching
+-- the dispatcher, so a recorded fault whose payload decodes to a COMPLETED
+-- outcome is a world that both faulted and committed — the ambiguity D3 forbids
+-- by name.
+pure func commit_under_fault(i: Interaction) -> [Violation] {
+  if not is_tool(i.identity.body) then []
+  else match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
+    ToolRecordUndecodable(_) => [],
+    ToolRecordDecoded(t) =>
+      if t.content == "" then []
+      else [CommitUnderFault(i.identity.ordinal, i.outcome.fault_class_id)]
+  }
+}
+
+export pure func world_transition_findings(x: ExecutionUnderTest) -> [Violation] {
+  fault_findings(x.world.log, required_class_ids())
+}
+
+-- ============================================================================
+-- FAMILY 11 — monotone virtual time and deadline derivation (D4 / D2)
+-- ============================================================================
+
+pure func chunk_offsets(cs: [StreamChunkRecord], pos: int, prev: int) -> [Violation] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      (if c.offset_ms < prev then [ChunkOffsetRegression(pos, prev, c.offset_ms)] else [])
+        ++ chunk_offsets(rest, pos, if c.offset_ms > prev then c.offset_ms else prev)
+  }
+}
+
+-- D2's deadline grammar, and the two sentinels are DIFFERENT statements:
+--   -1  this class carries no deadline at all
+--    0  this class carries a deadline and none was declared for this request
+-- Interchanging them is how `approval_deadline_exceeded`'s structural gap would
+-- become invisible: an approval recorded with -1 would claim the class has no
+-- deadline, which contradicts D2.
+pure func deadline_findings(xs: [Interaction]) -> [Violation] {
+  match xs {
+    [] => [],
+    i :: rest => {
+      let has = class_has_deadline(i.identity.body);
+      let d = i.deadline_ms;
+      let here =
+        if has && d < 0 then
+          [DeadlineDerivation(i.identity.ordinal,
+             "the '${interaction_kind(i)}' class carries a deadline under D2 and the interaction records ${d}, which states the class has none")]
+        else if not has && d != -1 then
+          [DeadlineDerivation(i.identity.ordinal,
+             "the '${interaction_kind(i)}' class carries no deadline under D2 and the interaction records ${d}")]
+        else [];
+      here ++ here_stream(i) ++ deadline_findings(rest)
+    }
+  }
+}
+
+-- Only a provider outcome may carry chunks (D2/D9). A non-provider interaction
+-- with chunks is a class boundary being crossed, and it is reported through the
+-- deadline-derivation rule's neighbour rather than silently ignored.
+pure func here_stream(i: Interaction) -> [Violation] {
+  if class_may_stream(i.identity.body) then []
+  else if List.length(i.outcome.chunks) == 0 then []
+  else [DeadlineDerivation(i.identity.ordinal,
+         "the '${interaction_kind(i)}' class may not stream under D2 and the interaction carries ${List.length(i.outcome.chunks)} chunk(s)")]
+}
+
+pure func advance_findings(xs: [Interaction]) -> [Violation] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      (if i.outcome.advance_ms < 0
+       then [NegativeAdvance(i.identity.ordinal, i.outcome.advance_ms)] else [])
+        ++ chunk_offsets(i.outcome.chunks, i.identity.ordinal, 0)
+        ++ advance_findings(rest)
+  }
+}
+
+export pure func virtual_time_findings(x: ExecutionUnderTest) -> [Violation] {
+  let advanced = x.world.clock_ms - x.initial_clock_ms;
+  let logged = total_advance_ms(x.world.log);
+  let balance = if advanced == logged then [] else [ClockBalance(advanced, logged)];
+  advance_findings(x.world.log) ++ deadline_findings(x.world.log) ++ balance
+}
+
+-- ============================================================================
+-- FAMILY 12 — harness hygiene
+-- ============================================================================
+
+pure func bound_failures(fs: [BoundFailure]) -> [Violation] {
+  match fs {
+    [] => [],
+    f :: rest =>
+      GeneratorBoundFailure(f.bound, f.limit, f.requested) :: bound_failures(rest)
+  }
+}
+
+pure func forbidden_sites(ss: [string]) -> [Violation] {
+  match ss {
+    [] => [],
+    s :: rest => ForbiddenEffectSite(s) :: forbidden_sites(rest)
+  }
+}
+
+export pure func hygiene_findings(x: ExecutionUnderTest) -> [Violation] {
+  let gen = if generator_installed(x.world.gen) then bound_failures(x.world.gen.failures) else [];
+  let harness = match x.result {
+    RunFailed(f) => [HarnessFailureObserved(harness_failure_kind_name(f.kind), f.interaction_position)],
+    RunCompleted(_) => []
+  };
+  let rng = if x.ambient_rng_reads > 0 then [AmbientRngRead(x.ambient_rng_reads)] else [];
+  gen ++ harness ++ rng ++ forbidden_sites(x.forbidden_effect_sites)
+}
+
+-- ============================================================================
+-- PART 6 — the whole set
+-- ============================================================================
+
+-- Every family, in D7's order, over one execution. The order is D7's rather
+-- than a dependency order because nothing here depends on anything else here:
+-- twelve independent readings of one execution, which is what makes "the first
+-- failed invariant" (D8) a meaningful field rather than an artefact of
+-- evaluation order.
+export pure func evaluate(x: ExecutionUnderTest) -> [Violation] {
+  terminal_summary_findings(x)
+    ++ parity_findings(x)
+    ++ phase_transition_findings(x)
+    ++ tool_pairing_findings(x)
+    ++ budget_findings(x)
+    ++ bounded_progress_findings(x)
+    ++ checkpoint_findings(x)
+    ++ outcome_agreement_findings(x)
+    ++ replay_findings(x)
+    ++ world_transition_findings(x)
+    ++ virtual_time_findings(x)
+    ++ hygiene_findings(x)
+}
+
+export pure func invariants_ok(x: ExecutionUnderTest) -> bool {
+  List.length(evaluate(x)) == 0
+}
+
+-- D8's "first failed invariant" field. Named rather than inferred, so a failure
+-- record carries the rule and not a count.
+export pure func first_failed_invariant(x: ExecutionUnderTest) -> Option[string] {
+  match evaluate(x) {
+    [] => None,
+    v :: _ => Some("${family_id(violation_family(v))}/${violation_rule(v)}")
+  }
+}
+
+-- Which families a given execution actually EXERCISED — evaluated is not the
+-- same as exercised, and D11's reporting must not conflate them. A family whose
+-- inputs are empty is vacuous on that execution, and a vacuous green reads
+-- identically to a real one (S8's complement). This is how a runner can say so.
+export type FamilyEvidence = { family: string, evaluated: bool, inputs: int }
+
+export pure func family_evidence(x: ExecutionUnderTest) -> [FamilyEvidence] {
+  let trace = trace_of(x.result);
+  let records = List.length(trace.records);
+  let log = List.length(x.world.log);
+  [{ family: family_id(TerminalSummary), evaluated: true, inputs: records },
+   { family: family_id(EmissionParity), evaluated: true, inputs: records },
+   { family: family_id(PhaseTransitions), evaluated: records > 0, inputs: records },
+   { family: family_id(ToolPairing), evaluated: log > 0, inputs: log },
+   { family: family_id(BudgetAccounting), evaluated: records > 0, inputs: records },
+   { family: family_id(BoundedProgress), evaluated: true, inputs: log },
+   { family: family_id(CheckpointHistory), evaluated: records > 0, inputs: records },
+   { family: family_id(OutcomeAgreement), evaluated: true, inputs: records },
+   { family: family_id(ReplayConsistency), evaluated: obligation_id(x.replay) != "no-replay", inputs: log },
+   { family: family_id(WorldTransitions), evaluated: log > 0, inputs: log },
+   { family: family_id(VirtualTime), evaluated: true, inputs: log },
+   { family: family_id(HarnessHygiene), evaluated: true, inputs: log }]
+}
+
+-- ============================================================================
+-- PART 7 — D7's thirteenth statement: the discovery contract
+-- ============================================================================
+--
+-- "Under the same execution manifest/profile,
+--  (schema_version, generator_id, generator_version, seed, initial_world) run
+--  twice must produce the same resolved program, interaction log, outcome, and
+--  normalized trace."
+--
+-- This is an invariant over a PAIR of executions and cannot be evaluated by a
+-- runner holding one, which is why it is not a thirteenth family: a family that
+-- silently passed whenever it had only one run would be a vacuous green of
+-- exactly the kind S8's complement describes.
+
+export type DeterminismFinding
+  = LogLengthDiffers(int, int)
+  | LogPositionDiffers(int, string, string)
+  | RunOutcomeDiffers(string, string)
+  | TraceLengthDiffers(int, int)
+  | TraceRecordDiffers(int, string, string)
+
+export pure func determinism_rule(f: DeterminismFinding) -> string {
+  match f {
+    LogLengthDiffers(_, _) => "determinism-log-length",
+    LogPositionDiffers(_, _, _) => "determinism-log-position",
+    RunOutcomeDiffers(_, _) => "determinism-outcome",
+    TraceLengthDiffers(_, _) => "determinism-trace-length",
+    TraceRecordDiffers(_, _, _) => "determinism-trace-record"
+  }
+}
+
+export pure func determinism_message(f: DeterminismFinding) -> string {
+  match f {
+    LogLengthDiffers(a, b) =>
+      "[determinism-log-length] the two runs recorded ${a} and ${b} interactions; D7's discovery contract requires the same interaction log from the same (schema, id, version, seed, initial world)",
+    LogPositionDiffers(pos, a, b) =>
+      "[determinism-log-position] at interaction position ${pos} the two runs recorded '${a}' and '${b}'",
+    RunOutcomeDiffers(a, b) =>
+      "[determinism-outcome] the two runs returned '${a}' and '${b}'",
+    TraceLengthDiffers(a, b) =>
+      "[determinism-trace-length] the two runs returned traces of ${a} and ${b} records",
+    TraceRecordDiffers(pos, a, b) =>
+      "[determinism-trace-record] at trace position ${pos} the two runs returned '${a}' and '${b}'"
+  }
+}
+
+pure func log_positions(a: [Interaction], b: [Interaction], pos: int) -> [DeterminismFinding] {
+  match a {
+    [] => [],
+    x :: xs =>
+      match b {
+        [] => [],
+        y :: ys => {
+          let px = identity_projection(x.identity);
+          let py = identity_projection(y.identity);
+          -- The comparison key is the identity AND the outcome, because two
+          -- runs that agree on every identity and differ in what the world
+          -- SERVED are not the same run, and an identity-only key is green on
+          -- exactly that.
+          let kx = "${px}|${x.request_projection}|${x.outcome.payload}|${x.outcome.advance_ms}";
+          let ky = "${py}|${y.request_projection}|${y.outcome.payload}|${y.outcome.advance_ms}";
+          (if kx == ky then [] else [LogPositionDiffers(pos, kx, ky)])
+            ++ log_positions(xs, ys, pos + 1)
+        }
+      }
+  }
+}
+
+pure func trace_positions(a: [LedgerRecord], b: [LedgerRecord], pos: int) -> [DeterminismFinding] {
+  match a {
+    [] => [],
+    x :: xs =>
+      match b {
+        [] => [],
+        y :: ys =>
+          (if record_variant(x) == record_variant(y) then []
+           else [TraceRecordDiffers(pos, record_variant(x), record_variant(y))])
+            ++ trace_positions(xs, ys, pos + 1)
+      }
+  }
+}
+
+export pure func discovery_contract_findings(
+  a: ExecutionUnderTest, b: ExecutionUnderTest
+) -> [DeterminismFinding] {
+  let la = a.world.log;
+  let lb = b.world.log;
+  let ta = trace_of(a.result).records;
+  let tb = trace_of(b.result).records;
+  let len = if List.length(la) == List.length(lb) then []
+            else [LogLengthDiffers(List.length(la), List.length(lb))];
+  let tlen = if List.length(ta) == List.length(tb) then []
+             else [TraceLengthDiffers(List.length(ta), List.length(tb))];
+  let out = if outcome_label(a.result) == outcome_label(b.result) then []
+            else [RunOutcomeDiffers(outcome_label(a.result), outcome_label(b.result))];
+  len ++ log_positions(la, lb, 0) ++ out ++ tlen ++ trace_positions(ta, tb, 0)
+}
+
+export pure func discovery_contract_ok(a: ExecutionUnderTest, b: ExecutionUnderTest) -> bool {
+  List.length(discovery_contract_findings(a, b)) == 0
+}
+
+export pure func has_determinism_rule(fs: [DeterminismFinding], rule: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest => if determinism_rule(f) == rule then true else has_determinism_rule(rest, rule)
+  }
+}
+
+-- ============================================================================
+-- Inline tests. The fixture-driven rows live in scripts/dst/invariants_dst.ail,
+-- which is where a real execution can be constructed; these are the derivations
+-- that need no world.
+-- ============================================================================
+
+pure func test_every_family_has_a_rule_and_an_obligation() -> bool
+  tests [((), true)]
+  {
+    List.length(all_families()) == 12
+      && all_families_distinct(all_families(), [])
+      && all_obligations_nonempty(all_families())
+  }
+
+pure func all_families_distinct(fs: [InvariantFamily], seen: [string]) -> bool {
+  match fs {
+    [] => true,
+    f :: rest =>
+      if contains_str(seen, family_id(f)) then false
+      else all_families_distinct(rest, family_id(f) :: seen)
+  }
+}
+
+pure func all_obligations_nonempty(fs: [InvariantFamily]) -> bool {
+  match fs {
+    [] => true,
+    f :: rest => if family_obligation(f) == "" then false else all_obligations_nonempty(rest)
+  }
+}
+
+-- THE ANTI-RECLASSIFICATION PIN. If this row goes red, either a gap was closed
+-- and the register was not updated, or a Logical variant was moved into the
+-- display-only set to make the parity family green. The second is the one-line
+-- wrong answer, and the module header says why it is wrong.
+--
+-- 14 at WI-A14, 13 at WI-C3 which closed StreamDelta, **TWO at WI-D2** which
+-- closed the other eleven. The literal is
+-- deliberately not derived from `d64_gap_register()`: a row asserting the
+-- register equals itself is green after any edit, and shrinking the register is
+-- exactly the move that has to be a deliberate, recorded change.
+pure func test_parity_register_agrees_with_the_vocabulary() -> bool
+  tests [((), true)]
+  {
+    List.length(parity_register_findings()) == 0
+      && List.length(d64_gap_register()) == 2
+      && List.length(display_only_baseline()) == 6
+  }
+
+-- The register is a WORK LIST, so every entry carries its reason. A register
+-- entry with no reason is a name nobody can plan against — D3's rule for a
+-- waived fault class, applied to a parity gap.
+pure func test_every_registered_gap_carries_a_reason() -> bool
+  tests [((), true)]
+  {
+    List.length(parity_gap_reasons()) == List.length(d64_gap_register())
+      && reasons_resolve(parity_gap_reasons())
+  }
+
+pure func reasons_resolve(gs: [ParityGap]) -> bool {
+  match gs {
+    [] => true,
+    g :: rest =>
+      if g.why == "" then false
+      else if not contains_str(d64_gap_register(), g.variant) then false
+      else reasons_resolve(rest)
+  }
+}
+
+-- DoneEvent is the one WI-A14 closed. Asserted in BOTH directions: it is out of
+-- the register, and it is out of the vocabulary's gap. Either alone would be
+-- green if the other had been edited to match a mistake.
+pure func test_done_event_is_out_of_the_gap_register() -> bool
+  tests [((), true)]
+  {
+    not contains_str(d64_gap_register(), "DoneEvent")
+  }
+
+pure func test_done_event_reaches_the_returned_trace() -> bool
+  tests [((), true)]
+  {
+    let gap = logical_variants_not_in_trace(event_vocabulary());
+    not contains_str(gap, "DoneEvent")
+  }
+
+-- The third half of that assertion — that DoneEvent is still classified
+-- LOGICAL, not merely out of the gap — is NOT an inline test, and the reason is
+-- an AILANG defect rather than a design choice. As a `tests` row whose body is
+-- `is_logical(event_vocabulary(), "DoneEvent")` it fails NON-DETERMINISTICALLY,
+-- six runs in ten, with `harness evaluation failed: record has no field: site`
+-- — naming a field of `dst_profile.CoreSite`, which is in this module's
+-- transitive closure and which the assertion never touches. The same call in
+-- `ailang run` is stable over every trial. Written up in
+-- .agent/issues/ailang-test-cluster-harness-bogus-record-field-error.md.
+--
+-- The assertion is not dropped: it is carried by
+-- `scenario_parity_register_is_the_whole_gap` in scripts/dst/invariants_dst.ail,
+-- which `make invariants` runs. A flaky gate is worse than no gate — it trains
+-- the reader to re-run rather than to read — so the assertion moved to where it
+-- is deterministic rather than being weakened or retried.
+
+pure func test_rules_are_distinct_across_families() -> bool
+  tests [((), true)]
+  {
+    let vs = sample_violations();
+    List.length(vs) == 37 && rules_distinct(vs, [])
+  }
+
+pure func rules_distinct(vs: [Violation], seen: [string]) -> bool {
+  match vs {
+    [] => true,
+    v :: rest =>
+      if contains_str(seen, violation_rule(v)) then false
+      else rules_distinct(rest, violation_rule(v) :: seen)
+  }
+}
+
+-- One sample per constructor. AILANG has no constructor enumeration on the pin,
+-- so this list is what makes `violation_rule`'s totality checkable at all, and
+-- `make invariants` counts the declared variants against it — the same
+-- structural guard the other hand-written sets in this project carry.
+pure func sample_violations() -> [Violation] {
+  [SummaryNotFinal(0), SummaryOnHarnessFailure("k", 1),
+   DisplayOnlyInTrace(0, "v"), ParityGapRegisterMissing("v"), ParityGapRegisterStale("v"),
+   DisplayOnlySetChanged("d"), StreamParityCount(0, 1), StreamParityOrder(0, "a", "b"),
+   RecordAfterTerminal(0, "n"), StepRegression("c", 1, 0),
+   ToolCallUnpaired(0, "c"), ToolResultUncorrelated(0, "d"), DeniedCallDispatched("c"),
+   TokenRegression("f", 1, 0), CostRegression(1, 0), NegativeCost(-1),
+   DecisionBudgetExceeded(1, 2), RetryBoundExceeded(1, 2), ProviderStepRepeated(0, 2),
+   CheckpointChainBroken("d"), CompactionAfterExhausted(0),
+   OutcomeSummaryDisagree("a", "b"), DoneEventDisagrees("a", "b"), SummaryAbsentForOutcome("a"),
+   ReplayRuleViolated("r", "d"), InteractionsUnconsumed(2, 1),
+   FaultWithoutClass(0, "k"), FaultClassUnknown(0, "c"), CommitUnderFault(0, "c"),
+   NegativeAdvance(0, -1), ChunkOffsetRegression(0, 1, 0), DeadlineDerivation(0, "d"),
+   ClockBalance(1, 0),
+   GeneratorBoundFailure("b", 1, 2), HarnessFailureObserved("k", 0), AmbientRngRead(1),
+   ForbiddenEffectSite("s")]
+}
+
+-- Every sample must map to a family D7 names, and every family must be reached
+-- by at least one rule. A family with no rule is an obligation with no
+-- instrument, which is the artifact-validates-while-incomplete failure.
+pure func test_every_family_is_reached_by_a_rule() -> bool
+  tests [((), true)]
+  {
+    families_all_reached(all_families(), sample_violations())
+  }
+
+pure func families_all_reached(fs: [InvariantFamily], vs: [Violation]) -> bool {
+  match fs {
+    [] => true,
+    f :: rest =>
+      if List.length(violations_in(vs, f)) == 0 then false
+      else families_all_reached(rest, vs)
+  }
+}
+
+pure func test_every_rule_has_a_message_naming_it() -> bool
+  tests [((), true)]
+  {
+    messages_name_their_rule(sample_violations())
+  }
+
+pure func messages_name_their_rule(vs: [Violation]) -> bool {
+  match vs {
+    [] => true,
+    v :: rest =>
+      if starts_with_bracketed(violation_message(v), violation_rule(v))
+      then messages_name_their_rule(rest)
+      else false
+  }
+}
+
+pure func starts_with_bracketed(msg: string, rule: string) -> bool {
+  Str.startsWith(msg, "[${rule}] ")
+}

@@ -1,0 +1,1212 @@
+-- scripts/dst/driver_plus_compose_dst.ail
+--
+-- `driver_plus_compose` v1 acceptance (ADR-001 D5, WI-D27), and **the goal
+-- line's clause 1 as an executable assertion.**
+--
+-- The machinery's own suite is scripts/dst/profile_definition_dst.ail; this
+-- script asserts only what is true of THIS profile, and it is the first profile
+-- acceptance script in the project that RUNS THE SUBJECT rather than only
+-- reading its record.
+--
+-- ============================================================================
+-- THE TWO HALVES, AND THE SECOND IS WHY THIS FILE IS NOT LIKE THE OTHER TWO
+-- ============================================================================
+--
+-- **Half 1 — the record.** The same load `driver_only_dst` and
+-- `driver_plus_no_ops_dst` perform: `validate_definition_at_load` at the table's
+-- bound revision, against the measured HEAD inventory and the derived
+-- classifier-2 call set, plus the four ADR-001 row-3 clauses that quantify over
+-- installed extensions, each asserted twice — as it stands, and against a
+-- MUTATION of this very definition that the clause must reject.
+--
+-- **Half 2 — THE DEMONSTRATION.** A full graded session through the REAL traced
+-- driver with compose installed through `register_with_config`, recorded,
+-- validated, reconstituted and STRICTLY REPLAYED. Every criterion-2 entry in
+-- this profile's record names `discovery` as its basis, and `discovery` is an
+-- EXISTENTIAL producer: its evidence is a run. **A profile citing it and not
+-- running one is a basis with nothing behind it**, which is precisely the
+-- fail-open shape `basis` was added to close. So the run is here, in the
+-- profile's own gate, and not in a neighbouring suite.
+--
+-- ============================================================================
+-- WHAT MAKES THE NON-VACUITY EXECUTABLE RATHER THAN COUNTED
+-- ============================================================================
+--
+-- S21 counts four acceptance rows leaning on an empty install list, and WI-D13's
+-- lesson is that **a vacuity that arrives with a number is the hardest kind to
+-- see**. `driver_plus_no_ops` answered that with 32 covered hooks and a computed
+-- statement saying none of them mediate. This profile answers it with ONE hook
+-- that does, and one is not a number that reassures anybody — so it is asserted
+-- rather than reported:
+--
+--     the recorded program contains >= 1 ExtensionEffect interaction whose
+--     origin is `compose`, and the strict replay reproduces it
+--
+-- That row goes RED if compose is dropped from the install list, RED if the
+-- intercept path breaks, RED if the recording regresses, and RED if the replay
+-- diverges. It is the assertion the whole profile record rests on, and the
+-- mutants below are run against it rather than against the record.
+--
+-- ============================================================================
+-- WHAT THIS SCRIPT DOES NOT CLAIM
+-- ============================================================================
+--
+-- Rows 1, 2, 6, 8, 9, 10 and 11 of ADR-001's acceptance table are NOT re-earned
+-- here; a row not run is a row not earned and per D10 nothing transfers from
+-- either predecessor. Compose is NOT classifier-clean and this script never says
+-- it is — `make ext_ambient_inventory` reports it AMBIENT at 8 sources, and the
+-- profile's header enumerates all 8. Door 3 is untouched.
+
+module scripts/dst/driver_plus_compose_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/ai (Message)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+
+import src/core/dst_driver_plus_compose (
+  driver_plus_compose,
+  compose_profile_id,
+  compose_profile_version,
+  compose_routed_claim,
+  compose_substance,
+  compose_coverage_statement,
+  compose_manifest,
+  installed_extension_ids,
+  criterion_2_slot_ids,
+  excluded_slot_ids,
+  rowed_slot_ids
+)
+import src/core/dst_profile (
+  ProfileDefinition,
+  ProfileRejection,
+  Classifier2Call,
+  WaivedFaultClass,
+  OmittedExtension,
+  InstalledPackage,
+  HookClassificationEntry,
+  HookClassification,
+  EffectFree, WorldMediated, ExplicitlyExcluded,
+  ClauseStatus,
+  clause_status_id,
+  classification_id,
+  basis_kind_id,
+  producer_kind,
+  ManifestRejection,
+  rejection_rule,
+  rejection_message,
+  manifest_message,
+  validate_manifest,
+  validate_definition_at_load,
+  routing_violation_at,
+  is_excluded_hook
+)
+import src/core/dst_profile_coverage as Cov (CapabilityDisclosureIds, AtomIds, atom_ids_id)
+import src/core/dst_attribution_table (
+  CoreSite,
+  unconditional_core_sites,
+  reachable_core_sites,
+  table_source_revision,
+  table_identity
+)
+import src/core/dst_fault_catalogue (
+  FaultClass,
+  fault_catalogue,
+  conditional_class_ids,
+  waiving_condition,
+  required_class_ids
+)
+import src/core/dst_result (ReplayMetadata)
+import src/core/phase_vocab (empty_ledger_trace)
+
+-- ---------------------------------------------------------------------------
+-- The demonstration's imports. Everything below this line exists to RUN the
+-- subject; nothing above it does.
+-- ---------------------------------------------------------------------------
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (RecordingWorld, prose_step)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
+-- THE REAL PACKAGE, through the entry point the HOST uses. A hand-built hooks
+-- record would be a rebuilt subject, and S14's whole point is that the gate must
+-- drive OUR closure rather than a replica of it. This import is also what makes
+-- the run grant {Env, FS}: `register_with_config` reads both before returning.
+import pkg/sunholo/motoko_ext_compose/compose as Compose (register_with_config)
+import src/core/dst_interaction (
+  Interaction,
+  ExtensionEffectIdentity,
+  identity_origin,
+  identity_kind,
+  interaction_kind,
+  count_kind
+)
+import src/core/dst_discovery (
+  DiscoveryWitness,
+  EnvExpectation,
+  DiscoveryFinding,
+  check_discovery,
+  discovery_message,
+  census,
+  census_line
+)
+import src/core/dst_program (
+  ExecutionProgram,
+  validate_program,
+  ProgramRejection,
+  program_message,
+  program_schema_version
+)
+import src/core/dst_replay (
+  ReplayMismatch,
+  ReconstitutionFinding,
+  world_state_of,
+  reconstitution_balance,
+  reconstitution_message,
+  strict_replay_findings,
+  replay_message,
+  refusal_message
+)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  ExtRuntime
+)
+
+-- The measured inventory, as `attribution_table_dst` measures it: what an
+-- inventory found in the SOURCE, not a copy of what the table declares.
+--
+-- THE TWO LITERALS BELOW ARE ANCHOR PINS AND THIS FILE IS NOW A CONSUMER OF
+-- THEM. `tools/predicate-anchors/anchors.sh` derives the cascade's width from
+-- the set of files that PIN the anchors that moved, by the grep recorded in its
+-- header; this file joins that set the day it lands, which is why the header of
+-- `src/core/dst_driver_plus_compose.ail` predicts the nine-file form for it.
+pure func head_inventory() -> [CoreSite] {
+  unconditional_core_sites()
+    ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
+          routed: false, note: "" },
+        { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process",
+          routed: false, note: "" }]
+}
+
+-- Classifier 2's member call sites in installable extensions, as the tool
+-- derives them: EMPTY at HEAD since WI-B2b widened `ExtPorts.ai_step`.
+pure func head_classifier_2_calls() -> [Classifier2Call] {
+  []
+}
+
+func report(rs: [ProfileRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${rejection_message(r)}");
+      report(rest)
+    }
+  }
+}
+
+func load(d: ProfileDefinition) -> [ProfileRejection] ! {IO} {
+  validate_definition_at_load(d, table_source_revision(), head_inventory(),
+                              head_classifier_2_calls(), fault_catalogue())
+}
+
+-- The shared shape for "this clause BINDS": a mutation of THIS profile that the
+-- named rule must reject. Not a fresh fixture — a fresh fixture would prove the
+-- rule works on some definition, and the question is whether it works on this
+-- one.
+func binds(label: string, rule: string, d: ProfileDefinition) -> bool ! {IO} {
+  let rs = load(d);
+  let ok = has_rule(rs, rule);
+  let _ = if ok then println("      ↳ BINDS: ${label} → rejected by [${rule}]")
+          else {
+            let _ = println("      ✗ ${label} was NOT rejected by [${rule}] — the clause passes vacuously on this profile");
+            report(rs)
+          };
+  ok
+}
+
+pure func has_rule(rs: [ProfileRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if rejection_rule(r) == rule then true else has_rule(rest, rule)
+  }
+}
+
+pure func join_ids(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => match rest { [] => x, _ => "${x}, ${join_ids(rest)}" }
+  }
+}
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+-- ===========================================================================
+-- 1. THE LOAD
+-- ===========================================================================
+
+func scenario_loads_clean() -> bool ! {IO} {
+  let rs = load(driver_plus_compose());
+  let ok = List.length(rs) == 0;
+  let _ = if ok then println("  ✓ ${compose_profile_id()} v${compose_profile_version()} LOADS CLEAN at the bound revision, with compose INSTALLED and on_tool_handle EXCLUDED")
+          else {
+            let _ = println("  ✗ ${compose_profile_id()} did NOT load clean: ${show(List.length(rs))} rejection(s)");
+            report(rs)
+          };
+  ok
+}
+
+func scenario_attribution_ref_is_current() -> bool ! {IO} {
+  let live = table_identity();
+  let rec = driver_plus_compose().attribution_ref;
+  let ok = rec.source_revision == live.source_revision && rec.content_hash == live.content_hash;
+  let _ = if ok then {
+            let _ = println("  ✓ the recorded attribution reference is current: (${rec.source_revision}, ${rec.content_hash})");
+            println("      D4's re-issue rule now has THREE consumers, not two; tools/predicate-anchors/anchors.sh carries the derived list")
+          } else {
+            let _ = println("  ✗ the attribution table was corrected and this profile was not re-issued (D4)");
+            let _ = println("      recorded: (${rec.source_revision}, ${rec.content_hash})");
+            println("      live:     (${live.source_revision}, ${live.content_hash})")
+          };
+  ok
+}
+
+func scenario_omissions() -> bool ! {IO} {
+  let d = driver_plus_compose();
+  let os = d.omitted_extensions;
+  let ok = List.length(os) > 0 && all_reasoned(os);
+  let _ = println("  ✓ installed ${show(List.length(d.installed_packages))} + omitted ${show(List.length(os))} = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)");
+  let _ = println("      installed: ${join_ids(installed_extension_ids())}");
+  let _ = println("      omitted:   ${join_ids(omission_ids(os))}");
+  let _ = show_install_lines(d.installed_packages);
+  let _ = show_omit_lines(os);
+  let _ = if ok then () else println("  ✗ an omission carries no reason");
+  ok
+}
+
+func show_install_lines(ps: [InstalledPackage]) -> () ! {IO} {
+  match ps {
+    [] => (),
+    p :: rest => {
+      let _ = println("INSTALLED ${p.extension_id} ${p.package_id} ${p.version} ${p.source_path}");
+      show_install_lines(rest)
+    }
+  }
+}
+
+func show_omit_lines(os: [OmittedExtension]) -> () ! {IO} {
+  match os {
+    [] => (),
+    o :: rest => {
+      let _ = println("OMITTED ${o.extension_id}");
+      show_omit_lines(rest)
+    }
+  }
+}
+
+pure func omission_ids(os: [OmittedExtension]) -> [string] {
+  match os { [] => [], o :: rest => o.extension_id :: omission_ids(rest) }
+}
+
+pure func all_reasoned(os: [OmittedExtension]) -> bool {
+  match os { [] => true, o :: rest => o.reason != "" && all_reasoned(rest) }
+}
+
+-- ===========================================================================
+-- 2. ROW 3's FOUR INSTALLED-EXTENSION CLAUSES
+-- ===========================================================================
+
+-- CLAUSE 1: the coverage floor. Over one extension covering three of its four
+-- registered atoms (item 4: compose registers only what it binds).
+func clause_coverage_floor() -> bool ! {IO} {
+  let d = driver_plus_compose();
+  let n = List.length(d.installed_packages);
+  let _ = println("  -- ROW 3 CLAUSE 1: the coverage floor, over ${show(n)} installed extension(s) --");
+  let _ = show_floor(d.disclosures);
+  let mutated: ProfileDefinition = { d | disclosures: empty_first(d.disclosures) };
+  let b = binds("compose covering zero hooks", "coverage-floor", mutated);
+  n > 0 && b
+}
+
+func show_floor(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
+  match ds {
+    [] => (),
+    x :: rest => {
+      let _ = println("      ${x.extension_id}: ${show(List.length(x.covered))} hook(s) covered, ${show(List.length(x.excluded))} excluded — floor satisfied, non-vacuously");
+      show_floor(rest)
+    }
+  }
+}
+
+pure func empty_first(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
+  match ds {
+    [] => [],
+    x :: rest => {
+      let emptied: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms, covered: [], excluded: x.covered };
+      emptied :: rest
+    }
+  }
+}
+
+-- CLAUSE 2: no unconditionally-dispatched hook excluded.
+--
+-- **THIS IS THE FIRST PROFILE FOR WHICH THE CLAUSE IS A REAL QUESTION.** Both
+-- predecessors exclude NOTHING, so the rule quantifies over an empty excluded
+-- list and cannot fire — a clause that passes over nothing, one level below the
+-- empty install list S21 counts. Here one slot IS excluded, and the assertion is
+-- two-sided: the excluded slot must be the GATED one, and moving the exclusion
+-- to any unconditional slot must be rejected.
+func clause_no_unconditional_exclusion() -> bool ! {IO} {
+  let d = driver_plus_compose();
+  let _ = println("  -- ROW 3 CLAUSE 2: no unconditionally-dispatched hook excluded --");
+  let _ = println("      compose excludes on_tool_handle, which is the ONE gated slot in the ABI");
+  let _ = println("      (ext/runtime.ail tests contains_tool before dispatching). Excluding any of");
+  let _ = println("      the other registered atoms would make the run unable to complete, and the rule says so.");
+  let gated_only = only_gated_excluded(d.disclosures);
+  let _ = if gated_only then () else println("      ✗ an unconditionally-dispatched slot appears in an excluded list");
+  -- Item 4: the mutation moves a REGISTERED unconditional atom into the
+  -- excluded list. compose no longer registers a Compactor, so excluding
+  -- `compactor[0]` would be rejected as atom-not-registered rather than for
+  -- the reason this clause is about; `response_interceptor[0]` is the one it holds.
+  let mutated: ProfileDefinition = { d | disclosures: exclude_response_intercept(d.disclosures) };
+  let b = binds("compose excluding on_response_intercept, which is unconditionally dispatched",
+                "unconditional-hook-excluded", mutated);
+  gated_only && b
+}
+
+pure func only_gated_excluded(ds: [CapabilityDisclosureIds]) -> bool {
+  match ds {
+    [] => true,
+    x :: rest =>
+      List.length(x.excluded) == 1 && contains_str(atom_id_strs(x.excluded), "tool_provider[0]")
+        && only_gated_excluded(rest)
+  }
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
+}
+
+-- B8: ids are atom ids (`kind[index]`) over `AtomIds` records.
+pure func drop_id(xs: [AtomIds], t: string) -> [AtomIds] {
+  match xs { [] => [], x :: rest => if Cov.atom_ids_id(x) == t then drop_id(rest, t) else x :: drop_id(rest, t) }
+}
+
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs { [] => [], x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest) }
+}
+
+pure func exclude_response_intercept(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
+  match ds {
+    [] => [],
+    x :: rest => {
+      let moved: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms,
+          covered: drop_id(x.covered, "response_interceptor[0]") ++ [{ kind: "tool_provider", index: 0 }],
+          excluded: [{ kind: "response_interceptor", index: 0 }] };
+      moved :: rest
+    }
+  }
+}
+
+-- CLAUSE 2b — NOT IN ADR-001's TEXT, AND HERE BECAUSE THIS PROFILE IS THE FIRST
+-- THAT CAN ASK IT. The excluded id lives in TWO D5 fields — field 9's
+-- `disclosures` and the classification entry — and `classification_agrees`
+-- exists to stop them drifting. With both predecessors' excluded lists empty
+-- that rule has never had a disagreement to find.
+func clause_exclusion_is_stated_twice_and_agrees() -> bool ! {IO} {
+  let d = driver_plus_compose();
+  let _ = println("  -- ROW 3 CLAUSE 2b: the exclusion is stated in TWO D5 fields and they agree --");
+  let _ = println("      field 9 disclosures.excluded = [${join_ids(excluded_slot_ids())}]");
+  let _ = println("      hook_classifications         = ExplicitlyExcluded on the same id, basis `disclosure`");
+  let mutated: ProfileDefinition = { d | disclosures: cover_everything(d.disclosures) };
+  binds("the disclosure covering on_tool_handle while the classification still excludes it",
+        "classification-disagrees-with-disclosure", mutated)
+}
+
+pure func cover_everything(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
+  match ds {
+    [] => [],
+    x :: rest => {
+      let all_covered: CapabilityDisclosureIds =
+        { extension_id: x.extension_id, atoms: x.atoms, covered: x.covered ++ x.excluded, excluded: [] };
+      all_covered :: rest
+    }
+  }
+}
+
+-- CLAUSE 3: no installed extension calls a classifier-2 `ExtPorts` field while
+-- registering an un-excluded hook. HALF-BOUND AND SAID SO, exactly as it is for
+-- `driver_plus_no_ops`: the derived call list is empty at HEAD, so the AILANG
+-- rule passes over nothing. What is new is the install list it intersects.
+func clause_classifier_2() -> bool ! {IO} {
+  let d = driver_plus_compose();
+  let _ = println("  -- ROW 3 CLAUSE 3: no installed extension calls a classifier-2 ExtPorts field --");
+  let _ = println("      the derived call list is EMPTY at HEAD, so the AILANG rule passes over nothing;");
+  let _ = println("      what discharges the clause is CLAIM row3c below, re-derived by the guard.");
+  let _ = println("      NOTE THE ASYMMETRY WITH CLASSIFIER 3: compose makes 36 ExtPorts field calls and");
+  let _ = println("      NONE of them is a classifier-2 member, because classifier 2's set is the fields");
+  let _ = println("      whose seam cannot thread successor state and that set is empty since WI-B2b.");
+  let _ = println("CLAIM row3c classifier_2_calls_in_installed_closures=0");
+  let rs = validate_definition_at_load(d, table_source_revision(), head_inventory(),
+                                       fabricated_call(), fault_catalogue());
+  let ok = has_rule(rs, "classifier-2-extension-installed");
+  let _ = if ok then println("      ↳ BINDS: a classifier-2 call ATTRIBUTED to compose → rejected by [classifier-2-extension-installed]")
+          else println("      ✗ a classifier-2 call attributed to an installed extension was NOT rejected");
+  ok
+}
+
+-- A call the tool does NOT report, attributed to the extension this profile DOES
+-- install. Fabricated deliberately and never fed to the real load.
+pure func fabricated_call() -> [Classifier2Call] {
+  [{ extension_id: "compose", field: "tool_handle",
+     site: "packages/motoko-ext-compose/proc.ail:0 (FABRICATED — not a tool finding)" }]
+}
+
+-- CLAUSE 4: per-extension covered/excluded hook IDS.
+func clause_disclosure_ids() -> bool ! {IO} {
+  let d = driver_plus_compose();
+  let _ = println("  -- ROW 3 CLAUSE 4: per-extension covered/excluded hook IDS --");
+  let _ = show_ids(d.disclosures);
+  let ok = List.length(d.disclosures) == List.length(d.installed_packages)
+             && List.length(d.disclosures) > 0;
+  let _ = if ok then () else println("      ✗ the disclosure set does not match the install set");
+  ok
+}
+
+func show_ids(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
+  match ds {
+    [] => (),
+    x :: rest => {
+      let _ = println("DISCLOSURE ${x.extension_id}");
+      let _ = println("      ${x.extension_id}");
+      let _ = println("        atoms:    ${join_ids(atom_id_strs(x.atoms))}");
+      let _ = println("        covered:  ${join_ids(atom_id_strs(x.covered))}");
+      let _ = println("        excluded: ${if List.length(x.excluded) == 0 then "(none)" else join_ids(atom_id_strs(x.excluded))}");
+      show_ids(rest)
+    }
+  }
+}
+
+-- ===========================================================================
+-- 3. WHAT THE COVERAGE NUMBER MEANS
+-- ===========================================================================
+
+func scenario_the_record_shows_the_substance() -> bool ! {IO} {
+  let d = driver_plus_compose();
+  let _ = println("  -- what each hook RESTS ON, per entry --");
+  let _ = show_entries(d.hook_classifications);
+  let s = compose_substance();
+  let _ = println("      ${show(s.criterion_1_hooks)} hook(s) on criterion 1 (basis: declared_row, ASSUMED — ADR:1415)");
+  let _ = println("      ${show(s.criterion_2_hooks)} hook(s) on criterion 2 (basis: discovery, MEASURED — dynamic, over the run below)");
+  let _ = println("      ${show(s.excluded_hooks)} hook(s) EXPLICITLY EXCLUDED (basis: disclosure) — the first in the project");
+  let _ = println("      ${show(s.no_op_hooks)} criterion-2 hook(s) satisfy the port and origin clauses VACUOUSLY");
+  let _ = println("      ${show(s.world_mediating_hooks)} covered hook(s) mediate the world SUBSTANTIVELY");
+  let _ = println("  -- THE COVERAGE STATEMENT, computed from the record (not written) --");
+  let _ = println("STATEMENT ${compose_coverage_statement()}");
+  let _ = println("      ${compose_coverage_statement()}");
+  -- The assertion is on the SUBSTANCE and not on the string: coverage exists,
+  -- and — for the first time in this project — some of it mediates.
+  -- Item 4: the two vacuous criterion-2 entries left with compose's constant
+  -- Compactor and SolverJudge; the mediating one and the exclusion remain.
+  let ok = s.covered_hooks > 0 && s.world_mediating_hooks == 1
+             && s.no_op_hooks == 0 && s.excluded_hooks == 1;
+  let _ = if ok then () else println("      ✗ the substance counts do not describe one mediating hook among the covered");
+  ok
+}
+
+func show_entries(cs: [HookClassificationEntry]) -> () ! {IO} {
+  match cs {
+    [] => (),
+    c :: rest => {
+      let kind = match producer_kind(c.basis.producer) {
+        Some(k) => basis_kind_id(k),
+        None => "UNRECOGNISED"
+      };
+      let _ = println("CLASSIFICATION ${c.extension_id} ${c.hook_id} ${classification_id(c.classification)} ${c.basis.producer} ${kind} ${clause_status_id(c.clauses.ports)} ${clause_status_id(c.clauses.origin_tag)} ${clause_status_id(c.clauses.world_state)}");
+      show_entries(rest)
+    }
+  }
+}
+
+-- ===========================================================================
+-- 4. THE DEMONSTRATION — goal-line clause 1
+-- ===========================================================================
+--
+-- The subject is compose's `on_response_intercept` chain: `dir_make` →
+-- `clock_now` → `file_write` → **`check_snippet`** → branch → `file_remove`,
+-- with the `ailang check` SERVED from `WorldState.ext_effects` instead of run.
+--
+-- WHY THE INTERCEPT AND NOT THE TOOL. `handle_compose_tool` calls
+-- `callStreamResult` — compose's ambient AI — before it reaches a snippet to
+-- check, so there is no branch through it that authors nothing (WI-D26 §5.1).
+-- That is the same measurement this profile's record acts on by EXCLUDING
+-- `on_tool_handle`: the record and the run agree about which half of compose is
+-- deterministic, and neither is inferred from the other.
+--
+-- THE QUANTITIES (S7 — no two equal, and distinct from every queue constant in
+-- the tree). `discovery_dst`'s compose fixtures use durations 43/47/53/59 and
+-- typed codes 71/73/1; the driver's own tools use -1; WI-D24's effects use
+-- 41…61. This file uses durations 79/83 and typed codes 89 (served) and 97
+-- (unconsumed slack), all four distinct from every one of those.
+--
+-- THE SLACK ENTRY IS LOAD-BEARING AND NOT DEFENSIVE. An empty `ext_effects`
+-- queue does not fail — it DELEGATES to the real dispatcher — so a fixture sized
+-- exactly to its expectation turns any future off-by-one into a live `ailang
+-- check` subprocess inside a deterministic gate (WI-D24 §4, WI-D26 §5.1). The
+-- second entry is never consumed; `reconstitution_balance` counts the queue the
+-- LOG rebuilds, not the one this function seeded, so nothing here can see it.
+
+func compose_cfg() -> ComposeHostConfig {
+  { compose: { mode: "inline",
+               subagent_model: "dst-model",
+               max_attempts: 1,
+               effect_guard: "off",
+               certificate_template: false,
+               authoring: { structured: false,
+                            author_tools: false,
+                            author_tools_budget: 0,
+                            author_tools_max_bytes: 4096,
+                            author_tools_max_turns: 0,
+                            author_tools_deny_globs: [],
+                            authoring_budget: 0,
+                            fallback_after: 0,
+                            min_observed_chars: 0,
+                            stdout_max_bytes: 0 },
+               claimcheck: { enabled: false,
+                             informalizer_model: "",
+                             comparator_model: "",
+                             timeout_ms: 0,
+                             max_invocations: 0,
+                             stdout_max_bytes: 0,
+                             ledger_in_informalizer: false } },
+    snippet_caps: ["IO"] }
+}
+
+-- A REAL diagnostic, measured by running `ailang check` on a module with an
+-- undefined variable through the production dispatcher. One function because the
+-- fixture embeds it in JSON and the assertion compares against it — two
+-- spellings of one string is the drift S23 exists to stop.
+func check_stderr_text() -> string {
+  "Error: type error in tmp/inline_1 (decl 0): undefined variable: undefined_symbol_xyz"
+}
+
+func compose_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+  [{ tool_call_id: "", duration_ms: 79, code: "", message: "",
+     content: "{\"tool\":\"BashExec\",\"cmd\":\"ailang check tmp/inline_1.ail\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"${check_stderr_text()}\",\"truncated\":false}",
+     exit_code: 89 },
+   { tool_call_id: "", duration_ms: 83, code: "", message: "",
+     content: "{\"tool\":\"BashExec\",\"cmd\":\"unreached\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false}",
+     exit_code: 97 }]
+}
+
+-- The response the model "returns". Reaching the fence is what puts compose on
+-- the routed path at all: a response without one returns `NoIntercept` before
+-- any effect happens, which is the reachability half S24 requires be asserted
+-- separately from the verdict.
+func fenced_response() -> string {
+  "here is the snippet\n```ailang\nexport func main() -> () ! {IO} { undefined_symbol_xyz() }\n```\n"
+}
+
+-- TWO prose steps and NO tool steps, and the second half of that is a claim this
+-- profile has to make rather than a convenience: `on_tool_handle` is EXCLUDED,
+-- so a run that dispatched a tool compose provides would be a routing violation
+-- of this profile's own disclosure. The script cannot produce one.
+func compose_script() -> [ScriptedStep] {
+  [prose_step(fenced_response()), prose_step("done")]
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func world_env() -> [{ key: string, value: string }] {
+  [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
+   { key: "MOTOKO_HEADLESS", value: "1" }]
+}
+
+func graded_world() -> WorldState {
+  { empty_world_state() |
+    script: compose_script(),
+    approvals: [],
+    env: world_env(),
+    ext_effects: compose_effects() }
+}
+
+-- THE REAL REGISTRY, WHOLESALE — `register_with_config` from `compose.ail` with
+-- a literal config, the same entry point `declared_vs_performed` uses. The id,
+-- the tool policy, the pre-step and the solver slot are compose's own, so the
+-- origin the fold stamps onto the recorded effect is the extension's real id
+-- rather than one this file chose.
+func compose_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { entries: [{ id: "compose", caps: Compose.register_with_config(compose_cfg()) }] },
+    strict_mode: false, verification: v }
+}
+
+func run_graded(w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  Session.run_v2_session_traced(
+    compose_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+pure func result_msgs(r: TracedSessionResult) -> [Message] {
+  match r.result {
+    Ok(msgs) => msgs,
+    Err(_) => []
+  }
+}
+
+pure func tool_message_contents(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" then m.content :: tool_message_contents(rest)
+      else tool_message_contents(rest)
+  }
+}
+
+pure func any_contains(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if contains(x, needle) then true else any_contains(rest, needle)
+  }
+}
+
+-- The ORIGINS of the recorded extension-effect interactions, off the transport
+-- the fold stamped. Not read from the fixture and not read from the hook.
+pure func effect_origins(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ExtensionEffectIdentity(_, _, _) => identity_origin(i.identity.body) :: effect_origins(rest),
+        _ => effect_origins(rest)
+      }
+  }
+}
+
+pure func all_equal(xs: [string], v: string) -> bool {
+  match xs { [] => true, x :: rest => x == v && all_equal(rest, v) }
+}
+
+pure func join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => match rest { [] => x, _ => "${x}, ${join(rest)}" }
+  }
+}
+
+-- The recorded run, as an `ExecutionProgram` under THIS profile's manifest. The
+-- `extension_profile` names this profile, so a program recorded under one
+-- profile and validated under another is visible in the artifact.
+pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    generator_id: "hand_authored_compose_demonstration",
+    generator_version: "1",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_plus_compose\"}",
+      synthetic_environment: initial.env,
+      files: [],
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_plus_compose/1"
+    },
+    bounds: {
+      max_interactions: 256,
+      max_chunks_per_interaction: 16,
+      max_payload_bytes: 4096,
+      max_resource_size: 4096,
+      max_clock_advance_ms: 60000,
+      chunk_draw_hi: 3
+    },
+    manifest: compose_manifest("HEAD", "ailang 0.33.0", "7.0", "{}", ["env_get"], [], "HEAD"),
+    interactions: w.log
+  }
+}
+
+func report_program(rs: [ProgramRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${program_message(r)}");
+      report_program(rest)
+    }
+  }
+}
+
+func report_recon(fs: [ReconstitutionFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => {
+      let _ = println("      ${reconstitution_message(f)}");
+      report_recon(rest)
+    }
+  }
+}
+
+func report_replay(ms: [ReplayMismatch]) -> () ! {IO} {
+  match ms {
+    [] => (),
+    m :: rest => {
+      let _ = println("      ${replay_message(m)}");
+      report_replay(rest)
+    }
+  }
+}
+
+func report_discovery(fs: [DiscoveryFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => {
+      let _ = println("      ${discovery_message(f)}");
+      report_discovery(rest)
+    }
+  }
+}
+
+-- THE GRADED SESSION. Everything from here to the end of the function is the
+-- evidence the profile's `discovery` basis names.
+func scenario_the_demonstration()
+  -> bool ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  let _ = println("  ================================================================");
+  let _ = println("  THE DEMONSTRATION — goal-line clause 1. A graded session through");
+  let _ = println("  the real traced driver, with compose installed, recorded,");
+  let _ = println("  validated and strictly replayed.");
+  let _ = println("  ================================================================");
+  let initial = graded_world();
+  let run = run_graded(initial);
+  let log = run.world.log;
+  let effects = count_kind(log, identity_kind(ExtensionEffectIdentity("", "", "")));
+  let origins = effect_origins(log);
+
+  let ok_ran = check("the graded session reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so every witness below is vacuous");
+
+  let _ = println("      census: ${census_line(census(log))}");
+
+  -- ---- REACHABILITY BEFORE VERDICT (S24) --------------------------------
+  --
+  -- A `check_snippet` that never ran records nothing and asserts nothing, and
+  -- that is byte-identical to every profile run in this tree before WI-D27.
+  let ok_reached = check("compose's routed seam RAN — the extension reached the recorder",
+                         effects == 1,
+                         "expect_extension_effect=${show(effects)}, expected 1; a routed call that never executes proves nothing, and more than one means the failure branch was not taken");
+
+  -- ---- THE NON-VACUITY ROW ----------------------------------------------
+  --
+  -- **THE ASSERTION THIS WHOLE PROFILE RESTS ON.** Criterion 2's first two
+  -- clauses, as a fact about the recorded program rather than as a count: an
+  -- ExtensionEffect interaction EXISTS (only the ExtPorts recording adapter
+  -- writes that class, so an ambient call would have left none) and its origin
+  -- is the performing extension's own id, stamped by the fold in
+  -- `ext/runtime.ail` — not by the hook, not by the recorder, not by this file.
+  let ok_origin = check("NON-VACUITY: the recorded program carries a world-mediated effect ORIGIN-TAGGED to compose",
+                        List.length(origins) >= 1 && all_equal(origins, "compose"),
+                        "origins=[${join(origins)}] — expected at least one, all \"compose\". If compose is not in the install list this row is what goes red, and it names what vanished: there is no origin-tagged extension effect in the program at all");
+
+  -- ---- THE BRANCH, ON THE TYPED CODE -------------------------------------
+  let tool_msgs = tool_message_contents(result_msgs(run));
+  let ok_branch = check("compose took the FAILURE branch, on the typed exit code and not on the rendered one",
+                        any_contains(tool_msgs, "ComposeInline"),
+                        "no ComposeInline tool message in the transcript — compose either did not intercept, or took the success branch, which is what reading \"exit_code\":0 out of `output` would do");
+
+  let ok_errors = check("the served content reached the model: the diagnostic came back through the decode",
+                        any_contains(tool_msgs, "undefined variable: undefined_symbol_xyz"),
+                        "the ComposeInline result carries no diagnostic text — the seam's stderr was lost with the rendering, or the check was served from the wrong queue and this row is what catches it at session level");
+
+  -- ---- THE DISCOVERY INSTRUMENT ITSELF -----------------------------------
+  --
+  -- The producer this profile's criterion-2 entries NAME, run over this run.
+  -- `check_discovery` grades the log in BOTH directions against witnesses the
+  -- recorder did not write, and the extension-effect witness is derived from the
+  -- scenario's control flow — one `tool_handle` per intercept dispatch, and the
+  -- dispatch count anchored to the independently-witnessed provider-call count.
+  let findings = check_discovery(log, graded_witness(run.world.clock_ms - initial.clock_ms));
+  let _ = if List.length(findings) > 0 then report_discovery(findings) else ();
+  let ok_discovery = check("the DISCOVERY instrument grades the run clean in both directions",
+                           List.length(findings) == 0,
+                           "${show(List.length(findings))} finding(s); the basis every criterion-2 entry in this profile names is `discovery`, so a finding here unmakes the record");
+
+  -- ---- VALIDATE ----------------------------------------------------------
+  let program = graded_program(run.world, initial);
+  let rejections = validate_program(program, required_class_ids());
+  let _ = if List.length(rejections) > 0 then report_program(rejections) else ();
+  let ok_valid = check("the recorded program VALIDATES",
+                       List.length(rejections) == 0,
+                       "${show(List.length(rejections))} rejection(s)");
+
+  match world_state_of(program, required_class_ids()) {
+    Err(r) => {
+      let _ = println("      ${refusal_message(r)}");
+      let ok_recon = check("the program reconstitutes a world", false, "refused");
+      ok_ran && ok_reached && ok_origin && ok_branch && ok_errors && ok_discovery
+        && ok_valid && ok_recon
+    },
+    Ok(replay_world) => {
+      -- NOTHING UNCONSUMED, AND NOTHING MISSING. The reconstituted world's
+      -- queues must match the classes the log records, one for one. An
+      -- `ext_effects` queue short by one is not a quiet failure at this seam:
+      -- the adapter DELEGATES, so the replay would perform a real subprocess.
+      let recon = reconstitution_balance(program, replay_world);
+      let _ = if List.length(recon) > 0 then report_recon(recon) else ();
+      let ok_balance = check("the reconstituted world's queues balance against the log — nothing unconsumed, nothing missing",
+                             List.length(recon) == 0,
+                             "${show(List.length(recon))} finding(s)");
+
+      -- THE TYPED CODE SURVIVED THE ROUND TRIP. If the projection dropped
+      -- `exit_code` — defaulting it to 0, the shape WI-D22's schema bump exists
+      -- to refuse — the replay would take compose's SUCCESS branch and this
+      -- demonstration would be a recorded failure replaying as a pass.
+      let ok_served = match replay_world.ext_effects {
+        e :: _ =>
+          check("the reconstituted queue serves the same TYPED exit code the recording did",
+                e.exit_code == 89,
+                "head exit_code=${show(e.exit_code)} — expected 89; a 0 here is a recorded compiler failure replaying as a pass"),
+        [] =>
+          check("the reconstituted queue serves the same TYPED exit code the recording did",
+                false,
+                "the reconstituted ext_effects queue is EMPTY, so a replay would run a real `ailang check`")
+      };
+
+      let replay = run_graded(replay_world);
+      let ms = strict_replay_findings(program.interactions, replay.world.log);
+      let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+      let ok_replay = check("the graded session REPLAYS to an identical interaction log",
+                            List.length(ms) == 0,
+                            "${show(List.length(ms))} mismatch(es)");
+
+      -- AND THE REPLAY REPRODUCES THE EFFECT, which is the second half of the
+      -- goal line's clause 1: "present in the recorded program AND reproduced by
+      -- its replay". An identical log already implies it; this asserts it by
+      -- name so that a future weakening of `strict_replay_findings` cannot take
+      -- the clause down with it silently.
+      let replay_origins = effect_origins(replay.world.log);
+      let ok_replay_effect =
+        check("NON-VACUITY, REPRODUCED: the replay records the same origin-tagged compose effect",
+              List.length(replay_origins) == List.length(origins)
+                && all_equal(replay_origins, "compose") && List.length(replay_origins) >= 1,
+              "replay origins=[${join(replay_origins)}] against recorded [${join(origins)}]");
+
+      let ok_replay_branch = check("the REPLAY takes the same failure branch",
+                                   any_contains(tool_message_contents(result_msgs(replay)), "ComposeInline"),
+                                   "the replay produced no ComposeInline result — the recorded run failed the check and the replay did not");
+
+      let _ = println("CLAIM clause1 extension_effects=${show(effects)} origins=[${join(origins)}] replayed=${show(List.length(replay_origins))} mismatches=${show(List.length(ms))}");
+
+      ok_ran && ok_reached && ok_origin && ok_branch && ok_errors && ok_discovery
+        && ok_valid && ok_balance && ok_served && ok_replay && ok_replay_effect
+        && ok_replay_branch
+    }
+  }
+}
+
+-- The witness the DISCOVERY producer grades against. Every field is produced by
+-- something that is NOT the recorder:
+--
+--   provider_calls      two scripted steps, so two provider calls: the fenced
+--                       response and the terminator.
+--   tool_dispatches     ZERO. `InterceptHandled` makes the driver append a tool
+--                       MESSAGE and loop; it dispatches no tool call, and
+--                       `on_tool_handle` is excluded so it could not.
+--   approvals           zero reads and zero consumed: no tool call reaches the
+--                       approval channel.
+--   clock_delta_ms      the WORLD's own `clock_ms` delta, passed in by the
+--                       caller. The response-producing mechanism, not the
+--                       log-writing one; every class may advance time, so no
+--                       single class's recorder can satisfy this alone.
+--   the three FS classes and the extension-effect class come from compose's
+--   control flow — one `dir_make`, one `file_write`, one `tool_handle` and one
+--   `file_remove` per intercept dispatch, and exactly one response carries a
+--   fence.
+--   expected_env_reads  SOURCE-DERIVED and of a DIFFERENT KIND from the six
+--                       above (dst_discovery's header says so): the env class
+--                       emits no ledger event, so this set is provenance
+--                       evidence rather than capability evidence and must never
+--                       be added into one completeness number with the rest.
+--
+-- THE RESOLUTION COUNT IS 1, MEASURED FOR THIS SCENARIO AND NOT INHERITED.
+-- `resolve_context_limit` performs five env requests per call — MOTOKO_PROFILE_DIR,
+-- MOTOKO_CONFIG, MOTOKO_REPO, MOTOKO_MODELS_FILE, MOTOKO_REPO again — so
+-- MOTOKO_REPO is read TWICE per resolution and a uniform set would be satisfied
+-- by a recorder that lost one of the two. WI-D3 measured 12 resolutions for
+-- discovery's scenarios and strict replay measured 19 and 8 for its own; the
+-- count tracks the LOOP ARMS a scenario takes and no formula over the witnessed
+-- quantities fits those points, so this scenario states its own. Two prose steps
+-- and no tool phase reach ONE resolution — `session_policy_init` before the loop
+-- and no per-arm re-resolution, because an `InterceptHandled` arm appends a
+-- message and loops without resolving a context limit. It goes RED rather than
+-- stale if the driver's loop structure changes the number, and that is the
+-- intended failure.
+--
+-- THE FIVE ONCE-PER-RUN KEYS are the same five `discovery_dst` derives, from the
+-- same two source sites: `session_policy_init` (session.ail:1417, four keys) and
+-- `derive_session_id` (session.ail:939, one key), each reached once on the traced
+-- path. The COUNTS matter and not merely the keys — a recorder that logged the
+-- first read of a key and dropped later ones would satisfy a presence check.
+-- Five + five + zero = ten, which is exactly the census's environment_read.
+--
+-- MOTOKO_TOOL_TIMEOUT_MS IS DECLARED AT ZERO RATHER THAN OMITTED, which is a
+-- real assertion and not padding: the key is read once per NATIVE dispatch
+-- (tool_phase.ail:343), this profile excludes `on_tool_handle` and the script
+-- dispatches no tool, so the log must contain ZERO reads of it. Omitting the key
+-- would let a stray dispatch's read pass unnoticed; declaring it at the
+-- independently-witnessed dispatch count makes it a balance.
+func graded_witness(clock_delta: int) -> DiscoveryWitness {
+  { provider_calls: 2,
+    tool_dispatches: 0,
+    approval_reads: 0,
+    approvals_consumed: 0,
+    clock_delta_ms: clock_delta,
+    file_writes: 1,
+    file_removes: 1,
+    dir_makes: 1,
+    extension_effects: 1,
+    expected_env_reads: env_reads_always(1)
+                          ++ [{ key: "MOTOKO_TOOL_TIMEOUT_MS", count: 0 }] }
+}
+
+pure func env_reads_always(resolutions: int) -> [EnvExpectation] {
+  [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
+   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+   { key: "OPENAI_BASE_URL",           count: 1 },
+   { key: "MOTOKO_HEADLESS",           count: 1 },
+   { key: "MOTOKO_SESSION_ID",         count: 1 }]
+    ++ env_reads_per_context_resolution(resolutions)
+}
+
+pure func env_reads_per_context_resolution(resolutions: int) -> [EnvExpectation] {
+  [{ key: "MOTOKO_PROFILE_DIR", count: resolutions },
+   { key: "MOTOKO_CONFIG",      count: resolutions },
+   { key: "MOTOKO_MODELS_FILE", count: resolutions },
+   { key: "MOTOKO_REPO",        count: resolutions * 2 }]
+}
+
+-- ===========================================================================
+-- 5. THE THREE OTHER ROWS BOUGHT WITH AN EMPTY INSTALL LIST
+-- ===========================================================================
+
+-- ROW 4. The `extension_effect_fault` waiver, re-earned on THIRD ground.
+func row_4_fault_waiver() -> bool ! {IO} {
+  let cat = fault_catalogue();
+  let ids = conditional_class_ids(cat);
+  let ws = driver_plus_compose().waived_fault_classes;
+  let count_ok = List.length(ws) == List.length(ids) && List.length(ids) > 0;
+  let each_ok = check_waivers(ws, cat);
+  let _ = println("  -- ROW 4: injected faults, and the extension_effect_fault waiver --");
+  let _ = if count_ok then println("      waives all ${show(List.length(ids))} conditional D3 classes, each condition READ from the catalogue")
+          else println("      ✗ the waiver list does not cover every conditional class");
+  let _ = println("      extension_effect_fault: WAIVED, and this profile installs an extension WITH an");
+  let _ = println("      effectful hook — so the waiver rests on neither emptiness (driver_only) nor");
+  let _ = println("      'no effectful hook' (driver_plus_no_ops). It rests on a per-FIELD fact: the class");
+  let _ = println("      is delivered by ExtPorts.ai_step, compose's only path to a provider is the ambient");
+  let _ = println("      callStreamResult, and that path is behind the EXCLUDED on_tool_handle. The waiver");
+  let _ = println("      would fail the moment this profile covered that slot or installed compaction_ai.");
+  let _ = println("      FINDING (third profile to record it): the catalogue's condition text names");
+  let _ = println("      `driver_only` inside it and the machinery requires a verbatim match, so this");
+  let _ = println("      profile records a sentence about a different profile. Reported, not fixed.");
+  let _ = println("CLAIM row4 ai_step_calls_in_installed_closures=0");
+  count_ok && each_ok
+}
+
+func check_waivers(ws: [WaivedFaultClass], cat: [FaultClass]) -> bool ! {IO} {
+  match ws {
+    [] => true,
+    w :: rest => {
+      let ok = match waiving_condition(cat, w.class_id) {
+        None => false,
+        Some(c) => c == w.condition
+      };
+      let _ = if ok then () else println("      ✗ ${w.class_id}: the recorded condition is not the catalogue's");
+      let tail = check_waivers(rest, cat);
+      ok && tail
+    }
+  }
+}
+
+-- ROW 5. Virtual time, re-earned over an install set that DOES read the clock.
+func row_5_virtual_time() -> bool ! {IO} {
+  let c = compose_routed_claim();
+  let same = c.reachable_total == List.length(reachable_core_sites([]));
+  let partition = c.reachable_total == c.routed + c.declared_unrouted;
+  let _ = println("  -- ROW 5: every time-bearing read reachable in the profile is routed --");
+  let _ = println("      routed-set claim, COMPUTED at the bound revision (nothing recorded):");
+  let _ = println("        reachable core sites: ${show(c.reachable_total)}");
+  let _ = println("        routed:               ${show(c.routed)}");
+  let _ = println("        declared unrouted:    ${show(c.declared_unrouted)}");
+  let _ = if same then println("      installing compose added NO reachable core site: the table's two attributed rows")
+          else println("      ✗ the reachable set changed with the install list and the profile did not account for it");
+  let _ = if same then println("      belong to test_dummy and scratchpad, neither of which is installed") else ();
+  let _ = println("      AND THIS IS THE FIRST PROFILE WHOSE INSTALL SET READS A CLOCK AT ALL. compose's");
+  let _ = println("      intercept calls clock_now — through ExtPorts, which is routed; WI-D26 §13.1");
+  let _ = println("      measured 0 ambient Clock sources in any compose hook path. driver_plus_no_ops");
+  let _ = println("      earned this row with 'no installed extension reads a clock'; that sentence is");
+  let _ = println("      FALSE here, and the row is re-earned on routing instead of on absence.");
+  let _ = println("CLAIM row5 ambient_clock_sources_in_installed_hook_paths=0");
+  same && partition
+}
+
+-- ROW 7. The oracle exemption, re-earned on a THIRD ground — and the previous
+-- two are BOTH unavailable here, which is what makes it worth running.
+func row_7_oracle_exemption() -> bool ! {IO} {
+  let _ = println("  -- ROW 7: the ScratchpadResult exemption, re-earned --");
+  let _ = println("      the variant is emitted only when a tool named `scratchpad` is served by a hook");
+  let _ = println("      returning `Handled` with a `cells` key (dst_invariants.parity_gap_reasons).");
+  let _ = println("      NEITHER of driver_plus_no_ops's two grounds is available: compose's");
+  let _ = println("      provided_tools is NOT empty, and its on_tool_handle does NOT delegate. What");
+  let _ = println("      keeps this profile off that path is TWO different facts:");
+  let _ = println("        (1) on_tool_handle is EXCLUDED in D5 field 9, so no dispatch of it is");
+  let _ = println("            conformant under this profile, and routing_violation_at fires on one;");
+  let _ = println("        (2) compose provides no tool named `scratchpad` — its provided_tools are");
+  let _ = println("            compose's own — so even a dispatched handle could not emit the variant.");
+  let _ = println("      Neither is the empty install list and neither is `provided_tools: []`.");
+  let _ = println("CLAIM row7 tool_handle_excluded_and_no_scratchpad_tool");
+  true
+}
+
+-- ===========================================================================
+-- 6. THE REST
+-- ===========================================================================
+
+-- **THE EXCLUSION CHECK IS SUBSTANTIVE HERE FOR THE FIRST TIME.** Both
+-- predecessors run it over an empty excluded list, so `is_excluded_hook` answers
+-- false for every input and `routing_violation_at` cannot fire. This profile has
+-- an excluded slot, so the check is two-sided: the excluded slot must be seen as
+-- excluded and a dispatch of it must be a violation, and a covered slot must
+-- not.
+func scenario_exclusion_check() -> bool ! {IO} {
+  let meta: ReplayMetadata =
+    { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
+      profile_id: compose_profile_id(), profile_version: compose_profile_version(),
+      event_vocabulary_version: "event-vocabulary/1" };
+  let d = driver_plus_compose();
+  let sees_exclusion = is_excluded_hook(d, "compose", "tool_provider[0]");
+  let sees_coverage = not is_excluded_hook(d, "compose", "response_interceptor[0]");
+  let violates =
+    match routing_violation_at(d, "compose", "tool_provider[0]", 0, empty_ledger_trace(), meta) {
+      None => false,
+      Some(_) => true
+    };
+  let no_violation =
+    match routing_violation_at(d, "compose", "response_interceptor[0]", 0, empty_ledger_trace(), meta) {
+      None => true,
+      Some(_) => false
+    };
+  let ok = sees_exclusion && sees_coverage && violates && no_violation;
+  let _ = if ok then {
+            let _ = println("  ✓ the runtime exclusion check BINDS on a non-empty excluded list, both ways:");
+            let _ = println("      dispatching on_tool_handle under this profile IS a routing violation");
+            println("      dispatching on_response_intercept is NOT — and the graded session dispatches no tool at all")
+          } else println("  ✗ the exclusion check did not answer both ways: excluded=${show(sees_exclusion)} covered=${show(sees_coverage)} violates=${show(violates)} clean=${show(no_violation)}");
+  ok
+}
+
+func scenario_manifest() -> bool ! {IO} {
+  let m = compose_manifest("HEAD", "ailang 0.33.0", "7.0", "{}", ["env_get"], [], "HEAD");
+  let rs = validate_manifest(m, driver_plus_compose());
+  let ok = List.length(rs) == 0 && List.length(m.extension_packages) == 1;
+  let _ = if ok then {
+            let _ = println("  ✓ the per-run execution manifest validates against the definition it realizes");
+            let _ = println("      profile:            ${m.profile_id}/${m.profile_version}");
+            let _ = println("      extension packages: ${show(List.length(m.extension_packages))}, projected from the install list");
+            let _ = println("      profile rules:      ${m.profile_rules_version}");
+            println("      event vocabulary:   ${m.event_vocabulary_version}")
+          } else {
+            let _ = println("  ✗ the manifest did not validate");
+            report_manifest(rs)
+          };
+  ok
+}
+
+func report_manifest(rs: [ManifestRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${manifest_message(r)}");
+      report_manifest(rest)
+    }
+  }
+}
+
+-- The registration disclosure. D5 field 9 carries HOOK ids and has no room for
+-- an ambient source, so registration's three land in field 6's instruments — and
+-- this scenario prints them where a reader of the run will see them rather than
+-- only a reader of the record.
+func scenario_registration_is_disclosed() -> bool ! {IO} {
+  let _ = println("  -- REGISTRATION RUNS AMBIENT, AND THIS PROFILE'S RUNS GRANT {Env, FS} --");
+  let _ = println("      compose's register_with_config reads getEnvOr(\"MOTOKO_PROFILE_DIR\", \".\") at");
+  let _ = println("      register.ail:9, then fileExists/readFile at config.ail, BEFORE any hook is");
+  let _ = println("      dispatched. AILANG capabilities are per PROCESS, so the withheld-capability");
+  let _ = println("      poison discipline `make world_state` runs for the driver DOES NOT EXTEND across");
+  let _ = println("      compose's registration. The gap is stated, not closed.");
+  let _ = println("      WHAT CARRIES THE DETERMINISM CLAIM INSTEAD: the record → strict-replay identity");
+  let _ = println("      asserted above. A registration read that varied with the host would make the two");
+  let _ = println("      runs diverge, and the replay row would go red.");
+  let _ = println("      The registration-effects amendment is DRAFT and on the maintenance register;");
+  let _ = println("      this item deliberately does not land it.");
+  let _ = println("DISCLOSED registration compose Env packages/motoko-ext-compose/register.ail getEnvOr");
+  let _ = println("DISCLOSED registration compose FS packages/motoko-ext-compose/config.ail fileExists");
+  let _ = println("DISCLOSED registration compose FS packages/motoko-ext-compose/config.ail readFile");
+  true
+}
+
+func scenario_what_is_not_claimed() -> bool ! {IO} {
+  let _ = println("  -- NOT CLAIMED for this profile (D10: nothing is inherited) --");
+  let _ = println("      rows 1, 2, 6, 8, 9, 10 and 11 are NOT re-earned here; a row not run is a row");
+  let _ = println("      not earned, and this profile borrows no predecessor's answer to any of them.");
+  let _ = println("      NOT CLAIMED ABOUT COMPOSE: that it is classifier-clean. `make");
+  let _ = println("      ext_ambient_inventory` reports it AMBIENT — 8 sources, in the three classes the");
+  let _ = println("      goal line closes by disclosure (four println, registration's three, one AI). The");
+  let _ = println("      three slot-level barriers STAND, `make profile_definition` says so on every run,");
+  let _ = println("      and door 3 is untouched. This profile's criterion-2 evidence is EXISTENTIAL —");
+  let _ = println("      what compose did in this run, through ports, tagged and replayed — and it does");
+  let _ = println("      not bound what compose could do on inputs this run did not supply.");
+  true
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  let _ = println("driver_plus_compose_dst  (${compose_profile_id()} v${compose_profile_version()})");
+  let a = scenario_loads_clean();
+  let b = scenario_attribution_ref_is_current();
+  let c = scenario_omissions();
+  let _ = println("  ================================================================");
+  let _ = println("  ADR-001 row 3's installed-extension clauses, plus the one this");
+  let _ = println("  profile is the first to be able to ask: a NON-EMPTY exclusion.");
+  let _ = println("  ================================================================");
+  let d1 = clause_coverage_floor();
+  let d2 = clause_no_unconditional_exclusion();
+  let d2b = clause_exclusion_is_stated_twice_and_agrees();
+  let d3 = clause_classifier_2();
+  let d4 = clause_disclosure_ids();
+  let e = scenario_the_record_shows_the_substance();
+  let demo = scenario_the_demonstration();
+  let f = row_4_fault_waiver();
+  let g = row_5_virtual_time();
+  let h = row_7_oracle_exemption();
+  let i = scenario_exclusion_check();
+  let j = scenario_manifest();
+  let k = scenario_registration_is_disclosed();
+  let l = scenario_what_is_not_claimed();
+  if a && b && c && d1 && d2 && d2b && d3 && d4 && e && demo && f && g && h && i && j && k && l then
+    println("driver_plus_compose_dst PASS")
+  else {
+    let _ = println("driver_plus_compose_dst FAIL");
+    exit(1)
+  }
+}

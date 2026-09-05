@@ -1,0 +1,27 @@
+module sunholo/motoko_ext_compaction_structural/register
+
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  ExtCtx,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  FinalizeDecision,
+  Msg,
+  PreStepDecision,
+  ResponseInterceptDecision,
+  ToolCallEnvelope,
+  ToolHandleDecision,
+  ToolPolicyDecision
+)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
+
+func pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+  compact_for_pre_step(ctx, msgs)
+}, next_state: ctx.world } }
+
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS} {
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    Compactor(pre_step)
+  ]
+}

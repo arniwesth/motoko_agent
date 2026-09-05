@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2092.0078333333327 1706.6000000000001" width="2092.0078333333327" height="1706.6000000000001" style="--bg:#1a1b26;--fg:#a9b1d6;--line:#3d59a1;--accent:#7aa2f7;--muted:#565f89;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="DISCOVERY" data-label="Discovery · reactive, seed-driven — the generator runs">
+  <rect x="40" y="632.7" width="907.1299999999995" height="283.20000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="632.7" width="907.1299999999995" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="646.7" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Discovery · reactive, seed-driven — the generator runs</text>
+</g>
+<g class="subgraph" data-id="REPLAY" data-label="Replay · consumes the exact program, never calls the generator">
+  <rect x="1085.3489999999993" y="1242.0000000000002" width="394.80299999999994" height="272.1" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1085.3489999999993" y="1242.0000000000002" width="394.80299999999994" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1097.3489999999993" y="1256.0000000000002" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Replay · consumes the exact program, never calls the generator</text>
+</g>
+<polyline class="edge" data-from="cfg" data-to="DISCOVERY" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="493.5649999999997,584.7 493.56499999999977,632.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DISCOVERY" data-to="prog" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="493.56499999999977,915.9000000000001 493.56499999999977,951.9000000000001 747.5152499999998,951.9000000000001 747.5152499999999,963.9000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="prog" data-to="vocab" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="713.3296666666665,1099.3000000000002 713.3296666666665,1111.3 352.9444999999999,1111.3 352.9444999999999,1123.3" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="prog" data-to="identity" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="815.8864166666665,1099.3000000000002 815.8864166666665,1313.1000000000001 805.6209999999996,1313.1000000000001 805.6209999999996,1325.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="prog" data-to="validate" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="918.4431666666665,1099.3000000000002 918.4431666666665,1111.3000000000002 1282.7504999999992,1111.3000000000002 1282.7504999999994,1123.3000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="validate" data-to="REPLAY" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1282.7504999999994,1194.0000000000002 1282.7504999999992,1242.0000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="REPLAY" data-to="hfail" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="1216.9499999999994,1514.1000000000004 1216.9499999999994,1550.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="REPLAY" data-to="outcomes" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1348.5509999999992,1514.1000000000004 1348.5509999999995,1526.1000000000001 1744.9311666666658,1526.1000000000001 1744.931166666666,1550.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="outcomes" data-to="invariants" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1898.4694999999995,1550.1000000000001 1898.4694999999992,908.1000000000003 1704.059666666666,908.1000000000003 1704.059666666666,195.20000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="invariants" data-to="promise" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1546.8163333333328,195.20000000000002 1546.8163333333328,231.20000000000002 1461.2186666666662,231.20000000000002 1461.2186666666662,243.20000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="promise" data-to="version" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="1540.087333333333,415.30000000000007 1540.087333333333,908.1000000000003 1648.8994999999995,908.1000000000003 1648.8994999999993,920.1000000000003" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="promise" data-to="corpora" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1382.3499999999997,415.30000000000007 1382.3499999999995,451.30000000000007 1142.1299999999997,451.30000000000007 1142.1299999999997,463.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="corpora" data-to="prog" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="a scheduled failure is promoted to the fixed corpus, with or before its fix" points="1142.1299999999997,584.7 1142.1299999999997,951.9000000000001 884.2575833333332,951.9000000000001 884.2575833333332,963.9000000000001" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ddrv" data-to="dgen" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="325.0386666666665,812.3000000000001 325.0386666666665,764.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dgen" data-to="ddrv" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="222.8524166666665,764.3000000000001 222.8524166666665,776.3000000000001 190.51933333333324,776.3000000000001 190.51933333333324,812.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dgen" data-to="dnote" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="427.2249166666664,764.3000000000001 427.2249166666664,776.3000000000001 709.3439999999996,776.3000000000001 709.3439999999997,812.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="corpora" data-to="prog" data-label="a scheduled failure is promoted to the fixed corpus, with or before its fix">
+  <rect x="971.1299999999995" y="890.6000000000001" width="341.3799999999998" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1141.8199999999995" y="905.7500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">a scheduled failure is promoted to the fixed corpus, with or before its fix</text>
+</g>
+<g class="node" data-id="cfg" data-label="&lt;b&gt;DiscoveryConfig&lt;/b&gt;
+schema_version · generator_id · generator_version · seed
+&lt;b&gt;initial_world&lt;/b&gt;: messages and policy · synthetic environment ·
+clock epoch · extension profile" data-shape="rectangle">
+  <rect x="295.4909999999998" y="497.1" width="396.1479999999998" height="87.60000000000001" rx="0" ry="0" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="493.5649999999997" y="540.9" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="493.5649999999997" dy="-20.8"><tspan font-weight="bold">DiscoveryConfig</tspan></tspan><tspan x="493.5649999999997" dy="16.900000000000002">schema_version · generator_id · generator_version · seed</tspan><tspan x="493.5649999999997" dy="16.900000000000002"><tspan font-weight="bold">initial_world</tspan>: messages and policy · synthetic environment ·</tspan><tspan x="493.5649999999997" dy="16.900000000000002">clock epoch · extension profile</tspan></text>
+</g>
+<g class="node" data-id="prog" data-label="&lt;b&gt;ExecutionProgram&lt;/b&gt; — the resolved, ordered protocol
+schema_version · generator_id · generator_version · seed ·
+initial_world · ordered interactions
+
+concrete outcomes plus the bounded actual request projections
+needed to diagnose a mismatch" data-shape="cylinder">
+  <rect x="610.7729166666666" y="970.9000000000001" width="410.22699999999986" height="121.4" fill="#2f2145" stroke="none" />
+  <line x1="610.7729166666666" y1="970.9000000000001" x2="610.7729166666666" y2="1092.3000000000002" stroke="#bb9af7" stroke-width="0.75" />
+  <line x1="1020.9999166666664" y1="970.9000000000001" x2="1020.9999166666664" y2="1092.3000000000002" stroke="#bb9af7" stroke-width="0.75" />
+  <ellipse cx="815.8864166666665" cy="1092.3000000000002" rx="205.11349999999993" ry="7" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <ellipse cx="815.8864166666665" cy="970.9000000000001" rx="205.11349999999993" ry="7" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="815.8864166666665" y="1031.6000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="815.8864166666665" dy="-37.70000000000001"><tspan font-weight="bold">ExecutionProgram</tspan> — the resolved, ordered protocol</tspan><tspan x="815.8864166666665" dy="16.900000000000002">schema_version · generator_id · generator_version · seed ·</tspan><tspan x="815.8864166666665" dy="16.900000000000002">initial_world · ordered interactions</tspan><tspan x="815.8864166666665" dy="16.900000000000002"></tspan><tspan x="815.8864166666665" dy="16.900000000000002">concrete outcomes plus the bounded actual request projections</tspan><tspan x="815.8864166666665" dy="16.900000000000002">needed to diagnose a mismatch</tspan></text>
+</g>
+<g class="node" data-id="vocab" data-label="&lt;b&gt;the interaction vocabulary&lt;/b&gt;
+ExpectProvider · origin, request matcher, timed outcome
+ExpectTool · origin, matcher, deadline, timed outcome
+ExpectApproval · matcher, deadline, timed outcome
+EnvironmentRead · key, value or missing
+RuntimeRandomDraw · bounds, value
+AdvanceClock · delta
+
+a provider timed outcome may carry ordered stream chunks at
+non-decreasing virtual offsets, then a final result or error" data-shape="rectangle">
+  <rect x="152.277" y="1123.3" width="401.33499999999987" height="189.00000000000003" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="352.94449999999995" y="1217.8" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5"><tspan x="352.94449999999995" dy="-71.50000000000001"><tspan font-weight="bold">the interaction vocabulary</tspan></tspan><tspan x="352.94449999999995" dy="16.900000000000002">ExpectProvider · origin, request matcher, timed outcome</tspan><tspan x="352.94449999999995" dy="16.900000000000002">ExpectTool · origin, matcher, deadline, timed outcome</tspan><tspan x="352.94449999999995" dy="16.900000000000002">ExpectApproval · matcher, deadline, timed outcome</tspan><tspan x="352.94449999999995" dy="16.900000000000002">EnvironmentRead · key, value or missing</tspan><tspan x="352.94449999999995" dy="16.900000000000002">RuntimeRandomDraw · bounds, value</tspan><tspan x="352.94449999999995" dy="16.900000000000002">AdvanceClock · delta</tspan><tspan x="352.94449999999995" dy="16.900000000000002"></tspan><tspan x="352.94449999999995" dy="16.900000000000002">a provider timed outcome may carry ordered stream chunks at</tspan><tspan x="352.94449999999995" dy="16.900000000000002">non-decreasing virtual offsets, then a final result or error</tspan></text>
+</g>
+<g class="node" data-id="identity" data-label="&lt;b&gt;each interaction carries two things, not one&lt;/b&gt;
+a stable &lt;b&gt;causal identity&lt;/b&gt;, deciding whether the outcome may be
+delivered · and a &lt;b&gt;bounded request projection or digest&lt;/b&gt;, used for
+strict reproduction and invariants
+
+every identity includes a global &lt;b&gt;encounter ordinal&lt;/b&gt;, so repeated
+production call ids stay representable and an invariant can reject
+them as system behaviour rather than the decoder rejecting the artifact
+provider identity adds kind, origin, step, model
+tool and approval identity add kind, origin, call id, name" data-shape="rectangle">
+  <rect x="581.6119999999997" y="1325.1000000000001" width="448.01799999999974" height="189.00000000000003" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="805.6209999999996" y="1419.6000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5"><tspan x="805.6209999999996" dy="-71.50000000000001"><tspan font-weight="bold">each interaction carries two things, not one</tspan></tspan><tspan x="805.6209999999996" dy="16.900000000000002">a stable <tspan font-weight="bold">causal identity</tspan>, deciding whether the outcome may be</tspan><tspan x="805.6209999999996" dy="16.900000000000002">delivered · and a <tspan font-weight="bold">bounded request projection or digest</tspan>, used for</tspan><tspan x="805.6209999999996" dy="16.900000000000002">strict reproduction and invariants</tspan><tspan x="805.6209999999996" dy="16.900000000000002"></tspan><tspan x="805.6209999999996" dy="16.900000000000002">every identity includes a global <tspan font-weight="bold">encounter ordinal</tspan>, so repeated</tspan><tspan x="805.6209999999996" dy="16.900000000000002">production call ids stay representable and an invariant can reject</tspan><tspan x="805.6209999999996" dy="16.900000000000002">them as system behaviour rather than the decoder rejecting the artifact</tspan><tspan x="805.6209999999996" dy="16.900000000000002">provider identity adds kind, origin, step, model</tspan><tspan x="805.6209999999996" dy="16.900000000000002">tool and approval identity add kind, origin, call id, name</tspan></text>
+</g>
+<g class="node" data-id="validate" data-label="&lt;b&gt;decode, then a pure structural validator — before replay begins&lt;/b&gt;
+rejects malformed schemas · negative time · duplicate interaction
+identities · impossible static references · absent required initial values" data-shape="rectangle">
+  <rect x="1057.6299999999997" y="1123.3000000000002" width="450.24099999999964" height="70.7" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="1282.7504999999994" y="1158.65" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="1282.7504999999994" dy="-12.350000000000001"><tspan font-weight="bold">decode, then a pure structural validator — before replay begins</tspan></tspan><tspan x="1282.7504999999994" dy="16.900000000000002">rejects malformed schemas · negative time · duplicate interaction</tspan><tspan x="1282.7504999999994" dy="16.900000000000002">identities · impossible static references · absent required initial values</tspan></text>
+</g>
+<g class="node" data-id="hfail" data-label="&lt;b&gt;a wrong kind or origin, an unsafe identity mismatch, an exhausted
+program, or an unused interaction is a HarnessFailure&lt;/b&gt;
+— not a simulated system fault, and never a production RunSummary
+if it occurs after execution begins it carries the partial trace and the
+actual request projection needed to diagnose it" data-shape="rectangle">
+  <rect x="1003.3149999999995" y="1550.1000000000001" width="427.26999999999987" height="104.50000000000001" rx="0" ry="0" fill="#3a1620" stroke="#f7768e" stroke-width="0.75" />
+  <text x="1216.9499999999994" y="1602.3500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#f7c6cf"><tspan x="1216.9499999999994" dy="-29.250000000000004"><tspan font-weight="bold">a wrong kind or origin, an unsafe identity mismatch, an exhausted</tspan></tspan><tspan x="1216.9499999999994" dy="16.900000000000002">program, or an unused interaction is a HarnessFailure</tspan><tspan x="1216.9499999999994" dy="16.900000000000002">— not a simulated system fault, and never a production RunSummary</tspan><tspan x="1216.9499999999994" dy="16.900000000000002">if it occurs after execution begins it carries the partial trace and the</tspan><tspan x="1216.9499999999994" dy="16.900000000000002">actual request projection needed to diagnose it</tspan></text>
+</g>
+<g class="node" data-id="outcomes" data-label="&lt;b&gt;009 D6 · one complete terminal result&lt;/b&gt;
+&lt;b&gt;SystemRun&lt;/b&gt;: outcome · ledger_trace · interaction_log · replay_metadata
+exactly one canonical RunSummary, the final record for the run
+&lt;b&gt;HarnessFailure&lt;/b&gt;: kind · interaction position · actual request projection ·
+partial ledger trace" data-shape="rectangle">
+  <rect x="1591.3928333333329" y="1550.1000000000001" width="460.61499999999984" height="104.50000000000001" rx="0" ry="0" fill="#24262f" stroke="#6e7681" stroke-width="0.75" />
+  <text x="1821.7003333333328" y="1602.3500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="1821.7003333333328" dy="-29.250000000000004"><tspan font-weight="bold">009 D6 · one complete terminal result</tspan></tspan><tspan x="1821.7003333333328" dy="16.900000000000002"><tspan font-weight="bold">SystemRun</tspan>: outcome · ledger_trace · interaction_log · replay_metadata</tspan><tspan x="1821.7003333333328" dy="16.900000000000002">exactly one canonical RunSummary, the final record for the run</tspan><tspan x="1821.7003333333328" dy="16.900000000000002"><tspan font-weight="bold">HarnessFailure</tspan>: kind · interaction position · actual request projection ·</tspan><tspan x="1821.7003333333328" dy="16.900000000000002">partial ledger trace</tspan></text>
+</g>
+<g class="node" data-id="invariants" data-label="&lt;b&gt;009 D7 · invariants over the whole execution&lt;/b&gt;
+including the two this lifecycle owns:
+&lt;b&gt;strict-replay request equality&lt;/b&gt; and &lt;b&gt;complete interaction consumption&lt;/b&gt;
+
+&lt;b&gt;the discovery contract is itself an invariant&lt;/b&gt; — under the same manifest
+and profile, the same schema_version, generator_id, generator_version,
+seed, and initial_world run twice must produce the same resolved program,
+interaction log, outcome, and normalized trace" data-shape="rectangle">
+  <rect x="1389.5729999999994" y="40" width="471.72999999999985" height="155.20000000000002" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="1625.4379999999994" y="117.60000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5"><tspan x="1625.4379999999994" dy="-54.60000000000001"><tspan font-weight="bold">009 D7 · invariants over the whole execution</tspan></tspan><tspan x="1625.4379999999994" dy="16.900000000000002">including the two this lifecycle owns:</tspan><tspan x="1625.4379999999994" dy="16.900000000000002"><tspan font-weight="bold">strict-replay request equality</tspan> and <tspan font-weight="bold">complete interaction consumption</tspan></tspan><tspan x="1625.4379999999994" dy="16.900000000000002"></tspan><tspan x="1625.4379999999994" dy="16.900000000000002"><tspan font-weight="bold">the discovery contract is itself an invariant</tspan> — under the same manifest</tspan><tspan x="1625.4379999999994" dy="16.900000000000002">and profile, the same schema_version, generator_id, generator_version,</tspan><tspan x="1625.4379999999994" dy="16.900000000000002">seed, and initial_world run twice must produce the same resolved program,</tspan><tspan x="1625.4379999999994" dy="16.900000000000002">interaction log, outcome, and normalized trace</tspan></text>
+</g>
+<g class="node" data-id="promise" data-label="&lt;b&gt;009 D8 · the reproducibility promise, stated precisely&lt;/b&gt;
+repeating discovery under the recorded manifest and seed reproduces
+the same resolved program
+the exact program reproduces the same interaction log, outcome, and trace
+under a newer revision the program is the same regression input, but a
+changed outcome may be the intended evidence a bug was fixed —
+&lt;i&gt;replay does not promise identical output across code changes&lt;/i&gt;
+a schema migration preserves old-program decoding or pins a runner;
+silently reinterpreting an old program is forbidden" data-shape="rectangle">
+  <rect x="1224.6126666666664" y="243.20000000000002" width="473.21199999999976" height="172.10000000000002" rx="0" ry="0" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="1461.2186666666662" y="329.25" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="1461.2186666666662" dy="-63.05000000000001"><tspan font-weight="bold">009 D8 · the reproducibility promise, stated precisely</tspan></tspan><tspan x="1461.2186666666662" dy="16.900000000000002">repeating discovery under the recorded manifest and seed reproduces</tspan><tspan x="1461.2186666666662" dy="16.900000000000002">the same resolved program</tspan><tspan x="1461.2186666666662" dy="16.900000000000002">the exact program reproduces the same interaction log, outcome, and trace</tspan><tspan x="1461.2186666666662" dy="16.900000000000002">under a newer revision the program is the same regression input, but a</tspan><tspan x="1461.2186666666662" dy="16.900000000000002">changed outcome may be the intended evidence a bug was fixed —</tspan><tspan x="1461.2186666666662" dy="16.900000000000002"><tspan font-style="italic">replay does not promise identical output across code changes</tspan></tspan><tspan x="1461.2186666666662" dy="16.900000000000002">a schema migration preserves old-program decoding or pins a runner;</tspan><tspan x="1461.2186666666662" dy="16.900000000000002">silently reinterpreting an old program is forbidden</tspan></text>
+</g>
+<g class="node" data-id="version" data-label="&lt;b&gt;a seed alone is not a reproduction key&lt;/b&gt;
+any change to the PRNG, draw order, generator ranges, boundary strategy,
+or default initial world that can remap a seed requires a &lt;b&gt;generator-version
+change&lt;/b&gt;, and a pinned canary per stable generator id must fail if such a
+remap happens without the bump
+
+shrinking operates on &lt;b&gt;programs&lt;/b&gt;, preserving request causality and schema
+validity, revalidating the failure after every reduction" data-shape="rectangle">
+  <rect x="1409.3294999999994" y="920.1000000000003" width="479.1399999999998" height="155.20000000000002" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="1648.8994999999993" y="997.7000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="1648.8994999999993" dy="-54.60000000000001"><tspan font-weight="bold">a seed alone is not a reproduction key</tspan></tspan><tspan x="1648.8994999999993" dy="16.900000000000002">any change to the PRNG, draw order, generator ranges, boundary strategy,</tspan><tspan x="1648.8994999999993" dy="16.900000000000002">or default initial world that can remap a seed requires a <tspan font-weight="bold">generator-version</tspan></tspan><tspan x="1648.8994999999993" dy="16.900000000000002">change, and a pinned canary per stable generator id must fail if such a</tspan><tspan x="1648.8994999999993" dy="16.900000000000002">remap happens without the bump</tspan><tspan x="1648.8994999999993" dy="16.900000000000002"></tspan><tspan x="1648.8994999999993" dy="16.900000000000002">shrinking operates on <tspan font-weight="bold">programs</tspan>, preserving request causality and schema</tspan><tspan x="1648.8994999999993" dy="16.900000000000002">validity, revalidating the failure after every reduction</tspan></text>
+</g>
+<g class="node" data-id="corpora" data-label="&lt;b&gt;009 D11 · search is a gate, not a bag of seeds&lt;/b&gt;
+blocking PR corpus: fixed seeds plus exact promoted regression programs
+rotating scheduled corpus: a deterministically changing seed window
+each job declares an operator-accepted minimum count the gate asserts —
+a zero, silently truncated, or below-minimum window fails
+the fixed bank must collectively reach every required fault class" data-shape="rectangle">
+  <rect x="902.9304999999997" y="463.30000000000007" width="478.3989999999998" height="121.4" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="1142.1299999999997" y="524.0000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5"><tspan x="1142.1299999999997" dy="-37.70000000000001"><tspan font-weight="bold">009 D11 · search is a gate, not a bag of seeds</tspan></tspan><tspan x="1142.1299999999997" dy="16.900000000000002">blocking PR corpus: fixed seeds plus exact promoted regression programs</tspan><tspan x="1142.1299999999997" dy="16.900000000000002">rotating scheduled corpus: a deterministically changing seed window</tspan><tspan x="1142.1299999999997" dy="16.900000000000002">each job declares an operator-accepted minimum count the gate asserts —</tspan><tspan x="1142.1299999999997" dy="16.900000000000002">a zero, silently truncated, or below-minimum window fails</tspan><tspan x="1142.1299999999997" dy="16.900000000000002">the fixed bank must collectively reach every required fault class</tspan></text>
+</g>
+<g class="node" data-id="ddrv" data-label="&lt;b&gt;the real production driver&lt;/b&gt; issues an external request
+discovery never invents a tool, approval, or extension request
+disconnected from production control flow" data-shape="rectangle">
+  <rect x="56" y="812.3000000000001" width="403.55799999999977" height="70.7" rx="0" ry="0" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="257.7789999999999" y="847.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="257.7789999999999" dy="-12.350000000000001"><tspan font-weight="bold">the real production driver</tspan> issues an external request</tspan><tspan x="257.7789999999999" dy="16.900000000000002">discovery never invents a tool, approval, or extension request</tspan><tspan x="257.7789999999999" dy="16.900000000000002">disconnected from production control flow</tspan></text>
+</g>
+<g class="node" data-id="dgen" data-label="&lt;b&gt;the seeded generator&lt;/b&gt; chooses a compatible response,
+fault, and latency from that request plus explicit generator state
+choice = f(generator id/version, seed, generator state, bounded
+request projection, world state) · no ambient RNG participates" data-shape="rectangle">
+  <rect x="120.66616666666653" y="676.7" width="408.74499999999983" height="87.60000000000001" rx="0" ry="0" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="325.0386666666665" y="720.5" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="325.0386666666665" dy="-20.8"><tspan font-weight="bold">the seeded generator</tspan> chooses a compatible response,</tspan><tspan x="325.0386666666665" dy="16.900000000000002">fault, and latency from that request plus explicit generator state</tspan><tspan x="325.0386666666665" dy="16.900000000000002">choice = f(generator id/version, seed, generator state, bounded</tspan><tspan x="325.0386666666665" dy="16.900000000000002">request projection, world state) · no ambient RNG participates</tspan></text>
+</g>
+<g class="node" data-id="dnote" data-label="the choice changes production state, and therefore &lt;b&gt;which request
+arrives next&lt;/b&gt; — a generated provider outcome may contain a tool call
+and thereby cause a later production tool request
+&lt;i&gt;the seed controls the trajectory without a test copy of the state machine&lt;/i&gt;" data-shape="rectangle">
+  <rect x="487.55799999999977" y="812.3000000000001" width="443.57199999999983" height="87.60000000000001" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="709.3439999999997" y="856.1" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="709.3439999999997" dy="-20.8">the choice changes production state, and therefore <tspan font-weight="bold">which request</tspan></tspan><tspan x="709.3439999999997" dy="16.900000000000002">arrives next — a generated provider outcome may contain a tool call</tspan><tspan x="709.3439999999997" dy="16.900000000000002">and thereby cause a later production tool request</tspan><tspan x="709.3439999999997" dy="16.900000000000002"><tspan font-style="italic">the seed controls the trajectory without a test copy of the state machine</tspan></tspan></text>
+</g>
+<g class="node" data-id="strict" data-label="&lt;b&gt;strict replay&lt;/b&gt; — the reproduction contract
+causal identity &lt;i&gt;and&lt;/i&gt; recorded projections must match,
+under the recorded execution manifest and profile" data-shape="rectangle">
+  <rect x="1101.3489999999993" y="1286.0000000000002" width="345.76" height="70.7" rx="0" ry="0" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="1274.2289999999994" y="1321.3500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="1274.2289999999994" dy="-12.350000000000001"><tspan font-weight="bold">strict replay</tspan> — the reproduction contract</tspan><tspan x="1274.2289999999994" dy="16.900000000000002">causal identity <tspan font-style="italic">and</tspan> recorded projections must match,</tspan><tspan x="1274.2289999999994" dy="16.900000000000002">under the recorded execution manifest and profile</tspan></text>
+</g>
+<g class="node" data-id="regress" data-label="&lt;b&gt;regression replay&lt;/b&gt; — a newer revision
+requires compatible causal identity, records projection
+differences, and may continue, so the same environment
+outcomes exercise changed production logic
+never weakens tool-call correlation or delivers an
+outcome to a different logical request" data-shape="rectangle">
+  <rect x="1101.3489999999993" y="1376.7000000000003" width="362.80299999999994" height="121.4" rx="0" ry="0" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="1282.7504999999992" y="1437.4000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="1282.7504999999992" dy="-37.70000000000001"><tspan font-weight="bold">regression replay</tspan> — a newer revision</tspan><tspan x="1282.7504999999992" dy="16.900000000000002">requires compatible causal identity, records projection</tspan><tspan x="1282.7504999999992" dy="16.900000000000002">differences, and may continue, so the same environment</tspan><tspan x="1282.7504999999992" dy="16.900000000000002">outcomes exercise changed production logic</tspan><tspan x="1282.7504999999992" dy="16.900000000000002">never weakens tool-call correlation or delivers an</tspan><tspan x="1282.7504999999992" dy="16.900000000000002">outcome to a different logical request</tspan></text>
+</g>
+</svg>

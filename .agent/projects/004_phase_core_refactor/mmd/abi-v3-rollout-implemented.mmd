@@ -1,0 +1,88 @@
+flowchart TB
+  %% ABI v3 rollout implementation, completed 2026-07-07.
+  %% Shows durable package sources, ABI surface, core threading, extension migrations, and gates.
+  %% Grounded 2026-07-07 with tools/code-graph/extract.sh --profile=all after enabling packages/
+  %% and runtime host files in the source index. Source index: 322 files, including 84 packages/*
+  %% files, Makefile, ailang.lock, and .motoko/config/**/*.json. Graph profile: all, source_stale=false.
+
+  subgraph SIGNOFF["Operator sign-off"]
+    q2["Open Q2<br/>artifacts stay raw Json"]:::decision
+    q3["Open Q3<br/>ExtPorts = ai_step + proc_exec + clock_now + env_get"]:::decision
+  end
+
+  subgraph PKG["Durable package sources under packages/"]
+    abi["motoko-ext-abi @ 3.0<br/>ExtCtx += ports/artifacts/telemetry<br/>Compacted += artifacts"]:::pkg
+    ai["motoko-ext-compaction-ai @ 0.3.0<br/>ports-native ai_step<br/>prefix/tool-pair split<br/>artifact cache"]:::pkg
+    structural["motoko-ext-compaction-structural @ 1.1.0<br/>ABI v3 re-cert<br/>mechanical arity update"]:::pkg
+    other["active extension packages<br/>vendored as path deps"]:::pkg
+  end
+
+  subgraph LOCK["Resolution used by build and run"]
+    toml["ailang.toml<br/>path dependencies"]:::file
+    lock["ailang.lock<br/>source = path<br/>ABI 3.0 / AI 0.3.0 / structural 1.1.0"]:::file
+    registry["registry_generated.ail<br/>pkg/... register imports<br/>ABI v3 ExtensionHooks"]:::file
+  end
+
+  subgraph CORE["Core-side threading"]
+    defaults["ctx_defaults.ail<br/>noop ports + empty artifacts<br/>zero telemetry"]:::core
+    session["session.ail C2LoopState<br/>carries ext_artifacts + telemetry<br/>projects ExtPorts into ExtCtx"]:::core
+    runtime["ext/runtime.ail pre-step fold<br/>threads artifacts across stages<br/>Compacted(_, _, artifacts) writes stage result"]:::core
+    rpc["rpc.ail + smoke/DST builders<br/>ABI v3 ExtCtx construction"]:::core
+  end
+
+  subgraph DST["Gates added or kept green"]
+    l1["phase_c_l1_scenarios<br/>PASS count=13"]:::gate
+    trace["phase_c2_wiring_scenarios<br/>driven LedgerTrace invariant<br/>PASS count=7"]:::gate
+    makegate["Makefile phase_c_l1<br/>now gates driven trace suite<br/>caps IO,Env,Clock,FS,Trace"]:::gate
+    coregate["make check_core<br/>extension boot probes + core checks"]:::gate
+  end
+
+  subgraph RUN["make run path"]
+    run["make run"]:::run
+    build["build"]:::run
+    sync["sync_packages<br/>mirrors legacy .packages only<br/>does not overwrite packages/ rollout sources"]:::warn
+    launch["scripts/run-agent.sh<br/>loads default profile extensions"]:::run
+  end
+
+  q2 --> abi
+  q3 --> abi
+  abi --> ai
+  abi --> structural
+  abi --> other
+
+  ai --> toml
+  structural --> toml
+  other --> toml
+  abi --> toml
+  toml --> lock
+  lock --> registry
+
+  abi --> defaults
+  defaults --> session
+  ai --> session
+  session --> runtime
+  runtime --> trace
+  rpc --> coregate
+
+  l1 --> makegate
+  trace --> makegate
+  coregate --> build
+
+  run --> build
+  build --> sync
+  sync --> lock
+  build --> coregate
+  build --> launch
+  registry --> launch
+
+  cache["~/.ailang/cache<br/>not a source for rollout packages<br/>no ABI 3.0 / AI 0.3.0 dirs"]:::nope
+  cache -. "explicitly avoided" .-> PKG
+
+  classDef decision fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef pkg fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef file fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef core fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef gate fill:#12323a,stroke:#39c5cf,color:#c5f6fb;
+  classDef run fill:#24301c,stroke:#9ece6a,color:#d7f5b8;
+  classDef warn fill:#3a2d18,stroke:#e0af68,color:#f5dfbd;
+  classDef nope fill:#322329,stroke:#f7768e,color:#ffd0d8,stroke-dasharray:5 5;

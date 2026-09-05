@@ -1,0 +1,979 @@
+-- src/core/dst_driver_plus_compose.ail
+--
+-- `driver_plus_compose` v1 — the THIRD conformant profile (ADR-001 D5, WI-D27),
+-- and the first whose coverage MEDIATES anything.
+--
+-- Per D10 the name says what is in the system under test: the real traced driver
+-- plus `motoko_ext_compose`, whose `on_response_intercept` performs real effects
+-- through real `ExtPorts` seams. `driver_plus_no_ops` is named for what its
+-- coverage IS; so is this one, and the difference between the two names is the
+-- difference the project has been trying to build since WI-D19.
+--
+-- ============================================================================
+-- WHAT THIS PROFILE IS FOR: THE GOAL LINE'S CLAUSE 1, MADE A RECORD
+-- ============================================================================
+--
+-- The plan's goal line (decided 2026-08-09, after WI-D23) reads:
+--
+--     A graded profile that installs compose records a real session and replays
+--     it deterministically, and the run's criterion-2 evidence is non-vacuous:
+--     extension effects world-mediated, origin-tagged to the performing
+--     extension, present in the recorded program and reproduced by its replay.
+--     The evidence comes from the discovery and witness instruments over the
+--     recorded run — a dynamic fact, not a classifier verdict, so door 3 does
+--     not block it.
+--
+-- This file is the profile RECORD. The run is `scripts/dst/driver_plus_compose_dst.ail`,
+-- and the record is worth nothing without it: every criterion-2 entry below
+-- names `discovery` as its basis, and `discovery` is an EXISTENTIAL producer
+-- (see `recognised_producers` in src/core/dst_profile.ail) whose evidence is one
+-- recorded, validated, strictly-replayed session. A profile citing it and not
+-- running one would be the fail-open shape `basis` was added to close.
+--
+-- ============================================================================
+-- WHAT A READER OF v1 MUST NOT CONCLUDE — four things, each measured
+-- ============================================================================
+--
+-- **1. COMPOSE IS NOT CLASSIFIER-CLEAN, AND THIS PROFILE DOES NOT SAY IT IS.**
+-- `make ext_ambient_inventory` at the bound revision reports compose AMBIENT: 8
+-- ambient sources and 36 `ExtPorts` field calls in its transitive closure. The
+-- 8 are exactly the three classes ADR-001's goal line closes by DISCLOSURE:
+--
+--     four `std/io.println`     compose.ail:31, author_loop.ail:4,
+--                               claimcheck.ail:4, ai_compat.ail:45
+--     registration's three      config.ail (fileExists, readFile) and
+--                               register.ail (getEnvOr) — see the
+--                               `Env`/`FS` entries under D5 field 6
+--     one ambient AI            `callStreamResult`, reached only from
+--                               `handle_compose_tool`, which this profile
+--                               EXCLUDES (see below)
+--
+-- So the three slot-level barriers STAND for compose at HEAD and `make
+-- profile_definition` says so on every run. Nothing here lowers them. What this
+-- profile records is a DIFFERENT kind of evidence about a NARROWER question, and
+-- the two are not substitutes: classifier 3 asks "what could this extension do,
+-- anywhere in its closure"; `discovery` asks "what did this hook actually do,
+-- in this run, and did it go through a port". The first is universal and the
+-- second existential, and D5's criterion 2 — *"effectful only through D1
+-- world-mediated ports, with origin tagged by extension id and explicit world
+-- state returned to the host"* — is a claim about effects that were performed.
+--
+-- **2. ONE COVERED HOOK MEDIATES, NOT SEVEN.** `coverage_substance` computes
+-- `world_mediating_hooks = 1`, and that number is the profile's whole claim.
+-- Seven hooks are covered; four are criterion-1 no-ops on a declared row, two
+-- are criterion-2 entries whose port and origin clauses hold VACUOUSLY because
+-- compose binds them to constants, and ONE — `on_response_intercept` — holds all
+-- three clauses substantively. This is the first profile in the project for
+-- which `coverage_statement` takes its third branch, and the sentence it
+-- computes is the honest one:
+--
+--     extension-model coverage is NON-ZERO: 7 hook(s) covered across 1 installed
+--     extension(s), of which 1 mediate the world SUBSTANTIVELY through a D1 port
+--     and 2 satisfy criterion 2 vacuously.
+--
+-- One is a small number and it is not rounded up. It is also the first one this
+-- project has ever been able to write.
+--
+-- **3. `on_tool_handle` IS EXCLUDED, AND THAT EXCLUSION IS THE FIRST NON-EMPTY
+-- ONE IN THE PROJECT.** Compose's tool path calls `callStreamResult` — ambient
+-- AI — before it reaches anything routed, so there is no branch through
+-- `handle_compose_tool` that authors nothing (WI-D26 §5.1, §13.3). A profile
+-- that covered it would be claiming criterion 2 over a chain whose first effect
+-- is ambient. `on_tool_handle` is the ONE gated slot in the ABI, so excluding it
+-- is admissible where excluding any of the other seven would be rejected — and
+-- D5's disclosure mechanism, non-vacuous since WI-D14 but never once carrying an
+-- excluded id, carries one here. THE CONDITION (S25): the exclusion is honest
+-- only while no run under this profile dispatches a tool compose provides.
+-- `routing_violation_at` is the runtime check and the acceptance script exercises
+-- it; the graded session drives prose steps and dispatches no tool at all.
+--
+-- **4. REGISTRATION RUNS AMBIENT AND THE PROFILE'S RUNS GRANT `Env` AND `FS`.**
+-- Compose's `register_with_config` reads `getEnvOr("MOTOKO_PROFILE_DIR", ".")`
+-- (register.ail:9) and then `fileExists`/`readFile` (config.ail), before any hook
+-- is dispatched. AILANG capabilities are per PROCESS, so a run that installs
+-- compose must grant both, and the withheld-capability poison discipline `make
+-- world_state` runs for the driver DOES NOT EXTEND ACROSS COMPOSE'S
+-- REGISTRATION. That gap is not closed here and is not closed by the registration-
+-- effects amendment either, which is DRAFT and on the maintenance register.
+--
+-- What carries the determinism claim instead is the RECORD → STRICT REPLAY
+-- identity: the graded session is recorded, the program validates, the world is
+-- reconstituted from it and the replay produces a byte-identical interaction
+-- log. A registration read that varied with the host would not survive that,
+-- because the two runs would diverge. See the `Env` and `FS` entries under D5
+-- field 6, which state the gap and the substitute instrument by name.
+--
+-- ============================================================================
+-- WHAT THIS PROFILE EARNS, AND WHAT IT DOES NOT — per D10
+-- ============================================================================
+--
+-- D10: additional profiles earn coverage SEPARATELY, and this one inherits
+-- nothing from either predecessor. It re-earns the four rows that lean on an
+-- empty install list (WI-D5's tabulation) and it re-earns them on ground neither
+-- predecessor could stand on:
+--
+--   row 3  driver_only's pass is VACUOUS; driver_plus_no_ops re-earned it over
+--          four extensions that perform nothing. Re-earned here over an
+--          extension that performs something, with a NON-EMPTY excluded list.
+--   row 4  the `extension_effect_fault` waiver. Re-earned, and it is the one row
+--          whose GROUND MOVES AGAIN: see `waived_fault_classes` below.
+--   row 5  virtual time. Re-earned by measurement: compose has no ambient Clock
+--          in any hook path (WI-D26 §13.1) and reads the clock through
+--          `ExtPorts.clock_now`.
+--   row 7  the `ScratchpadResult` exemption. Re-earned on a THIRD ground:
+--          compose provides tools, so `provided_tools: []` is not available to
+--          it — the exemption rests on the tool name and on the excluded slot.
+--
+-- **The other seven rows are NOT claimed.** A row not run is a row not earned.
+--
+-- ============================================================================
+-- THE ATTRIBUTION REFERENCE AND THE ROUTED SET
+-- ============================================================================
+--
+-- Recorded as LITERALS, for the third time and for the reason the first two
+-- record them so: D4 makes a table correction re-issue every referring profile,
+-- which is only mechanically true if the profile records the content hash and
+-- something compares it. Calling `table_identity()` here would make the
+-- comparison a tautology.
+--
+-- **THE PAIR IS NOW A TRIPLE.** Every previous re-issue of this table has cost
+-- two profile-version bumps; from this file forward it costs three, and
+-- `tools/predicate-anchors/anchors.sh` carries the derived consumer list.
+--
+-- **Installing compose adds NO reachable core site.** `reachable_core_sites`
+-- adds an attributed row only when the row's hook set intersects the install
+-- list, and the table's two attributed rows belong to `test_dummy` and
+-- `scratchpad`. So the routed-set claim is the same 7/6/1 partition both
+-- predecessors compute, and the acceptance script asserts that EQUALITY rather
+-- than the numbers.
+
+module src/core/dst_driver_plus_compose
+
+import std/list as List (length)
+
+import src/core/dst_profile (
+  ProfileDefinition,
+  ExecutionManifest,
+  ProfileRejection,
+  RoutedSetClaim,
+  AttributionRef,
+  Classifier2Call,
+  ClassificationBasis,
+  Criterion2Clauses,
+  HookClassification,
+  HookClassificationEntry,
+  InstalledPackage,
+  OmittedExtension,
+  EffectFree, WorldMediated, ExplicitlyExcluded,
+  Substantively, Vacuously,
+  no_criterion_2,
+  clause_is_vacuous,
+  clause_is_substantive,
+  PackageVersion,
+  CoverageSubstance,
+  coverage_substance,
+  coverage_statement,
+  routed_set_claim,
+  waivers_from,
+  validate_definition_at_load,
+  profile_rules_version
+)
+import src/core/dst_attribution_table as Attr (
+  CoreSite,
+  attribution_rules_version,
+  reachable_core_sites
+)
+import src/core/dst_fault_catalogue as Fault (FaultClass, fault_catalogue, conditional_class_ids)
+import src/core/dst_profile_coverage as Cov (
+  coverage_rules_version,
+  AtomRef,
+  AtomIds,
+  CapabilityDisclosureIds,
+  atom_id,
+  atom_ids_id,
+  capability_kind_id,
+  CapabilityKind, PromptShaperKind, ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind
+)
+import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
+
+export pure func compose_profile_id() -> string { "driver_plus_compose" }
+
+-- v1. The first issue. There is no supersession history here yet, and when there
+-- is it goes at the TOP of this block with its date, per plan rule S15 —
+-- re-dating a claim in place is how a sentence becomes a false statement about
+-- history, and this file will carry claims that move.
+--
+-- WHAT WILL MOVE IT, PREDICTED FROM THE OTHER TWO PROFILES' HISTORY: any edit to
+-- `ext_ports_of` in `src/core/session.ail`, INCLUDING PROSE (WI-D21 measured
+-- that a comment block alone re-issued both predecessors), and any edit that
+-- moves an anchor this profile's acceptance fixture pins. The fixture pins
+-- `ext/runtime.ail:199` and `tool_phase.ail:318`, so this file joins the
+-- nine-file form WI-D24 measured, not the five-file one WI-D25 measured.
+-- v3 (2026-08-27, ADR-001 Phase C item 4 — 6.0 registration trimming).
+-- RE-ISSUED because the DENOMINATOR moved, not an anchor: compose now registers
+-- only the four atoms it binds with a real body (PromptShaper, ToolPolicy,
+-- ToolProvider, ResponseInterceptor); its constant Compactor and SolverJudge
+-- are gone, so the two VACUOUS criterion-2 entries are gone with them and the
+-- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
+-- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
+-- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
+export pure func compose_profile_version() -> string { "7" }
+
+-- The same attribution table both predecessors bind, at the same identity.
+-- THREE profiles referring to one table: D4's rule now re-issues three, and the
+-- cost of a table correction is stated here so the next item can price it
+-- without re-deriving.
+export pure func compose_attribution_ref() -> AttributionRef {
+  { source_revision: "c0fbf10",
+    -- RE-RECORDED AT 7.0 REVIEW FIX FOR v6, from
+    -- sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33.
+    -- TWO anchors moved, +4 (`3012/3122 -> 3016/3126`): the publish-before-`done`
+    -- ordering fix (review finding 4) added four lines inside `c2_loop`'"'"'s success
+    -- arm, which sits between `:1529` and the two `provider.ports.clock_now`
+    -- sites. The other three did not move and were re-derived anyway, on the
+    -- rule the previous re-baseline had to learn the hard way: an anchor that
+    -- still matches is not an anchor that is still right.
+    --
+    -- All five anchored expressions are byte-identical at their offsets. Pure
+    -- offset drift; the routed clock set is unchanged at six sites. The
+    -- exit-manifest publish reads no clock.
+    -- RE-RECORDED AT ABI 7.0 FOR v5, from
+    -- sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66.
+    -- FIVE anchors moved, all +2 (`1162/1421/1527/3010/3120 ->
+    -- 1164/1423/1529/3012/3122`), and the cause is two import lines in
+    -- `session.ail` for the exit-intent seam (`ext/exit_manifest`,
+    -- `ext/ctx_defaults`), both above every anchor.
+    --
+    -- ONE OF THE FIVE DID NOT FAIL THE CHECK, and that is the part worth
+    -- recording: at +2 the `:1162` anchor landed on `let clock_now = func(...)`
+    -- instead of `let reading = p.clock_now(w0);` — a different expression
+    -- carrying the same substring, so the grep matched and the anchor silently
+    -- re-pointed. Re-baselining only the four that shouted would have frozen a
+    -- green anchor onto the wrong line. All five were re-derived.
+    --
+    -- All five anchored expressions were compared to
+    -- `git show cec2e25~1:src/core/session.ail` character by character and are
+    -- byte-identical: pure offset drift, no site changed identity, routing or
+    -- attribution. The exit-manifest publish reads no clock, so the routed set
+    -- is the same six it was.
+    --
+    -- THE WIDTH WAS MIS-PRICED FIRST AND THE GATE CORRECTED IT. The re-baseline
+    -- note in `anchors.sh` initially claimed a THREE-file cascade on the grounds
+    -- that no fixture-carried anchor moved — true, and not the rule. `make
+    -- driver_only` answered `the attribution table was corrected and driver_only
+    -- was not re-issued (D4)`, which is the six-file form: the three profile
+    -- versions and their refs are pinned to the TABLE, not to the anchors it
+    -- happens to hold. The claim in `anchors.sh` is corrected to match.
+    -- WI-D27: recorded for the first time, from the live table at the bound
+    -- revision — `driver_only_attribution_ref` and `no_ops_attribution_ref`
+    -- carry the same pair and the full re-issue history behind it. This file has
+    -- no history to record because it has never been re-issued; what it records
+    -- instead is that it now shares theirs.
+    -- #160: re-recorded with both predecessors', from
+    -- sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc
+    -- — this file's FIRST re-issue, and it cost nothing but this comment, which
+    -- is what WI-D27 predicted when it wrote that a third profile widens every
+    -- future re-baseline. An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    -- MOT-130: re-recorded with both predecessors', from
+    -- sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55
+    -- — this file's SECOND re-issue, and again it cost nothing but this comment.
+    -- All five session anchors moved +14, pushed by a Z3 contract on
+    -- `trace_sensitive_key`. An anchor re-measurement, not a table correction.
+    -- See `driver_only_attribution_ref`.
+    content_hash: "sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4" }
+}
+
+-- ---------------------------------------------------------------------------
+-- The one installed extension
+-- ---------------------------------------------------------------------------
+--
+-- ONE, deliberately. The four zero-barrier extensions `driver_plus_no_ops`
+-- installs are installable here too and are DECLINED, with the reason recorded
+-- in `not_installed()` below: this profile's claim IS its substance ratio, and
+-- adding thirty-two no-op hooks would move `world_mediating_hooks` from 1 of 7
+-- to 1 of 39 without adding one mediated effect. Coverage that dilutes the
+-- number it is measured by is coverage bought to look like something else.
+export pure func installed_extension_ids() -> [string] { ["compose"] }
+
+pure func packages_of(ids: [string]) -> [InstalledPackage] {
+  match ids {
+    [] => [],
+    id :: rest => package_of(id) :: packages_of(rest)
+  }
+}
+
+-- `source_path` is the module that BINDS the hooks — the scan-root rule's
+-- subject and classifier 3's closure root. For compose that is `register.ail`,
+-- which is also where registration's `getEnvOr` lives; the two facts are the
+-- same file and that is not a coincidence (WI-D15).
+pure func package_of(id: string) -> InstalledPackage {
+  { extension_id: id, package_id: "sunholo/motoko_ext_compose", version: "0.2.4",
+    source_path: "packages/motoko-ext-compose/register.ail" }
+}
+
+-- ---------------------------------------------------------------------------
+-- The per-hook classification: THREE kinds of entry, not two
+-- ---------------------------------------------------------------------------
+--
+-- `driver_plus_no_ops` has two kinds — criterion 1 on a declared row, criterion
+-- 2 on classifier 3 — and both predecessors' `excluded` lists are empty. This
+-- profile has three, and the third is the one D5's disclosure mechanism was
+-- written for and has never carried:
+--
+--   FOUR ROWLESS SLOTS, criterion 1, basis `declared_row`, kind Assumed.
+--   `on_describe_tools`, `on_build_system_prompt`, `on_budget_plan` and
+--   `on_tool_policy` declare NO effect row in the ABI. Compose binds all four to
+--   constants or to pure functions of the config. The basis is READ and the
+--   record says so; ADR:1415 calls that reading an interim rule and an
+--   ASSUMPTION and this profile does not upgrade it.
+--
+--   THREE ROWED SLOTS, criterion 2, basis `discovery`, kind Measured. Criterion
+--   1 is unavailable for them — a named binding cannot declare narrower than a
+--   closed ABI slot — and classifier 3 cannot clear compose (see the header). So
+--   they rest on the DYNAMIC producer, and each records how each of criterion
+--   2's three clauses holds:
+--
+--     on_response_intercept   ports SUBSTANTIVELY, origin_tag SUBSTANTIVELY,
+--                             world_state SUBSTANTIVELY. The graded run records
+--                             an `ExtensionEffect` interaction for compose's
+--                             `check_snippet`, stamped `origin = "compose"` by
+--                             the fold, and the program strictly replays.
+--     on_pre_step             ports VACUOUSLY, origin_tag VACUOUSLY, world_state
+--     on_solver_candidate     SUBSTANTIVELY. Compose binds both to constants —
+--                             `PassThrough` and `NoDecision`, each returning
+--                             `next_state: ctx.world` (compose.ail:1109-1126).
+--                             They are dispatched on every step of the graded
+--                             run and perform nothing, so clauses 1 and 2 hold
+--                             over an empty set exactly as they do for the four
+--                             no-op extensions — measured dynamically here
+--                             rather than statically there.
+--
+--   ONE GATED SLOT, EXCLUDED, basis `disclosure`, kind Assumed. `on_tool_handle`.
+--   See the header: its chain reaches ambient AI. `classification_agrees` checks
+--   this entry against D5 field 9's excluded list, so the basis is not
+--   self-certifying.
+--
+-- THE ROWED/ROWLESS SPLIT IS A FACT ABOUT THE ABI. It is stated once, below,
+-- because AILANG cannot read the ABI's effect rows, and
+-- `tools/profile_definition/check_compose_profile.py` re-derives it from
+-- `packages/motoko-ext-abi/types.ail` on every run and fails if this list
+-- disagrees. Same discipline classifier 2's call inventory gets, same reason:
+-- both readings type-check and the stale one is silent.
+-- B8: hook ids are ATOM ids, `kind[index]`; the rowed KINDS at index 0 and the
+-- one gated atom is `tool_provider[0]`. Item 4: compose no longer registers a
+-- Compactor or a SolverJudge, so two of these four ids name atoms compose does
+-- not hold — the list stays the ABI FACT (the guard compares its kinds against
+-- types.ail) and `criterion_2_slot_ids` intersects it with the registration.
+-- A FACT ABOUT THE ABI, not a decision: the atoms whose `Capability` payload
+-- declares a non-empty effect row. `exit_intent[0]` joined at 7.0 (`! {FS}`),
+-- and `check_fixtures.py` re-derives this list from types.ail on every run and
+-- fails when the two readings disagree -- which is how it was caught here
+-- rather than silently narrowing what this profile claims to cover.
+--
+-- Listing it does NOT widen coverage: `criterion_2_slot_ids` intersects this
+-- with the atoms compose actually REGISTERS, and compose registers no
+-- `ExitIntent`, so the covered set is unchanged.
+export pure func rowed_slot_ids() -> [string] {
+  ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]",
+   "exit_intent[0]"]
+}
+
+-- The one slot this profile excludes. Separate from `rowed_slot_ids` because it
+-- is a DECISION and that one is a fact about the ABI; folding them together is
+-- how a decision starts reading as a derivation.
+export pure func excluded_slot_ids() -> [string] { ["tool_provider[0]"] }
+
+-- The rowed atoms this profile actually covers: the ABI fact, restricted to
+-- the atoms compose REGISTERS, minus the decision — computed rather than
+-- restated so the three cannot drift. Item 4: one atom, `response_interceptor[0]`.
+export pure func criterion_2_slot_ids() -> [string] {
+  remove_ids(keep_ids(rowed_slot_ids(), atom_id_strs(atom_ids_of(registered_atoms()))), excluded_slot_ids())
+}
+
+-- The covered rowed atoms whose port and origin clauses hold over an EMPTY
+-- SET, because compose binds them to constants. Item 4: NONE — the two constant
+-- bindings (Compactor, SolverJudge) were exactly the atoms trimming removed, so
+-- `no_op_hooks == 0` is what the substance computes now (v2: 2).
+export pure func vacuous_criterion_2_slot_ids() -> [string] { [] }
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
+}
+
+pure func remove_ids(xs: [string], drop: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(drop, x) then remove_ids(rest, drop) else x :: remove_ids(rest, drop)
+  }
+}
+
+pure func keep_ids(xs: [string], keep: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(keep, x) then x :: keep_ids(rest, keep) else keep_ids(rest, keep)
+  }
+}
+
+-- The revision each producer ran at. A STAMP, not a liveness check — a profile
+-- is issued at a revision and the tree moves under it. What keeps it honest is
+-- that the guard re-runs the producers on every run and fails if the live
+-- verdicts disagree with what these entries claim, so a stale stamp beside a
+-- still-true measurement is visible as a stamp and a stale stamp beside a
+-- changed measurement is RED.
+export pure func measured_at() -> string { "52ed505" }
+
+-- CRITERION 2, ALL THREE CLAUSES SUBSTANTIVE. The first entry of this shape in
+-- the project, and the sentence under each clause is what the acceptance script
+-- asserts rather than what this comment says:
+--
+--   (1) ports       the recorded program contains an `ExtensionEffect`
+--                   interaction. Only `ExtPorts`'s recording adapter writes that
+--                   class (WI-D24), and an ambient call writes none, so the
+--                   interaction's PRESENCE is the evidence. SUBSTANTIVE.
+--   (2) origin_tag  the interaction's `identity_origin` is "compose", stamped by
+--                   the fold in `ext/runtime.ail` — not by the hook, not by the
+--                   recorder, not by the fixture. SUBSTANTIVE.
+--   (3) world_state `ResponseInterceptOutcome` carries `next_state`, compose
+--                   threads it through the whole `dir_make → clock_now →
+--                   file_write → check_snippet → file_remove` chain, and the
+--                   program STRICTLY REPLAYS — which a chain that dropped a
+--                   successor world cannot do. SUBSTANTIVE.
+pure func mediating_criterion_2() -> Criterion2Clauses {
+  { ports: Substantively, origin_tag: Substantively, world_state: Substantively }
+}
+
+-- CRITERION 2 WITH TWO CLAUSES VACUOUS, for the two slots compose binds to
+-- constants. Identical in shape to `driver_plus_no_ops`'s entries and DIFFERENT
+-- in basis: there the emptiness is a static fact about four closures, here it is
+-- a dynamic fact about two bindings that were dispatched and performed nothing.
+pure func constant_criterion_2() -> Criterion2Clauses {
+  { ports: Vacuously, origin_tag: Vacuously, world_state: Substantively }
+}
+
+pure func classification_of(slot_id: string) -> HookClassification {
+  if contains_str(excluded_slot_ids(), slot_id) then ExplicitlyExcluded
+  else if contains_str(rowed_slot_ids(), slot_id) then WorldMediated
+  else EffectFree
+}
+
+pure func basis_of(slot_id: string) -> ClassificationBasis {
+  if contains_str(excluded_slot_ids(), slot_id) then
+    { producer: "disclosure", revision: measured_at() }
+  else if contains_str(rowed_slot_ids(), slot_id) then
+    { producer: "discovery", revision: measured_at() }
+  else
+    { producer: "declared_row", revision: measured_at() }
+}
+
+pure func clauses_of(slot_id: string) -> Criterion2Clauses {
+  if contains_str(excluded_slot_ids(), slot_id) then no_criterion_2()
+  else if contains_str(vacuous_criterion_2_slot_ids(), slot_id) then constant_criterion_2()
+  else if contains_str(rowed_slot_ids(), slot_id) then mediating_criterion_2()
+  else no_criterion_2()
+}
+
+pure func entries_for(ext_id: string, atoms: [AtomRef]) -> [HookClassificationEntry] {
+  match atoms {
+    [] => [],
+    a :: rest => {
+      let id = Cov.atom_id(a);
+      let e: HookClassificationEntry =
+        { extension_id: ext_id, hook_id: id, classification: classification_of(id),
+          basis: basis_of(id), clauses: clauses_of(id) };
+      e :: entries_for(ext_id, rest)
+    }
+  }
+}
+
+-- Item 4 (6.0 trimming): THE ATOM LIST IS A CLAIM ABOUT compose's OWN
+-- REGISTRATION (`packages/motoko-ext-compose/compose.ail`), stated as literals
+-- and cross-checked on every run against B2's enumeration by
+-- `check_compose_profile.py` — a list that reads more or fewer atoms than the
+-- package writes is red. compose binds four atoms with a real body:
+--   PromptShaper (`on_build_system_prompt`), ToolPolicy (`on_tool_policy_with_mode`),
+--   ToolProvider (`provided_tools()`, `on_tool_handle`) and
+--   ResponseInterceptor (`on_response_intercept`).
+-- Until item 4 this was `atoms_at_zero(all_capability_kinds())` — one per kind.
+pure func kinds_at_zero(ks: [CapabilityKind]) -> [AtomRef] {
+  match ks { [] => [], k :: rest => ({ kind: k, index: 0 }) :: kinds_at_zero(rest) }
+}
+
+pure func registered_atoms() -> [AtomRef] {
+  kinds_at_zero([PromptShaperKind, ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind])
+}
+
+pure func classifications_of(ids: [string]) -> [HookClassificationEntry] {
+  match ids {
+    [] => [],
+    id :: rest => entries_for(id, registered_atoms()) ++ classifications_of(rest)
+  }
+}
+
+pure func atom_ids_of(atoms: [AtomRef]) -> [AtomIds] {
+  match atoms { [] => [], a :: rest => ({ kind: Cov.capability_kind_id(a.kind), index: a.index }) :: atom_ids_of(rest) }
+}
+
+pure func drop_atom_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(ids, Cov.atom_ids_id(x)) then drop_atom_ids(rest, ids) else x :: drop_atom_ids(rest, ids)
+  }
+}
+
+pure func keep_atom_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(ids, Cov.atom_ids_id(x)) then x :: keep_atom_ids(rest, ids) else keep_atom_ids(rest, ids)
+  }
+}
+
+
+-- D5 field 9. IDS, never counts. **THE FIRST NON-EMPTY `excluded` LIST IN THE
+-- PROJECT.** Both predecessors disclose eight covered and zero excluded, which
+-- exercises the disclosure's shape and not its purpose — row 3's clause exists
+-- so that a profile which does NOT cover a slot has to say which, by name, and
+-- until this file nothing ever had to.
+pure func disclosures_of(ids: [string]) -> [CapabilityDisclosureIds] {
+  match ids {
+    [] => [],
+    id :: rest => {
+      let d: CapabilityDisclosureIds =
+        { extension_id: id,
+          atoms: atom_ids_of(registered_atoms()),
+          covered: drop_atom_ids(atom_ids_of(registered_atoms()), excluded_slot_ids()),
+          excluded: keep_atom_ids(atom_ids_of(registered_atoms()), excluded_slot_ids()) };
+      d :: disclosures_of(rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The fourteen that are NOT installed
+-- ---------------------------------------------------------------------------
+--
+-- Completeness is the point: installed plus omitted is every extension in
+-- `ailang.toml`'s `[extensions] packages`, checked against the resolved list by
+-- the guard rather than against this file. An extension in neither is a decision
+-- INHERITED rather than taken, which is what WI-D7's trigger exists to refuse.
+--
+-- THREE reasons, not one, because three different things are true.
+pure func declined_reason() -> string {
+  "NOT INSTALLED BY CHOICE, and it is the only reason in this profile that is not a barrier. This extension stands at ZERO barriers at the bound revision — classifier 3 (make ext_ambient_inventory) reports it PORT-MEDIATED with 0 ambient sources and 0 ExtPorts field calls in its transitive closure, and tools/profile_definition/check_fixtures.py re-derives that per (extension, slot) pair on every run — so it IS installable in a conformant profile, and driver_plus_no_ops v9 installs it and earns all eight of its slots. It is declined HERE because this profile's claim is a RATIO and not a count: coverage_substance computes world_mediating_hooks = 1 of 7 covered hooks, and installing four extensions with eight no-op slots each would make that 1 of 39 while adding not one mediated effect. Per WI-D2's rule a reason must name what would have to CHANGE for the decision to reverse: nothing about this extension — what would have to change is this profile's subject, which is compose's mediation and not the size of the install list. The coverage it would add is not lost, it is earned by driver_plus_no_ops, and per D10 neither profile inherits the other's rows."
+}
+
+pure func barrier_reason() -> string {
+  "NOT INSTALLED, and un-installable in a conformant profile at this revision rather than declined. Three barrier slots stand for it — on_pre_step, on_response_intercept and on_solver_candidate each declare a non-empty ABI effect row and are unconditionally dispatched, so criterion 1 fails on the declared row and D5 forbids installing an extension with any unconditionally-dispatched hook excluded. Criterion 2 is not available either, and that is a MEASUREMENT rather than an absence of one, per D1's rule that a reason records a measurement: classifier 3 (make ext_ambient_inventory) reports this extension AMBIENT — at least one ambient effect source in its transitive module closure — so criterion 2's first clause FAILS on evidence and WI-D13's per-(extension, slot) derivation leaves all three standing. AND THE DYNAMIC PRODUCER DOES NOT RESCUE IT, which is the clause this profile adds to the reason WI-D14 wrote: `discovery` is admissible only over a run that actually exercised the hook and recorded a world-mediated, origin-tagged effect for it, and this profile records exactly ONE graded session, through compose. An extension the session never dispatches has no dynamic evidence either, so citing `discovery` for it would be a basis with no run behind it. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: world-MEDIATION of the effects it performs, which is a port-surface change, and not anything this profile can decide. Re-derived on every run by tools/profile_definition/check_fixtures.py, which prints the standing count per extension."
+}
+
+pure func omit_each(ids: [string], reason: string) -> [OmittedExtension] {
+  match ids {
+    [] => [],
+    id :: rest => {
+      let o: OmittedExtension = { extension_id: id, reason: reason };
+      o :: omit_each(rest, reason)
+    }
+  }
+}
+
+pure func not_installed() -> [OmittedExtension] {
+  [{ extension_id: "compaction_ai",
+     reason: "NOT INSTALLED, and it is the sharpest of the seventeen. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. WHAT WI-D27 ADDS: this profile now has a producer that can speak about behaviour rather than rows, so compaction_ai is the extension most likely to be installable in the NEXT profile of this kind — a graded run that dispatches its on_pre_step through ExtPorts.ai_step against a scripted provider would produce exactly the evidence `discovery` reads. That run is not in this item and the omission stands until it exists; naming it here is what stops the possibility from being rediscovered as a surprise." }]
+    ++ omit_each(["compaction_structural", "decision_framework", "empty_stop_guard",
+                  "progress_contract_guard"], declined_reason())
+    -- `repetition_guard` joined ailang.toml's [extensions] packages and this profile
+    -- named it in neither list -- WI-D7's "decision INHERITED rather than taken". It
+    -- omits on the measured basis the others here share: `make ext_ambient_inventory`
+    -- reports it AMBIENT (1 ambient source, 0 ExtPorts field calls), so criterion 2's
+    -- first clause fails on evidence, and its `SolverJudge` binding declares
+    -- `! {Process}` under unconditional dispatch, so criterion 1 fails on the row.
+    ++ omit_each(["a2a", "agentcli", "ailang_docs", "context_mode", "exa_search", "herdr",
+                  "mcp", "microrag", "omnigraph", "repetition_guard", "scratchpad",
+                  "test_dummy"], barrier_reason())
+}
+
+-- ---------------------------------------------------------------------------
+-- The definition
+-- ---------------------------------------------------------------------------
+
+export pure func driver_plus_compose() -> ProfileDefinition {
+  let cat = fault_catalogue();
+  let ids = installed_extension_ids();
+  {
+    profile_id: compose_profile_id(),
+    profile_version: compose_profile_version(),
+
+    -- D5 field 2.
+    installed_packages: packages_of(ids),
+    hook_classifications: classifications_of(ids),
+
+    -- D5 field 9. The first disclosure in the project with an id in `excluded`.
+    disclosures: disclosures_of(ids),
+
+    -- D5 field 3. TWO entries differ from `driver_plus_no_ops`'s and the second
+    -- is the one this profile exists to change.
+    adapter_boundaries: [
+      { boundary_id: "provider.model_step", included: true,
+        note: "Ports.model_step and the ProviderExchange it returns; a deterministic run binds the scripted adapter, and the boundary is in scope either way" },
+      { boundary_id: "provider.wire_parser", included: false,
+        note: "the provider's on-the-wire response parser. D3 excludes wire-parser faults from the fault catalogue, and THIS is the field that scopes that exclusion to a named boundary rather than leaving it as prose" },
+      { boundary_id: "tool.envelope_dispatch", included: true,
+        note: "tool_envelope_dispatch and tool_phase's typed ToolCallEnvelope contract" },
+      { boundary_id: "tool.process_exec", included: true,
+        note: "Ports.tool_exec, whose ToolExecution threads successor state (A12). INCLUDED AND NOW REACHED FROM TWO SIDES: the driver's own tool phase, and — since WI-D26 routed compose's four exec sites — an installed extension's `ExtPorts.tool_handle`, which lands on the same seam through the ext bridge" },
+      { boundary_id: "approval.stdin_channel", included: false,
+        note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
+      { boundary_id: "extension.abi", included: true,
+        note: "the motoko-ext-abi hook surface, ABI 7.0 (the ExitIntent variant; was 6.0 at B8, 5.0 before it). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
+      { boundary_id: "extension.ext_ports", included: true,
+        note: "the ExtPorts surface an extension uses to reach the world. **INCLUDED, and this is the whole difference between this profile and both predecessors.** driver_only excluded it because it installs nothing; driver_plus_no_ops excluded it BY MEASUREMENT, classifier 3 reporting 0 ExtPorts field calls in each installed closure, and named it 'the boundary WI-C5's compose-bearing profile would have to include'. This is that profile and it includes it: classifier 3 reports 36 ExtPorts field calls in compose's closure, and the graded session records one of them — a tool_handle — as an origin-tagged interaction in the recorded program" }
+    ],
+
+    -- D5 field 4. The driver's own four, plus the one this profile adds. It is
+    -- NOT `driver_plus_no_ops`'s `extension.hook_is_state_preserving`, and the
+    -- difference is the point: that promise is FALSE here. Compose's intercept
+    -- makes a directory, writes a file, runs a check and removes the file, and
+    -- every one of those advances the world.
+    resource_models: [
+      { model_id: "tool.all_or_nothing",
+        promise: "a failed tool call performs no partial logical update; the call either completes and is observable in the ledger or it does not and is not" },
+      { model_id: "tool.deadline_outcome_is_stated",
+        promise: "a tool completing after its declared deadline states whether the work completed before or after the observation; the outcome is never left ambiguous" },
+      { model_id: "provider.no_partial_commit",
+        promise: "a provider error, including a partial stream followed by an error, commits no message to the conversation; the logical state is the state before the step" },
+      { model_id: "approval.single_shot",
+        promise: "an approval decision is taken once per request and is not re-read; a denial is terminal for that request rather than retried" },
+      { model_id: "extension.effects_are_recorded_and_attributed",
+        promise: "every effect an installed hook performs arrives through an ExtPorts field call, is recorded as an interaction in the execution program, and carries the performing extension's own id as its origin. The contrapositive is what makes it falsifiable and is what the acceptance script asserts: an effect that is NOT in the log did not go through a port, so a hook that performs more than the log records has broken this promise rather than merely gone unobserved. This replaces driver_plus_no_ops's `extension.hook_is_state_preserving`, which is FALSE for compose — its intercept advances the world four times per dispatch" }
+    ],
+
+    -- D5 field 5. D1's collecting sink is bounded by exactly this list, and it
+    -- is UNCHANGED from both predecessors: an extension that performs effects
+    -- adds no new PROJECTION, because the effects it performs are recorded into
+    -- the interaction log that `result.interaction_log` already names. Adding
+    -- one speculatively would permit an emission this profile cannot produce.
+    diagnostic_projections: [
+      { projection_id: "ledger.trace",
+        note: "the LedgerTrace the traced driver returns; D6's recorded axis" },
+      { projection_id: "ledger.run_summary",
+        note: "the single final RunSummary record every terminal path emits (D6.1, WI-A9)" },
+      { projection_id: "result.interaction_log",
+        note: "what the world served the driver, in order (D6, WI-A9). For this profile it carries the ExtensionEffect class as well, which is where the criterion-2 evidence is read" },
+      { projection_id: "result.replay_metadata",
+        note: "the interpretation context a trace is useless without (D8)" }
+    ],
+
+    -- D5 field 6. THIS IS WHERE THIS PROFILE IS MOST DIFFERENT FROM ITS
+    -- PREDECESSORS AND WHERE A READER SHOULD BE MOST CAREFUL. Two of the five
+    -- capabilities are GRANTED to this profile's runs, because compose's
+    -- registration reads them before any hook is dispatched, and the instrument
+    -- for those two is NOT the poison pair.
+    forbidden_capabilities: [
+      { capability: "Clock",
+        instrument: "make world_state — the Clock poison PAIR: the deterministic entry point completes with Clock withheld, and the live world dies with it withheld. AND for the installed set: compose reads the clock ONLY through ExtPorts.clock_now (WI-D26 §13.1 measured 0 ambient Clock sources in any compose hook path), so the pair covers the installed closure as well as the driver. The graded session's clock advances are recorded interactions and the strict replay reproduces them" },
+      { capability: "AI",
+        instrument: "make world_state — the provider poison PAIR: the deterministic entry point completes with AI withheld, and the live world dies with it withheld. NAMED LIMIT, AND IT IS THE REASON on_tool_handle IS EXCLUDED: compose's `handle_compose_tool` calls `callStreamResult`, an AMBIENT provider call, so the pair does NOT cover that chain. This profile excludes the slot that reaches it rather than covering it and disclosing the gap in prose — the exclusion is in D5 field 9 where a machine can read it, and `routing_violation_at` fires if a run dispatches it anyway" },
+      { capability: "Process",
+        instrument: "make world_state — the typed tool-contract poison PAIR: a fully-seeded world completes with Process withheld, and an UNSEEDED one dies. AND for the installed set this is now a SUBSTANTIVE claim rather than a vacuous one: WI-D26 routed compose's four `std/process.exec` sites onto ExtPorts.tool_handle and removed the std/process imports, so classifier 3 reports ZERO ambient {Process} sources in compose's closure. The graded session serves compose's `ailang check` from WorldState.ext_effects; before WI-D26 the same run spawned a real subprocess and the replay spawned it again" },
+      { capability: "Rand",
+        instrument: "make world_state — no module under src/core/*.ail reaches std/rand, checked structurally; D1 names an ambient RNG as a prohibited hiding place for world state. AND for the installed set: classifier 3 reports no ambient {Rand} source in compose's closure, so the structural claim extends to the installed package by measurement rather than by scope" },
+      { capability: "Env",
+        instrument: "**GRANTED TO THIS PROFILE'S RUNS, NOT WITHHELD, AND THE POISON PAIR DOES NOT COVER IT.** compose's `register_with_config` reads `getEnvOr(\"MOTOKO_PROFILE_DIR\", \".\")` at packages/motoko-ext-compose/register.ail:9, before any hook is dispatched, and AILANG capabilities are per PROCESS — so a run that installs compose grants {Env} to the whole process and `make world_state`'s Env poison pair (WI-D3) says nothing about compose's registration. THE GAP IS STATED AND NOT CLOSED. What carries the determinism claim in its place is the RECORD → STRICT REPLAY identity asserted by scripts/dst/driver_plus_compose_dst.ail: the graded session is recorded, the program validates, a world is reconstituted from it and the replay produces an identical interaction log — which a registration read that varied with the host could not survive. DISCLOSED, per ADR-001's goal line clause 2, which closes registration effects by the per-process-capability measurement (S22/D13/WI-D6) rather than by routing. The registration-effects amendment that would write this into the ADR is DRAFT and on the maintenance register; it is deliberately not landed by this item" },
+      { capability: "FS",
+        instrument: "**GRANTED TO THIS PROFILE'S RUNS, for the same reason as Env and at a different site.** compose's config load reads `fileExists` and `readFile` at packages/motoko-ext-compose/config.ail, reached from `register_with_config`, so registration touches the real filesystem before any hook runs. THE HOOK PATHS DO NOT: WI-D26 §13.1 measured 0 ambient FS sources in any compose hook path, and compose's intercept reaches the filesystem only through ExtPorts.dir_make / file_write / file_remove, all three of which are recorded interaction classes (WI-D19). So the FS claim splits exactly where the Env one does — registration ambient and disclosed, hooks mediated and recorded — and the graded session's recorded program is what shows the second half. This capability has no entry in either predecessor's list because neither installed anything that reads a file" }
+    ],
+
+    -- D5 field 7. READ from A7's catalogue, both the id list and each condition.
+    --
+    -- **THE `extension_effect_fault` WAIVER RESTS ON GROUND NEITHER PREDECESSOR
+    -- STOOD ON, AND IT IS THE NARROWEST IT HAS EVER BEEN.** The catalogue's
+    -- condition reads: "the selected D5 profile installs an extension with an
+    -- effectful hook that issues this world request; driver_only installs none,
+    -- so it waives this class by construction (plan P4)". driver_only waived it
+    -- by EMPTINESS. driver_plus_no_ops waived it by MEASUREMENT — four
+    -- extensions installed, none with an effectful hook. This profile installs
+    -- an extension WITH an effectful hook, and still waives the class, because
+    -- the class is delivered by `ExtPorts.ai_step` SPECIFICALLY and compose's
+    -- only path to a provider is `callStreamResult` — ambient, and behind the
+    -- excluded `on_tool_handle`. So the waiver now rests on a per-FIELD fact
+    -- rather than a per-extension one, and it would fail the moment this profile
+    -- covered `on_tool_handle` or installed `compaction_ai`.
+    --
+    -- THE CONDITION TEXT NAMES `driver_only` INSIDE IT and the machinery
+    -- requires a verbatim match, so this profile records a sentence about a
+    -- different profile — the third to do so. REPORTED, not fixed: it is a
+    -- fault-catalogue content change with its own version bump and its own
+    -- ripple across three profiles now, which is exactly the price WI-D14
+    -- declined to pay when the defect had two consumers.
+    waived_fault_classes: waivers_from(cat, conditional_class_ids(cat)),
+    exercised_fault_classes: [],
+
+    -- D5 field 8. Literals, deliberately: see the header.
+    attribution_ref: compose_attribution_ref(),
+
+    -- D5 field 10.
+    omitted_extensions: not_installed(),
+
+    -- A10 decision 1. IDENTICAL to both predecessors', and that identity is a
+    -- measured result rather than a copy: installing compose adds no attributed
+    -- row, because the table's two attributed rows belong to `test_dummy` and
+    -- `scratchpad`. The acceptance script asserts the routed claim equals the
+    -- empty-install one rather than restating 7/6/1.
+    unrouted_reachable_sites: [
+      { site_key: "src/core/test/stub_step.ail:203",
+        instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read",
+        why_unroutable: "live_ports' clock adapter — the one place the driver's call graph reads a real wall clock, by design. It is IN this profile's reachable set even though a deterministic run binds the scripted adapter instead: D4's profile-reachable is INSTALLATION-scoped, not execution-scoped (A10 decision 1)." }
+    ],
+
+    -- D5 obligation 2's roots. compose resolves under `packages/`.
+    scan_roots: ["src", "packages"]
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The claims, computed
+-- ---------------------------------------------------------------------------
+
+export pure func compose_routed_claim() -> RoutedSetClaim {
+  routed_set_claim(driver_plus_compose())
+}
+
+export pure func compose_substance() -> CoverageSubstance {
+  coverage_substance(driver_plus_compose())
+}
+
+export pure func compose_coverage_statement() -> string {
+  coverage_statement(driver_plus_compose())
+}
+
+export pure func validate_compose_profile(
+  loading_against: string,
+  discovered: [CoreSite],
+  calls: [Classifier2Call],
+  catalogue: [FaultClass]
+) -> [ProfileRejection] {
+  validate_definition_at_load(driver_plus_compose(), loading_against, discovered, calls, catalogue)
+}
+
+-- ---------------------------------------------------------------------------
+-- The per-run execution manifest
+-- ---------------------------------------------------------------------------
+
+pure func versions_of(ps: [InstalledPackage]) -> [PackageVersion] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let v: PackageVersion = { package_id: p.package_id, version: p.version };
+      v :: versions_of(rest)
+    }
+  }
+}
+
+-- D5's manifest is PER RUN, so it is built rather than declared, and
+-- `extension_packages` is projected from the install list rather than restated.
+export pure func compose_manifest(
+  source_revision: string,
+  toolchain: string,
+  abi_version: string,
+  normalized_configuration: string,
+  classifier_2_set: [string],
+  unrouted_fields: [string],
+  scan_root_commit: string
+) -> ExecutionManifest {
+  {
+    source_revision: source_revision,
+    toolchain: toolchain,
+    extension_packages: versions_of(driver_plus_compose().installed_packages),
+    abi_version: abi_version,
+    profile_id: compose_profile_id(),
+    profile_version: compose_profile_version(),
+    event_vocabulary_version: event_vocabulary_version(),
+    normalized_configuration: normalized_configuration,
+    classifier_2_set: classifier_2_set,
+    unrouted_fields: unrouted_fields,
+    scan_roots: driver_plus_compose().scan_roots,
+    scan_root_commit: scan_root_commit,
+    profile_rules_version: profile_rules_version(),
+    coverage_rules_version: Cov.coverage_rules_version(),
+    attribution_rules_version: Attr.attribution_rules_version(),
+    fault_catalogue_version: Fault.fault_catalogue_version()
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. The load-time acceptance AND the graded demonstration are
+-- scripts/dst/driver_plus_compose_dst.ail; these assert the RECORD's shape.
+-- ---------------------------------------------------------------------------
+
+-- The three D5 fields that name the install set must be ONE set, stated three
+-- ways. Asserted against `registered_atoms()` rather than 8.
+pure func test_the_install_set_is_one_set_stated_three_ways() -> bool
+  tests [((), true)]
+  {
+    let d = driver_plus_compose();
+    let n = List.length(installed_extension_ids());
+    n == 1
+      && List.length(d.installed_packages) == n
+      && List.length(d.disclosures) == n
+      && List.length(d.hook_classifications) == n * List.length(registered_atoms())
+  }
+
+-- THE FIRST NON-EMPTY EXCLUDED LIST. Asserted as a partition of the eight slots
+-- rather than as two counts, so a slot that fell out of both lists is caught
+-- here as well as by the coverage machinery.
+pure func test_the_disclosure_excludes_exactly_one_slot() -> bool
+  tests [((), true)]
+  {
+    let d = driver_plus_compose();
+    partitions_all(d.disclosures, List.length(registered_atoms()))
+  }
+
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs { [] => [], x :: rest => Cov.atom_ids_id(x) :: atom_id_strs(rest) }
+}
+
+pure func partitions_all(ds: [CapabilityDisclosureIds], n: int) -> bool {
+  match ds {
+    [] => true,
+    x :: rest =>
+      List.length(x.excluded) == 1
+        && contains_str(atom_id_strs(x.excluded), "tool_provider[0]")
+        && List.length(x.covered) == n - 1
+        && not contains_str(atom_id_strs(x.covered), "tool_provider[0]")
+        && partitions_all(rest, n)
+  }
+}
+
+-- THE ITEM'S CENTRAL ASSERTION ABOUT THE RECORD, and it is the first time any
+-- profile in this project can make it: the coverage is non-zero AND at least one
+-- covered hook mediates the world substantively. `world_mediating_hooks == 1` is
+-- asserted exactly rather than as `> 0`, because the number IS the claim and a
+-- future edit that quietly promoted a vacuous entry should move it.
+pure func test_the_coverage_mediates_exactly_one_hook() -> bool
+  tests [((), true)]
+  {
+    let s = compose_substance();
+    -- Item 4: four registered atoms — two rowless (criterion 1), one rowed and
+    -- mediating (criterion 2), one excluded (the gated ToolProvider).
+    s.installed_extensions == 1
+      && s.covered_hooks == 3
+      && s.excluded_hooks == 1
+      && s.criterion_1_hooks == 2
+      && s.criterion_2_hooks == 1
+      && s.no_op_hooks == 0
+      && s.world_mediating_hooks == 1
+  }
+
+-- The computed statement takes `coverage_statement`'s THIRD branch, which no
+-- profile has ever reached. Asserted through the substance rather than by
+-- string-matching the sentence: the branch is selected by
+-- `world_mediating_hooks > 0`, so this asserts the selector and the two
+-- predecessors' own tests assert theirs.
+pure func test_the_statement_is_the_mediating_branch() -> bool
+  tests [((), true)]
+  {
+    let s = compose_substance();
+    s.world_mediating_hooks > 0 && s.covered_hooks > 0 && s.installed_extensions > 0
+      && compose_coverage_statement() != ""
+  }
+
+-- Every entry walked, so a future edit that changes one is caught. THREE kinds,
+-- each with its own admissible basis: excluded on `disclosure`, criterion 1 on
+-- `declared_row`, criterion 2 on `discovery` — and criterion 2 split again into
+-- the mediating entry and the two constant ones.
+pure func test_every_entry_rests_on_its_own_admissible_basis() -> bool
+  tests [((), true)]
+  {
+    entries_ok(driver_plus_compose().hook_classifications, 0)
+  }
+
+pure func entries_ok(cs: [HookClassificationEntry], seen: int) -> bool {
+  match cs {
+    [] => seen == 4,
+    c :: rest => {
+      let ok = match c.classification {
+        WorldMediated =>
+          c.basis.producer == "discovery"
+            && clause_is_substantive(c.clauses.world_state)
+            && (if contains_str(vacuous_criterion_2_slot_ids(), c.hook_id) then
+                  clause_is_vacuous(c.clauses.ports) && clause_is_vacuous(c.clauses.origin_tag)
+                else
+                  clause_is_substantive(c.clauses.ports)
+                    && clause_is_substantive(c.clauses.origin_tag)),
+        EffectFree =>
+          c.basis.producer == "declared_row"
+            && not clause_is_vacuous(c.clauses.ports)
+            && not clause_is_substantive(c.clauses.world_state),
+        ExplicitlyExcluded =>
+          c.basis.producer == "disclosure"
+            && c.hook_id == "tool_provider[0]"
+            && not clause_is_substantive(c.clauses.ports)
+            && not clause_is_vacuous(c.clauses.ports)
+      };
+      ok && c.basis.revision != "" && entries_ok(rest, seen + 1)
+    }
+  }
+}
+
+-- Installing compose added NO reachable core site, so the routed claim is the
+-- same partition the empty install list computes. An equality against the table,
+-- not against 7/6/1.
+pure func test_installing_added_no_reachable_site() -> bool
+  tests [((), true)]
+  {
+    let c = compose_routed_claim();
+    c.reachable_total == c.routed + c.declared_unrouted
+      && c.reachable_total == List.length(Attr.reachable_core_sites([]))
+      && List.length(driver_plus_compose().unrouted_reachable_sites) == c.declared_unrouted
+  }
+
+-- Installed plus omitted is the whole installable set. The count is checked
+-- against `ailang.toml` by the guard; what is asserted here is DISJOINTNESS,
+-- which no external check would notice.
+pure func test_installed_and_omitted_are_disjoint() -> bool
+  tests [((), true)]
+  {
+    let d = driver_plus_compose();
+    disjoint(omitted_ids(d.omitted_extensions), installed_extension_ids())
+      && List.length(d.omitted_extensions) == 17
+  }
+
+pure func omitted_ids(os: [OmittedExtension]) -> [string] {
+  match os { [] => [], o :: rest => o.extension_id :: omitted_ids(rest) }
+}
+
+pure func disjoint(xs: [string], ys: [string]) -> bool {
+  match xs { [] => true, x :: rest => if contains_str(ys, x) then false else disjoint(rest, ys) }
+}
+
+-- The covered rowed slots are the ABI's rowed set, restricted to what compose
+-- REGISTERS, minus this profile's one decision — computed rather than restated,
+-- because a second literal list would let the decision and the derivation drift.
+--
+-- FIVE rowed atoms at ABI 7.0, four before it: `exit_intent[0]` declares
+-- `! {FS}`. The covered count is UNCHANGED at one, and that is the property
+-- worth asserting rather than the raw total — compose registers no `ExitIntent`,
+-- so the intersection drops it and the profile's coverage claim is exactly what
+-- it was. A test pinned to the total alone would have gone red on an ABI
+-- addition that changes nothing about this profile.
+pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
+  tests [((), true)]
+  {
+    List.length(rowed_slot_ids()) == 5
+      && List.length(excluded_slot_ids()) == 1
+      && List.length(criterion_2_slot_ids()) == 1
+      && not contains_str(criterion_2_slot_ids(), "tool_provider[0]")
+      && contains_str(criterion_2_slot_ids(), "response_interceptor[0]")
+  }
+
+-- The manifest's extension list is a PROJECTION of the install list.
+pure func test_manifest_projects_the_install_list() -> bool
+  tests [((), true)]
+  {
+    let m = compose_manifest("r", "t", "7.0", "{}", ["env_get"], [], "r");
+    List.length(m.extension_packages) == List.length(driver_plus_compose().installed_packages)
+      && List.length(m.extension_packages) == 1
+      && m.profile_id == compose_profile_id()
+      && m.profile_version == compose_profile_version()
+      && m.profile_rules_version == profile_rules_version()
+  }

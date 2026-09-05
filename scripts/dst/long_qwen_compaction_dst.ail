@@ -1,0 +1,1544 @@
+module scripts/dst/long_qwen_compaction_dst
+
+import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
+import std/io (println, exit)
+import std/json (Json, jo, kv, js)
+import std/list (length)
+import std/option (None)
+import std/result (Result, Ok, Err)
+import std/string (contains, length as string_length, substring)
+import std/trace as Trace
+import src/core/config (CostRates, VerificationConfig)
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead, FileRead, ToolInvocation, ToolExecution, ToolCompleted)
+import src/core/ext_world (token_to_world, world_to_token, dropped_successor, world_advanced, world_interaction_count)
+import src/core/test/stub_step (StepProvider, Ported, recording_ports, scripted_ports, bounded_scripted_ports, scripted_provider_input_tokens, scripted_world_state, prose_step, empty_rt)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/phase_vocab (
+  LedgerTrace,
+  LedgerRecord,
+  WireRecord,
+  CompactionStageRecord,
+  DecisionRecord,
+  InMemoryStageOutcome,
+  TraceStageApplied,
+  TraceStageRejected,
+  TraceStageObserved,
+  TraceStagePassed,
+  LedgerEvent,
+  ProviderCallPrepared,
+  ProviderResult,
+  CompactionExhausted,
+  ErrorEvent,
+  RunSummary,
+  SealExhausted,
+  SealSystemPromptEmpty,
+  payload_messages,
+  seal_compacted_payload,
+  split_for_compaction
+)
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
+  ExtRuntime,
+  ExtRegistry,
+  ExtCtx,
+  BudgetPlan,
+  PromptPatch,
+  BudgetPatch,
+  ToolPolicyDecision,
+  ToolHandleDecision,
+  ResponseInterceptDecision,
+  FinalizeDecision,
+  PreStepDecision,
+  PassThrough,
+  PassThroughObserved,
+  Compacted,
+  Allow,
+  Delegate,
+  Handled,
+  NoIntercept,
+  NoDecision,
+  Msg,
+  DiagnosticField
+)
+import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
+import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
+import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
+import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
+
+let qwen_model = "openrouter/qwen/qwen3.6-35b-a3b"
+let runtime_status_call_id = "runtime-status-after-compaction"
+
+type LongStats = { applied: int, rejected: int, prepared: int, provider_results: int, projection: [string], final_count: int, final_digest: string, runtime_status_ok: bool }
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func budget() -> BudgetPlan {
+  { total: 40, solver: 40, verifier: 0 }
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func abi_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+-- WI-B2a. `ExtPorts.ai_step` takes `[Msg]` (4 fields); `Ports.model_step` takes
+-- `[Message]` (5, since v0.33.0 added `images`). The `ai_step` bridge below
+-- crosses that seam, so it needs the same converter WI-B3 settled elsewhere:
+-- ADD `images: []`, because `Msg` has no vision parts to copy and dropping the
+-- field is only correct in the other direction. Mirrors `compaction_ai.msg_to_message`.
+func msg_to_message(m: Msg) -> Message {
+  { role: m.role, content: m.content, tool_calls: m.tool_calls,
+    tool_call_id: m.tool_call_id, images: [] }
+}
+
+func msgs_to_messages(ms: [Msg]) -> [Message] {
+  match ms {
+    [] => [],
+    m :: rest => msg_to_message(m) :: msgs_to_messages(rest)
+  }
+}
+
+func abi_tool(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func abi_assistant(content: string, calls: [ToolCall]) -> Msg {
+  { role: "assistant", content: content, tool_calls: calls, tool_call_id: "" }
+}
+
+func tool_call(id: string) -> ToolCall {
+  { id: id, name: "LongResult", arguments: "{\"marker\":\"${id}\"}" }
+}
+
+func runtime_status_call() -> ToolCall {
+  { id: runtime_status_call_id, name: "MotokoRuntimeStatus", arguments: "{}" }
+}
+
+func step_marker(n: int) -> string {
+  "long-qwen-step-${show(n)}"
+}
+
+func filler_block() -> string {
+  " deterministic tool payload abcdefghijklmnopqrstuvwxyz 0123456789 abcdefghijklmnopqrstuvwxyz 0123456789"
+}
+
+func repeat_block(n: int) -> string {
+  if n <= 0 then "" else "${filler_block()}${repeat_block(n - 1)}"
+}
+
+-- Issue #165's fixture needs strings near one MiB, but std/string.repeat is
+-- recursive in AILANG v0.33.0 and reaches the interpreter's depth ceiling at
+-- that size. Doubling gives the fixture logarithmic construction depth while
+-- keeping the measured char/4 token counts exact.
+func headroom_megabyte_block() -> string {
+  let x1 = "u";
+  let x2 = "${x1}${x1}";
+  let x4 = "${x2}${x2}";
+  let x8 = "${x4}${x4}";
+  let x16 = "${x8}${x8}";
+  let x32 = "${x16}${x16}";
+  let x64 = "${x32}${x32}";
+  let x128 = "${x64}${x64}";
+  let x256 = "${x128}${x128}";
+  let x512 = "${x256}${x256}";
+  let x1024 = "${x512}${x512}";
+  let x2048 = "${x1024}${x1024}";
+  let x4096 = "${x2048}${x2048}";
+  let x8192 = "${x4096}${x4096}";
+  let x16384 = "${x8192}${x8192}";
+  let x32768 = "${x16384}${x16384}";
+  let x65536 = "${x32768}${x32768}";
+  let x131072 = "${x65536}${x65536}";
+  let x262144 = "${x131072}${x131072}";
+  let x524288 = "${x262144}${x262144}";
+  "${x524288}${x524288}"
+}
+
+func headroom_block(n: int) -> string {
+  substring(headroom_megabyte_block(), 0, n)
+}
+
+func headroom_raw_limit() -> int { 262144 }
+func headroom_output_allowance() -> int { 65536 }
+func headroom_expected_effective_segment_limit() -> int { 196288 }
+
+func headroom_call(id: string) -> ToolCall {
+  { id: id, name: "HeadroomFixture", arguments: "{}" }
+}
+
+-- Before structural compaction this segment is exactly 208,980 char/4 tokens.
+-- Only the older of the two tool messages can move. The floor tier rewrites it
+-- to 26 tokens, yielding a 207,239-token repinned payload: 79% of 262,144 and
+-- only 54,905 tokens of response headroom.
+func headroom_segment() -> [Msg] {
+  [
+    abi_msg("user", headroom_block(827496)),
+    abi_assistant("", [headroom_call("headroom-old"), headroom_call("headroom-recent")]),
+    abi_tool("headroom-old", headroom_block(8348)),
+    abi_tool("headroom-recent", headroom_block(76))
+  ]
+}
+
+func headroom_history() -> [Message] {
+  [msg("system", headroom_block(1280))] ++ msgs_to_messages(headroom_segment())
+}
+
+func headroom_small_history() -> [Message] {
+  [msg("system", headroom_block(1280)), msg("user", "small control")]
+}
+
+func headroom_raw_overflow_history() -> [Message] {
+  [msg("system", headroom_block(1280)), msg("user", headroom_block(1048576))]
+}
+
+func headroom_fail_open_history() -> [Message] {
+  [msg("system", "s"), msg("user", headroom_block(200000))]
+}
+
+func headroom_direct_ctx(limit: int, msgs: [Msg]) -> ExtCtx {
+  {
+    task: "issue-165",
+    step: 0,
+    model: qwen_model,
+    context_limit: limit,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: budget(),
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: msgs,
+    state_key: "issue-165",
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(),
+    world: empty_ext_world()
+  }
+}
+
+func long_stdout(current: string, next: string) -> string {
+  "tool-result current=${current} next=${next}${repeat_block(8)}"
+}
+
+func is_summarizer_prompt(msgs: [Message]) -> bool {
+  match msgs {
+    m :: [] => m.role == "user" && length(m.tool_calls) == 0 && m.tool_call_id == "",
+    _ => false
+  }
+}
+
+func contains_marker(msgs: [Message], marker: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => if contains(m.content, marker) || m.tool_call_id == marker then true else contains_marker(rest, marker)
+  }
+}
+
+func highest_agent_idx_from_markers(msgs: [Message], n: int) -> int {
+  if n <= 0 then 1
+  else if contains_marker(msgs, step_marker(n)) then n
+  else highest_agent_idx_from_markers(msgs, n - 1)
+}
+
+func step_result(content: string, calls: [ToolCall], finish: string) -> StepResult {
+  {
+    message: { role: "assistant", content: content, tool_calls: [], tool_call_id: "", images: [] },
+    tool_calls: calls,
+    finish_reason: finish,
+    input_tokens: 100,
+    output_tokens: 40,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0
+  }
+}
+
+func routed_step(max_tools: int, model: string, msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+  if is_summarizer_prompt(msgs) then {
+    let prompt = match msgs { m :: [] => m.content, _ => "" };
+    Ok(step_result("summary:${show(string_length(prompt))}", [], "stop"))
+  } else {
+    let idx = highest_agent_idx_from_markers(msgs, max_tools + 1);
+    if idx <= max_tools then {
+      let marker = step_marker(idx);
+      Ok(step_result("calling LongResult ${marker}", [tool_call(marker)], "tool_calls"))
+    } else if not contains_marker(msgs, runtime_status_call_id) then {
+      Ok(step_result("checking runtime status after compaction", [runtime_status_call()], "tool_calls"))
+    } else {
+      Ok(step_result("long qwen deterministic run complete", [], "stop"))
+    }
+  }
+}
+
+-- WI-A12 made `Ports.clock_now` state-threaded. This fixture pinned a constant
+-- epoch, and the state-threaded equivalent of a constant is a world whose clock
+-- does not advance — so it returns the reading WITHOUT a successor advance,
+-- preserving this fixture's behaviour exactly. It is a fixture, not a driver
+-- adapter, and nothing here asserts on elapsed time.
+func fixed_clock(state: WorldState) -> ClockReading ! {Clock} {
+  { now_ms: 123456789, next_state: state }
+}
+
+-- The same constant for `ExtPorts.clock_now`. WI-C5 widened that field to thread
+-- the world token, so this fixture now mirrors `fixed_clock` above exactly:
+-- same constant, world returned unchanged, because a fixture clock advances no
+-- cursor.
+func fixed_ext_clock(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 123456789, next_state: world }
+}
+-- WI-A12 made `Ports.env_get` state-threaded; this fixture always served the
+-- caller's fallback, so the threaded form does the same and returns the world
+-- unchanged. `fixed_ext_env` is the un-widened `ExtPorts` shape (WI-C5's).
+-- WI-D3 gave this seam a key to answer. Every other key still falls back.
+--
+-- `MOTOKO_MODELS_FILE` used to come from the PROCESS environment: the
+-- `compaction_dst` recipe set it, `context_usage` read it ambiently, and this
+-- suite's context limit was therefore a property of how the target was invoked
+-- rather than of the world it declares. Now the world says it, and the recipe
+-- does not have to.
+func fixed_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  let value = if key == "MOTOKO_MODELS_FILE" then qwen_catalog_path() else fallback;
+  { value: value, next_state: state }
+}
+
+func qwen_catalog_path() -> string { "scripts/fixtures/qwen36-small-model-catalog.json" }
+
+-- WI-D3. THE FIXTURE'S OWN CATALOGUE, DECLARED RATHER THAN INHERITED.
+--
+-- Until WI-D3 this suite's context limit came from a file on the HOST reached
+-- through a PROCESS environment variable — `compaction_dst` set
+-- MOTOKO_MODELS_FILE and `context_usage` read both the variable and the file
+-- ambiently. Both halves are the dependency acceptance row 10 exists to remove,
+-- and it was load-bearing: with the world serving neither, the driver resolves 0
+-- and the two scenarios that need a small limit stop reaching their invariants.
+--
+-- The value is the one `scripts/fixtures/qwen36-small-model-catalog.json`
+-- carries: a synthetic raw 66,736-token window whose 65,536-token provider
+-- output allowance leaves the suite's original 1,200-token working budget.
+-- The path is the one the driver COMPUTES from `fixed_env`'s answer, not one
+-- this fixture asserts.
+func fixed_file(state: WorldState, path: string) -> FileRead ! {FS} {
+  let here = path == qwen_catalog_path();
+  let content =
+    if here then "{\"context_limits\":{\"openrouter/qwen/qwen3.6-35b-a3b\":66736}}"
+    else "";
+  { present: here, content: content, next_state: state }
+}
+
+func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback }
+-- WI-A12 widened `Ports.tool_exec` to the typed contract. This fixture served
+-- an empty string; the typed equivalent is an empty completion for the id that
+-- was actually asked about, with the world unchanged. `fixed_ext_exec` was the
+-- un-widened `ExtPorts.tool_handle` shape until WI-D16 widened that row; it now
+-- threads the token and returns it UNCHANGED, which is S12's identity
+-- transition and correct here because this fixture executes nothing.
+func fixed_exec(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  -- WI-D22: `exit_code: -1`, because this fixture executes nothing.
+  { outcome: ToolCompleted({ tool_call_id: inv.call.id, content: "", exit_code: -1 }), next_state: state }
+}
+
+-- `_tool, _args_json` per the ABI row (WI-D23 renamed this fixture's `_name,
+-- _args` with the census's other stragglers); `exit_code: -1` because a fixed
+-- stub executes nothing and 0 would assert a success no process produced.
+func fixed_ext_exec(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", exit_code: -1, next_state: world } }
+
+-- WI-D16's file read seam. `present: false` rather than an empty-string
+-- content claim — see `ExtFileRead`. This fixture has no filesystem behind it.
+func fixed_ext_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: world } }
+
+-- WI-D17's mutators. `ok: false` for the same reason `present: false` is the
+-- read's answer: this fixture has no filesystem behind it, and a no-op that
+-- claimed success would state something about the world that is not true.
+func fixed_ext_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+func fixed_ext_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+-- WI-D18's directory trio, same answer and same reason.
+func fixed_ext_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} { { kind: ExtPathMissing, next_state: world } }
+func fixed_ext_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} { { present: false, entries: [], next_state: world } }
+func fixed_ext_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+
+func runtime_hooks() -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  long_runtime()
+}
+
+func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
+  let model_step = func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> ProviderExchange ! {AI, IO, Trace} {
+    { emissions: [], result: routed_step(max_tools, model, msgs, on_chunk), next_state: state }
+  };
+  let base = ports_shape_probe(model_step);
+  -- WI-D3 added `file_read`. This site rebuilds the record FIELD BY FIELD rather
+  -- than by record update, so a new seam in `Ports` lands here as a type error
+  -- rather than being inherited — which is the trade this shape makes and the
+  -- reason the other construction sites use `{ base | ... }`. It takes the
+  -- deterministic file seam from `base`, like `approval_read`.
+  {
+    model_step: base.model_step,
+    approval_read: base.approval_read,
+    clock_now: fixed_clock,
+    env_get: fixed_env,
+    file_read: fixed_file,
+    -- WI-D17 added `file_write`/`file_remove`. Taken from `base` — the
+    -- deterministic pair — for the same reason `file_read` takes `fixed_file`:
+    -- this fixture has no filesystem behind it and no site in it writes one.
+    file_write: base.file_write,
+    file_remove: base.file_remove,
+    -- WI-D18's directory class, from `base` for the same reason.
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: base.dir_make,
+    tool_exec: fixed_exec,
+    -- WI-D24's extension-effect dispatch, from `base` for the directory class's
+    -- reason: this fixture installs no extension, so no site in it reaches the
+    -- seam, and the deterministic default is the honest binding.
+    ext_effect_exec: base.ext_effect_exec
+  }
+}
+
+func headroom_catalog_path() -> string { "issue-165-model-catalog.json" }
+
+func headroom_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  let value = if key == "MOTOKO_MODELS_FILE" then headroom_catalog_path() else fallback;
+  { value: value, next_state: state }
+}
+
+func headroom_file(raw_limit: int, state: WorldState, path: string) -> FileRead ! {FS} {
+  let here = path == headroom_catalog_path();
+  let content =
+    if here then "{\"context_limits\":{\"${qwen_model}\":${show(raw_limit)}}}"
+    else "";
+  { present: here, content: content, next_state: state }
+}
+
+-- A terminal scripted provider for the headroom cases. When capacity
+-- enforcement is enabled it behaves like a shared-window provider: the
+-- request is rejected if input plus the configured maximum response cannot
+-- fit. The main-call invariant remains stronger — an unsafe request must be
+-- stopped BEFORE this port is reached — so ProviderCallPrepared and
+-- ProviderResult remain forbidden evidence for the unsafe driver arms.
+--
+-- `enforce_capacity` is explicit because raw-limit 0 and reserve-exceeds-limit
+-- are Motoko fail-open policy fixtures, not physically meaningful provider
+-- configurations. Those controls use an unbounded provider deliberately.
+func headroom_ports(raw_limit: int, enforce_capacity: bool) -> Ports ! {AI, FS, IO, Trace} {
+  let base =
+    if enforce_capacity then bounded_scripted_ports({
+      context_window: raw_limit,
+      max_output_tokens: headroom_output_allowance()
+    })
+    else scripted_ports();
+  {
+    base |
+    clock_now: fixed_clock,
+    env_get: headroom_env,
+    file_read: \state path. headroom_file(raw_limit, state, path),
+    tool_exec: fixed_exec
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Strict-provider fixture (models hy3:free/Novita). Rejects any payload that
+-- contains an assistant tool_call without a matching tool result (an orphaned
+-- tool_call — invalid per the OpenAI tool-call protocol). The scripted run's
+-- SECOND agent turn emits a tool_call with finish_reason="stop" (the hy3:free
+-- quirk); the loop must still run that tool and continue, so the strict
+-- provider never sees an orphaned-tool-call payload.
+-- ---------------------------------------------------------------------------
+
+func strict_has_tool_result_for(msgs: [Message], id: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => if m.role == "tool" && m.tool_call_id == id then true else strict_has_tool_result_for(rest, id)
+  }
+}
+
+func strict_calls_all_answered(all: [Message], calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => if strict_has_tool_result_for(all, c.id) then strict_calls_all_answered(all, rest) else false
+  }
+}
+
+func strict_orphan_scan(all: [Message], rest: [Message]) -> bool {
+  match rest {
+    [] => false,
+    m :: tail =>
+      if m.role == "assistant" && length(m.tool_calls) > 0 && not strict_calls_all_answered(all, m.tool_calls)
+      then true
+      else strict_orphan_scan(all, tail)
+  }
+}
+
+func payload_has_orphaned_toolcall(msgs: [Message]) -> bool {
+  strict_orphan_scan(msgs, msgs)
+}
+
+func routed_step_strict(_model: string, msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+  if payload_has_orphaned_toolcall(msgs) then
+    Err({ code: "ProtocolError", message: "strict provider: payload contains an unanswered tool_call", retryable: false })
+  else if is_summarizer_prompt(msgs) then
+    Ok(step_result("strict summary", [], "stop"))
+  else {
+    let idx = highest_agent_idx_from_markers(msgs, 4);
+    if idx <= 3 then {
+      -- idx==2 is the hy3:free quirk: tool_calls present, finish_reason="stop".
+      let finish = if idx == 2 then "stop" else "tool_calls";
+      Ok(step_result("calling LongResult ${step_marker(idx)} - task still in progress, continuing", [tool_call(step_marker(idx))], finish))
+    } else if not contains_marker(msgs, runtime_status_call_id) then
+      Ok(step_result("checking runtime status after compaction", [runtime_status_call()], "tool_calls"))
+    else
+      Ok(step_result("strict deterministic run complete", [], "stop"))
+  }
+}
+
+func strict_ports() -> Ports ! {AI, IO, Trace} {
+  let model_step = func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> ProviderExchange ! {AI, IO, Trace} {
+    { emissions: [], result: routed_step_strict(model, msgs, on_chunk), next_state: state }
+  };
+  let base = ports_shape_probe(model_step);
+  -- WI-D3 added `file_read`. This site rebuilds the record FIELD BY FIELD rather
+  -- than by record update, so a new seam in `Ports` lands here as a type error
+  -- rather than being inherited — which is the trade this shape makes and the
+  -- reason the other construction sites use `{ base | ... }`. It takes the
+  -- deterministic file seam from `base`, like `approval_read`.
+  {
+    model_step: base.model_step,
+    approval_read: base.approval_read,
+    clock_now: fixed_clock,
+    env_get: fixed_env,
+    file_read: fixed_file,
+    -- WI-D17 added `file_write`/`file_remove`. Taken from `base` — the
+    -- deterministic pair — for the same reason `file_read` takes `fixed_file`:
+    -- this fixture has no filesystem behind it and no site in it writes one.
+    file_write: base.file_write,
+    file_remove: base.file_remove,
+    -- WI-D18's directory class, from `base` for the same reason.
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: base.dir_make,
+    tool_exec: fixed_exec,
+    -- WI-D24's extension-effect dispatch, from `base` for the directory class's
+    -- reason: this fixture installs no extension, so no site in it reaches the
+    -- seam, and the deterministic default is the honest binding.
+    ext_effect_exec: base.ext_effect_exec
+  }
+}
+
+func run_strict() -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    long_runtime(),
+    "strict provider orphaned-toolcall dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    initial_history(),
+    ".",
+    40,
+    false,
+    0,
+    no_rates(),
+    Ported(strict_ports())
+  )
+}
+
+func compaction_ai_hook() -> FixtureHooks ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 60,
+    keep_recent: 8,
+    keep_recent_tokens: 600,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
+  fixture_hooks("compaction_ai", {
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ . { prepend: [], append: [] },
+    budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    compact: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { compact_with_ai(ctx, msgs, cfg) },
+    policy: \_ _ . Allow,
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  })
+}
+
+func structural_hook() -> FixtureHooks {
+  fixture_hooks("compaction_structural", {
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ . { prepend: [], append: [] },
+    budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    compact: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+      compact_for_pre_step(ctx, msgs)
+    }, next_state: ctx.world } },
+    policy: \_ _ . Allow,
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  })
+}
+
+func next_marker_from_call_id(id: string) -> string {
+  if id == step_marker(1) then step_marker(2)
+  else if id == step_marker(2) then step_marker(3)
+  else if id == step_marker(3) then step_marker(4)
+  else if id == step_marker(4) then step_marker(5)
+  else if id == step_marker(5) then step_marker(6)
+  else if id == step_marker(6) then step_marker(7)
+  else if id == step_marker(7) then step_marker(8)
+  else if id == step_marker(8) then step_marker(9)
+  else if id == step_marker(9) then step_marker(10)
+  else if id == step_marker(10) then step_marker(11)
+  else if id == step_marker(11) then step_marker(12)
+  else step_marker(13)
+}
+
+func long_tool_hook() -> FixtureHooks {
+  fixture_hooks("long_result_tool", {
+    tools: ["LongResult"],
+    describe: \_ . [{ name: "LongResult", description: "deterministic long-result fixture", parameters: "{\"type\":\"object\"}" }],
+    prompt: \_ . { prepend: [], append: [] },
+    budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    compact: \ctx _. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace},
+    policy: \_ _ . Allow,
+    provide: func(ctx: ExtCtx, call) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+      let next = next_marker_from_call_id(call.id);
+      Handled({
+        tool_call_id: call.id,
+        tool: call.tool,
+        exit_code: 0,
+        stdout: long_stdout(call.id, next),
+        stderr: "",
+        metadata: jo([kv("fixture", js("long_qwen")), kv("next", js(next))])
+      })
+    }, next_state: ctx.world } },
+    intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  })
+}
+
+func long_runtime() -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let reg: ExtRegistry = { entries: [compaction_ai_hook(), structural_hook(), long_tool_hook()] };
+  { registry: reg, strict_mode: false, verification: v }
+}
+
+func structural_only_runtime() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let reg: ExtRegistry = { entries: [structural_hook()] };
+  { registry: reg, strict_mode: false, verification: v }
+}
+
+func headroom_budget_probe_hook() -> FixtureHooks {
+  fixture_hooks("headroom_budget_probe", {
+    tools: [],
+    describe: \_ . [],
+    prompt: \_ . { prepend: [], append: [] },
+    budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
+    compact: \ctx _. {
+      decision: PassThroughObserved("headroom.context_limit", [
+        { key: "context_limit", value: show(ctx.context_limit) }
+      ]),
+      next_state: ctx.world
+    } ! {AI, IO, Trace},
+    policy: \_ _ . Allow,
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
+  })
+}
+
+func headroom_runtime() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let reg: ExtRegistry = { entries: [headroom_budget_probe_hook(), structural_hook()] };
+  { registry: reg, strict_mode: false, verification: v }
+}
+
+func run_headroom_case(raw_limit: int, history: [Message], rt: ExtRuntime, enforce_provider_capacity: bool) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    rt,
+    "issue 165 output headroom dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    history,
+    ".",
+    4,
+    false,
+    0,
+    no_rates(),
+    Ported(headroom_ports(raw_limit, enforce_provider_capacity))
+  )
+}
+
+func initial_history() -> [Message] {
+  [
+    msg("system", "deterministic long qwen compaction dst system prompt"),
+    msg("user", "Start the long deterministic tool loop. ${step_marker(1)}")
+  ]
+}
+
+func run_long() -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    long_runtime(),
+    "long qwen compaction dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    initial_history(),
+    ".",
+    40,
+    false,
+    0,
+    no_rates(),
+    Ported(long_ports(12))
+  )
+}
+
+func digest_msgs(msgs: [Message], acc: int) -> string {
+  match msgs {
+    [] => show(acc),
+    m :: rest => digest_msgs(rest, acc + string_length(m.role) + string_length(m.content) + string_length(m.tool_call_id) + length(m.tool_calls))
+  }
+}
+
+func record_projection(r: LedgerRecord) -> string {
+  match r {
+    CompactionStageRecord(s) => {
+      let tag = match s.outcome {
+        TraceStageApplied(note) => "applied:${note}",
+        TraceStageRejected(reason) => "rejected:${reason}",
+        TraceStageObserved(code, fields) => "observed:${code}:${show(fields)}",
+        TraceStagePassed => "passed"
+      };
+      "stage step=${show(s.step)} ext=${s.ext_id} ${tag}"
+    },
+    WireRecord(ev) => event_projection(ev),
+    DecisionRecord(d) => "decision step=${show(d.step)} ${d.decision}"
+  }
+}
+
+func event_projection(ev: LedgerEvent) -> string {
+  match ev {
+    ProviderCallPrepared(i) => "prepared step=${show(i.step)} model=${i.model} msg=${show(i.msg_count)} est=${show(i.estimated_input_tokens)} sys=${show(i.system_prefix_count)} chars=${show(i.system_prefix_chars)} sys_digest=${i.system_prefix_digest} digest=${i.payload_digest}",
+    ProviderResult(i) => "provider_result step=${show(i.step)} finish=${i.finish_reason} tools=${show(i.tool_calls)}",
+    CompactionExhausted(info) => "compaction_exhausted step=${show(info.step)}",
+    ErrorEvent(info) => "error code=${info.code}",
+    RunSummary(info) => "run_summary finish=${info.finish_reason} steps=${show(info.steps_executed)} error=${info.error}",
+    _ => "event"
+  }
+}
+
+func projection_records(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest => record_projection(r) :: projection_records(rest)
+  }
+}
+
+func applied_count(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let inc = match r {
+        CompactionStageRecord(s) => if s.ext_id == "compaction_ai" then match s.outcome { TraceStageApplied(_) => 1, _ => 0 } else 0,
+        _ => 0
+      };
+      inc + applied_count(rest)
+    }
+  }
+}
+
+func rejected_count(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let inc = match r {
+        CompactionStageRecord(s) => match s.outcome { TraceStageRejected(_) => 1, _ => 0 },
+        _ => 0
+      };
+      inc + rejected_count(rest)
+    }
+  }
+}
+
+func prepared_count(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let inc = match r { WireRecord(ProviderCallPrepared(_)) => 1, _ => 0 };
+      inc + prepared_count(rest)
+    }
+  }
+}
+
+func provider_result_count(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let inc = match r { WireRecord(ProviderResult(_)) => 1, _ => 0 };
+      inc + provider_result_count(rest)
+    }
+  }
+}
+
+func has_exhausted_or_system_empty(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => false,
+    r :: rest => {
+      let here = match r {
+        WireRecord(CompactionExhausted(_)) => true,
+        WireRecord(ErrorEvent(info)) => info.code == "SystemPromptEmpty",
+        _ => false
+      };
+      here || has_exhausted_or_system_empty(rest)
+    }
+  }
+}
+
+func run_is_ok(result: TracedSessionResult) -> bool {
+  match result.result { Ok(_) => true, Err(_) => false }
+}
+
+func run_is_context_exhausted(result: TracedSessionResult) -> bool {
+  match result.result {
+    Err(e) => e.code == "ContextExhausted" && contains(e.message, "compaction_exhausted"),
+    Ok(_) => false
+  }
+}
+
+func diagnostic_has_limit(fields: [DiagnosticField], expected: int) -> bool {
+  match fields {
+    [] => false,
+    f :: rest =>
+      if f.key == "context_limit" && f.value == show(expected) then true
+      else diagnostic_has_limit(rest, expected)
+  }
+}
+
+func observed_headroom_limit(records: [LedgerRecord], expected: int) -> bool {
+  match records {
+    [] => false,
+    r :: rest => {
+      let here = match r {
+        CompactionStageRecord(s) =>
+          if s.ext_id != "headroom_budget_probe" then false
+          else match s.outcome {
+            TraceStageObserved(code, fields) =>
+              code == "headroom.context_limit" && diagnostic_has_limit(fields, expected),
+            _ => false
+          },
+        _ => false
+      };
+      here || observed_headroom_limit(rest, expected)
+    }
+  }
+}
+
+func prepared_fields_ok(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => true,
+    r :: rest => {
+      let here = match r {
+        WireRecord(ProviderCallPrepared(info)) =>
+          info.model == qwen_model && info.estimated_input_tokens > 0 && info.system_prefix_count >= 1 && info.system_prefix_chars > 0 && digest_shape_ok(info.system_prefix_digest) && info.payload_digest != "",
+        _ => true
+      };
+      here && prepared_fields_ok(rest)
+    }
+  }
+}
+
+func digest_shape_ok(d: string) -> bool {
+  string_length(d) == 71 && substring(d, 0, 7) == "sha256:"
+}
+
+func first_system_prefix_digest(records: [LedgerRecord]) -> string {
+  match records {
+    [] => "",
+    r :: rest => match r {
+      WireRecord(ProviderCallPrepared(info)) => info.system_prefix_digest,
+      _ => first_system_prefix_digest(rest)
+    }
+  }
+}
+
+func system_prefix_digest_stable(records: [LedgerRecord], expected: string) -> bool {
+  match records {
+    [] => expected != "",
+    r :: rest => {
+      let here = match r {
+        WireRecord(ProviderCallPrepared(info)) => info.system_prefix_digest == expected,
+        _ => true
+      };
+      here && system_prefix_digest_stable(rest, expected)
+    }
+  }
+}
+
+func runtime_status_after_compaction_ok(msgs: [Message], expected_digest: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => {
+      let here =
+        m.role == "tool"
+          && m.tool_call_id == runtime_status_call_id
+          && contains(m.content, "\"tool\":\"MotokoRuntimeStatus\"")
+          && contains(m.content, "\"provider_calls_started\":")
+          && contains(m.content, "\"provider_calls_completed\":")
+          && contains(m.content, "\"steps_executed_so_far\":")
+          && contains(m.content, "\"compaction_ai_applied\":")
+          && not contains(m.content, "\"compaction_ai_applied\":0")
+          && contains(m.content, "\"digest\":\"${expected_digest}\"");
+      here || runtime_status_after_compaction_ok(rest, expected_digest)
+    }
+  }
+}
+
+func provider_result_after_prepared(records: [LedgerRecord], step: int, seen_prepared: bool) -> bool {
+  match records {
+    [] => false,
+    r :: rest => match r {
+      WireRecord(ProviderCallPrepared(info)) =>
+        if info.step == step then provider_result_after_prepared(rest, step, true)
+        else provider_result_after_prepared(rest, step, seen_prepared),
+      WireRecord(ProviderResult(info)) =>
+        if seen_prepared && info.step == step then true
+        else provider_result_after_prepared(rest, step, seen_prepared),
+      CompactionStageRecord(s) =>
+        if s.ext_id == "compaction_ai" && s.step > step then false
+        else provider_result_after_prepared(rest, step, seen_prepared),
+      _ => provider_result_after_prepared(rest, step, seen_prepared)
+    }
+  }
+}
+
+func applied_stages_have_dispatch_success(records: [LedgerRecord], all_records: [LedgerRecord]) -> bool {
+  match records {
+    [] => true,
+    r :: rest => {
+      let here = match r {
+        CompactionStageRecord(s) =>
+          if s.ext_id == "compaction_ai" then match s.outcome {
+            TraceStageApplied(_) => provider_result_after_prepared(all_records, s.step, false),
+            _ => true
+          } else true,
+        _ => true
+      };
+      here && applied_stages_have_dispatch_success(rest, all_records)
+    }
+  }
+}
+
+func summarize_long_result(result: TracedSessionResult) -> Result[LongStats, ScenarioFailure] {
+  match result.result {
+    Err(e) => Err({ failed_invariant: "session result is Ok", trace: ["${e.code}: ${e.message}"] }),
+    Ok(final_history) => {
+      let records = result.trace.records;
+      let stats = {
+        applied: applied_count(records),
+        rejected: rejected_count(records),
+        prepared: prepared_count(records),
+        provider_results: provider_result_count(records),
+        projection: projection_records(records) ++ ["final count=${show(length(final_history))} digest=${digest_msgs(final_history, 0)}"],
+        final_count: length(final_history),
+        final_digest: digest_msgs(final_history, 0),
+        runtime_status_ok: runtime_status_after_compaction_ok(final_history, first_system_prefix_digest(records))
+      };
+      Ok(stats)
+    }
+  }
+}
+
+func scenario_multiple_compactions() -> Result[(), ScenarioFailure] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let result = run_long();
+  match summarize_long_result(result) {
+    Err(f) => Err(f),
+    Ok(s) => {
+      let records = result.trace.records;
+      if s.applied < 3 then Err({ failed_invariant: "at least three compaction_ai stages applied", trace: s.projection })
+      else if s.rejected != 0 then Err({ failed_invariant: "no TraceStageRejected records", trace: s.projection })
+      else if has_exhausted_or_system_empty(records) then Err({ failed_invariant: "no compaction exhausted or SystemPromptEmpty", trace: s.projection })
+      else if not prepared_fields_ok(records) then Err({ failed_invariant: "prepared call has Qwen model, system prefix, and digest", trace: s.projection })
+      else if not system_prefix_digest_stable(records, first_system_prefix_digest(records)) then Err({ failed_invariant: "system prefix digest is stable across provider calls", trace: s.projection })
+      else if not s.runtime_status_ok then Err({ failed_invariant: "runtime status tool reports compaction and stable system digest", trace: s.projection })
+      else if not applied_stages_have_dispatch_success(records, records) then Err({ failed_invariant: "each applied compaction_ai stage has same-step ProviderCallPrepared then ProviderResult", trace: s.projection })
+      else if s.prepared < s.applied then Err({ failed_invariant: "each compaction reaches provider_call_prepared", trace: s.projection })
+      else if s.provider_results < s.prepared then Err({ failed_invariant: "each prepared provider call has ProviderResult", trace: s.projection })
+      else {
+        let _ = println("long_qwen_counts applied=${show(s.applied)} rejected=${show(s.rejected)} prepared=${show(s.prepared)} provider_results=${show(s.provider_results)} projection_records=${show(length(s.projection))}");
+        ok_or_failure(s.final_count >= 25, "persisted history grows through tool loop", s.projection)
+      }
+    }
+  }
+}
+
+func scenario_seal_side_exhaustion() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let history = [
+    msg("system", "seal-side exhaustion system prompt"),
+    msg("user", "prose bulk ${repeat_block(80)}")
+  ];
+  let result = Session.run_v2_session_traced(
+    structural_only_runtime(),
+    "seal-side exhaustion dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    history,
+    ".",
+    4,
+    false,
+    0,
+    no_rates(),
+    Ported(long_ports(1))
+  );
+  let records = result.trace.records;
+  match result.result {
+    Ok(_) => Err({ failed_invariant: "oversized non-tool window is rejected by seal", trace: projection_records(records) }),
+    Err(e) =>
+      if contains(e.message, "compaction_exhausted") && has_exhausted_or_system_empty(records) then Ok(())
+      else Err({ failed_invariant: "CompactionExhausted event and error are emitted", trace: ["${e.code}: ${e.message}"] ++ projection_records(records) })
+  }
+}
+
+-- Issue #165, Layer 1: reproduce the exact seal boundary and prove the strict
+-- provider oracle on both sides of the shared window. The oracle is deliberately
+-- independent of `usage_percent_with_limit`: a payload is unsafe when input plus
+-- the declared output allowance exceeds the raw shared window, even if the
+-- existing input-only percentage is below 95.
+func scenario_output_headroom_exact_boundary() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let raw_limit = headroom_raw_limit();
+  let allowance = headroom_output_allowance();
+  let provider = headroom_ports(raw_limit, true);
+  let discard_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
+  let boundary_msgs = [msg("user", headroom_block((raw_limit - allowance) * 4))];
+  let over_boundary_msgs = [msg("user", headroom_block(((raw_limit - allowance) * 4) + 4))];
+  let boundary_exchange = provider.model_step(empty_world_state(), qwen_model, boundary_msgs, discard_chunk);
+  let over_boundary_exchange = provider.model_step(empty_world_state(), qwen_model, over_boundary_msgs, discard_chunk);
+  let provider_accepts_boundary = match boundary_exchange.result { Ok(_) => true, Err(_) => false };
+  let provider_rejects_over_boundary = match over_boundary_exchange.result {
+    Err(e) => e.code == "E_PROVIDER_CONTEXT_LENGTH" && not e.retryable,
+    Ok(_) => false
+  };
+  let provider_contract =
+    scripted_provider_input_tokens(boundary_msgs) + allowance == raw_limit
+      && scripted_provider_input_tokens(over_boundary_msgs) + allowance == raw_limit + 1
+      && provider_accepts_boundary
+      && provider_rejects_over_boundary;
+  let original = headroom_segment();
+  let split = split_for_compaction(headroom_history());
+  let pinned_tokens = estimate_tokens_messages(split.pinned);
+  let ext_limit = raw_limit - pinned_tokens;
+  let decision = compact_for_pre_step(headroom_direct_ctx(ext_limit, original), original);
+  let chain = match decision {
+    PassThrough => original,
+    Compacted(out, _, _) => out,
+    PassThroughObserved(_, _) => original
+  };
+  let ladder = match decision {
+    PassThrough => "PassThrough",
+    Compacted(_, note, _) => note,
+    PassThroughObserved(code, _) => "Observed:${code}"
+  };
+  let candidate = split.pinned ++ msgs_to_messages(chain);
+  let segment_tokens = estimate_tokens_messages(msgs_to_messages(original));
+  let input_tokens = estimate_tokens_messages(candidate);
+  let raw_pct = usage_percent_with_limit(candidate, raw_limit);
+  let headroom = raw_limit - input_tokens;
+  let unsafe = input_tokens + allowance > raw_limit;
+  let sealed = seal_compacted_payload(split, msgs_to_messages(chain), qwen_model, raw_limit, true);
+  let rejected = match sealed {
+    Err(SealExhausted(_)) => true,
+    Err(SealSystemPromptEmpty(_)) => false,
+    Ok(_) => false
+  };
+  let exact_fixture =
+    pinned_tokens == 320
+      && ext_limit == 261824
+      && segment_tokens == 208980
+      && ladder == "structural: tier=floor keep_last=1"
+      && input_tokens == 207239
+      && raw_pct == 79
+      && headroom == 54905
+      && unsafe;
+  ok_or_failure(provider_contract && exact_fixture && rejected,
+    "unsafe 262144/65536 payload is rejected after the structural floor",
+    [
+      "provider_boundary_accepts=${show(provider_accepts_boundary)} provider_over_boundary_rejects=${show(provider_rejects_over_boundary)}",
+      "pinned_tokens=${show(pinned_tokens)} ext_limit=${show(ext_limit)} segment_tokens=${show(segment_tokens)}",
+      "ladder=${ladder}",
+      "input_tokens=${show(input_tokens)} raw_pct=${show(raw_pct)} headroom=${show(headroom)} allowance=${show(allowance)} unsafe=${show(unsafe)}",
+      "seal_rejected=${show(rejected)}"
+    ])
+}
+
+-- Issue #165, Layer 2: the real CallModel arm must hand the pre-step chain the
+-- output-reserved segment budget and must refuse the unsafe reconstructed
+-- payload before ProviderCallPrepared. Arms B and C are two-sided controls:
+-- B proves the scripted provider path is live; C proves the existing raw
+-- exhaustion terminal is live.
+func scenario_output_headroom_real_driver_three_arms() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let arm_a = run_headroom_case(headroom_raw_limit(), headroom_history(), headroom_runtime(), true);
+  let arm_b = run_headroom_case(headroom_raw_limit(), headroom_small_history(), structural_only_runtime(), true);
+  let arm_c = run_headroom_case(headroom_raw_limit(), headroom_raw_overflow_history(), structural_only_runtime(), true);
+  let a_records = arm_a.trace.records;
+  let b_records = arm_b.trace.records;
+  let c_records = arm_c.trace.records;
+  let a_ok =
+    run_is_context_exhausted(arm_a)
+      && has_exhausted_or_system_empty(a_records)
+      && prepared_count(a_records) == 0
+      && provider_result_count(a_records) == 0
+      && observed_headroom_limit(a_records, headroom_expected_effective_segment_limit());
+  let b_ok =
+    run_is_ok(arm_b)
+      && prepared_count(b_records) == 1
+      && provider_result_count(b_records) == 1
+      && not has_exhausted_or_system_empty(b_records);
+  let c_ok =
+    run_is_context_exhausted(arm_c)
+      && has_exhausted_or_system_empty(c_records)
+      && prepared_count(c_records) == 0
+      && provider_result_count(c_records) == 0;
+  ok_or_failure(a_ok && b_ok && c_ok,
+    "real driver shares one output-reserved budget across pre-step and seal",
+    [
+      "arm=A expected=ContextExhausted observed_limit=${show(observed_headroom_limit(a_records, headroom_expected_effective_segment_limit()))} prepared=${show(prepared_count(a_records))} provider_results=${show(provider_result_count(a_records))} result_ok=${show(run_is_ok(arm_a))}",
+      "arm=B expected=provider_success prepared=${show(prepared_count(b_records))} provider_results=${show(provider_result_count(b_records))} result_ok=${show(run_is_ok(arm_b))}",
+      "arm=C expected=raw_exhaustion prepared=${show(prepared_count(c_records))} provider_results=${show(provider_result_count(c_records))} exhausted=${show(run_is_context_exhausted(arm_c))}"
+    ])
+}
+
+-- Unknown and reserve-exceeds-limit are explicit fail-open policy, not a
+-- side effect of division by zero. Both arms use a payload above the small raw
+-- limit. The unknown arm is today's control; the small-limit arm is the
+-- regression that distinguishes an explicit zero effective budget from the
+-- current raw-limit seal.
+func scenario_output_headroom_unknown_and_small_fail_open() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let unknown = run_headroom_case(0, headroom_fail_open_history(), headroom_runtime(), false);
+  let small = run_headroom_case(32768, headroom_fail_open_history(), headroom_runtime(), false);
+  let unknown_records = unknown.trace.records;
+  let small_records = small.trace.records;
+  let unknown_ok =
+    run_is_ok(unknown)
+      && prepared_count(unknown_records) == 1
+      && provider_result_count(unknown_records) == 1
+      && observed_headroom_limit(unknown_records, 0);
+  let small_ok =
+    run_is_ok(small)
+      && prepared_count(small_records) == 1
+      && provider_result_count(small_records) == 1
+      && observed_headroom_limit(small_records, 0);
+  ok_or_failure(unknown_ok && small_ok,
+    "unknown and reserve-exceeding limits fail open at both stages",
+    [
+      "unknown result_ok=${show(run_is_ok(unknown))} observed_zero=${show(observed_headroom_limit(unknown_records, 0))} prepared=${show(prepared_count(unknown_records))} provider_results=${show(provider_result_count(unknown_records))}",
+      "small raw_limit=32768 allowance=${show(headroom_output_allowance())} result_ok=${show(run_is_ok(small))} observed_zero=${show(observed_headroom_limit(small_records, 0))} prepared=${show(prepared_count(small_records))} provider_results=${show(provider_result_count(small_records))}"
+    ])
+}
+
+func same_string_list(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && same_string_list(xs, ys) }
+  }
+}
+
+func scenario_replay_deterministic() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let r1 = run_long();
+  let r2 = run_long();
+  match summarize_long_result(r1) {
+    Err(f) => Err(f),
+    Ok(s1) => match summarize_long_result(r2) {
+      Err(f) => Err(f),
+      Ok(s2) => {
+        let same = same_string_list(s1.projection, s2.projection);
+        if same then {
+          let _ = println("long_qwen_replay deterministic=true projection_records=${show(length(s1.projection))}");
+          Ok(())
+        }
+        else Err({ failed_invariant: "normalized trace projection replays deterministically", trace: ["left_count=${show(length(s1.projection))}", "right_count=${show(length(s2.projection))}"] ++ s1.projection })
+      }
+    }
+  }
+}
+
+-- A stop-finish tool turn must run its tool and continue (never ship an
+-- orphaned tool_call). Two failure modes are both caught:
+--   (1) the loop drops the tool_call and finalizes early -> never reaches
+--       step-3 in the final history;
+--   (2) it drops the call but a later turn ships the orphaned payload -> the
+--       strict provider rejects it (session result is Err).
+-- Also asserts the strict run replays deterministically.
+func scenario_strict_provider_rejects_orphaned_toolcall() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let r1 = run_strict();
+  let recs1 = projection_records(r1.trace.records);
+  match r1.result {
+    Err(e) =>
+      Err({ failed_invariant: "strict provider must never receive an orphaned tool_call payload", trace: ["${e.code}: ${e.message}"] ++ recs1 }),
+    Ok(final_history) =>
+      if not contains_marker(final_history, step_marker(3)) then
+        Err({ failed_invariant: "stop-finish tool turn must run its tool and continue past step-3", trace: recs1 ++ ["final digest=${digest_msgs(final_history, 0)}"] })
+      else {
+        let r2 = run_strict();
+        let recs2 = projection_records(r2.trace.records);
+        if same_string_list(recs1, recs2) then {
+          let _ = println("strict_provider_orphaned_toolcall ok deterministic=true records=${show(length(recs1))}");
+          Ok(())
+        } else
+          Err({ failed_invariant: "strict provider run replays deterministically", trace: ["left=${show(length(recs1))}", "right=${show(length(recs2))}"] ++ recs1 })
+      }
+  }
+}
+
+func strict_provider_orphaned_toolcall_scenario() -> Scenario {
+  { id: "compaction.strict_provider_orphaned_toolcall", seed: "fixed", run: scenario_strict_provider_rejects_orphaned_toolcall }
+}
+
+func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: string, step: int) -> ExtCtx ! {AI, IO, Trace} {
+  {
+    task: task,
+    step: step,
+    model: qwen_model,
+    context_limit: limit,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: budget(),
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: [],
+    state_key: "k",
+    ports: {
+      -- S12: this shim PERFORMS a provider call, so it must return the world
+      -- `model_step` advanced. It previously handed `empty_world_state()` in and
+      -- returned the token it was given — the exact defect
+      -- `dst_fault_catalogue.NoReachableBranch` described at the real seam.
+      ai_step: func(world: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
+        let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
+        let w0 = token_to_world(world);
+        let exchange = ports.model_step(w0, model, msgs_to_messages(msgs), on_chunk);
+        {
+          result: match exchange.result {
+            Ok(r) => Ok(r.message.content),
+            Err(e) => Err(e.message)
+          },
+          next_state: world_to_token(exchange.next_state)
+        }
+      },
+      tool_handle: fixed_ext_exec,
+      file_read: fixed_ext_file_read,
+      file_write: fixed_ext_file_write,
+      file_remove: fixed_ext_file_remove,
+      path_stat: fixed_ext_path_stat,
+      dir_list: fixed_ext_dir_list,
+      dir_make: fixed_ext_dir_make,
+      clock_now: fixed_ext_clock,
+      env_get: fixed_ext_env
+    },
+    artifacts: artifacts,
+    telemetry: zero_token_telemetry(),
+    world: empty_ext_world()
+  }
+}
+
+func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx ! {AI, IO, Trace} {
+  direct_ctx_with_task_step(limit, ports, artifacts, "direct", 0)
+}
+
+func summary_ports(summary: string) -> Ports ! {AI, IO, Trace} {
+  let model_step = func(state: WorldState, _model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO})
+    -> ProviderExchange ! {AI, IO, Trace} {
+    { emissions: [], result: Ok(step_result(summary, [], "stop")), next_state: state }
+  };
+  ports_shape_probe(model_step)
+}
+
+func direct_msgs() -> [Msg] {
+  [
+    abi_msg("user", "old plain one ${repeat_block(4)}"),
+    abi_msg("assistant", "old answer one ${repeat_block(4)}"),
+    abi_msg("user", "old plain two ${repeat_block(4)}"),
+    abi_assistant("call LongResult", [tool_call("direct-call-1")]),
+    abi_tool("direct-call-1", "direct tool result ${repeat_block(4)}"),
+    abi_msg("user", "recent question"),
+    abi_msg("assistant", "recent answer")
+  ]
+}
+
+func direct_msgs_with_status() -> [Msg] {
+  [
+    abi_msg("user", "old plain one ${repeat_block(4)}"),
+    abi_assistant("call runtime status", [runtime_status_call()]),
+    abi_tool(runtime_status_call_id, "{\"tool\":\"MotokoRuntimeStatus\",\"current_step\":47,\"step_budget\":100,\"finish_reason_so_far\":\"tool_calls\",\"stage_applied_total\":9,\"compaction_ai_applied\":8}${repeat_block(20)}"),
+    abi_assistant("call LongResult", [tool_call("direct-call-1")]),
+    abi_tool("direct-call-1", "direct tool result ${repeat_block(4)}"),
+    abi_msg("user", "recent question"),
+    abi_msg("assistant", "recent answer")
+  ]
+}
+
+func contains_summary_msg(msgs: [Msg], text: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => if m.role == "assistant" && contains(m.content, text) then true else contains_summary_msg(rest, text)
+  }
+}
+
+func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let input = direct_msgs();
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 1,
+    keep_recent: 4,
+    keep_recent_tokens: 300,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
+  match compact_with_ai(direct_ctx(100, summary_ports("DIRECT-SUMMARY"), empty_ext_artifacts()), input, cfg).decision {
+    PassThrough => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=PassThrough"] }),
+    PassThroughObserved(code, _) => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=${code}"] }),
+    Compacted(out, _, _) => {
+      if not contains_summary_msg(out, "[RUNTIME COMPACTION SUMMARY]") then Err({ failed_invariant: "runtime capsule emitted", trace: ["out_len=${show(length(out))}"] })
+      else if not contains_summary_msg(out, "DIRECT-SUMMARY") then Err({ failed_invariant: "ai summary prose preserved", trace: ["out_len=${show(length(out))}"] })
+      else if not contains_summary_msg(out, "not a fresh session") then Err({ failed_invariant: "capsule marks non-fresh session", trace: [] })
+      else match validate_compactor_output(input, out) {
+        Err(reason) => Err({ failed_invariant: "validate_compactor_output accepts direct compaction", trace: [reason] }),
+        Ok(_) => Ok(())
+      }
+    }
+  }
+}
+
+func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let input = direct_msgs();
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 1,
+    keep_recent: 4,
+    keep_recent_tokens: 300,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
+  match compact_with_ai(direct_ctx(100, summary_ports("CACHED-SUMMARY-A"), empty_ext_artifacts()), input, cfg).decision {
+    PassThrough => Err({ failed_invariant: "first cache run compacts", trace: ["decision=PassThrough"] }),
+    PassThroughObserved(code, _) => Err({ failed_invariant: "first cache run compacts", trace: ["decision=${code}"] }),
+    Compacted(out1, _, artifacts) => {
+      if not contains_summary_msg(out1, "CACHED-SUMMARY-A") then Err({ failed_invariant: "first run records cached summary", trace: [] })
+      else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts, "direct cache second task", 12), input, cfg).decision {
+        PassThrough => Err({ failed_invariant: "second cache run compacts", trace: ["decision=PassThrough"] }),
+        PassThroughObserved(code, _) => Err({ failed_invariant: "second cache run compacts", trace: ["decision=${code}"] }),
+        Compacted(out2, _, _) => {
+          if contains_summary_msg(out2, "CACHED-SUMMARY-A")
+            && not contains_summary_msg(out2, "CACHE-MISS-FAIL")
+            && contains_summary_msg(out2, "direct cache second task")
+            && contains_summary_msg(out2, "current_step_before_request: 12") then Ok(())
+          else Err({ failed_invariant: "same-segment artifact cache reuses summary", trace: ["second_len=${show(length(out2))}"] })
+        }
+      }
+    }
+  }
+}
+
+func scenario_hostile_summary_preserves_control_capsule() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let input = direct_msgs_with_status();
+  let task = "Continue the 200-phase compaction stress task. Stop only after phase 200 is complete. Call MotokoRuntimeStatus every 10 phases and do not ask what to work on next.";
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 1,
+    keep_recent: 4,
+    keep_recent_tokens: 300,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
+  match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("What would you like to work on?"), empty_ext_artifacts(), task, 48), input, cfg).decision {
+    PassThrough => Err({ failed_invariant: "hostile summary compact_with_ai compacts", trace: ["decision=PassThrough"] }),
+    PassThroughObserved(code, _) => Err({ failed_invariant: "hostile summary compact_with_ai compacts", trace: ["decision=${code}"] }),
+    Compacted(out, _, _) => {
+      if not contains_summary_msg(out, "[RUNTIME COMPACTION SUMMARY]") then Err({ failed_invariant: "hostile path emits capsule", trace: ["out_len=${show(length(out))}"] })
+      else if not contains_summary_msg(out, task) then Err({ failed_invariant: "capsule preserves exact task", trace: [] })
+      else if not contains_summary_msg(out, "not a fresh session") then Err({ failed_invariant: "capsule rejects fresh-session framing", trace: [] })
+      else if not contains_summary_msg(out, "Continue the original task") then Err({ failed_invariant: "capsule preserves continue obligation", trace: [] })
+      else if not contains_summary_msg(out, "MotokoRuntimeStatus") then Err({ failed_invariant: "capsule preserves status cadence/status facts", trace: [] })
+      else if not contains_summary_msg(out, "\"current_step\":47") then Err({ failed_invariant: "capsule mirrors latest runtime status", trace: [] })
+      else if not contains_summary_msg(out, "What would you like to work on?") then Err({ failed_invariant: "hostile ai prose still included as prose only", trace: [] })
+      else match validate_compactor_output(input, out) {
+        Err(reason) => Err({ failed_invariant: "validate_compactor_output accepts hostile capsule compaction", trace: [reason] }),
+        Ok(_) => Ok(())
+      }
+    }
+  }
+}
+
+func decision_code_is(d: PreStepDecision, code: string) -> bool {
+  match d { PassThroughObserved(actual, _) => actual == code, _ => false }
+}
+
+func scenario_terminal_observations() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let input = direct_msgs();
+  let base: CompactionAiConfig = {
+    model: qwen_model, threshold_pct: 1, keep_recent: 4, keep_recent_tokens: 300,
+    min_relief_pct: 5, rate_limit_enabled: false, min_gap_steps: 3, hard_override_pct: 95
+  };
+  let no_prefix = compact_with_ai(direct_ctx(10, summary_ports("unused"), empty_ext_artifacts()), [abi_msg("user", repeat_block(4))], { base | keep_recent_tokens: 100000 }).decision;
+  let insufficient = compact_with_ai(direct_ctx(100, summary_ports("unused"), empty_ext_artifacts()), input, { base | min_relief_pct: 1000 }).decision;
+  let failed = compact_with_ai(direct_ctx(100, summary_ports(""), empty_ext_artifacts()), input, base).decision;
+  let not_relieving = compact_with_ai(direct_ctx(100, summary_ports(repeat_block(200)), empty_ext_artifacts()), input, base).decision;
+  ok_or_failure(
+    decision_code_is(no_prefix, "compaction_ai.no_foldable_prefix")
+      && decision_code_is(insufficient, "compaction_ai.insufficient_relief")
+      && decision_code_is(failed, "compaction_ai.summarizer_failed")
+      && decision_code_is(not_relieving, "compaction_ai.output_not_relieving"),
+    "all terminal over-threshold paths are observed",
+    [show(no_prefix), show(insufficient), show(failed), show(not_relieving)]
+  )
+}
+
+func multiple_compactions_scenario() -> Scenario {
+  { id: "compaction.long_qwen_ai_multiple_compactions", seed: "fixed", run: scenario_multiple_compactions }
+}
+
+func replay_deterministic_scenario() -> Scenario {
+  { id: "compaction.long_qwen_ai_replay_deterministic", seed: "fixed", run: scenario_replay_deterministic }
+}
+
+func output_shape_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_output_shape_valid", seed: "fixed", run: scenario_output_shape_valid }
+}
+
+func artifact_cache_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_artifact_cache_stable", seed: "fixed", run: scenario_artifact_cache_stable }
+}
+
+func hostile_summary_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_hostile_summary_control_capsule", seed: "fixed", run: scenario_hostile_summary_preserves_control_capsule }
+}
+
+func terminal_observations_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_terminal_observations", seed: "fixed", run: scenario_terminal_observations }
+}
+
+func seal_side_exhaustion_scenario() -> Scenario {
+  { id: "compaction.structural_seal_side_exhaustion", seed: "fixed", run: scenario_seal_side_exhaustion }
+}
+
+func output_headroom_exact_boundary_scenario() -> Scenario {
+  { id: "compaction.output_headroom_exact_262144_65536", seed: "fixed", run: scenario_output_headroom_exact_boundary }
+}
+
+func output_headroom_real_driver_three_arms_scenario() -> Scenario {
+  { id: "compaction.output_headroom_real_driver_three_arms", seed: "fixed", run: scenario_output_headroom_real_driver_three_arms }
+}
+
+func output_headroom_fail_open_scenario() -> Scenario {
+  { id: "compaction.output_headroom_unknown_and_small_fail_open", seed: "fixed", run: scenario_output_headroom_unknown_and_small_fail_open }
+}
+
+-- ---------------------------------------------------------------------------
+-- S12's executable instrument, on the ONE hook in the tree that calls ai_step
+-- ---------------------------------------------------------------------------
+--
+-- WI-B2b found the same defect twice inside `compact_with_ai`: a re-wrap that
+-- discarded the world the summarizer advanced, and failure branches returning
+-- the ENTERED world after attempts had been made and script entries consumed.
+-- `next_state: ctx.world` type-checks everywhere and passed every test in the
+-- tree, so B2b shipped a comment and said plainly that a comment is weaker than
+-- a check. This is the check.
+--
+-- It needs a RECORDING provider, and that is the whole reason it lives here
+-- rather than beside the other direct-ctx scenarios: `summary_ports` above
+-- returns `next_state: state` unchanged, so under it EVERY hook looks like it
+-- dropped its successor and the assertion would be a false positive on correct
+-- code. `stub_step.recording_ports` appends an interaction to `WorldState.log`
+-- on every model step, and `ext_world.world_json` round-trips that log through
+-- the token -- which is the counter WI-B2b believed the token did not carry,
+-- and the reason this could be built at all.
+--
+-- BOTH directions are asserted, because either alone is satisfiable by a
+-- degenerate check: the hook that CALLS the summarizer must advance the world,
+-- and the hook that short-circuits below threshold must NOT (S12: an identity
+-- transition is the correct answer for a component that did nothing).
+func recording_direct_ctx(limit: int, artifacts: Json, w: WorldState)
+  -> ExtCtx ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  { direct_ctx_with_task_step(limit, recording_ports(empty_rt()), artifacts, "s12", 0)
+    | world: world_to_token(w) }
+}
+
+func scenario_s12_successor_is_not_dropped() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let cfg: CompactionAiConfig = {
+    model: qwen_model, threshold_pct: 1, keep_recent: 4, keep_recent_tokens: 300,
+    min_relief_pct: 5, rate_limit_enabled: false, min_gap_steps: 3, hard_override_pct: 95
+  };
+  let w = scripted_world_state([prose_step("a summary of the earlier turns")]);
+
+  -- (a) OVER threshold: the summarizer is called, so the world MUST advance.
+  let entered_hot = world_to_token(w);
+  let hot = compact_with_ai(recording_direct_ctx(100, empty_ext_artifacts(), w), direct_msgs(), cfg);
+  let hot_ok = not dropped_successor(entered_hot, hot.next_state, true);
+
+  -- (b) UNDER threshold: nothing is called, so the identity transition is
+  --     CORRECT and must not be reported as a defect.
+  let entered_cold = world_to_token(w);
+  let cold = compact_with_ai(recording_direct_ctx(1000000, empty_ext_artifacts(), w),
+                             [abi_msg("user", "short")], cfg);
+  let cold_ok = not dropped_successor(entered_cold, cold.next_state, false)
+                  && not world_advanced(entered_cold, cold.next_state);
+
+  if hot_ok && cold_ok then Ok(())
+  else Err({ failed_invariant: "a hook that performed a provider call returns the world it advanced (S12)",
+             trace: ["hot_advanced=${show(world_advanced(entered_hot, hot.next_state))}",
+                     "hot_log_in=${show(world_interaction_count(entered_hot))}",
+                     "hot_log_out=${show(world_interaction_count(hot.next_state))}",
+                     "cold_advanced=${show(world_advanced(entered_cold, cold.next_state))}"] })
+}
+
+func s12_successor_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_successor_is_not_dropped", seed: "fixed", run: scenario_s12_successor_is_not_dropped }
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let scenarios = [
+    multiple_compactions_scenario(),
+    replay_deterministic_scenario(),
+    output_shape_scenario(),
+    artifact_cache_scenario(),
+    hostile_summary_scenario(),
+    terminal_observations_scenario(),
+    seal_side_exhaustion_scenario(),
+    output_headroom_exact_boundary_scenario(),
+    output_headroom_real_driver_three_arms_scenario(),
+    output_headroom_fail_open_scenario(),
+    strict_provider_orphaned_toolcall_scenario(),
+    s12_successor_scenario()
+  ];
+  let failed = run_all(scenarios, 0);
+  if failed == 0 then println("long_qwen_compaction_dst PASS count=${show(length(scenarios))}")
+  else {
+    let _ = println("long_qwen_compaction_dst FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}

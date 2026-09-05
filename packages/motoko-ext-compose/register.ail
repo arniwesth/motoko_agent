@@ -1,0 +1,12 @@
+module sunholo/motoko_ext_compose/register
+
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (Capability)
+import pkg/sunholo/motoko_ext_compose/config (read_compose_host_config)
+import pkg/sunholo/motoko_ext_compose/compose (register_with_config as register_with_host_cfg)
+
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS, AI, Clock, IO, Process, Rand} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let host_cfg = read_compose_host_config(profile_dir);
+  register_with_host_cfg(host_cfg)
+}

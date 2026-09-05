@@ -55,11 +55,40 @@ export func tool_call_to_envelope(call: ToolCall) -> ToolCallEnvelope {
   }
 }
 
+-- THE PER-VARIANT EXIT-CODE MAPPING, IN ITS ONE HOME (WI-D23). Which
+-- `ToolResultItem` variant carries which exit code used to live as seven
+-- literals inside `tool_result_item_to_json`; the typed dispatch path below
+-- is a SECOND consumer of that mapping — S23's threshold — so it moved here
+-- and both consumers read it. Two independent statements of "ToolErrorResult
+-- is 1" is how the JSON a model reads and the field a caller branches on
+-- drift apart.
+--
+-- The in-process tools (ReadFile, Search, WriteFile, EditFile) map to 0, not
+-- to `ScriptedTool.exit_code`'s -1: this mapping is what the model-facing
+-- JSON has asserted since the adapter was written, and it is a statement
+-- about the TOOL ("it succeeded"), which a dispatch that returned a typed
+-- success variant is entitled to make. -1 is for a PRODUCER that cannot
+-- state a code at all; this producer holds the result item and can.
+export pure func tool_result_exit_code(item: ToolResultItem) -> int {
+  match item {
+    ReadFileResult(_) => 0,
+    SearchResult(_) => 0,
+    WriteFileResult(_) => 0,
+    EditFileResult(_) => 0,
+    BashExecResult(r) => r.exit_code,
+    RunTestsResult(r) => r.exit_code,
+    ToolErrorResult(_) => 1
+  }
+}
+
 -- Convert one motoko ToolResultItem (rich ADT) to a JSON object suitable
 -- for feeding back to the model. Captures all fields the model would
 -- realistically need to plan its next turn — file content for ReadFile,
 -- diffs for WriteFile/EditFile, exit_code + stdout/stderr for shell
 -- commands, search matches for Search.
+--
+-- Every arm's `exit_code` reads `tool_result_exit_code` — see that accessor
+-- for why the mapping must not be restated here as literals.
 --
 -- The result is a Json object; caller encode()s to string for the
 -- upstream `(ToolCall) -> string` contract.
@@ -72,14 +101,14 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
       kv("line_count", jnum(_int_to_float(r.line_count))),
       kv("truncated", jb(r.truncated)),
       kv("sha256", js(r.sha256)),
-      kv("exit_code", jnum(0.0))
+      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item))))
     ]),
 
     SearchResult(r) => jo([
       kv("tool", js("Search")),
       kv("pattern", js(r.pattern)),
       kv("matches", ja(search_matches_to_json(r.matches))),
-      kv("exit_code", jnum(0.0))
+      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item))))
     ]),
 
     WriteFileResult(r) => jo([
@@ -88,7 +117,7 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
       kv("bytes_written", jnum(_int_to_float(r.bytes_written))),
       kv("sha256", js(r.sha256)),
       kv("diff", js(r.diff)),
-      kv("exit_code", jnum(0.0))
+      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item))))
     ]),
 
     EditFileResult(r) => jo([
@@ -101,13 +130,13 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
       kv("applied_edits", jnum(_int_to_float(r.applied_edits))),
       kv("dry_run", jb(r.dry_run)),
       kv("match_strategy", js(r.match_strategy)),
-      kv("exit_code", jnum(0.0))
+      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item))))
     ]),
 
     BashExecResult(r) => jo([
       kv("tool", js("BashExec")),
       kv("cmd", js(r.cmd)),
-      kv("exit_code", jnum(_int_to_float(r.exit_code))),
+      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item)))),
       kv("stdout", js(r.stdout)),
       kv("stderr", js(r.stderr)),
       kv("truncated", jb(r.meta.truncated))
@@ -115,7 +144,7 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
 
     RunTestsResult(r) => jo([
       kv("tool", js("RunTests")),
-      kv("exit_code", jnum(_int_to_float(r.exit_code))),
+      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item)))),
       kv("stdout", js(r.stdout)),
       kv("stderr", js(r.stderr)),
       kv("truncated", jb(r.meta.truncated))
@@ -125,7 +154,7 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
       kv("tool", js(r.tool)),
       kv("error", jb(true)),
       kv("message", js(r.message)),
-      kv("exit_code", jnum(1.0))
+      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item))))
     ])
   }
 }
@@ -149,10 +178,46 @@ func match_to_json(m: SearchMatch) -> Json {
   ])
 }
 
--- dispatch_one is the (almost) drop-in adapter that satisfies upstream
--- `runTools`'s `dispatch: (ToolCall) -> string` contract. It takes
--- `workdir` as a leading parameter; the call site partial-applies it
--- via a one-line lambda:
+-- WI-D23: THE TYPED SIBLING WI-D21 PRICED AS LINK 4. `dispatch_one`'s
+-- `(workdir, ToolCall) -> string` contract exists to satisfy upstream
+-- `runTools` and does not move; what its callers lacked was the exit code
+-- the body already held — `run_native_batch` returns the typed
+-- `ToolResultItem`, and the string was always its JSON rendering. This
+-- sibling returns both halves, and `dispatch_one` below is a PROJECTION of
+-- it, so the two cannot disagree: one dispatch, one rendering, one
+-- exit-code mapping (`tool_result_exit_code` above).
+--
+-- Behaviour:
+--   1. Convert ToolCall → ToolCallEnvelope (name → tool, decode arguments)
+--   2. Run [envelope] through run_native_batch with the bound workdir
+--   3. content   = the single ToolResultItem → JSON object → encoded string
+--      exit_code = the same item through the one per-variant mapping
+--
+-- The "unexpected dispatcher result count" branch is defensive — given
+-- a single-element input, run_native_batch always returns a single-element
+-- output, but the type system doesn't enforce that. The branch keeps the
+-- callback total: no exceptions, no nil returns. Its exit_code is 1, not 0
+-- and not -1: it is an ERROR surface (the dispatcher broke its
+-- single-result contract), and 1 is what the one mapping assigns an error.
+-- 0 would assert a success no process produced; -1 would file an adapter
+-- defect under "no subprocess ran".
+export func dispatch_one_typed(workdir: string, call: ToolCall) -> { content: string, exit_code: int } ! {FS, Process} {
+  let envelope = tool_call_to_envelope(call) in
+  let results = run_native_batch([envelope], workdir) in
+  match results {
+    [r] => { content: encode(tool_result_item_to_json(r)), exit_code: tool_result_exit_code(r) },
+    _ => { content: encode(jo([
+             kv("error", jb(true)),
+             kv("message", js("internal: dispatcher returned 0 or >1 results for single call"))
+           ])),
+           exit_code: 1 }
+  }
+}
+
+-- The (almost) drop-in adapter that satisfies upstream `runTools`'s
+-- `dispatch: (ToolCall) -> string` contract. It takes `workdir` as a
+-- leading parameter; the call site partial-applies it via a one-line
+-- lambda:
 --
 --   match runTools(model, msgs, tools, \call. dispatch_one(workdir, call), 8) { ... }
 --
@@ -161,24 +226,9 @@ func match_to_json(m: SearchMatch) -> Json {
 -- propagates them via row polymorphism so the call-site effect row
 -- becomes ! {AI, FS, Process} automatically.
 --
--- Behaviour:
---   1. Convert ToolCall → ToolCallEnvelope (name → tool, decode arguments)
---   2. Run [envelope] through run_native_batch with the bound workdir
---   3. Convert the single ToolResultItem → JSON object → encoded string
---   4. Return that string (it becomes the tool-role message content)
---
--- The "unexpected dispatcher result count" branch is defensive — given
--- a single-element input, run_native_batch always returns a single-element
--- output, but the type system doesn't enforce that. The branch keeps the
--- callback total: no exceptions, no nil returns.
+-- WI-D23 made this a projection of `dispatch_one_typed` — the body IS the
+-- sibling's content half, so a divergence between the string a model reads
+-- and the code a typed caller branches on is not expressible from here.
 export func dispatch_one(workdir: string, call: ToolCall) -> string ! {FS, Process} {
-  let envelope = tool_call_to_envelope(call) in
-  let results = run_native_batch([envelope], workdir) in
-  match results {
-    [r] => encode(tool_result_item_to_json(r)),
-    _ => encode(jo([
-           kv("error", jb(true)),
-           kv("message", js("internal: dispatcher returned 0 or >1 results for single call"))
-         ]))
-  }
+  dispatch_one_typed(workdir, call).content
 }

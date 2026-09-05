@@ -1,0 +1,9 @@
+-- TWO-SIDED CONTROL, builtin side.
+-- `_io_println` is wrapped by `std/io.println`, whose cached row is `! {IO}`.
+-- Calling it directly bypasses every port, and the import-only half of this
+-- inventory cannot see it -- there is no import here to see.
+module fixtures/control_ambient_builtin
+
+export func emit(s: string) -> () {
+  _io_println(s)
+}

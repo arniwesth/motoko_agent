@@ -1,0 +1,51 @@
+module scripts/dst/conformance_registry_probe
+
+import std/io (println, exit)
+import pkg/sunholo/motoko_ext_abi/types (ExtEntry, Capability, Compactor)
+import pkg/sunholo/motoko_ext_conformance/harness (run_conformance)
+import src/core/config (load_runtime_config)
+import src/core/ext/registry_generated (parse_core_ext_order)
+
+func registry_names_csv() -> string {
+  "test_dummy,omnigraph,context_mode,mcp,exa_search,ailang_docs,compose,a2a,decision_framework,microrag,compaction_ai,scratchpad,compaction_structural"
+}
+
+-- Item 4 (6.0 trimming): an entry registers only the atoms it binds, so a
+-- list with no `Compactor` atom is not a compactor and the compactor kit does
+-- not apply to it (`harness.compact_with` reports `no_compactor_atom` for such
+-- a list). Those entries are SKIPPED BY NAME here rather than scored, so the
+-- probe still runs every Compactor-bearing entry and says which it did not.
+pure func has_compactor(caps: [Capability]) -> bool {
+  match caps {
+    [] => false,
+    Compactor(_) :: _ => true,
+    _ :: rest => has_compactor(rest)
+  }
+}
+
+func run_hooks(entries: [ExtEntry], failed: int) -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  match entries {
+    [] => failed,
+    e :: rest => {
+      if has_compactor(e.caps) then {
+        let _ = println("conformance entry=${e.id} compactor=yes");
+        let n = run_conformance(e.caps);
+        run_hooks(rest, failed + n)
+      } else {
+        let _ = println("conformance entry=${e.id} compactor=no -- skipped (no Compactor atom registered)");
+        run_hooks(rest, failed)
+      }
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let cfg = load_runtime_config();
+  let registry = parse_core_ext_order(registry_names_csv(), cfg);
+  let failures = run_hooks(registry.entries, 0);
+  if failures == 0 then println("conformance registry probe PASS")
+  else {
+    let _ = println("conformance registry probe FAIL count=${show(failures)}");
+    exit(1)
+  }
+}

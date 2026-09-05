@@ -1,0 +1,23 @@
+[package]
+name = "sunholo/motoko_ext_repetition_guard"
+version = "0.1.0"
+edition = "1"
+ailang = ">=0.33.0"
+description = "Breaks no-progress loops: denies a tool call that has already returned the same result N times, and accepts an answer the model has already given N times"
+license = "Apache-2.0"
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_repetition_guard/repetition_guard",
+  "sunholo/motoko_ext_repetition_guard/register"
+]
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+
+[effects]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream"]
+
+[metadata]
+tags = ["motoko", "extension", "guard", "loop", "termination"]
+ai_summary = "Task-agnostic repetition guard: the only extension in this tree that argues for stopping."

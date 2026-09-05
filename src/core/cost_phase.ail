@@ -1,0 +1,66 @@
+-- src/core/cost_phase.ail
+--
+-- Pure cost policy extracted for Phase C. WI-C5 routes live entrypoints
+-- through session.ail; later WIs wire these helpers deeper.
+
+module src/core/cost_phase
+
+import src/core/config (CostRates)
+
+export pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: CostRates) -> int {
+  (input_tokens * rates.input_per_1m_millicents +
+   output_tokens * rates.output_per_1m_millicents) / 1000000
+}
+
+export pure func cost_cap_exceeded(total_cost_millicents: int, max_cost_millicents: int, rates: CostRates) -> bool {
+  max_cost_millicents > 0 && rates.input_per_1m_millicents > 0 && total_cost_millicents >= max_cost_millicents
+}
+
+export pure func next_warning_threshold(total_cost_millicents: int, max_cost_millicents: int, already_warned_pct: int) -> int {
+  if max_cost_millicents <= 0 then already_warned_pct
+  else {
+    let pct = (total_cost_millicents * 100) / max_cost_millicents;
+    if pct >= 90 && already_warned_pct < 90 then 90
+    else if pct >= 75 && already_warned_pct < 75 then 75
+    else if pct >= 50 && already_warned_pct < 50 then 50
+    else already_warned_pct
+  }
+}
+
+pure func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+pure func priced_rates() -> CostRates {
+  { input_per_1m_millicents: 1000000, output_per_1m_millicents: 2000000 }
+}
+
+pure func test_step_cost_millicents_zero_rates() -> bool
+  tests [((), true)]
+  {
+    step_cost_millicents(100, 50, no_rates()) == 0
+  }
+
+pure func test_step_cost_millicents_counts_input_and_output() -> bool
+  tests [((), true)]
+  {
+    step_cost_millicents(3, 4, priced_rates()) == 11
+  }
+
+pure func test_cost_cap_exceeded() -> bool
+  tests [((), true)]
+  {
+    cost_cap_exceeded(100, 100, priced_rates())
+      && not cost_cap_exceeded(99, 100, priced_rates())
+      && not cost_cap_exceeded(100, 0, priced_rates())
+      && not cost_cap_exceeded(100, 100, no_rates())
+  }
+
+pure func test_next_warning_thresholds() -> bool
+  tests [((), true)]
+  {
+    next_warning_threshold(50, 100, 0) == 50
+      && next_warning_threshold(75, 100, 50) == 75
+      && next_warning_threshold(90, 100, 75) == 90
+      && next_warning_threshold(95, 100, 90) == 90
+  }

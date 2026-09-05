@@ -3,25 +3,32 @@ name = "local/motoko_agent"
 version = "0.1.0"
 edition = "1"
 module_prefix = "src"
-ailang = ">=0.24.2"
+ailang = ">=0.33.0"
 
 [dependencies]
 "sunholo/logging" = "0.4.0"
 # Registry-published versions (ailang-packages 2026-05-08).
-"sunholo/motoko_ext_abi" = "2.2.0"
-"sunholo/motoko_ext_test_dummy" = "0.2.2"
-"sunholo/motoko_ext_omnigraph" = "0.2.3"
+"sunholo/motoko_ext_abi" = { path = "packages/motoko-ext-abi" }
+"sunholo/motoko_ext_test_dummy" = { path = "packages/motoko-ext-test-dummy" }
+"sunholo/motoko_ext_omnigraph" = { path = "packages/motoko-ext-omnigraph" }
 "sunholo/motoko_ext_context_mode" = { path = "packages/motoko-ext-context-mode" }
-"sunholo/motoko_ext_mcp" = "0.2.7"
-"sunholo/motoko_ext_exa_search" = "0.2.7"
-"sunholo/motoko_ext_ai_compat" = "0.2.1"
-"sunholo/motoko_ext_compose" = "0.2.4"
-"sunholo/motoko_ext_a2a" = "0.2.2"
-"sunholo/motoko_ext_decision_framework" = "0.2.2"
-"sunholo/motoko_ext_microrag" = "0.4.2"
-"sunholo/motoko_ext_compaction_ai" = "0.2.0"
-"sunholo/motoko_ext_ailang_docs" = "0.1.4"
+"sunholo/motoko_ext_mcp" = { path = "packages/motoko-ext-mcp" }
+"sunholo/motoko_ext_exa_search" = { path = "packages/motoko-ext-exa-search" }
+"sunholo/motoko_ext_ai_compat" = { path = "packages/motoko-ext-ai-compat" }
+"sunholo/motoko_ext_compose" = { path = "packages/motoko-ext-compose" }
+"sunholo/motoko_ext_a2a" = { path = "packages/motoko-ext-a2a" }
+"sunholo/motoko_ext_decision_framework" = { path = "packages/motoko-ext-decision-framework" }
+"sunholo/motoko_ext_microrag" = { path = "packages/motoko-ext-microrag" }
+"sunholo/motoko_ext_compaction_ai" = { path = "packages/motoko-ext-compaction-ai" }
+"sunholo/motoko_ext_ailang_docs" = { path = "packages/motoko-ext-ailang-docs" }
 "sunholo/motoko_ext_scratchpad" = { path = "packages/motoko_scratchpad" }
+"sunholo/motoko_ext_compaction_structural" = { path = "packages/motoko-ext-compaction-structural" }
+"sunholo/motoko_ext_conformance" = { path = "packages/motoko_ext_conformance" }
+"sunholo/motoko_ext_empty_stop_guard" = { path = "packages/motoko-ext-empty-stop-guard" }
+"sunholo/motoko_ext_progress_contract_guard" = { path = "packages/motoko-ext-progress-contract-guard" }
+"sunholo/motoko_ext_repetition_guard" = { path = "packages/motoko-ext-repetition-guard" }
+"sunholo/motoko_ext_agentcli" = { path = "packages/motoko-ext-agentcli" }
+"sunholo/motoko_ext_herdr" = { path = "packages/motoko-ext-herdr" }
 
 [extensions]
 packages      = [
@@ -35,15 +42,42 @@ packages      = [
   "sunholo/motoko_ext_a2a@0.2.2",
   "sunholo/motoko_ext_decision_framework@0.2.2",
   "sunholo/motoko_ext_microrag@0.4.2",
-  "sunholo/motoko_ext_compaction_ai@0.2.0",
+  "sunholo/motoko_ext_compaction_ai@0.3.0",
   "sunholo/motoko_ext_scratchpad@0.1.0",
+  "sunholo/motoko_ext_compaction_structural@1.1.0",
+  "sunholo/motoko_ext_empty_stop_guard@0.1.0",
+  "sunholo/motoko_ext_progress_contract_guard@0.1.0",
+  "sunholo/motoko_ext_repetition_guard@0.1.0",
+  "sunholo/motoko_ext_agentcli@0.1.0",
+  "sunholo/motoko_ext_herdr@0.1.0",
 ]
 config_import   = "src/core/config.RuntimeConfig"
+# hooks_import is required by upstream's manifest loader and names a 5.x type
+# that no longer exists at ABI 6.0; only the upstream (5.x-shape) generator
+# reads it. The project-local generator (make registry_gen,
+# tools/ext_registry_gen/generate.py) reads the three keys below instead.
 hooks_import    = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
+capability_import = "pkg/sunholo/motoko_ext_abi/types.Capability"
+entry_import      = "pkg/sunholo/motoko_ext_abi/types.ExtEntry"
+normalize_import  = "src/core/ext/registry_normalize"
 registry_import = "pkg/sunholo/motoko_ext_abi/types.ExtRegistry"
 output          = "src/core/ext/registry_generated.ail"
+# The row stamped on the generated dispatch functions: the union of the
+# registered packages' register_with_config rows — what `resolve` actually
+# performs. Deliberately NARROWER than [effects] max below, which must also
+# cover effects that imported modules merely *declare*. See #159: generating
+# the registry row from the ceiling over-declares and breaks every consumer
+# of the generated file.
+effects         = ["AI", "Clock", "Env", "FS", "IO", "Net", "Process", "Rand", "SharedMem", "Stream", "Trace"]
 
 [effects]
+# The ceiling is checked against every non-`pkg/` module the project loads —
+# which includes the stdlib. `motoko-ext-context-mode` imports std/sem, and
+# std/sem declares `! {SharedMem, SharedIndex}` on store_frame_ns (:466), so
+# SharedIndex must stay here even though nothing in this repo performs it.
+# Dropping it fails as `effect ceiling violation in package local/motoko_agent`
+# on every extension. It is kept out of the generated registry row via
+# [extensions] effects above.
 max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex", "Rand", "Trace"]
 
 # OpenRouter provider for streaming (M-AI-PROVIDER-CONFIG, v0.15.0+).

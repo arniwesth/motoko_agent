@@ -1,0 +1,1103 @@
+-- src/core/dst_driver_only.ail
+--
+-- `driver_only` v1 — the first conformant simulation profile (ADR-001 D5,
+-- plan P4). One INSTANCE of the machinery in src/core/dst_profile.ail, kept in
+-- its own module and its own commit so that the validator's rejections are
+-- readable before the definition that passes them.
+--
+-- Per D10 the name carries neither "DST" nor "simulation": it names what is in
+-- the system under test, which is the real traced driver plus the main-loop
+-- cursor and nothing else.
+--
+-- ============================================================================
+-- Why the install list is empty, and why that is not a weakness
+-- ============================================================================
+--
+-- No shipped configuration can be the first profile. All fourteen install
+-- `compaction_ai`, and it must be OMITTED — named, with the reason, in
+-- `omitted_extensions` below.
+--
+-- WI-B4 RE-DERIVED THIS REASON, because WI-B2b killed the original one and left
+-- the conclusion standing on nothing. Until B2b, the argument was classifier 2:
+-- `ExtPorts.ai_step` fronted `Ports.model_step`, whose `ProviderExchange`
+-- threads successor state, and the ext seam returned `Result[string, string]`
+-- and could not carry it. B2b widened `ai_step` to
+-- `(ExtWorld, string, [Msg]) -> AiStepOutcome`, so **`ai_step` left the
+-- classifier-2 set** — derived, 3 → 2, with zero member call sites — and that
+-- sentence is now false. The omission is unchanged; only its basis moved.
+--
+-- The basis now is D5's coverage criterion read directly, and it is stronger
+-- than the old one because it does not depend on `compaction_ai` at all. See
+-- `omitted_extensions` for the full argument. In outline:
+--
+--   * D5 admits a hook as covered only if it is (1) deterministic and
+--     effect-free for its explicit inputs, or (2) effectful only through D1
+--     world-mediated ports, with origin tagged by extension id and explicit
+--     world state returned to the host.
+--   * **Classification reads DECLARED effect rows, not performed ones** — the
+--     reconciling detector that would license reading them the other way is
+--     D5 obligation 2's, and it is still unbuilt (WI-C5 owns it).
+--   * `ExtensionHooks.on_budget_plan` declares `! {Env, FS}` in the ABI. Rows
+--     are CLOSED, so every implementation of it declares exactly that row —
+--     there is no narrower binding available to any extension. `Env` and `FS`
+--     are not world-mediated ports, so criterion 1 fails on the declared row;
+--     and `BudgetPatch` has no successor field, so criterion 2's "explicit
+--     world state returned" cannot be satisfied by any binding either.
+--   * `OnBudgetPlan` is UNCONDITIONALLY dispatched
+--     (`dst_profile_coverage.hook_dispatch`, `ext/runtime.ail:229`), and D5
+--     forbids installing an extension with any unconditionally-dispatched hook
+--     excluded.
+--
+-- So on this ABI **no extension in the tree is installable in a conformant
+-- profile**, and the empty install list below is FORCED rather than chosen.
+-- That is a sharper claim than the one this header used to make, and it is
+-- guarded rather than asserted: `make driver_only` re-checks the ABI facts it
+-- rests on and goes red the day `on_budget_plan` is widened — which is exactly
+-- the day the decision has to be retaken.
+--
+-- ===========================================================================
+-- SUPERSEDED AT WI-D6, 2026-08-06. THAT DAY CAME, AND IT WAS TAKEN
+-- DELIBERATELY. Kept above rather than deleted, per plan rule S15: the two
+-- bullets and the paragraph were true from the ABI's first version until this
+-- date, and re-dating them in place would make them a false claim about
+-- history.
+--
+-- WHAT CHANGED: `on_budget_plan`'s ABI row was narrowed from the closed
+-- `! {Env, FS}` to no row at all. The slot is now coverable under criterion 1.
+-- The third bullet still holds — the slot is still unconditionally dispatched
+-- and still cannot be excluded — but it is no longer a barrier, because the
+-- slot no longer needs excluding.
+--
+-- WHY IT WAS NOT A RELAXATION: WI-D6 measured all fifteen `on_budget_plan`
+-- bindings in the tree against two producers independent of the declaration —
+-- the runtime capability trap out of process (7 of 15 directly witnessed) and
+-- the effect checker over all 15, total over inputs. Not one performs `Env` or
+-- `FS`. The narrowing moved the DECLARATION to the measurement, which is what
+-- WI-D5's verdict asked for when it found the barrier to be "the rule, not the
+-- behaviour". `make declared_vs_performed` carries the whole table.
+--
+-- WHAT DID *NOT* CHANGE, AND IT IS THE PART THAT MATTERS FOR THIS FILE:
+-- **`driver_only` still installs nothing and still covers nothing.** Every
+-- vacuity this profile's acceptance table rests on is unchanged in extent.
+-- Earning coverage needs a profile that installs something, which is WI-C5 and
+-- is not this file.
+--
+-- ===========================================================================
+-- CORRECTED AT WI-D7, 2026-08-06. THE PARAGRAPH ABOVE USED TO END "the empty
+-- install list below is now CHOSEN rather than FORCED", AND IT IS STILL
+-- FORCED.
+--
+-- THIS FILE DISAGREED WITH ITSELF FOR ONE ITEM. `omitted_extensions` below has
+-- said, correctly, since WI-D6 wrote it: "The three other former barriers
+-- stand and are unaffected." This header said the emptiness had become a
+-- choice. Both were written by the same item on the same day and nothing went
+-- red, because no artifact computed the barrier COUNT — each passage was
+-- reasoning locally about the slot in front of it.
+--
+-- WHY FORCED IS STILL THE RIGHT WORD. `on_budget_plan` was ONE of FOUR
+-- unconditionally-dispatched slots. D5 forbids installing an extension with
+-- ANY unconditionally-dispatched hook excluded, so all four must be coverable
+-- before the choice exists. WI-D7 measured the other three across all fifteen
+-- bindings each, by narrowing every row tree-wide and letting the effect
+-- checker answer over all inputs. Each is refused by exactly ONE binding, and
+-- the compiler named it:
+--
+--   on_pre_step            compaction_ai   AI, IO, Trace — reached through
+--                                          ExtPorts.ai_step, and WI-D7 read
+--                                          this as "all ten". See below.
+--   on_response_intercept  compose         Clock, FS, IO, Process — the
+--                                          inline-snippet path
+--   on_solver_candidate    context_mode    Process — a node bridge spawned
+--                                          fire-and-forget
+--
+-- Two of the three rows NARROWED to what is performed (nine effects → four,
+-- nine → one). Neither narrowing removes a barrier: a non-empty row fails
+-- criterion 1 at four effects exactly as it did at nine, and none of the
+-- effects is a world-mediated port, so criterion 2 fails too.
+--
+-- WI-D8 NARROWED THE THIRD ROW TOO, AND CORRECTED WHAT WI-D7 RECORDED ABOVE.
+-- D7 wrote "all ten effects, reached through ExtPorts.ai_step" and the second
+-- half is right while the first was never measured. `ExtPorts.ai_step` had
+-- carried a ten-effect row since WI-B2a and nothing had ever checked it
+-- against a body; its whole effect demand comes from `session.ext_ai_step`,
+-- which calls `Ports.model_step` and nothing else, and `model_step` is
+-- `! {AI, IO, Trace}`. Seven of the ten — Process, FS, Env, Net, SharedMem,
+-- Clock, Stream — are effects that port CANNOT produce.
+--
+-- So `on_pre_step` narrowed to `! {AI, IO, Trace}`, by the same consequence
+-- WI-D7 named: the slot's row follows the port's. THE BARRIER DID NOT MOVE.
+-- The count is still THREE, and the reason is unchanged in kind — a non-empty
+-- row fails criterion 1 at three effects exactly as it did at ten.
+--
+-- What DID change is the evidence for criterion 2, and WI-D8 decided it
+-- explicitly rather than letting the narrowing decide it. At ten effects the
+-- row positively CONTRADICTED the mediation claim, because seven of them are
+-- effects the mediating port cannot produce. At three it stops contradicting
+-- it — every declared effect is exactly what the mediated port performs — but
+-- it does not begin supporting it either: `! {AI, IO, Trace}` is equally
+-- consistent with a binding that calls an ambient provider directly. D7's
+-- verdict therefore stands: THE BARRIER IS THE ROW'S VOCABULARY, and removing
+-- it needs a port-surface change or a criterion that can read mediation.
+--
+-- SO THE COUNT IS THREE, AND IT IS NOW A CHECKED ARTIFACT RATHER THAN PROSE.
+-- `make profile_definition` derives it from the ABI rows and the dispatch
+-- table on every run and prints it as a number; it goes RED if the count
+-- reaches zero, because that is the day the omission has to be decided rather
+-- than inherited. That is D5 planning defect 4 ("the caveat needs to be a
+-- checked artifact, not prose") discharged for this claim specifically — and
+-- it is the mechanism that would have caught the disagreement above.
+-- ===========================================================================
+--
+-- An empty install list makes the coverage floor and the per-hook disclosure
+-- hold VACUOUSLY, and that vacuity is safe rather than convenient: the
+-- per-extension rules make an unchecked installed extension impossible, so
+-- there is nothing for an empty list to hide. Four of D5's fields are NOT
+-- vacuous for an empty install list, and all four carry real content here — the
+-- adapter/parser boundaries, the logical resource models, the permitted
+-- diagnostic projections, and the forbidden capabilities.
+--
+-- ============================================================================
+-- What this profile CLAIMS, and what each claim rests on
+-- ============================================================================
+--
+-- The attribution reference is recorded as LITERALS, not as a call to
+-- `table_identity()`. That is deliberate and it is the difference between a
+-- check and a tautology: D4 states that a table correction re-issues every
+-- referring profile, which is only mechanically true if the profile records the
+-- content hash and something compares it. If this file called the live function
+-- the comparison would always pass and the rule would be decorative. The cost
+-- is that a table edit turns `make driver_only` red until the profile is
+-- re-issued with a version bump. That cost IS the rule.
+--
+-- The routed-set claim is NOT recorded. `routed_set_claim` computes it from the
+-- table at the bound revision (plan P3). P4 describes "a reachable clock set of
+-- the four driver sites"; at HEAD the computed answer is SEVEN reachable — five
+-- routed and two declared-unrouted — because A12 routed a fifth site in
+-- `tool_phase.ail` and A5 declared the two unrouted ones explicitly. Writing
+-- four down here is exactly the defect P3 exists to prevent, so nothing is
+-- written down.
+--
+-- The two declared-unrouted sites are A10's decision 1 in force. Each names its
+-- instrument, and the instrument is not a promise: `make world_state` runs the
+-- Clock poison PAIR, which shows the deterministic entry point completes with
+-- `Clock` withheld — so it reaches neither site — and that the live world dies
+-- with `Clock` withheld, so the first half is evidence of containment rather
+-- than evidence that nothing reads a clock at all.
+
+module src/core/dst_driver_only
+
+import std/list as List (length)
+
+import src/core/dst_profile (
+  ProfileDefinition,
+  ExecutionManifest,
+  ProfileRejection,
+  RoutedSetClaim,
+  AttributionRef,
+  Classifier2Call,
+  routed_set_claim,
+  waivers_from,
+  validate_definition_at_load,
+  definition_ok,
+  profile_rules_version
+)
+import src/core/dst_attribution_table as Attr (CoreSite)
+import src/core/dst_fault_catalogue as Fault (FaultClass, fault_catalogue, conditional_class_ids)
+import src/core/dst_profile_coverage as Cov (coverage_rules_version)
+import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
+
+export pure func driver_only_id() -> string { "driver_only" }
+-- v3, WI-A13 stage 4. RE-ISSUED for the SECOND time and for the same mechanical
+-- reason: stage 4 added one `GeneratedWorld` arm to `ported_provider`
+-- (session.ail:887), which sits above four attributed clock sites, so all four
+-- moved by five lines and A5's table was re-measured. THE CLAIM DID NOT CHANGE
+-- — same seven sites, same effects, same routed flags, same reviewers; only the
+-- coordinates moved.
+--
+-- Two clusters have now paid this, and the second is the useful data point. The
+-- stub_step anchor (`:163` at the time) was NOT disturbed, because that cascade
+-- is documented and an author who knows about it can insert below the anchor and
+-- widen import lists in place. The session.ail anchors were disturbed anyway,
+-- because a new `StepProvider` variant forces a new match arm and a match arm
+-- cannot be moved below the sites it precedes — so this half of the cascade is
+-- NOT avoidable by care. That distinction is the case for A14/A15 building a
+-- coordinate-independent anchor: the avoidable half is already avoided, and
+-- what remains is structural.
+--
+-- **WI-C1 REFUTED the "avoidable half" claim, and the refutation is cheap
+-- enough to be damning.** C1 disturbed the stub_step anchor (`:163` -> `:182`)
+-- with NOTHING BUT COMMENT LINES — a note explaining the recorded-stream
+-- adoption, placed above `live_ports` where a reader of `live_ports` will find
+-- it. "Insert below the anchor" is not available to a comment whose whole job is
+-- to be read before the thing it describes. So the avoidable half is avoidable
+-- only by writing documentation in the wrong place, which is a worse trade than
+-- re-issuing a profile, and the case for a coordinate-independent anchor is now
+-- made by three consecutive items rather than two.
+--
+-- v2, WI-A13 stage 2. RE-ISSUED, not edited: stage 2 inserted lines into
+-- session.ail and stub_step.ail above four attributed clock sites, so A5's
+-- table was re-measured and its content hash changed. D4 makes a table
+-- correction re-issue every referring profile, and `driver_only_dst`'s failure
+-- message states the remedy at the point of failure — bump the version and
+-- re-record the pair, never make the profile call `table_identity()`.
+--
+-- Worth recording that the CLAIM did not change. Same seven sites, same
+-- effects, same routed flags, same reviewers; only the coordinates moved. The
+-- table anchors sites by line number, so any edit above one re-measures it, and
+-- the hash cannot distinguish a re-measurement from a correction. Treating both
+-- as a re-issue is the safe direction and is what the header already chose
+-- ("that cost IS the rule"), but the fragility is a finding worth A14/A15's
+-- attention rather than something to absorb silently each cluster.
+-- BUMPED TO 4 AT WI-B4, for two independent reasons and both are D-rule
+-- mandated rather than housekeeping:
+--
+--   1. D4. A5's attribution table was re-derived — nine of its ten anchors were
+--      stale at HEAD, before any WI-B4 edit, and `make dst` had exited 2 short
+--      of the check for long enough that nobody saw it. Correcting the table
+--      re-issues every referring profile, and the identity pair below is
+--      re-recorded with it.
+--   2. D5/D8. The fault catalogue moved to `fault-catalogue/2`
+--      (`extension_effect_fault` gained a reachable branch), which this
+--      profile's manifest records.
+--
+-- Coverage did NOT change: the install list is still empty, the waived class
+-- set is still every conditional class, and no hook classification moved.
+--
+-- BUMPED TO 5 AT WI-C1, for ONE reason and it is a RE-MEASUREMENT, not a
+-- correction — which is the distinction the paragraph above says the hash
+-- cannot make, arriving one item later exactly as predicted.
+--
+--   D4. Three anchors moved because WI-C1 added comment lines above them:
+--   `stub_step.ail` 163 -> 182 (the recorded-stream adoption note above
+--   `live_ports`) and `session.ail` 2360 -> 2365, 2470 -> 2475 (the note at
+--   `exchange.emissions`). Re-derived: `now()` is unique in `stub_step.ail`,
+--   and `session.ail` has exactly four `clock_now(` call sites. So each anchor
+--   had exactly ONE candidate and no judgement was exercised — the same finding
+--   B4 recorded, and it is worth saying plainly a second time rather than
+--   claiming credit for a decision that was not available.
+--
+-- THE CLAIM DID NOT CHANGE. Same seven sites, same effects, same routed flags,
+-- same reviewers; only coordinates moved, and every referring `site_key` was
+-- updated with them. Coverage did not change either: install list still empty,
+-- waived set still every conditional class, no hook classification moved, and
+-- the catalogue is still `fault-catalogue/2`.
+--
+-- **This is the cost of anchoring by line number, paid for the second
+-- consecutive item, by an edit that was PURE COMMENT.** B4 flagged the
+-- fragility as worth attention rather than absorbing; this is the evidence that
+-- it recurs on the cheapest possible change.
+--
+-- BUMPED TO 6 AT WI-C3, and it is again a RE-MEASUREMENT rather than a
+-- correction — the FOURTH consecutive item to pay this cascade.
+--
+--   D4. SIX anchors moved, which is twice C1's three, because WI-C3 threads a
+--   new field through `C2LoopState` and adds the converter above
+--   `append_stream_delta`: `session.ail` 851 -> 878, 992 -> 1104, 1097 -> 1210,
+--   2365 -> 2521, 2475 -> 2631, and `stub_step.ail` 182 -> 202. Re-derived
+--   exactly as at B4 and C1, and with the same answer: `now()` is unique in
+--   `stub_step.ail`, `session.ail` has exactly one real `now()` call and exactly
+--   four `ports.clock_now(` call sites. One candidate each, so NO JUDGEMENT was
+--   available — said plainly rather than claimed as a decision.
+--
+-- THE CLAIM DID NOT CHANGE, again. Same seven sites, same effects, same routed
+-- flags, same reviewers. Coverage did not change: install list still empty,
+-- waived set still every conditional class, no hook classification moved, and
+-- the catalogue is still `fault-catalogue/2`.
+--
+-- BUMPED TO 7 AT WI-C5, and this one IS a correction rather than a
+-- re-measurement — the first in five items. Widening `ExtPorts.clock_now`
+-- routed the extension seam, so `session.ail:878` LEFT the unconditional-core
+-- set (the function that carried it is deleted) and `session.ail:881` joined it
+-- as the sixth ROUTED site. The four A12 sites moved again — 1104 -> 1126,
+-- 1210 -> 1232, 2521 -> 2543, 2631 -> 2653 — and `stub_step.ail:202` did not
+-- move. **The claim DID change this time: 5 routed of 7 became 6 of 7.**
+-- Coverage still did not: install list still empty, still nothing covered
+-- provably.
+--
+-- **AND THE CASCADE WAS PAID TWICE WITHIN WI-C5, exactly as within WI-C3.** The
+-- second payment was caused by rewriting a HISTORICAL COMMENT BLOCK for tense
+-- under plan rule S15 after the anchors had been derived, which moved four
+-- `session.ail` numbers by nine. S15 tells you to go back and tense a comment;
+-- doing so re-dates every anchor below it. That interaction is now plan rule
+-- S18. **A THIRD consumer surfaced too, which no checklist in this project
+-- named:** `dst_attribution_table`'s own unit test
+-- `test_discovered_site_in_neither_list_is_rejected` carries a copy of a moved
+-- anchor, alongside the two C3 found (`tools/predicate-anchors`, and
+-- `attribution_table_dst`'s `omitted_site()` fixture). It was caught by
+-- `ailang test` inside `make dst`, not by search.
+--
+-- **C1 refuted the v3 note's claim that half this cascade is avoidable by
+-- inserting below the anchor; WI-C3 refutes the other half.** Three of the six
+-- moves here are not comments at all — they are a FIELD added to a record type
+-- and a function extracted above its caller, and neither has a "below the
+-- anchor" version. A record's fields have an order the anchor cannot be placed
+-- after, and an extracted converter has to be in scope before the function that
+-- calls it. Four items have now paid this; the case for a coordinate-independent
+-- anchor is no longer a preference.
+-- v6 -> v7 at WI-C5. Re-issued because the attribution table's
+-- unconditional-core set changed: `session.ail:878` left it (the seam was
+-- routed) and `session.ail:881` joined it, and four routed sites moved line.
+-- That changes the table's content hash, which is part of this profile's
+-- conformance, so the version and the ref below move together — a profile
+-- carrying a stale ref fails closed at load, which is the point.
+--
+-- The COVERAGE claim is unchanged: still an empty install list, still nothing
+-- covered provably. What moved is the routed-set arithmetic (6 routed of 7,
+-- from 5 of 7), not what this profile can claim about extensions.
+--
+-- v7 -> v8 AT WI-D2, and this one is a RE-MEASUREMENT rather than a correction.
+-- Five anchors moved because WI-D2 widened `ToolDispatchOutcome` and
+-- `execute_allowed_tool_call` to return the events they emit, and added the
+-- appends that consume them: `tool_phase.ail` 288 -> 313, 289 -> 314,
+-- 344 -> 373, and `session.ail` 2543 -> 2601, 2653 -> 2711. `session.ail`
+-- 881/1126/1232, `stub_step.ail:202` and `ext/runtime.ail:190` did not move.
+--
+-- **The CLAIM did not change: same seven sites, same effects, same routed
+-- flags, same reviewers, still 6 routed of 7.** Every anchor was re-derived the
+-- way B4, C1, C3 and C5 derived theirs, and with the same answer: `now()` is
+-- unique in `stub_step.ail`, `exec_scratchpad_cell_ws` and `ports.clock_now(`
+-- are each unique in `tool_phase.ail`, and `session.ail` has exactly four
+-- `ports.clock_now(` call sites. **One candidate each, so NO JUDGEMENT was
+-- available** — said plainly rather than claimed as a decision.
+--
+-- Coverage did not change either: install list still empty, waived set
+-- unchanged, no hook classification moved, catalogue still `fault-catalogue/2`.
+--
+-- **AND WI-D2 PAID THE CASCADE EXACTLY ONCE**, which C3 and C5 both failed to
+-- do. S18 is why: every source edit including the six comment blocks tensed for
+-- S15 was finished BEFORE the anchor numbers were derived, so no number was
+-- re-dated by a later comment rewrite. Line-count neutrality (D1's route) was
+-- not available here — a record type gained a field on two variants and a fold
+-- gained a threaded accumulator, and neither has a "below the anchor" form.
+-- v10 -> v11 AT WI-D6, AND IT IS A DIFFERENT KIND OF BUMP FROM THE LAST THREE.
+-- v8->v9 (D3), v9->v10 (D4) and D2's before them were RE-MEASUREMENTS: anchors
+-- moved, the claims did not. This one changes a CLAIM — `omitted_extensions`'
+-- reason for `compaction_ai` no longer says the omission is forced by the ABI,
+-- because it is not. The install list, the coverage claim, the waived set, the
+-- hook classifications, the catalogue and the attribution ref are all
+-- UNCHANGED, so no anchor moved and no coverage moved.
+--
+-- The bump exists because the reason is part of the definition and a consumer
+-- reading `driver_only/10`'s reason would be reading a sentence this tree no
+-- longer asserts. That is precisely the S15 failure mode — a claim quoted
+-- forward and read as current — and a version is the mechanism this file
+-- already has for refusing it.
+--
+-- WHAT A READER OF v11 MUST NOT CONCLUDE: that anything is covered. v11 installs
+-- exactly what v10 installed, which is nothing. The empty install list moved
+-- from FORCED to CHOSEN and nothing else moved with it.
+--
+-- v9 -> v10 AT WI-D4, a RE-MEASUREMENT like WI-D3's and WI-D2's and not a
+-- correction. TWO anchors moved — `session.ail` 2654 -> 2677 and 2764 -> 2787 —
+-- because WI-D4 replaced four `resolve_context_limit` call sites in `c2_loop`
+-- with reads of `policy.step.compaction.context_limit` and the comment blocks
+-- explaining why are longer than the code they replaced. `session.ail`
+-- 881/1126/1232, `stub_step.ail:203`, `tool_phase.ail` 313/314/373 and
+-- `ext/runtime.ail:190` did not move.
+--
+-- Every anchor was re-derived and NO JUDGEMENT was available, the same answer
+-- the last six items got: `session.ail` still has exactly four
+-- `ports.clock_now(` call sites, so the third and fourth are the third and
+-- fourth. WI-D4 adds no clock site and removes none.
+--
+-- A FOURTH CONSUMER exists beyond the two `.ail` ones and WI-D3 found it the
+-- hard way: `tools/predicate-anchors/anchors.sh` carries its own copy of the
+-- line numbers, and `make anchors` keeps reporting the old ones until it is
+-- updated too. Paid here in the same pass.
+--
+-- The record of WI-D3's cascade below is LEFT AS WI-D3 WROTE IT, including its
+-- "eight call sites" — that is what was true at WI-D3, and S15's trap is
+-- precisely that a bare number re-dated inside a historical record becomes a
+-- false claim about history. The driver reaches `resolve_context_limit` at four
+-- sites now; that fact belongs here, in WI-D4's paragraph, and not inside
+-- WI-D3's.
+--
+-- v8 -> v9 AT WI-D3, a RE-MEASUREMENT like WI-D2's and not a correction.
+-- Three anchors moved because WI-D3 added `Ports.file_read`, `WorldState.files`
+-- and `ContextReader`, bound the file seam in `live_ports`, and threaded
+-- `resolve_context_limit` at eight call sites: `stub_step.ail` 202 -> 203 (one
+-- import line above it) and `session.ail` 2601 -> 2654, 2711 -> 2764.
+-- `session.ail` 881/1126/1232, `tool_phase.ail` 313/314/373 and
+-- `ext/runtime.ail:190` did not move.
+--
+-- **The CLAIM did not change: same seven sites, same effects, same routed
+-- flags, same reviewers, still 6 routed of 7.** WI-D3 adds no clock site — its
+-- new ambient reader is `ports.ambient_file`, which is an FS read and this table
+-- is the CLOCK attribution. Every anchor was re-derived with the same answer the
+-- last five items got: `now()` is still unique in `stub_step.ail` and
+-- `session.ail` still has exactly four `ports.clock_now(` call sites. **One
+-- candidate each, so NO JUDGEMENT was available.**
+--
+-- Coverage did not change: install list still empty, waived set unchanged, no
+-- hook classification moved, catalogue still `fault-catalogue/2`.
+--
+-- WHAT DID CHANGE IN THIS FILE IS THE ENV ENTRY'S INSTRUMENT, and it is a
+-- correction rather than a re-measurement: the forbidden-capability row for
+-- `Env` claimed PROVENANCE ONLY on the grounds that the Env-withheld poison pair
+-- was deferred. WI-D3 built the pair, so the claim was false the moment the
+-- Makefile's deferral note was deleted.
+--
+-- `FS` is deliberately NOT added to `forbidden_capabilities`, and the reason is
+-- scope rather than evidence: `make world_state` now proves the deterministic
+-- entry point completes with FS withheld, so the claim would be true and
+-- instrumented. Adding it is a PROFILE claim with its own machinery — a coverage
+-- row, a waiver review and another version bump — and WI-D3's remit was the
+-- world class and row 10. That is the thing that would have to change, named
+-- rather than located.
+--
+-- **WI-D3 PAID THE CASCADE ONCE**, following S18 as WI-D2 did: every source
+-- edit including the seven comment blocks tensed for S15 was finished BEFORE the
+-- anchor numbers were derived. Line-count neutrality was not available — two
+-- record types gained a field and a module gained two parameters.
+-- v11 → v12 AT WI-D7, AND IT IS THE SAME KIND OF BUMP AS v10 → v11: a CLAIM
+-- changed, no anchor moved. v11's header said the empty install list had become
+-- CHOSEN rather than FORCED. It is still FORCED — three of the four
+-- unconditionally-dispatched slots still refuse coverage, measured across all
+-- fifteen bindings each, and the count is now derived on every run by
+-- `make profile_definition`. A consumer reading v11's header would be reading a
+-- sentence this tree no longer asserts, which is exactly the S15 failure mode a
+-- version exists to refuse.
+--
+-- Install list, coverage claim, waived set, hook classifications, catalogue and
+-- attribution ref are all UNCHANGED. v12 installs exactly what v11 installed,
+-- which is nothing, and covers exactly what v11 covered, which is nothing.
+--
+-- v12 → v13 AT WI-D13, AND IT IS THE SAME KIND OF BUMP AGAIN: a CLAIM changed,
+-- no anchor moved, nothing new is installed and nothing new is covered.
+--
+-- WHAT CHANGED: **for four of the fifteen extensions the empty install list
+-- stopped being FORCED and became CHOSEN**, and this file has now said "forced"
+-- for two versions running. `omitted_extensions` below names all four with
+-- their measured basis. The v12 header's sentence — "three of the four
+-- unconditionally-dispatched slots still refuse coverage" — is still true of
+-- the SLOTS and is no longer true of those four EXTENSIONS, which is exactly
+-- the distinction WI-D13 put into the derivation.
+--
+-- WHY IT MOVED WITHOUT AN ABI EDIT. WI-D12 built classifier 3
+-- (`make ext_ambient_inventory`), the first producer in this tree that can
+-- supply D5 criterion 2's evidence — criterion 2 is a claim about the CALL
+-- PATH, and every row-reading instrument is blind to provenance by
+-- construction (`ADR:1449`). WI-D13 re-shaped the barrier derivation to the
+-- (extension, slot) pair on the strength of it, which Amendment A named as one
+-- of the three things that change when classifier 3 exists (`ADR:1580`). The
+-- ABI rows are untouched and the SLOT-level barrier count is still THREE.
+--
+-- WHAT DID *NOT* CHANGE, AND IT IS AGAIN THE PART THAT MATTERS FOR THIS FILE:
+-- **driver_only still installs nothing and still covers nothing.** Every
+-- vacuity this profile's acceptance table rests on is unchanged in extent.
+-- Naming an extension in `omitted_extensions` is not a coverage claim;
+-- installing one is, and it is WI-C5's.
+--
+-- v13 → v14 AT WI-D14, AND IT IS THE SMALLEST KIND OF BUMP THIS FILE TAKES: a
+-- sentence inside one reason became FALSE, and nothing else moved. No anchor,
+-- no install, no coverage, no waiver, no attribution ref.
+--
+-- WHAT BECAME FALSE. `compaction_structural`'s reason below said installing it
+-- "is WI-C5's, not an instrument's side effect". **WI-D14 installed it — in a
+-- DIFFERENT PROFILE.** `src/core/dst_driver_plus_no_ops.ail` installs all four
+-- of the zero-barrier extensions and covers 32 hooks, entirely of no-ops. So
+-- the install decision was neither WI-C5's nor an instrument's; it was a second
+-- profile's, which is the case the sentence did not contemplate and which D10
+-- always permitted. The clause is qualified in place with its date rather than
+-- rewritten, per plan rule S15, because it was true from WI-D13 until 2026-08-07.
+--
+-- WHAT DID NOT CHANGE, AND IT IS WHY THIS IS A BUMP AND NOT A RE-ISSUE:
+-- **driver_only still installs nothing and still covers nothing, and its own
+-- coverage is still ZERO.** A second profile installing an extension takes
+-- nothing from this one and gives it nothing — per D10 each profile earns its
+-- rows from scratch, and `driver_plus_no_ops` inherits none of the eleven this
+-- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
+-- are unchanged in extent, and the mandatory zero-coverage caveat is still
+-- true of `driver_only` verbatim.
+export pure func driver_only_version() -> string { "26" }
+
+-- The attribution table this profile was issued against. Literals by design —
+-- see the header. Re-issuing the profile after a table correction means bumping
+-- `driver_only_version` and re-recording both halves of this pair.
+export pure func driver_only_attribution_ref() -> AttributionRef {
+  { source_revision: "c0fbf10",
+    -- RE-RECORDED AT 7.0 REVIEW FIX FOR v26, from
+    -- sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33.
+    -- TWO anchors moved, +4 (`3012/3122 -> 3016/3126`): the publish-before-`done`
+    -- ordering fix (review finding 4) added four lines inside `c2_loop`'"'"'s success
+    -- arm, which sits between `:1529` and the two `provider.ports.clock_now`
+    -- sites. The other three did not move and were re-derived anyway, on the
+    -- rule the previous re-baseline had to learn the hard way: an anchor that
+    -- still matches is not an anchor that is still right.
+    --
+    -- All five anchored expressions are byte-identical at their offsets. Pure
+    -- offset drift; the routed clock set is unchanged at six sites. The
+    -- exit-manifest publish reads no clock.
+    -- RE-RECORDED AT ABI 7.0 FOR v25, from
+    -- sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66.
+    -- FIVE anchors moved, all +2 (`1162/1421/1527/3010/3120 ->
+    -- 1164/1423/1529/3012/3122`), and the cause is two import lines in
+    -- `session.ail` for the exit-intent seam (`ext/exit_manifest`,
+    -- `ext/ctx_defaults`), both above every anchor.
+    --
+    -- ONE OF THE FIVE DID NOT FAIL THE CHECK, and that is the part worth
+    -- recording: at +2 the `:1162` anchor landed on `let clock_now = func(...)`
+    -- instead of `let reading = p.clock_now(w0);` — a different expression
+    -- carrying the same substring, so the grep matched and the anchor silently
+    -- re-pointed. Re-baselining only the four that shouted would have frozen a
+    -- green anchor onto the wrong line. All five were re-derived.
+    --
+    -- All five anchored expressions were compared to
+    -- `git show cec2e25~1:src/core/session.ail` character by character and are
+    -- byte-identical: pure offset drift, no site changed identity, routing or
+    -- attribution. The exit-manifest publish reads no clock, so the routed set
+    -- is the same six it was.
+    --
+    -- THE WIDTH WAS MIS-PRICED FIRST AND THE GATE CORRECTED IT. The re-baseline
+    -- note in `anchors.sh` initially claimed a THREE-file cascade on the grounds
+    -- that no fixture-carried anchor moved — true, and not the rule. `make
+    -- driver_only` answered `the attribution table was corrected and driver_only
+    -- was not re-issued (D4)`, which is the six-file form: the three profile
+    -- versions and their refs are pinned to the TABLE, not to the anchors it
+    -- happens to hold. The claim in `anchors.sh` is corrected to match.
+    -- RE-RECORDED AT WI-D25 FOR v22, NINTH time, from
+    -- sha256:4339fef00fff65bcbdaa42374424ec375b4f4329d2f85db5ebaee41b23d44572.
+    -- TWO anchors moved, not five and not six, and that is the narrowest
+    -- re-issue this pair has taken: `session.ail:2921` -> `:2942` and `:3031` ->
+    -- `:3052`, both +21, because the item's only `session.ail` edit is in
+    -- `c2_loop`'s `CallModel` arm — a WI-D4 comment re-tensed two-part and two
+    -- `c2_finalize` arguments swapped in place. The arm sits BELOW `:1476` and
+    -- ABOVE the two `provider.ports.clock_now` sites, so three of the five
+    -- session anchors did not move at all.
+    --
+    -- AND `ext_ports_of` WAS NOT TOUCHED, which is why this is the SIX-file form
+    -- rather than WI-D24's nine: `ext/runtime.ail` was edited only BELOW its
+    -- `:199` anchor (three comment corrections in the dispatchers), so the
+    -- fixture-carried anchors — `ext/runtime.ail:199` and `tool_phase.ail:318` —
+    -- are both unmoved and the three discovered-site fixtures are untouched.
+    -- That is WI-D24's corrected law used in the direction it was written for.
+    --
+    -- Both anchored expressions were compared to `git show HEAD:` character by
+    -- character and are byte-identical: pure offset drift.
+    --
+    -- RE-RECORDED AT WI-D24 FOR v21, EIGHTH time, AND THE FIRST TO MOVE SIX
+    -- ANCHORS RATHER THAN FIVE OR THREE. The usual five `session.ail` clock
+    -- anchors moved +15 (1096/1355/1461/2906/3016 -> 1111/1370/1476/2921/3031)
+    -- because the item edited `ext_ports_of`, which is the WI-D21 law working as
+    -- recorded. What is new is the SIXTH: `src/core/ext/runtime.ail:190` -> `:199`,
+    -- because the eighth recording adapter's ext id is stamped by that file's
+    -- fold and the import plus its rationale sit above the anchor.
+    --
+    -- AND THAT MAKES THIS A NINE-FILE RE-ISSUE WITH `tool_phase.ail` UNTOUCHED,
+    -- which WI-D21 §11.1 recorded as impossible: it priced nine files as "the
+    -- price of a `tool_phase` move". Measured here, the three discovered-site
+    -- fixtures carry `ext/runtime.ail:190` as well as `tool_phase.ail:318`, so
+    -- ANY move of either fires the wide form. The law is corrected at
+    -- `tools/predicate-anchors/anchors.sh`, where the enumeration lives.
+    --
+    -- All six anchored expressions were compared to `git show HEAD:` character
+    -- by character and are byte-identical: pure offset drift, no site changed
+    -- identity, routing or attribution.
+    -- RE-RECORDED AT WI-D20 FOR v18, FIFTH time — AND IT IS THE FIRST ONE THAT
+    -- IS NOT A ROUTE B SURFACE ITEM, so the pattern stated further down is now
+    -- known to have an exception rather than being a law. The five `session.ail`
+    -- anchors did NOT move this time; the three `tool_phase.ail` ones did, and
+    -- for a different reason: routing `on_tool_handle` needs `ext_world`'s codec
+    -- inside `tool_phase.ail`, and an import can only go above them.
+    --
+    -- TWO OF THE THREE ARE THE USUAL RE-MEASUREMENT (313 -> 317, 314 -> 318),
+    -- compared character-for-character against `git show HEAD:` and identical.
+    -- THE THIRD IS NOT, and that is why this entry says more than its four
+    -- predecessors: `tool_phase.ail:373` -> `:413` also CHANGED — it read
+    -- `ports.clock_now(world)` and now reads `ports.clock_now(handle_world)`,
+    -- because a delegating `on_tool_handle` may have advanced the world before
+    -- the native dispatch begins. WHICH sites are attributed and routed is still
+    -- unmoved — still seven sites, still 6 routed of 7 — so the profile's claim
+    -- is unchanged and this is still a re-issue rather than a correction. What
+    -- moved inside one of those sites is recorded at its row's `note`, because a
+    -- reader who diffed it and found it not byte-identical is owed the reason.
+    -- `source_revision` unchanged, for WI-D4's reason.
+    --
+    -- The v17 value was
+    -- sha256:6b929328f5dbb8007451f84224b6f2c83d618e09966681a9e3a683392718c3a7.
+    -- Re-recorded at WI-D4 for v10, and it is the same KIND of event as WI-D3's
+    -- and WI-D2's: a re-measurement, not a correction. The hash covers the ROWS,
+    -- so it moves when an anchor moves even though the claim does not — TWO line
+    -- numbers changed here (`session.ail` 2654 -> 2677 and 2764 -> 2787, both
+    -- pushed down by WI-D4's comment blocks in `c2_loop`) and nothing about which
+    -- sites are attributed or routed did. Still seven sites, still 6 routed of 7.
+    -- `source_revision` is unchanged because WI-D4 did not re-bind the table to a
+    -- new revision; it re-derived the same table's anchors.
+    --
+    -- RE-RECORDED AT WI-D16 FOR v15, and it is the SAME KIND of event again: a
+    -- re-measurement, not a correction. FIVE line numbers changed here
+    -- (`session.ail` 881 -> 911, 1126 -> 1160, 1232 -> 1266, 2677 -> 2711 and
+    -- 2787 -> 2821), all pushed down by the widening of `ExtPorts.tool_handle`
+    -- and the new `ExtPorts.file_read` seam inside `ext_ports_of`. Each anchored
+    -- expression was compared character-for-character against `git show HEAD:`
+    -- before and after; nothing about WHICH sites are attributed or routed
+    -- moved. Still seven sites, still 6 routed of 7. `source_revision` is
+    -- unchanged for WI-D4's reason: the table was not re-bound to a new
+    -- revision, its anchors were re-derived.
+    --
+    -- RE-RECORDED AT WI-D18 FOR v17, FOURTH time and the same kind of event —
+    -- and at four in a row this is no longer worth narrating as an incident.
+    -- The same five `session.ail` line numbers moved again (931 -> 965,
+    -- 1185 -> 1224, 1291 -> 1330, 2736 -> 2775, 2846 -> 2885), pushed down by the
+    -- three new `ExtPorts.path_stat`/`dir_list`/`dir_make` bridges inside
+    -- `ext_ports_of` — 34 closure lines plus one on the ABI import line. Verified
+    -- character-for-character against `git show HEAD:` at all five. Still seven
+    -- sites, still 6 routed of 7, `source_revision` unchanged.
+    --
+    -- RE-RECORDED AT WI-D21 FOR v19, FIFTH time — AND THE FIRST CAUSED BY AN
+    -- EDIT THAT ADDED NO CODE. The same five `session.ail` line numbers moved
+    -- again (965 -> 1061, 1224 -> 1320, 1330 -> 1426, 2775 -> 2871,
+    -- 2885 -> 2981), all +96, pushed down by a COMMENT BLOCK written inside
+    -- `ext_ports_of`'s `tool_handle` closure. No seam, no import, no expression.
+    --
+    -- That is worth one sentence rather than none, because the pattern recorded
+    -- below is stated in terms of SEAMS: "every seam added to `ExtPorts` lands
+    -- inside `ext_ports_of`". The real rule is weaker and costlier — every EDIT
+    -- to `ext_ports_of`, prose included, re-issues this profile — and an item
+    -- whose whole deliverable was documentation is the cheapest possible
+    -- demonstration of it. Verified character-for-character against
+    -- `git show HEAD:` at all five. Still seven sites, still 6 routed of 7,
+    -- `source_revision` unchanged for WI-D4's reason.
+    --
+    -- RE-RECORDED AT WI-D23 FOR v20, SIXTH time — the WI-D21 law firing exactly
+    -- as the handoff priced it. The same five `session.ail` line numbers moved
+    -- again (1061 -> 1096, 1320 -> 1355, 1426 -> 1461, 2871 -> 2906,
+    -- 2981 -> 3016), all +35, pushed down by the typed exit-code work at and
+    -- above `ext_ports_of`: the `tool_outcome_exit_code` projection beside
+    -- `tool_outcome_text`, the S15 re-tensing of the seam comment, and the
+    -- `tool_handle` closure's second output field. Verified
+    -- character-for-character against `git show HEAD:` at all five. Still seven
+    -- sites, still 6 routed of 7, `source_revision` unchanged for WI-D4's
+    -- reason.
+    --
+    -- The v19 value was
+    -- sha256:c007fb3e2489b6e64c75400557226c996b4be6f9b9b22c73428e16062da6d25c.
+    -- The v18 value was
+    -- sha256:5f000167b1af7f0fa67740501b5a98c852b06e5fb25767c7429599295cd2311c.
+    -- The v16 value was
+    -- sha256:4e532c81e5b37538db280e1345b4d6a13dd12c8b61309bd39f73e123e36edbb7.
+    -- RE-RECORDED AT WI-D17 FOR v16, third time and the SAME KIND of event.
+    -- The same five line numbers moved again (`session.ail` 911 -> 931,
+    -- 1160 -> 1185, 1266 -> 1291, 2711 -> 2736 and 2821 -> 2846), pushed down by
+    -- the two new `ExtPorts.file_write`/`file_remove` bridges inside
+    -- `ext_ports_of` — 20 closure lines plus 5 in the record literal. Verified
+    -- character-for-character against `git show HEAD:` at all five. Still seven
+    -- sites, still 6 routed of 7, `source_revision` unchanged.
+    --
+    -- THE PATTERN IS NOW WORTH STATING RATHER THAN RE-DISCOVERING: every seam
+    -- added to `ExtPorts` lands inside `ext_ports_of`, which is above all five
+    -- anchors, so EVERY Route B surface item re-issues this profile and
+    -- `driver_plus_no_ops` with it. That is priced, not surprising.
+    --
+    -- The v15 value was
+    -- sha256:d3bf3ae5ae6a7612744b8a266febcb2e1ec17450b5a72215a9ee1f16fa7eb685.
+    -- The v14 value was
+    -- sha256:ccfc1e3401635ae59326da4052621d934875bdedd0a05552dd7dc1e41a64b210.
+    -- The previous values: v9 at WI-D3 was
+    -- sha256:affd24637c63ee5aaa102815487bc8083f86413f20d3e5a05ec3ba741f9736bb,
+    -- and v8 at WI-D2 was
+    -- sha256:ff487d030bd98320790a29342faee0cfae621cd5fea02ce4d1f9b91316b402f7.
+    -- RE-RECORDED FOR #160 FOR v23, TENTH time, from
+    -- sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc.
+    -- ALL FIVE session anchors moved and this is the eleven-file form, not
+    -- WI-D25's five: `1111 -> 1148`, `1370 -> 1407`, `1476 -> 1513` (+37) and
+    -- `2942 -> 2996`, `3052 -> 3106` (+54).
+    --
+    -- THE CAUSE IS A COMMENT, which is new in this pair's history and is the
+    -- part worth recording. #160's functional diff is four hunks in
+    -- `runtime_status_counts` and `runtime_builtin`; what moved the anchors is
+    -- the ~37 lines of comment above the first and ~17 above the second. Thirty
+    -- lines of prose above an anchor cost exactly what thirty lines of code do.
+    --
+    -- NOT A TABLE CORRECTION. An anchor re-measurement: the routed clock set is
+    -- unchanged — six sites before, six after, `clock_now(` text identical
+    -- character-for-character against `git show ce9b599:` — so no site was
+    -- added, removed, re-argued or re-routed and the D4 judgement has the same
+    -- answer it had before.
+    -- MOT-130: re-recorded with both successors', from
+    -- sha256:de7030a145cffd4de1249ed78c853006dde56e1a5f9e55baa2a95f8b564c6c55.
+    -- All five session anchors moved +14 — 1148/1407/1513/2996/3106 ->
+    -- 1162/1421/1527/3010/3120 — pushed by a Z3 CONTRACT and its comment on
+    -- `trace_sensitive_key` (session.ail:236), which sits above all five. That
+    -- cause is new in this pair's history: #160 was the first re-issue caused by
+    -- a comment, and this is the first caused by a VERIFICATION artifact.
+    --
+    -- IT IS ALSO THE FIRST RE-ISSUE THAT COULD NOT BE AVOIDED BY PLACEMENT.
+    -- WI-D19 dodged the cascade by making every edit line-count-neutral; a
+    -- contract cannot be, and every function in `session.ail` that the SMT
+    -- fragment can decide sits between :195 and :1772 — above at least two
+    -- anchors. So `session.ail` is contract-frozen unless an item prices this,
+    -- which makes contract adoption a second class of item that must, alongside
+    -- the `ext_ports_of` edits the anchors.sh header already names.
+    --
+    -- NOT A TABLE CORRECTION. An anchor re-measurement: the routed clock set is
+    -- unchanged — six sites before, six after, `clock_now(` text identical
+    -- character-for-character against `git show HEAD:` — and all five anchored
+    -- expressions are byte-identical at their new offsets, so no site was added,
+    -- removed, re-argued or re-routed and the D4 judgement has the same answer
+    -- it had before.
+    content_hash: "sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4" }
+}
+
+-- ---------------------------------------------------------------------------
+-- The definition
+-- ---------------------------------------------------------------------------
+
+export pure func driver_only() -> ProfileDefinition {
+  let cat = fault_catalogue();
+  {
+    profile_id: driver_only_id(),
+    profile_version: driver_only_version(),
+
+    -- D5 field 2. Empty: see the header. `compaction_ai` is omitted below
+    -- rather than installed-and-excluded.
+    installed_packages: [],
+    hook_classifications: [],
+
+    -- D5 field 9. Vacuous, and safe for the reason the header gives.
+    disclosures: [],
+
+    -- D5 field 3. NOT vacuous for an empty install list: this field is what
+    -- scopes D3's wire-parser exclusion, and it is the driver's own boundaries
+    -- that are being scoped, not an extension's.
+    adapter_boundaries: [
+      { boundary_id: "provider.model_step", included: true,
+        note: "Ports.model_step and the ProviderExchange it returns; a deterministic run binds the scripted adapter, and the boundary is in scope either way" },
+      { boundary_id: "provider.wire_parser", included: false,
+        note: "the provider's on-the-wire response parser. D3 excludes wire-parser faults from the fault catalogue, and THIS is the field that scopes that exclusion to a named boundary rather than leaving it as prose" },
+      { boundary_id: "tool.envelope_dispatch", included: true,
+        note: "tool_envelope_dispatch and tool_phase's typed ToolCallEnvelope contract" },
+      { boundary_id: "tool.process_exec", included: true,
+        note: "Ports.tool_exec, whose ToolExecution threads successor state (A12)" },
+      { boundary_id: "approval.stdin_channel", included: false,
+        note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
+      { boundary_id: "extension.abi", included: false,
+        note: "the motoko-ext-abi hook surface, ABI 7.0 (the ExitIntent variant; 6.0 at B8, the Capability list; SAID 5.0 through B7, and this note SAID 4.0 from WI-A10 until WI-D14, 2026-08-07, and had been stale since WI-B2b took the ABI to 5.0 — nothing compared it, which is the transcription defect this module's header is about; `check_fixtures.py` now re-derives it from packages/motoko-ext-abi/ailang.toml). Excluded BECAUSE the install list is empty — no extension behaviour is in the system under test, which is what makes this the interim profile the ADR describes rather than a claim about extensions" }
+    ],
+
+    -- D5 field 4. The logical transitions the profile promises a fault leaves
+    -- behind. D3 forbids a timeout leaving the simulator's logical state
+    -- ambiguous, and these are the promises the fault catalogue's per-class
+    -- `logical_transition` rows are read against.
+    resource_models: [
+      { model_id: "tool.all_or_nothing",
+        promise: "a failed tool call performs no partial logical update; the call either completes and is observable in the ledger or it does not and is not" },
+      { model_id: "tool.deadline_outcome_is_stated",
+        promise: "a tool completing after its declared deadline states whether the work completed before or after the observation; the outcome is never left ambiguous" },
+      { model_id: "provider.no_partial_commit",
+        promise: "a provider error, including a partial stream followed by an error, commits no message to the conversation; the logical state is the state before the step" },
+      { model_id: "approval.single_shot",
+        promise: "an approval decision is taken once per request and is not re-read; a denial is terminal for that request rather than retried" }
+    ],
+
+    -- D5 field 5. D1's collecting sink is bounded by exactly this list: a
+    -- projection not named here may not be emitted during execution. NOT
+    -- vacuous for an empty install list — these are the driver's own.
+    diagnostic_projections: [
+      { projection_id: "ledger.trace",
+        note: "the LedgerTrace the traced driver returns; D6's recorded axis" },
+      { projection_id: "ledger.run_summary",
+        note: "the single final RunSummary record every terminal path emits (D6.1, WI-A9)" },
+      { projection_id: "result.interaction_log",
+        note: "what the world served the driver, in order (D6, WI-A9)" },
+      { projection_id: "result.replay_metadata",
+        note: "the interpretation context a trace is useless without (D8)" }
+    ],
+
+    -- D5 field 6. What A12's poison probes test against. Every entry names the
+    -- check that goes red if the capability is exercised — a forbidden
+    -- capability with no instrument is enforced by nothing, and the machinery
+    -- rejects a blank instrument for that reason.
+    forbidden_capabilities: [
+      { capability: "Clock",
+        instrument: "make world_state — the Clock poison PAIR: the deterministic entry point completes with Clock withheld, and the live world dies with it withheld" },
+      { capability: "AI",
+        instrument: "make world_state — the provider poison PAIR: the deterministic entry point completes with AI withheld, and the live world dies with it withheld" },
+      { capability: "Process",
+        instrument: "make world_state — the typed tool-contract poison PAIR: a fully-seeded world completes with Process withheld, and an UNSEEDED one dies" },
+      { capability: "Rand",
+        instrument: "make world_state — no module under src/core/*.ail reaches std/rand, checked structurally; D1 names an ambient RNG as a prohibited hiding place for world state" },
+      { capability: "Env",
+        instrument: "make world_state — the host-env poison PAIR, as of WI-D3: the deterministic entry point completes with Env withheld and the live world dies with it withheld. This entry said PROVENANCE ONLY from WI-A10 until WI-D3, and it was correct while it stood — resolve_context_limit read four keys ambiently at eight driver call sites, so the deterministic half could not pass. Routing both its halves through Ports.env_get and Ports.file_read is what made the pair possible. world_state_probe's provenance assertion is STILL RUN and is not what this entry rests on: provenance says the driver read the world where it was asked to, the pair says nothing else in the run reads the host, and C4 ruled that the first is not hermeticity." }
+    ],
+
+    -- D5 field 7. READ from A7's catalogue, both the id list and each
+    -- condition — not transcribed. `driver_only` exercises no conditional
+    -- class, so it waives every one of them, and the day A7 adds a conditional
+    -- class this profile waives it automatically rather than silently omitting
+    -- it. The machinery separately rejects a waiver whose condition has drifted
+    -- from the catalogue's.
+    waived_fault_classes: waivers_from(cat, conditional_class_ids(cat)),
+    exercised_fault_classes: [],
+
+    -- D5 field 8. Literals, deliberately: see the header.
+    attribution_ref: driver_only_attribution_ref(),
+
+    -- D5 field 10. REWRITTEN AT WI-B4. The previous reason was the classifier-2
+    -- one, and WI-B2b made it false: `ai_step` now returns `AiStepOutcome`,
+    -- carries `next_state`, and has LEFT the classifier-2 set. A reason that
+    -- has become false is worse than no reason, because it still reads as an
+    -- argument.
+    --
+    -- Note what this costs in guarding: `tools/profile_definition/check_fixtures.py`
+    -- used to re-derive this omission from `member_call_sites`, so the list
+    -- could not silently drop `compaction_ai`. With zero member call sites in
+    -- the tree that check is now VACUOUS — it passes because there is nothing
+    -- to require, which is the "absent reads identically to unchanged" shape
+    -- this project keeps finding. The replacement guard is the ABI-fact check
+    -- described in the header and implemented in the same script; it is not the
+    -- same check and it is named rather than quietly substituted.
+    omitted_extensions: [
+      { extension_id: "compaction_ai",
+        reason: "OMITTED, AND FROM WI-D6 (2026-08-06) THE OMISSION IS A CHOICE RATHER THAN A CONSEQUENCE. THE PREVIOUS REASON IS RESTATED IN THE PAST TENSE BELOW RATHER THAN DELETED, per plan rule S15: it was true from WI-B4 until this date and re-dating it in place would make it a false claim about history. WHAT IT SAID, and it was correct: on_budget_plan declared the ABI's closed row ! {Env, FS} and returns BudgetPatch, which has no successor field — so criterion 1 failed on the declared row and criterion 2 failed for want of returned world state, and no binding of that slot by ANY extension could do better while the ABI row stood. Combined with D5's refusal to install an extension with an unconditionally-dispatched hook excluded, that made EVERY extension in the tree un-installable, and this profile's empty install list FORCED. WHAT CHANGED: WI-D6 narrowed that ABI row to no row at all. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE, so this one names it — the barrier was the DECLARATION, and the declaration moved. It was not relaxed: all fifteen on_budget_plan bindings in the tree were measured against two producers independent of the declaration, and not one performs Env or FS. MEASURED, per D1's rule that a reason should record a measurement rather than a diagnosis: the runtime capability trap, out of process, witnessed 7 of 15 directly, and the effect checker covers all 15 total over inputs — the other 8 are unreachable by the runtime instrument because their own register_with_config reads Env or FS BEFORE any hook is dispatched, which is a fact about registration and not about the hook. WHAT DID NOT CHANGE, AND IT IS WHY THIS EXTENSION IS STILL OMITTED: nothing about this profile. driver_only installs no extension, so it covers no extension, and every clause of its acceptance table that quantifies over installed extensions is still vacuous to exactly the same extent. Installing compaction_ai here would be a coverage claim and a profile version bump, and it belongs to WI-C5's compose-bearing profile rather than to an ABI edit. The three other former barriers stand and are unaffected. WI-D6 SAID THE EMPTY INSTALL LIST HAD BECOME CHOSEN RATHER THAN FORCED, AND WI-D7 WITHDREW THAT: it is still FORCED, because three of the four unconditionally-dispatched slots still refuse coverage and D5 forbids installing an extension with any of them excluded. MEASURED AT WI-D7, per D1's rule that a reason records a measurement rather than a diagnosis. Each of the three slots had its row narrowed to nothing tree-wide and every one of the 71 files of the fifteen packages derived from registry_generated.ail re-checked; fourteen of fifteen bindings accept the empty row in every slot, and each slot is refused by exactly ONE binding that the compiler names — on_pre_step by compaction_ai (incompatible closed rows: r1 has extra labels [AI Clock Env FS IO Net Process SharedMem Stream Trace], at register.ail:93), on_response_intercept by compose (extra labels [Clock FS IO Process], at compose.ail:816), on_solver_candidate by context_mode (extra labels [Process], at register.ail:56). Each was confirmed a second time from the BODY rather than from the annotation, by narrowing the refusing helper's own row and reading the effect checker: Effect checking failed for function 'fresh_compaction', for 'on_response_intercept', and for 'finalize_with_index' respectively. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE, so this one names it for each: on_response_intercept and on_solver_candidate NARROWED to what is performed (nine effects to four, and nine to one) and are still barriers, because a non-empty row fails criterion 1 at any width and none of Process, FS, IO or Clock is a world-mediated port — what would have to change is world-MEDIATION of those effects, which is Route B and a port-surface change; on_pre_step did NOT narrow, and the thing that would have to change there is ExtPorts.ai_step's own port row, since compaction_ai reaches all ten of its effects through that single call. The last one is the sharpest, because ai_step IS already a D1 world-mediated port returning AiStepOutcome.next_state and compact_with_ai returns it rather than ctx.world, so criterion 2's SUBSTANCE is satisfied and what refuses the slot is that a declared row has no vocabulary for saying that these arrive through a world-mediated port. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR AND NOT THE ROW'S WIDTH. CARRIED FORWARD, still true and still the reason this entry names compaction_ai specifically: compaction_ai in FACT reaches effects only through ExtPorts.ai_step — compaction_ai.ail imports std/ai (a type only), std/crypto, std/json, std/list, std/option, std/result and std/string, every one of which classifier 1 derives as proven effect-free, and calls no ambient builtin." },
+
+      -- ======================================================================
+      -- WI-D13 (2026-08-07). FOUR NEW ENTRIES, AND THEY ARE A DIFFERENT KIND
+      -- OF OMISSION FROM THE ONE ABOVE.
+      -- ======================================================================
+      --
+      -- `compaction_ai` is omitted because it CANNOT be installed conformantly.
+      -- These four are omitted because this profile DECLINES to install them,
+      -- and that is a choice it did not have until today. WI-D13 re-shaped the
+      -- barrier derivation from the SLOT to the (extension, slot) pair on the
+      -- strength of classifier 3, and for these four the count reached ZERO.
+      --
+      -- WHY THEY ARE NAMED HERE RATHER THAN LEFT SILENT. An extension at zero
+      -- barriers is installable, and an installable extension left unmentioned
+      -- is a decision INHERITED rather than taken — which is precisely what
+      -- WI-D7's trigger exists to refuse. `make profile_definition` now goes
+      -- RED for any zero-barrier extension this list does not name, so the
+      -- silence is not available. Naming one is not a coverage claim.
+      -- Installing one is, and it is WI-C5's.
+      --
+      -- THE CRITERION, DECIDED EXPLICITLY AGAINST BOTH RATHER THAN INHERITED,
+      -- because these hooks read most naturally as criterion 1 and criterion 1
+      -- is not available:
+      --
+      --   CRITERION 1 — "deterministic and effect-free for its explicit
+      --   inputs". TRUE IN SUBSTANCE and NOT AVAILABLE AS A BASIS. Measured at
+      --   WI-D13 with a two-sided control over all twelve barrier-slot hook
+      --   bodies of these four extensions: each body verbatim, declared with NO
+      --   effect row outside the ABI record, is ACCEPTED; each body plus one
+      --   `println`, same shape, is REJECTED with "Missing effects: IO", so the
+      --   effect checker was running on all twelve and is sensitive. But
+      --   criterion 1's BASIS in this tree is the DECLARED ROW — ADR:1415
+      --   records that as an interim rule and an assumption, and WI-B4 settled
+      --   that its scope is classification generally rather than criterion 1
+      --   alone. These slots' declared rows are ! {AI, IO, Trace},
+      --   ! {IO, Process, FS, Clock} and ! {Process}, and a named binding
+      --   cannot declare narrower than a closed ABI slot. So on its own basis
+      --   criterion 1 FAILS, and admitting a measurement into that basis is an
+      --   ADR-scope act which ADR-001 Amendment A deliberately WITHHELD.
+      --
+      --   CRITERION 2 — "effectful only through D1 world-mediated ports, with
+      --   origin tagged by extension id and explicit world state returned to
+      --   the host". SATISFIED, and it is the basis recorded. Read as WI-B4
+      --   read it, as a conjunction of three clauses:
+      --     (1) classifier 3 reports all four PORT-MEDIATED, with 0 ambient
+      --         sources and 0 ExtPorts field calls in the closure. The set of
+      --         effects performed is EMPTY, so the quantifier holds VACUOUSLY.
+      --     (2) nothing is performed, so there is no origin to tag. VACUOUS.
+      --         (WI-B4 established that PreStepStage = { ext_id, outcome } tags
+      --         on_pre_step's dispatch, so the clause is satisfiable
+      --         non-vacuously — just not by an extension that performs
+      --         nothing.)
+      --     (3) every one of the twelve bodies returns `next_state: ctx.world`,
+      --         and the outcome types carry the field, derived from the ABI
+      --         rather than assumed. SATISFIED NON-VACUOUSLY, and it is the
+      --         only clause here that is a substantive fact about these
+      --         bindings.
+      --
+      -- **THE VACUITY IS NAMED RATHER THAN BANKED.** Two of criterion 2's three
+      -- clauses hold because nothing happens. Amendment A predicted exactly
+      -- this and said so in advance (ADR:1611): "the first hook classifier 3
+      -- clears will be one that performs nothing, not one that mediates." So
+      -- the coverage these four would buy is coverage of no-ops. That is a true
+      -- measurement and a real number, and it is NOT evidence that the
+      -- world-mediation machinery works, because installing them exercises none
+      -- of it. This profile's acceptance table already leans on an empty
+      -- install list in four places; installing these would make a fifth
+      -- vacuity that is HARDER to see, because it would arrive with a non-zero
+      -- coverage number attached. That is the reason to decline, and it is a
+      -- reason about evidence rather than about correctness.
+      { extension_id: "compaction_structural",
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07); until today it was omitted by consequence like every other extension. ZERO barriers remain for it: classifier 3 (make ext_ambient_inventory) reports PORT-MEDIATED over its 4-module transitive closure — 0 ambient sources, 0 ExtPorts field calls — and all three barrier slots' outcome types return explicit world state. So D5 criterion 2 is satisfied, on the basis recorded above, with clauses 1 and 2 VACUOUS and clause 3 substantive. It is the sharpest of the four: it is the ONE extension of fifteen that binds on_pre_step as a named top-level function rather than an inline record-field expression, which is the form the effect checker actually reads, so its declared row constrains its binding where the other fourteen's do not. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: nothing about this extension would — what would have to change is this profile's willingness to bank coverage of hooks that perform nothing. Installing it is a coverage claim and a profile version bump and it is WI-C5's, not an instrument's side effect. QUALIFIED AT WI-D14 (2026-08-07) AND KEPT AS WRITTEN, per plan rule S15: the previous sentence was true from WI-D13 until that date and is now false in one clause. Installing this extension was NEITHER WI-C5's nor an instrument's side effect — it was a SECOND PROFILE's, src/core/dst_driver_plus_no_ops.ail, which installs all four zero-barrier extensions and covers 32 hooks entirely of no-ops. D10 always permitted that and this reason did not contemplate it. THIS PROFILE'S DECISION IS UNCHANGED: driver_only still declines to install it, still installs nothing, and its own extension-model coverage is still ZERO; a second profile's install list takes nothing from this one's and gives it nothing. THE MEASUREMENT, per D1's rule that a reason records a measurement rather than a diagnosis: its pre_step body verbatim, declared with no effect row outside the ABI record, is ACCEPTED (its only call is compact_for_pre_step, an export pure func); the same body plus one println is REJECTED with 'Missing effects: IO'. Two-sided, on all three barrier-slot bodies." },
+      { extension_id: "decision_framework",
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above and for the same reason. Classifier 3 reports PORT-MEDIATED over its 2-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Its three barrier-slot hooks are inline record-field expressions returning { PassThrough }, { NoIntercept } and { NoDecision } with next_state: ctx.world; on the shipped ABI an inline binding's declared row is INERT (ADR:1415's amended record-field passage), so the row was never the operative constraint for it and the measurement is the only thing that ever spoke. Two-sided control at WI-D13: each body rowless is ACCEPTED, each plus one println REJECTED 'Missing effects: IO'. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing — not anything about the extension." },
+      { extension_id: "empty_stop_guard",
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above. Classifier 3 reports PORT-MEDIATED over its 3-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Its on_solver_candidate is the only one of the four's twelve barrier-slot bodies that calls a helper rather than returning a literal (decide, from empty_stop_guard.ail), and it measures identically: rowless ACCEPTED, plus one println REJECTED 'Missing effects: IO'. That helper is inside the closure classifier 3 measured, which is why a closure-scoped instrument is the right unit and a module-scoped one would not have settled it. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing." },
+      { extension_id: "progress_contract_guard",
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above. Classifier 3 reports PORT-MEDIATED over its 3-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Same shape as empty_stop_guard: on_solver_candidate calls decide from its own package and the other two barrier-slot hooks return literals, and the two-sided control gives the same answer on all three — rowless ACCEPTED, plus one println REJECTED 'Missing effects: IO'. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing." }
+    ],
+
+    -- A10 decision 1, in force. Exactly the reachable-and-unrouted set; the
+    -- machinery checks BOTH directions, so a site that gets routed or moves
+    -- cannot leave a stale declaration behind reading as if the gap were live.
+    -- WENT FROM TWO ENTRIES TO ONE AT WI-C5. `src/core/session.ail:878` —
+    -- `ext_unrouted_clock` — is gone: widening `ExtPorts.clock_now` to take and
+    -- return the world token removed the shape obstacle plan rule S2 had
+    -- accommodated, and `ext_ports_of` now routes that seam through
+    -- `Ports.clock_now` like every other. The S2 exception is RETIRED rather
+    -- than merely unexercised, and the machinery checks both directions, so a
+    -- declaration left behind here for a site that is no longer
+    -- reachable-and-unrouted would be a rejection.
+    unrouted_reachable_sites: [
+      { site_key: "src/core/test/stub_step.ail:203",
+        instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read",
+        why_unroutable: "live_ports' clock adapter — the one place the driver's call graph reads a real wall clock, by design, and therefore the one place {Clock} is genuinely load-bearing. It is IN this profile's reachable set even though a deterministic run binds the scripted adapter instead: D4's profile-reachable is INSTALLATION-scoped, not execution-scoped, and carving it out on execution-scope grounds would put a fail-open exception into an installation-scoped rule (A10 decision 1)." }
+    ],
+
+    -- D5 obligation 2's roots, and the set an installed package's AILANG source
+    -- must lie within. Every extension in `[extensions] packages` is a path
+    -- dependency under `packages/`, so the exposure is nil today; the gate
+    -- exists for the first registry-resolved EXTENSION, which the resolved lock
+    -- graph would otherwise carry into an install list with nothing having
+    -- scanned it. (`ailang.toml:9`'s `sunholo/logging` is registry-resolved and
+    -- outside these roots, but it is a library dependency and not an extension,
+    -- so it is not installable and not this rule's business.)
+    scan_roots: ["src", "packages"]
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The claim, computed
+-- ---------------------------------------------------------------------------
+
+-- Decision 2. Derived from the table at the revision the profile binds, so a
+-- table correction moves the claim instead of leaving a stale number behind.
+export pure func driver_only_routed_claim() -> RoutedSetClaim {
+  routed_set_claim(driver_only())
+}
+
+export pure func validate_driver_only(
+  loading_against: string,
+  discovered: [CoreSite],
+  calls: [Classifier2Call],
+  catalogue: [FaultClass]
+) -> [ProfileRejection] {
+  validate_definition_at_load(driver_only(), loading_against, discovered, calls, catalogue)
+}
+
+-- ---------------------------------------------------------------------------
+-- The per-run execution manifest
+-- ---------------------------------------------------------------------------
+
+-- D5's manifest is PER RUN, so it is built rather than declared. Everything
+-- that can be read from an artifact is read here; everything that is a property
+-- of the run or of the scan is an argument, which is why the derived classifier
+-- sets arrive from the caller (the tool derives them per run and consults no
+-- list) rather than being frozen into this file.
+export pure func driver_only_manifest(
+  source_revision: string,
+  toolchain: string,
+  abi_version: string,
+  normalized_configuration: string,
+  classifier_2_set: [string],
+  unrouted_fields: [string],
+  scan_root_commit: string
+) -> ExecutionManifest {
+  {
+    source_revision: source_revision,
+    toolchain: toolchain,
+    extension_packages: [],
+    abi_version: abi_version,
+    profile_id: driver_only_id(),
+    profile_version: driver_only_version(),
+    event_vocabulary_version: event_vocabulary_version(),
+    normalized_configuration: normalized_configuration,
+    classifier_2_set: classifier_2_set,
+    unrouted_fields: unrouted_fields,
+    scan_roots: driver_only().scan_roots,
+    scan_root_commit: scan_root_commit,
+    profile_rules_version: profile_rules_version(),
+    coverage_rules_version: Cov.coverage_rules_version(),
+    attribution_rules_version: Attr.attribution_rules_version(),
+    fault_catalogue_version: Fault.fault_catalogue_version()
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. The load-time acceptance is scripts/dst/driver_only_dst.ail,
+-- which supplies the measured inventory and the derived call set.
+-- ---------------------------------------------------------------------------
+
+-- The claim is asserted as a PARTITION and against the table, never against a
+-- written-down number. P4 says "four driver sites" and the computed answer is
+-- seven reachable / five routed / two declared-unrouted; a constant here would
+-- have frozen P4's number and gone quietly wrong.
+pure func test_routed_claim_is_computed_not_recorded() -> bool
+  tests [((), true)]
+  {
+    let c = driver_only_routed_claim();
+    c.reachable_total == c.routed + c.declared_unrouted
+      && c.reachable_total == List.length(Attr.reachable_core_sites([]))
+  }
+
+-- Every reachable-and-unrouted site is declared, and every declaration still
+-- applies. Asserted here as a COUNT MATCH against the table rather than against
+-- the literal 2, so routing a site is a one-line profile edit and not a silent
+-- pass.
+pure func test_declarations_match_the_unrouted_set() -> bool
+  tests [((), true)]
+  {
+    List.length(driver_only().unrouted_reachable_sites)
+      == driver_only_routed_claim().declared_unrouted
+  }
+
+-- P4: the omission is NAMED. An empty omission list would satisfy every other
+-- rule in the machinery while making the profile's central claim — that no
+-- shipped configuration can be the first profile — unstated.
+pure func test_omission_is_named() -> bool
+  tests [((), true)]
+  {
+    match driver_only().omitted_extensions {
+      [] => false,
+      o :: _ => o.extension_id == "compaction_ai" && o.reason != ""
+    }
+  }
+
+-- The waiver list is READ from the catalogue, so it cannot fall behind it. A
+-- transcribed list would pass a count check the day it was written and fail
+-- silently the day a conditional class was added.
+pure func test_waivers_track_the_catalogue() -> bool
+  tests [((), true)]
+  {
+    let cat = fault_catalogue();
+    List.length(driver_only().waived_fault_classes)
+      == List.length(conditional_class_ids(cat))
+      && List.length(conditional_class_ids(cat)) > 0
+  }
+
+-- The four D5 fields that are NOT vacuous for an empty install list all carry
+-- content. Cluster 3 identified them; this is what makes that identification
+-- falsifiable rather than a remark.
+pure func test_the_four_non_vacuous_fields_are_populated() -> bool
+  tests [((), true)]
+  {
+    let d = driver_only();
+    List.length(d.adapter_boundaries) > 0
+      && List.length(d.resource_models) > 0
+      && List.length(d.diagnostic_projections) > 0
+      && List.length(d.forbidden_capabilities) > 0
+      && List.length(d.installed_packages) == 0
+  }
+
+-- The manifest's fifth axis is read, not transcribed.
+pure func test_manifest_reads_the_vocabulary_version() -> bool
+  tests [((), true)]
+  {
+    -- The `abi_version` argument said "4.0" until WI-D14 and had been stale
+    -- since WI-B2b, exactly as the two real records did. It is not what this
+    -- test asserts — but a fixture carrying a stale version reads as current,
+    -- and `check_fixtures.check_abi_version` is deliberately TOTAL over every
+    -- manifest this file builds rather than only over the shipped ones.
+    let m = driver_only_manifest("r", "t", "7.0", "{}", ["ai_step"], [], "r");
+    m.event_vocabulary_version == event_vocabulary_version()
+      && m.profile_id == driver_only_id()
+      -- Reads rather than transcribes. This line held the literal "1" and went
+      -- stale the moment the profile was re-issued as v2 — a transcription in
+      -- the very test whose subject is "read, not transcribed". The version is
+      -- not what this test asserts; the real version check is
+      -- `scenario_attribution_ref_is_current`, where the literal is the point.
+      && m.profile_version == driver_only_version()
+  }

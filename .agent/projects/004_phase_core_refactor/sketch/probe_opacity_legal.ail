@@ -1,0 +1,12 @@
+-- Opacity probe (legal consumer): imports the History type + ops only.
+-- Expected: checks and runs.
+module probe_opacity_legal
+
+import std/io (println)
+import hist_opaque (History, empty_history, append, size, checkpoint)
+
+export func main() -> () ! {IO} {
+  let h = append(append(empty_history(), 1), 2);
+  let cp = checkpoint(h);
+  println("size=${show(size(h))} after_cp_size=${show(size(cp.history))} event=${cp.event}")
+}

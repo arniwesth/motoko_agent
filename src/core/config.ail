@@ -106,7 +106,9 @@ export type OmnigraphConfig = {
   timeout_ms: int
 }
 
-export type CompactionAiConfig = {
+-- Keep the core profile shape distinct from the ABI/package compaction
+-- configuration record, which has additional AI scheduling fields.
+export type CoreCompactionAiConfig = {
   model: string,
   threshold_pct: int,
   keep_recent: int
@@ -146,7 +148,7 @@ export type RuntimeConfig = {
   context_mode: ContextModeConfig,
   exa_search: ExaSearchConfig,
   omnigraph: OmnigraphConfig,
-  compaction_ai: CompactionAiConfig,
+  compaction_ai: CoreCompactionAiConfig,
   cost_rates: CostRates,
   verification: VerificationConfig,
   warnings: [string]
@@ -428,7 +430,7 @@ func load_omnigraph(root: Json) -> OmnigraphConfig {
   }
 }
 
-func load_compaction_ai(root: Json) -> CompactionAiConfig {
+func load_compaction_ai(root: Json) -> CoreCompactionAiConfig {
   let c = object_at(root, "compaction_ai");
   {
     model: json_string(c, "model", "openrouter/auto"),

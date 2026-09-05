@@ -15,17 +15,19 @@ import std/io (println)
 import std/env (getEnv)
 import std/result (Result, Ok, Err)
 import src/core/agent_loop_v2 (run_v2)
+import src/core/config (CostRates)
 import src/core/ext/runtime (init_runtime)
+import src/core/test/stub_step (LiveAI)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
 import src/core/types (Msg)
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let rt = init_runtime();
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
 
   let initial_msgs: [Msg] = [
-    { role: "system", content: "You are a coding assistant. Use the ReadFile tool when asked to read files." },
-    { role: "user", content: "Read /etc/hostname and tell me what it contains in one sentence." }
+    { role: "system", content: "You are a coding assistant. Use the ReadFile tool when asked to read files.", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "Read /etc/hostname and tell me what it contains in one sentence.", tool_calls: [], tool_call_id: "" }
   ];
 
   let model_arg = match getEnv("AILANG_SMOKE_MODEL") {
@@ -43,7 +45,10 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     initial_msgs,
     "/tmp",
     4,
-    false
+    false,       -- ohmy_pi
+    0,           -- max_cost_millicents: 0 = fail-open under 0/0 rates
+    { input_per_1m_millicents: 0, output_per_1m_millicents: 0 },  -- CostRates
+    LiveAI       -- live provider
   );
 
   match result {
