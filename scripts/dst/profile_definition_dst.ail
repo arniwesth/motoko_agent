@@ -24,7 +24,7 @@
 --                           slot classified nowhere. A row-shape validator
 --                           accepts it. Only counting per SLOT rejects it.
 --
---   `seven_unconditional`   each of the SEVEN unconditionally-dispatched slots
+--   `eight_unconditional`   each of the EIGHT unconditionally-dispatched slots
 --                           excluded in turn. D5's prose says six. Under six,
 --                           the `on_describe_tools` case loads clean and then
 --                           fails closed on the first model step.
@@ -348,7 +348,7 @@ pure func installed(ext_id: string, path: string) -> InstalledPackage {
 }
 
 -- B8: disclosures are per ATOM. The fixture registers the one-atom-per-kind
--- shape every extension has at B8 (`eight()`), and `covered`/`excluded` are
+-- shape every extension has at B8 (`one_per_kind()`), and `covered`/`excluded` are
 -- atom ids over it.
 pure func a(kind: string, idx: int) -> AtomIds { { kind: kind, index: idx } }
 
@@ -356,10 +356,10 @@ pure func atom_ids_of(xs: [AtomRef]) -> [AtomIds] {
   match xs { [] => [], x :: rest => a(capability_kind_id(x.kind), x.index) :: atom_ids_of(rest) }
 }
 
-pure func eight() -> [AtomIds] { atom_ids_of(atoms_at_zero(all_capability_kinds())) }
+pure func one_per_kind() -> [AtomIds] { atom_ids_of(atoms_at_zero(all_capability_kinds())) }
 
 pure func with_disclosure(ext_id: string, covered: [AtomIds], excluded: [AtomIds]) -> ProfileDefinition {
-  with_atoms(ext_id, eight(), covered, excluded)
+  with_atoms(ext_id, one_per_kind(), covered, excluded)
 }
 
 pure func with_atoms(ext_id: string, atoms: [AtomIds], covered: [AtomIds], excluded: [AtomIds]) -> ProfileDefinition {
@@ -390,7 +390,7 @@ pure func with_entry(
 ) -> ProfileDefinition {
   { clean() |
     installed_packages: [installed("based", "packages/motoko-ext-based/based.ail")],
-    disclosures: [{ extension_id: "based", atoms: eight(), covered: eight(), excluded: [] }],
+    disclosures: [{ extension_id: "based", atoms: one_per_kind(), covered: one_per_kind(), excluded: [] }],
     hook_classifications: [
       { extension_id: "based", hook_id: "compactor[0]", classification: c,
         basis: { producer: producer, revision: revision }, clauses: cl }
@@ -415,22 +415,26 @@ pure func only(ids: [AtomIds], keep: string) -> [AtomIds] {
   }
 }
 
--- Each of the SEVEN unconditionally-dispatched slots, excluded in turn, with
--- the other seven covered. Iterating the atoms of `all_capability_kinds()` and
+-- Each of the EIGHT unconditionally-dispatched slots, excluded in turn, with
+-- the other eight covered. EIGHT at ABI 7.0: `ExitIntent` joined the
+-- unconditional side, because what is dispatched is the RENDER and the render
+-- runs at every turn end for every registered atom -- only its EXECUTION is
+-- conditional, and that happens in the host at exit over published data, where
+-- no atom is dispatched at all. Iterating the atoms of `all_capability_kinds()` and
 -- consulting `capability_dispatch` means this sweep cannot go stale: a ninth kind, or a kind
 -- whose dispatch kind changes, is picked up without editing this function.
 -- Writing "the seven" out by hand here would be the very re-derivation the
 -- module header forbids.
-func seven_unconditional() -> bool ! {IO} {
+func eight_unconditional() -> bool ! {IO} {
   sweep_slots(atoms_at_zero(all_capability_kinds()), 0, true)
 }
 
 func sweep_slots(xs: [AtomRef], seen: int, acc: bool) -> bool ! {IO} {
   match xs {
     [] => {
-      let ok = seen == 7;
-      let _ = if ok then println("  ✓ all SEVEN unconditionally-dispatched slots reject exclusion (D5's prose says six)")
-              else println("  ✗ expected 7 unconditionally-dispatched slots, swept ${show(seen)}");
+      let ok = seen == 8;
+      let _ = if ok then println("  ✓ all EIGHT unconditionally-dispatched slots reject exclusion (D5's prose says six)")
+              else println("  ✗ expected 8 unconditionally-dispatched slots, swept ${show(seen)}");
       acc && ok
     },
     s :: rest => {
@@ -439,7 +443,7 @@ func sweep_slots(xs: [AtomRef], seen: int, acc: bool) -> bool ! {IO} {
         Gated => {
           -- The one gated kind: excluding its atom is LEGAL, and asserting that
           -- keeps this sweep from degenerating into "reject every exclusion".
-          let d = with_disclosure("gatedok", without(eight(), id), only(eight(), id));
+          let d = with_disclosure("gatedok", without(one_per_kind(), id), only(one_per_kind(), id));
           let ok = List.length(load(d)) == 0;
           let _ = if ok then println("  ✓ '${id}' is GATED: excluding it loads clean")
                   else {
@@ -449,7 +453,7 @@ func sweep_slots(xs: [AtomRef], seen: int, acc: bool) -> bool ! {IO} {
           sweep_slots(rest, seen, acc && ok)
         },
         Unconditional => {
-          let d = with_disclosure("uncond", without(eight(), id), only(eight(), id));
+          let d = with_disclosure("uncond", without(one_per_kind(), id), only(one_per_kind(), id));
           let ok = has_rule(load(d), "unconditional-hook-excluded");
           let _ = if ok then println("  ✓ '${id}' unconditionally dispatched: excluding it is rejected")
                   else println("  ✗ '${id}' unconditionally dispatched: exclusion was NOT rejected");
@@ -509,7 +513,7 @@ func exclusion_check() -> bool ! {IO} {
     { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: "fixture_clean", profile_version: "1",
       event_vocabulary_version: "event-vocabulary/1" };
-  let d = with_disclosure("gated", without(eight(), "tool_provider[0]"), only(eight(), "tool_provider[0]"));
+  let d = with_disclosure("gated", without(one_per_kind(), "tool_provider[0]"), only(one_per_kind(), "tool_provider[0]"));
   let violated =
     match routing_violation_at(d, "gated", "tool_provider[0]", 4, empty_ledger_trace(), meta) {
       None => false,
@@ -608,22 +612,22 @@ export func main() -> () ! {IO} {
 
   let _ = println("  -- the coverage floor and the disclosure (delegated to A6) --");
   let floor = assert_rejected("an installed extension with ZERO covered hooks", "coverage-floor",
-                              with_disclosure("inert", [], eight()));
+                              with_disclosure("inert", [], one_per_kind()));
   let unknown = assert_rejected("an unknown capability kind", "unknown-capability-kind",
                                 with_atoms("typo", [a("describe_tool", 0)], [a("describe_tool", 0)], []));
   let overlap = assert_rejected("covered and excluded not DISJOINT per atom", "atoms-covered-excluded-disjoint",
-                                with_disclosure("overlap", eight(), only(eight(), "tool_provider[0]")));
+                                with_disclosure("overlap", one_per_kind(), only(one_per_kind(), "tool_provider[0]")));
   -- THE fixture that separates this from a row-shape validator. Both lists are
   -- disjoint, every id is a real atom, and the entry count is CORRECT — seven
   -- covered plus one excluded is eight. `solver_judge[0]` is classified
   -- nowhere. Only counting per ATOM rejects it.
   let partial = assert_rejected("SET COMPLETENESS: eight entries, seven atoms", "atoms-covered-excluded-exhaustive",
                                 with_disclosure("partial",
-                                  a("describe_tools", 0) :: without(without(eight(), "tool_provider[0]"), "solver_judge[0]"),
-                                  only(eight(), "tool_provider[0]")));
+                                  a("describe_tools", 0) :: without(without(one_per_kind(), "tool_provider[0]"), "solver_judge[0]"),
+                                  only(one_per_kind(), "tool_provider[0]")));
 
   let _ = println("  -- the seven/one dispatch split, swept rather than restated --");
-  let seven = seven_unconditional();
+  let seven = eight_unconditional();
 
   let _ = println("  -- the attribution reference --");
   let stale_bind = assert_stale_binding();
@@ -635,14 +639,14 @@ export func main() -> () ! {IO} {
   let c2 = assert_rejected("an INSTALLED extension calling a classifier-2 field", "classifier-2-extension-installed",
                            { clean() |
                              installed_packages: [installed("compaction_ai", "packages/motoko-ext-compaction-ai/compaction_ai.ail")],
-                             disclosures: [{ extension_id: "compaction_ai", atoms: eight(),
-                                             covered: eight(), excluded: [] }],
+                             disclosures: [{ extension_id: "compaction_ai", atoms: one_per_kind(),
+                                             covered: one_per_kind(), excluded: [] }],
                              omitted_extensions: [] });
   let roots = assert_rejected("a package whose AILANG source is OUTSIDE the scan roots", "package-outside-scan-roots",
                               { clean() |
                                 installed_packages: [installed("remote", "/root/.ailang/registry/sunholo/remote/lib.ail")],
-                                disclosures: [{ extension_id: "remote", atoms: eight(),
-                                                covered: eight(), excluded: [] }] });
+                                disclosures: [{ extension_id: "remote", atoms: one_per_kind(),
+                                                covered: one_per_kind(), excluded: [] }] });
 
   let _ = println("  -- decision 1: unrouted reachable core sites --");
   let undeclared = assert_rejected("an unrouted reachable site left UNDECLARED", "unrouted-site-undeclared",

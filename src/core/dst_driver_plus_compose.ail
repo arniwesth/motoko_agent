@@ -568,7 +568,7 @@ export pure func driver_plus_compose() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface, ABI 6.0 (B8; was 5.0). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
+        note: "the motoko-ext-abi hook surface, ABI 7.0 (the ExitIntent variant; was 6.0 at B8, 5.0 before it). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
       { boundary_id: "extension.ext_ports", included: true,
         note: "the ExtPorts surface an extension uses to reach the world. **INCLUDED, and this is the whole difference between this profile and both predecessors.** driver_only excluded it because it installs nothing; driver_plus_no_ops excluded it BY MEASUREMENT, classifier 3 reporting 0 ExtPorts field calls in each installed closure, and named it 'the boundary WI-C5's compose-bearing profile would have to include'. This is that profile and it includes it: classifier 3 reports 36 ExtPorts field calls in compose's closure, and the graded session records one of them — a tool_handle — as an origin-tagged interaction in the recorded program" }
     ],
@@ -907,7 +907,7 @@ pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = compose_manifest("r", "t", "6.0", "{}", ["env_get"], [], "r");
+    let m = compose_manifest("r", "t", "7.0", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_compose().installed_packages)
       && List.length(m.extension_packages) == 1
       && m.profile_id == compose_profile_id()

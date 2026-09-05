@@ -164,6 +164,9 @@ def parse_output(path):
 # ---------------------------------------------------------------------------
 
 
+EXPECTED_CAPABILITY_KINDS = 9
+
+
 def abi_slots():
     """capability kind id -> (declared row, outcome type, returns world state).
 
@@ -176,10 +179,14 @@ def abi_slots():
     row (or the reverse) is a FAIL, never a skip.
     """
     kinds = capability_kind_ids()
-    if len(kinds) != 8:
-        fail(f"read {len(kinds)} capability kind ids from {COVERAGE.relative_to(REPO)}, expected 8: "
-             f"{kinds}. The ABI gained or lost a kind and this guard's per-kind checks would "
-             "silently skip it.")
+    # NINE at ABI 7.0 (`ExitIntent`), eight before it. Pinned rather than
+    # derived on purpose: the count is what makes a kind added to the ABI and
+    # forgotten here a FAIL instead of a silent skip, so it moves by hand, once,
+    # with the variant.
+    if len(kinds) != EXPECTED_CAPABILITY_KINDS:
+        fail(f"read {len(kinds)} capability kind ids from {COVERAGE.relative_to(REPO)}, expected "
+             f"{EXPECTED_CAPABILITY_KINDS}: {kinds}. The ABI gained or lost a kind and this "
+             "guard's per-kind checks would silently skip it.")
     payloads = capability_payloads(ABI_TYPES.read_text())
     if set(payloads) != set(kinds):
         fail(f"the coverage artifact's kind table {sorted(kinds)} and the ABI's `Capability` "

@@ -542,7 +542,7 @@ export pure func driver_plus_no_ops() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface, ABI 6.0 (B8; was 5.0). INCLUDED, which is the whole difference between this profile and driver_only: four extensions' hooks are dispatched across it on every run. What that buys is the DISPATCH being under test, not the extensions' effects — they perform none, and the coverage statement says so" },
+        note: "the motoko-ext-abi hook surface, ABI 7.0 (the ExitIntent variant; was 6.0 at B8, 5.0 before it). INCLUDED, which is the whole difference between this profile and driver_only: four extensions' hooks are dispatched across it on every run. What that buys is the DISPATCH being under test, not the extensions' effects — they perform none, and the coverage statement says so" },
       { boundary_id: "extension.ext_ports", included: false,
         note: "the ExtPorts surface an extension uses to reach the world. EXCLUDED, and by MEASUREMENT rather than by declaration: classifier 3 reports 0 ExtPorts field calls in each of the four installed closures, so no installed hook crosses this boundary at all. It is the boundary WI-C5's compose-bearing profile would have to include, and naming it excluded here is what keeps that visible" }
     ],
@@ -844,7 +844,7 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = no_ops_manifest("r", "t", "6.0", "{}", ["env_get"], [], "r");
+    let m = no_ops_manifest("r", "t", "7.0", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_no_ops().installed_packages)
       && List.length(m.extension_packages) == 4
       && m.profile_id == no_ops_id()

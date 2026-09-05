@@ -31,6 +31,15 @@
 --                  = sub-order / precedence / chain order. The gate is the ONE
 --                  constant `fold_kind_repeats_allowed` below (`true`); every
 --                  fixture that reads it says which reading it measured.
+--   7.0 (DECIDED)  `ExitIntent` N>1 is admitted -- it is a CONCATENATION kind
+--                  like `DescribeTools`, and one extension may well want an
+--                  intent per concern (close panes; settle the run file). What
+--                  is rejected is a repeated `label` within one extension, on
+--                  exactly `ToolProvider`'s reasoning: the label is how the
+--                  published manifest and every diagnostic name the intent, so
+--                  two atoms answering to one name is a hidden intra-extension
+--                  precedence, not a configuration.
+--
 --   D7 (ADOPTED)   `register_with_config -> []`. The RECOMMENDED reading is
 --                  implemented: the entry is OMITTED from the effective registry
 --                  and NAMED in `omitted_empty`, and the profile layer rejects
@@ -71,7 +80,10 @@ import pkg/sunholo/motoko_ext_abi/types (
   ToolPolicy,
   ToolProvider,
   ResponseInterceptor,
-  SolverJudge
+  SolverJudge,
+  ExitIntent,
+  ExitAction,
+  ExitIntentOutcome
 )
 
 -- `Capability` (the 6.0 sum, eight kinds) and `ExtEntry` (D5's owner-bearing
@@ -99,6 +111,7 @@ export type RegistrationRejection
   = SecondVote(string, string, int)          -- id, kind, position of the 2nd atom
   | FoldKindRepeated(string, string, int)    -- id, kind, position (D4 off)
   | DuplicateToolName(string, string, int)   -- id, tool name, position of the atom
+  | DuplicateExitLabel(string, string, int)  -- id, intent label, position of the atom
   | EmptyRegistration(string)                -- id (D7 alternative reading)
 
 export pure func rejection_rule(r: RegistrationRejection) -> string {
@@ -106,6 +119,7 @@ export pure func rejection_rule(r: RegistrationRejection) -> string {
     SecondVote(_, _, _) => "second-vote-atom",
     FoldKindRepeated(_, _, _) => "fold-kind-repeated",
     DuplicateToolName(_, _, _) => "duplicate-tool-name",
+    DuplicateExitLabel(_, _, _) => "duplicate-exit-label",
     EmptyRegistration(_) => "empty-registration"
   }
 }
@@ -115,6 +129,7 @@ export pure func rejection_extension(r: RegistrationRejection) -> string {
     SecondVote(e, _, _) => e,
     FoldKindRepeated(e, _, _) => e,
     DuplicateToolName(e, _, _) => e,
+    DuplicateExitLabel(e, _, _) => e,
     EmptyRegistration(e) => e
   }
 }
@@ -127,6 +142,8 @@ export pure func rejection_message(r: RegistrationRejection) -> string {
       "[fold-kind-repeated] extension '${e}' registers a second ${k} at list position ${show(p)}; N>1 for this kind is admitted only once D4 is signed off (fold_kind_repeats_allowed)",
     DuplicateToolName(e, n, p) =>
       "[duplicate-tool-name] extension '${e}' advertises tool '${n}' twice, the second time in the ToolProvider at list position ${show(p)}; provider names must be disjoint within an extension (D3)",
+    DuplicateExitLabel(e, l, p) =>
+      "[duplicate-exit-label] extension '${e}' registers a second ExitIntent labelled '${l}' at list position ${show(p)}; intent labels must be disjoint within an extension (7.0)",
     EmptyRegistration(e) =>
       "[empty-registration] extension '${e}' registers no capability atom (D7, the rejecting reading; empty_registration_omits is false)"
   }
@@ -141,7 +158,8 @@ export pure func kind_name(c: Capability) -> string {
     ToolPolicy(_) => "ToolPolicy",
     ToolProvider(_, _) => "ToolProvider",
     ResponseInterceptor(_) => "ResponseInterceptor",
-    SolverJudge(_) => "SolverJudge"
+    SolverJudge(_) => "SolverJudge",
+    ExitIntent(_, _, _) => "ExitIntent"
   }
 }
 
@@ -156,6 +174,13 @@ pure func is_vote_kind(c: Capability) -> bool {
 pure func is_provider(c: Capability) -> bool {
   match c {
     ToolProvider(_, _) => true,
+    _ => false
+  }
+}
+
+pure func is_exit_intent(c: Capability) -> bool {
+  match c {
+    ExitIntent(_, _, _) => true,
     _ => false
   }
 }
@@ -179,16 +204,22 @@ pure func add_names(id: string, pos: int, names: [string], seen: [string]) -> Re
 }
 
 -- One pass, in list order. `seen_kinds` are the kind names already admitted;
--- `seen_tools` the tool-name set so far. Every atom is either admitted in
--- place or is the FIRST rejection -- never skipped.
-pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], seen_tools: [string]) -> Result[(), RegistrationRejection] {
+-- `seen_tools` the tool-name set so far; `seen_labels` the ExitIntent labels.
+-- Every atom is either admitted in place or is the FIRST rejection -- never
+-- skipped.
+--
+-- `ExitIntent` is exempted from the fold-kind gate for the same reason
+-- `ToolProvider` is: its multiplicity rule is its own (disjoint labels), so
+-- flipping D4 to `false` must not silently turn a legal second intent into a
+-- `fold-kind-repeated`.
+pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], seen_tools: [string], seen_labels: [string]) -> Result[(), RegistrationRejection] {
   match caps {
     [] => Ok(()),
     c :: rest => {
       let k = kind_name(c);
       let repeated = contains_str(seen_kinds, k);
       if repeated && is_vote_kind(c) then Err(SecondVote(id, k, pos))
-      else if repeated && not is_provider(c) && not fold_kind_repeats_allowed() then Err(FoldKindRepeated(id, k, pos))
+      else if repeated && not is_provider(c) && not is_exit_intent(c) && not fold_kind_repeats_allowed() then Err(FoldKindRepeated(id, k, pos))
       else {
         let tools = match c {
           ToolProvider(names, _) => add_names(id, pos, names, seen_tools),
@@ -196,7 +227,18 @@ pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], s
         };
         match tools {
           Err(e) => Err(e),
-          Ok(seen_tools2) => walk(id, rest, pos + 1, k :: seen_kinds, seen_tools2)
+          Ok(seen_tools2) => {
+            let labels = match c {
+              ExitIntent(label, _, _) =>
+                if contains_str(seen_labels, label) then Err(DuplicateExitLabel(id, label, pos))
+                else Ok(label :: seen_labels),
+              _ => Ok(seen_labels)
+            };
+            match labels {
+              Err(e) => Err(e),
+              Ok(seen_labels2) => walk(id, rest, pos + 1, k :: seen_kinds, seen_tools2, seen_labels2)
+            }
+          }
         }
       }
     }
@@ -207,7 +249,7 @@ pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], s
 -- the order every dispatcher sees.
 export pure func normalize_registration(id: string, caps: [Capability]) -> Result[ExtEntry, RegistrationRejection] {
   if List.length(caps) == 0 && not empty_registration_omits() then Err(EmptyRegistration(id))
-  else match walk(id, caps, 0, [], []) {
+  else match walk(id, caps, 0, [], [], []) {
     Err(e) => Err(e),
     Ok(_) => Ok({ id: id, caps: caps })
   }
@@ -287,6 +329,25 @@ pure func test_overlapping_provider_names_are_rejected() -> bool
       _ => false
     };
     across && within
+  }
+
+pure func p_exit(ctx: ExtCtx) -> ExitIntentOutcome ! {FS} { { actions: [], next_state: ctx.world } }
+
+-- 7.0. Two intents pass in list order; two intents ANSWERING TO ONE LABEL do
+-- not. The second half is the rule that matters: the label is the manifest's
+-- key, so a repeat would publish two lists under one name.
+pure func test_exit_intents_repeat_but_labels_must_be_disjoint() -> bool
+  tests [((), true)]
+  {
+    let two = match normalize_registration("two", [ExitIntent("panes", true, p_exit), ExitIntent("run-file", false, p_exit)]) {
+      Ok(e) => List.length(e.caps) == 2,
+      Err(_) => false
+    };
+    let dup = match normalize_registration("dup", [ExitIntent("panes", true, p_exit), ToolPolicy(p_policy), ExitIntent("panes", true, p_exit)]) {
+      Err(DuplicateExitLabel(e, l, p)) => e == "dup" && l == "panes" && p == 2,
+      _ => false
+    };
+    two && dup
   }
 
 -- The D4 gate reads the constant, so this test states the SAME expectation

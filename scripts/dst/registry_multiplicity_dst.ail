@@ -41,11 +41,12 @@ import src/core/ext/registry_normalize (
   rejection_message,
   rejection_extension,
   kind_name,
+  DuplicateExitLabel,
   fold_kind_repeats_allowed,
   empty_registration_omits
 )
 -- B8: `Capability`/`ExtEntry` and the constructors are the ABI's now.
-import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtEntry)
+import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExitAction, ExitIntentOutcome, ExtEntry)
 
 -- ---------------------------------------------------------------------------
 -- Neutral payloads. Only the KINDS and the names matter to the boundary.
@@ -61,13 +62,18 @@ pure func handle(ctx: ExtCtx, _c: ToolCallEnvelope)
 }
 pure func intercept(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: NoIntercept, next_state: ctx.world } }
 pure func judge(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: NoDecision, next_state: ctx.world } }
+pure func at_exit(ctx: ExtCtx) -> ExitIntentOutcome ! {FS} { { actions: [], next_state: ctx.world } }
 
 -- THE NEGATIVE CONTROL: every kind once, plus a second ToolProvider with
 -- DISJOINT names (the one N>1 D3 admits unconditionally). Must load clean.
 pure func clean() -> [Capability] {
   [DescribeTools(describe), PromptShaper(shape), BudgetShaper(budget), Compactor(compact),
    ToolPolicy(policy), ToolProvider(["Alpha", "Beta"], handle), ResponseInterceptor(intercept),
-   SolverJudge(judge), ToolProvider(["Gamma"], handle)]
+   SolverJudge(judge), ToolProvider(["Gamma"], handle),
+   -- 7.0: two ExitIntents with DISJOINT labels, the N>1 this kind admits. Same
+   -- shape as the second ToolProvider above and admitted for the same reason:
+   -- the kind concatenates, and the multiplicity rule is about the NAMES.
+   ExitIntent("panes", true, at_exit), ExitIntent("run-file", false, at_exit)]
 }
 
 -- ---------------------------------------------------------------------------
@@ -125,19 +131,21 @@ pure func overlapping_providers() -> [Capability] { clean() ++ [ToolProvider(["D
 pure func duplicate_within_provider() -> [Capability] {
   [DescribeTools(describe), ToolProvider(["Alpha", "Alpha"], handle)]
 }
-pure func fold_repeated() -> [Capability] { clean() ++ [Compactor(compact)] }         -- position 9
+pure func fold_repeated() -> [Capability] { clean() ++ [Compactor(compact)] }         -- position 11
+-- 7.0: a third intent answering to a label already taken. Position 11.
+pure func duplicate_exit_label() -> [Capability] { clean() ++ [ExitIntent("panes", true, at_exit)] }
 
 func scenario_fold_kind(label: string) -> bool ! {IO} {
   let r = normalize_registration("fold", fold_repeated());
   if fold_kind_repeats_allowed() then
     match r {
-      Ok(e) => { let _ = println("  ✓ ${label}: D4 SIGNED (fold_kind_repeats_allowed = true) -- second Compactor passes through at position 9, ${show(List.length(e.caps))} atoms in order"); List.length(e.caps) == 10 },
+      Ok(e) => { let _ = println("  ✓ ${label}: D4 SIGNED (fold_kind_repeats_allowed = true) -- second Compactor passes through at position 11, ${show(List.length(e.caps))} atoms in order"); List.length(e.caps) == 12 },
       Err(x) => { let _ = println("  ✗ ${label}: D4 signed but rejected: ${rejection_message(x)}"); false }
     }
   else
     match r {
       Err(FoldKindRepeated(e, k, p)) => {
-        let ok = e == "fold" && k == "Compactor" && p == 9;
+        let ok = e == "fold" && k == "Compactor" && p == 11;
         let _ = if ok then println("  ✓ ${label}: D4 OPEN (fold_kind_repeats_allowed = false) -- ${rejection_message(FoldKindRepeated(e, k, p))}")
                 else println("  ✗ ${label}: wrong payload (${e}, ${k}, ${show(p)})");
         ok
@@ -157,7 +165,7 @@ func scenario_whole_registry(label: string) -> bool ! {IO} {
   let bad: ExtEntry = { id: "bad#2", caps: second_judge() };
   let rejects = match normalize_registry([good, empty, bad]) {
     Err(SecondVote(e, k, p)) => {
-      let ok = e == "bad#2" && k == "SolverJudge" && p == 9;
+      let ok = e == "bad#2" && k == "SolverJudge" && p == 11;
       let _ = if ok then println("  ✓ ${label}: one bad extension rejects the WHOLE build -- ${rejection_message(SecondVote(e, k, p))}")
               else println("  ✗ ${label}: wrong payload");
       ok
@@ -187,14 +195,16 @@ export func main() -> () ! {IO} {
   let c = assert_clean("every kind once + a second ToolProvider with disjoint names", "clean#0", clean());
   let _ = println("  -- one mutation each --");
   let r1 = assert_rejected("second ToolPolicy", "second-vote-atom", "vote#1", second_policy(),
-    \r. match r { SecondVote(_, k, p) => k == "ToolPolicy" && p == 9, _ => false });
+    \r. match r { SecondVote(_, k, p) => k == "ToolPolicy" && p == 11, _ => false });
   let r2 = assert_rejected("second SolverJudge", "second-vote-atom", "vote#2", second_judge(),
-    \r. match r { SecondVote(_, k, p) => k == "SolverJudge" && p == 9, _ => false });
+    \r. match r { SecondVote(_, k, p) => k == "SolverJudge" && p == 11, _ => false });
   let r3 = assert_rejected("two ToolProviders sharing 'Beta'", "duplicate-tool-name", "prov#3", overlapping_providers(),
-    \r. match r { DuplicateToolName(_, n, p) => n == "Beta" && p == 9, _ => false });
+    \r. match r { DuplicateToolName(_, n, p) => n == "Beta" && p == 11, _ => false });
   let r4 = assert_rejected("one ToolProvider advertising 'Alpha' twice", "duplicate-tool-name", "prov#4", duplicate_within_provider(),
     \r. match r { DuplicateToolName(_, n, p) => n == "Alpha" && p == 1, _ => false });
   let r5 = scenario_fold_kind("second Compactor (fold kind)");
+  let r6 = assert_rejected("a third ExitIntent reusing the label 'panes'", "duplicate-exit-label", "exit#5", duplicate_exit_label(),
+    \r. match r { DuplicateExitLabel(_, l, p) => l == "panes" && p == 11, _ => false });
   let _ = println("  -- the whole build --");
   let w = scenario_whole_registry("registry of good + empty + bad");
   -- the harness's own control: the boundary must be able to reject at all
@@ -202,7 +212,7 @@ export func main() -> () ! {IO} {
     && (match normalize_registration("x", clean()) { Ok(_) => true, Err(_) => false });
   let _ = if control then println("  ✓ control: the boundary both accepts and rejects")
           else println("  ✗ control: the boundary never rejects -- every row above is vacuous");
-  if c && r1 && r2 && r3 && r4 && r5 && w && control
+  if c && r1 && r2 && r3 && r4 && r5 && r6 && w && control
   then println("registry_multiplicity_dst PASS")
   else { let _ = println("registry_multiplicity_dst FAIL"); exit(1) }
 }

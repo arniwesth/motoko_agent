@@ -40,7 +40,7 @@ import src/core/dst_profile_coverage (
 )
 
 -- B8: the slot half of the coverage unit is gone; every scenario below is an
--- ATOM scenario. `eight()` is the one-atom-per-kind registration every
+-- ATOM scenario. `one_per_kind()` is the one-atom-per-kind registration every
 -- extension in the tree has at B8; `chain_atoms()` is the legal N>1 shape.
 
 pure func same_ids(a: [string], b: [string]) -> bool {
@@ -94,7 +94,7 @@ func assert_accepted(label: string, install: [CapabilityDisclosure]) -> bool ! {
   ok
 }
 
-pure func eight() -> [AtomRef] { atoms_at_zero(all_capability_kinds()) }
+pure func one_per_kind() -> [AtomRef] { atoms_at_zero(all_capability_kinds()) }
 
 pure func without(xs: [AtomRef], k: CapabilityKind) -> [AtomRef] {
   match xs {
@@ -108,48 +108,48 @@ pure func at0(k: CapabilityKind) -> AtomRef { { kind: k, index: 0 } }
 pure func driver_only_install() -> [CapabilityDisclosure] { [] }
 
 pure func fully_covered() -> [CapabilityDisclosure] {
-  [{ extension_id: "hello", atoms: eight(), covered: eight(), excluded: [] }]
+  [{ extension_id: "hello", atoms: one_per_kind(), covered: one_per_kind(), excluded: [] }]
 }
 
 pure func gated_exclusion_only() -> [CapabilityDisclosure] {
-  [{ extension_id: "compose", atoms: eight(),
-     covered: without(eight(), ToolProviderKind), excluded: [at0(ToolProviderKind)] }]
+  [{ extension_id: "compose", atoms: one_per_kind(),
+     covered: without(one_per_kind(), ToolProviderKind), excluded: [at0(ToolProviderKind)] }]
 }
 
 pure func all_excluded() -> [CapabilityDisclosure] {
-  [{ extension_id: "inert", atoms: eight(), covered: [], excluded: eight() }]
+  [{ extension_id: "inert", atoms: one_per_kind(), covered: [], excluded: one_per_kind() }]
 }
 
 pure func unconditional_excluded() -> [CapabilityDisclosure] {
-  [{ extension_id: "no_prompt", atoms: eight(),
-     covered: without(eight(), PromptShaperKind), excluded: [at0(PromptShaperKind)] }]
+  [{ extension_id: "no_prompt", atoms: one_per_kind(),
+     covered: without(one_per_kind(), PromptShaperKind), excluded: [at0(PromptShaperKind)] }]
 }
 
 pure func describe_tools_excluded() -> [CapabilityDisclosure] {
-  [{ extension_id: "silent_catalog", atoms: eight(),
-     covered: without(eight(), DescribeToolsKind), excluded: [at0(DescribeToolsKind)] }]
+  [{ extension_id: "silent_catalog", atoms: one_per_kind(),
+     covered: without(one_per_kind(), DescribeToolsKind), excluded: [at0(DescribeToolsKind)] }]
 }
 
 -- Eight entries, seven atoms: `solver_judge[0]` classified nowhere and
 -- `describe_tools[0]` twice. Only counting per ATOM rejects it.
 pure func partial_disclosure() -> [CapabilityDisclosure] {
-  [{ extension_id: "partial", atoms: eight(),
-     covered: at0(DescribeToolsKind) :: without(without(eight(), ToolProviderKind), SolverJudgeKind),
+  [{ extension_id: "partial", atoms: one_per_kind(),
+     covered: at0(DescribeToolsKind) :: without(without(one_per_kind(), ToolProviderKind), SolverJudgeKind),
      excluded: [at0(ToolProviderKind)] }]
 }
 
 pure func overlapping() -> [CapabilityDisclosure] {
-  [{ extension_id: "overlap", atoms: eight(), covered: eight(), excluded: [at0(ToolPolicyKind)] }]
+  [{ extension_id: "overlap", atoms: one_per_kind(), covered: one_per_kind(), excluded: [at0(ToolPolicyKind)] }]
 }
 
 pure func duplicated_extension() -> [CapabilityDisclosure] {
-  [{ extension_id: "twice", atoms: eight(), covered: eight(), excluded: [] },
-   { extension_id: "twice", atoms: eight(), covered: eight(), excluded: [] }]
+  [{ extension_id: "twice", atoms: one_per_kind(), covered: one_per_kind(), excluded: [] },
+   { extension_id: "twice", atoms: one_per_kind(), covered: one_per_kind(), excluded: [] }]
 }
 
 pure func two_defects() -> [CapabilityDisclosure] {
-  [{ extension_id: "inert", atoms: eight(), covered: [], excluded: eight() },
-   { extension_id: "overlap", atoms: eight(), covered: eight(), excluded: [at0(ToolPolicyKind)] }]
+  [{ extension_id: "inert", atoms: one_per_kind(), covered: [], excluded: one_per_kind() },
+   { extension_id: "overlap", atoms: one_per_kind(), covered: one_per_kind(), excluded: [at0(ToolPolicyKind)] }]
 }
 
 pure func ids(kinds: [string]) -> [AtomIds] {

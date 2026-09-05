@@ -1,6 +1,6 @@
 [package]
 name = "sunholo/motoko_ext_abi"
-version = "6.0"
+version = "7.0"
 edition = "1"
 ailang = ">=0.17.0"
 description = "ABI contract for motoko_agent extension packages: Capability, ExtCtx, policy and decision types"
@@ -14,7 +14,7 @@ max = []
 
 [metadata]
 tags = ["motoko", "extension", "abi", "hooks", "plugin"]
-ai_summary = "Stable ABI contract for motoko_agent extensions. 6.0 replaces the ExtensionHooks record with the Capability sum (register_with_config -> [Capability], wrapped by the host into ExtEntry { id, caps }; ADR-001 Phase B, B8). Provides Capability, ExtEntry, ExtRegistry, ExtCtx, BudgetPlan, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, and VerificationConfig types. 5.0 adds the WI-B2b world token: ExtWorld, AiStepOutcome, and the four hook outcome records (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome) that carry D1's successor state back out of a hook. All motoko-ext-* packages depend on this package. Bumping ExtensionHooks is a major version bump."
+ai_summary = "Stable ABI contract for motoko_agent extensions. 7.0 adds the ExitIntent capability and the ExitAction data type: an extension declares what should happen when the SESSION ends, the host renders it to data at every turn end and executes it at clean exit, so no extension code and no IPC run in the exit path. 6.0 replaces the ExtensionHooks record with the Capability sum (register_with_config -> [Capability], wrapped by the host into ExtEntry { id, caps }; ADR-001 Phase B, B8). Provides Capability, ExtEntry, ExtRegistry, ExtCtx, BudgetPlan, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, and VerificationConfig types. 5.0 adds the WI-B2b world token: ExtWorld, AiStepOutcome, and the four hook outcome records (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome) that carry D1's successor state back out of a hook. All motoko-ext-* packages depend on this package. Bumping ExtensionHooks is a major version bump."
 repository = "https://github.com/sunholo-data/ailang-packages/tree/main/packages/motoko-ext-abi"
 homepage = "https://ailang.sunholo.com/docs/packages/motoko-ext-abi"
 license_url = "https://github.com/sunholo-data/ailang-packages/blob/main/LICENSE"

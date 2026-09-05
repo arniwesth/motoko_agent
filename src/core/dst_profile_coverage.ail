@@ -158,6 +158,7 @@ export type CapabilityKind
   | ToolProviderKind
   | ResponseInterceptorKind
   | SolverJudgeKind
+  | ExitIntentKind
 
 export type DispatchKind = Unconditional | Gated
 
@@ -167,6 +168,20 @@ export type DispatchKind = Unconditional | Gated
 -- advertised tools (`first_handle_atoms`). D5 forbids EXCLUDING an
 -- unconditionally-dispatched atom — the run cannot complete — so the profile's
 -- only move for one it cannot cover is to OMIT the extension.
+-- 7.0, and the question is NOT the one the exit-intent design expected to have
+-- to answer. `ExitIntent` looked like it needed a third `DispatchKind` -- an
+-- atom that fires at most once, only on a clean exit, never under SIGKILL --
+-- and both existing answers looked wrong: `Unconditional` a coverage lie,
+-- `Gated` a licence to exclude it.
+--
+-- The data-not-closure shape settles it without a new variant. What is
+-- dispatched is the RENDER, and the render runs at EVERY turn end for EVERY
+-- registered ExitIntent atom -- an unconditional fold, exactly like the other
+-- seven. What is conditional is the EXECUTION of the rendered actions, and
+-- that happens in the TUI's exit handler over published DATA, where no atom is
+-- dispatched and no extension code runs at all. A profile that excluded an
+-- ExitIntent atom would be claiming the render does not happen, and it does.
+-- So: Unconditional, and it is the truth rather than the convenient answer.
 export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
   match k {
     DescribeToolsKind => Unconditional,
@@ -176,7 +191,8 @@ export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
     ToolPolicyKind => Unconditional,
     ToolProviderKind => Gated,
     ResponseInterceptorKind => Unconditional,
-    SolverJudgeKind => Unconditional
+    SolverJudgeKind => Unconditional,
+    ExitIntentKind => Unconditional
   }
 }
 
@@ -189,7 +205,8 @@ export pure func capability_kind_id(k: CapabilityKind) -> string {
     ToolPolicyKind => "tool_policy",
     ToolProviderKind => "tool_provider",
     ResponseInterceptorKind => "response_interceptor",
-    SolverJudgeKind => "solver_judge"
+    SolverJudgeKind => "solver_judge",
+    ExitIntentKind => "exit_intent"
   }
 }
 
@@ -202,12 +219,14 @@ export pure func capability_kind_from_id(id: string) -> Option[CapabilityKind] {
   else if id == "tool_provider" then Some(ToolProviderKind)
   else if id == "response_interceptor" then Some(ResponseInterceptorKind)
   else if id == "solver_judge" then Some(SolverJudgeKind)
+  else if id == "exit_intent" then Some(ExitIntentKind)
   else None
 }
 
 export pure func all_capability_kinds() -> [CapabilityKind] {
   [DescribeToolsKind, PromptShaperKind, BudgetShaperKind, CompactorKind,
-   ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind, SolverJudgeKind]
+   ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind, SolverJudgeKind,
+   ExitIntentKind]
 }
 
 -- THE UNIT: an atom is (kind, index-within-kind) in the registration's list
@@ -542,21 +561,24 @@ pure func count_unconditional_kinds(ks: [CapabilityKind]) -> int {
   }
 }
 
-pure func test_all_capability_kinds_is_eight_distinct() -> bool
+pure func test_all_capability_kinds_is_nine_distinct() -> bool
   tests [((), true)]
   {
-    List.length(all_capability_kinds()) == 8 && distinct_ids(kind_ids(all_capability_kinds()), [])
+    List.length(all_capability_kinds()) == 9 && distinct_ids(kind_ids(all_capability_kinds()), [])
   }
 
 pure func test_one_atom_per_kind_fully_covered_passes() -> bool
   tests [((), true)]
   {
-    List.length(one_per_kind()) == 8
+    List.length(one_per_kind()) == 9
       && capability_install_list_ok([cap_full("ext_a", one_per_kind())])
       && capability_install_list_ok([])
   }
 
-pure func test_seven_kinds_are_unconditional() -> bool
+-- EIGHT at 7.0, seven before it: `ExitIntent`'s render is an unconditional
+-- per-turn-end fold (see `capability_dispatch`), so the new kind joins the
+-- unconditional side and `ToolProvider` remains the ONE gated kind.
+pure func test_eight_kinds_are_unconditional() -> bool
   tests [((), true)]
   {
     let gated: CapabilityDisclosure =
@@ -569,7 +591,7 @@ pure func test_seven_kinds_are_unconditional() -> bool
         excluded: [{ kind: DescribeToolsKind, index: 0 }] };
     capability_install_list_ok([gated])
       && has_rule(validate_capability_disclosure(unc), "unconditional-hook-excluded")
-      && count_unconditional_kinds(all_capability_kinds()) == 7
+      && count_unconditional_kinds(all_capability_kinds()) == 8
   }
 
 pure func test_zero_covered_is_rejected() -> bool

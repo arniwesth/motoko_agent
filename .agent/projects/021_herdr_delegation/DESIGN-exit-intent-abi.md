@@ -1,28 +1,34 @@
 # DESIGN: extension-declared exit intent — removing the herdr hardcoded TUI surface
 
-Date: 2026-09-04
-Status: Proposed v2 (2026-09-04) — revised after NEEDS-FIX review by `mot-dlg-1788529974769` (claude). v1 proposed closure-valued `ExitIntent` + `ExtCtx` identity; the review blocked all three shapes (B1–B3) with fresh v0.33.0 measurements. This revision adopts the review's fixes: data-not-closure exit actions, positional payload, registration-time identity. Review: `.motoko/herdr-delegates/answer-mot-dlg-1788529974769.md`.
-Scope: `motoko-ext-herdr` MOT-133/134/136/137 + `src/tui/src/herdr-{owner-token,reap}.ts` + `herdr-agent-state.ts` exit seam.
-Does NOT propose: changing what the integration does (token format, opt-in reaping, report-by-default sweep). Only WHO declares it and WHERE it executes.
+Date: 2026-09-04, revised 2026-09-05
+Status: **Accepted and implemented v3 (2026-09-05)** on branch `arniwesth/exit-intent-abi`, as
+`motoko-ext-abi 7.0`. v1 proposed closure-valued `ExitIntent` + `ExtCtx` identity and was blocked on
+all three shapes by the NEEDS-FIX review from `mot-dlg-1788529974769` (claude); v2 adopted the
+review's fixes (data-not-closure exit actions, positional payload, registration-time identity) and
+left §5's four questions open. v3 answers all four, and two of the answers are corrections to v2
+rather than choices between the options it listed — see §5. Review:
+`.motoko/herdr-delegates/answer-mot-dlg-1788529974769.md`.
+Scope: `motoko-ext-herdr` MOT-133/134/136/137 + `src/tui/src/exit-actions.ts` (new) +
+`src/core/ext/exit_manifest.ail` (new) + the `herdr-agent-state.ts` exit seam.
+Does NOT change what the integration does (token format, opt-in reaping, report-by-default sweep).
+Only WHO declares it and WHERE it executes.
 
 ## 1. The problem
 
-A pluggable extension requires hardcoded TUI changes. Concretely, `motoko-ext-herdr`
-needs three host-side pieces that no other extension needs and the ABI cannot express:
+A pluggable extension required hardcoded TUI changes. Concretely, `motoko-ext-herdr`
+needed three host-side pieces that no other extension needs and the ABI could not express:
 
 1. **Session clock minting.** The `mot-owner` ownership token is `<own-pane>:<session-ms>`
-   (`types.owner_token_value`). The TUI mints the clock once (`herdr-owner-token.ts:
-   sessionStartMs`), forwards it as `MOTOKO_SESSION_MS` via `buildChildEnv`
-   (`runtime-process.ts`), and the exit-time reaper rebuilds the same string on the
-   far side of a language boundary. The extension explicitly refuses to mint its own
-   (`register.ail`): a local clock would look right and match nothing.
+   (`types.owner_token_value`). The TUI mints the clock once, forwards it as
+   `MOTOKO_SESSION_MS` via `buildChildEnv`, and the exit-time reaper rebuilt the same
+   string on the far side of a language boundary. The extension explicitly refuses to
+   mint its own (`register.ail`): a local clock would look right and match nothing.
 2. **Exit-time reap.** `herdr-reap.ts:reapOwnedPanes`, called from `releaseHerdrReporter`
-   (`herdr-agent-state.ts`) inside `process.on('exit')` — synchronously, because an async
-   spawn there never runs, 1s timeout per call, best-effort, never blocking exit.
-3. **Env forwarding.** `buildChildEnv`'s `HERDR_*` prefix rule exists so the extension's
-   `register_with_config` can read `HERDR_ENV/BIN_PATH/PANE_ID` (+ the operator knobs
-   `HERDR_ALLOWED_KINDS`, `HERDR_DELEGATE_KIND`, …) through `std/env`. Already generic,
-   but it is herdr-shaped load-bearing config the ABI does not model.
+   inside `process.on('exit')` — synchronously, because an async spawn there never runs,
+   1s timeout per call, best-effort, never blocking exit.
+3. **Env forwarding.** `buildChildEnv`'s `HERDR_*` prefix rule, so `register_with_config`
+   can read `HERDR_ENV/BIN_PATH/PANE_ID` and the operator knobs through `std/env`.
+   Already generic, but herdr-shaped load-bearing config the ABI does not model.
 
 Everything else the integration does — tagging at spawn, orphan sweep, dagr producer,
 auto view pane, readiness gates, elapsed wording — is pure AILANG + routed `herdr`
@@ -30,200 +36,219 @@ calls and needs no host help.
 
 The same missing slot bites one more place: the dagr run file freezes tasks `working`
 when the model delegates and moves on (DESIGN-dagr-as-delegation-view.md §6: "there is
-no ABI slot for 'session ended'"). Session-end settlement for the run file (dagr §8
-item 4, via F-5 §7 "Explicitly out of scope") is the same seam, a different question.
+no ABI slot for 'session ended'"). Session-end settlement for the run file is the same
+seam, a different question — and `ExitAction.PublishFile` now exists to serve it (§3b),
+though nothing uses it yet.
 
-## 2. What the ABI has today, and why it cannot host this
+## 2. What the ABI had, and why it could not host this
 
-`packages/motoko-ext-abi/types.ail` `Capability` (post-6.0): `DescribeTools`,
-`PromptShaper`, `BudgetShaper`, `Compactor`, `ToolPolicy`, `ToolProvider`,
-`ResponseInterceptor`, `SolverJudge`. Registration returns `[Capability]`; the vote
-kinds reject N>1 (017 ADR-001).
+`packages/motoko-ext-abi/types.ail` `Capability` (6.0): `DescribeTools`, `PromptShaper`,
+`BudgetShaper`, `Compactor`, `ToolPolicy`, `ToolProvider`, `ResponseInterceptor`,
+`SolverJudge`. Registration returns `[Capability]`; the vote kinds reject N>1 (017 ADR-001).
 
 - `SolverJudge((ExtCtx, string) -> FinalizeOutcome ! {Process})` is model-answer
   finalization, not process exit. Wrong trigger, wrong lifetime.
-- No capability carries an exit trigger at all. The TUI exit seam (`initHerdrReporter`
-  registers `exit`/`SIGINT`/`SIGTERM`; DESIGN-f5 §2.3) is host-side TypeScript "where
-  the ABI's missing session-end slot does not matter" — a direct quote of the gap.
-- Effect-row reality: an exit intent needs `{Process, FS}` at minimum (enumerate panes,
-  close by id) plus `Clock` for timestamps, executed **synchronously inside the exit
-  handler** with a bounded timeout. An async `Process` effect dispatched through the
-  runtime would never execute there — the event loop is already closed. Any ABI shape
-  that ignores this constraint produces a hook that fires everywhere except exit.
+- No capability carried an exit trigger at all. The TUI exit seam is host-side TypeScript
+  "where the ABI's missing session-end slot does not matter" — a direct quote of the gap.
+- Effect-row reality: an exit intent needs `{Process, FS}` at minimum, executed
+  **synchronously inside the exit handler** with a bounded timeout. An async `Process`
+  effect dispatched through the runtime would never execute there — the event loop is
+  already closed. Any ABI shape that ignores this constraint produces a hook that fires
+  everywhere except exit.
 
-## 3. Proposal (v2): data-not-closure `ExitIntent` + registration-time identity
+## 3. What landed: data-not-closure `ExitIntent` + a published manifest
 
-v1 proposed a closure-valued `ExitIntent` (`plan: (ExtWorld) -> [ExitAction]`) with
-session identity on `ExtCtx`. The review blocked all three shapes — B1 (the exit
-dispatcher runs in the TUI process where no extension code exists; the per-task AILANG
-runtime is normally already gone, and reaching it needs the async IPC an `exit` handler
-cannot do), B2 (record payload puts both closures in the `smuggle` position B8 measured
-as unchecked — re-measured in-review on v0.33.0), B3 (`register_with_config` takes no
-`ExtCtx`; `ExtCtx` is built inside the per-task runtime, so it cannot carry a stable
-session clock anyway). This revision adopts the review's fixes throughout.
+### 3a. Registration-time session identity — and the duplication is GONE, not narrowed
 
-Two additions, sized to the stabilisation pass:
+v2 predicted that the token FORMAT would collapse to one definition while the mint stayed
+host-side, and that §6's v1 criterion ("mint logic deleted") was unachievable. Half right.
+The mint does stay: `register_with_config(cfg)` receives no ctx (`types.ail:4`), the herdr
+config is assembled once at registration and captured, and `ExtCtx` is built inside the
+per-task child which has no stable session clock of its own. `sessionStartMs` and the
+`MOTOKO_SESSION_MS` forwarding are unchanged, and `herdr-owner-token.ts` survives as
+`src/tui/src/session-identity.ts` holding exactly that and nothing else.
 
-### 3a. Registration-time session identity (narrows hardcoded piece 1, does not kill it)
+What v2 did not foresee is that the FORMAT duplication disappears entirely rather than
+collapsing to "one definition plus a twin test". The exit action carries the token KEY and
+VALUE as data (§3b), so the host compares two strings it was handed and never builds one.
+`owner_token_value` in `packages/motoko-ext-herdr/types.ail` is now the only definition of
+the format in either language, and `herdr-owner-token.test.ts`'s twin assertions were
+deleted rather than moved — there is nothing left for them to pin.
 
-B3 correction: `register_with_config(cfg: RuntimeConfig) -> [Capability]`
-(`packages/motoko-ext-abi/types.ail:4`) receives no ctx, and the herdr config is
-assembled once at registration and captured (`register.ail` → `make_hooks`). So
-identity cannot arrive per-hook via `ExtCtx` without restructuring the package — and
-`ExtCtx` is built inside the per-task child (`mk_v2_ext_ctx`, `src/core/session.ail`),
-which has no stable session clock of its own. The host must still mint the clock
-(`sessionStartMs`) and forward `MOTOKO_SESSION_MS` via `buildChildEnv`.
+The cost inversion the review caught (M4) held: adding fields to `ExtCtx` IS the
+record-literal totality price, while adding a `Capability` variant is zero-cost for
+non-using extensions. No `ExtCtx` field was added.
 
-What moves: the *format* collapses to one definition (`types.owner_token_value`; the
-review's restatement), while mint + forwarding stay host-side. honest acceptance: "the
-format has one definition; the mint stays and is the only host-side piece" — NOT
-"`herdr-owner-token.ts` mint logic deleted".
+### 3b. `ExitIntent`, and the manifest that carries it across the process boundary
 
-Note the cost inversion the review caught (M4): adding fields to `ExtCtx` IS the
-record-literal totality price (every `ExtCtx` literal site — six extension packages'
-tests plus `session.ail`, `rpc.ail` ×2, `ext/runtime.ail` — must gain the fields),
-while adding a `Capability` variant is zero-cost for non-using extensions (the reason
-6.0 bought capability registration). So §3a as v1 wrote it was the expensive half
-priced as cheap.
-
-### 3b. Data-not-closure `ExitIntent` (kills hardcoded piece 2)
-
-B1 fix: the intent yields **data computed while the runtime is alive**, not a closure
-executed after it dies. Per turn/task end the host collects each extension's
-`[ExitAction]` and caches the latest; at process exit it executes the cached lists in
-registry order — synchronously, bounded, best-effort — with no AILANG execution and no
-IPC in the exit path. "Computed from already-known data" becomes an architectural
-consequence instead of an asserted constraint.
+The intent yields **data computed while the runtime is alive**, not a closure executed
+after it dies. What v2 left as "the host collects and caches the latest" is, concretely, a
+FILE: at every turn end the AILANG side renders each intent and publishes a session-keyed
+manifest (write-tmp + `mv`); at process exit the TUI reads that one file and executes what
+it finds, synchronously, bounded, best-effort — no AILANG execution and no IPC in the exit
+path. "Computed from already-known data" is a consequence of where the code runs rather
+than a rule anyone has to remember.
 
 ```ailang
-| ExitIntent(string, bool, (ExtCtx) -> [ExitAction] ! {FS})
---              label  reap?  render cached actions from live state (positional
---                           payload: ctor-arg lambdas ARE row-checked, B2/B8)
+| ExitIntent(string, bool, (ExtCtx) -> ExitIntentOutcome ! {FS})
+--            label  enabled?  render, from FS-backed state, returning a successor
 
-type ExitAction
-  = ClosePane(string)                    -- explicit pane id; never name/kind/argv (P2-6)
-  | PublishFile({ tmp: string, dest: string })  -- the settled write-tmp+mv transaction (M9),
-                                         -- never a raw WriteFile (torn-read risk, dagr §8.1)
-  | RunArgv({ bin: string, args: [string] })    -- herdr-shaped escape hatch, token-free argv only
+export type ExitIntentOutcome = { actions: [ExitAction], next_state: ExtWorld }
+
+export type ExitAction
+  = ClosePane(PaneCloseAction)          -- { bin, pane, token_key, token_value }
+  | PublishFile(PublishFileAction)      -- { tmp, dest }: the settled write-tmp+rename
+  | RunArgv(RunArgvAction)              -- { bin, args }: argv only, no shell
 ```
 
-Shape notes (all review-driven):
+Shape notes:
 
-- **Positional payload** (B2): multi-arg ctor like `ToolProvider`, so the render
-  closure sits in the compiler-enforced position. The ABI header claim for the other
-  eight kinds then holds for the ninth. Record payload is rejected — it chooses the
-  `smuggle` hole by construction.
-- **Captured `bool`, not `() -> bool` thunk** (M8): reading env is `! {Env}`; a pure
-  thunk with an env job is a compile error positionally or a silent smuggle in a
-  record. Resolve `HERDR_REAP_ON_EXIT=1` at registration via `getEnvOr` like every
-other knob (`register.ail` already reads all of them) and capture the bool.
-- **Effect row `! {FS}` provisional** (review §3 nits): the row is the enforcement
-  mechanism, so it is stated, not left implicit. `plan` renders from live FS-backed
-  state (dagr run file + markers); the `std/process` risk is a row question, answered
-  by the row.
-- **No `ExtWorld` threading** (M7): `token` is host-opaque (`types.ail`) — extension
-  code must not read it. Extension-owned cross-task state lives where it already
-  lives: the filesystem (dagr run file + `.pane-*` markers). The render closure reads
-  files, not the token.
-- **Persistence across tasks is required** (M10): the rendering runtime dies per task,
-  so an in-memory owned-pane set loses panes spawned in earlier tasks. Options: (a)
-  file-backed session-keyed set (same keying as the run file), or (b) the review's
-  constructive alternative — the host exit dispatcher reads the session-keyed dagr run
-  file's per-attempt `locator { pane }` rows directly, no AILANG at exit, no ABI major
-  for this half at all. Price (b) before building (a).
+- **Positional payload** (B2), so the render closure sits in the compiler-enforced
+  position. A record payload would choose the `smuggle` hole by construction.
+- **Captured `bool`, not a thunk** (M8): reading env is `! {Env}`. `HERDR_REAP_ON_EXIT=1`
+  is resolved at registration via `getEnvOr` like every other knob and captured.
+- **`ClosePane` carries the PROOF, not just the id.** This is the one addition v2 did not
+  have, and it is what makes a cached action safe. The extension names the token key and
+  value that must still be on the pane; the host verifies before closing. A pane id
+  recycled between the render and the exit fails the check and is left alone — so the
+  freshness a cache gives up is bought back at exit, without teaching the host whose panes
+  are whose. `token_key == ""` is "no proof required" and has to be written deliberately.
+- **The render returns a SUCCESSOR and reads through `ExtPorts.file_read`.** v2 specified
+  `! {FS}` and a bare `[ExitAction]`, which is what was first built. It type-checked,
+  passed its own tests, and `make driver_plus_no_ops` rejected it: the barrier derivation
+  classifies a slot by (rowed, unconditionally dispatched, returns explicit world state),
+  and a rowed unconditional slot returning no world state makes EVERY extension in the
+  tree non-zero-barrier at a stroke. The gate was right and the draft was wrong — an
+  FS-reading hook that cannot hand on its cursor is exactly WI-D1's shape. `! {FS}` stayed;
+  the outcome grew `next_state` and the read became routed.
+- **No `ExtWorld` threading of extension state** (M7): `token` is host-opaque. Extension-
+  owned cross-task state lives where it already lives — the dagr run file.
+- **Persistence across tasks** (M10) is solved by the manifest, which subsumes both options
+  v2 priced. See §5 Q4.
 
-Host contract (unchanged from v1, pinned the way `herdr-reap.test.ts` pins it now):
-synchronous, bounded (`REAP_LIMIT`, announced truncation), best-effort (never blocks
-exit), closes by explicit id, skips another session's / untagged / own pane, empty list
-is a silent no-op. **SIGKILL/power loss runs nothing** — startup sweep stays the backstop
-(DESIGN-f5 §2.3).
+Host contract, pinned by `src/tui/src/exit-actions.test.ts`: synchronous, bounded
+(`EXIT_ACTION_LIMIT = 32`, announced truncation), best-effort (never blocks exit), closes
+by explicit id only after the proof holds, one `pane list` per binary however many closes,
+an unknown manifest version or action kind executes nothing rather than guessing, empty
+list is a silent no-op. **SIGKILL/power loss runs nothing** — the startup sweep stays the
+backstop (DESIGN-f5 §2.3).
 
-### 3c. Explicitly NOT proposed
+### 3c. Explicitly NOT changed
 
-- No change to the token format, the opt-in default (D2), the report-by-default sweep
-  (D3), or the tag-at-spawn path. Mechanism moves; policy stays.
+- The token format, the opt-in default (D2), the report-by-default sweep (D3), and the
+  tag-at-spawn path are untouched. Mechanism moved; policy stayed.
 - No `Pending`-at-exit: suspending the run for an operator decision at exit turns a
-  runaway into a hung session (the guard's own measured reasoning).
+  runaway into a hung session.
 - No generic async-at-exit: the sync constraint is load-bearing, not an optimization.
+- One behaviour DID narrow, and it is recorded rather than smoothed over: the old reaper
+  closed *everything* carrying this session's token, so the MOT-137 dagr VIEW pane cleaned
+  up at exit for free. The intent renders from the run file's in-flight attempts, and the
+  view pane is not one, so it is no longer closed at exit — the orphan sweep still
+  recognises it. See the note above `ensure_dagr_pane`.
 
-## 4. Migration (corrected pricing — review M4/M5)
+## 4. What it cost (v2's §4 predictions, against what happened)
 
-v1 priced this as "~16 packages + ABI major" for the variant. The review corrects
-both halves (M4): the 16-package price was the pre-6.0 *record-slot* price
-(RESEARCH-extension-abi-evolution.md: adding a hook slot forced every extension's
-record literal to change); capability registration (6.0) was bought precisely to make
-slot additions zero-cost. A new `Capability` variant touches no extension that does
-not use it. The real cost is host-side and enumerable:
+v2 corrected v1's "~16 packages + ABI major" to "host-side and enumerable". That held: no
+extension that does not use the variant was touched. The actual list:
 
-1. `packages/motoko-ext-abi/types.ail`: `ExitIntent` positional variant + `ExitAction`
-   type. No `ExtCtx` fields (v1's record extension is dropped — that WAS the 16-package
-   shape, and it served nothing after B3).
-2. Registration/normalization (`registry_normalize.ail`): admit N>1 `ExitIntent`
-   (composable, ordered concatenation; decide duplicate-`label` handling —
-   `ToolProvider` rejects duplicate advertised names with position, review §3 nits).
-3. Coverage enumeration (M4/M5 — v1's §4.5 was backwards): the denominator is ALREADY
-   per-extension registered atoms (B8 deleted the slot half; `dst_profile_coverage.ail`
-   rule `atom-not-registered`; 017 ADR-001 Q1: no atom of a kind = zero barriers on
-   that kind by construction). What needs doing is the pin list, not a denominator
-   redesign: `CapabilityKind`, `all_capability_kinds()`, `capability_dispatch`,
-   `test_all_capability_kinds_is_eight_distinct` (becomes nine), `dst_profile.ail`
-   `eight()`, `registry_normalize.ail`, `ext/runtime.ail`, `tool_catalog.ail`,
-   `test/ext_fixture.ail`, `motoko_ext_conformance/`. `make profile_coverage`
-   (`Makefile`) diffs the ABI variant count and fails the moment the variant lands —
-   and its `awk '/^export type Capability/,/^[[:space:]]*$/'` producer is line-fragile
-   (a blank line inside the variant list truncates the count): keep the payload dense
-   or fix the producer first.
-4. Dispatch classification (M6 — new §5 question, see below): `capability_dispatch` is
-   `Unconditional | Gated`; an exit-only atom fits neither precedent (never under
-   SIGKILL, at most once, only on clean exit). Decide before the variant lands.
-5. Exit dispatcher in the TUI: per turn/task-end collect + cache each intent's
-   `[ExitAction]`; at exit execute cached lists in registry order, synchronously,
-   bounded, best-effort. `releaseHerdrReporter` becomes the first caller of generic
-   machinery, not herdr-specific logic.
-6. `motoko-ext-herdr`: declare the intent with captured bool; render from the
-   session-keyed file-backed set (or take review-M10 option (b): host reads the dagr
-   run file's `locator.pane` rows directly — no AILANG at exit, no ABI major for this
-   half). Collapse the token *format* to `owner_token_value`; mint + forwarding stay.
-7. Gates: `verify_herdr_*` + `herdr-reap.test.ts` semantics move to intent tests;
-   `check_core` + `verify_core` + `declared_vs_performed` green (positional payload is
-   row-checked, so no new `smuggle`-row exposure — the opposite of v1).
+1. `packages/motoko-ext-abi/types.ail`: `PaneCloseAction`/`PublishFileAction`/
+   `RunArgvAction`/`ExitAction`/`ExitIntentOutcome` + the positional variant; version 7.0.
+   No `ExtCtx` fields.
+2. `src/core/ext/registry_normalize.ail`: `ExitIntent` N>1 admitted (a concatenation kind
+   like `DescribeTools`), duplicate LABEL within one extension rejected with position —
+   `ToolProvider`'s duplicate-name rule, same reasoning. New rejection
+   `DuplicateExitLabel`; fixtures in `scripts/dst/registry_multiplicity_dst.ail`.
+3. Coverage enumeration: `CapabilityKind` gains `ExitIntentKind`, `all_capability_kinds()`
+   is nine, `capability_dispatch` says `Unconditional` (§5 Q1), the eight-distinct test
+   became nine, the seven-unconditional sweep became eight, and the fixtures' `eight()`
+   helper was renamed `one_per_kind()` — the name the coverage module's own prose already
+   used. `make profile_coverage`'s awk producer counts 9 and agrees with the AIL side.
+4. Dispatch classification: answered, see §5 Q1.
+5. `src/core/ext/runtime.ail`: `dispatch_exit_intents`, an unconditional fold in registry
+   then list order, threading the world atom to atom with the holder stamped and cleared
+   exactly as `dispatch_response_intercept` does.
+6. `src/core/ext/exit_manifest.ail` (new): renders, encodes, publishes write-tmp + `mv`
+   (`std/fs` has no rename at v0.33.0 — ailang#897). Called from the two turn-end seams in
+   `session.ail`, on both the success and the error arm.
+7. `src/tui/src/exit-actions.ts` (new) + `initExitActions()` registered in `index.ts`
+   BEFORE the herdr reporter, so lifecycle authority is handed back last.
+   `herdr-reap.ts` and `herdr-reap.test.ts` deleted; `herdr-owner-token.{ts,test.ts}`
+   became `session-identity.{ts,test.ts}` with the token half removed.
+8. `motoko-ext-herdr`: `HerdrConfig.reap_on_exit` read at registration; `exit_actions`
+   renders `ClosePane` per in-flight attempt in the session's own run file;
+   `dagr.open_delegate_panes` is the pure query, with its own inline tests.
+9. `tools/ext_ambient_inventory/hook_scope.py`: `"ExitIntent": (3, (2,))` — and one real
+   tool bug found by the first atom in the tree with a string literal in a DATA position.
+   `keep_interpolations` blanked a literal's quotes along with its text, which made
+   `ExitIntent("label", …)` indistinguishable from `Kind(, f)` and rejected the whole
+   registration as wrong-arity. The delimiters are now preserved, which is what the
+   function's name and docstring always claimed. herdr's pinned atom count re-pinned 2 → 3.
+10. `tools/profile_definition/check_no_op_profile.py`: `EXPECTED_CAPABILITY_KINDS = 9`.
+11. New gate `make verify_exit_intent` (8 cases), wired into `check_core`.
 
-## 5. Open questions for the ABI pass (revised — review M6/M7/M9/M10 + §3 corrections)
+Green after the change: `make check_core` (including the new gate), `make verify_core`,
+`make profile_coverage`, `make registry_multiplicity`, `make hook_guard`,
+`make profile_definition`, `npx tsc --noEmit` and the TUI jest suites.
+Still red, unchanged by this branch and pre-existing on its base commit:
+`make declared_vs_performed`, `make driver_plus_no_ops`, `make driver_plus_compose` and
+`make ext_hook_scope_selftest` all fail on `repetition_guard` being in `ailang.toml`'s
+resolved install set while no profile names it, plus a door-3 residue (`f`) in the
+selftest. Those belong to whoever added that extension; this branch re-pinned only what it
+moved and left that drift reporting itself.
 
-1. (M6, new — the best question the review produced.) `capability_dispatch` admits
-   `Unconditional | Gated`; excluding `Unconditional` rejects ("the run cannot
-   complete"). An exit-only atom dispatches at most once, only on clean exit, never
-   under SIGKILL. `Unconditional` makes a coverage lie; `Gated` legitimises exclusion
-   — which is probably right but undecided. Decide before the variant lands.
-2. (M9, narrowed.) The atomicity question is SETTLED (dagr §8.1: write-tmp+`mv` via
-   `Process`, `std/fs` cannot rename) — so `ExitAction` carries `PublishFile { tmp,
-   dest }`, never raw `WriteFile`. Only open question: can the two-step transaction
-   complete inside the exit budget? Settle-on-exit needs this answer first.
-3. (M7, re-asked.) Dropped the world-shape question — `ExtWorld` has no ports
-   (`ports` lives on `ExtCtx`), so "full world risks a fresh subprocess call" was
-   wrong. Real question: what effect row does the render closure carry, and what
-   makes it enforceable? Stated provisionally as `! {FS}`; `std/process` use in the
-   body is the risk, and the row is the mechanism.
-4. (M10, the build-vs-read decision.) File-backed session-keyed owned-pane set (new
-   persistence, same keying as the run file) vs host reads the dagr run file's
-   `locator.pane` rows directly (no AILANG at exit, no ABI major for this half,
-   satisfies every §6 criterion). Price (b) first.
-5. (Kept.) `HERDR_*` env forwarding as-is (`herdr-child-env.test.ts`) vs per-extension
-   config files (`MOTOKO_PROFILE_DIR/<ext>.json`, already the documented path)?
-   Out of scope, but the next hardcoded-knob complaint will be one of those.
-   Dropped v1 Q3 (`session_ms` placement): B3 killed the `ExtCtx` move, so there is
-   nothing to place.
+## 5. The four open questions, answered
 
-## 6. Acceptance (corrected — B3)
+1. **(M6, dispatch classification.)** `Unconditional`, and the shape settles it rather than
+   a judgement call. What is dispatched is the RENDER, and the render runs at every turn
+   end for every registered atom — an unconditional fold like the other seven. What is
+   conditional is the EXECUTION of the rendered actions, which happens in the TUI's exit
+   handler over published data, where no atom is dispatched and no extension code runs at
+   all. A profile excluding an `ExitIntent` atom would be claiming the render does not
+   happen, and it does. So `Unconditional` is the truth, not the convenient answer, and no
+   third `DispatchKind` variant was needed. `ToolProvider` remains the ONE gated kind.
+2. **(M9, can the two-step publish complete inside the exit budget?)** Yes, and the answer
+   is cheaper than the question assumed: the extension writes the tmp file while it is
+   alive, and the host's half of the transaction is `fs.renameSync` — one syscall, no
+   subprocess, no timeout to blow. `PublishFile` therefore ships as an action kind, tested,
+   with no consumer yet; dagr's settle-on-exit can take it whenever that item lands.
+3. **(M7, the render's row and what enforces it.)** `! {FS}` — stated in the ABI, and the
+   row IS the mechanism: a render that wanted to spawn a subprocess would not compile.
+   Corrected in one respect the question did not anticipate: `{FS}` alone was not enough,
+   because a rowed unconditional slot must also return explicit world state or it breaks
+   the barrier derivation. The read goes through `ExtPorts.file_read` and the outcome
+   carries `next_state`. See §3b.
+4. **(M10, build vs read.)** Neither, and both. The manifest generalises them: the
+   extension renders from the session-keyed dagr run file it already writes (option b's
+   "no new persistence"), and the persistence that crosses tasks is the manifest itself
+   (option a's "file-backed, session-keyed") — but it is generic host machinery rather than
+   herdr's own, so the TUI keeps zero herdr knowledge. `.dagr/run-<pane>-<session>.json` is
+   read by the extension in-process, never by the host. Neither option was priced further
+   because the third one satisfies §6 outright.
+5. **(Kept, still out of scope.)** `HERDR_*` env forwarding as-is
+   (`herdr-child-env.test.ts`) vs per-extension config files
+   (`MOTOKO_PROFILE_DIR/<ext>.json`). The next hardcoded-knob complaint will be one of
+   those. Note that `HERDR_REAP_ON_EXIT` moved from "read by the TUI" to "read by the
+   extension through the existing prefix forward", so this branch made the forwarding
+   MORE load-bearing rather than less.
 
-- `src/tui/src/herdr-reap.ts` herdr-specific logic deleted; generic exit dispatcher
-  in its place; no `mot-owner` string remains in `src/tui/` outside dispatcher tests.
-- Token *format* has one definition (AILANG `owner_token_value`; host twin-test stays
-  as the pin). Mint (`sessionStartMs`) + `MOTOKO_SESSION_MS` forwarding STAY — v1's
-  "mint logic deleted" criterion was unachievable (B3) and is withdrawn.
-- `make check_core`, `make verify_core`, `make declared_vs_performed`,
-  `make profile_coverage` green; new `verify_exit_intent` gate asserting: intent
-  fires on clean exit, closes only own tokened panes by id, announces the cap,
-  never blocks exit, SIGKILL case stays with the startup sweep.
-- Live check: delegate in flight + `HERDR_REAP_ON_EXIT=1` + quit → pane gone;
-  without the flag → pane survives; another session's panes never touched (P2-6).
+## 6. Acceptance — met, with one criterion superseded
+
+- ✅ `src/tui/src/herdr-reap.ts` deleted; a generic exit dispatcher in its place. No
+  `mot-owner` string remains in `src/tui/` outside `exit-actions.test.ts`, which uses it
+  as a fixture token exactly as an extension would supply one.
+- ✅ / superseded. v2 predicted "the format has one definition; the host twin-test stays as
+  the pin". The format has one definition and the twin test is GONE, because the host no
+  longer builds the token at all — a stronger outcome than the criterion asked for. The
+  mint (`sessionStartMs`) and `MOTOKO_SESSION_MS` forwarding stay, as v2 said they must.
+- ✅ `make check_core`, `make verify_core`, `make profile_coverage` green; new
+  `make verify_exit_intent` gate asserting: the intent is registered whether or not the
+  knob is on; with it off nothing renders and the manifest still discloses the intent;
+  with it on an in-flight pane becomes exactly one `close_pane` carrying this session's
+  token key and value; a settled task and the producer's own pane are never named; an
+  absent, unreadable or session-less run file produces nothing; and the published manifest
+  is the shape `exit-actions.ts` parses. `make declared_vs_performed` is red for a
+  pre-existing reason (§4).
+- ⏳ Live check not yet run: delegate in flight + `HERDR_REAP_ON_EXIT=1` + quit → pane
+  gone; without the flag → pane survives; another session's panes never touched (P2-6).
+  Both halves are pinned by tests on their own side of the boundary, but the two have not
+  been exercised together in a real herdr pane. That is the remaining work on this branch.

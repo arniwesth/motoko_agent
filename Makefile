@@ -2179,7 +2179,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_dagr_producer
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_dagr_producer verify_exit_intent
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2245,6 +2245,27 @@ verify_herdr_owner_tag:
 		scripts/verify_mot133_owner_tag.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_herdr_owner_tag: delegate ownership tagging or the orphan sweep regressed (MOT-133)" && exit 1)
+
+# ABI 7.0: the extension-declared exit intent, the AILANG half.
+#
+# WHAT THIS REPLACED. `src/tui/src/herdr-reap.test.ts` pinned an exit-time reap
+# that lived in the TUI and knew four things that were never the host's: the
+# `mot-owner` token key, its format, the `herdr pane list` shape, and the
+# HERDR_REAP_ON_EXIT opt-in. That file is gone with the reaper. Its semantics
+# split in two and BOTH halves are gated: the host half by
+# `src/tui/src/exit-actions.test.ts` (verify the proof, three action kinds,
+# bounded, best-effort), and the extension half here — what is declared, when it
+# renders, and what the rendered actions say.
+#
+# Scripted ports, no herdr and no filesystem, so it runs everywhere. The render
+# is driven through the registered `Capability` rather than by calling the
+# closure, so the `enabled` gate and the fold's ordering are exercised too.
+.PHONY: verify_exit_intent
+verify_exit_intent:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_exit_intent.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_exit_intent: the extension-declared exit intent regressed (ABI 7.0)" && exit 1)
 
 # MOT-137: under HERDR_DAGR_PANE=1 the extension opens the dagr view itself, on
 # the first delegation, AT MOST ONCE — and a refused open neither fails the

@@ -76,11 +76,17 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- the delegate's working directory.
     motoko_script: getEnvOr("HERDR_MOTOKO_SCRIPT", "./scripts/run-agent.sh"),
     -- THE RUN IDENTITY, AND IT IS NOT MINTED HERE. F-5's ownership token is
-    -- `<own pane>:<session-start-ms>`, and the TUI's exit-time reaper
-    -- (HERDR_REAP_ON_EXIT) has to build the SAME string on the other side of a
-    -- language boundary. One clock, minted once by the TUI in
-    -- `src/tui/src/herdr-owner-token.ts` and forwarded as MOTOKO_SESSION_MS by
+    -- `<own pane>:<session-start-ms>`, and the clock cannot come from this side:
+    -- the runtime is spawned per task, so a local clock would mint a new
+    -- identity for every task in one session and the panes tagged by the first
+    -- would be unrecognisable to the second. One clock, minted once by the TUI
+    -- in `src/tui/src/session-identity.ts` and forwarded as MOTOKO_SESSION_MS by
     -- `buildChildEnv`. A local clock here would look right and match nothing.
+    --
+    -- THE FORMAT, unlike the clock, is no longer duplicated: at ABI 7.0 the
+    -- exit intent carries the token into the manifest as data, so
+    -- `types.owner_token_value` is the only definition of it in either
+    -- language.
     --
     -- Unset is a real case, not a bug: `ailang run` invoked without the TUI.
     -- Empty disables tagging and the sweep, with a note on the delegation —
@@ -125,7 +131,19 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- margin rather than cutting it fine. One blocking call at this bound
     -- replaces roughly twenty busy-polls at M6's median.
     check_wait_ms: parse_int_or(getEnvOr("HERDR_CHECK_WAIT_MS", "20000"), 20000),
-    max_output_chars: parse_int_or(getEnvOr("HERDR_MAX_OUTPUT_CHARS", "16000"), 16000)
+    max_output_chars: parse_int_or(getEnvOr("HERDR_MAX_OUTPUT_CHARS", "16000"), 16000),
+    -- F-5 D2, MOVED HERE FROM THE TUI AT ABI 7.0. The exit-time reap used to be
+    -- host-side TypeScript that read this variable for itself
+    -- (`src/tui/src/herdr-reap.ts`, deleted); it is now an `ExitIntent` this
+    -- package declares, and the host only executes the actions it publishes. The knob
+    -- has to be resolved HERE because the render's row is `! {FS}` and cannot
+    -- reach `Env` — see `HerdrConfig.reap_on_exit`.
+    --
+    -- STILL OFF BY DEFAULT, and for the unchanged reason: reaping destroys
+    -- in-flight work on every clean exit. `agent_confined` sets it for itself,
+    -- because in a disposable container quota burn dominates and no operator
+    -- work lives in a pane.
+    reap_on_exit: getEnvOr("HERDR_REAP_ON_EXIT", "") == "1"
   };
 
   -- The whole gate. Empty tools is a silent, correct no-op; it is not an error

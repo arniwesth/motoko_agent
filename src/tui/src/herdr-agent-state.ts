@@ -30,7 +30,6 @@
  */
 
 import { spawn, spawnSync } from "child_process";
-import { reapOwnedPanes } from "./herdr-reap.js";
 
 /**
  * Motoko's own run states, restated here rather than imported from ui.ts.
@@ -332,18 +331,13 @@ export function releaseHerdrReporter(): void {
   if (released) return;
   if (!active && !spawnHook) return;
   released = true;
-  // REAP BEFORE RELEASING, and only under HERDR_REAP_ON_EXIT=1 (F-5 D2). Delegate panes outlive
-  // this process by design — nothing kills them when their caller goes away — so the opt-in rung
-  // closes the ones carrying THIS session's ownership token, by explicit pane id, never by name.
-  // It runs first because releasing our own agent row is the last thing that should happen; both
-  // are bounded and best-effort, and neither may keep Motoko from exiting. See `herdr-reap.ts`.
-  if (active) {
-    try {
-      reapOwnedPanes(process.env, active.bin, active.paneId);
-    } catch {
-      // A surviving delegate pane is a far smaller problem than a Motoko that cannot exit.
-    }
-  }
+  // NO REAPING HERE ANY MORE (ABI 7.0). Through 6.0 this function closed the session's delegate
+  // panes itself, which meant this file knew the `mot-owner` token key, its format, the
+  // `herdr pane list` JSON shape and the HERDR_REAP_ON_EXIT opt-in — four rules belonging to
+  // `packages/motoko-ext-herdr` living in the host because the ABI had no session-end slot. It has
+  // one now: the extension declares an `ExitIntent`, the runtime publishes the actions at every
+  // turn end, and `exit-actions.ts` performs them from its own handler, registered BEFORE this one
+  // so that giving lifecycle authority back stays the last thing that happens.
   const paneId = active?.paneId ?? "test-pane";
   const args = buildReleaseArgs(paneId, ++seq);
   if (spawnHook) {

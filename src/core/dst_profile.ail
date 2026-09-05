@@ -1722,14 +1722,14 @@ pure func test_forbidden_capability_needs_an_instrument() -> bool
 -- The composition defect this module exists to avoid, asserted directly: the
 -- excluded-hook rule is READ from A6, so `on_describe_tools` — D5's prose
 -- undercount — is rejected here without this module restating anything.
--- B8 test helpers: atom ids. `eight()` is the one-atom-per-kind registration
+-- B8 test helpers: atom ids. `one_per_kind()` is the one-atom-per-kind registration
 -- every extension in the tree has at B8; `all_but(ids)` is it minus `ids`.
 pure func ai(kind: string, idx: int) -> AtomIds { { kind: kind, index: idx } }
 pure func kinds_at_zero(ks: [CapabilityKind]) -> [AtomIds] {
   match ks { [] => [], k :: rest => ai(Cov.capability_kind_id(k), 0) :: kinds_at_zero(rest) }
 }
-pure func eight() -> [AtomIds] { kinds_at_zero(Cov.all_capability_kinds()) }
-pure func all_but(ids: [string]) -> [AtomIds] { drop_ids(eight(), ids) }
+pure func one_per_kind() -> [AtomIds] { kinds_at_zero(Cov.all_capability_kinds()) }
+pure func all_but(ids: [string]) -> [AtomIds] { drop_ids(one_per_kind(), ids) }
 pure func drop_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
   match xs {
     [] => [],
@@ -1742,7 +1742,7 @@ pure func test_describe_tools_exclusion_is_inherited_not_restated() -> bool
   {
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "x", package_id: "p", version: "1", source_path: "packages/x/x.ail" }],
-      disclosures: [{ extension_id: "x", atoms: eight(),
+      disclosures: [{ extension_id: "x", atoms: one_per_kind(),
                       covered: all_but(["describe_tools[0]"]),
                       excluded: [ai("describe_tools", 0)] }] };
     has_rule(validate_coverage(d), "unconditional-hook-excluded")
@@ -1757,7 +1757,7 @@ pure func test_partial_disclosure_is_rejected_through_the_profile_gate() -> bool
   {
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "p", package_id: "p", version: "1", source_path: "packages/p/p.ail" }],
-      disclosures: [{ extension_id: "p", atoms: eight(),
+      disclosures: [{ extension_id: "p", atoms: one_per_kind(),
                       covered: ai("describe_tools", 0) :: all_but(["tool_provider[0]", "solver_judge[0]"]),
                       excluded: [ai("tool_provider", 0)] }] };
     let rs = validate_coverage(d);
@@ -1826,7 +1826,7 @@ pure func test_classifier_2_extension_installed_is_rejected() -> bool
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "compaction_ai", package_id: "p", version: "1",
                              source_path: "packages/motoko-ext-compaction-ai/compaction_ai.ail" }],
-      disclosures: [{ extension_id: "compaction_ai", atoms: eight(), covered: eight(), excluded: [] }] };
+      disclosures: [{ extension_id: "compaction_ai", atoms: one_per_kind(), covered: one_per_kind(), excluded: [] }] };
     let calls: [Classifier2Call] =
       [{ extension_id: "compaction_ai", field: "ai_step",
          site: "packages/motoko-ext-compaction-ai/compaction_ai.ail:106" }];
@@ -2238,7 +2238,7 @@ pure func excluding_profile() -> ProfileDefinition {
   { fixture_base() |
     installed_packages: [{ extension_id: "compose", package_id: "sunholo/motoko_ext_compose",
                            version: "0.2.4", source_path: "packages/motoko-ext-compose/compose.ail" }],
-    disclosures: [{ extension_id: "compose", atoms: eight(),
+    disclosures: [{ extension_id: "compose", atoms: one_per_kind(),
                     covered: all_but(["tool_provider[0]"]),
                     excluded: [ai("tool_provider", 0)] }] }
 }
