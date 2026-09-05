@@ -31,6 +31,17 @@
 --      nothing"
 --   7. the published manifest is the shape `exit-actions.ts` parses: the
 --      version it refuses to guess past, and one intent entry per atom
+--   8. THE REGRESSION THAT SHIPPED ONCE: a render handed ports that cannot
+--      reach the filesystem produces nothing, silently. `noop_ext_ports()`
+--      answers `present: false` to every path, so an exit ctx built with it
+--      renders an empty action list from a run file that is really there — and
+--      every other case in this gate still passes, because they inject a
+--      scripted `file_read`. Found live on 2026-09-05 (a real delegate on a
+--      real pane, a correct run file on disk, `"actions": []` in the
+--      manifest); the fix is `session.publish_turn_exit_manifest` passing
+--      `ext_ports_of(provider.ports, ...)`. This case cannot catch that wiring
+--      from here — it pins the BEHAVIOUR so the failure mode is named where
+--      someone debugging an empty manifest will look.
 --
 -- The render is driven through the registered `Capability` rather than by
 -- calling `exit_actions` directly, so what is asserted is what the host would
@@ -272,6 +283,18 @@ func case_manifest_shape_is_what_the_host_parses() -> bool ! {IO, Process, FS, C
 -- rename on one side alone is silent in the worst way: the runtime publishes
 -- nowhere the host looks, and the result is indistinguishable from an install
 -- where no extension declared an intent.
+-- See item 8 in the header. The assertion is deliberately "produces nothing":
+-- that IS what a no-op port does, and the point is that it does so without a
+-- word, from a run file that would otherwise yield a close.
+func case_noop_ports_render_nothing_silently() -> bool ! {IO, Process, FS, Clock} {
+  let caps = hooks(true, "200");
+  let with_read = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(ports_reading(run_file_present))).intents);
+  let with_noop = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(noop_ext_ports())).intents);
+  report("a render given ports that cannot read the FS yields nothing, silently",
+         List.length(with_read) == 1 && List.length(with_noop) == 0,
+         "reading ports gave ${show(List.length(with_read))} action(s) and no-op ports gave ${show(List.length(with_noop))}; if these AGREE the fixture is not measuring the read at all")
+}
+
 func case_manifest_var_is_the_agreed_name() -> bool ! {IO} {
   report("the manifest env var is MOTOKO_EXIT_MANIFEST",
          manifest_path_var() == "MOTOKO_EXIT_MANIFEST",
@@ -286,9 +309,10 @@ export func main() -> () ! {IO, Process, FS, Clock, Env} {
   let r5 = case_no_run_file_is_a_silent_no_op();
   let r6 = case_no_session_clock_produces_nothing();
   let r7 = case_manifest_shape_is_what_the_host_parses();
-  let r8 = case_manifest_var_is_the_agreed_name();
-  let all_ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8;
-  if all_ok then println("verify_exit_intent: 8 cases OK")
+  let r8 = case_noop_ports_render_nothing_silently();
+  let r9 = case_manifest_var_is_the_agreed_name();
+  let all_ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9;
+  if all_ok then println("verify_exit_intent: 9 cases OK")
   else {
     let _ = println("verify_exit_intent: FAILED");
     exit(1)

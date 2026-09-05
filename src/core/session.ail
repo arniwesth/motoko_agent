@@ -45,11 +45,11 @@ import src/core/types (Msg)
 import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir, empty_ext_world) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
 import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, effective_input_limit)
 import src/core/context_usage (resolve_context_limit)
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry)
 import src/core/ext/exit_manifest (publish_exit_manifest)
 import src/core/ext/runtime (
   dispatch_response_intercept,
@@ -3287,7 +3287,7 @@ func conversation_loop_v2_with_policy(
           mode: "v2"
         }));
         let traced = run_v2_from_messages_traced_with_policy_and_counts(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts);
-        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget);
+        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider);
         let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
         match traced.result {
           Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
@@ -3321,11 +3321,21 @@ func conversation_loop_v2_with_policy(
 -- exactly the turn whose delegates are most likely to have been abandoned, so
 -- publishing only on `Ok` would drop the interesting case.
 --
--- THE CTX IS DELIBERATELY MINIMAL. `ExitIntent`'s row is `! {FS}`: a render
--- cannot reach a port, cannot call a subprocess and cannot ask the model
--- anything, so handing it live ports would advertise a reach the row denies.
+-- THE CTX CARRIES LIVE PORTS, and the first draft did not — which is the whole
+-- reason this comment is long. `ExitIntent`'s row is `! {FS}` and its render
+-- reads through `ExtPorts.file_read`, so `noop_ext_ports()` looked defensible
+-- ("a render cannot reach a port it should not need") and was wrong in the one
+-- way nothing caught: the no-op `file_read` answers `present: false` to every
+-- path, so every render read an absent run file and published an empty action
+-- list. Both sides were green — the gate injects a scripted `file_read`, and
+-- the host dispatcher was handed hand-written manifests — and the seam between
+-- them was dead. Found by running it live: a real delegate on a real pane,
+-- a correct run file on disk, and `"actions": []` in the manifest.
+--
 -- `mode` says "exit" rather than "v2" so that anything reading the ctx knows
--- which boundary it is standing on.
+-- which boundary it is standing on, and the world is the provider's own cursor
+-- rather than a fresh one, so the render's read descends from the run's state
+-- instead of from nothing.
 func publish_turn_exit_manifest(
   rt: ExtRuntime,
   task: string,
@@ -3333,8 +3343,9 @@ func publish_turn_exit_manifest(
   cwd: string,
   env_url: string,
   hybrid_tools: bool,
-  budget: BudgetPlan
-) -> () ! {Env, FS, IO, Process} {
+  budget: BudgetPlan,
+  provider: PortedProvider
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let ctx: ExtCtx = {
     task: task,
     step: 0,
@@ -3349,10 +3360,10 @@ func publish_turn_exit_manifest(
     history_slice: [],
     state_key: "core:ext:exit",
     context_limit: 0,
-    ports: noop_ext_ports(),
+    ports: ext_ports_of(provider.ports, provider.world, env_url),
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(),
-    world: empty_ext_world()
+    world: world_to_token(provider.world)
   };
   -- The result says whether the live file was replaced. Discarded on purpose:
   -- a manifest that could not be published leaves the previous one standing,
@@ -3428,7 +3439,7 @@ export func run_v2_with_conversation(
     conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts())
   else {
   let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
-  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget);
+  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider);
   let initial_counts = runtime_status_counts(initial_traced.trace);
   match initial_traced.result {
     Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts),

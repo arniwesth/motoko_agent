@@ -184,7 +184,7 @@ extension that does not use the variant was touched. The actual list:
    registration as wrong-arity. The delimiters are now preserved, which is what the
    function's name and docstring always claimed. herdr's pinned atom count re-pinned 2 → 3.
 10. `tools/profile_definition/check_no_op_profile.py`: `EXPECTED_CAPABILITY_KINDS = 9`.
-11. New gate `make verify_exit_intent` (8 cases), wired into `check_core`.
+11. New gate `make verify_exit_intent` (9 cases), wired into `check_core`.
 
 Green after the change: `make check_core` (including the new gate), `make verify_core`,
 `make profile_coverage`, `make registry_multiplicity`, `make hook_guard`,
@@ -246,9 +246,46 @@ moved and left that drift reporting itself.
   with it on an in-flight pane becomes exactly one `close_pane` carrying this session's
   token key and value; a settled task and the producer's own pane are never named; an
   absent, unreadable or session-less run file produces nothing; and the published manifest
-  is the shape `exit-actions.ts` parses. `make declared_vs_performed` is red for a
-  pre-existing reason (§4).
-- ⏳ Live check not yet run: delegate in flight + `HERDR_REAP_ON_EXIT=1` + quit → pane
-  gone; without the flag → pane survives; another session's panes never touched (P2-6).
-  Both halves are pinned by tests on their own side of the boundary, but the two have not
-  been exercised together in a real herdr pane. That is the remaining work on this branch.
+  is the shape `exit-actions.ts` parses; and (case 8) that a render handed ports which
+  cannot read the filesystem yields nothing while the reading-ports case yields one — the
+  regression §7 describes. `make declared_vs_performed` is red for a pre-existing reason
+  (§4).
+- ✅ Live check RUN, 2026-09-05, in herdr workspace `w2` against a real server, and it
+  earned its place — see §7. All three legs pass:
+  - reap on: a real `claude` delegate on `w2:pD`, tagged `mot-owner=w2:p1:1788596332118`,
+    in flight in the run file; Motoko exits; the pane is gone and every other pane in both
+    workspaces survives.
+  - reap off: a real delegate on `w2:pE`, same tag, same in-flight record; the manifest
+    discloses `enabled: false` with an empty action list and the pane SURVIVES the exit.
+  - P2-6: a manifest naming four panes with this session's token was executed against real
+    panes carrying, respectively, that token, a FOREIGN token (`w9:p9:…`), no token at all,
+    and — deliberately — the other operator Motoko's live pane `w1:p1`. Exactly one closed;
+    the report said `unproven: 3`. `publish_file` renamed its tmp and `run_argv` ran.
+
+## 7. What the live check found, and why the unit gates could not
+
+The end-to-end run failed on its first attempt, and the way it failed is the point.
+
+Both halves were green. `make verify_exit_intent` passed because it injects a scripted
+`file_read` into the ctx it builds. `exit-actions.test.ts` passed because it is handed
+manifests written by hand. Neither could see the seam between them, and the seam was dead:
+`session.publish_turn_exit_manifest` built its exit ctx with `noop_ext_ports()`.
+
+The reasoning that put it there is in the commit that removed it, and it was not lazy —
+it was a defensible-sounding inference from the row. `ExitIntent` carries `! {FS}`, the
+render "cannot reach a port it should not need", so handing it live ports looked like
+advertising a reach the row denies. Then §5 Q3's correction landed: the render moved from
+ambient `std/fs` to routed `ExtPorts.file_read`, and nothing went back to revisit the ctx.
+The no-op port answers `present: false` to every path, so every render read an absent run
+file and published `"actions": []` — from a run file that was on disk, correct, and
+naming an in-flight delegate on `w2:pB`.
+
+Silent in the worst direction: an empty action list is exactly what a clean session with
+no delegates looks like. Nothing in either test suite, and nothing in `check_core`, could
+tell those apart.
+
+`verify_exit_intent` case 8 now pins the BEHAVIOUR (a render given ports that cannot read
+the FS yields nothing, and the reading-ports case must disagree with it, or the fixture is
+not measuring the read at all). It cannot catch the wiring from inside the extension gate;
+what catches the wiring is running it. Recorded here so the next person to build an
+ABI seam prices the live check in rather than treating it as confirmation.
