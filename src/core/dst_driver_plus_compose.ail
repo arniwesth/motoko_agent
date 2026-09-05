@@ -217,7 +217,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
 -- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
 -- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
-export pure func compose_profile_version() -> string { "6" }
+export pure func compose_profile_version() -> string { "7" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -365,8 +365,18 @@ pure func package_of(id: string) -> InstalledPackage {
 -- Compactor or a SolverJudge, so two of these four ids name atoms compose does
 -- not hold — the list stays the ABI FACT (the guard compares its kinds against
 -- types.ail) and `criterion_2_slot_ids` intersects it with the registration.
+-- A FACT ABOUT THE ABI, not a decision: the atoms whose `Capability` payload
+-- declares a non-empty effect row. `exit_intent[0]` joined at 7.0 (`! {FS}`),
+-- and `check_fixtures.py` re-derives this list from types.ail on every run and
+-- fails when the two readings disagree -- which is how it was caught here
+-- rather than silently narrowing what this profile claims to cover.
+--
+-- Listing it does NOT widen coverage: `criterion_2_slot_ids` intersects this
+-- with the atoms compose actually REGISTERS, and compose registers no
+-- `ExitIntent`, so the covered set is unchanged.
 export pure func rowed_slot_ids() -> [string] {
-  ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]"]
+  ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]",
+   "exit_intent[0]"]
 }
 
 -- The one slot this profile excludes. Separate from `rowed_slot_ids` because it
@@ -568,11 +578,18 @@ pure func omit_each(ids: [string], reason: string) -> [OmittedExtension] {
 
 pure func not_installed() -> [OmittedExtension] {
   [{ extension_id: "compaction_ai",
-     reason: "NOT INSTALLED, and it is the sharpest of the sixteen. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. WHAT WI-D27 ADDS: this profile now has a producer that can speak about behaviour rather than rows, so compaction_ai is the extension most likely to be installable in the NEXT profile of this kind — a graded run that dispatches its on_pre_step through ExtPorts.ai_step against a scripted provider would produce exactly the evidence `discovery` reads. That run is not in this item and the omission stands until it exists; naming it here is what stops the possibility from being rediscovered as a surprise." }]
+     reason: "NOT INSTALLED, and it is the sharpest of the seventeen. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. WHAT WI-D27 ADDS: this profile now has a producer that can speak about behaviour rather than rows, so compaction_ai is the extension most likely to be installable in the NEXT profile of this kind — a graded run that dispatches its on_pre_step through ExtPorts.ai_step against a scripted provider would produce exactly the evidence `discovery` reads. That run is not in this item and the omission stands until it exists; naming it here is what stops the possibility from being rediscovered as a surprise." }]
     ++ omit_each(["compaction_structural", "decision_framework", "empty_stop_guard",
                   "progress_contract_guard"], declined_reason())
+    -- `repetition_guard` joined ailang.toml's [extensions] packages and this profile
+    -- named it in neither list -- WI-D7's "decision INHERITED rather than taken". It
+    -- omits on the measured basis the others here share: `make ext_ambient_inventory`
+    -- reports it AMBIENT (1 ambient source, 0 ExtPorts field calls), so criterion 2's
+    -- first clause fails on evidence, and its `SolverJudge` binding declares
+    -- `! {Process}` under unconditional dispatch, so criterion 1 fails on the row.
     ++ omit_each(["a2a", "agentcli", "ailang_docs", "context_mode", "exa_search", "herdr",
-                  "mcp", "microrag", "omnigraph", "scratchpad", "test_dummy"], barrier_reason())
+                  "mcp", "microrag", "omnigraph", "repetition_guard", "scratchpad",
+                  "test_dummy"], barrier_reason())
 }
 
 -- ---------------------------------------------------------------------------
@@ -918,7 +935,7 @@ pure func test_installed_and_omitted_are_disjoint() -> bool
   {
     let d = driver_plus_compose();
     disjoint(omitted_ids(d.omitted_extensions), installed_extension_ids())
-      && List.length(d.omitted_extensions) == 16
+      && List.length(d.omitted_extensions) == 17
   }
 
 pure func omitted_ids(os: [OmittedExtension]) -> [string] {
@@ -929,13 +946,20 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
   match xs { [] => true, x :: rest => if contains_str(ys, x) then false else disjoint(rest, ys) }
 }
 
--- The covered rowed slots are the ABI's rowed set minus this profile's one
--- decision, computed rather than restated. A second literal list would let the
--- decision and the derivation drift.
+-- The covered rowed slots are the ABI's rowed set, restricted to what compose
+-- REGISTERS, minus this profile's one decision — computed rather than restated,
+-- because a second literal list would let the decision and the derivation drift.
+--
+-- FIVE rowed atoms at ABI 7.0, four before it: `exit_intent[0]` declares
+-- `! {FS}`. The covered count is UNCHANGED at one, and that is the property
+-- worth asserting rather than the raw total — compose registers no `ExitIntent`,
+-- so the intersection drops it and the profile's coverage claim is exactly what
+-- it was. A test pinned to the total alone would have gone red on an ABI
+-- addition that changes nothing about this profile.
 pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
   tests [((), true)]
   {
-    List.length(rowed_slot_ids()) == 4
+    List.length(rowed_slot_ids()) == 5
       && List.length(excluded_slot_ids()) == 1
       && List.length(criterion_2_slot_ids()) == 1
       && not contains_str(criterion_2_slot_ids(), "tool_provider[0]")

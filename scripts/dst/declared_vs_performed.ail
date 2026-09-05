@@ -137,6 +137,7 @@ import pkg/sunholo/motoko_ext_scratchpad/register as Scratchpad (register_with_c
 import pkg/sunholo/motoko_ext_compaction_structural/register as CompactionStructural (register_with_config)
 import pkg/sunholo/motoko_ext_empty_stop_guard/register as EmptyStopGuard (register_with_config)
 import pkg/sunholo/motoko_ext_progress_contract_guard/register as ProgressContractGuard (register_with_config)
+import pkg/sunholo/motoko_ext_repetition_guard/register as RepetitionGuard (register_with_config)
 import pkg/sunholo/motoko_ext_agentcli/register as Agentcli (register_with_config)
 import pkg/sunholo/motoko_ext_herdr/register as Herdr (register_with_config)
 
@@ -1031,6 +1032,28 @@ export func budget_agentcli() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Ran
 export func reg_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let h = Herdr.register_with_config(0);
   reached("reg_herdr", show(List.length(h)))
+}
+
+-- repetition_guard — REGISTER arm. Added when the extension joined ailang.toml's
+-- [extensions] packages: the host could install it and this probe had no arm for
+-- it, so it was a subject the gate skipped in silence — the exact drift the
+-- member-for-member check above exists to catch.
+export func reg_repetition_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = RepetitionGuard.register_with_config(0);
+  reached("reg_repetition_guard", show(List.length(h)))
+}
+
+-- repetition_guard — DISPATCH arm. It binds ToolPolicy and SolverJudge and NO
+-- BudgetShaper, so the 4242 comes from the witness alone — which is the same
+-- shape `budget_herdr` and `budget_agentcli` already use, and it still
+-- discriminates: the witness is registered AFTER the subject in one ordered
+-- unconditional fold, so the value is unobtainable unless that fold ran over
+-- the subject's entry first.
+export func budget_repetition_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = RepetitionGuard.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", caps: h }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_repetition_guard", show(out.total))
 }
 
 -- herdr — DISPATCH arm. The witness hook is registered AFTER the subject in
