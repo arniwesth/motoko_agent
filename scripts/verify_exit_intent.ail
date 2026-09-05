@@ -63,7 +63,7 @@ import std/fs (writeFileResult, mkdirAll, removeFileResult)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx, ExtWorld, ExtPorts, ExtFileRead, BudgetPlan, empty_ext_world,
-  Capability, ExitIntent, ExitAction, ClosePane, PublishFile, RunArgv,
+  Capability, ExitIntent, ExitAction, ClosePane,
   ExtEntry, ExtRegistry, ExtRuntime, VerificationConfig
 )
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
@@ -168,9 +168,7 @@ func enabled_flags(intents: [RenderedIntent]) -> [bool] {
 -- case can assert on the whole action rather than on one field of it.
 func action_text(a: ExitAction) -> string {
   match a {
-    ClosePane(c) => "close:${c.pane}|${c.token_key}|${c.token_value}|${c.bin}",
-    PublishFile(f) => "publish:${f.tmp}->${f.dest}",
-    RunArgv(r) => "argv:${r.bin}"
+    ClosePane(c) => "close:${c.pane}|${c.token_key}|${c.token_value}"
   }
 }
 
@@ -235,7 +233,7 @@ func case_off_renders_nothing_but_discloses() -> bool ! {IO, Process, FS, Clock}
 
 func case_on_closes_the_in_flight_pane_with_the_token() -> bool ! {IO, Process, FS, Clock} {
   let acts = actions_of(render(true, "200", run_file_present));
-  let want = "close:w1:pA|mot-owner|w1:p1:200|herdr";
+  let want = "close:w1:pA|mot-owner|w1:p1:200";
   report("with the knob on: one close, by pane id, carrying this session's token",
          List.length(acts) == 1 && first_text(acts) == want,
          "got ${show(List.length(acts))} action(s), first `${first_text(acts)}`, wanted `${want}`")
@@ -244,8 +242,8 @@ func case_on_closes_the_in_flight_pane_with_the_token() -> bool ! {IO, Process, 
 func case_settled_and_own_pane_are_never_named() -> bool ! {IO, Process, FS, Clock} {
   let acts = actions_of(render(true, "200", run_file_present));
   let texts = action_texts(acts);
-  let no_settled = has_text(acts, "close:w1:pB|mot-owner|w1:p1:200|herdr") == false;
-  let no_own = has_text(acts, "close:w1:p1|mot-owner|w1:p1:200|herdr") == false;
+  let no_settled = has_text(acts, "close:w1:pB|mot-owner|w1:p1:200") == false;
+  let no_own = has_text(acts, "close:w1:p1|mot-owner|w1:p1:200") == false;
   report("a settled task holds no pane, and the producer's own pane is never closed",
          no_settled && no_own,
          "actions were ${show(List.length(texts))}: a `done` attempt's pane belongs to nobody, and closing w1:p1 would be Motoko closing itself")
@@ -274,6 +272,8 @@ func case_manifest_shape_is_what_the_host_parses() -> bool ! {IO, Process, FS, C
   let ok = contains(doc, "\"version\":\"${manifest_version()}\"")
         && contains(doc, "\"label\":\"delegate-panes\"")
         && contains(doc, "\"kind\":\"close_pane\"")
+        -- REVIEW FINDING 1: no executable is carried anywhere in the document.
+        && contains(doc, "\"bin\"") == false
         && contains(doc, "\"pane\":\"w1:pA\"")
         && contains(doc, "\"token_key\":\"mot-owner\"")
         && contains(doc, "\"token_value\":\"w1:p1:200\"")
@@ -331,7 +331,7 @@ func case_render_reads_through_the_port_and_only_the_port() -> bool ! {IO, Proce
   let caps = hooks(true, "200");
   let routed = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(ports_reading(run_file_present))).intents);
   let noop = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(noop_ext_ports())).intents);
-  let from_port = first_text(routed) == "close:w1:pA|mot-owner|w1:p1:200|herdr";
+  let from_port = first_text(routed) == "close:w1:pA|mot-owner|w1:p1:200";
   let ok = planted && List.length(routed) == 1 && from_port && List.length(noop) == 0;
   report("the render reads through the port and only the port, and a blind port renders nothing",
          ok,

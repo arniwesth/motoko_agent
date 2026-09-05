@@ -1,5 +1,6 @@
 import { spawnSync } from "child_process";
 import * as fs from "fs";
+import { randomBytes } from "crypto";
 import * as path from "path";
 import { sessionStartMs } from "./session-identity.js";
 
@@ -47,27 +48,45 @@ export const EXIT_ACTION_LIMIT = 32;
 /** Milliseconds any single subprocess at exit may take. Synchronous by necessity — see `run`. */
 const CALL_TIMEOUT_MS = 1000;
 
+/**
+ * Milliseconds the WHOLE exit dispatch may take, across every action.
+ *
+ * A per-call timeout is not a deadline, and the arithmetic is the argument: 32 actions naming 32
+ * distinct binaries is 32 enumerations plus 32 closes, so a per-call bound of 1s permitted a
+ * 64-second exit while the prose called it "bounded". This is checked between actions, so the true
+ * worst case is this budget plus one in-flight call.
+ */
+export const EXIT_BUDGET_MS = 3000;
+
+/**
+ * Largest manifest this will read, in bytes. A file that grew past this is not parsed at all —
+ * the reader is a fixed-size JSON document produced by a fold over registered atoms, so anything
+ * larger is a sign the file is not what it claims and nothing good comes of parsing it at exit.
+ */
+export const MAX_MANIFEST_BYTES = 1 << 20;
+
 export interface ClosePaneAction {
   kind: "close_pane";
-  bin: string;
   pane: string;
   tokenKey: string;
   tokenValue: string;
 }
 
-export interface PublishFileAction {
-  kind: "publish_file";
-  tmp: string;
-  dest: string;
-}
-
-export interface RunArgvAction {
-  kind: "run_argv";
-  bin: string;
-  args: string[];
-}
-
-export type ExitAction = ClosePaneAction | PublishFileAction | RunArgvAction;
+/**
+ * The only verb a manifest may request.
+ *
+ * WHAT THIS TYPE USED TO HOLD, and why it does not any more. Through the first draft it also
+ * carried `run_argv` ({bin, args}) and `publish_file` ({tmp, dest}), and `close_pane` named its own
+ * `bin`. All three were arbitrary-execution or arbitrary-write surfaces reachable by anything that
+ * can write one file under the workdir — another extension with FS access, an agent file tool, a
+ * delegate sharing the checkout — performed at exit with this process's privileges, outside the
+ * runtime's FS sandbox and outside its filtered child environment. "No shell" bought nothing when
+ * `bin` could be `/bin/sh` and `args` could be `["-c", …]`.
+ *
+ * The executable is now resolved HERE, from this process's own environment, and is never read from
+ * the file. A manifest writer can ask for a tagged pane to be closed and can ask for nothing else.
+ */
+export type ExitAction = ClosePaneAction;
 
 /**
  * Where the manifest for THIS session lives.
@@ -77,8 +96,36 @@ export type ExitAction = ClosePaneAction | PublishFileAction | RunArgvAction;
  * is the MOT-118 shape this project has already paid for twice. Keyed by the session clock so two
  * Motokos in one checkout cannot overwrite each other's manifest.
  */
-export function exitManifestPath(workdir: string, sessionMs: number | string = sessionStartMs()): string {
-  return path.resolve(workdir, ".motoko", "exit", `manifest-${sessionMs}.json`);
+export function exitManifestPath(
+  workdir: string,
+  sessionMs: number | string = sessionStartMs(),
+  nonce: string = sessionNonce(),
+): string {
+  return path.resolve(workdir, ".motoko", "exit", `manifest-${sessionMs}-${nonce}.json`);
+}
+
+/**
+ * A random per-process suffix for the manifest name.
+ *
+ * A MILLISECOND IS NOT AN IDENTITY. Keyed on the clock alone, two Motokos started in the same
+ * millisecond in one checkout share both the manifest and its `.tmp` — so one can publish over the
+ * other, one can execute the other's actions, and the write-tmp-then-rename transaction stops
+ * being atomic because two writers share the temporary inode. Concurrent sessions in one checkout
+ * are an ordinary way to use herdr, which is the whole reason the run file is session-keyed too.
+ *
+ * This is uniqueness, not authorization: it stops an accident, not an attacker. What stops an
+ * attacker is that a close carries a proof the pane must still present.
+ */
+let nonce: string | null = null;
+
+export function sessionNonce(): string {
+  if (nonce === null) nonce = randomBytes(8).toString("hex");
+  return nonce;
+}
+
+/** Test seam: pins (or with null, releases) the nonce. */
+export function __setSessionNonceForTests(value: string | null): void {
+  nonce = value;
 }
 
 /**
@@ -130,39 +177,27 @@ export function parseExitManifest(json: string): ExitAction[] {
   return actions;
 }
 
-function str(v: unknown): string {
-  return typeof v === "string" ? v : "";
+/** A non-empty string, or null. Never "" — see `parseAction` for why that distinction is load-bearing. */
+function reqStr(v: unknown): string | null {
+  return typeof v === "string" && v !== "" ? v : null;
 }
 
+/**
+ * One action, or null.
+ *
+ * EVERY FIELD IS REQUIRED, and that is a fix rather than a preference. The first draft read a
+ * missing `token_key` as "" and then treated "" as "close any pane that exists" — so the escape
+ * hatch documented as deliberate was also what malformed input DECAYED to. A close request that
+ * lost its proof in transit must be refused, not promoted to an unconditional close. There is no
+ * unproven-close mode now; if one is ever wanted it needs its own authorization.
+ */
 function parseAction(raw: Record<string, unknown>): ExitAction | null {
-  switch (raw?.kind) {
-    case "close_pane": {
-      const bin = str(raw.bin);
-      const pane = str(raw.pane);
-      if (!bin || !pane) return null;
-      return {
-        kind: "close_pane",
-        bin,
-        pane,
-        tokenKey: str(raw.token_key),
-        tokenValue: str(raw.token_value),
-      };
-    }
-    case "publish_file": {
-      const tmp = str(raw.tmp);
-      const dest = str(raw.dest);
-      if (!tmp || !dest) return null;
-      return { kind: "publish_file", tmp, dest };
-    }
-    case "run_argv": {
-      const bin = str(raw.bin);
-      if (!bin) return null;
-      const args = Array.isArray(raw.args) ? raw.args.filter((a): a is string => typeof a === "string") : [];
-      return { kind: "run_argv", bin, args };
-    }
-    default:
-      return null;
-  }
+  if (raw?.kind !== "close_pane") return null;
+  const pane = reqStr(raw.pane);
+  const tokenKey = reqStr(raw.token_key);
+  const tokenValue = reqStr(raw.token_value);
+  if (!pane || !tokenKey || !tokenValue) return null;
+  return { kind: "close_pane", pane, tokenKey, tokenValue };
 }
 
 /** Test seam: replaces every subprocess. Returns stdout. */
@@ -172,20 +207,22 @@ export function __setRunnerForTests(fn: ((bin: string, args: string[]) => string
   runner = fn;
 }
 
-/** Test seam: replaces the rename `publish_file` performs. */
-let renamer: ((tmp: string, dest: string) => void) | null = null;
-
-export function __setRenamerForTests(fn: ((tmp: string, dest: string) => void) | null): void {
-  renamer = fn;
-}
-
 function run(bin: string, args: string[]): string {
   if (runner) return runner(bin, args);
   try {
     // SYNCHRONOUS, and not by preference: an async spawn started inside an 'exit' handler never
-    // runs, because the event loop is already closed. The timeout is what keeps that from turning
-    // into a hang on a wedged server.
-    const out = spawnSync(bin, args, { encoding: "utf8", timeout: CALL_TIMEOUT_MS });
+    // runs, because the event loop is already closed.
+    //
+    // `killSignal: "SIGKILL"` IS THE FIX FOR A TIMEOUT THAT WAS NOT A DEADLINE. spawnSync's
+    // `timeout` sends its kill signal and then WAITS for the child to die; the default SIGTERM is
+    // catchable, so a child that handles it without exiting blocks this call past its nominal
+    // bound — measured at 2.2s against a nominal 1000ms. SIGKILL cannot be caught, so the bound is
+    // real. See `EXIT_BUDGET_MS` for the aggregate, which is the half that actually matters.
+    const out = spawnSync(bin, args, {
+      encoding: "utf8",
+      timeout: CALL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
     return out.stdout ?? "";
   } catch {
     // Best-effort by construction: an action that did not happen is a smaller problem than a
@@ -233,7 +270,8 @@ export function paneProofHolds(
   tokens: Map<string, Record<string, string>>,
   action: ClosePaneAction,
 ): boolean {
-  if (action.tokenKey === "") return tokens.has(action.pane);
+  // No empty-key case: `parseAction` refuses an action without all three fields, so there is no
+  // shape reaching here that means "close whatever exists".
   return tokens.get(action.pane)?.[action.tokenKey] === action.tokenValue;
 }
 
@@ -244,61 +282,67 @@ export interface ExitActionReport {
   truncated: number;
   /** Close actions skipped because the pane no longer presented the proof. */
   unproven: number;
+  /** Actions abandoned because the aggregate budget ran out. */
+  overBudget: number;
 }
 
 /**
  * Perform a manifest's actions. Synchronous, bounded, best-effort, and safe to call twice — the
  * second pass finds panes already closed and a tmp file already renamed.
  */
-export function performExitActions(actions: ExitAction[]): ExitActionReport {
+/**
+ * Perform a manifest's actions with a host-resolved `bin`. Synchronous, bounded by BOTH the action
+ * cap and the aggregate budget, best-effort, and safe to call twice — the second pass finds the
+ * panes already closed.
+ *
+ * `bin` is a PARAMETER, not a field of any action: the caller supplies the multiplexer it already
+ * knows about from its own environment. Nothing in the manifest can name an executable.
+ */
+export function performExitActions(
+  actions: ExitAction[],
+  bin: string,
+  now: () => number = Date.now,
+): ExitActionReport {
   const targets = actions.slice(0, EXIT_ACTION_LIMIT);
-  const report: ExitActionReport = { performed: [], truncated: actions.length - targets.length, unproven: 0 };
-  if (targets.length === 0) return report;
-
-  // Resolve the proofs first, one `pane list` per distinct binary, so a manifest with twenty
-  // closes costs one enumeration rather than twenty.
-  const tokensByBin = new Map<string, Map<string, Record<string, string>>>();
-  for (const a of targets) {
-    if (a.kind !== "close_pane" || tokensByBin.has(a.bin)) continue;
-    tokensByBin.set(a.bin, paneTokens(run(a.bin, ["pane", "list"])));
+  const report: ExitActionReport = {
+    performed: [],
+    truncated: actions.length - targets.length,
+    unproven: 0,
+    overBudget: 0,
+  };
+  // No binary means no way to act, and inventing one is exactly what this file must not do.
+  if (targets.length === 0 || !bin) {
+    report.overBudget = bin ? 0 : targets.length;
+    return report;
   }
 
-  for (const a of targets) {
-    switch (a.kind) {
-      case "close_pane": {
-        const tokens = tokensByBin.get(a.bin) ?? new Map();
-        if (!paneProofHolds(tokens, a)) {
-          report.unproven += 1;
-          continue;
-        }
-        run(a.bin, ["pane", "close", a.pane]);
-        report.performed.push(a);
-        break;
-      }
-      case "publish_file": {
-        try {
-          // A rename, not a copy, and not a subprocess: this is the half of the extension's
-          // write-tmp-then-publish transaction that has to happen last. `renameSync` is one
-          // syscall, which is what makes it affordable inside the exit budget at all.
-          if (renamer) renamer(a.tmp, a.dest);
-          else fs.renameSync(a.tmp, a.dest);
-          report.performed.push(a);
-        } catch {
-          // The destination keeps its previous version. A stale file beats a truncated one.
-        }
-        break;
-      }
-      case "run_argv": {
-        run(a.bin, a.args);
-        report.performed.push(a);
-        break;
-      }
+  const deadline = now() + EXIT_BUDGET_MS;
+  // One enumeration for the whole manifest: every close names the same server, because the server
+  // is ours and not the file's.
+  const tokens = paneTokens(run(bin, ["pane", "list"]));
+
+  for (let i = 0; i < targets.length; i += 1) {
+    const a = targets[i]!;
+    if (now() >= deadline) {
+      report.overBudget = targets.length - i;
+      break;
     }
+    if (!paneProofHolds(tokens, a)) {
+      report.unproven += 1;
+      continue;
+    }
+    run(bin, ["pane", "close", a.pane]);
+    report.performed.push(a);
   }
 
   if (report.truncated > 0) {
     process.stderr.write(
-      `motoko: performed ${targets.length} exit actions; ${report.truncated} left undone (limit ${EXIT_ACTION_LIMIT})\n`,
+      `motoko: performed ${report.performed.length} exit actions; ${report.truncated} left undone (limit ${EXIT_ACTION_LIMIT})\n`,
+    );
+  }
+  if (report.overBudget > 0) {
+    process.stderr.write(
+      `motoko: exit budget of ${EXIT_BUDGET_MS}ms spent; ${report.overBudget} action(s) left undone\n`,
     );
   }
   return report;
@@ -317,20 +361,31 @@ export function __resetExitDispatchForTests(): void {
  * A missing manifest is the ordinary case, not an error: a session that spawned no runtime, or an
  * install with no extension declaring an intent, has nothing to do here and says nothing.
  */
-export function runExitActions(): ExitActionReport {
-  const empty: ExitActionReport = { performed: [], truncated: 0, unproven: 0 };
+export function runExitActions(env: NodeJS.ProcessEnv = process.env): ExitActionReport {
+  const empty: ExitActionReport = { performed: [], truncated: 0, unproven: 0, overBudget: 0 };
   if (dispatched) return empty;
   dispatched = true;
   const p = manifestPath;
   if (!p) return empty;
+
+  // THE EXECUTABLE COMES FROM HERE AND NOWHERE ELSE. `HERDR_BIN_PATH` is injected into the pane by
+  // the multiplexer itself; the manifest has no say. Outside a pane there is nothing to close and
+  // nothing is run.
+  const bin = env.HERDR_BIN_PATH ?? "";
+
   let json: string;
   try {
+    // A REGULAR FILE, AND A BOUNDED ONE. `statSync` before `readFileSync` so a fifo or a device
+    // node cannot block the exit path, and a size cap so a file that grew past anything this
+    // producer could write is refused rather than parsed.
+    const st = fs.statSync(p);
+    if (!st.isFile() || st.size > MAX_MANIFEST_BYTES) return empty;
     json = fs.readFileSync(p, "utf8");
   } catch {
     return empty;
   }
   try {
-    return performExitActions(parseExitManifest(json));
+    return performExitActions(parseExitManifest(json), bin);
   } catch {
     // Never let an exit action keep Motoko from exiting.
     return empty;
@@ -338,24 +393,28 @@ export function runExitActions(): ExitActionReport {
 }
 
 /**
- * Register the exit-time dispatch.
+ * Register the exit-time dispatch. ONE 'exit' listener, and deliberately no signal handlers.
  *
- * BEFORE the herdr reporter's own hooks, deliberately: Node runs 'exit' listeners in registration
- * order, and giving lifecycle authority back to herdr should be the last thing that happens, after
- * whatever the session still owned has been dealt with.
+ * WHY NOT SIGINT/SIGTERM. The obvious reasoning — "a signal with no listener terminates the process
+ * without running 'exit' handlers, so register for the signals too" — produced a handler that ran
+ * the actions and then returned. Installing a listener REMOVES Node's default termination, so that
+ * handler turned Ctrl+C into a no-op: measured, a process with it installed survived both SIGINT
+ * and SIGTERM. It did not surface in the real TUI only because `env-server.ts` registers its own
+ * SIGINT/SIGTERM handlers at `index.ts:779`, before this one, and those call `process.exit(0)` —
+ * which fires 'exit' listeners, including this one. So the correct behaviour was already there and
+ * this file was contributing a latent hang behind it.
  *
- * 'exit' covers `process.exit()`, which is how index.ts terminates on every normal path.
- * SIGINT/SIGTERM are registered separately because a signal with no listener terminates the process
- * WITHOUT running 'exit' handlers — and `runExitActions` is idempotent, so a signal followed by an
- * exit performs one pass, not two.
+ * The rule that follows: signal termination has ONE owner in this process, and it is not this file.
+ * An 'exit' listener is all a cleanup needs, because every path that terminates deliberately goes
+ * through `process.exit()`. `herdr-agent-state.ts` still carries a re-raising SIGINT/SIGTERM pair
+ * of its own that predates this work and has the same shape of problem; it is left alone here
+ * rather than folded into an unrelated change.
+ *
+ * Registered BEFORE the herdr reporter's 'exit' hook: Node runs 'exit' listeners in registration
+ * order, and giving lifecycle authority back to herdr should be the last thing that happens.
  */
 export function initExitActions(): void {
   process.on("exit", () => {
     runExitActions();
   });
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => {
-      runExitActions();
-    });
-  }
 }

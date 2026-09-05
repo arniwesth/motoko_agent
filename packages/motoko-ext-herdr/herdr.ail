@@ -1276,8 +1276,10 @@ export func on_tool_handle(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope
 -- clock (`ailang run` without the TUI) or an unreadable run file all yield the
 -- empty list, which the host executes as a silent no-op.
 func close_action(cfg: HerdrConfig, pane: string) -> ExitAction {
+  -- NO `bin`. The host runs the multiplexer it knows about from its own
+  -- environment; this side names the pane and the proof and nothing else. See
+  -- the ABI's `PaneCloseAction` for why that absence is the point.
   let c: PaneCloseAction = {
-    bin: cfg.bin,
     pane: pane,
     token_key: owner_token_key(),
     token_value: owner_token_value(cfg.own_pane, cfg.session_ms)

@@ -1020,9 +1020,26 @@ export type FinalizeOutcome = { decision: FinalizeDecision, next_state: ExtWorld
 -- an action names WHAT to do and WHICH proof to require, never WHOM to
 -- believe. `ClosePane` carries the pane id AND the token the host must find on
 -- that pane before closing it, so the ownership RULE (which key, which value)
--- is the extension's and the VERIFICATION is the host's. That is what restores
--- the freshness a cached action would otherwise lose: a pane id recycled
--- between the render and the exit fails the token check and is left alone.
+-- is the extension's and the VERIFICATION is the host's.
+--
+-- WHAT THE MANIFEST DELIBERATELY CANNOT SAY, after the 7.0 review. The first
+-- draft of this type also carried `RunArgv({ bin, args })` and
+-- `PublishFile({ tmp, dest })`, and `ClosePane` named its own `bin`. Every one
+-- of those was an arbitrary-execution or arbitrary-write surface reachable by
+-- anything that can write one file under the workdir -- another extension with
+-- FS access, an agent file tool, a delegate sharing the checkout -- executed at
+-- exit with the TUI's privileges, outside the runtime's FS sandbox and outside
+-- its filtered child environment. "No shell" bought nothing when `bin` could be
+-- `/bin/sh` and `args` could be `["-c", ...]`, and an `! {FS}` render could
+-- hand out process instructions without ever holding `{Process}`.
+--
+-- So the surface is now ONE verb with no executable in it. The host resolves
+-- the binary from its own environment and will not take one from the file. A
+-- manifest writer can ask for a tagged pane to be closed and can ask for
+-- nothing else. `PublishFile` was dropped rather than hardened because it had
+-- no consumer; when dagr settle-on-exit needs it, it should arrive with a
+-- host-granted destination and a generation precondition rather than a pair of
+-- free paths.
 --
 -- SIGKILL AND POWER LOSS RUN NOTHING. Nothing published here is a guarantee;
 -- it is a best-effort courtesy on a clean exit, and every consumer needs a
@@ -1032,28 +1049,26 @@ export type FinalizeOutcome = { decision: FinalizeDecision, next_state: ExtWorld
 -- Close one multiplexer pane, by explicit id, only if it still carries the
 -- named token. Never a name, a kind, or an argv pattern: `mot-dlg-*` proves
 -- "a Motoko delegate", not "THIS Motoko's delegate", and two concurrent
--- sessions both match it. `token_key == ""` means "close unconditionally" and
--- is the shape a caller should have to write deliberately.
+-- sessions both match it.
+--
+-- NO `bin` FIELD, and that absence is the security property. The host runs the
+-- multiplexer it already knows about from its own environment; a manifest that
+-- could name the executable would be a code-execution channel wearing the
+-- shape of a cleanup request.
+--
+-- ALL THREE FIELDS ARE REQUIRED AND NON-EMPTY. An earlier draft read a missing
+-- `token_key` as "" and treated "" as "close any pane that exists" -- so the
+-- deliberate escape hatch was also what MALFORMED input decayed to, which is
+-- the wrong direction for a default to fail in. There is no unproven-close mode
+-- now; if one is ever wanted it needs its own authorization, not an empty
+-- string.
 export type PaneCloseAction = {
-  bin: string,
   pane: string,
   token_key: string,
   token_value: string
 }
 
--- The settled write-tmp-then-rename transaction, never a raw write: a reader
--- polling the destination must never observe a half-written file. The tmp file
--- is written while the runtime is alive; the host performs only the rename.
-export type PublishFileAction = { tmp: string, dest: string }
-
--- The escape hatch, and the reason it is bounded: argv only, no shell, no
--- token interpolation by the host, one bounded call per action.
-export type RunArgvAction = { bin: string, args: [string] }
-
-export type ExitAction
-  = ClosePane(PaneCloseAction)
-  | PublishFile(PublishFileAction)
-  | RunArgv(RunArgvAction)
+export type ExitAction = ClosePane(PaneCloseAction)
 
 -- The render's answer, and it carries a SUCCESSOR for the same reason the four
 -- other outcome types do (WI-B2b): the render reads FS-backed state, it reads

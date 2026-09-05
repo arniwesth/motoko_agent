@@ -3287,7 +3287,7 @@ func conversation_loop_v2_with_policy(
           mode: "v2"
         }));
         let traced = run_v2_from_messages_traced_with_policy_and_counts(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts);
-        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider);
+        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider, traced.world);
         let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
         match traced.result {
           Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
@@ -3344,7 +3344,15 @@ func publish_turn_exit_manifest(
   env_url: string,
   hybrid_tools: bool,
   budget: BudgetPlan,
-  provider: PortedProvider
+  provider: PortedProvider,
+  -- THE TURN'S SUCCESSOR WORLD, not the provider's pre-turn one. `TracedSessionResult` carries
+  -- `world` precisely so the state the turn produced can be handed on; passing `provider.world`
+  -- rewinds the render to before the turn it is supposed to be summarising, which under scripted
+  -- or recording ports means files written DURING the turn are invisible to it and replay cursors
+  -- restart from stale state. Live ambient reads hide this by consulting the disk instead, and the
+  -- extension fixture hides it by answering from canned content regardless of the world it is
+  -- given — the same both-sides-mocked shape that hid the no-op ports bug.
+  world: WorldState
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let ctx: ExtCtx = {
     task: task,
@@ -3360,10 +3368,10 @@ func publish_turn_exit_manifest(
     history_slice: [],
     state_key: "core:ext:exit",
     context_limit: 0,
-    ports: ext_ports_of(provider.ports, provider.world, env_url),
+    ports: ext_ports_of(provider.ports, world, env_url),
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(),
-    world: world_to_token(provider.world)
+    world: world_to_token(world)
   };
   -- The result says whether the live file was replaced. Discarded on purpose:
   -- a manifest that could not be published leaves the previous one standing,
@@ -3439,7 +3447,7 @@ export func run_v2_with_conversation(
     conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts())
   else {
   let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
-  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider);
+  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider, initial_traced.world);
   let initial_counts = runtime_status_counts(initial_traced.trace);
   match initial_traced.result {
     Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts),
