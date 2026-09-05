@@ -1,0 +1,724 @@
+module sunholo/motoko_ext_herdr/dagr
+
+-- THE DAGR RUN FILE, WRITTEN BY THE EXTENSION AND NEVER BY THE MODEL.
+--
+-- `herdr-dagr` renders a run graph from a JSON file that someone else must
+-- write. This module is that writer's PURE half: every function here maps a
+-- document plus one observation to the next document, with no effects, so the
+-- whole contract mapping is testable without a herdr, a filesystem, or a dagr
+-- binary. The I/O half — read, modify, publish — lives in `herdr.ail`.
+--
+-- WHY THE EXTENSION AND NOT THE MODEL (`DESIGN-dagr-as-delegation-view.md` §2).
+-- dagr's `evidence` tier is the field that separates "the delegate said done"
+-- from "something checked it", and the validator DOES NOT ENFORCE IT —
+-- measured: `evidence: "verified"` with the receipt `"trust me bro"` exits 0
+-- under `--strict`. A model-authored producer fabricates under ordinary
+-- pressure; one hand-authored file in that session carried four invented
+-- receipts, three of them stamped verified, and checked clean. An
+-- extension-authored producer derives the tier MECHANICALLY from what
+-- `DelegateCheck` actually observed, so the unenforced field stops mattering.
+--
+-- THE ONE RULE THIS FILE EXISTS TO KEEP: nothing here may emit a fact the code
+-- did not observe. Four fields are refused by name, each for its own reason
+-- (§3.1, §3.4, §4):
+--
+--   `verified`        no path independently checks a delegate's ANSWER, so
+--                     every settle of delegated work lands at `reported` and
+--                     the pane is visibly short of `◆`. That is the honest
+--                     reading and it is also the progress bar for 023. The one
+--                     place the tier is earned is `open_failed_task`, which
+--                     grades a spawn this code watched fail rather than a
+--                     result it was told about; its receipt is herdr's exit
+--                     code.
+--   `asserted`        reading a prose claim needs a screen read, which neither
+--                     check path does.
+--   `model`           (was refused: nothing selected one. Since Delegate gained a
+--                     free-string `model` param, the REQUEST is recorded on the
+--                     attempt as `model` verbatim — a display chip (`fable·xhigh`),
+--                     never a claim about what ran. Empty means the caller said
+--                     nothing and the field is omitted.)
+--   `last_output_at`  the extension never reads pane output, and dagr renders
+--   `queued_input`    this field as staleness ("14m silent"). A value nobody
+--                     observed is a misreport, not a placeholder.
+--
+-- MEASURED AGAINST THE v0.3.1 BINARY, and one of these overturns the design's
+-- guess: a task with no `kind` is REJECTED (`E111: task … missing kind`), so
+-- the fallback §3.1 named is the one in force — `task`, deliberately neutral,
+-- whenever the model did not say. Emitting `kind` from the agent kind was
+-- never an option: a review delegated to claude is still a review.
+--
+-- Contract v3. The v0.3.1 binary reads v1/v2 and writes v3; its README is from
+-- `main` and documents flags the binary rejects, so the binary is the
+-- authority, not the README.
+
+import std/option (Option, Some, None)
+import std/string (length, substring, contains, replace, split, intToStr, join)
+import std/json (Json, jo, ja, kv, js, jb, jnum, get, asString, asArray, asObject, encode, decode)
+import std/result (Ok, Err)
+import std/datetime (formatRFC3339)
+
+-- ---------------------------------------------------------------------------
+-- Small JSON surgery
+-- ---------------------------------------------------------------------------
+--
+-- The document is read back from disk every call and rewritten whole, so these
+-- are the only mutators needed: set one key, and map over a list.
+
+pure func kvs_without(kvs: [{key: string, value: Json}], key: string) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    p :: rest => if p.key == key then kvs_without(rest, key) else p :: kvs_without(rest, key)
+  }
+}
+
+pure func obj_set(o: Json, key: string, v: Json) -> Json {
+  match asObject(o) {
+    None => jo([kv(key, v)]),
+    Some(kvs) => jo(kvs_without(kvs, key) ++ [kv(key, v)])
+  }
+}
+
+pure func obj_del(o: Json, key: string) -> Json {
+  match asObject(o) { None => o, Some(kvs) => jo(kvs_without(kvs, key)) }
+}
+
+pure func arr_of(j: Json) -> [Json] {
+  match asArray(j) { Some(xs) => xs, None => [] }
+}
+
+pure func field(o: Json, key: string) -> Json {
+  match get(o, key) { Some(v) => v, None => jo([]) }
+}
+
+pure func sfield(o: Json, key: string) -> string {
+  match get(o, key) {
+    None => "",
+    Some(v) => match asString(v) { Some(s) => s, None => "" }
+  }
+}
+
+pure func arr_field(o: Json, key: string) -> [Json] {
+  match get(o, key) { Some(v) => arr_of(v), None => [] }
+}
+
+pure func last_of(xs: [Json]) -> Option[Json] {
+  match xs {
+    [] => None,
+    x :: rest => match rest { [] => Some(x), _ => last_of(rest) }
+  }
+}
+
+pure func count_of(xs: [Json]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + count_of(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Identity and placement
+-- ---------------------------------------------------------------------------
+--
+-- ONE WRITER PER FILE, and that is not only a recursion question (§5). Two
+-- operator Motokos in the same checkout — two panes, one repo, an ordinary way
+-- to use herdr — would both resolve a plain `.dagr/run.json` and clobber each
+-- other with no recursion involved. Keying the file by the producer's own pane
+-- AND its session makes every writer unique by construction; the session half
+-- is what stops a Motoko restarted in the same pane from reopening the
+-- previous run's document.
+
+pure func slug(s: string) -> string { replace(s, ":", "-") }
+
+export pure func run_id(own_pane: string, session_ms: string) -> string
+  tests [(("w1:p1", "1756000000000"), "run-motoko-w1-p1-1756000000000")]
+  { "run-motoko-${slug(own_pane)}-${session_ms}" }
+
+export pure func run_file_name(own_pane: string, session_ms: string) -> string
+  tests [(("w1:p1", "1756000000000"), "run-w1-p1-1756000000000.json")]
+  { "run-${slug(own_pane)}-${session_ms}.json" }
+
+export pure func run_file(dagr_dir: string, own_pane: string, session_ms: string) -> string
+  tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/run-w1-p1-1756000000000.json")]
+  { "${dagr_dir}/${run_file_name(own_pane, session_ms)}" }
+
+-- The `.tmp` sibling stays in the SAME directory on purpose: `mv` is atomic
+-- only within a filesystem, and a tmp under /tmp with the run file in the tree
+-- would silently become a copy-then-unlink that a reader can observe halfway.
+export pure func run_tmp(dagr_dir: string, own_pane: string, session_ms: string) -> string
+  tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/run-w1-p1-1756000000000.json.tmp")]
+  { "${run_file(dagr_dir, own_pane, session_ms)}.tmp" }
+
+-- Written once per session, next to the run file, when the run file exists and
+-- does not parse. Its presence is what makes "tell the model once" once.
+export pure func refused_marker(dagr_dir: string, own_pane: string, session_ms: string) -> string
+  tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/.unparseable-w1-p1-1756000000000")]
+  { "${dagr_dir}/.unparseable-${slug(own_pane)}-${session_ms}" }
+
+-- THE VIEW-PANE SENTINEL, and it is the reason auto-opening cannot run away.
+--
+-- The extension has no state between tool calls (`herdr.dagr_record` says so),
+-- so "did this session already open a view?" has to be a fact on disk. It is
+-- keyed like every other per-run path here — by producer pane AND session — so
+-- a Motoko restarted in the same pane opens its own view for its own run file
+-- rather than inheriting the previous run's marker.
+--
+-- IT HOLDS THE PANE ID, not just a bit. That costs nothing over an empty
+-- sentinel and it is what lets a later reader — the operator, or anything that
+-- wants to replace the view rather than add a second one — name the pane it is
+-- allowed to touch. `scripts/dagr-pane.sh` keeps `.dagr/.pane` for the same
+-- purpose and for the same reason: a pane is only ours to close if we can prove
+-- we opened it.
+--
+-- MEASURED WHY: 2026-09-01 a session opened ~90 view panes by opening one per
+-- poll. The marker goes down BEFORE the open is attempted, which is
+-- `sweep_once`'s rule too — a failed attempt that retries on every subsequent
+-- Delegate call is the same runaway with a slower fuse.
+export pure func pane_marker(dagr_dir: string, own_pane: string, session_ms: string) -> string
+  tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/.pane-w1-p1-1756000000000")]
+  { "${dagr_dir}/.pane-${slug(own_pane)}-${session_ms}" }
+
+export pure func attempt_id(task_id: string, n: int) -> string
+  tests [(("mot-dlg-7", 1), "mot-dlg-7·a1"), (("mot-dlg-7", 2), "mot-dlg-7·a2")]
+  { "${task_id}·a${intToStr(n)}" }
+
+-- ISO-8601 with a Z, which is what the contract wants and what
+-- `std/datetime.formatRFC3339` produces from epoch milliseconds.
+export pure func at(now_ms: int) -> string
+  tests [(1756000000000, "2025-08-24T01:46:40Z")]
+  { formatRFC3339(now_ms) }
+
+-- A task needs a title, and the only text the extension has is the prompt the
+-- model wrote. First line, bounded: dagr renders this in a pane column.
+export pure func task_title(prompt: string) -> string
+  tests [
+    ("Fix the parser\n\nDetails follow", "delegate: Fix the parser"),
+    ("", "delegate: (no prompt)")
+  ]
+  {
+    let first = match split(prompt, "\n") { [] => "", l :: _ => l };
+    let cut = if length(first) > 72 then "${substring(first, 0, 72)}…" else first;
+    if cut == "" then "delegate: (no prompt)" else "delegate: ${cut}"
+  }
+
+-- ENUMERATED, NOT FREE TEXT (§3.1). Every session would otherwise invent its
+-- own vocabulary. An unknown value is not an error worth failing a delegation
+-- over — it degrades to the neutral kind, which is also what an omitted one
+-- does. `task` rather than nothing because the v0.3.1 validator rejects a
+-- kind-less task with E111 (measured 2026-08-31).
+export pure func task_kind_or_default(k: string) -> string
+  tests [
+    ("impl", "impl"), ("review", "review"), ("research", "research"),
+    ("test", "test"), ("docs", "docs"),
+    ("", "task"), ("whatever", "task")
+  ]
+  {
+    if k == "impl" || k == "review" || k == "research" || k == "test" || k == "docs"
+    then k else "task"
+  }
+
+export pure func known_task_kinds() -> string
+  tests [((), "impl, review, research, test, docs")]
+  { "impl, review, research, test, docs" }
+
+-- ---------------------------------------------------------------------------
+-- Reading the document
+-- ---------------------------------------------------------------------------
+
+export pure func empty_doc(own_pane: string, session_ms: string, now_ms: int) -> Json {
+  jo([
+    kv("dagr", jnum(3.0)),
+    kv("run", jo([
+      kv("id", js(run_id(own_pane, session_ms))),
+      kv("title", js("motoko delegation (pane ${own_pane})")),
+      kv("started_at", js(at(now_ms)))
+    ])),
+    kv("generated_at", js(at(now_ms))),
+    kv("tasks", ja([])),
+    kv("events", ja([]))
+  ])
+}
+
+-- A file that exists but does not parse is NEVER overwritten. Silently
+-- replacing a document is the failure the whole design warns about: the reader
+-- sees a confident graph with no idea it lost the previous one. `None` means
+-- "stop writing for this session and say so".
+export pure func load_doc(present: bool, content: string, own_pane: string, session_ms: string, now_ms: int) -> Option[Json] {
+  if present == false || content == "" then Some(empty_doc(own_pane, session_ms, now_ms))
+  else match decode(content) {
+    Err(_) => None,
+    Ok(d) => Some(d)
+  }
+}
+
+pure func tasks_of(doc: Json) -> [Json] { arr_field(doc, "tasks") }
+
+pure func find_task(ts: [Json], id: string) -> Option[Json] {
+  match ts {
+    [] => None,
+    t :: rest => if sfield(t, "id") == id then Some(t) else find_task(rest, id)
+  }
+}
+
+export pure func is_empty_run(doc: Json) -> bool
+  { count_of(tasks_of(doc)) == 0 }
+
+export pure func has_task(doc: Json, id: string) -> bool
+  { match find_task(tasks_of(doc), id) { Some(_) => true, None => false } }
+
+-- THE HANDLE THE MODEL HOLDS IS NOT ALWAYS THE TASK ID, and that is a
+-- consequence of `retry_of` rather than a wrinkle worth avoiding. A linked
+-- retry appends attempt n to the EXISTING task, so the new handle names a task
+-- whose id came from the first delegation. The task carries the current handle
+-- as its `owner` — a free string in the contract, and the honest reading of
+-- "who is working on this now" — so one lookup serves both cases: the ordinary
+-- one where id == handle, and the retry where only `owner` matches.
+pure func find_owner(ts: [Json], key: string) -> Option[Json] {
+  match ts {
+    [] => None,
+    t :: rest => if sfield(t, "owner") == key then Some(t) else find_owner(rest, key)
+  }
+}
+
+export pure func task_of_key(doc: Json, key: string) -> string {
+  match find_task(tasks_of(doc), key) {
+    Some(t) => sfield(t, "id"),
+    None => match find_owner(tasks_of(doc), key) {
+      Some(t) => sfield(t, "id"),
+      None => ""
+    }
+  }
+}
+
+-- Terminal ATTEMPT states, which is the transition guard §3.5 asks for: a
+-- second `DelegateCheck` on a finished delegate must append nothing, and the
+-- motoko path's early read succeeds on every call once the answer exists.
+export pure func attempt_is_terminal(state: string) -> bool
+  tests [
+    ("done", true), ("failed", true), ("rejected", true),
+    ("settled_unverified", true), ("lost", true),
+    ("working", false), ("queued", false), ("", false)
+  ]
+  {
+    state == "done" || state == "failed" || state == "rejected"
+      || state == "settled_unverified" || state == "lost"
+  }
+
+pure func latest_attempt(doc: Json, id: string) -> Option[Json] {
+  match find_task(tasks_of(doc), id) {
+    None => None,
+    Some(t) => last_of(arr_field(t, "attempts"))
+  }
+}
+
+export pure func latest_attempt_state(doc: Json, id: string) -> string
+  { match latest_attempt(doc, id) { None => "", Some(a) => sfield(a, "state") } }
+
+export pure func latest_attempt_id(doc: Json, id: string) -> string
+  { match latest_attempt(doc, id) { None => "", Some(a) => sfield(a, "id") } }
+
+export pure func is_settled_already(doc: Json, id: string) -> bool
+  { attempt_is_terminal(latest_attempt_state(doc, id)) }
+
+-- `retry_of` is refused, never the delegation (§3.6). Three conditions, all
+-- local: the task exists in THIS run file, and its latest attempt is terminal —
+-- linking onto work still in flight would claim a retry of something nobody
+-- has given up on. (That the handle was issued by this extension is checked by
+-- the caller with `owns_name`, which is where that rule already lives.)
+export pure func can_link_retry(doc: Json, id: string) -> bool
+  { has_task(doc, id) && is_settled_already(doc, id) }
+
+-- ---------------------------------------------------------------------------
+-- Writing the document
+-- ---------------------------------------------------------------------------
+
+pure func with_tasks(doc: Json, ts: [Json]) -> Json { obj_set(doc, "tasks", ja(ts)) }
+
+pure func append_event(doc: Json, ev: Json) -> Json
+  { obj_set(doc, "events", ja(arr_field(doc, "events") ++ [ev])) }
+
+export pure func touch(doc: Json, now_ms: int) -> Json
+  { obj_set(doc, "generated_at", js(at(now_ms))) }
+
+pure func map_task(ts: [Json], id: string, f: (Json) -> Json) -> [Json] {
+  match ts {
+    [] => [],
+    t :: rest => if sfield(t, "id") == id then f(t) :: rest else t :: map_task(rest, id, f)
+  }
+}
+
+pure func map_last_attempt(t: Json, f: (Json) -> Json) -> Json {
+  let ats = arr_field(t, "attempts");
+  obj_set(t, "attempts", ja(map_last(ats, f)))
+}
+
+pure func map_last(xs: [Json], f: (Json) -> Json) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => match rest { [] => [f(x)], _ => x :: map_last(rest, f) }
+  }
+}
+
+pure func started_event(task: string, attempt: string, actor: string, now_ms: int) -> Json {
+  jo([kv("at", js(at(now_ms))), kv("type", js("attempt_started")),
+      kv("task", js(task)), kv("attempt", js(attempt)), kv("actor", js(actor))])
+}
+
+pure func settled_event(task: string, attempt: string, actor: string, detail: string, now_ms: int) -> Json {
+  jo([kv("at", js(at(now_ms))), kv("type", js("attempt_settled")),
+      kv("task", js(task)), kv("attempt", js(attempt)), kv("actor", js(actor)),
+      kv("detail", js(detail))])
+}
+
+-- LIVENESS IS ONE FIELD, LATCHED. `prompt_acknowledged` starts false and turns
+-- true on the first observed `working`, `blocked` or `done`; it never goes
+-- back, because `idle` is ALSO the resting state after a completed turn and
+-- recomputing from `status != idle` would flip a live attempt back to
+-- unacknowledged on the next poll. The other two contract fields are omitted —
+-- see this file's header.
+pure func liveness(ack: bool) -> Json { jo([kv("prompt_acknowledged", jb(ack))]) }
+
+pure func locator(pane: string, agent: string) -> Json
+  { jo([kv("pane", js(pane)), kv("agent", js(agent))]) }
+
+-- `model` is the REQUESTED model chip, recorded verbatim (dagr renders it as a
+-- display chip, never a claim about what ran). Empty omits the field — the
+-- caller said nothing and the CLI default stands.
+pure func new_attempt(task_id: string, n: int, cause: Json, actor: string,
+                      pane: string, agent: string, now_ms: int) -> Json {
+  new_attempt_model(task_id, n, cause, actor, pane, agent, now_ms, "")
+}
+
+pure func new_attempt_model(task_id: string, n: int, cause: Json, actor: string,
+                            pane: string, agent: string, now_ms: int, model: string) -> Json {
+  let base = jo([
+    kv("id", js(attempt_id(task_id, n))), kv("n", jnum(_int_to_float(n))),
+    kv("cause", cause), kv("actor", js(actor)),
+    kv("locator", locator(pane, agent)),
+    kv("state", js("working")), kv("started_at", js(at(now_ms))),
+    kv("liveness", liveness(false))
+  ]);
+  if model == "" then base else obj_set(base, "model", js(model))
+}
+
+-- THE FIRST WRITE POINT, and it is deliberately not "after `pane split`"
+-- (§3.2). Four failure branches sit between the split and a working delegate,
+-- each of which closes the pane; a task appended at the split would survive as
+-- a phantom `working` row for a delegation that never happened.
+export pure func open_task(doc: Json, id: string, title: string, kind: string,
+                           actor: string, pane: string, loc_agent: string, now_ms: int) -> Json {
+  open_task_model(doc, id, title, kind, actor, pane, loc_agent, now_ms, "")
+}
+
+-- The requested-model variant. Records the ask verbatim on the attempt; empty
+-- omits the field (CLI default). A retry carries its own ask on its own attempt.
+export pure func open_task_model(doc: Json, id: string, title: string, kind: string,
+                                 actor: string, pane: string, loc_agent: string,
+                                 now_ms: int, model: string) -> Json {
+  let a = new_attempt_model(id, 1, jo([kv("type", js("initial"))]), actor, pane, loc_agent, now_ms, model);
+  -- `owner` is the handle the model holds, which at open time IS the id; a
+  -- linked retry is the only thing that moves it, to the NEW handle, so a
+  -- reader comparing the task's `id` (the first delegation) with its `owner`
+  -- (who is working on it now) can tell a retried task from new work.
+  -- `locator.agent` is a different fact — what herdr calls the agent — and for a motoko delegate
+  -- the row self-reports as `motoko` (MOT-120), not as the handle.
+  let t = jo([
+    kv("id", js(id)), kv("title", js(title)), kv("kind", js(kind)),
+    kv("owner", js(id)), kv("state", js("working")), kv("deps", ja([])),
+    kv("attempts", ja([a]))
+  ]);
+  append_event(with_tasks(doc, tasks_of(doc) ++ [t]),
+               started_event(id, attempt_id(id, 1), actor, now_ms))
+}
+
+-- A DELEGATION THAT CONSUMED RESOURCES AND FAILED IS STILL A FACT (F3).
+--
+-- `open_task` above explains why nothing is written at `pane split`: a task
+-- appended there would survive as a phantom `working` row for a delegation that
+-- never happened. Measured live 2026-09-01, the OTHER half of that choice cost
+-- more than the phantom would have. Two `claude` spawns each took a pane, an
+-- `agent start` and a task file, failed at `agent prompt` with `agent_not_ready`
+-- — and left the run file with NO ROW AT ALL. A reader of that document sees a
+-- session that delegated three times. It delegated five.
+--
+-- So the answer is not to open earlier. It is to open and settle in ONE
+-- transition: the task is BORN `failed` with an already-terminal attempt, so it
+-- is never observable as `working` and the phantom the comment above refuses
+-- cannot appear, while the work that was actually spent stays on the record.
+--
+-- `verified` IS THE HONEST TIER HERE AND NOWHERE ELSE IN THIS FILE, and the
+-- header's refusal of it is unchanged in substance. Every other settle grades a
+-- claim about A DELEGATE'S ANSWER, which nothing independently checks, so every
+-- one of those lands at `reported`. This one grades a claim about THE SPAWN,
+-- and its evidence is herdr's own exit status read by this code — a mechanical
+-- receipt in the contract's own terms, with the exit code as the receipt.
+--
+-- The tier travels as a PARAMETER rather than a constant because one call-site
+-- never invoked herdr at all: the motoko quoting refusal spends a pane but its
+-- only "receipt" is this extension's own prose, so it lands at `reported`.
+-- `verified` here means "herdr-observed or extension-observed spawn spend",
+-- never "the delegate's answer was checked" — that reading stays refused.
+--
+-- TWO CLOCK READINGS, not one. `started_at` is when the delegation began and
+-- `ended_at` is when it failed; collapsing them onto the failure moment would
+-- state that a spawn which spent 3.9s on `agent start` took no time at all.
+export pure func open_failed_task(doc: Json, id: string, title: string, kind: string,
+                                  actor: string, pane: string, loc_agent: string,
+                                  receipt: string, reason: string,
+                                  started_ms: int, now_ms: int, tier: string) -> Json {
+  let a0 = new_attempt(id, 1, jo([kv("type", js("initial"))]), actor, pane, loc_agent, started_ms);
+  let outcome = jo([kv("result", js("failed")), kv("evidence", js(tier)),
+                    kv("receipt", js(receipt)), kv("reason", js(reason))]);
+  let a = obj_set(obj_set(obj_set(a0, "state", js("failed")),
+                          "ended_at", js(at(now_ms))),
+                  "outcome", outcome);
+  let t = jo([
+    kv("id", js(id)), kv("title", js(title)), kv("kind", js(kind)),
+    kv("owner", js(id)), kv("state", js("failed")), kv("deps", ja([])),
+    kv("attempts", ja([a]))
+  ]);
+  touch(append_event(append_event(with_tasks(doc, tasks_of(doc) ++ [t]),
+                                  started_event(id, attempt_id(id, 1), actor, started_ms)),
+                     settled_event(id, attempt_id(id, 1), actor, reason, now_ms)),
+        now_ms)
+}
+
+-- A RETRY IS AN ATTEMPT, NOT A NEW TASK (§3.6). This is the whole of what
+-- `retry_of` buys: dagr's rework rendering needs attempt n to carry a cause
+-- pointing back at attempt n−1, and without it every re-delegation looks like
+-- new work and the rework count — arguably the one thing the pane shows that
+-- the transcript does not — is always zero. `owner` moves to the new handle
+-- for the same reason: `task_of_key` resolves EITHER handle to this task, and
+-- the task's `id` keeps the first handle so the retry chain stays visible.
+export pure func open_retry(doc: Json, id: string, new_key: string, actor: string,
+                            pane: string, agent: string, reason: string, now_ms: int) -> Json {
+  open_retry_model(doc, id, new_key, actor, pane, agent, reason, now_ms, "")
+}
+
+export pure func open_retry_model(doc: Json, id: string, new_key: string, actor: string,
+                                  pane: string, agent: string, reason: string,
+                                  now_ms: int, model: string) -> Json {
+  match find_task(tasks_of(doc), id) {
+    None => doc,
+    Some(t) => {
+      let n = count_of(arr_field(t, "attempts")) + 1;
+      let prev = latest_attempt_id(doc, id);
+      let cause = jo([kv("type", js("followup")), kv("ref", js(prev)), kv("reason", js(reason))]);
+      let a = new_attempt_model(id, n, cause, actor, pane, agent, now_ms, model);
+      let t2 = obj_set(obj_set(obj_set(t, "attempts", ja(arr_field(t, "attempts") ++ [a])),
+                               "state", js("working")),
+                       "owner", js(new_key));
+      append_event(with_tasks(doc, map_task(tasks_of(doc), id, func(_x: Json) -> Json { t2 })),
+                   started_event(id, attempt_id(id, n), actor, now_ms))
+    }
+  }
+}
+
+-- Latched, and only from a RECOGNISED, NON-EMPTY status: `agent_status_of`
+-- returns "" for missing or undecodable output, and a decode failure must not
+-- become `working` in the graph.
+export pure func latch_ack(doc: Json, id: string) -> Json {
+  with_tasks(doc, map_task(tasks_of(doc), id, func(t: Json) -> Json {
+    map_last_attempt(t, func(a: Json) -> Json {
+      if attempt_is_terminal(sfield(a, "state")) then a
+      else obj_set(a, "liveness", liveness(true))
+    })
+  }))
+}
+
+-- `blocked` is a TASK state over a still-`working` attempt: the delegate has
+-- not failed and has not finished, it is sitting on a prompt someone has to
+-- answer. W205 requires the unblocker be named — a blocked node is never just
+-- a red mark — and here the unblocker is always a human at that pane.
+export pure func mark_blocked(doc: Json, id: string, pane: string, now_ms: int) -> Json {
+  touch(with_tasks(doc, map_task(tasks_of(doc), id, func(t: Json) -> Json {
+    let t2 = obj_set(obj_set(t, "state", js("blocked")),
+                     "unblock", js("operator: answer the prompt on pane ${pane}"));
+    map_last_attempt(t2, func(a: Json) -> Json {
+      if attempt_is_terminal(sfield(a, "state")) then a
+      else obj_set(a, "liveness", liveness(true))
+    })
+  })), now_ms)
+}
+
+-- A blocked task that comes back to life must not stay blocked. Same shape as
+-- the latch: only the non-terminal case moves.
+export pure func mark_working(doc: Json, id: string, now_ms: int) -> Json {
+  touch(with_tasks(doc, map_task(tasks_of(doc), id, func(t: Json) -> Json {
+    -- The unblock line goes with the block. Leaving it behind would state, of a
+    -- task that is running again, that someone still has to answer a prompt —
+    -- exactly the kind of stale fact this producer exists not to publish.
+    if sfield(t, "state") == "blocked"
+    then obj_del(obj_set(t, "state", js("working")), "unblock")
+    else t
+  })), now_ms)
+}
+
+-- THE ONLY TERMINAL WRITE, and it is a TRANSITION, not an assignment (§3.5).
+-- `do_check_motoko`'s early read succeeds on every call once the answer file
+-- exists — nothing consumes it — so a second check on a finished delegate must
+-- append no second `attempt_settled`. An already-terminal attempt returns the
+-- document untouched.
+--
+-- `task_state` is separate from `attempt_state` because they differ in exactly
+-- one row that matters: an attempt `lost` projects to a task `failed`.
+export pure func settle(doc: Json, id: string, attempt_state: string, task_state: string,
+                        evidence: string, receipt: string, reason: string,
+                        now_ms: int) -> Json {
+  if has_task(doc, id) == false || is_settled_already(doc, id) then doc
+  else {
+    let aid = latest_attempt_id(doc, id);
+    -- The actor is read back off the attempt rather than passed in: the check
+    -- paths do not know which kind was delegated (the handle does not carry
+    -- it), and the document already recorded it at open time.
+    let actor = match latest_attempt(doc, id) { Some(a) => sfield(a, "actor"), None => "" };
+    let outcome0 = jo([kv("result", js(attempt_state)), kv("evidence", js(evidence))]);
+    let outcome1 = if receipt == "" then outcome0 else obj_set(outcome0, "receipt", js(receipt));
+    let outcome  = if reason == "" then outcome1 else obj_set(outcome1, "reason", js(reason));
+    let ts2 = map_task(tasks_of(doc), id, func(t: Json) -> Json {
+      -- Settling also clears any unblock line, for `mark_working`'s reason.
+      let t2 = obj_del(obj_set(t, "state", js(task_state)), "unblock");
+      map_last_attempt(t2, func(a: Json) -> Json {
+        let a1 = if attempt_state == "done" then obj_set(a, "liveness", liveness(true)) else a;
+        obj_set(obj_set(obj_set(a1, "state", js(attempt_state)),
+                        "ended_at", js(at(now_ms))),
+                "outcome", outcome)
+      })
+    });
+    touch(append_event(with_tasks(doc, ts2),
+                       settled_event(id, aid, actor, if reason == "" then receipt else reason, now_ms)),
+          now_ms)
+  }
+}
+
+-- Provenance for things that are true but are not state changes: a close that
+-- failed, a refused `retry_of` link, the fact that a task settles only when the
+-- model asks (§6's no-poll case, which is a Motoko-side misreport and not an
+-- F-5 orphan).
+export pure func add_note(doc: Json, id: string, detail: string, now_ms: int) -> Json {
+  touch(append_event(doc,
+    jo([kv("at", js(at(now_ms))), kv("type", js("note")),
+        kv("task", js(id)), kv("detail", js(detail))])), now_ms)
+}
+
+export pure func render(doc: Json) -> string { encode(doc) }
+
+-- ---------------------------------------------------------------------------
+-- What a PREVIOUS session left behind (F1)
+-- ---------------------------------------------------------------------------
+--
+-- `dagr_open` already writes, in the run file's own words, that a task settles
+-- only when the model calls `DelegateCheck`. What it cannot say is what happens
+-- after that: the session ends, the document freezes with its last attempt
+-- `working`, and nothing ever revisits it. Measured live 2026-09-01 — `.dagr/`
+-- still held `run-w1-p6-1788279509710.json` from a run three hours earlier,
+-- carrying task `mot-dlg-1788282630477` `working` on pane `w1:p8`, a pane that
+-- no longer existed. The startup sweep reported nothing, and was right to: it
+-- enumerates PANES, and that pane was gone. Nobody was looking at the records.
+--
+-- SO THIS READS AND NEVER WRITES. One writer per file is what keeps two
+-- Motokos in one checkout from clobbering each other (§5) and it gets no
+-- exception for a file whose writer merely LOOKS dead — "looks dead" is the
+-- judgement P2-6 measured going wrong, one class over. What comes out is a
+-- sentence; the correction stays with whoever owns that file.
+
+pure func starts_with(s: string, pre: string) -> bool
+  { length(s) >= length(pre) && substring(s, 0, length(pre)) == pre }
+
+pure func ends_with(s: string, suf: string) -> bool
+  { length(s) >= length(suf) && substring(s, length(s) - length(suf), length(s)) == suf }
+
+-- A `.dagr/` entry this producer wrote in SOME session. `own_file` is this
+-- session's own basename and is never included — that is the one file we are
+-- the writer of, and its in-flight tasks are genuinely in flight. `run.json`
+-- fails the `run-` test on purpose: it is the hand-authored install probe and
+-- nothing about it is this producer's to read as a record.
+export pure func is_foreign_run_file(name: string, own_file: string) -> bool
+  tests [
+    (("run-w1-p6-100.json", "run-w1-p1-200.json"), true),
+    (("run-w1-p1-200.json", "run-w1-p1-200.json"), false),
+    (("run.json", "run-w1-p1-200.json"), false),
+    (("probe-alpha.txt", "run-w1-p1-200.json"), false),
+    ((".unparseable-w1-p1-200", "run-w1-p1-200.json"), false)
+  ]
+  { starts_with(name, "run-") && ends_with(name, ".json") && name != own_file }
+
+pure func has_str(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == needle then true else has_str(rest, needle)
+  }
+}
+
+pure func abandoned_of(ts: [Json], live: [string]) -> [string] {
+  match ts {
+    [] => [],
+    t :: rest => {
+      let tail = abandoned_of(rest, live);
+      let id = sfield(t, "id");
+      match last_of(arr_field(t, "attempts")) {
+        None => tail,
+        Some(a) => {
+          let pane = sfield(field(a, "locator"), "pane");
+          -- BOTH CONDITIONS, and the pane one is what makes this a fact rather
+          -- than a guess. An in-flight attempt whose pane is STILL THERE may be
+          -- a delegate of a session that is still running; saying it is
+          -- abandoned would be the same class of misreport this file exists to
+          -- prevent, pointed the other way.
+          if attempt_is_terminal(sfield(a, "state")) == false
+             && pane != "" && has_str(live, pane) == false
+          then "${id} (${sfield(t, "kind")}) on pane ${pane}" :: tail
+          else tail
+        }
+      }
+    }
+  }
+}
+
+-- Tasks in `content` whose latest attempt is still in flight on a pane that is
+-- not in `live`. An unparseable file yields nothing: we are not its writer and
+-- not its validator either.
+export pure func abandoned_tasks(content: string, live: [string]) -> [string] {
+  match decode(content) {
+    Err(_) => [],
+    Ok(doc) => abandoned_of(tasks_of(doc), live)
+  }
+}
+
+export pure func abandoned_tasks_str(content: string, live: [string]) -> string
+  tests [
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"kind\":\"review\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1"]), "mot-dlg-5 (review) on pane w1:p8"),
+    -- the pane is still there: not this function's call to make
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"kind\":\"review\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1", "w1:p8"]), ""),
+    -- settled work is not abandoned, whatever became of its pane
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"kind\":\"review\",\"attempts\":[{\"state\":\"done\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1"]), ""),
+    -- only the LATEST attempt counts: a1 lost, a2 running on a live pane
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"kind\":\"impl\",\"attempts\":[{\"state\":\"lost\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}",
+      ["w1:p9"]), ""),
+    (("not json", ["w1:p1"]), ""),
+    (("", ["w1:p1"]), "")
+  ]
+  { join(",", abandoned_tasks(content, live)) }
+
+pure func count_str(xs: [string]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + count_str(rest) }
+}
+
+-- REPORT, NEVER REPAIR, and the sentence says which. A model told "there is a
+-- stale record" without being told it is not its to fix will try to fix it.
+export pure func abandoned_report(items: [string]) -> string
+  tests [
+    ([], ""),
+    ((["run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8"]),
+     "\n\nStale delegation record: 1 task in another session's dagr run file is recorded still in flight on a pane that no longer exists (run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8). Nothing was changed: this session is not that file's writer and never writes to it. The record is stale, not the work — that delegate is gone, and its result, if any, was never collected.")
+  ]
+  {
+    match items {
+      [] => "",
+      _ => {
+        let n = count_str(items);
+        let noun = if n == 1 then "task" else "tasks";
+        let verb = if n == 1 then "is" else "are";
+        "\n\nStale delegation record: ${intToStr(n)} ${noun} in another session's dagr run file ${verb} recorded still in flight on a pane that no longer exists (${join(", ", items)}). Nothing was changed: this session is not that file's writer and never writes to it. The record is stale, not the work — ${if n == 1 then "that delegate is" else "those delegates are"} gone, and ${if n == 1 then "its result" else "their results"}, if any, ${if n == 1 then "was" else "were"} never collected."
+      }
+    }
+  }

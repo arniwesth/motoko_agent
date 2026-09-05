@@ -1,7 +1,26 @@
 # Handoff: implement F-5 (orphan ownership) and the dagr producer
 
 Date: 2026-08-31
-Status: **Ready. Every design question is settled; this is build order, specs, and fences.**
+Status: **Worked 2026-08-31. MOT-133, MOT-136 and MOT-134 are implemented on branch
+`arniwesth/mot-133-f-5-extension-side-tag-delegates-at-spawn-report-stale`; MOT-135 (tolerant
+envelope) is untouched, as intended. Two of the three "stop and report" triggers fired and are
+recorded below. One line of D2 could not be applied from inside the agent container —
+[`PATCH-agent-confined-reap-on-exit.md`](PATCH-agent-confined-reap-on-exit.md).**
+
+## What the build-order measurements found
+
+1. **Tokens do NOT survive a herdr server restart** — and neither do the delegates, which are killed
+   with it. The sweep is therefore same-server-lifetime, which is the whole of its population; no
+   name-based fallback was substituted.
+   [`MEASUREMENTS-2026-08-31-token-survival.md`](MEASUREMENTS-2026-08-31-token-survival.md).
+2. **The v0.3.1 validator rejects a kind-less task** (`E111`), so the `task` fallback this handoff
+   named is the one in force — and it found a second requirement the design never mentioned, `W205`
+   on a blocked task with no unblock owner.
+   [`MEASUREMENTS-2026-08-31-dagr-contract.md`](MEASUREMENTS-2026-08-31-dagr-contract.md).
+3. `agent list` output size never became a question: the sweep enumerates `pane list` instead, which
+   is a strict superset at the same one-call cost.
+
+Everything below is the brief as it was written, kept for the record.
 Specs (read in this order — they ARE the spec, this page only sequences them):
 1. [`DESIGN-f5-orphan-ownership.md`](DESIGN-f5-orphan-ownership.md) — accepted 2026-08-31, §6 has
    the decisions.

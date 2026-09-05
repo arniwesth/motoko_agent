@@ -468,6 +468,40 @@ COPY --from=herdr-sidebar-build --chown=${USERNAME}:${USERNAME} \
 RUN herdr plugin link /opt/herdr-sidebar \
     && herdr plugin list
 
+# ---------------------------------------------------------------------------- herdr-dagr (install)
+# The live delegation DAG viewer (`scripts/dagr-pane.sh`, MOT-136/137) and the contract
+# checker `make verify_dagr_producer` runs against. Installed with `plugin install`, not
+# `plugin link`: unlike herdr-sidebar this plugin publishes checksum-verified release
+# binaries, so its own `scripts/install.sh` fetches the binary for the exact pinned commit
+# and no Rust toolchain is needed in this image. Install works with no herdr server
+# running, which is what makes this possible at build time - and build time is the only
+# option, because nothing mounts /home/motoko, so a plugin installed at run time would
+# vanish on the next rebuild.
+#
+# PIN: Makefile DAGR_VERSION is the source of truth (CI parses it out of the Makefile
+# and refuses the skip with DAGR_REQUIRED=1). This re-reads it from the build context
+# rather than carrying a second version literal, so the two cannot drift. The symlink
+# puts `dagr` on PATH so `command -v dagr` - the first thing Makefile DAGR_BIN probes -
+# resolves without knowing the plugin's hashed install directory.
+#
+# The --chown is LOAD-BEARING, not tidiness. COPY lands as root:root whatever USER is in
+# effect, /tmp carries the sticky bit, and the `rm` below runs as ${USERNAME} - which is
+# EPERM on a root-owned file in a sticky directory, and `rm -f` does not swallow that (it
+# only swallows a missing file). The build failed exactly there: the plugin installed, then
+# the step died on the cleanup. Owning the file makes the removal the no-op it was meant
+# to be. It shrinks nothing either way - the COPY layer keeps the bytes - it just stops a
+# stale pin from sitting in the running container's /tmp.
+COPY --chown=${USERNAME}:${USERNAME} Makefile /tmp/motoko_Makefile.pin
+RUN version="$(sed -nE 's/^DAGR_VERSION \?= ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' /tmp/motoko_Makefile.pin | head -n1)" \
+    && test -n "$version" \
+    && herdr plugin install aemrebarut/herdr-dagr --ref "v${version}" --yes \
+    && rm -f /tmp/motoko_Makefile.pin \
+    && herdr plugin list | grep -q herdr-dagr \
+    && ln -sf "$(ls /home/${USERNAME}/.config/herdr/plugins/github/herdr-dagr-*/bin/dagr | head -n1)" \
+         /home/${USERNAME}/.local/bin/dagr \
+    && /home/${USERNAME}/.local/bin/dagr --version
+
+
 
 # ---------------------------------------------------------------------------- the hand tools, wired up
 # Three of the tools above do nothing useful as a bare binary on PATH — they are shell and git

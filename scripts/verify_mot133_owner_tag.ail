@@ -1,0 +1,378 @@
+-- scripts/verify_mot133_owner_tag.ail
+--
+-- MOT-133 / F-5: `motoko-ext-herdr` must tag every delegate pane it spawns with
+-- an ownership token, and must report — but by default never close — panes
+-- carrying a tag from a Motoko session that is gone.
+--
+-- What is pinned here, and why each case exists:
+--
+--   1. the tag is issued, with the exact argv, AFTER the spawn succeeded
+--   2. a failed tag degrades to a note and the delegation still succeeds (D1:
+--      an untagged delegate is merely unsweepable, which is the status quo)
+--   3. a stale pane is REPORTED and NOT closed by default (D3, the rung that
+--      can destroy another session's work)
+--   4. HERDR_SWEEP_STALE=1 closes it, by explicit pane id
+--   5. a pane whose owner is still alive is left alone and unmentioned
+--   6. the sweep is once per run: with the sentinel present, nothing is swept
+--
+-- Every case drives the exported `on_tool_handle` with scripted ports — no
+-- herdr, no filesystem. The scripted `tool_handle` RECORDS each argv into the
+-- world token, so "the tag was issued" is asserted against the actual call
+-- rather than inferred from the prose.
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run \
+--     --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main scripts/verify_mot133_owner_tag.ail
+--
+-- Prints one OK/FAIL line per case; exits non-zero on any FAIL.
+module scripts/verify_mot133_owner_tag
+
+import std/io (println, exit)
+import std/json (Json, jo, ja, kv, js, jnum, encode, decode, get, asArray, asString)
+import std/string (contains, join)
+import std/option (Some, None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtClockReading,
+  ExtDirListing,
+  ToolCallEnvelope, ToolResultEnvelope, ToolHandleOutcome, ToolHandleDecision,
+  Handled, Delegate, BudgetPlan, empty_ext_world
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle)
+
+-- ---------------------------------------------------------------------------
+-- The call log, carried in the world token
+-- ---------------------------------------------------------------------------
+--
+-- `ExtWorld` is `{ token: Json }` and the ports thread it, so the world IS the
+-- recorder: no mutable state, and the assertions read what the extension
+-- actually sent.
+
+func log_of(w: ExtWorld) -> [Json] {
+  match asArray(w.token) { Some(xs) => xs, None => [] }
+}
+
+func record(w: ExtWorld, entry: string) -> ExtWorld {
+  { token: ja(log_of(w) ++ [js(entry)]) }
+}
+
+func log_lines(w: ExtWorld) -> [string] {
+  match asArray(w.token) {
+    None => [],
+    Some(xs) => strings_of(xs)
+  }
+}
+
+func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (match asString(x) { Some(s) => s, None => "" }) :: strings_of(rest)
+  }
+}
+
+func log_text(w: ExtWorld) -> string { join("\n", log_lines(w)) }
+
+-- ---------------------------------------------------------------------------
+-- A scripted herdr
+-- ---------------------------------------------------------------------------
+
+func argv_text(args_json: string) -> string {
+  match decode(args_json) {
+    Err(_) => "",
+    Ok(o) => match get(o, "args") {
+      None => "",
+      Some(a) => match asArray(a) { Some(xs) => join(" ", strings_of(xs)), None => "" }
+    }
+  }
+}
+
+func envelope(stdout: string, stderr: string, code: int) -> string {
+  encode(jo([kv("stdout", js(stdout)), kv("stderr", js(stderr)),
+             kv("exit_code", jnum(_int_to_float(code)))]))
+}
+
+func herdr_error(code: string) -> string {
+  encode(jo([kv("error", jo([kv("code", js(code)), kv("message", js("scripted"))]))]))
+}
+
+-- Canned answers for the calls a successful `Delegate` makes, plus whatever the
+-- case under test wants back from `pane list` and `pane report-metadata`.
+func scripted(pane_list_out: string, tag_ok: bool)
+  -> (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS} {
+  func(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+    let argv = argv_text(args_json);
+    let w = record(world, argv);
+    if contains(argv, "pane split") then
+      { output: envelope("{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"},\"type\":\"pane_info\"}}", "", 0),
+        exit_code: 0, next_state: w }
+    else if contains(argv, "agent explain") then
+      { output: envelope("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}", "", 0),
+        exit_code: 0, next_state: w }
+    else if contains(argv, "pane list") then
+      { output: envelope(pane_list_out, "", 0), exit_code: 0, next_state: w }
+    else if contains(argv, "pane report-metadata") then
+      if tag_ok then { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: w }
+      else { output: envelope("", herdr_error("pane_not_found"), 1), exit_code: 1, next_state: w }
+    else
+      { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: w }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Filesystem: the task file writes, and the sweep sentinel is absent or present
+-- ---------------------------------------------------------------------------
+
+func ok_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: world }
+}
+
+func ok_dir(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: world }
+}
+
+func no_file(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: false, content: "", next_state: world }
+}
+
+func swept_already(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, ".sweep-") then { present: true, content: "200", next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+func fixed_clock(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 1787475040757, next_state: world }
+}
+
+func ports_for(pane_list_out: string, tag_ok: bool,
+               read: (ExtWorld, string) -> ExtFileRead ! {FS}) -> ExtPorts {
+  let base = noop_ext_ports();
+  { ai_step: base.ai_step,
+    tool_handle: scripted(pane_list_out, tag_ok),
+    file_read: read,
+    file_write: ok_write,
+    file_remove: base.file_remove,
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: ok_dir,
+    clock_now: fixed_clock,
+    env_get: base.env_get }
+}
+
+-- The F1 fixture: `.dagr/` holds ANOTHER session's run file, and that file
+-- records a task still `working` on a pane the pane list does not contain.
+func dagr_dir_list(world: ExtWorld, path: string) -> ExtDirListing ! {FS} {
+  if contains(path, ".dagr")
+  then { present: true,
+         entries: ["run-w1-p6-100.json", "run-w1-p1-200.json", "run.json", "probe-alpha.txt"],
+         next_state: world }
+  else { present: false, entries: [], next_state: world }
+}
+
+-- w1:p8 is not in either pane-list fixture, so the record is provably stale.
+func stale_record() -> string {
+  "{\"dagr\":3,\"tasks\":[{\"id\":\"mot-dlg-77\",\"kind\":\"review\",\"state\":\"working\",\"attempts\":[{\"id\":\"mot-dlg-77·a1\",\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]}],\"events\":[]}"
+}
+
+-- This session's OWN run file carries an in-flight task too, on a pane that is
+-- equally absent. It must NOT be reported: we are its writer and that task is
+-- genuinely in flight.
+func own_record() -> string {
+  "{\"dagr\":3,\"tasks\":[{\"id\":\"mot-dlg-99\",\"kind\":\"impl\",\"state\":\"working\",\"attempts\":[{\"id\":\"mot-dlg-99·a1\",\"state\":\"working\",\"locator\":{\"pane\":\"w1:pZ\"}}]}],\"events\":[]}"
+}
+
+func dagr_files(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, "run-w1-p6-100.json") then { present: true, content: stale_record(), next_state: world }
+  else if contains(path, "run-w1-p1-200.json") then { present: true, content: own_record(), next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+func ports_with_dagr(pane_list_out: string) -> ExtPorts {
+  let base = ports_for(pane_list_out, true, dagr_files);
+  { base | dir_list: dagr_dir_list }
+}
+
+func mk_ctx(ports: ExtPorts) -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-mot133", step: 0, model: "test-model", cwd: "/tmp",
+    hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
+    env_server_url: "", budget_remaining: 4, history_slice: [],
+    state_key: "test", context_limit: 0, ports: ports,
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: empty_ext_world() }
+}
+
+-- own pane w1:p1, session 200 -> this session's token is `w1:p1:200`.
+func mk_cfg(sweep_stale: bool) -> HerdrConfig {
+  { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
+    allowed_kinds: "claude", depth: 0, max_depth: 1, motoko_script: "./x.sh",
+    session_ms: "200", sweep_stale: sweep_stale, dagr_dir: "/tmp/.dagr",
+    -- MOT-137 off: the view pane has its own gate
+    -- (`verify_mot137_dagr_pane.ail`) and tags with the SAME argv this file
+    -- asserts on, so leaving it on here would make "the tag was issued" true
+    -- for the wrong pane.
+    dagr_pane: false,
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000 }
+}
+
+func delegate_call() -> ToolCallEnvelope {
+  { id: "c1", tool: "Delegate", arguments: jo([kv("prompt", js("do a thing"))]) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Pane-list fixtures
+-- ---------------------------------------------------------------------------
+
+-- w1:pB is tagged by session w1:p7:100, and w1:p7 is NOT in the list -> stale.
+func panes_with_stale() -> string {
+  "{\"id\":\"cli:pane:list\",\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:pB\",\"tokens\":{\"mot-owner\":\"w1:p7:100\"}}],\"type\":\"pane_list\"}}"
+}
+
+-- Same tag, but w1:p7 is alive -> foreign, hands off.
+func panes_with_foreign() -> string {
+  "{\"id\":\"cli:pane:list\",\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:p7\"},{\"pane_id\":\"w1:pB\",\"tokens\":{\"mot-owner\":\"w1:p7:100\"}}],\"type\":\"pane_list\"}}"
+}
+
+-- ---------------------------------------------------------------------------
+-- Cases
+-- ---------------------------------------------------------------------------
+
+type Case = {
+  label: string,
+  ports: ExtPorts,
+  sweep_stale: bool,
+  expect_exit: int,
+  expect_in_out: [string],
+  -- The negative on the RESULT TEXT, which the log-side pair already had. A
+  -- report that names the wrong file is worse than no report, and only a
+  -- must-not-appear assertion can catch that.
+  expect_not_in_out: [string],
+  expect_in_log: [string],
+  expect_not_in_log: [string]
+}
+
+func all_contained(hay: string, needles: [string]) -> bool {
+  match needles {
+    [] => true,
+    n :: rest => if contains(hay, n) then all_contained(hay, rest) else false
+  }
+}
+
+func none_contained(hay: string, needles: [string]) -> bool {
+  match needles {
+    [] => true,
+    n :: rest => if contains(hay, n) then false else none_contained(hay, rest)
+  }
+}
+
+func run_case(c: Case) -> bool ! {IO, Process, FS, Clock} {
+  let out = on_tool_handle(mk_cfg(c.sweep_stale), mk_ctx(c.ports), delegate_call());
+  let calls = log_text(out.next_state);
+  match out.decision {
+    Delegate => {
+      println("FAIL: ${c.label} — on_tool_handle delegated a Delegate call");
+      false
+    },
+    Handled(r) => {
+      let text = "${r.stdout}${r.stderr}";
+      if r.exit_code != c.expect_exit then {
+        println("FAIL: ${c.label} — exit ${show(r.exit_code)} (wanted ${show(c.expect_exit)}); out: ${text}");
+        false
+      } else if all_contained(text, c.expect_in_out) == false then {
+        println("FAIL: ${c.label} — result text missing an expected phrase; out: ${text}");
+        false
+      } else if none_contained(text, c.expect_not_in_out) == false then {
+        println("FAIL: ${c.label} — result text carried a forbidden phrase; out: ${text}");
+        false
+      } else if all_contained(calls, c.expect_in_log) == false then {
+        println("FAIL: ${c.label} — expected herdr call not issued; calls:\n${calls}");
+        false
+      } else if none_contained(calls, c.expect_not_in_log) == false then {
+        println("FAIL: ${c.label} — a forbidden herdr call was issued; calls:\n${calls}");
+        false
+      } else {
+        println("OK: ${c.label}");
+        true
+      }
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let tag_argv = "pane report-metadata w1:pA --source motoko-delegate --token mot-owner=w1:p1:200";
+
+  let c1 = run_case({
+    label: "delegate pane is tagged with this session's ownership token",
+    ports: ports_for(panes_with_foreign(), true, no_file),
+    sweep_stale: false, expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA"],
+    expect_not_in_out: [],
+    expect_in_log: [tag_argv],
+    expect_not_in_log: ["Ownership tagging failed"] });
+
+  let c2 = run_case({
+    label: "a failed tag degrades to a note and the delegation still succeeds (D1)",
+    ports: ports_for(panes_with_foreign(), false, no_file),
+    sweep_stale: false, expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA", "Ownership tagging failed"],
+    expect_not_in_out: [],
+    expect_in_log: [tag_argv],
+    expect_not_in_log: [] });
+
+  let c3 = run_case({
+    label: "a stale-owner pane is reported and NOT closed by default (D3)",
+    ports: ports_for(panes_with_stale(), true, no_file),
+    sweep_stale: false, expect_exit: 0,
+    expect_in_out: ["Orphan sweep", "w1:pB", "Nothing was closed"],
+    expect_not_in_out: [],
+    expect_in_log: ["pane list"],
+    expect_not_in_log: ["pane close w1:pB"] });
+
+  let c4 = run_case({
+    label: "HERDR_SWEEP_STALE=1 closes the stale pane, by explicit id",
+    ports: ports_for(panes_with_stale(), true, no_file),
+    sweep_stale: true, expect_exit: 0,
+    expect_in_out: ["Orphan sweep: closed 1 pane", "w1:pB"],
+    expect_not_in_out: [],
+    expect_in_log: ["pane close w1:pB"],
+    expect_not_in_log: [] });
+
+  let c5 = run_case({
+    label: "a pane whose owner is still alive is left alone and unmentioned",
+    ports: ports_for(panes_with_foreign(), true, no_file),
+    sweep_stale: true, expect_exit: 0,
+    expect_in_out: [],
+    expect_not_in_out: [],
+    expect_in_log: ["pane list"],
+    expect_not_in_log: ["pane close w1:pB", "pane close w1:p7"] });
+
+  -- F1, measured 2026-09-01: a run file from a session that ended mid-flight
+  -- sat in `.dagr/` with a task `working` on a pane that no longer existed, and
+  -- the sweep said nothing — it enumerates panes, and that pane was gone.
+  let c5b = run_case({
+    label: "an in-flight task in ANOTHER session's run file is reported when its pane is gone",
+    ports: ports_with_dagr(panes_with_foreign()),
+    sweep_stale: false, expect_exit: 0,
+    expect_in_out: ["Stale delegation record", "run-w1-p6-100.json", "mot-dlg-77", "w1:p8",
+                    "Nothing was changed"],
+    -- The other half, and the one that keeps this from being noise: THIS
+    -- session's own run file carries an identical in-flight task on an equally
+    -- absent pane (`mot-dlg-99` on `w1:pZ`), and it must not appear. We are
+    -- that file's writer and its work is live. `run.json` is the hand-authored
+    -- install probe and is not this producer's record to read at all.
+    expect_not_in_out: ["mot-dlg-99", "run.json", "probe-alpha"],
+    expect_in_log: ["pane list"],
+    expect_not_in_log: ["pane close"] });
+
+  let c6 = run_case({
+    label: "the sweep is once per run: with the sentinel present nothing is enumerated",
+    ports: ports_for(panes_with_stale(), true, swept_already),
+    sweep_stale: true, expect_exit: 0,
+    expect_in_out: [],
+    expect_not_in_out: [],
+    expect_in_log: [],
+    expect_not_in_log: ["pane list", "pane close w1:pB"] });
+
+  if c1 && c2 && c3 && c4 && c5 && c5b && c6 then () else exit(1)
+}

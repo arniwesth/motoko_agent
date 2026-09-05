@@ -75,6 +75,45 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- How a motoko delegate is launched. Relative to the pane's cwd, which is
     -- the delegate's working directory.
     motoko_script: getEnvOr("HERDR_MOTOKO_SCRIPT", "./scripts/run-agent.sh"),
+    -- THE RUN IDENTITY, AND IT IS NOT MINTED HERE. F-5's ownership token is
+    -- `<own pane>:<session-start-ms>`, and the TUI's exit-time reaper
+    -- (HERDR_REAP_ON_EXIT) has to build the SAME string on the other side of a
+    -- language boundary. One clock, minted once by the TUI in
+    -- `src/tui/src/herdr-owner-token.ts` and forwarded as MOTOKO_SESSION_MS by
+    -- `buildChildEnv`. A local clock here would look right and match nothing.
+    --
+    -- Unset is a real case, not a bug: `ailang run` invoked without the TUI.
+    -- Empty disables tagging and the sweep, with a note on the delegation —
+    -- degrading to today's behaviour, which is what D1 asks for.
+    -- This is a MOT-118-class duplicated rule; the format lives in
+    -- `types.owner_token_value` and its TypeScript twin.
+    session_ms: getEnvOr("MOTOKO_SESSION_MS", ""),
+    -- D3, held firmly: reporting is the default and closing is opt-in. This is
+    -- the only rung that can destroy another session's work.
+    sweep_stale: getEnvOr("HERDR_SWEEP_STALE", "") == "1",
+    -- THE dagr RUN FILE'S HOME. Inside the workdir for `work_dir`'s reason —
+    -- AILANG_FS_SANDBOX is pinned there and a write outside it terminates the
+    -- run — and NOT a plain `.dagr/run.json`: the file name carries the pane
+    -- and the session so that two Motokos in one checkout, which is an ordinary
+    -- way to use herdr, cannot clobber each other. Point the dagr pane at it
+    -- with DAGR_RUN; it also finds `.dagr/*.json` on its own.
+    --
+    -- Producing the file costs nothing when nobody reads it, so this is not
+    -- gated on the dagr binary being installed — the same philosophy as the
+    -- tool gate above, one level down: write, and let the view be absent.
+    dagr_dir: getEnvOr("MOTOKO_DAGR_DIR", "${workdir}/.dagr"),
+    -- SHOW THE VIEW, DON'T JUST WRITE IT (MOT-137). Opt-in, and it is the same
+    -- rung rule `sweep_stale` above follows: reporting is the default, and
+    -- anything that mutates the operator's workspace — closing their panes,
+    -- splitting their terminal — waits to be asked. A package that split the
+    -- screen of everyone who inherited it would be making a layout decision on
+    -- their behalf from inside a tool call.
+    --
+    -- This repo's own container sets it (`.devcontainer/agent_confined/
+    -- docker-compose.yml`), which is where "always on for us, inert for
+    -- everyone else" belongs — the same place HERDR_REAP_ON_EXIT and
+    -- HERDR_ALLOWED_KINDS make their profile-local calls.
+    dagr_pane: getEnvOr("HERDR_DAGR_PANE", "") == "1",
     -- BELOW MOTOKO'S 30s PROCESS WALL BY CONSTRUCTION. herdr's own default for
     -- `agent start --timeout` is 30000 — exactly Motoko's — so leaving this
     -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is

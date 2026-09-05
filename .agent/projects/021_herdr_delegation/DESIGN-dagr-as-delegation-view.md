@@ -2,8 +2,10 @@
 
 Date: 2026-08-26. Revised 2026-08-30 twice (§3–§4 rewritten against the code, §5–§8 extended; then
 a delegated codex review, 18 findings, folded in; see §9).
-Status: **Design. Not implemented. No Linear issue yet.** The F-5 dependency is **resolved as a
-design question** (accepted 2026-08-31,
+Status: **Implemented 2026-08-31 (MOT-136), against MOT-133's tag-at-spawn.** The mapping below is
+the spec the code follows; where the v0.3.1 binary disagreed with it, the measurement is cited
+inline and [`MEASUREMENTS-2026-08-31-dagr-contract.md`](MEASUREMENTS-2026-08-31-dagr-contract.md)
+has the probes. The F-5 dependency was **resolved as a design question** (accepted 2026-08-31,
 [`DESIGN-f5-orphan-ownership.md`](DESIGN-f5-orphan-ownership.md)); sequencing now means landing
 the producer with or after F-5's *implementation*, not waiting on a decision.
 Provenance: `herdr-dagr` v0.3.1 installed and probed this session (§7 is measured). The mapping in
@@ -97,15 +99,25 @@ The first draft said every delegate is renamed with `agent rename`; the recipe i
 was superseded by `types.motoko_handle` and the code renames nothing. The contract rule the draft
 was protecting — pane ids never in `id` — still holds via `handle_name`.
 
+**One deviation, made at implementation and worth stating because this table says otherwise.**
+`owner` does not carry the full `mot-dlg-<ms>@<pane>` handle; it carries the **pane-free key of the
+handle the task currently belongs to**. It had to become load-bearing: `retry_of` appends attempt
+*n* to an EXISTING task, so from that moment the handle the model holds is not the task id, and
+something in the document has to say which task a later `DelegateCheck` is about. `owner` is that
+something — it starts equal to the id and moves on a linked retry. Nothing is lost: the pane half of
+the handle is already in `locator.pane`, which is where the contract wants it.
+
 Fields **not** emitted, and why:
 
 - `kind`: emitted only from the model's own declaration. **Decided 2026-08-31 (§8 item 7):**
   `Delegate` grows an optional `task_kind: impl|review|research|test|docs` parameter — enumerated,
   not free text, or every session invents a vocabulary — bundled with `retry_of` so the model sees
-  one schema migration, not two. Omitted → the producer omits `kind`, assuming the v0.3.1 binary
-  accepts a kind-less task (the handoff must verify this once; if it refuses, fall back to a
-  deliberately neutral `task`). Never derive it from agent kind: a review delegated to claude is
+  one schema migration, not two. Never derive it from agent kind: a review delegated to claude is
   still a review. A model mislabel costs a wrong glyph, nothing operational.
+  **Measured 2026-08-31, and the assumption was wrong**
+  ([`MEASUREMENTS-2026-08-31-dagr-contract.md`](MEASUREMENTS-2026-08-31-dagr-contract.md)): a
+  kind-less task is **rejected** — `E111 … missing kind` — so the fallback this section named is
+  the one in force. Omitted, or outside the enumeration → `task`, deliberately neutral.
 - `model`: nothing selects or records one (`DESIGN-delegate-model-selection.md`). A guessed chip is
   a fabrication; omit until selection lands.
 
@@ -118,7 +130,7 @@ Fields **not** emitted, and why:
 | `do_check`: `agent wait` fails, not `timeout` | classify the code (§4): `agent_not_found` → `lost`; anything else → no write |
 | `do_check`: `agent get` fails | same classification |
 | `do_check` branch 1: answer present and non-empty | settle `done` per §4 |
-| `do_check` branch 2: `blocked` | task `blocked`; attempt stays `working`; latch `prompt_acknowledged: true` |
+| `do_check` branch 2: `blocked` | task `blocked`; attempt stays `working`; latch `prompt_acknowledged: true`; **set `unblock`** — measured: `--strict` refuses a blocked task that names no unblock owner (W205), and on this path the unblocker is always a human at that pane. Cleared again when the task moves on |
 | `do_check` branch 3: `is_settled(status)`, no answer | settle `settled_unverified` per §4 |
 | `do_check` branch 4: anything else, incl. wait `timeout` | refresh liveness (§3.4); task stays `working`. **A wait timeout observes nothing terminal** and never settles |
 | reap via `pane close` | no state change. The close result is currently ignored on both success paths; the producer should read it and append a `note` event when the close failed rather than assert the locator is stale |
@@ -138,6 +150,10 @@ Fields **not** emitted, and why:
 
 The contract's `liveness` block has three fields. dagr renders `last_output_at` as staleness
 (`14m silent`), so a value the producer did not observe is a misreport, not a placeholder.
+
+Measured 2026-08-31: a working attempt whose `liveness` carries **only**
+`prompt_acknowledged` passes `--strict` — no W204/W208 — so the honest document is also a valid
+one and the omissions below never trade against CI.
 
 | field | source | emitted? |
 |---|---|---|
@@ -445,7 +461,8 @@ at their sections):
 6. **Typed answer envelope** (§4.2) — **decided: free text now, tolerant envelope as its own
    follow-up, strict only if the tolerant one measures well.**
 7. **`task_kind` on `Delegate`** (§3.1) — **decided: in v1, bundled with `retry_of`;** enumerated
-   values, omitted → no `kind` emitted.
+   values, omitted → `kind: "task"` (the fallback, since a kind-less task is rejected — measured
+   2026-08-31).
 
 One code fix stood on its own, independent of dagr: `do_check` (claude/codex) read herdr state
 before the answer file, losing a delivered answer when the pane was gone. **Fixed and merged**

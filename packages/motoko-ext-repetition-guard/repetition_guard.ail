@@ -1,0 +1,314 @@
+module sunholo/motoko_ext_repetition_guard/repetition_guard
+
+-- THE ONLY GUARD IN THIS TREE THAT ARGUES FOR STOPPING.
+--
+-- `empty_stop_guard` and `progress_contract_guard` both push the model to
+-- CONTINUE. Nothing pushed the other way, and on 2026-09-01 a live session
+-- showed what that costs: after answering a question, the model ran 197 steps of
+-- one cycle -- open a herdr pane, `sleep 2`, read it, close it -- re-emitting
+-- the same ~1KB answer every ~15 seconds for twenty minutes, spawning and
+-- closing about ninety panes, and it was still going when the log ended. No
+-- `run_summary`, no `done`. `agent.max_steps` was 300 and was never reached; it
+-- was the only ceiling there was.
+-- (`.motoko/logfile/session_2026-09-01T19-12-41-501Z.jsonl`, steps 0-196.)
+--
+-- TWO SHAPES, TWO HOOKS, because the loop that actually happened is invisible to
+-- the hook you would reach for first.
+--
+--   `SolverJudge` fires ONLY on a step with no tool calls (`session.ail`'s
+--   `hybrid_attempt = None` arm). Every step of the observed loop carried a
+--   `BashExec` call, so a finalize-side guard alone would have watched the whole
+--   thing go past. It is still the right hook for the OTHER shape -- a model
+--   that has stopped calling tools and is only restating its answer -- and that
+--   is what `decide_answer` is for.
+--
+--   `ToolPolicy` fires on every tool call, and that is where the observed loop
+--   lives. `decide_call` is the half that ends it.
+--
+-- WHAT THE OBSERVED LOOP REPEATED, and it is not what the obvious design
+-- assumes. The first version of this guard counted identical (call, RESULT)
+-- pairs -- the discriminator that keeps a poll safe -- and replaying it over the
+-- real transcript it fired NEVER. The runaway call was `herdr plugin pane open`,
+-- byte-identical 84 times, and every result differed: each open returns a fresh
+-- pane id. Identical call, never an identical answer.
+--
+-- What WAS byte-identical was the prose. One ~2KB assistant message, emitted 85
+-- times, each time alongside a tool call. So `decide_call` carries two rules and
+-- the second is the one that catches this shape:
+--
+--   A. the same (call, result) pair `call_budget` times -- same question, same
+--      answer, no progress. This is the shape a settled poll degenerates into.
+--   B. the message CARRYING the call restates prose the assistant has already
+--      emitted verbatim. A model rewriting the same 2KB answer for the third
+--      time is not working, whatever its tool call says.
+--
+-- Replayed over the real transcript, B denies at step 31 of 197: 166 steps and
+-- 82 of the 84 pane opens that never happen.
+--
+-- WHAT THIS CANNOT DO, stated plainly because the gap is load-bearing: NO
+-- EXTENSION SEAM CAN HALT A TOOL-CALLING LOOP. `ToolPolicyDecision` has no
+-- terminal variant; a denied call returns a denial to the model and the loop
+-- goes round again. What denial buys is that the call NEVER EXECUTES -- no pane,
+-- no `sleep`, no subprocess -- so a runaway costs a model round-trip instead of
+-- two herdr panes and two seconds of wall clock, and the model is told, in the
+-- one place it is guaranteed to read, that it is repeating itself. The hard
+-- ceiling is still `agent.max_steps`.
+--
+-- `Pending(reason, DenyAfterTimeout)` WOULD halt -- it suspends the run for an
+-- operator decision -- and it is deliberately not used. Nothing in this tree
+-- returns `Pending` yet, `approval_read` blocks on the operator, and turning a
+-- runaway loop into a hung session is a worse failure than the one being fixed.
+-- That trade is an operator's to make, not this guard's.
+
+import std/string (trim, intToStr, length)
+import std/json (encode, decode)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, Msg, ToolCall, ToolCallEnvelope,
+  ToolPolicyDecision, Deny, NoOpinion,
+  FinalizeDecision, Accept, NoDecision
+)
+
+export pure func guard_marker() -> string
+  tests [((), "[motoko-repetition-guard]")]
+  { "[motoko-repetition-guard]" }
+
+-- HOW MANY IDENTICAL (call, result) PAIRS BEFORE A CALL IS REFUSED.
+--
+-- Five, and the number is a false-positive budget rather than a guess at when a
+-- loop starts. Polling is the legitimate shape that looks most like a loop --
+-- the herdr integration prompt asks for eight `DelegateCheck` calls on one
+-- handle -- and it is only counted here when the RESULT is byte-identical too,
+-- which a poll whose state is moving never is. Five identical answers to five
+-- identical questions is not progress under any reading.
+export pure func call_budget() -> int
+  tests [((), 5)]
+  { 5 }
+
+-- HOW MANY PRIOR EMISSIONS OF THE SAME PROSE BEFORE IT COUNTS AS RESTATEMENT.
+-- Two, so the third is the one that acts. Lower than `call_budget` on purpose: a
+-- repeated tool call may still be doing something, and repeated prose cannot.
+-- Used by both halves -- it is one judgement ("this text is a restatement"), and
+-- the halves differ only in what they do about it.
+export pure func answer_budget() -> int
+  tests [((), 2)]
+  { 2 }
+
+-- HOW LONG A REPEATED TEXT MUST BE TO COUNT AS RESTATEMENT AT ALL.
+--
+-- A model narrating its way through a task says "Now let me run the tests." more
+-- than twice in a session and is working fine; nobody writes the same PARAGRAPH
+-- three times while making progress. 200 characters is the line between the two
+-- and it is a judgement, not a measurement -- the text that triggered this guard
+-- was 1969. It only ever makes the guard fire LESS, so an operator who wants
+-- narration caught can lower it.
+export pure func restate_min_chars() -> int
+  tests [((), 200)]
+  { 200 }
+
+-- ---------------------------------------------------------------------------
+-- Comparing calls
+-- ---------------------------------------------------------------------------
+--
+-- `ToolCall.arguments` is the raw JSON STRING the provider sent and
+-- `ToolCallEnvelope.arguments` is decoded `Json`, so the two sides of every
+-- comparison arrive in different shapes and the same call can differ by nothing
+-- but whitespace. Both are normalised through decode-then-encode; a string that
+-- will not decode compares as itself, which can only ever make this guard fire
+-- LESS.
+
+export pure func canon(raw: string) -> string
+  tests [
+    ("{ \"a\" : 1 }", "{\"a\":1}"),
+    ("not json", "not json"),
+    ("", "")
+  ]
+  { match decode(raw) { Ok(j) => encode(j), Err(_) => raw } }
+
+export pure func signature(tool: string, args: string) -> string
+  tests [(("BashExec", "{ \"cmd\" : \"ls\" }"), "BashExec {\"cmd\":\"ls\"}")]
+  { "${tool} ${canon(args)}" }
+
+export pure func call_signature(call: ToolCallEnvelope) -> string
+  { signature(call.tool, encode(call.arguments)) }
+
+pure func msg_signature(c: ToolCall) -> string
+  { signature(c.name, c.arguments) }
+
+-- ---------------------------------------------------------------------------
+-- Pairing a historical call with the result it got
+-- ---------------------------------------------------------------------------
+--
+-- THE RESULT IS HALF THE TEST, and without it this guard breaks delegation
+-- polling on its first run. A `tool`-role message carries `tool_call_id`, so the
+-- pairing is exact rather than positional -- a batch of parallel calls has
+-- several results in flight at once and position says nothing about which is
+-- which.
+
+type Seen = { sig: string, out: string }
+
+pure func result_for(msgs: [Msg], id: string) -> string {
+  match msgs {
+    [] => "",
+    m :: rest =>
+      if m.role == "tool" && m.tool_call_id == id then m.content
+      else result_for(rest, id)
+  }
+}
+
+pure func pair_calls(all: [Msg], cs: [ToolCall]) -> [Seen] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let out = result_for(all, c.id);
+      let tail = pair_calls(all, rest);
+      -- A call still in flight has no result yet, and an unanswered call is not
+      -- evidence of anything.
+      if out == "" then tail else { sig: msg_signature(c), out: out } :: tail
+    }
+  }
+}
+
+pure func calls_of(all: [Msg], msgs: [Msg]) -> [Seen] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      let tail = calls_of(all, rest);
+      if m.role == "assistant" then pair_calls(all, m.tool_calls) ++ tail else tail
+    }
+  }
+}
+
+pure func count_matching(xs: [Seen], sig: string, out: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest =>
+      (if x.sig == sig && x.out == out then 1 else 0) + count_matching(rest, sig, out)
+  }
+}
+
+pure func max_for_sig(all: [Seen], xs: [Seen], sig: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => {
+      let here = if x.sig == sig then count_matching(all, sig, x.out) else 0;
+      let tail = max_for_sig(all, rest, sig);
+      if here > tail then here else tail
+    }
+  }
+}
+
+-- The most any single (call, result) PAIR carrying this signature has been seen.
+-- Grouping by the pair rather than by the call alone is what keeps a moving poll
+-- out of the count: eight `DelegateCheck`s reporting eight different elapsed
+-- times are eight distinct pairs, and none of them reaches the budget.
+export pure func worst_repeat(ctx: ExtCtx, sig: string) -> int {
+  let seen = calls_of(ctx.history_slice, ctx.history_slice);
+  max_for_sig(seen, seen, sig)
+}
+
+export pure func deny_message(tool: string, n: int) -> string {
+  "`${tool}` has already been called ${intToStr(n)} times in this run with these exact arguments, and returned byte-identical output every time. It will return the same thing again, so this call was NOT executed and nothing about the world has changed since the first one. Either do something different, or -- if you are finished -- stop calling tools and state your final answer. ${guard_marker()}"
+}
+
+export pure func restate_message(tool: string, n: int) -> string {
+  "This message repeats, word for word, an answer you have already given ${intToStr(n)} times, so the `${tool}` call attached to it was NOT executed. You are re-verifying something you have already verified and re-stating something you have already said. If the work is done, say so once and stop calling tools; if it is not, do something you have not already done. ${guard_marker()}"
+}
+
+-- The prose carried by the message making this call. `history_slice` at
+-- `ToolPolicy` time is `st.msgs ++ [assistant]` (`session.ail`'s
+-- `pending_tool_context`), so the last assistant message IS the one being
+-- policed, and everything before it is what to compare against.
+pure func last_assistant(msgs: [Msg], best: string) -> string {
+  match msgs {
+    [] => best,
+    m :: rest => last_assistant(rest, if m.role == "assistant" then m.content else best)
+  }
+}
+
+export pure func restating(ctx: ExtCtx, budget: int, min_chars: int) -> int {
+  let text = trim(last_assistant(ctx.history_slice, ""));
+  if length(text) < min_chars then 0
+  else {
+    let n = prior_answers(ctx, text);
+    if n >= budget then n else 0
+  }
+}
+
+-- THE TOOL-SIDE HALF. `NoOpinion`, never `Allow`: another extension's policy may
+-- have something to say about this call, and an `Allow` here would speak over
+-- it. This guard has an opinion about exactly one thing.
+--
+-- A BUDGET OF ZERO OR LESS TURNS THIS HALF OFF, and the rule lives here rather
+-- than in `register`'s env reader so that "disabled" is a property of the budget
+-- and is covered by the same gate as everything else. An operator reproducing a
+-- loop needs the guard inert, and inert is not the same as absent: the atom
+-- still registers and still abstains, so nothing downstream changes shape.
+export pure func decide_call_with_budget(ctx: ExtCtx, call: ToolCallEnvelope, budget: int) -> ToolPolicyDecision {
+  decide_call_full(ctx, call, budget, answer_budget(), restate_min_chars())
+}
+
+export pure func decide_call_full(ctx: ExtCtx, call: ToolCallEnvelope,
+                                  budget: int, restate_budget: int, min_chars: int) -> ToolPolicyDecision {
+  if budget <= 0 then NoOpinion
+  else {
+    let n = worst_repeat(ctx, call_signature(call));
+    if n >= budget then Deny(deny_message(call.tool, n))
+    else {
+      -- Rule B, and it is checked second only because rule A names a more
+      -- specific fault when both hold. `restate_budget <= 0` disables it the
+      -- same way `budget <= 0` disables the whole half.
+      let r = if restate_budget <= 0 then 0 else restating(ctx, restate_budget, min_chars);
+      if r > 0 then Deny(restate_message(call.tool, r)) else NoOpinion
+    }
+  }
+}
+
+export pure func decide_call(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision
+  { decide_call_with_budget(ctx, call, call_budget()) }
+
+-- ---------------------------------------------------------------------------
+-- Comparing answers
+-- ---------------------------------------------------------------------------
+--
+-- `ctx.history_slice` is `st.msgs ++ [assistant]` -- the candidate is the LAST
+-- message in it. Counting it would make every first emission look like a repeat,
+-- which is `progress_contract_guard`'s trap #1 one hook over, so the count runs
+-- over everything but the tail.
+
+pure func drop_last(xs: [Msg]) -> [Msg] {
+  match xs {
+    [] => [],
+    x :: rest => match rest { [] => [], _ => x :: drop_last(rest) }
+  }
+}
+
+pure func count_answer(msgs: [Msg], text: string) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest =>
+      (if m.role == "assistant" && trim(m.content) == text then 1 else 0)
+        + count_answer(rest, text)
+  }
+}
+
+export pure func prior_answers(ctx: ExtCtx, candidate: string) -> int
+  { count_answer(drop_last(ctx.history_slice), trim(candidate)) }
+
+-- ACCEPT, NOT FEEDBACK. A model that has said the same thing three times is not
+-- withholding a better answer; it has given its answer and cannot tell that it
+-- is done. Asking it to continue is what the other two guards do and is exactly
+-- the wrong instruction here -- the run ends with the text the model kept
+-- repeating, which IS the answer.
+--
+-- A BLANK CANDIDATE IS NOT THIS GUARD'S. `empty_stop_guard` asks for more on
+-- exactly that message; accepting nothing would contradict it on the same
+-- message, and between the two the one that asks for a real answer is right.
+export pure func decide_answer_with_budget(ctx: ExtCtx, candidate: string, budget: int) -> FinalizeDecision {
+  if budget <= 0 || trim(candidate) == "" then NoDecision
+  else if prior_answers(ctx, candidate) >= budget then Accept(candidate)
+  else NoDecision
+}
+
+export pure func decide_answer(ctx: ExtCtx, candidate: string) -> FinalizeDecision
+  { decide_answer_with_budget(ctx, candidate, answer_budget()) }

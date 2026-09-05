@@ -32,8 +32,8 @@ module sunholo/motoko_ext_herdr/types
 --      them — a healthy agent has a populated `matched_rule` and a null
 --      `fallback_reason`. `explain_says_ready` is that test.
 
-import std/string (length, substring, contains, intToStr, join, replace, stringToInt, find)
-import std/json (Json, decode, encode, get, asString, asNumber, jo, ja, js, kv)
+import std/string (length, substring, contains, intToStr, join, replace, split, stringToInt, find)
+import std/json (Json, decode, encode, get, asString, asNumber, asArray, jo, ja, js, kv)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import std/process (ProcessError, NotAllowed, NotFound, PermissionDenied,
@@ -399,6 +399,31 @@ export pure func grants_relaxation(kind: string) -> bool
 -- claude needs nothing: it is unattended-capable in this image with no
 -- relaxation at all, and is ~1.3x faster. It is the default kind for that
 -- reason, not for parity of treatment.
+-- PER-KIND, PER-MODEL ARGV. Both CLIs take a model flag (`claude --model`,
+-- `codex -m/--model`) and herdr passes trailing `[AGENT_ARG]...` through after
+-- `--` — the same slot the relaxation flags above ride. Free-string by operator
+-- decision: model names are alnum/dash/dot/underscore by shape, so anything
+-- carrying a shell token is refused rather than sent (same rule as
+-- `path_is_safe`). Empty means "CLI default" and adds nothing, which keeps
+-- today's behaviour byte-identical when the caller says nothing.
+export pure func kind_model_args(k: string, model: string) -> [string]
+  tests [
+    (("claude", "claude-fable-5"), ["--model", "claude-fable-5"]),
+    (("codex", "gpt-5.3-codex"), ["-m", "gpt-5.3-codex"]),
+    (("claude", ""), []),
+    (("codex", ""), []),
+    (("gemini", "gemini-2.5-pro"), []),
+    (("motoko", "whatever"), []),
+    (("claude", "a;b"), []),
+    (("claude", "a`id`"), [])
+  ]
+  {
+    if model == "" || has_shell_tokens(model) then []
+    else if k == "claude" then ["--model", model]
+    else if k == "codex" then ["-m", model]
+    else []
+  }
+
 export pure func kind_default_args(k: string) -> [string]
   { if k == "codex" then ["-s", "danger-full-access", "-a", "never"] else [] }
 
@@ -428,12 +453,25 @@ export pure func argv_split(cwd: string, depth_env: string) -> [string]
 -- herdr's own default is 30000 — exactly Motoko's — so leaving it off is the
 -- trap 021 §3.1 named.
 export pure func argv_start(name: string, kind: string, pane: string, timeout_ms: int) -> [string]
+  { argv_start_model(name, kind, pane, timeout_ms, "") }
+
+-- `model` is operator-supplied free text; `kind_model_args` refuses anything
+-- with a shell token, so an accepted model keeps `argv_is_safe` green and a
+-- refused one degrades to CLI-default rather than failing the delegation.
+export pure func argv_start_model(name: string, kind: string, pane: string, timeout_ms: int, model: string) -> [string]
+  tests [
+    (("mot-dlg-7", "claude", "w1:pA", 20000, ""), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000"),
+    (("mot-dlg-7", "claude", "w1:pA", 20000, "claude-fable-5"), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5"),
+    (("mot-dlg-8", "codex", "w1:pB", 20000, "gpt-5.3-codex"), "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never -m gpt-5.3-codex"),
+    (("mot-dlg-7", "claude", "w1:pA", 20000, "a;b"), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000")
+  ]
   {
     let base = ["agent", "start", name, "--kind", kind, "--pane", pane,
                 "--timeout", intToStr(timeout_ms)];
-    match kind_default_args(kind) {
+    let extra = kind_default_args(kind) ++ kind_model_args(kind, model);
+    match extra {
       [] => base,
-      extra => base ++ ["--"] ++ extra
+      _ => base ++ ["--"] ++ extra
     }
   }
 
@@ -514,6 +552,13 @@ export pure func argv_start_str(name: string, kind: string, pane: string, timeou
      "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never")
   ]
   { show_argv(argv_start(name, kind, pane, timeout_ms)) }
+
+export pure func argv_start_model_str(name: string, kind: string, pane: string, timeout_ms: int, model: string) -> string
+  tests [
+    (("mot-dlg-7", "claude", "w1:pA", 20000, "claude-fable-5"),
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5")
+  ]
+  { show_argv(argv_start_model(name, kind, pane, timeout_ms, model)) }
 
 export pure func kind_default_args_str(k: string) -> string
   tests [
@@ -836,6 +881,33 @@ export pure func failure_code(exit_code: int, stderr: string) -> string
     else "herdr_cli_rejected"
   }
 
+-- WHICH FAILURES MEAN "THE AGENT IS GONE" — measured, not assumed
+-- (`MEASUREMENTS-2026-08-31-failure-codes.md`). This is the gate on the dagr
+-- producer's `lost` row, and it is narrow on purpose: burying a transient herdr
+-- error as a dead attempt is exactly the confidently-wrong graph the producer
+-- exists to avoid.
+--
+--   agent_not_found    the agent is gone. herdr does not distinguish "never
+--                      existed" from "existed and its pane closed" — staged
+--                      both ways, plus a never-existent pane id, all exit 1
+--                      with this code from BOTH `agent wait` and `agent get`.
+--                      For the producer the distinction does not matter:
+--                      either way there is nothing left to observe.
+--   server_not_running herdr's API socket is unreachable. The pane may be
+--                      perfectly alive behind it — write NOTHING.
+--   anything else      unclassified. The measured enumeration is not
+--                      exhaustive, and a code not seen is not evidence.
+export pure func means_agent_gone(exit_code: int, stderr: string) -> bool
+  tests [
+    ((1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}"), true),
+    ((1, "{\"error\":{\"code\":\"server_not_running\",\"message\":\"x\"}}"), false),
+    ((1, "{\"error\":{\"code\":\"timeout\",\"message\":\"x\"}}"), false),
+    ((2, "herdr agent commands:"), false),
+    ((1, "--current requires HERDR_PANE_ID"), false),
+    ((0, ""), false)
+  ]
+  { failure_code(exit_code, stderr) == "agent_not_found" }
+
 -- One accurate sentence per shape. Each names what actually happened and what
 -- to do about it; none of them mentions PATH unless PATH is the problem.
 export pure func failure_message(exit_code: int, stderr: string) -> string
@@ -1082,6 +1154,40 @@ export pure func split_pane_id(stdout: string) -> string
   ]
   { nested_string(stdout, "result", "pane", "pane_id") }
 
+-- ONE LEVEL DEEPER THAN EVERY OTHER READER HERE, and that is why it is its own
+-- function rather than a fourth argument to `nested_string`. `plugin pane open`
+-- answers `{"result":{"plugin_pane":{"pane":{"pane_id":...}}}}` — the pane is
+-- wrapped in the plugin record that owns it — where `pane split` answers
+-- `{"result":{"pane":{"pane_id":...}}}`. Reading the second shape out of the
+-- first silently yields "", which the caller would read as "opened but
+-- untaggable" rather than as a parse miss.
+export pure func plugin_pane_id(stdout: string) -> string
+  tests [
+    ("{\"id\":\"cli:plugin\",\"result\":{\"plugin_pane\":{\"entrypoint\":\"dagr\",\"pane\":{\"label\":\"dagr\",\"pane_id\":\"w1:p8\"},\"plugin_id\":\"herdr-dagr\"},\"type\":\"plugin_pane_opened\"}}", "w1:p8"),
+    -- the `pane split` shape, which this must NOT accept
+    ("{\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"}}}", ""),
+    ("{\"error\":{\"code\":\"plugin_not_installed\"}}", ""),
+    ("", "")
+  ]
+  {
+    match decode(stdout) {
+      Err(_) => "",
+      Ok(o) => match get(o, "result") {
+        None => "",
+        Some(r) => match get(r, "plugin_pane") {
+          None => "",
+          Some(pp) => match get(pp, "pane") {
+            None => "",
+            Some(pane) => match get(pane, "pane_id") {
+              None => "",
+              Some(v) => match asString(v) { Some(x) => x, None => "" }
+            }
+          }
+        }
+      }
+    }
+  }
+
 export pure func agent_status_of(stdout: string) -> string
   tests [
     ("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"idle\",\"pane_id\":\"w1:p8\"},\"type\":\"agent_info\"}}", "idle"),
@@ -1105,6 +1211,319 @@ export pure func is_settled(status: string) -> bool
     ("working", false), ("blocked", false), ("unknown", false), ("", false)
   ]
   { status == "done" || status == "idle" }
+
+-- ---------------------------------------------------------------------------
+-- Ownership: who spawned this pane (F-5)
+-- ---------------------------------------------------------------------------
+--
+-- A pane does not die with its caller, so an orphaned delegate is an
+-- unattended, unsandboxed agent with tree and credential access
+-- (`DESIGN-f5-orphan-ownership.md` §1). Everything below exists to answer ONE
+-- question positively — "is this pane a delegate of THIS Motoko session?" —
+-- because P2-6's rule is that a kill needs positive proof of ownership, never
+-- "not me". `owns_name`'s `mot-dlg-` prefix cannot answer it: two concurrent
+-- Motokos both own that prefix.
+--
+-- The proof is a herdr pane token written at spawn:
+--
+--     pane report-metadata <pane> --source motoko-delegate \
+--       --token mot-owner=<own HERDR_PANE_ID>:<session-start-ms>
+--
+-- The session-start half distinguishes a RESTARTED Motoko in the same pane from
+-- the run that spawned the delegate, which the pane id alone cannot.
+--
+-- MEASURED REACH, and it is not the whole of time
+-- (`MEASUREMENTS-2026-08-31-token-survival.md`): tokens do not survive a herdr
+-- SERVER restart — and neither do the delegates, which are killed with it. So
+-- ownership is good for one server lifetime, which is exactly as long as there
+-- is anything to own. Do not paper over the gap with a name-based rule; that is
+-- the rule P2-6 measured going wrong.
+--
+-- THE VALUE IS ALSO WRITTEN IN TYPESCRIPT (MOT-118 class). `HERDR_REAP_ON_EXIT`
+-- lives in the TUI exit seam (`src/tui/src/herdr-owner-token.ts`), on the far
+-- side of a language boundary nothing links, and it must build the SAME string
+-- from the SAME two inputs. If this format changes, that file changes with it.
+
+export pure func owner_token_key() -> string
+  tests [((), "mot-owner")]
+  { "mot-owner" }
+
+export pure func owner_token_value(own_pane: string, session_ms: string) -> string
+  tests [
+    (("w1:p1", "1756000000000"), "w1:p1:1756000000000"),
+    (("", "1756000000000"), ":1756000000000")
+  ]
+  { "${own_pane}:${session_ms}" }
+
+export pure func owner_token_arg(own_pane: string, session_ms: string) -> string
+  tests [(("w1:p1", "1756000000000"), "mot-owner=w1:p1:1756000000000")]
+  { "${owner_token_key()}=${owner_token_value(own_pane, session_ms)}" }
+
+-- The pane half of a token value. Pane ids CONTAIN a colon (`w1:p1`), so this
+-- is "everything before the last colon", not "the first field".
+pure func drop_last(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => match rest {
+      [] => [],
+      _  => x :: drop_last(rest)
+    }
+  }
+}
+
+export pure func owner_pane_of(token_value: string) -> string
+  tests [
+    ("w1:p1:1756000000000", "w1:p1"),
+    ("w12:p3:1", "w12:p3"),
+    ("nocolons", ""),
+    ("", "")
+  ]
+  { join(":", drop_last(split(token_value, ":"))) }
+
+-- `--source` is display-only provenance; herdr keys the token by its own name.
+export pure func argv_report_owner(pane: string, own_pane: string, session_ms: string) -> [string]
+  {
+    ["pane", "report-metadata", pane, "--source", "motoko-delegate",
+     "--token", owner_token_arg(own_pane, session_ms)]
+  }
+
+export pure func argv_report_owner_str(pane: string, own_pane: string, session_ms: string) -> string
+  tests [
+    (("w1:pA", "w1:p1", "1756000000000"),
+     "pane report-metadata w1:pA --source motoko-delegate --token mot-owner=w1:p1:1756000000000")
+  ]
+  { show_argv(argv_report_owner(pane, own_pane, session_ms)) }
+
+-- PANES, NOT AGENTS, and that is a correction to the design's §2.1 mechanism.
+-- Both calls carry tokens and both cost one call, but a tokened pane with no
+-- agent row — a motoko delegate whose inner run released its agent authority,
+-- or never got far enough to claim one — is INVISIBLE to `agent list` and
+-- visible here. Measured 2026-08-31 (token-survival addendum). The gate is
+-- unchanged: the `mot-owner` token and nothing else.
+export pure func argv_pane_list() -> [string]
+  { ["pane", "list"] }
+
+export pure func argv_pane_list_str() -> string
+  tests [((), "pane list")]
+  { show_argv(argv_pane_list()) }
+
+pure func panes_of(stdout: string) -> [Json] {
+  match decode(stdout) {
+    Err(_) => [],
+    Ok(o) => match get(o, "result") {
+      None => [],
+      Some(r) => match get(r, "panes") {
+        None => [],
+        Some(ps) => match asArray(ps) { Some(xs) => xs, None => [] }
+      }
+    }
+  }
+}
+
+pure func json_str(j: Json, key: string) -> string {
+  match get(j, key) {
+    None => "",
+    Some(v) => match asString(v) { Some(s) => s, None => "" }
+  }
+}
+
+-- herdr writes its OWN tokens — the sidebar pane carries
+-- `herdr-sidebar-explorer` and `herdr-sidebar-git` (measured 2026-08-31). So
+-- "has tokens" is not a Motoko signal and the key filter is not optional.
+pure func pane_owner_of(p: Json) -> string {
+  match get(p, "tokens") {
+    None => "",
+    Some(t) => json_str(t, owner_token_key())
+  }
+}
+
+pure func pane_ids_of(ps: [Json]) -> [string] {
+  match ps {
+    [] => [],
+    p :: rest => json_str(p, "pane_id") :: pane_ids_of(rest)
+  }
+}
+
+export pure func live_pane_ids(stdout: string) -> [string]
+  { pane_ids_of(panes_of(stdout)) }
+
+export pure func live_pane_ids_str(stdout: string) -> string
+  tests [
+    ("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:p2\"}]}}", "w1:p1,w1:p2"),
+    ("{\"error\":{\"code\":\"server_not_running\"}}", ""),
+    ("", "")
+  ]
+  { join(",", live_pane_ids(stdout)) }
+
+pure func has_str(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == needle then true else has_str(rest, needle)
+  }
+}
+
+-- THREE CLASSES, and only one of them is ever touched.
+--
+--   mine    — the token equals this session's. A live delegate of this run.
+--   stale   — the owner is gone: either the owner pane is this very pane under
+--             an older session (a Motoko cannot be its own predecessor), or the
+--             owner pane is no longer in the pane list at all.
+--   foreign — someone else's, still plausibly alive. Left strictly alone, and
+--             an UNPARSEABLE token lands here too: a token whose pane half we
+--             cannot read is not proof of anything, and the default direction
+--             for "no proof" is hands off (P2-6).
+export pure func sweep_class(own_pane: string, own_token: string, owner: string, live: [string]) -> string
+  tests [
+    (("w1:p1", "w1:p1:200", "w1:p1:200", ["w1:p1"]), "mine"),
+    (("w1:p1", "w1:p1:200", "w1:p1:100", ["w1:p1"]), "stale"),
+    (("w1:p1", "w1:p1:200", "w1:p9:100", ["w1:p1"]), "stale"),
+    (("w1:p1", "w1:p1:200", "w1:p9:100", ["w1:p1", "w1:p9"]), "foreign"),
+    (("w1:p1", "w1:p1:200", "garbage", ["w1:p1"]), "foreign"),
+    (("w1:p1", "w1:p1:200", "", ["w1:p1"]), "foreign")
+  ]
+  {
+    if owner == "" then "foreign"
+    else if owner == own_token then "mine"
+    else {
+      let op = owner_pane_of(owner);
+      if op == "" then "foreign"
+      else if op == own_pane then "stale"
+      else if has_str(live, op) then "foreign"
+      else "stale"
+    }
+  }
+
+pure func stale_of(ps: [Json], own_pane: string, own_token: string, live: [string]) -> [string] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let tail = stale_of(rest, own_pane, own_token, live);
+      let owner = pane_owner_of(p);
+      let id = json_str(p, "pane_id");
+      -- Never sweep the pane this Motoko is sitting in, whatever it carries.
+      if id != "" && id != own_pane && sweep_class(own_pane, own_token, owner, live) == "stale"
+      then id :: tail
+      else tail
+    }
+  }
+}
+
+-- The whole sweep, as one pure function of `pane list`'s stdout.
+export pure func sweep_stale_panes(stdout: string, own_pane: string, session_ms: string) -> [string]
+  {
+    let ps = panes_of(stdout);
+    stale_of(ps, own_pane, owner_token_value(own_pane, session_ms), pane_ids_of(ps))
+  }
+
+export pure func sweep_stale_panes_str(stdout: string, own_pane: string, session_ms: string) -> string
+  tests [
+    -- own live delegate + a stale one owned by a pane that is gone
+    (("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:pA\",\"tokens\":{\"mot-owner\":\"w1:p1:200\"}},{\"pane_id\":\"w1:pB\",\"tokens\":{\"mot-owner\":\"w1:p7:100\"}}]}}",
+      "w1:p1", "200"), "w1:pB"),
+    -- the owner pane is still alive: foreign, hands off
+    (("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:p7\"},{\"pane_id\":\"w1:pB\",\"tokens\":{\"mot-owner\":\"w1:p7:100\"}}]}}",
+      "w1:p1", "200"), ""),
+    -- a previous run in THIS pane: stale, and the only case where the owner
+    -- pane is alive and the verdict is still stale
+    (("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"},{\"pane_id\":\"w1:pB\",\"tokens\":{\"mot-owner\":\"w1:p1:100\"}}]}}",
+      "w1:p1", "200"), "w1:pB"),
+    -- untagged panes and herdr's own tokens are not delegates
+    (("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p2\",\"tokens\":{\"herdr-sidebar-git\":\"1788\"}},{\"pane_id\":\"w1:p3\"}]}}",
+      "w1:p1", "200"), ""),
+    (("{\"error\":{\"code\":\"server_not_running\"}}", "w1:p1", "200"), ""),
+    (("", "w1:p1", "200"), "")
+  ]
+  { join(",", sweep_stale_panes(stdout, own_pane, session_ms)) }
+
+-- REPORT ALWAYS, KILL ONLY UNDER `HERDR_SWEEP_STALE=1` (design §5.4, D3). The
+-- asymmetry that decides the default: one report line against a killed agent.
+export pure func sweep_report(stale: [string], closing: bool) -> string
+  tests [
+    (([], false), ""),
+    ((["w1:pB"], false),
+     "\n\nOrphan sweep: 1 pane carries this extension's ownership tag from a Motoko session that is gone (w1:pB). It is still running and still costing quota. Nothing was closed — set HERDR_SWEEP_STALE=1 to have future sessions close them, or close it by hand."),
+    ((["w1:pB", "w1:pC"], true),
+     "\n\nOrphan sweep: closed 2 panes tagged by a Motoko session that is gone (w1:pB, w1:pC).")
+  ]
+  {
+    match stale {
+      [] => "",
+      _ => {
+        let n = length_of(stale);
+        let noun = if n == 1 then "pane" else "panes";
+        let ids = join(", ", stale);
+        if closing then
+          "\n\nOrphan sweep: closed ${intToStr(n)} ${noun} tagged by a Motoko session that is gone (${ids})."
+        else {
+          let verb = if n == 1 then "It is" else "They are";
+          "\n\nOrphan sweep: ${intToStr(n)} ${noun} ${if n == 1 then "carries" else "carry"} this extension's ownership tag from a Motoko session that is gone (${ids}). ${verb} still running and still costing quota. Nothing was closed — set HERDR_SWEEP_STALE=1 to have future sessions close them, or close ${if n == 1 then "it" else "them"} by hand."
+        }
+      }
+    }
+  }
+
+pure func length_of(xs: [string]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + length_of(rest) }
+}
+
+-- One sentinel per run, so the sweep reports once and not on every tool call.
+-- Keyed by the session clock alone: the pane id carries a colon and this is a
+-- filename, and two runs in one workdir cannot share a millisecond.
+export pure func sweep_sentinel_path(work_dir: string, session_ms: string) -> string
+  tests [(("/w/.motoko/herdr-delegates", "1756000000000"), "/w/.motoko/herdr-delegates/.sweep-1756000000000")]
+  { "${work_dir}/.sweep-${session_ms}" }
+
+-- ---------------------------------------------------------------------------
+-- The dagr view pane (MOT-137)
+-- ---------------------------------------------------------------------------
+--
+-- OPENING THE VIEW IS A LAYOUT MUTATION, so it is opt-in (HERDR_DAGR_PANE=1)
+-- for the same reason `sweep_stale` is: this file's rung-ordering rule is that
+-- anything which changes the operator's workspace rather than reporting to it
+-- waits to be asked. What the flag buys when it IS asked for is that the run
+-- file stops being a thing only a reader who knows about `scripts/dagr-pane.sh`
+-- ever sees.
+--
+-- WHY NOT `plugin action invoke open-dagr`, which is the obvious call: that
+-- action resolves `.dagr/run.json`, and this producer writes
+-- `.dagr/run-<pane>-<session>.json` — keyed that way because one writer per
+-- file is what stops two Motokos in one checkout from clobbering each other
+-- (DESIGN-dagr-as-delegation-view.md §5). The two rules never intersect, so the
+-- stock action renders whatever stale document is lying in the directory. The
+-- run file therefore travels explicitly as $DAGR_RUN, exactly as
+-- `scripts/dagr-pane.sh` passes it.
+--
+-- `--no-focus`, AND IT IS NOT A STYLE CHOICE. `dagr-pane.sh` passes `--focus`
+-- because a human just typed it and is looking at the result. This fires from
+-- inside a `Delegate` tool call, mid-turn, with the operator reading Motoko's
+-- own pane; taking focus there interrupts a person to show them a picture they
+-- did not ask for at that instant. Verified against the binary: `plugin pane
+-- open` accepts both `--focus` and `--no-focus`.
+--
+-- `--target-pane`, FOR THE SAME REASON `argv_split` PASSES `--current`: without
+-- it the split is relative to whatever herdr considers focused, which from
+-- inside a tool call is not knowably Motoko's own pane. The view belongs beside
+-- the session it is a view OF.
+export pure func dagr_plugin_id() -> string
+  tests [((), "herdr-dagr")]
+  { "herdr-dagr" }
+
+export pure func argv_dagr_pane(own_pane: string, run_path: string, cwd: string) -> [string]
+  {
+    ["plugin", "pane", "open", "--plugin", dagr_plugin_id(), "--entrypoint", "dagr",
+     "--placement", "split", "--direction", "right", "--target-pane", own_pane,
+     "--no-focus", "--cwd", cwd, "--env", "DAGR_RUN=${run_path}"]
+  }
+
+-- Every element token-free, so `argv_is_safe` passes and the routed port stays
+-- reachable: a run path is `path_is_safe`-checked by the caller and `=` is not
+-- one of #158's triggers — `argv_split` has carried `--env KEY=` since 021.
+export pure func argv_dagr_pane_str(own_pane: string, run_path: string, cwd: string) -> string
+  tests [
+    (("w1:p1", "/w/.dagr/run-w1-p1-1756000000000.json", "/w"),
+     "plugin pane open --plugin herdr-dagr --entrypoint dagr --placement split --direction right --target-pane w1:p1 --no-focus --cwd /w --env DAGR_RUN=/w/.dagr/run-w1-p1-1756000000000.json")
+  ]
+  { show_argv(argv_dagr_pane(own_pane, run_path, cwd)) }
 
 -- ---------------------------------------------------------------------------
 -- The routed process port

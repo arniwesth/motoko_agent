@@ -4,6 +4,7 @@ import * as path from "path";
 import * as readline from "readline";
 import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
 import { dispatchOhMyPiTool } from "./ohMyPi/dispatcher.js";
+import { sessionStartMs } from "./herdr-owner-token.js";
 
 export interface DelegatedExecReq {
   cmd: string;
@@ -339,6 +340,16 @@ export function buildChildEnv(
     MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
     MOTOKO_CAPTURE_FAILED_PAYLOAD: process.env.MOTOKO_CAPTURE_FAILED_PAYLOAD ?? "",
     MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+    // THE RUN IDENTITY FOR F-5 OWNERSHIP, minted here and nowhere else.
+    //
+    // `motoko-ext-herdr` tags every delegate pane it spawns with
+    // `mot-owner=<pane>:<session ms>` so that an orphan can be recognised as THIS session's
+    // without falling back to a name prefix that two concurrent Motokos would both match. The
+    // clock cannot live in the extension: the runtime is spawned per task, so it would mint a new
+    // identity for every task and the exit-time reaper would match none of its own delegates.
+    // This process outlives every runtime it spawns, so `sessionStartMs()` memoizes one value for
+    // the whole session. Format and reasoning: `herdr-owner-token.ts`.
+    MOTOKO_SESSION_MS: String(sessionStartMs()),
     AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
     AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",
     MOTOKO_COST_INPUT_PER_1M_MILLICENTS:

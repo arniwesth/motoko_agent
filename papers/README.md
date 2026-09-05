@@ -47,6 +47,7 @@ Papers that informed Motoko's design and point to future research directions.
 |---|---|---|
 | Vulnerability Detection: From Formal Verification to Large Language Models and Hybrid Approaches | [2503.10784](https://arxiv.org/abs/2503.10784) | Survey of formal methods vs. LLM analysis vs. hybrids; ESBMC-AI's counterexample-guided repair loop is the pattern Motoko's DP7 verifier gate (`src/core/session.ail`) already implements with `ailang check` in the oracle slot. Motivates `m-motoko-z3-contracts.md` (raise the oracle from type-checking to Z3 contracts) and supplies the citable hallucination case — 4o/o1/R1 all report CWE-190 on code ESBMC proves safe in 0.73s — for the DST report's vacuity-accounting argument |
 | A Neurosymbolic Approach to Natural Language Formalization and Verification | [2511.09008](https://arxiv.org/abs/2511.09008) | Formal verification of natural language; semi-formal verifier mode inspiration |
+| CSLib: The Lean Computer Science Library | [2602.04846](https://arxiv.org/abs/2602.04846) | White paper, not results — track, do not adopt. Its Pillar-2 architecture (Boole IVL → **Lean goals** → SMT hammers) is the named fix for the failure mode 028 characterised: `ailang verify` fails to *no obligation* (`blocked`), a VC generator fails to *an unproved obligation*. Motoko already runs the consumer side — an axiom-audited Lean 4 kernel with a Mathlib mode (`src/tui/src/scratchpad/lean-session.ts`) — currently dark. Full reading: `.agent/projects/029_cslib_proof_tier/` |
 
 ## Tools & Infrastructure
 

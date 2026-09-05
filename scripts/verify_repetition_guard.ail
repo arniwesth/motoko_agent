@@ -1,0 +1,251 @@
+-- scripts/verify_repetition_guard.ail
+--
+-- The loop guard, driven over the shape that actually happened.
+--
+-- 2026-09-01: a live session ran 197 steps of one cycle -- open a herdr pane,
+-- `sleep 2`, read it, close it -- re-emitting the same answer every ~15s for
+-- twenty minutes and spawning ~90 panes, and was still going when the log ended.
+--
+-- CASE 7 IS THAT TRANSCRIPT, and it is the case that exists because the first
+-- version of this test did not have it. Cases 1-6 cover identical (call, result)
+-- pairs, which is the discriminator that keeps polling safe -- and replaying
+-- that rule alone over the real jsonl, it fired NEVER. `plugin pane open` was
+-- byte-identical 84 times and returned a fresh pane id every time, so no two
+-- pairs ever matched. What repeated verbatim was the PROSE: one ~2KB message, 85
+-- times, each carrying a tool call.
+--
+-- THE CASES THAT MUST NOT FIRE MATTER MORE THAN THE ONES THAT MUST. A guard that
+-- breaks delegation polling (case 3) or tight test-edit-test iteration (case 9)
+-- is worse than no guard at all, and a guard that mistakes narration for
+-- restatement (case 8) would fire on almost every session.
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run --caps IO --entry main \
+--     scripts/verify_repetition_guard.ail
+--
+-- Prints OK/FAIL per assertion; exits non-zero on any FAIL.
+module scripts/verify_repetition_guard
+
+import std/io (println, exit)
+import std/json (Json, jo, kv, js, decode)
+import std/string (contains, intToStr)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, Msg, ToolCall, ToolCallEnvelope, BudgetPlan,
+  ToolPolicyDecision, Allow, Deny, NoOpinion, Pending,
+  FinalizeDecision, Accept, ContinueWithFeedback, NoDecision,
+  empty_ext_world
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_repetition_guard/repetition_guard (
+  decide_call, decide_answer, decide_call_with_budget, decide_answer_with_budget,
+  decide_call_full, restate_min_chars, guard_marker
+)
+
+-- ---------------------------------------------------------------------------
+-- Building a transcript
+-- ---------------------------------------------------------------------------
+
+func ctx_of(history: [Msg]) -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-repetition-guard", step: 0, model: "test-model", cwd: ".",
+    hybrid_tools: false, budget: budget, mode: "v2", workdir: ".",
+    env_server_url: "", budget_remaining: 4, history_slice: history,
+    state_key: "test", context_limit: 0, ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: empty_ext_world() }
+}
+
+func assistant_call(id: string, tool: string, args: string) -> Msg {
+  { role: "assistant", content: "", tool_calls: [{ id: id, name: tool, arguments: args }],
+    tool_call_id: "" }
+}
+
+func tool_result(id: string, out: string) -> Msg {
+  { role: "tool", content: out, tool_calls: [], tool_call_id: id }
+}
+
+func assistant_text(text: string) -> Msg {
+  { role: "assistant", content: text, tool_calls: [], tool_call_id: "" }
+}
+
+func envelope(tool: string, args: string) -> ToolCallEnvelope {
+  match decode(args) {
+    Ok(j) => { id: "live", tool: tool, arguments: j },
+    Err(_) => { id: "live", tool: tool, arguments: jo([]) }
+  }
+}
+
+-- n copies of one call, each answered identically: the runaway shape.
+func repeat_same(n: int, tool: string, args: string, out: string) -> [Msg] {
+  if n <= 0 then []
+  else {
+    let id = "c${intToStr(n)}";
+    [assistant_call(id, tool, args), tool_result(id, out)] ++ repeat_same(n - 1, tool, args, out)
+  }
+}
+
+-- n copies of one call, each answered DIFFERENTLY: the polling shape. The
+-- output carries the iteration the way a real `DelegateCheck` carries elapsed
+-- time, so no two pairs are equal.
+func repeat_moving(n: int, tool: string, args: string) -> [Msg] {
+  if n <= 0 then []
+  else {
+    let id = "p${intToStr(n)}";
+    [assistant_call(id, tool, args),
+     tool_result(id, "still working, waited ${intToStr(n)}00ms")]
+      ++ repeat_moving(n - 1, tool, args)
+  }
+}
+
+func check(label: string, ok: bool) -> bool ! {IO} {
+  if ok then { println("OK: ${label}"); true } else { println("FAIL: ${label}"); false }
+}
+
+func denied(d: ToolPolicyDecision) -> bool {
+  match d { Deny(_) => true, _ => false }
+}
+
+func denial_text(d: ToolPolicyDecision) -> string {
+  match d { Deny(m) => m, _ => "" }
+}
+
+func accepted(d: FinalizeDecision) -> bool {
+  match d { Accept(_) => true, _ => false }
+}
+
+func accepted_text(d: FinalizeDecision) -> string {
+  match d { Accept(t) => t, _ => "" }
+}
+
+-- ---------------------------------------------------------------------------
+-- Cases
+-- ---------------------------------------------------------------------------
+
+export func main() -> () ! {IO} {
+  let open_args = "{\"cmd\":\"herdr plugin pane open --plugin herdr-dagr --entrypoint dagr\"}";
+  let open_out = "{\"result\":{\"pane\":{\"pane_id\":\"w1:p39\"}}}";
+
+  -- 1. THE OBSERVED LOOP. Five identical `plugin pane open` calls, five
+  --    identical results; the sixth is refused before it can spawn pane 91.
+  let loop5 = ctx_of(repeat_same(5, "BashExec", open_args, open_out));
+  let d1 = decide_call(loop5, envelope("BashExec", open_args));
+  let a1 = check("a call repeated 5 times with identical output is denied", denied(d1));
+  let a2 = check("the denial says how many times and tells the model to answer instead",
+                 contains(denial_text(d1), "5 times")
+                   && contains(denial_text(d1), "state your final answer")
+                   && contains(denial_text(d1), guard_marker()));
+
+  -- 2. ONE UNDER THE BUDGET IS STILL ALLOWED THROUGH. The guard must not fire
+  --    early: four identical calls is a model being repetitive, not a runaway.
+  let loop4 = ctx_of(repeat_same(4, "BashExec", open_args, open_out));
+  let a3 = check("four identical calls are not yet a loop",
+                 denied(decide_call(loop4, envelope("BashExec", open_args))) == false);
+
+  -- 3. POLLING SURVIVES, and this is the assertion that decides whether the
+  --    guard is shippable. Eight `DelegateCheck` calls on one handle -- exactly
+  --    what the herdr integration prompt asks for -- with output that moves.
+  let poll = ctx_of(repeat_moving(8, "DelegateCheck", "{\"name\":\"mot-dlg-1\"}"));
+  let a4 = check("a poll whose output moves is never denied, at any depth",
+                 denied(decide_call(poll, envelope("DelegateCheck", "{\"name\":\"mot-dlg-1\"}"))) == false);
+
+  -- 4. A DIFFERENT CALL IS UNAFFECTED by another call's runaway. The count is
+  --    per signature, not a global "this session is looping" verdict.
+  let a5 = check("an unrelated call is untouched while another signature is denied",
+                 denied(decide_call(loop5, envelope("BashExec", "{\"cmd\":\"ls\"}"))) == false);
+
+  -- 5. WHITESPACE IS NOT A NEW CALL. The provider's raw argument string and the
+  --    decoded envelope arrive in different shapes; if they did not normalise to
+  --    the same signature the guard would never fire on a real transcript.
+  let spaced = ctx_of(repeat_same(5, "BashExec", "{ \"cmd\" : \"ls\" }", "total 0"));
+  let a6 = check("arguments differing only in whitespace are the same call",
+                 denied(decide_call(spaced, envelope("BashExec", "{\"cmd\":\"ls\"}"))));
+
+  -- 6. NoOpinion, NEVER Allow. Another extension's policy may have something to
+  --    say about a call this one is indifferent to.
+  let a7 = check("the guard abstains rather than allowing",
+                 match decide_call(loop4, envelope("BashExec", open_args)) {
+                   NoOpinion => true, _ => false
+                 });
+
+  -- 7. RULE B, AND IT IS THE ONE THAT CATCHES THE REAL LOOP. The first version
+  --    of this guard counted (call, result) pairs only; replayed over the actual
+  --    2026-09-01 transcript it fired NEVER, because `plugin pane open` returns
+  --    a FRESH PANE ID every time -- identical call, never an identical result.
+  --    What was byte-identical was the prose: one ~2KB message, 85 times, each
+  --    with a tool call attached. Replayed with this rule, the deny lands at step
+  --    31 of 197.
+  let essay = "The pane was not showing a bundled demo. It was rendering .dagr/run.json, the install-probe run document, because dagr view selects its run file as DAGR_RUN then .dagr/run.json then run.json under the pane cwd, and the producer writes timestamped filenames that match neither fallback.";
+  let restating = ctx_of([
+    assistant_text(essay),
+    assistant_text(essay),
+    { role: "assistant", content: essay,
+      tool_calls: [{ id: "x", name: "BashExec", arguments: open_args }], tool_call_id: "" }
+  ]);
+  let d2 = decide_call(restating, envelope("BashExec", open_args));
+  let a14 = check("a call attached to prose the model has already given twice is denied",
+                  denied(d2));
+  let a15 = check("the restatement denial says so rather than blaming the call",
+                  contains(denial_text(d2), "repeats, word for word")
+                    && contains(denial_text(d2), "stop calling tools"));
+
+  -- 8. AND NOT ON NARRATION. A model that says "Now let me run the tests." three
+  --    times is working; nobody writes the same PARAGRAPH three times while
+  --    making progress. The length floor is the whole difference.
+  let chatter = "Now let me run the tests.";
+  let narrating = ctx_of([
+    assistant_text(chatter),
+    assistant_text(chatter),
+    { role: "assistant", content: chatter,
+      tool_calls: [{ id: "y", name: "BashExec", arguments: "{\"cmd\":\"make test\"}" }], tool_call_id: "" }
+  ]);
+  let a16 = check("short repeated narration is not restatement",
+                  denied(decide_call(narrating, envelope("BashExec", "{\"cmd\":\"make test\"}"))) == false);
+
+  -- 9. TIGHT ITERATION SURVIVES. `make test` a dozen times with edits between it
+  --    is a working session: the args repeat, the OUTPUT moves, and the prose is
+  --    different every time. Nothing here may fire.
+  let iterate = ctx_of(repeat_moving(12, "BashExec", "{\"cmd\":\"make test\"}"));
+  let a17 = check("repeated identical commands with moving output are not a loop",
+                  denied(decide_call(iterate, envelope("BashExec", "{\"cmd\":\"make test\"}"))) == false);
+
+  -- 10. RULE B IS SEPARATELY DISABLE-ABLE, so an operator can keep the cheap
+  --     pair rule and drop the prose one.
+  let a18 = check("a restatement budget of 0 disables rule B alone",
+                  denied(decide_call_full(restating, envelope("BashExec", open_args), 5, 0, restate_min_chars())) == false);
+
+  -- 11. THE ANSWER HALF. The same text a third time is the answer, not a step
+  --    towards one: accept it and end the run.
+  let answer = "Here is how to open the dagr pane. Verified live.";
+  let said3 = ctx_of([assistant_text(answer), assistant_text(answer), assistant_text(answer)]);
+  let f1 = decide_answer(said3, answer);
+  let a8 = check("an answer given twice before is accepted on the third emission",
+                 accepted(f1) && accepted_text(f1) == answer);
+
+  -- 12. AND NOT BEFORE. `history_slice` is `msgs ++ [candidate]`, so the
+  --    candidate must never count itself -- otherwise a first answer looks like
+  --    a repeat and every run ends on step one.
+  let said1 = ctx_of([assistant_text(answer)]);
+  let a9 = check("a first answer is not a repeat of itself",
+                 accepted(decide_answer(said1, answer)) == false);
+  let said2 = ctx_of([assistant_text(answer), assistant_text(answer)]);
+  let a10 = check("a second emission is still allowed to continue",
+                  accepted(decide_answer(said2, answer)) == false);
+
+  -- 13. A BLANK CANDIDATE IS empty_stop_guard's. Accepting nothing would
+  --    contradict the guard that asks for a real answer on the same message.
+  let blank = ctx_of([assistant_text(""), assistant_text(""), assistant_text("")]);
+  let a11 = check("a blank repeated candidate is left to the empty-stop guard",
+                  accepted(decide_answer(blank, "  ")) == false);
+
+  -- 14. BOTH HALVES ARE DISABLE-ABLE. An operator reproducing a loop needs the
+  --     guard inert, and a budget of 0 is how they get it.
+  let a12 = check("budget 0 disables the tool half",
+                  denied(decide_call_with_budget(loop5, envelope("BashExec", open_args), 0)) == false);
+  let a13 = check("budget 0 disables the answer half",
+                  accepted(decide_answer_with_budget(said3, answer, 0)) == false);
+
+  if a1 && a2 && a3 && a4 && a5 && a6 && a7 && a8 && a9 && a10 && a11 && a12 && a13
+     && a14 && a15 && a16 && a17 && a18
+  then () else exit(1)
+}
