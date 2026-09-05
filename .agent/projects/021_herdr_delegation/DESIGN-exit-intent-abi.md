@@ -284,8 +284,18 @@ Silent in the worst direction: an empty action list is exactly what a clean sess
 no delegates looks like. Nothing in either test suite, and nothing in `check_core`, could
 tell those apart.
 
-`verify_exit_intent` case 8 now pins the BEHAVIOUR (a render given ports that cannot read
-the FS yields nothing, and the reading-ports case must disagree with it, or the fixture is
-not measuring the read at all). It cannot catch the wiring from inside the extension gate;
-what catches the wiring is running it. Recorded here so the next person to build an
-ABI seam prices the live check in rather than treating it as confirmation.
+`verify_exit_intent` case 8 now pins what CAN be pinned from inside the extension gate,
+and it needed a decoy to be a test at all. Every other case supplies the run file through a
+scripted `file_read`, so with nothing at the real path none of them can tell a render that
+goes through the port from one that reads `std/fs` behind its back. Case 8 writes a real
+run file at the configured path holding a DIFFERENT pane (`w1:pDECOY`) from the scripted
+content's (`w1:pA`), and asserts three things at once: the routed render names `w1:pA` (the
+bytes came from the port), the no-op render names nothing (the shipped regression), and the
+two DISAGREE (without which a fixture that renders nothing twice reads as green).
+Verified by reintroducing the ambient read: two cases go red and the argv-level diagnostic
+names `w1:pDECOY` explicitly.
+
+What case 8 still cannot see is the wiring — `session.publish_turn_exit_manifest` handing
+over no-op ports is a host-side construction the extension gate has no reach into. What
+catches that is running it. Recorded here so the next person to build an ABI seam prices
+the live check in rather than treating it as confirmation.

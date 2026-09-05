@@ -59,6 +59,8 @@ import std/io (println, exit)
 import std/json (Json, encode, jo, kv, js, ja)
 import std/list as List (length)
 import std/string (contains)
+import std/fs (writeFileResult, mkdirAll)
+import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx, ExtWorld, ExtPorts, ExtFileRead, BudgetPlan, empty_ext_world,
   Capability, ExitIntent, ExitAction, ClosePane, PublishFile, RunArgv,
@@ -283,16 +285,56 @@ func case_manifest_shape_is_what_the_host_parses() -> bool ! {IO, Process, FS, C
 -- rename on one side alone is silent in the worst way: the runtime publishes
 -- nowhere the host looks, and the result is indistinguishable from an install
 -- where no extension declared an intent.
--- See item 8 in the header. The assertion is deliberately "produces nothing":
--- that IS what a no-op port does, and the point is that it does so without a
--- word, from a run file that would otherwise yield a close.
-func case_noop_ports_render_nothing_silently() -> bool ! {IO, Process, FS, Clock} {
+-- See item 8 in the header.
+--
+-- A DECOY ON DISK IS WHAT MAKES THIS A TEST. Every other case here supplies the
+-- run file through a scripted `file_read`, so none of them can tell a render
+-- that goes through the port from one that reads `std/fs` behind its back —
+-- with nothing at the real path, both look identical, and asserting "no-op
+-- ports render nothing" alone would be passed by a fixture that renders nothing
+-- for any reason at all.
+--
+-- So this writes a REAL run file at the path the config names, holding a
+-- DIFFERENT pane (`w1:pDECOY`) from the one the scripted content holds
+-- (`w1:pA`). Three things then have to hold at once, and each kills a distinct
+-- failure:
+--
+--   the routed render names w1:pA      the bytes came from the PORT. If the
+--                                      render ever goes back to an ambient
+--                                      `std/fs` read (the shape §5 Q3 of the
+--                                      design corrected), it names w1:pDECOY
+--                                      and this fails.
+--   the no-op render names NOTHING     the shipped regression: `file_read`
+--                                      answering `present: false` to every
+--                                      path renders an empty list, silently,
+--                                      from a run file that is really there.
+--   the two DISAGREE                   without this the case is vacuous — a
+--                                      broken fixture renders nothing twice
+--                                      and reads as green.
+func decoy_path() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
+
+func decoy_content() -> string {
+  "{\"dagr\":3,\"tasks\":[{\"id\":\"decoy\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:pDECOY\"}}]}],\"events\":[]}"
+}
+
+func plant_decoy() -> bool ! {FS} {
+  let _ = mkdirAll("/tmp/.dagr");
+  match writeFileResult(decoy_path(), decoy_content()) {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+func case_render_reads_through_the_port_and_only_the_port() -> bool ! {IO, Process, FS, Clock} {
+  let planted = plant_decoy();
   let caps = hooks(true, "200");
-  let with_read = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(ports_reading(run_file_present))).intents);
-  let with_noop = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(noop_ext_ports())).intents);
-  report("a render given ports that cannot read the FS yields nothing, silently",
-         List.length(with_read) == 1 && List.length(with_noop) == 0,
-         "reading ports gave ${show(List.length(with_read))} action(s) and no-op ports gave ${show(List.length(with_noop))}; if these AGREE the fixture is not measuring the read at all")
+  let routed = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(ports_reading(run_file_present))).intents);
+  let noop = actions_of(dispatch_exit_intents(mk_runtime(caps), mk_ctx(noop_ext_ports())).intents);
+  let from_port = first_text(routed) == "close:w1:pA|mot-owner|w1:p1:200|herdr";
+  let ok = planted && List.length(routed) == 1 && from_port && List.length(noop) == 0;
+  report("the render reads through the port and only the port, and a blind port renders nothing",
+         ok,
+         "decoy planted=${show(planted)} at ${decoy_path()}; routed gave ${show(List.length(routed))} action(s) `${first_text(routed)}` (w1:pDECOY here means the render bypassed the port and read the filesystem); no-op ports gave ${show(List.length(noop))}")
 }
 
 func case_manifest_var_is_the_agreed_name() -> bool ! {IO} {
@@ -309,7 +351,7 @@ export func main() -> () ! {IO, Process, FS, Clock, Env} {
   let r5 = case_no_run_file_is_a_silent_no_op();
   let r6 = case_no_session_clock_produces_nothing();
   let r7 = case_manifest_shape_is_what_the_host_parses();
-  let r8 = case_noop_ports_render_nothing_silently();
+  let r8 = case_render_reads_through_the_port_and_only_the_port();
   let r9 = case_manifest_var_is_the_agreed_name();
   let all_ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9;
   if all_ok then println("verify_exit_intent: 9 cases OK")
