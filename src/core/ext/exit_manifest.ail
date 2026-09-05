@@ -70,6 +70,7 @@ import src/core/ext/runtime (RenderedIntent, dispatch_exit_intents)
 -- would execute a subset of the actions and report a complete sweep.
 export pure func manifest_version() -> string
   ensures { result != "" }
+  tests [((), "exit-actions/1")]
   { "exit-actions/1" }
 
 -- The env var the host names the file in. One definition, read here, written
@@ -82,6 +83,7 @@ export pure func manifest_version() -> string
 -- wearing a contract's clothes (ADR-001 §1).
 export pure func manifest_path_var() -> string
   ensures { result != "" }
+  tests [((), "MOTOKO_EXIT_MANIFEST")]
   { "MOTOKO_EXIT_MANIFEST" }
 
 -- One action, as the TUI reads it. `kind` is the tag the dispatcher switches
