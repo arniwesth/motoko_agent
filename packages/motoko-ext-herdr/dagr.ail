@@ -685,6 +685,22 @@ pure func abandoned_of(ts: [Json], live: [string]) -> [string] {
 -- reason: a task that was retried names its old pane in an earlier attempt, and
 -- that pane belongs to nobody by the time the retry is running.
 --
+-- AND THAT EXCLUSION LOSES A CLEANUP THE PRE-7.0 REAPER CAUGHT. `dagr_settle`
+-- marks the attempt terminal whether or not the pane close SUCCEEDED -- a
+-- failed close adds a note ("so it may still be running", herdr.ail:376) and
+-- nothing more. So a delegate whose close failed for any reason other than
+-- `pane_not_found` is recorded terminal, is excluded here, and is therefore
+-- absent from every later exit render. The old reaper enumerated by TOKEN and
+-- ignored task state entirely, so it would have retried that pane at exit.
+--
+-- This is a behavioural narrowing, not an oversight, and it is recorded rather
+-- than fixed here because the fix belongs on the other side: a cleanup
+-- obligation should survive a failed cleanup, which means the run file needs to
+-- carry "close attempted and failed" as its own fact rather than folding it
+-- into a note on a settled attempt. Until it does, the startup orphan sweep is
+-- what catches these -- the same backstop that catches everything a SIGKILL
+-- skipped.
+--
 -- THE RUN FILE IS ALREADY SESSION-KEYED (`run_file_name`: producer pane plus
 -- session), so every pane named here was spawned by THIS session. That is what
 -- makes reading it a substitute for a separate owned-pane set rather than a

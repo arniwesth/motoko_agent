@@ -27,8 +27,17 @@ import { sessionStartMs } from "./session-identity.js";
  * WHY THE TOKEN CHECK IS STILL HERE WHEN THE POLICY IS NOT. A cached action is a claim about a
  * past moment, and pane ids can be recycled. `close_pane` therefore carries the pane id AND the
  * token that must still be on it; the extension decides which key and which value prove ownership,
- * and this file verifies the pane presents them before closing anything. That is what buys back
- * the freshness the cache gives up, without teaching the host whose panes are whose.
+ * and this file verifies the pane presents them before closing anything — without ever learning
+ * whose panes are whose.
+ *
+ * WHAT THAT IS WORTH, STATED HONESTLY. It makes a STALE action no more dangerous than a fresh one,
+ * which is the property the cache needed. It does NOT make the close atomic: `pane list` and
+ * `pane close` are two calls, ownership can change between them, and every action in the manifest
+ * is checked against one enumeration taken before any of them ran. Re-listing before each close
+ * would shrink the window, not remove it; removing it needs an operation herdr does not offer —
+ * close this pane incarnation if its token still matches. The pre-7.0 reaper had the same race,
+ * and this is a best-effort snapshot check, not a guarantee that a reassigned pane is never
+ * closed.
  *
  * WHAT IT CANNOT DO. SIGKILL, a power loss, or a crash runs nothing at all — the manifest is a
  * best-effort courtesy on a clean exit, and every producer needs its own startup-side backstop

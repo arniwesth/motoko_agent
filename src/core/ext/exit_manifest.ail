@@ -81,10 +81,12 @@ export pure func action_json(a: ExitAction) -> Json {
     ClosePane(c) => jo([
       kv("kind", js("close_pane")),
       kv("pane", js(c.pane)),
-      -- The proof the host must find on the pane before closing it. This is
-      -- what keeps a CACHED action safe: a pane id recycled between the render
-      -- and the exit fails the check and is left alone. No executable is named
-      -- here and none is read from here -- see the ABI's `PaneCloseAction`.
+      -- The proof the host must find on the pane before closing it: what makes
+      -- a CACHED action no more dangerous than a fresh one, since a pane id
+      -- recycled between the render and the exit fails the check. It is a
+      -- snapshot check and not an atomic one -- see `PaneCloseAction` in the
+      -- ABI for the race it narrows rather than closes. No executable is named
+      -- here and none is read from here.
       kv("token_key", js(c.token_key)),
       kv("token_value", js(c.token_value))
     ])

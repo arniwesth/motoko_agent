@@ -107,12 +107,25 @@ Shape notes:
   position. A record payload would choose the `smuggle` hole by construction.
 - **Captured `bool`, not a thunk** (M8): reading env is `! {Env}`. `HERDR_REAP_ON_EXIT=1`
   is resolved at registration via `getEnvOr` like every other knob and captured.
-- **`ClosePane` carries the PROOF, not just the id.** This is the one addition v2 did not
-  have, and it is what makes a cached action safe. The extension names the token key and
-  value that must still be on the pane; the host verifies before closing. A pane id
-  recycled between the render and the exit fails the check and is left alone — so the
-  freshness a cache gives up is bought back at exit, without teaching the host whose panes
-  are whose. `token_key == ""` is "no proof required" and has to be written deliberately.
+- **`ClosePane` carries the PROOF, not just the id.** The extension names the token key and
+  value that must still be on the pane; the host verifies before closing, without ever
+  learning whose panes are whose. A pane id recycled between the render and the exit fails
+  the check and is left alone.
+
+  **What that is worth, corrected.** v2 and the first v3 draft both said this "buys back the
+  freshness a cache gives up". It does not, and the review was right to call it. What it buys
+  is that a STALE action is no more dangerous than a fresh one — the property the cache
+  actually needed. It does not make the close atomic: `pane list` and `pane close` are two
+  calls, ownership can change between them, and every action is checked against one
+  enumeration taken before any of them ran. Re-listing per close would shrink that window,
+  not remove it; removing it needs an operation herdr does not offer — close this pane
+  incarnation if its token still matches. **The pre-7.0 reaper had the same race.** This is a
+  best-effort snapshot check, and anything stronger has to come from the server.
+
+  All three fields are required and non-empty. An earlier draft read a missing `token_key` as
+  `""` and treated `""` as "close any pane that exists", so the escape hatch documented as
+  deliberate was also what malformed input decayed to — a default failing in the wrong
+  direction. There is no unproven-close mode now.
 - **The render returns a SUCCESSOR and reads through `ExtPorts.file_read`.** v2 specified
   `! {FS}` and a bare `[ExitAction]`, which is what was first built. It type-checked,
   passed its own tests, and `make driver_plus_no_ops` rejected it: the barrier derivation
@@ -140,11 +153,20 @@ backstop (DESIGN-f5 §2.3).
 - No `Pending`-at-exit: suspending the run for an operator decision at exit turns a
   runaway into a hung session.
 - No generic async-at-exit: the sync constraint is load-bearing, not an optimization.
-- One behaviour DID narrow, and it is recorded rather than smoothed over: the old reaper
-  closed *everything* carrying this session's token, so the MOT-137 dagr VIEW pane cleaned
-  up at exit for free. The intent renders from the run file's in-flight attempts, and the
-  view pane is not one, so it is no longer closed at exit — the orphan sweep still
-  recognises it. See the note above `ensure_dagr_pane`.
+- TWO behaviours narrowed, both recorded rather than smoothed over. Both follow from the same
+  change of denominator: the old reaper enumerated by TOKEN and ignored task state, while the
+  intent renders from the run file's in-flight attempts.
+  - The MOT-137 dagr VIEW pane is tagged but is not an attempt, so it is no longer closed at
+    exit. See the note above `ensure_dagr_pane`.
+  - **A delegate whose pane close FAILED is now excluded too**, which the review found and
+    which is the worse of the two. `dagr_settle` marks the attempt terminal whether or not the
+    close succeeded — a failure adds a note saying the delegate "may still be running"
+    (`herdr.ail:376`) and nothing else — so that pane is terminal, excluded by
+    `open_delegate_panes`, and absent from every later exit render. The old reaper would have
+    retried it. The fix belongs in the run file rather than the query: a cleanup obligation
+    should survive a failed cleanup, which means recording "close attempted and failed" as its
+    own fact instead of folding it into a note on a settled attempt. Until then the startup
+    orphan sweep is the backstop — the same one that catches everything a SIGKILL skipped.
 
 ## 4. What it cost (v2's §4 predictions, against what happened)
 
@@ -255,6 +277,10 @@ moved and left that drift reporting itself.
 - ✅ `src/tui/src/herdr-reap.ts` deleted; a generic exit dispatcher in its place. No
   `mot-owner` string remains in `src/tui/` outside `exit-actions.test.ts`, which uses it
   as a fixture token exactly as an extension would supply one.
+- ⚠️ "Mechanism moves; policy stays" is TRUE OF THE RUNGS AND NOT OF THE COVERAGE. The opt-in
+  default, the token gate and the report-by-default sweep are unchanged, but the set of panes
+  reaped at exit is narrower than the pre-7.0 reaper's in the two ways §3c records. This
+  branch should not claim cleanup behaviour is unchanged, and no longer does.
 - ✅ / superseded. v2 predicted "the format has one definition; the host twin-test stays as
   the pin". The format has one definition and the twin test is GONE, because the host no
   longer builds the token at all — a stronger outcome than the criterion asked for. The

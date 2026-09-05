@@ -1022,6 +1022,17 @@ export type FinalizeOutcome = { decision: FinalizeDecision, next_state: ExtWorld
 -- that pane before closing it, so the ownership RULE (which key, which value)
 -- is the extension's and the VERIFICATION is the host's.
 --
+-- THE PROOF NARROWS A RACE; IT DOES NOT CLOSE ONE, and the first draft of this
+-- header claimed otherwise ("restores the freshness a cached action would
+-- otherwise lose"). It cannot: the host enumerates panes and then closes them,
+-- and ownership can change between those two calls. Re-listing immediately
+-- before each close would only make the window smaller. Closing it needs an
+-- operation the multiplexer does not offer -- close this pane incarnation if
+-- its token still matches, atomically. The pre-7.0 reaper had the same race;
+-- what the proof actually buys is that a STALE action, rendered turns earlier,
+-- is no worse than a fresh one, which is the property the cache needed and the
+-- only one claimed here.
+--
 -- WHAT THE MANIFEST DELIBERATELY CANNOT SAY, after the 7.0 review. The first
 -- draft of this type also carried `RunArgv({ bin, args })` and
 -- `PublishFile({ tmp, dest })`, and `ClosePane` named its own `bin`. Every one
