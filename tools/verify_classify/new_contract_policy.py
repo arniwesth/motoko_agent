@@ -135,10 +135,23 @@ def verifier_rejects(path: str, name: str) -> tuple[bool | None, str]:
 
     probed = text[:m.start()] + head + "\n  ensures { true }" + tail + text[m.end():]
     stem = src_path.stem
-    probed = probed.replace(f"module src/core/{stem}",
-                            f"module tools/verify_classify/generated/{stem}_policy", 1)
+    # THE MODULE LINE IS DERIVED FROM THE PATH, not assumed flat. `module
+    # src/core/{stem}` matched nothing for a file under `src/core/ext/`, whose
+    # declaration reads `module src/core/ext/exit_manifest` -- so the copy landed
+    # in `generated/` still claiming the original module name and every probe
+    # died on `Error MOD010: module ... doesn't match file path`. The excuse was
+    # then reported as "could not be checked", which is the correct fail-closed
+    # answer to a question this tool could not ask: every new `pure func` under
+    # `src/core/ext/` was unjustifiable BY CONSTRUCTION, and the policy globs
+    # `src/core`, which includes it.
+    rel_module = src_path.relative_to(ROOT).with_suffix("").as_posix()
+    # `_`-flattened so `src/core/foo.ail` and `src/core/ext/foo.ail` cannot write
+    # the same probe file and silently answer for each other.
+    probe_stem = rel_module.replace("/", "_")
+    probed = probed.replace(f"module {rel_module}",
+                            f"module tools/verify_classify/generated/{probe_stem}_policy", 1)
     GEN.mkdir(parents=True, exist_ok=True)
-    probe = GEN / f"{stem}_policy.ail"
+    probe = GEN / f"{probe_stem}_policy.ail"
     probe.write_text(probed)
 
     res = subprocess.run(
