@@ -360,8 +360,28 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # re-baseline once is cheaper than a `session.ail` whose import block is written
 # for the anchor checker.
 
+# THE 7.0 REVIEW MOVED TWO OF THE FIVE, +4 -- `3012/3122 -> 3016/3126`. The
+# publish-before-`done` fix (review finding 4) added four lines inside
+# `c2_loop`'s success arm, which sits between `:1529` and the two
+# `provider.ports.clock_now` sites; the first three anchors did not move.
+#
+# ALL FIVE WERE RE-DERIVED ANYWAY, on the rule the +2 re-baseline above had to
+# learn: an anchor that still matches is not an anchor that is still right.
+# `grep -n 'clock_now'` was run over the working tree and each of the five
+# expressions compared to its recorded text. Three were byte-identical at
+# unchanged offsets; two moved by four and are byte-identical at the new ones.
+#
+# THE D4 JUDGEMENT: the routed clock set is unchanged, six sites and six. The
+# exit-manifest publish reads no clock; it is ordered before a ledger emit and
+# performs FS and Process work only.
+#
+# WIDTH: the six-file form again, for the reason the note above records -- the
+# three profiles pin the TABLE, so correcting a row re-issues them whether or
+# not a fixture-carried anchor moved. driver_only v25 -> v26, no_ops v13 -> v14,
+# compose v5 -> v6.
+
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1164 1423 1529 3012 3122; do
+for l in 1164 1423 1529 3016 3126; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

@@ -212,7 +212,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- entries) to the extension's OWN list (`registered_atoms_of`, 4 entries in
 -- all). `check_no_op_profile.py` cross-checks each claim against B2's
 -- enumeration, which is what turned v10 red — as B8 §5 said it would.
-export pure func no_ops_version() -> string { "13" }
+export pure func no_ops_version() -> string { "14" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -220,6 +220,18 @@ export pure func no_ops_version() -> string { "13" }
 -- can be re-issued silently by the other's edit.
 export pure func no_ops_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT 7.0 REVIEW FIX FOR v14, from
+    -- sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33.
+    -- TWO anchors moved, +4 (`3012/3122 -> 3016/3126`): the publish-before-`done`
+    -- ordering fix (review finding 4) added four lines inside `c2_loop`'"'"'s success
+    -- arm, which sits between `:1529` and the two `provider.ports.clock_now`
+    -- sites. The other three did not move and were re-derived anyway, on the
+    -- rule the previous re-baseline had to learn the hard way: an anchor that
+    -- still matches is not an anchor that is still right.
+    --
+    -- All five anchored expressions are byte-identical at their offsets. Pure
+    -- offset drift; the routed clock set is unchanged at six sites. The
+    -- exit-manifest publish reads no clock.
     -- RE-RECORDED AT ABI 7.0 FOR v13, from
     -- sha256:c6cf9b2c9d9287cf8071160333c1aa4acfbed2020d31b1a8b5db73c1f2cd7e66.
     -- FIVE anchors moved, all +2 (`1162/1421/1527/3010/3120 ->
@@ -300,7 +312,7 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- the routed clock set is unchanged. See `driver_only_attribution_ref`,
     -- which carries the full account and the reason a contract cannot dodge this
     -- the way WI-D19 dodged it.
-    content_hash: "sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33" }
+    content_hash: "sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4" }
 }
 
 -- ---------------------------------------------------------------------------

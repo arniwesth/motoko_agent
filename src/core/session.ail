@@ -50,7 +50,7 @@ import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY p
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, effective_input_limit)
 import src/core/context_usage (resolve_context_limit)
 import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry)
-import src/core/ext/exit_manifest (publish_exit_manifest)
+import src/core/ext/exit_manifest (publish_exit_manifest, manifest_path_var)
 import src/core/ext/runtime (
   dispatch_response_intercept,
   dispatch_solver_candidate,
@@ -2366,6 +2366,10 @@ func c2_loop(
           let done_event = DoneEvent({ step: done_step, output: info.output, source: st.finalize_source });
           let trace_with_done = ledger_append(trace_after_empty_floor, WireRecord(done_event));
           let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, st.emissions, Ok(st.msgs));
+          -- BEFORE `done`, DELIBERATELY. The TUI exits on `done` without waiting
+          -- for this process, so a manifest published after it is a race this
+          -- code lost under measurement. See `publish_turn_exit_manifest`.
+          let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, st.provider, finalized.world);
           let _ = ledger_emit(session_id, done_event);
           finalized
         },
@@ -3287,7 +3291,7 @@ func conversation_loop_v2_with_policy(
           mode: "v2"
         }));
         let traced = run_v2_from_messages_traced_with_policy_and_counts(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts);
-        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider, traced.world);
+        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, traced.world);
         let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
         match traced.result {
           Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
@@ -3317,9 +3321,28 @@ func conversation_loop_v2_with_policy(
 -- runtime is reliably still alive, and every intent this publishes was
 -- computed from state that boundary can see.
 --
--- BOTH ARMS OF EVERY TURN, success and error. A turn that ended in an error is
--- exactly the turn whose delegates are most likely to have been abandoned, so
--- publishing only on `Ok` would drop the interesting case.
+-- CALLED FROM TWO PLACES, AND THE ORDERING IS WHY.
+--
+-- The load-bearing call is inside `c2_loop`'s success arm, immediately BEFORE
+-- `ledger_emit(session_id, done_event)`. That position is not tidiness: the TUI
+-- treats `done` as "the turn is over", drains its logger and calls
+-- `process.exit`, WITHOUT waiting for this process. Publishing after `done` was
+-- therefore two comparable few-millisecond paths with no ordering between them,
+-- and it lost. MEASURED 2026-09-05 by injecting a 2s delay into
+-- `publish_exit_manifest` and running a real headless delegation: the TUI
+-- exited with `.motoko/exit/` still empty, the manifest landed a second later
+-- naming exactly the right pane with the right proof, and the delegate survived
+-- with HERDR_REAP_ON_EXIT=1. Two earlier live runs had passed; they won a race
+-- rather than being safe. Emitting `done` only after this returns makes the
+-- ordering a property instead of a timing assumption.
+--
+-- The turn-boundary calls are the BACKSTOP, and they stay because not every
+-- terminal path emits `DoneEvent` -- an errored turn, an exhausted step budget
+-- and a cost cap all finalize without one, and an errored turn is exactly the
+-- one whose delegates are most likely to have been abandoned. Publishing twice
+-- on the common path costs one render, one small write and one `mv` against a
+-- turn that just made a model call; every publish rewrites the whole document,
+-- so the second is idempotent rather than additive.
 --
 -- THE CTX CARRIES LIVE PORTS, and the first draft did not — which is the whole
 -- reason this comment is long. `ExitIntent`'s row is `! {FS}` and its render
@@ -3344,7 +3367,7 @@ func publish_turn_exit_manifest(
   env_url: string,
   hybrid_tools: bool,
   budget: BudgetPlan,
-  provider: PortedProvider,
+  ports: Ports,
   -- THE TURN'S SUCCESSOR WORLD, not the provider's pre-turn one. `TracedSessionResult` carries
   -- `world` precisely so the state the turn produced can be handed on; passing `provider.world`
   -- rewinds the render to before the turn it is supposed to be summarising, which under scripted
@@ -3354,6 +3377,12 @@ func publish_turn_exit_manifest(
   -- given — the same both-sides-mocked shape that hid the no-op ports bug.
   world: WorldState
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  -- ROUTED, NOT AMBIENT. The manifest's name is read through `Ports.env_get`
+  -- rather than `std/env`, because this now runs INSIDE the deterministic
+  -- driver: `make world_state` rejects an un-routed env read on that path, and
+  -- it is right to -- a replayed run must see the same name the recorded one
+  -- did. The successor is threaded into the ctx the render receives.
+  let named = ports.env_get(world, manifest_path_var(), "");
   let ctx: ExtCtx = {
     task: task,
     step: 0,
@@ -3368,16 +3397,16 @@ func publish_turn_exit_manifest(
     history_slice: [],
     state_key: "core:ext:exit",
     context_limit: 0,
-    ports: ext_ports_of(provider.ports, world, env_url),
+    ports: ext_ports_of(ports, named.next_state, env_url),
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(),
-    world: world_to_token(world)
+    world: world_to_token(named.next_state)
   };
   -- The result says whether the live file was replaced. Discarded on purpose:
   -- a manifest that could not be published leaves the previous one standing,
   -- and failing a completed turn over a best-effort courtesy would be the
   -- wrong trade in the one direction that matters.
-  let _ = publish_exit_manifest(rt, ctx);
+  let _ = publish_exit_manifest(rt, ctx, named.value);
   ()
 }
 
@@ -3447,7 +3476,7 @@ export func run_v2_with_conversation(
     conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts())
   else {
   let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
-  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider, initial_traced.world);
+  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider.ports, initial_traced.world);
   let initial_counts = runtime_status_counts(initial_traced.trace);
   match initial_traced.result {
     Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts),

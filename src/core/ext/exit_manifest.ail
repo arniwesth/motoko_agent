@@ -53,7 +53,6 @@
 
 module src/core/ext/exit_manifest
 
-import std/env (getEnv)
 import std/fs (writeFileResult)
 import std/json (Json, encode, jo, ja, kv, js, jb, jnum)
 import std/process (exec)
@@ -135,21 +134,21 @@ pure func count_intents(xs: [RenderedIntent]) -> int {
   }
 }
 
-pure func env_or_empty(key: string) -> string ! {Env} {
-  match getEnv(key) {
-    Ok(v) => v,
-    Err(_) => ""
-  }
-}
-
 -- Publish the manifest for THIS turn. Idempotent by construction: every
 -- publish rewrites the whole document, so a turn that renders nothing publishes
 -- an empty list and the exit handler correctly does nothing.
 --
 -- Returns whether the live file was replaced, for the gate to assert on. Every
 -- caller in the tree discards it.
-export func publish_exit_manifest(rt: ExtRuntime, ctx: ExtCtx) -> bool ! {Env, FS, IO, Process} {
-  let dest = env_or_empty(manifest_path_var());
+-- `dest` IS A PARAMETER, and it stopped being an ambient `getEnv` here for a
+-- measured reason. Once the publish moved inside `c2_loop` (the ordering fix
+-- for review finding 4), reading the path through `std/env` put an AMBIENT env
+-- read on the deterministic driver path, and `make world_state` rejected it:
+-- "the deterministic entry point needs Env -- a driver env read or a
+-- context_usage read is un-routed". The caller now reads the name through
+-- `Ports.env_get`, which is world-mediated and replayable, and hands the value
+-- down. This function's row lost `Env` entirely as a result.
+export func publish_exit_manifest(rt: ExtRuntime, ctx: ExtCtx, dest: string) -> bool ! {FS, IO, Process} {
   if dest == "" then false
   else {
     -- The successor is discarded HERE and nowhere deeper, and this is the one
