@@ -1,0 +1,144 @@
+module src/core/context_limit
+
+-- P1 (D1) steps 1-2: the resolved context limit as a named sum.
+--
+-- TYPE HOME (hard): this is a LEAF module. It imports nothing from
+-- phase_vocab, ports or context_usage, so both context_usage and
+-- phase_vocab can import it without closing the
+-- context_usage -> ports -> phase_vocab cycle (context_usage.ail:9 imports
+-- ports; ports.ail:44 imports phase_vocab). Only std/option crosses in.
+--
+-- The ADR sketch (ADR-001-sequencing-the-dst-architecture-caps.md:284-302)
+-- is the specification. `Bounded` is constructed only by the two resolvers
+-- (P1 step 7 wires them into session_policy_init/with_model), only from a
+-- decoded n > 0. `Unknown` is reached only when BOTH halves failed and
+-- carries both misses. `Disabled` is declared, never inferred (step 6).
+--
+-- Rule 4: no policy change under Bounded. The three projections below are
+-- the ONLY erasures of the reason to int; nothing else reads the arm.
+-- working_budget_for_ext is kept separate from raw_window_of: unifying them
+-- changes pre-step behaviour under Bounded.
+--
+-- contracts: the three projections carry int-only contracts (see below).
+-- effective_input_limit's seal over the InputBudget sum is structural and
+-- recorded as spec-equals-body risk; the int projections are the
+-- substantive ones under 027's register.
+
+import std/option (Option, Some, None)
+
+export type LimitSource = ProfileOverride | Catalogue
+
+export type ProfileMiss
+  = ProfileConfigAbsent
+  | ProfileConfigUndecodable
+  | ProfileKeyAbsent
+  | ProfileKeyNonPositive
+
+export type CatalogueMiss
+  = CatalogueAbsent
+  | CatalogueUndecodable
+  | ModelNotInCatalogue(string)
+
+export type ContextLimit
+  = Bounded({ raw_window: int, source: LimitSource })
+  | Disabled
+  | Unknown({ profile: ProfileMiss, catalogue: CatalogueMiss })
+
+export type BudgetMiss
+  = LimitUnknown({ profile: ProfileMiss, catalogue: CatalogueMiss })
+  | LimitDisabled
+  | InvalidWindow({ raw: int, allowance: int })
+
+export type InputBudget = Budget(int) | NoBudget(BudgetMiss)
+
+-- Keep this value in one place with compaction.ail's output_token_allowance:
+-- both the extension-facing working limit and the final payload seal depend
+-- on the same reservation. Duplicated (not imported) to keep this module a
+-- leaf: importing compaction would pull phase_vocab's world in through the
+-- back door.
+export pure func output_token_allowance() -> int { 65536 }
+
+-- a. raw_window_of: Bounded -> raw_window, else 0. Serves the raw int
+-- surfaces (mk_v2_ext_ctx sites, rpc hook-context literals, checkpoint
+-- denominators, status int, EmptyStopFinalize wire field) so their schemas
+-- and goldens do not move.
+export pure func raw_window_of(limit: ContextLimit) -> int
+  ensures { result >= 0 }
+{
+  match limit {
+    Bounded(r) => r.raw_window,
+    Disabled => 0,
+    Unknown(_) => 0
+  }
+}
+
+-- b. working_budget_for_ext: reproduces max(0, effective(raw) - pinned) for
+-- the pre-step call. Separate from raw_window_of by rule 4.
+export pure func working_budget_for_ext(limit: ContextLimit, pinned_tokens: int) -> int
+  requires { pinned_tokens >= 0 }
+  ensures { result >= 0 }
+{
+  let raw = raw_window_of(limit);
+  let eff = if raw <= output_token_allowance() then 0 else raw - output_token_allowance();
+  if eff <= pinned_tokens then 0 else eff - pinned_tokens
+}
+
+-- c. effective_input_limit: the seal. Takes the sum where phase_vocab's
+-- seal_compacted_payload took raw_context_limit: int. Internal; not an ABI
+-- change. Unknown and Disabled seal to NoBudget with their reason; a
+-- non-positive Bounded window (which the resolvers never construct) seals
+-- to InvalidWindow rather than silently passing 0 through.
+export pure func effective_input_limit(limit: ContextLimit) -> InputBudget {
+  match limit {
+    Bounded(r) =>
+      if r.raw_window <= 0 then NoBudget(InvalidWindow({ raw: r.raw_window, allowance: output_token_allowance() }))
+      else if r.raw_window <= output_token_allowance() then Budget(0)
+      else Budget(r.raw_window - output_token_allowance()),
+    Disabled => NoBudget(LimitDisabled),
+    Unknown(u) => NoBudget(LimitUnknown({ profile: u.profile, catalogue: u.catalogue }))
+  }
+}
+
+-- The two resolvers: the ONLY constructors of Bounded, only from n > 0.
+-- Profile override first; absent or non-positive profile key is a
+-- ProfileMiss and falls through to the catalogue (rule 3: Disabled is
+-- never inferred — it requires the explicit key, wired in step 6).
+export pure func resolve_bounded_from_profile(n: int) -> Option[ContextLimit] {
+  if n > 0 then Some(Bounded({ raw_window: n, source: ProfileOverride }))
+  else None
+}
+
+export pure func resolve_bounded_from_catalogue(n: int) -> Option[ContextLimit] {
+  if n > 0 then Some(Bounded({ raw_window: n, source: Catalogue }))
+  else None
+}
+
+pure func raw_window_of_bounded_is_window() -> bool
+  tests [((), true)]
+{
+  raw_window_of(Bounded({ raw_window: 71, source: Catalogue })) == 71
+}
+
+pure func raw_window_of_unbounded_is_zero() -> bool
+  tests [((), true)]
+{
+  raw_window_of(Disabled) == 0
+    && raw_window_of(Unknown({ profile: ProfileKeyAbsent, catalogue: CatalogueAbsent })) == 0
+}
+
+pure func working_budget_matches_seal_minus_pinned() -> bool
+  tests [((), true)]
+{
+  working_budget_for_ext(Bounded({ raw_window: 262144, source: Catalogue }), 100) == 196508
+    && working_budget_for_ext(Bounded({ raw_window: 65536, source: Catalogue }), 0) == 0
+    && working_budget_for_ext(Disabled, 0) == 0
+}
+
+pure func seal_roundtrip_bounded() -> bool
+  tests [((), true)]
+{
+  match effective_input_limit(Bounded({ raw_window: 262144, source: Catalogue })) {
+    Budget(n) => n == 196608,
+    NoBudget(_) => false
+  }
+}
