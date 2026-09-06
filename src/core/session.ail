@@ -897,9 +897,17 @@ pure func tool_outcome_exit_code(o: ToolOutcome) -> int {
   }
 }
 
-pure func decode_or_empty(raw: string) -> Json {
-  match decode(raw) { Ok(j) => j, Err(_) => jo([]) }
-}
+-- `decode_or_empty` USED TO SIT HERE and is gone (PLAN-001 live-run fix 1).
+-- It turned an unparseable argument string into `{}` with no event and no
+-- warning, and its one consumer — `ext_ports_of`'s `tool_handle` bridge below —
+-- then handed that empty object to the tool runtime, which reported the first
+-- field it could not find. On the MODEL'S tool path the same fallback lives in
+-- `tool_dispatch_adapter.tool_call_to_envelope` and is now short-circuited by
+-- `tool_phase.arguments_undecodable`, which emits `ToolArgumentsUndecodable` and
+-- tells the model its arguments were cut. The bridge below is the extension's
+-- path, has no `emit` in scope and returns an `ExtProcOutcome` rather than a
+-- tool message, so it says the same thing in the vocabulary it has: a non-zero
+-- exit and a sentence, instead of a silent `{}`.
 
 -- EXPORTED AT WI-D23, for one consumer: `world_state_probe`'s adoption row,
 -- which per S14 must exercise THIS bridge's `tool_handle` closure against a
@@ -1069,22 +1077,35 @@ export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPo
   -- ground is unchanged, and it is still true that no adapter constructs it.
   let tool_handle = func(w: ExtWorld, tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
     let w0 = token_to_world(w);
-    let inv: ToolInvocation = {
-      call: { id: "", tool: tool, arguments: decode_or_empty(args_json) },
-      workdir: ".",
-      timeout_ms: 0,
-      started_at_ms: 0
-    };
-    -- `ext_effect_exec` AND NOT `tool_exec` SINCE WI-D24. Same shape, different
-    -- class: this dispatch is the extension's, it is served from
-    -- `WorldState.ext_effects`, and it is recorded as
-    -- `ExtensionEffectIdentity(w0.holder_ext_id, extension_effect_fault, "")`.
-    -- The id comes off the world because this closure is built once per step and
-    -- cannot name its caller; `ext/runtime`'s fold stamps it on the re-seat.
-    let execution = p.ext_effect_exec(w0, inv);
-    { output: tool_outcome_text(execution.outcome),
-      exit_code: tool_outcome_exit_code(execution.outcome),
-      next_state: world_to_token(execution.next_state) }
+    -- BLANK IS NOT UNDECODABLE, for `tool_phase.arguments_undecodable`'s reason:
+    -- a call with no arguments arrives as "" and has always meant the empty
+    -- object. Only a non-blank string that will not parse is a fault, and it is
+    -- reported rather than flattened.
+    let decoded = if trim(args_json) == "" then Ok(jo([])) else decode(args_json);
+    match decoded {
+      Err(_) =>
+        { output: "the arguments for `${tool}` were not valid JSON (${show(Str.length(args_json))} bytes), so the tool was NOT run. Nothing was written, read or executed.",
+          exit_code: 1,
+          next_state: w },
+      Ok(args) => {
+        let inv: ToolInvocation = {
+          call: { id: "", tool: tool, arguments: args },
+          workdir: ".",
+          timeout_ms: 0,
+          started_at_ms: 0
+        };
+        -- `ext_effect_exec` AND NOT `tool_exec` SINCE WI-D24. Same shape, different
+        -- class: this dispatch is the extension's, it is served from
+        -- `WorldState.ext_effects`, and it is recorded as
+        -- `ExtensionEffectIdentity(w0.holder_ext_id, extension_effect_fault, "")`.
+        -- The id comes off the world because this closure is built once per step and
+        -- cannot name its caller; `ext/runtime`'s fold stamps it on the re-seat.
+        let execution = p.ext_effect_exec(w0, inv);
+        { output: tool_outcome_text(execution.outcome),
+          exit_code: tool_outcome_exit_code(execution.outcome),
+          next_state: world_to_token(execution.next_state) }
+      }
+    }
   };
   -- WI-D16's file read seam, bridged to WI-D3's `Ports.file_read`. Same `let w0`
   -- shape, same tool reason.

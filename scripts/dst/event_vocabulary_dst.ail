@@ -2,7 +2,7 @@
 --
 -- WI-A8 acceptance, under ADR-001 D6.
 --
--- The artifact declares a wire name and a payload schema for each of the 34
+-- The artifact declares a wire name and a payload schema for each of the 35
 -- `LedgerEvent` variants. This script is what makes those declarations mean
 -- something: it builds ONE SAMPLE VALUE PER VARIANT and asserts, against the
 -- LIVE projection `phase_vocab.to_schema_v1`, that
@@ -23,8 +23,8 @@
 -- so nothing can enumerate `LedgerEvent` for us. What CAN be done, and is:
 -- `event_variant_id` is a total match, so a new constructor is a compile error
 -- in the artifact; `make event_vocabulary` then counts the variants in the type
--- declaration itself and fails if it is not 34, which ties both the row list
--- and this sample list to the type rather than to each other.
+-- declaration itself and compares that count against the row list and the
+-- golden list, which ties all three to the type rather than to each other.
 
 module scripts/dst/event_vocabulary_dst
 
@@ -39,6 +39,7 @@ import src/core/phase_vocab (
   Dp7VerifierRejected, CostExhausted, CompactionApplied, CompactionExhausted,
   ExtCompactionRejected, ExtensionDiagnostic, ThinkingStreamStart, ThinkingStreamEnd,
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
+  ToolArgumentsUndecodable,
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
   NativeToolResults, SessionSuspend, SessionStart, ErrorEvent, TotalsUpdated,
   CheckpointTaken, StreamDelta,
@@ -104,6 +105,7 @@ pure func samples() -> [LedgerEvent] {
       total_cost_usd: 0.08, cap_millicents: 10 }),
     ExtInterceptHandled({ step: 1, stream_id: "s", tool: "t", id: "i", exit_code: 0 }),
     HybridBashExtracted({ step: 1, cmd: "ls" }),
+    ToolArgumentsUndecodable({ step: 1, stream_id: "s", tool: "WriteFile", id: "i", raw_length: 4176 }),
     DoneEvent({ step: 1, output: "o", source: "src" }),
     EmptyStopFinalize({ step: 1, input_tokens: 1, estimated_input_tokens: 2,
       context_limit: 3 }),
@@ -120,7 +122,7 @@ pure func samples() -> [LedgerEvent] {
     CheckpointTaken({ reason: "r", before_digest: "b", after_digest: "a" }),
     -- The payload-dependent variant, thinking branch. The reasoning branch is a
     -- separate sample below: `samples()` is one PER VARIANT (the completeness
-    -- list), and the second branch is an extra round-trip case, not a 35th row.
+    -- list), and the second branch is an extra round-trip case, not its own row.
     StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "text", text: "d" })
   ]
 }
@@ -279,7 +281,7 @@ export func main() -> () ! {IO} {
             report_rejections(rs)
           };
 
-  -- 2. THE ROUND TRIP. All 34 variants against the live projection.
+  -- 2. THE ROUND TRIP. All 35 variants against the live projection.
   let c2 = assert_all(ss);
   let _ = if c2 then println("  ✓ all ${show(List.length(ss))} variants round-trip: wire name and payload schema match the live projection")
           else println("  ✗ at least one variant does not round-trip");
@@ -296,7 +298,7 @@ export func main() -> () ! {IO} {
   -- 4. The classification, and the D6.4 gap it makes countable.
   let logical = logical_variants(rows);
   let display = display_only_variants(rows);
-  let c4 = List.length(logical) + List.length(display) == 34;
+  let c4 = List.length(logical) + List.length(display) == 35;
   let _ = if c4 then println("  ✓ every variant classified: ${show(List.length(logical))} logical, ${show(List.length(display))} display-only")
           else println("  ✗ the classification does not partition the vocabulary");
   let _ = print_list("display-only", display);
