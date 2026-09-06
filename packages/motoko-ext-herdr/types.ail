@@ -1531,6 +1531,42 @@ export pure func argv_dagr_pane_str(own_pane: string, run_path: string, cwd: str
   { show_argv(argv_dagr_pane(own_pane, run_path, cwd)) }
 
 -- ---------------------------------------------------------------------------
+-- The OPERATOR's dagr view (2026-09-06)
+-- ---------------------------------------------------------------------------
+--
+-- `scripts/dagr-pane.sh` records the pane it opened in `.dagr/.pane`, for the
+-- same proof standard the extension's own marker exists for: a pane is only
+-- ours to touch if we can prove we opened it. `dagr.operator_pane_marker` names
+-- that file; these two read it back.
+--
+-- WHY THE MARKER ALONE IS NOT ENOUGH. The script removes its marker before
+-- opening and rewrites it after, so an absent marker is honest — but a PRESENT
+-- one only says a view was opened once, not that it is still up, and pane ids
+-- are reused. A stale marker read as "the operator has a view" would suppress
+-- the extension's view for the rest of the run, silently. So the id is probed,
+-- exactly as `close_marked` in that script probes it, and the answer must still
+-- be a dagr pane.
+export pure func argv_pane_get(pane: string) -> [string]
+  { ["pane", "get", pane] }
+
+export pure func argv_pane_get_str(pane: string) -> string
+  tests [("w1:pV", "pane get w1:pV")]
+  { show_argv(argv_pane_get(pane)) }
+
+-- The label herdr puts on a pane opened by the dagr plugin. Substring rather
+-- than a decode: `pane get` answers a record whose nesting has changed twice in
+-- this plugin's life, and the ONLY claim being made here is "this id is still a
+-- dagr view" — the same test `scripts/dagr-pane.sh` makes with grep.
+export pure func is_dagr_pane(stdout: string) -> bool
+  tests [
+    ("{\"result\":{\"pane\":{\"label\":\"dagr\",\"pane_id\":\"w1:pV\"}}}", true),
+    ("{\"result\":{\"pane\":{\"label\":\"shell\",\"pane_id\":\"w1:pV\"}}}", false),
+    ("{\"error\":{\"code\":\"pane_not_found\"}}", false),
+    ("", false)
+  ]
+  { contains(stdout, "\"label\":\"dagr\"") }
+
+-- ---------------------------------------------------------------------------
 -- The routed process port
 -- ---------------------------------------------------------------------------
 --

@@ -174,6 +174,23 @@ export pure func pane_marker(dagr_dir: string, own_pane: string, session_ms: str
   tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/.pane-w1-p1-1756000000000")]
   { "${dagr_dir}/.pane-${slug(own_pane)}-${session_ms}" }
 
+-- THE OPERATOR'S SENTINEL, and it is not this producer's to write.
+-- `scripts/dagr-pane.sh` writes the pane id of a HAND-OPENED dagr view here,
+-- for the same reason `pane_marker` exists: a pane is only ours to touch if we
+-- can prove we opened it. The extension reads it and yields — a second view of
+-- a different run file, on screen next to one the operator opened deliberately,
+-- is the "yet another dagr view" they objected to in the PLAN-001 live run.
+-- (`.agent/issues/herdr-extension-run-file-drifts-from-operator-plan-file.md`,
+-- option B.)
+--
+-- NOT KEYED BY PANE OR SESSION, unlike everything else here, because it is not
+-- this session's file: the script keeps exactly one and re-points it at each
+-- replacement. That asymmetry is the whole reason it is named separately rather
+-- than derived from `pane_marker`.
+export pure func operator_pane_marker(dagr_dir: string) -> string
+  tests [("/w/.dagr", "/w/.dagr/.pane")]
+  { "${dagr_dir}/.pane" }
+
 export pure func attempt_id(task_id: string, n: int) -> string
   tests [(("mot-dlg-7", 1), "mot-dlg-7·a1"), (("mot-dlg-7", 2), "mot-dlg-7·a2")]
   { "${task_id}·a${intToStr(n)}" }

@@ -37,7 +37,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   ToolCallEnvelope, ToolResultEnvelope
 )
 import pkg/sunholo/motoko_ext_herdr/dagr (
-  run_file, run_tmp, refused_marker, pane_marker, load_doc, render, task_title,
+  run_file, run_tmp, refused_marker, pane_marker, operator_pane_marker, load_doc, render, task_title,
   task_kind_or_default, known_task_kinds, task_of_key, can_link_retry, is_empty_run,
   open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
@@ -55,7 +55,7 @@ import pkg/sunholo/motoko_ext_herdr/types (
   depth_allows, next_depth, argv_env_depth,
   argv_report_owner, argv_pane_list, sweep_stale_panes, sweep_report, live_pane_ids,
   sweep_sentinel_path, owner_token_value, owner_token_key,
-  argv_dagr_pane, plugin_pane_id,
+  argv_dagr_pane, plugin_pane_id, argv_pane_get, is_dagr_pane,
   failure_code, failure_message, means_agent_gone, explain_says_ready,
   split_pane_id, agent_status_of, agent_pane_of, is_settled,
   bash_exec_tool, bash_exec_args, bash_field, bash_exit
@@ -556,6 +556,37 @@ func tag_owner(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, pane: string)
 -- longer closed at exit. What the tag still buys is the orphan sweep, which
 -- recognises a view left behind by a session that is gone. A view pane that
 -- outlives its run is a picture of nothing, and that is the path that reaps it.
+-- Is a dagr view the OPERATOR opened still up? `scripts/dagr-pane.sh` records
+-- the pane it opened in `.dagr/.pane` and re-points that file at every
+-- replacement, so the marker is the only claim available and the id in it is
+-- the only thing worth probing.
+--
+-- TWO READS, NOT ONE, AND THE SECOND IS THE LOAD-BEARING ONE. An absent marker
+-- is honest — the script removes it before opening and rewrites it after — but
+-- a present one says a view was opened once, not that it is still up, and pane
+-- ids are reused. A stale marker taken at face value would suppress the
+-- extension's view for the rest of the run with nothing on screen and nothing
+-- said. So the id goes through `pane get` and must still answer `"label":"dagr"`,
+-- which is exactly the test that script's own `close_marked` makes before it
+-- closes anything.
+--
+-- THE COST IS ONE HERDR ROUND-TRIP PER `Delegate`, and only until this session
+-- opens its own view (after which `pane_marker` short-circuits above this) or
+-- the operator's view is found gone. `ensure_dagr_pane`'s header argues against
+-- a pre-flight `plugin list` on the same call; the difference is that this one
+-- decides whether to open at all, where that one would only have predicted an
+-- exit code the open itself reports for free.
+func operator_view_open(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld)
+  -> { open: bool, next_state: ExtWorld } ! {IO, Process, FS} {
+  let seen = p.file_read(w, operator_pane_marker(cfg.dagr_dir));
+  if seen.present == false || seen.content == "" then
+    { open: false, next_state: seen.next_state }
+  else {
+    let probe = run_herdr(cfg, p, seen.next_state, argv_pane_get(seen.content));
+    { open: probe.code == 0 && is_dagr_pane(probe.out), next_state: probe.next_state }
+  }
+}
+
 func ensure_dagr_pane(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string)
   -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
   -- The same refusals `dagr_record` makes, for the same reasons — no run
@@ -569,41 +600,62 @@ func ensure_dagr_pane(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: strin
     let seen = p.file_read(w, marker);
     if seen.present then { note: "", next_state: seen.next_state }
     else {
-      let live = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
-      if path_is_safe(live) == false || path_is_safe(workdir) == false then
-        { note: "", next_state: seen.next_state }
+      -- THE OPERATOR'S VIEW WINS, AND IT WINS BY SILENCE (2026-09-06).
+      -- A dagr pane the operator opened by hand is already on screen, on a run
+      -- file they chose. Opening a second one beside it — on THIS extension's
+      -- run file, which describes the same work and disagrees with theirs — is
+      -- the "yet another dagr view" objected to in the PLAN-001 live run. The
+      -- extension yields: nothing opened, nothing said, and NO MARKER WRITTEN,
+      -- so if the operator closes their view the next `Delegate` opens one.
+      -- That re-evaluation is why the marker is deliberately not laid down on
+      -- this branch, and it is the one path through this function where
+      -- at-most-once is not the rule — there is nothing to be at-most-once
+      -- about, because nothing was opened.
+      --
+      -- This is option B of
+      -- `.agent/issues/herdr-extension-run-file-drifts-from-operator-plan-file.md`.
+      -- The two run files STILL DRIFT; only one of them is on screen. Option A
+      -- (the extension writing into the operator's plan file) is the answer to
+      -- the drift and is deliberately not this change.
+      let operator = operator_view_open(cfg, p, seen.next_state);
+      if operator.open then { note: "", next_state: operator.next_state }
       else {
-        -- MARKER FIRST. Everything below is at-most-once from here on.
-        let dir = p.dir_make(seen.next_state, cfg.dagr_dir);
-        let mark = p.file_write(dir.next_state, marker, "");
-        let op = run_herdr(cfg, p, mark.next_state, argv_dagr_pane(cfg.own_pane, live, workdir));
-        if op.code != 0 then
-          -- The fallback sentence is the point of reporting this at all: the
-          -- operator asked for the view to appear and it did not, and the
-          -- script that opens it by hand is the thing they need to know.
-          { note: " (The dagr view could not be opened automatically — `${failure_code(op.code, op.err)}`. The run file is being written regardless; open the view with `scripts/dagr-pane.sh`.)",
-            next_state: op.next_state }
+        let live = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+        if path_is_safe(live) == false || path_is_safe(workdir) == false then
+          { note: "", next_state: operator.next_state }
         else {
-          let pane = plugin_pane_id(op.out);
-          if pane == "" then
-            -- Opened, but this could not read the id back, so it cannot be
-            -- tagged and cannot be proved ours later. Say so rather than
-            -- leaving an untracked pane silently behind.
-            { note: " (A dagr view pane was opened but herdr's answer carried no pane id, so it is untagged: an orphan sweep will not recognise it and it will not be closed at exit.)",
+          -- MARKER FIRST. Everything below is at-most-once from here on.
+          let dir = p.dir_make(operator.next_state, cfg.dagr_dir);
+          let mark = p.file_write(dir.next_state, marker, "");
+          let op = run_herdr(cfg, p, mark.next_state, argv_dagr_pane(cfg.own_pane, live, workdir));
+          if op.code != 0 then
+            -- The fallback sentence is the point of reporting this at all: the
+            -- operator asked for the view to appear and it did not, and the
+            -- script that opens it by hand is the thing they need to know.
+            { note: " (The dagr view could not be opened automatically — `${failure_code(op.code, op.err)}`. The run file is being written regardless; open the view with `scripts/dagr-pane.sh`.)",
               next_state: op.next_state }
           else {
-            let rec = p.file_write(op.next_state, marker, pane);
-            let tag = run_herdr(cfg, p, rec.next_state, argv_report_owner(pane, cfg.own_pane, cfg.session_ms));
-            -- Name the marker file alongside the pane: `scripts/dagr-pane.sh`
-            -- takes over this same marker when the operator opens the view by
-            -- hand (measured 2026-09-04: auto-opened w1:pX replaced by w1:pY).
-            -- A later "which pane is the view" question is answered by the
-            -- marker's CONTENT, not by this sentence.
-            if tag.code == 0 then
-              { note: " A dagr pane (${pane}) is showing this run live (marker `${marker}`). If a second view is opened by hand, the hand-opened one wins and this one is closed.", next_state: tag.next_state }
-            else
-              { note: " A dagr pane (${pane}) is showing this run live, but ownership tagging failed (`${failure_code(tag.code, tag.err)}`) — it will not be closed at exit.",
-                next_state: tag.next_state }
+            let pane = plugin_pane_id(op.out);
+            if pane == "" then
+              -- Opened, but this could not read the id back, so it cannot be
+              -- tagged and cannot be proved ours later. Say so rather than
+              -- leaving an untracked pane silently behind.
+              { note: " (A dagr view pane was opened but herdr's answer carried no pane id, so it is untagged: an orphan sweep will not recognise it and it will not be closed at exit.)",
+                next_state: op.next_state }
+            else {
+              let rec = p.file_write(op.next_state, marker, pane);
+              let tag = run_herdr(cfg, p, rec.next_state, argv_report_owner(pane, cfg.own_pane, cfg.session_ms));
+              -- Name the marker file alongside the pane: `scripts/dagr-pane.sh`
+              -- takes over this same marker when the operator opens the view by
+              -- hand (measured 2026-09-04: auto-opened w1:pX replaced by w1:pY).
+              -- A later "which pane is the view" question is answered by the
+              -- marker's CONTENT, not by this sentence.
+              if tag.code == 0 then
+                { note: " A dagr pane (${pane}) is showing this run live (marker `${marker}`). If a second view is opened by hand, the hand-opened one wins and this one is closed.", next_state: tag.next_state }
+              else
+                { note: " A dagr pane (${pane}) is showing this run live, but ownership tagging failed (`${failure_code(tag.code, tag.err)}`) — it will not be closed at exit.",
+                  next_state: tag.next_state }
+            }
           }
         }
       }
