@@ -64,11 +64,13 @@
 #   herdr agent prompt <target> 'summarise the diff' --wait --until idle
 #   herdr agent read <target> --source recent --lines 120
 #
-# VERSIONS ARE PINNED IN THE TREE. versions.env beside this file carries herdr's version and sha256 and the
-# three CLI versions; every command here reads it, so `stop`, `sessions` and `logs` work with no network.
-# `build` reproduces exactly that file. `upgrade` re-resolves each line from upstream, rewrites the file and
-# rebuilds — commit that diff, it is the harness-upgrade record. Override one for a single command by
-# exporting it: `HERDR_VERSION=0.8.1 agent.sh build`.
+# VERSIONS ARE HALF-PINNED IN THE TREE. versions.env beside this file carries herdr's version and sha256
+# and the agent-browser version; every command here reads it, so `stop`, `sessions` and `logs` work with no
+# network. `build` reproduces exactly that file for the pinned half, and re-resolves the agent CLIs (claude,
+# codex, omp) at npm `latest` on every build — reproducibility of those three is not a goal, by decision
+# 2026-09-06. `upgrade` re-resolves each pinned line from upstream, rewrites the file and rebuilds — commit
+# that diff, it is the harness-upgrade record. Override a pin for a single command by exporting it:
+# `HERDR_VERSION=0.8.1 agent.sh build`.
 #
 # ENVIRONMENT: AGENT_HERDR_SESSION (session name; `session=NAME` overrides it), and any pinned version name
 # from versions.env (an exported value wins over the file).
@@ -194,17 +196,17 @@ Restore it from git, or regenerate it with: $(basename "$0") upgrade"
     esac
   fi
   local v
-  for v in HERDR_VERSION HERDR_SHA256 AGENT_BROWSER_VERSION \
-           AGENT_BROWSER_VERSION CLAUDE_CODE_VERSION CODEX_VERSION OMP_VERSION; do
+  for v in HERDR_VERSION HERDR_SHA256 AGENT_BROWSER_VERSION; do
     [[ -n "${!v:-}" ]] || die "${v} is empty — ${VERSIONS_FILE} is incomplete. Regenerate it:
   $(basename "$0") upgrade"
   done
 }
 load_versions
 
-# Resolve the current release of everything, print the new file to stdout. Python rather than jq: jq is not
-# on macOS by default. Fails loudly rather than falling back to what is already pinned — a silent fallback is
-# the exact failure this design removes, and `build` is the command for "use what is pinned".
+# Resolve the current release of the pinned half (herdr, agent-browser) and print the new file to stdout.
+# Python rather than jq: jq is not on macOS by default. Fails loudly rather than falling back to what is
+# already pinned — a silent fallback is the exact failure this design removes, and `build` is the command
+# for "use what is pinned".
 resolve_versions() {
   # python3 rather than jq: jq is not on macOS by default. python3 is not guaranteed either — it arrives with
   # the Xcode command line tools — so say which one is missing rather than letting "command not found" become
@@ -228,12 +230,7 @@ def get(url):
 
 try:
     m = get("https://herdr.dev/latest.json")
-    npm = {}
-    for var, pkg in (("AGENT_BROWSER_VERSION", "agent-browser"),
-                     ("CLAUDE_CODE_VERSION", "@anthropic-ai/claude-code"),
-                     ("CODEX_VERSION", "@openai/codex"),
-                     ("OMP_VERSION", "@oh-my-pi/pi-coding-agent")):
-        npm[var] = get("https://registry.npmjs.org/%s/latest" % pkg.replace("/", "%2F"))["version"]
+    npm_browser = get("https://registry.npmjs.org/agent-browser")["version"]
 except Exception as exc:                                     # network, DNS, TLS, a shape change upstream
     sys.exit("could not resolve upstream versions: %s" % exc)
 
@@ -244,8 +241,7 @@ for key in ("linux-aarch64", "linux-x86_64"):
 print("HERDR_VERSION=%s" % m["version"])
 print("HERDR_SHA256_LINUX_AARCH64=%s" % m["sha256"]["linux-aarch64"])
 print("HERDR_SHA256_LINUX_X86_64=%s" % m["sha256"]["linux-x86_64"])
-for var in ("AGENT_BROWSER_VERSION", "CLAUDE_CODE_VERSION", "CODEX_VERSION", "OMP_VERSION"):
-    print("%s=%s" % (var, npm[var]))
+print("AGENT_BROWSER_VERSION=%s" % npm_browser)
 PY
 }
 
@@ -281,10 +277,8 @@ HERDR_SHA256_LINUX_X86_64=$(get HERDR_SHA256_LINUX_X86_64)
 # under a measurement, so that one is bumped on purpose rather than by \`upgrade\`.
 AGENT_BROWSER_VERSION=$(get AGENT_BROWSER_VERSION)
 
-# The agent CLIs herdr starts, from the npm registry's \`latest\` dist-tag.
-CLAUDE_CODE_VERSION=$(get CLAUDE_CODE_VERSION)
-CODEX_VERSION=$(get CODEX_VERSION)
-OMP_VERSION=$(get OMP_VERSION)
+# The agent CLIs herdr starts (claude, codex, omp) are deliberately NOT pinned here: the Dockerfile
+# installs them at npm \`latest\` on every build, by decision 2026-09-06.
 EOF
 }
 
@@ -325,10 +319,9 @@ ensure_up() {
   docker image inspect "$IMAGE" >/dev/null 2>&1 || die "the image ${IMAGE} is not present locally.
 It is built from this profile's Dockerfile and never pushed, so compose cannot pull it — that is what a
 \"pull access denied … repository does not exist\" message here means. A \`docker system prune -a\`
-(\`make prune\`) removes it once the containers are down. Rebuild it at the versions pinned in
-versions.env — nothing is re-resolved, so this reproduces the same harness:
-  $(basename "$0") build"
-  echo "starting agent_confined  (herdr ${HERDR_VERSION}, claude ${CLAUDE_CODE_VERSION}, codex ${CODEX_VERSION}, omp ${OMP_VERSION})" >&2
+(\`make prune\`) removes it once the containers are down. Rebuild it with: $(basename "$0") build
+  — the pinned half (herdr, agent-browser) reproduces versions.env; the agent CLIs re-resolve at latest."
+  echo "starting agent_confined  (herdr ${HERDR_VERSION}, agent CLIs at npm latest)" >&2
   echo "the first run builds the image; expect several minutes" >&2
   compose up -d
   compose ps
@@ -448,10 +441,12 @@ it in a herdr pane instead."
     echo "stopped session '${name}' and its panes; the container and any other sessions are untouched."
     ;;
   build)
-    # Reproduces versions.env exactly. This is NOT an upgrade — that is a separate verb, so that changing
-    # what the agent runs is always a commit and never a side effect of rebuilding.
-    echo "building at the pinned versions: herdr ${HERDR_VERSION}, claude ${CLAUDE_CODE_VERSION}, codex ${CODEX_VERSION}, omp ${OMP_VERSION}"
-    echo "(to move them forward: $(basename "$0") upgrade)"
+    # The pinned half (herdr, agent-browser) reproduces versions.env exactly. The agent CLIs (claude,
+    # codex, omp) re-resolve at npm \`latest\` on EVERY build instead — reproducibility of those three is
+    # not a goal, by decision 2026-09-06 — so `build` is no longer a pure reproduction, and that is intended.
+    echo "building: herdr ${HERDR_VERSION} (pinned), agent CLIs at npm latest"
+    echo "(to move the pinned half forward: $(basename "$0") upgrade)"
+    export AGENTS_CACHE_BUST="$(date +%s)"
     compose up -d --build
     compose ps
     ;;
@@ -476,9 +471,9 @@ Build at the versions already pinned with: $(basename "$0") build"
     echo
     echo "versions.env rewritten. Commit that diff: it is the record of what the agent now runs."
     # Re-read so the build below uses the new values rather than the ones loaded at start-up.
-    unset HERDR_VERSION HERDR_SHA256 HERDR_SHA256_LINUX_AARCH64 HERDR_SHA256_LINUX_X86_64 \
-          CLAUDE_CODE_VERSION CODEX_VERSION OMP_VERSION
+    unset HERDR_VERSION HERDR_SHA256 HERDR_SHA256_LINUX_AARCH64 HERDR_SHA256_LINUX_X86_64
     load_versions
+    export AGENTS_CACHE_BUST="$(date +%s)"
     compose up -d --build
     compose ps
     ;;

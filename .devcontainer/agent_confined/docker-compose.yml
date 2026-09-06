@@ -25,26 +25,40 @@ services:
       context: ../..
       dockerfile: .devcontainer/agent_confined/Dockerfile
       args:
-        # NONE of these have defaults, and that is the design. A `latest` baked into the Dockerfile does not
-        # track latest: the instruction text never changes, so Docker reuses the cached layer and the image
-        # keeps whatever was current the day it was first built, indefinitely and invisibly. agent.sh
-        # resolves each one on the HOST — herdr from https://herdr.dev/latest.json (version AND sha256), the
-        # three CLIs from the npm registry — so the arg VALUE changes when upstream publishes, which is what
-        # invalidates the layer. Building with plain `docker compose` therefore FAILS here rather than
-        # silently producing an unpinned image; that is the point. Reproduce an old image by exporting the
-        # same values (see `agent.sh help`).
+        # HERDR_VERSION, HERDR_SHA256 and AGENT_BROWSER_VERSION have no defaults, and that is the design.
+        # A pinned value baked into the Dockerfile does not track anything: the instruction text never
+        # changes, so Docker reuses the cached layer and the image keeps whatever was current the day it
+        # was first built, indefinitely and invisibly. agent.sh resolves each one on the HOST — herdr from
+        # https://herdr.dev/latest.json (version AND sha256), agent-browser from the npm registry — so the
+        # arg VALUE changes when upstream publishes, which is what invalidates the layer. Building with
+        # plain `docker compose` therefore FAILS here rather than silently producing an unpinned image; that
+        # is the point. Reproduce an old image by exporting the same values (see `agent.sh help`).
         HERDR_VERSION: ${HERDR_VERSION:?resolved by agent.sh — build through it, or export it yourself}
         HERDR_SHA256: ${HERDR_SHA256:?resolved by agent.sh from https://herdr.dev/latest.json}
         AGENT_BROWSER_VERSION: ${AGENT_BROWSER_VERSION:?resolved by agent.sh from the npm registry}
-        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:?resolved by agent.sh from the npm registry}
-        CODEX_VERSION: ${CODEX_VERSION:?resolved by agent.sh from the npm registry}
-        OMP_VERSION: ${OMP_VERSION:?resolved by agent.sh from the npm registry}
+        # The agent CLIs (claude, codex, omp) float at npm `latest` instead — the Dockerfile installs them
+        # unpinned, and AGENTS_CACHE_BUST is what invalidates that layer. agent.sh exports a fresh timestamp
+        # on every build; empty (plain `docker compose`) means the layer may come from cache.
+        AGENTS_CACHE_BUST: ${AGENTS_CACHE_BUST:-}
 
     # Own tag. Sharing the operator profile's image name would rebuild that image out from under it.
     image: motoko_agent_confined/dev:1.0
 
     command: sleep infinity
     working_dir: /workspaces/motoko_agent
+    # Herdr Studio (herdr-gui) on the HOST's loopback. The dashboard runs INSIDE this container and
+    # defaults to container-loopback, which no published port can reach — Docker DNATs to the container's
+    # eth0 address, and a 127.0.0.1-bound socket only answers its own loopback. So host access takes BOTH:
+    #   1. this entry — host 127.0.0.1:${HERDR_STUDIO_PORT:-8787} forwards into the container, and
+    #   2. starting the bridge on all interfaces inside: `herdr-gui --host 0.0.0.0 --port 8787`
+    #      (or `make studio` from the host — it starts the bridge and prints the login URL, token
+    #      included. A non-loopback bind switches Studio to token auth; read powerfooI/herdr-studio
+    #      SECURITY.md before binding wider than this).
+    # Host side stays loopback-only: only processes on the host itself can connect. `internal: true`
+    # below does NOT block this — published-port ingress is DNAT, not container egress. Tune the host
+    # port with HERDR_STUDIO_PORT; the container side stays 8787.
+    ports:
+      - "127.0.0.1:${HERDR_STUDIO_PORT:-8787}:8787"
 
     # EGRESS BOUNDARY. This service is on an `internal: true` network ONLY, so Docker/OrbStack installs NO
     # gateway and NO NAT for it: the agent has no route to any private network the host may be attached to

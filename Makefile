@@ -2438,6 +2438,11 @@ run: build
 	clear
 	MOTOKO_CONFIG=$(PROFILE) ./scripts/run-agent.sh
 
+# Run motoko without building
+motoko:
+	clear
+	MOTOKO_CONFIG=$(PROFILE) ./scripts/run-agent.sh $(ARGS)
+
 # Optional live calibration only; not part of compaction_dst or CI.
 # Requires OPENROUTER_API_KEY and uses Qwen for both agent and compaction_ai.
 live_qwen36_compaction_calibration: build
@@ -2966,3 +2971,28 @@ agent_confined_r7:
 	  echo "(set R7_BASELINE=<path> to use another location)"; \
 	  exit 2; }
 	@python3 .devcontainer/agent_confined/checks/r7_git_audit.py --root "$$PWD" --verify "$(R7_BASELINE)"
+
+# `make studio` starts Herdr Studio in the agent container and prints the login URL.
+#
+# HOST-SIDE like the two targets above: it shells out to agent.sh. Idempotent — if the bridge
+# already answers, nothing is started and the current token is just printed. A (re)start binds
+# 0.0.0.0 inside the container (the compose `ports:` block explains why container-loopback is
+# unreachable from the host); that bind switches Studio to token auth, so the printed URL carries
+# `?token=` for one-click copying into the browser. The token is host-loopback-scoped and rotates
+# on rebuild — convenient, not a secret to store.
+HERDR_STUDIO_PORT ?= 8787
+.PHONY: studio
+studio:
+	@agent=.devcontainer/agent_confined/agent.sh; \
+	if ! $$agent run curl -fsS -m3 http://127.0.0.1:8787/healthz >/dev/null 2>&1; then \
+	  echo "starting herdr-gui in the agent container…"; \
+	  $$agent run bash -lc 'mkdir -p "$$HOME/.config/herdr-gui" && setsid nohup herdr-gui --host 0.0.0.0 --port 8787 >"$$HOME/.config/herdr-gui/bridge.log" 2>&1 < /dev/null &'; \
+	fi; \
+	token=""; \
+	for i in $$(seq 1 30); do \
+	  token=$$($$agent run cat /home/motoko/.config/herdr-gui/auth-token 2>/dev/null | tr -d '\r\n '); \
+	  if [ -n "$$token" ] && $$agent run curl -fsS -m3 http://127.0.0.1:8787/healthz >/dev/null 2>&1; then break; fi; \
+	  sleep 1; \
+	done; \
+	[ -n "$$token" ] || { echo "studio did not come up — check ~/.config/herdr-gui/bridge.log in the container"; exit 1; }; \
+	echo "Herdr Studio: http://localhost:$(HERDR_STUDIO_PORT)?token=$$token"
