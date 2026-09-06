@@ -370,6 +370,49 @@ export pure func kind_allowed(allowed: string, kind: string) -> bool
     }
   }
 
+-- WHEN A DEFAULT IS A GUESS (2026-09-06). With more than one kind permitted and
+-- no `kind` on the call, falling back to a default picks for the model and says
+-- nothing. Measured cost of exactly that in the PLAN-001 live run: two claude
+-- panes started against a task written for motoko workers, both gone before
+-- producing anything, and the operator's first report of the session was "it
+-- started claude code instances and not motoko"
+-- (`DESIGN-delegate-model-selection.md` status paragraph). With ONE permitted
+-- kind there is nothing to guess, so the default stands.
+--
+-- EMPTY MEMBERS ARE DROPPED. `claude,,motoko` is two kinds and a typo, not
+-- three; counting the commas would make it three and then refuse to name the
+-- third. The same normalisation as `kind_allowed` — spaces stripped — so
+-- "claude, motoko" is two.
+export pure func allowed_kinds_list(allowed: string) -> [string]
+  { non_empty(split(replace(allowed, " ", ""), ",")) }
+
+pure func non_empty(xs: [string]) -> [string]
+  { match xs { [] => [], x :: rest => if x == "" then non_empty(rest) else x :: non_empty(rest) } }
+
+export pure func allowed_kind_count(allowed: string) -> int
+  tests [
+    ("claude", 1),
+    ("claude,codex", 2),
+    ("claude, motoko", 2),
+    ("claude,,motoko", 2),
+    ("", 0)
+  ]
+  { length_of(allowed_kinds_list(allowed)) }
+
+pure func length_of(xs: [string]) -> int
+  { match xs { [] => 0, _ :: rest => 1 + length_of(rest) } }
+
+-- The one permitted kind, or "" when the operator permits none or several.
+-- A caller reading "" must not default.
+export pure func sole_allowed_kind(allowed: string) -> string
+  tests [
+    ("claude", "claude"),
+    ("  motoko ", "motoko"),
+    ("claude,codex", ""),
+    ("", "")
+  ]
+  { match allowed_kinds_list(allowed) { x :: [] => x, _ => "" } }
+
 -- Does choosing this kind relax anything? Used to make the grant legible in the
 -- tool result, so a privileged delegate is visible in the transcript rather
 -- than only in the pane label.
@@ -427,9 +470,14 @@ export pure func kind_model_args(k: string, model: string) -> [string]
 export pure func kind_default_args(k: string) -> [string]
   { if k == "codex" then ["-s", "danger-full-access", "-a", "never"] else [] }
 
-export pure func default_kind() -> string
-  tests [((), "claude")]
-  { "claude" }
+-- `default_kind()` LIVED HERE AND IS GONE (2026-09-06). It was the fallback for
+-- a `Delegate` call with no `kind`, and its last caller was `register.ail`'s
+-- `getEnvOr("HERDR_DELEGATE_KIND", default_kind())` — which is exactly the line
+-- that made an operator's choice indistinguishable from a fallback. `cfg.kind`
+-- is now empty when the operator did not choose, and the fallback, where there
+-- is one, is `sole_allowed_kind`. A default kind beside an allowlist that may
+-- hold several is how a reader learns the wrong rule, so it is deleted rather
+-- than left exported with no callers.
 
 -- ---------------------------------------------------------------------------
 -- argv builders

@@ -45,7 +45,8 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
 )
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
-  known_kind, default_kind, kind_allowed, grants_relaxation, kind_model_args,
+  known_kind, kind_allowed, grants_relaxation, kind_model_args,
+  allowed_kind_count, sole_allowed_kind,
   path_is_safe, path_within, argv_is_safe, show_argv,
   argv_split, argv_start, argv_start_model, argv_prompt, argv_get, argv_explain, argv_close,
   argv_wait, wait_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
@@ -122,19 +123,32 @@ export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
 -- because free text means every session invents its own vocabulary, and
 -- `retry_of` says what it is for, because the temptation it invites is linking
 -- merely-similar tasks and the rework count is only worth having if it is true.
-func delegate_params(allowed: string) -> string {
-  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.\"},\"model\":{\"type\":\"string\",\"description\":\"Model for the delegate CLI (claude `--model`, codex `-m`). Free string; empty means the CLI default. Shell metacharacters are refused and fall back to the default. Applies to claude/codex only; ignored for other kinds.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":[\"prompt\"]}"
+-- THE SCHEMA HAS TO AGREE WITH THE HANDLER (2026-09-06). When the operator
+-- permits several kinds and set no default, a `Delegate` with no `kind` is
+-- REFUSED — so the schema must say `kind` is required and must stop advising the
+-- model to omit it. A schema that teaches the opposite of what the handler does
+-- costs a turn every time, and the model has no way to find out but by being
+-- refused. `must_choose` is exactly the handler's condition, computed once by
+-- the caller off the same two config fields.
+func delegate_params(allowed: string, must_choose: bool) -> string {
+  let kind_desc =
+    if must_choose then
+      "Agent kind to run, REQUIRED: the operator permits ${allowed} and set no default, so there is nothing to fall back on. These are different agents, not different models of one agent — a task written for a motoko worker does not run on a claude one. Pick the one this task is written for."
+    else
+      "Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.";
+  let required = if must_choose then "[\"prompt\",\"kind\"]" else "[\"prompt\"]";
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model for the delegate CLI (claude `--model`, codex `-m`). Free string; empty means the CLI default. Shell metacharacters are refused and fall back to the default. Applies to claude/codex only; ignored for other kinds.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
 }
 
 func check_params() -> string {
   "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"The delegate handle returned by Delegate.\"}},\"required\":[\"name\"]}"
 }
 
-export func describe_tools(allowed: string) -> [ToolSchema] {
+export func describe_tools(allowed: string, must_choose: bool) -> [ToolSchema] {
   [
     { name: "Delegate",
       description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. Poll with DelegateCheck — a typical task takes 20-30s and some take over a minute.",
-      parameters: delegate_params(allowed) },
+      parameters: delegate_params(allowed, must_choose) },
     { name: "DelegateCheck",
       description: "Fetch a delegate's current state and its answer if it has landed. Cheap; call it as often as you like.",
       parameters: check_params() }
@@ -792,7 +806,27 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
   let prompt = arg_str(call.arguments, "prompt", "");
-  let kind = arg_str(call.arguments, "kind", cfg.kind);
+  -- KIND, AND THE THREE PLACES IT CAN COME FROM, in order (2026-09-06).
+  --
+  --   1. the call. The model asked for one; nothing to decide.
+  --   2. `cfg.kind`, which is `HERDR_DELEGATE_KIND` and is EMPTY unless the
+  --      operator actually set it (see `register.ail`). An operator default is
+  --      a decision, not a guess, so it stands however many kinds are allowed.
+  --   3. the allowlist, but only when it holds exactly ONE kind — then there is
+  --      nothing to guess.
+  --
+  -- Otherwise the call is refused below rather than defaulted. The old line read
+  -- `arg_str(call.arguments, "kind", cfg.kind)` with `cfg.kind` defaulting to
+  -- `claude`, and the PLAN-001 live run measured what that costs under
+  -- `HERDR_ALLOWED_KINDS=claude,motoko`: two claude panes started against a task
+  -- written for motoko workers, both gone before producing anything, and the
+  -- operator's first report of the session was "it started claude code instances
+  -- and not motoko". See `DESIGN-delegate-model-selection.md`.
+  let asked_kind = arg_str(call.arguments, "kind", "");
+  let kind =
+    if asked_kind != "" then asked_kind
+    else if cfg.kind != "" then cfg.kind
+    else sole_allowed_kind(cfg.allowed_kinds);
   let cwd = arg_str(call.arguments, "cwd", ctx.workdir);
   -- View-only, both of them. An unusable value degrades (`task_kind_or_default`
   -- neutralises an unknown kind; an unlinkable `retry_of` opens a normal task
@@ -806,6 +840,13 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
 
   if prompt == "" then
     { result: err_result(call.id, "Delegate", "Delegate requires a non-empty `prompt`."), next_state: ctx.world }
+  -- AN AMBIGUOUS KIND IS AN ASK, NOT A DEFAULT. Checked before `known_kind`
+  -- because `kind` is "" on this branch and "`` is not an agent kind herdr knows
+  -- at all" would be a true sentence about the wrong problem.
+  else if kind == "" then
+    { result: err_result(call.id, "Delegate",
+        "`Delegate` needs a `kind`: the operator permits ${show(allowed_kind_count(cfg.allowed_kinds))} of them (${cfg.allowed_kinds}) and there is no default to fall back on. Pick the one the task is written for — they are different agents, not different models of one agent, and a task written for a motoko worker does not run on a claude one. The operator can set HERDR_DELEGATE_KIND to make one of them the default."),
+      next_state: ctx.world }
   else if known_kind(kind) == false then
     { result: err_result(call.id, "Delegate", "`${kind}` is not an agent kind herdr knows at all. The operator permits: ${cfg.allowed_kinds}."), next_state: ctx.world }
   -- OPERATOR POLICY, CHECKED BEFORE ANYTHING IS SPENT. Refusing here rather
@@ -1376,7 +1417,9 @@ export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO,
       on_tool_handle(cfg, ctx, call)
     };
   let describe = func(_u: ()) -> [ToolSchema] {
-    match tools { [] => [], _ => describe_tools(cfg.allowed_kinds) }
+    -- The handler's condition, verbatim: several permitted kinds and no
+    -- operator default is the case where `kind` has to come from the model.
+    match tools { [] => [], _ => describe_tools(cfg.allowed_kinds, cfg.kind == "" && allowed_kind_count(cfg.allowed_kinds) > 1) }
   };
   -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   let at_exit = func(ctx: ExtCtx) -> ExitIntentOutcome ! {FS} { exit_actions(cfg, ctx) };

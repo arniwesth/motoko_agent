@@ -2,6 +2,22 @@
 
 Date: 2026-08-26
 Status: **Design + measurements. Not implemented. No Linear issue yet.**
+**2026-09-06: the failure this design predicts has now happened on the live path.** In the
+PLAN-001 run the model called `Delegate` twice without `kind`; `register.ail:61` fell back to
+`default_kind()` = `claude`, two claude-code panes started against a task written for motoko
+workers, both were gone before producing anything, and the user's first report of the session was
+*"it started claude code instances and not motoko"*. With `HERDR_ALLOWED_KINDS=claude,motoko` a
+silent default is a guess. The smallest change consistent with §5 is: when more than one kind is
+allowed, a `Delegate` without `kind` is refused with the allowed list, not defaulted. Record:
+[`MEASUREMENTS-2026-09-05-plan001-live-run.md`](MEASUREMENTS-2026-09-05-plan001-live-run.md) finding 3.
+**That smallest change is now implemented** — commit `PLAN-001 live-run fix 3: refuse a Delegate
+that does not name its kind`, gated by `make verify_delegate_kind`. It is only the KIND half; the
+`model` policy this document is otherwise about is unchanged. One thing the paragraph above did not
+settle and the code had to: `register.ail:61` read `getEnvOr("HERDR_DELEGATE_KIND", default_kind())`,
+so `cfg.kind` was `claude` whether the operator had chosen claude or chosen nothing, and no caller
+could tell an operator decision from a fallback. It now defaults to `""`, and the fallback order is
+call → `HERDR_DELEGATE_KIND` → the allowlist when it holds exactly one kind → refuse. `default_kind()`
+is deleted; the shipped single-kind configuration is unchanged.
 Provenance: every measurement in §2–§4 was taken this session against the running herdr
 (0.8.2) and this repo at HEAD. Findings build on
 [`MEASUREMENTS-2026-08-22.md`](MEASUREMENTS-2026-08-22.md) (M1, M2, P2-3, P2-5, P2-7) and

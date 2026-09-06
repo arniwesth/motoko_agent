@@ -2179,7 +2179,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_dagr_producer verify_exit_intent
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_delegate_kind verify_dagr_producer verify_exit_intent
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2280,6 +2280,27 @@ verify_herdr_dagr_pane:
 		scripts/verify_mot137_dagr_pane.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_herdr_dagr_pane: the auto-opened dagr view regressed (MOT-137)" && exit 1)
+
+# 2026-09-06: a `Delegate` with no `kind` is refused when the operator permits
+# more than one and set no default, rather than defaulted. The failure it pins
+# is measured, not hypothetical — the PLAN-001 live run started two claude panes
+# against a task written for motoko workers under
+# HERDR_ALLOWED_KINDS=claude,motoko, and the operator's first report of the
+# session was "it started claude code instances and not motoko".
+#
+# FIVE CASES, FOUR OF THEM THE CORNERS OF ONE CONDITION (`cfg.kind == "" &&
+# allowed_kind_count > 1`), because the two that must NOT refuse are the
+# expensive half: the shipped single-kind default, and an operator who set
+# HERDR_DELEGATE_KIND. The fifth reads `describe_tools` directly and asserts the
+# schema requires `kind` exactly when the handler does — a schema that advises
+# omitting it while the handler refuses the omission costs a turn every time and
+# the model can only learn it by being refused.
+.PHONY: verify_delegate_kind
+verify_delegate_kind:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_delegate_kind_required.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_delegate_kind: Delegate defaulted a kind the operator did not choose" && exit 1)
 
 # MOT-136: the dagr producer, in two legs.
 #
