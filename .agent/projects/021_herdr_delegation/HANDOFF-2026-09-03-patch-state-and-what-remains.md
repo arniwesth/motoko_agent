@@ -113,7 +113,14 @@ by hand.
 
 Unchanged from 09-02 except that C is now reachable:
 
-- **C — `agent_not_ready` on an agent herdr itself started.** Reproducible 2/2 in the 09-01
+- **C — `agent_not_ready` on an agent herdr itself started.** SCOPED 2026-09-07 in
+  [`DESIGN-prompt-retry.md`](DESIGN-prompt-retry.md), which corrects one thing this entry and
+  `NOTE-2026-09-03` §5 both imply: the extension's HANDLING of this sequence is already gated —
+  `verify_mot136_dagr_producer` scripts the exact F3 shape and asserts three things about it. What
+  is missing is a MITIGATION (a bounded retry) and the DIAGNOSIS, and only the second needs a live
+  repro. The retry turns out to rest on one unverified assumption — that the refusal is
+  pre-delivery — which that design shows how to settle in one command, without reproducing the
+  race at all. Original entry follows. Reproducible 2/2 in the 09-01
   exercise: `agent start` succeeded, the readiness gate passed, `agent prompt` refused with *"the
   pane holds an agent herdr did not start"*. This work makes the failure **visible** in the run
   file; it does not explain it. It needed F2 or an authenticated `claude` CLI — F2 is now applied,
