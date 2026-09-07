@@ -505,6 +505,13 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && contains(last_start_argv(s12.world), "--model") == false);
   let a17 = check("the refused model ask is still recorded verbatim",
                   contains(read_file(s12.world, run_file_path()), "\"model\":\"a;b\""));
+  -- AND IT IS SAID, not merely done (2026-09-07). The refusal is silent by
+  -- policy; the transcript claiming the delegate runs on the refused model is a
+  -- different thing, and was true until this assertion existed.
+  let a17b = check("a refused model is described as refused, not as the model in use",
+                   contains(s12.out, "REFUSED")
+                     && contains(s12.out, "runs on its own default")
+                     && contains(s12.out, "with model `a;b`") == false);
   emit(s12.world);
 
   -- 13. THE MOTOKO HALF OF THE MODEL STORY (2026-09-07). A motoko delegate is a
@@ -540,6 +547,6 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
   emit(s15.world);
 
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
-     && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17
+     && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 && a17b
      && a18 && a19 && a20 then () else exit(1)
 }

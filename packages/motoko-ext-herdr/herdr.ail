@@ -44,14 +44,14 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
   run_settled_tmp, settle_at_session_end, open_task_ids_str, run_file,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
-  abandoned_ids, settle_abandoned, sweep_tmp,
+  abandoned_ids, settle_abandoned, sweep_tmp, prunable_scratch, prune_report,
   open_delegate_panes
 )
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
   known_kind, kind_allowed, grants_relaxation, kind_model_args,
   allowed_kind_count, sole_allowed_kind,
-  path_is_safe, path_within, argv_is_safe, show_argv,
+  path_is_safe, path_within, argv_is_safe, show_argv, has_shell_tokens,
   argv_split, argv_start, argv_start_model, argv_prompt, argv_get, argv_explain, argv_close,
   argv_wait, wait_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
   is_motoko, motoko_kind, motoko_run_payload, motoko_payload_is_safe,
@@ -209,8 +209,22 @@ func relaxation_note(kind: string) -> string {
 -- all — gemini and the rest of herdr's 22 — and it stays because an operator
 -- who widens HERDR_ALLOWED_KINDS should be told which of them drop the model
 -- rather than discovering it from a delegate on the wrong one.
+-- A REFUSED MODEL IS SAID OUT LOUD (2026-09-07). `kind_model_args` and
+-- `argv_split` both drop a model carrying a shell token and fall back to the
+-- agent's own default -- deliberately, so a bad string costs a default rather
+-- than a failed delegation. But this sentence used to report the ASK for every
+-- non-empty model, so a refused one produced "running `claude` with model
+-- `a;b`" about a delegate running something else entirely. That is the one
+-- shape this project's measurements keep finding: a true-sounding sentence
+-- about a thing that did not happen.
+--
+-- The silence itself is still the open policy question in
+-- `DESIGN-delegate-model-selection.md`; this only stops the transcript from
+-- misdescribing it.
 func model_note(kind: string, model: string) -> string {
   if model == "" then ""
+  else if has_shell_tokens(model) then
+    " (model `${model}` was REFUSED: it carries a shell metacharacter, so the delegate runs on its own default)"
   else if kind == "claude" || kind == "codex" || is_motoko(kind) then " with model `${model}`"
   else " (model `${model}` ignored: applies to claude, codex and motoko only)"
 }
@@ -741,6 +755,20 @@ func close_panes(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, ids: [string])
 -- Every failure is silent and leaves the original standing: this is a courtesy
 -- performed on somebody else's document, and the one thing worse than not doing
 -- it is half-doing it and saying so.
+-- Deletes, by explicit name, only what `prunable_scratch` named. A failure is
+-- silent for `republish_foreign`'s reason: this is tidying somebody else's
+-- leftovers, and a directory entry that survives costs nothing.
+func remove_all(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, names: [string]) -> ExtWorld ! {FS} {
+  match names {
+    [] => w,
+    n :: rest => {
+      let path = "${cfg.dagr_dir}/${n}";
+      let next = if path_is_safe(path) then p.file_remove(w, path).next_state else w;
+      remove_all(cfg, p, next, rest)
+    }
+  }
+}
+
 func republish_foreign(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, path: string, doc: Json)
   -> ExtWorld ! {IO, Process, FS} {
   let tmp = sweep_tmp(path, cfg.own_pane, cfg.session_ms);
@@ -813,7 +841,15 @@ func scan_abandoned(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
     else {
       let own = run_file_name(cfg.own_pane, cfg.session_ms);
       let r = scan_files(cfg, p, dl.next_state, dl.entries, own, live, now_ms);
-      { note: abandoned_report(r.items, cfg.sweep_settle), next_state: r.next_state }
+      -- THE SAME LISTING, a second question. `scan_files` asks what other
+      -- sessions RECORDED; this asks what they LEFT. Sharing `dl.entries` is
+      -- the point: the directory is read once per run either way.
+      let junk = prunable_scratch(dl.entries, cfg.own_pane, cfg.session_ms, live);
+      let pruned = if cfg.sweep_stale
+                   then remove_all(cfg, p, r.next_state, junk)
+                   else r.next_state;
+      { note: "${abandoned_report(r.items, cfg.sweep_settle)}${prune_report(junk, cfg.sweep_stale)}",
+        next_state: pruned }
     }
   }
 }

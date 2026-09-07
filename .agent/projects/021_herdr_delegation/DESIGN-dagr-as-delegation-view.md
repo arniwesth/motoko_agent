@@ -348,6 +348,13 @@ close it by implementation.
 - **Whole-file rewrite per event.** The document is append-only in content and rewritten entire on
   each write, so a run with *n* settlements writes O(n²) bytes. Fine for a dozen delegates; not fine
   for a long-lived orchestrator. Needs a cap or rotation before it runs unattended.
+  **STILL OPEN, and the constant doubled on 2026-09-07**: settle-on-exit writes a second document
+  beside the live one on every publish. The shape of the cost is unchanged and the fix is the same
+  one — a cap or rotation — but the coefficient is now 2. What WAS fixed the same day is the
+  *directory's* unbounded growth, which is a different problem with the same smell: `.dagr/`
+  accumulated a run file, a view-pane marker and a settled candidate per session and never removed
+  any of them. The startup sweep now prunes the two SCRATCH shapes — never a record — under
+  `HERDR_SWEEP_STALE=1`, gated on the owning pane being absent from `pane list`.
 - **dagr absent must be a no-op.** Producing the file costs nothing when nobody reads it, so the
   producer should always write and never require the binary — mirroring `register.ail`'s existing
   gate philosophy (compute `provided_tools`; offer nothing rather than something that fails).

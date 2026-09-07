@@ -685,6 +685,105 @@ export pure func is_foreign_run_file(name: string, own_file: string) -> bool
   ]
   { starts_with(name, "run-") && ends_with(name, ".json") && name != own_file }
 
+-- ---------------------------------------------------------------------------
+-- Pruning the scratch a dead session left in `.dagr/`
+-- ---------------------------------------------------------------------------
+--
+-- `scan_files`' header says this directory "wants pruning, not a silent limit"
+-- if it grows past reading. It has: one run file, one view-pane marker and (as
+-- of settle-on-exit) one settled candidate per session, none of them ever
+-- removed. This is the pruning, and it is deliberately narrow.
+--
+-- SCRATCH ONLY, NEVER A RECORD. `run-<pane>-<ms>.json` is a document with a
+-- reader — the graph, the report, and an operator's history — and nothing here
+-- deletes one. What it removes is the two files that mean nothing once their
+-- session is gone:
+--
+--   `.pane-<pane>-<ms>`               the at-most-once marker for the view pane
+--   `run-<pane>-<ms>.json.settled`    a settle-on-exit candidate never renamed,
+--                                     which means the session did not exit
+--                                     cleanly and the candidate is now a
+--                                     description of a moment nobody will
+--                                     publish
+--
+-- THE OWNING PANE IS THE EVIDENCE, and it is in the name. A pane absent from
+-- `pane list` cannot be running a Motoko, so its scratch is dead — the same
+-- positive-proof standard `sweep_class` and `abandoned_tasks` use, and NOT
+-- "the name looks stale". A pane that is still there may host a different
+-- session now, so nothing is removed on that branch: the cost of keeping a
+-- dead file is a directory entry, and the cost of removing a live one is a
+-- session losing its own at-most-once marker mid-run.
+pure func scratch_owner_pane(name: string) -> string {
+  if starts_with(name, ".pane-") then pane_of_tail(drop_prefix(name, ".pane-"))
+  else if starts_with(name, "run-") && ends_with(name, ".json.settled")
+  then pane_of_tail(drop_prefix(name, "run-"))
+  else ""
+}
+
+-- `w1-p6-100` -> `w1:p6`. The session ms is the last dash-segment and the pane
+-- is everything before it, with the slug undone.
+pure func pane_of_tail(tail: string) -> string {
+  let parts = split(tail, "-");
+  match parts {
+    a :: b :: _ :: [] => "${a}:${b}",
+    _ => ""
+  }
+}
+
+pure func drop_prefix(s: string, pre: string) -> string {
+  substring(s, length(pre), length(s))
+}
+
+export pure func is_prunable_scratch(name: string, own_pane: string, session_ms: string, live: [string]) -> bool {
+  let owner = scratch_owner_pane(name);
+  -- Never this session's own scratch, whatever the pane list says: our marker
+  -- and our candidate are both in use right now.
+  owner != "" && contains(name, session_ms) == false
+    && owner != own_pane && has_str(live, owner) == false
+}
+
+export pure func prunable_scratch(names: [string], own_pane: string, session_ms: string, live: [string]) -> [string] {
+  match names {
+    [] => [],
+    n :: rest => {
+      let tail = prunable_scratch(rest, own_pane, session_ms, live);
+      if is_prunable_scratch(n, own_pane, session_ms, live) then n :: tail else tail
+    }
+  }
+}
+
+export pure func prunable_scratch_str(names: [string], own_pane: string, session_ms: string, live: [string]) -> string
+  tests [
+    -- a dead session's marker and candidate: both go
+    (([".pane-w1-p6-100", "run-w1-p6-100.json.settled"], "w1:p1", "200", ["w1:p1"]),
+     ".pane-w1-p6-100,run-w1-p6-100.json.settled"),
+    -- the RECORD is never scratch, whatever became of its session
+    ((["run-w1-p6-100.json"], "w1:p1", "200", ["w1:p1"]), ""),
+    -- the owning pane is still there: it may host a live session now
+    (([".pane-w1-p6-100"], "w1:p1", "200", ["w1:p1", "w1:p6"]), ""),
+    -- our own scratch, on our own pane
+    (([".pane-w1-p1-200", "run-w1-p1-200.json.settled"], "w1:p1", "200", ["w1:p1"]), ""),
+    -- our session id on another pane is still ours to keep
+    (([".pane-w1-p9-200"], "w1:p1", "200", ["w1:p1"]), ""),
+    -- anything this producer did not write
+    ((["run.json", "probe-alpha.txt", ".unparseable-w1-p6-100"], "w1:p1", "200", ["w1:p1"]), "")
+  ]
+  { join(",", prunable_scratch(names, own_pane, session_ms, live)) }
+
+export pure func prune_report(names: [string], removed: bool) -> string {
+  match names {
+    [] => "",
+    _ => {
+      let n = count_str(names);
+      let noun = if n == 1 then "file" else "files";
+      if removed then
+        "\n\nPruned ${intToStr(n)} scratch ${noun} left in the dagr directory by sessions that are gone (${join(", ", names)}). No run file was touched."
+      else
+        "\n\n${intToStr(n)} scratch ${noun} in the dagr directory belong to sessions that are gone (${join(", ", names)}). They are markers and unpublished candidates, not records — set HERDR_SWEEP_STALE=1 to have future sessions remove them."
+    }
+  }
+}
+
 pure func has_str(xs: [string], needle: string) -> bool {
   match xs {
     [] => false,

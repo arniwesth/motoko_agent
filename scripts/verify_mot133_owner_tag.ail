@@ -152,7 +152,10 @@ func ports_for(pane_list_out: string, tag_ok: bool,
     tool_handle: scripted(pane_list_out, tag_ok),
     file_read: read,
     file_write: ok_write,
-    file_remove: base.file_remove,
+    -- INSTRUMENTED (2026-09-07). The prune's whole risk is deleting the wrong
+    -- file, and a sentence saying what was pruned is the producer's claim about
+    -- itself. This records the actual calls so a case can assert on them.
+    file_remove: logging_remove,
     path_stat: base.path_stat,
     dir_list: base.dir_list,
     dir_make: ok_dir,
@@ -160,12 +163,28 @@ func ports_for(pane_list_out: string, tag_ok: bool,
     env_get: base.env_get }
 }
 
+-- Removals land in the same call log the herdr calls do, prefixed so they
+-- cannot be confused with one.
+func logging_remove(world: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: record(world, "rm ${path}") }
+}
+
 -- The F1 fixture: `.dagr/` holds ANOTHER session's run file, and that file
 -- records a task still `working` on a pane the pane list does not contain.
 func dagr_dir_list(world: ExtWorld, path: string) -> ExtDirListing ! {FS} {
   if contains(path, ".dagr")
   then { present: true,
-         entries: ["run-w1-p6-100.json", "run-w1-p1-200.json", "run-w1-p5-050.json", "run.json", "probe-alpha.txt"],
+         entries: ["run-w1-p6-100.json", "run-w1-p1-200.json", "run-w1-p5-050.json", "run.json", "probe-alpha.txt",
+                   -- w1:p6's session is gone (its pane is in no pane list), so
+                   -- both of these are dead scratch. `.unparseable-…` is this
+                   -- producer's too but is a RECORD of a refusal, not scratch.
+                   ".pane-w1-p6-100", "run-w1-p6-100.json.settled", ".unparseable-w1-p6-100",
+                   -- w1:p1 is US: our own marker and candidate, both in use
+                   ".pane-w1-p1-200", "run-w1-p1-200.json.settled",
+                   -- w1:p7 IS in the pane list. Another Motoko may be running
+                   -- there right now, and deleting its at-most-once marker
+                   -- mid-run would make it re-open a view it already opened.
+                   ".pane-w1-p7-050"],
          next_state: world }
   else { present: false, entries: [], next_state: world }
 }
@@ -418,6 +437,40 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
     -- never the pane, and never this session's own run file
     expect_not_in_log: ["pane close", "run-w1-p1-200.json.sweep", "run-w1-p5-050.json.sweep"] });
 
+  -- The directory grows by one marker, one record and (since settle-on-exit) one
+  -- candidate per session, and `scan_files`' header says it "wants pruning, not
+  -- a silent limit". These two cases are that pruning, in both rungs.
+  let c5d = run_case({
+    label: "dead sessions' scratch is reported and NOT removed by default",
+    ports: ports_with_dagr(panes_with_foreign()),
+    sweep_stale: false,
+    sweep_settle: false, expect_exit: 0,
+    expect_in_out: ["scratch", ".pane-w1-p6-100", "run-w1-p6-100.json.settled",
+                    "HERDR_SWEEP_STALE=1"],
+    -- never a record, never ours, never another producer's file
+    expect_not_in_out: ["Pruned"],
+    expect_in_log: ["pane list"],
+    expect_not_in_log: ["rm "] });
+
+  let c5e = run_case({
+    label: "HERDR_SWEEP_STALE=1 removes the dead scratch, by name, and no record",
+    ports: ports_with_dagr(panes_with_foreign()),
+    sweep_stale: true,
+    sweep_settle: false, expect_exit: 0,
+    expect_in_out: ["Pruned 2 scratch files", "No run file was touched"],
+    expect_not_in_out: [],
+    expect_in_log: ["rm /tmp/.dagr/.pane-w1-p6-100", "rm /tmp/.dagr/run-w1-p6-100.json.settled"],
+    -- THE ASSERTIONS THAT MATTER. A record, this session's OWN scratch, another
+    -- producer's file, and the refusal marker must all survive, and only a log
+    -- assertion can say so — the prune sentence is the producer's own claim.
+    expect_not_in_log: ["rm /tmp/.dagr/run-w1-p6-100.json\n", "rm /tmp/.dagr/run-w1-p1-200.json",
+                        "rm /tmp/.dagr/.pane-w1-p1-200", "rm /tmp/.dagr/run-w1-p1-200.json.settled",
+                        "rm /tmp/.dagr/run.json", "rm /tmp/.dagr/probe-alpha.txt",
+                        "rm /tmp/.dagr/.unparseable-w1-p6-100",
+                        "rm /tmp/.dagr/run-w1-p5-050.json",
+                        -- the live-pane guard, end to end
+                        "rm /tmp/.dagr/.pane-w1-p7-050"] });
+
   let c6 = run_case({
     label: "the sweep is once per run: with the sentinel present nothing is enumerated",
     ports: ports_for(panes_with_stale(), true, swept_already),
@@ -428,5 +481,5 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
     expect_in_log: [],
     expect_not_in_log: ["pane list", "pane close w1:pB"] });
 
-  if c1 && c2 && c3 && c4 && c5 && c5b && c5c && c6 then () else exit(1)
+  if c1 && c2 && c3 && c4 && c5 && c5b && c5c && c5d && c5e && c6 then () else exit(1)
 }
