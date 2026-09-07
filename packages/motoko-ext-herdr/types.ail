@@ -485,11 +485,35 @@ export pure func kind_default_args(k: string) -> [string]
 -- `pane split --cwd`), the wrap never fires and `req.args` survives. That
 -- recovers the WI-D24 holder stamping 018 §2.4 had to give up.
 
-export pure func argv_split(cwd: string, depth_env: string) -> [string]
+-- `model` IS THE MOTOKO PATH'S WHOLE MODEL TRANSPORT
+-- (`DESIGN-delegate-model-selection.md` §1). claude and codex take a flag after
+-- `--` (`kind_model_args`); a motoko delegate is `./scripts/run-agent.sh` in a
+-- shell, and that script reads `MODEL` from its environment. Verified on the
+-- receiving side before this was added: `models.resolveRuntimeModel` returns a
+-- non-blank `MODEL` ahead of the profile's configured model, and `index.ts`
+-- protects every variable already present in the environment, so an inherited
+-- `MODEL` is not overwritten by config.
+--
+-- EMPTY EMITS NOTHING, and that is not the same as emitting `MODEL=`. The two
+-- pairs above it are deliberately blank — `--env ANTHROPIC_API_KEY=` CLEARS a
+-- credential (021 §7 item 4). A blank `MODEL=` would read as the same gesture
+-- while doing the opposite of what a caller who said nothing about the model
+-- wants: `resolveRuntimeModel` trims and falls through, so it is inert today,
+-- and it would be a false statement about the pane's environment for anyone
+-- reading it. Omission says "this pane resolves its own model", which is true.
+--
+-- A SHELL TOKEN DEGRADES TO OMISSION, matching `kind_model_args` exactly rather
+-- than failing the delegation. Both halves of §1 therefore answer a bad model
+-- string the same way, which is the property worth having; that the answer is
+-- SILENT is the open policy question that design records, and it is not made
+-- worse here.
+export pure func argv_split(cwd: string, depth_env: string, model: string) -> [string]
   {
-    ["pane", "split", "--current", "--direction", "right", "--cwd", cwd,
-     "--no-focus", "--env", "ANTHROPIC_API_KEY=", "--env", "OPENAI_API_KEY=",
-     "--env", depth_env]
+    let base = ["pane", "split", "--current", "--direction", "right", "--cwd", cwd,
+                "--no-focus", "--env", "ANTHROPIC_API_KEY=", "--env", "OPENAI_API_KEY=",
+                "--env", depth_env];
+    if model == "" || has_shell_tokens(model) then base
+    else base ++ ["--env", "MODEL=${model}"]
   }
 
 -- `--timeout` MUST be passed and MUST be below Motoko's 30s process wall.
@@ -581,9 +605,19 @@ export pure func show_argv(xs: [string]) -> string
   tests [([], ""), (["agent", "get", "x"], "agent get x")]
   { join(" ", xs) }
 
-export pure func argv_split_str(cwd: string, depth_env: string) -> string
-  tests [(("/w/m", "HERDR_DELEGATE_DEPTH=1"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1")]
-  { show_argv(argv_split(cwd, depth_env)) }
+export pure func argv_split_str(cwd: string, depth_env: string, model: string) -> string
+  tests [
+    -- no model: byte-identical to the argv this builder emitted before the
+    -- model half landed, which is what keeps every non-motoko delegate unmoved.
+    (("/w/m", "HERDR_DELEGATE_DEPTH=1", ""), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1"),
+    (("/w/m", "HERDR_DELEGATE_DEPTH=1", "openrouter/x-ai/grok-4"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1 --env MODEL=openrouter/x-ai/grok-4"),
+    -- a slash-and-dash model name is the ordinary case and carries no token
+    (("/w/m", "HERDR_DELEGATE_DEPTH=2", "anthropic/claude-sonnet-4-6"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=2 --env MODEL=anthropic/claude-sonnet-4-6"),
+    -- refused, and refused SILENTLY: the pane resolves its own model
+    (("/w/m", "HERDR_DELEGATE_DEPTH=1", "a;rm -rf /"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1"),
+    (("/w/m", "HERDR_DELEGATE_DEPTH=1", "a`id`"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1")
+  ]
+  { show_argv(argv_split(cwd, depth_env, model)) }
 
 export pure func argv_start_str(name: string, kind: string, pane: string, timeout_ms: int) -> string
   tests [

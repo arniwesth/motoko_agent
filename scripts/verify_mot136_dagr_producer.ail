@@ -189,7 +189,7 @@ func scripted(status: string, gone: bool, fail_at: string)
       if fail_at == "split" then { output: envelope("", herdr_error("pane_split_failed"), 1), exit_code: 1, next_state: world }
       else
         { output: envelope("{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"},\"type\":\"pane_info\"}}", "", 0),
-          exit_code: 0, next_state: world }
+          exit_code: 0, next_state: put_file(world, "/tmp/.last-pane-split", argv) }
     else if contains(argv, "agent explain") then
       { output: envelope("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}", "", 0),
         exit_code: 0, next_state: world }
@@ -292,6 +292,11 @@ func delegate_call_model(id: string, prompt: string, kind: string, task_kind: st
 -- answers blindly, so without this the model flag would be asserted only against
 -- the run file and never against the call that carries it.
 func last_start_argv(world: ExtWorld) -> string { read_file(world, "/tmp/.last-agent-start") }
+
+-- The last `pane split` argv. A motoko delegate never reaches `agent start`, so
+-- this is the ONLY place its model can be asserted: the split is where `MODEL`
+-- is handed over (`types.argv_split`).
+func last_split_argv(world: ExtWorld) -> string { read_file(world, "/tmp/.last-pane-split") }
 
 func check_call(id: string, name: string) -> ToolCallEnvelope {
   { id: id, tool: "DelegateCheck", arguments: jo([kv("name", js(name))]) }
@@ -500,6 +505,39 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                   contains(read_file(s12.world, run_file_path()), "\"model\":\"a;b\""));
   emit(s12.world);
 
+  -- 13. THE MOTOKO HALF OF THE MODEL STORY (2026-09-07). A motoko delegate is a
+  --     shell running `run-agent.sh`, not an `agent start`, so its model cannot
+  --     ride a flag after `--`. It rides the pane split as `MODEL`, which the
+  --     receiving Motoko resolves ahead of its configured profile.
+  let s13 = drive(s12.world, ports_at(13000, "working", false, true),
+                  delegate_call_model("c13", "motoko model work", "motoko", "impl", "", "openrouter/meta/muse-spark-1.3"));
+  let a18 = check("a motoko delegate's model rides the pane split as MODEL",
+                  s13.code == 0
+                    && contains(last_split_argv(s13.world), "--env MODEL=openrouter/meta/muse-spark-1.3"));
+  emit(s13.world);
+
+  -- 14. The same degradation as the flag path: a shell token yields no MODEL at
+  --     all, so the delegate resolves its own model rather than the call failing.
+  let s14 = drive(s13.world, ports_at(14000, "working", false, true),
+                  delegate_call_model("c14", "motoko metachar", "motoko", "impl", "", "a;b"));
+  let a19 = check("a motoko model with metacharacters is refused from the split",
+                  s14.code == 0
+                    && contains(last_split_argv(s14.world), "MODEL=") == false);
+  emit(s14.world);
+
+  -- 15. AND THE OTHER DIRECTION, which is the half that catches a model threaded
+  --     unconditionally: claude takes its model as a flag, so ITS split must not
+  --     carry MODEL — a variable the claude CLI does not read, in a pane holding
+  --     no Motoko.
+  let s15 = drive(s14.world, ports_at(15000, "working", false, true),
+                  delegate_call_model("c15", "claude model work", "claude", "impl", "", "claude-fable-5"));
+  let a20 = check("a claude delegate's split carries no MODEL: its transport is the flag",
+                  s15.code == 0
+                    && contains(last_start_argv(s15.world), "--model claude-fable-5")
+                    && contains(last_split_argv(s15.world), "MODEL=") == false);
+  emit(s15.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
-     && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 then () else exit(1)
+     && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17
+     && a18 && a19 && a20 then () else exit(1)
 }

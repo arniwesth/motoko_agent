@@ -137,7 +137,7 @@ func delegate_params(allowed: string, must_choose: bool) -> string {
     else
       "Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.";
   let required = if must_choose then "[\"prompt\",\"kind\"]" else "[\"prompt\"]";
-  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model for the delegate CLI (claude `--model`, codex `-m`). Free string; empty means the CLI default. Shell metacharacters are refused and fall back to the default. Applies to claude/codex only; ignored for other kinds.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model the delegate should run on: claude `--model`, codex `-m`, motoko the MODEL environment variable. Free string; empty means that agent's own default. Shell metacharacters are refused and fall back to the default. Ignored by kinds with no model transport.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
 }
 
 func check_params() -> string {
@@ -188,10 +188,16 @@ func relaxation_note(kind: string) -> string {
 -- and the CLI default stands; a non-empty value that yields no argv (wrong kind
 -- or refused metacharacters) is still what was asked, so it is reported as
 -- asked rather than silently normalised.
+-- MOTOKO JOINED THE FIRST ARM (2026-09-07) when it gained a transport: the
+-- model reaches it as `MODEL` on the pane split (`types.argv_split`) instead of
+-- as a flag after `--`. The arm below is now the kinds with NO transport at
+-- all — gemini and the rest of herdr's 22 — and it stays because an operator
+-- who widens HERDR_ALLOWED_KINDS should be told which of them drop the model
+-- rather than discovering it from a delegate on the wrong one.
 func model_note(kind: string, model: string) -> string {
   if model == "" then ""
-  else if kind == "claude" || kind == "codex" then " with model `${model}`"
-  else " (model `${model}` ignored: applies to claude/codex only)"
+  else if kind == "claude" || kind == "codex" || is_motoko(kind) then " with model `${model}`"
+  else " (model `${model}` ignored: applies to claude, codex and motoko only)"
 }
 
 func err_result(call_id: string, tool: string, msg: string) -> ToolResultEnvelope {
@@ -889,10 +895,20 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
       if wrote.ok == false then
         { result: err_result(call.id, "Delegate", "Could not write the task file `${task}`: ${wrote.error}"), next_state: wrote.next_state }
       else {
-        let sp = run_herdr(cfg, p, wrote.next_state, argv_split(cwd, argv_env_depth(cfg.depth)));
+        -- THE MODEL RIDES THE SPLIT, AND ONLY FOR MOTOKO. The split is shared by
+        -- both lifecycles and happens BEFORE the branch below, so this is the
+        -- one place the two paths' model transports have to be told apart:
+        -- claude and codex take theirs as a flag on `agent start`
+        -- (`argv_start_model`), and passing `MODEL` into their pane as well
+        -- would put a variable neither CLI reads into a pane holding no Motoko
+        -- — inert, and untrue of the environment it describes. A non-motoko
+        -- delegate's split argv is therefore byte-identical to what it was.
+        let split_model = if is_motoko(kind) then model else "";
+        let split_argv = argv_split(cwd, argv_env_depth(cfg.depth), split_model);
+        let sp = run_herdr(cfg, p, wrote.next_state, split_argv);
         let pane = split_pane_id(sp.out);
         if sp.code != 0 || pane == "" then
-          { result: err_result(call.id, "Delegate", explain_failure("Splitting a pane for the delegate", argv_split(cwd, argv_env_depth(cfg.depth)), sp)), next_state: sp.next_state }
+          { result: err_result(call.id, "Delegate", explain_failure("Splitting a pane for the delegate", split_argv, sp)), next_state: sp.next_state }
         else if is_motoko(kind) then {
           -- MOTOKO IS A SECOND LIFECYCLE, NOT A KIND. `agent start --kind` takes
           -- a fixed list of 22 and motoko is not on it (020 ADR-001 option B).
@@ -951,7 +967,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
               let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
               { result: {
                   tool_call_id: call.id, tool: "Delegate", exit_code: 0,
-                  stdout: "Delegate `${h}` is running motoko in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.${tag.note}${rec.note}${view.note}",
+                  stdout: "Delegate `${h}` is running motoko${model_note(kind, model)} in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.${tag.note}${rec.note}${view.note}",
                   stderr: "", metadata: meta_kind(h, pane, motoko_kind())
                 },
                 next_state: view.next_state }

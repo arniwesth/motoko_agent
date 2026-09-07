@@ -11,10 +11,19 @@ title, now true of the code as well.** No Linear issue yet. Corrected 2026-09-07
   flag map §1 priced as "moderate" is those two functions, and it is **gated**: four assertions in
   `scripts/verify_mot136_dagr_producer.ail` (`make verify_dagr_producer`) cover passthrough after
   `--`, the metacharacter refusal, and that the ask is recorded verbatim on the attempt either way.
-- **§1's motoko half is NOT built.** `types.argv_split` still emits its three `--env` pairs and no
-  `MODEL=`, so a `model` on a motoko `Delegate` is silently ignored. This was the *one-line* half.
-- **No policy, as §3–§4 predicted.** The only validation is `has_shell_tokens`, and a refused model
-  **degrades silently to the CLI default** rather than failing the call — a delegate then runs on a
+- **§1's motoko half is BUILT** (2026-09-07). `types.argv_split` takes the model and appends a
+  fourth `--env MODEL=<x>` pair to the pane split; `do_delegate` passes it only when the kind is
+  motoko, because the split is shared by both lifecycles and claude/codex take theirs as a flag.
+  Verified on the receiving side before it was written, which §1 asserted but did not show:
+  `models.resolveRuntimeModel` returns a non-blank `MODEL` **ahead of** the profile's configured
+  model, and `index.ts` protects every variable already in the environment from config overwrite —
+  so the variable this sends actually decides the delegate's model. Empty emits nothing rather than
+  `MODEL=`, which would read like the deliberate credential-clearing `--env KEY=` pairs beside it
+  while meaning the opposite. Gated by three cases in `verify_mot136_dagr_producer.ail`, including
+  the one that catches a model threaded to claude's split as well.
+- **No policy, as §3–§4 predicted** — now on both transports, which is the honest cost of building
+  the second one. The only validation is `has_shell_tokens`, and a refused model
+  **degrades silently to the agent's own default** rather than failing the call — a delegate then runs on a
   model nobody chose and nothing says so. A shell-safe but bogus model (a typo, a retired id) is
   still accepted by every layer and still fails inside the answer-file window, which is this page's
   third route to P2-3.
