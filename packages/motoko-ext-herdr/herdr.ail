@@ -27,7 +27,7 @@ module sunholo/motoko_ext_herdr/herdr
 import std/option (Option, Some, None)
 import std/string (length, substring, contains)
 import std/crypto (sha256Hex)
-import std/json (Json, jo, kv, js, jnum, jb, get, asString)
+import std/json (Json, jo, kv, js, jnum, jb, get, asString, decode)
 
 import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
@@ -43,6 +43,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
   run_settled_tmp, settle_at_session_end, open_task_ids_str,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
+  abandoned_ids, settle_abandoned, sweep_tmp,
   open_delegate_panes
 )
 import pkg/sunholo/motoko_ext_herdr/types (
@@ -116,7 +117,10 @@ export type HerdrConfig = {
   -- second without the first. It is ALSO not sufficient on its own: the host
   -- refuses every publish unless the operator granted a root
   -- (`MOTOKO_EXIT_PUBLISH_ROOT`), so this knob asks and that grant permits.
-  settle_on_exit: bool
+  settle_on_exit: bool,
+  -- F-5 rung 4, upgraded from REPORTING to REPAIRING -- and only for the case
+  -- the sweep has positive proof of. See `dagr.settle_abandoned`.
+  sweep_settle: bool
 }
 
 export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
@@ -729,19 +733,61 @@ func close_panes(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, ids: [string])
 -- session, this runs once per run, and a cap would have to pick which stale
 -- records to hide. If the directory ever grows past reading, it wants pruning,
 -- not a silent limit.
+-- REPUBLISH A FILE THIS SESSION DOES NOT OWN, through the same tmp-then-rename
+-- transaction `publish` uses. In place would be a torn read for whatever has a
+-- dagr view open on it, and the owner being gone does not make its readers gone.
+--
+-- Every failure is silent and leaves the original standing: this is a courtesy
+-- performed on somebody else's document, and the one thing worse than not doing
+-- it is half-doing it and saying so.
+func republish_foreign(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, path: string, doc: Json)
+  -> ExtWorld ! {IO, Process, FS} {
+  let tmp = sweep_tmp(path, cfg.own_pane, cfg.session_ms);
+  if path_is_safe(path) == false || path_is_safe(tmp) == false then w
+  else {
+    let wrote = p.file_write(w, tmp, render(doc));
+    if wrote.ok == false then wrote.next_state
+    else {
+      let mv = run_cmd(p, wrote.next_state, "mv", [tmp, path]);
+      if mv.code != 0 then p.file_remove(mv.next_state, tmp).next_state
+      else mv.next_state
+    }
+  }
+}
+
 func scan_files(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, names: [string],
-                own: string, live: [string])
-  -> { items: [string], next_state: ExtWorld } ! {FS} {
+                own: string, live: [string], now_ms: int)
+  -> { items: [string], next_state: ExtWorld } ! {IO, Process, FS} {
   match names {
     [] => { items: [], next_state: w },
     n :: rest =>
-      if is_foreign_run_file(n, own) == false then scan_files(cfg, p, w, rest, own, live)
+      if is_foreign_run_file(n, own) == false then scan_files(cfg, p, w, rest, own, live, now_ms)
       else {
-        let rd = p.file_read(w, "${cfg.dagr_dir}/${n}");
+        let path = "${cfg.dagr_dir}/${n}";
+        let rd = p.file_read(w, path);
         let here = if rd.present
                    then prefix_all("${n} — ", abandoned_tasks(rd.content, live))
                    else [];
-        let more = scan_files(cfg, p, rd.next_state, rest, own, live);
+        -- THE REPORT IS COMPUTED FIRST AND FROM THE PRE-SETTLEMENT CONTENT, so
+        -- the sentence the operator reads names what was found rather than what
+        -- is left. Settling and then reporting would produce an empty report on
+        -- exactly the run where the sweep did the most.
+        let settled_state =
+          if cfg.sweep_settle == false || rd.present == false then rd.next_state
+          else match here {
+            -- nothing measured gone in this file: it is not ours to touch
+            [] => rd.next_state,
+            _ => match decode(rd.content) {
+              -- unparseable is not ours to repair either, and `abandoned_tasks`
+              -- already read it as empty, so this arm is unreachable today and
+              -- is written to stay correct if that ever stops being true.
+              Err(_) => rd.next_state,
+              Ok(doc) =>
+                republish_foreign(cfg, p, rd.next_state, path,
+                                  settle_abandoned(doc, live, cfg.own_pane, now_ms))
+            }
+          };
+        let more = scan_files(cfg, p, settled_state, rest, own, live, now_ms);
         { items: here ++ more.items, next_state: more.next_state }
       }
   }
@@ -753,8 +799,8 @@ func prefix_all(pre: string, xs: [string]) -> [string] {
   match xs { [] => [], x :: rest => "${pre}${x}" :: prefix_all(pre, rest) }
 }
 
-func scan_abandoned(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, live: [string])
-  -> { note: string, next_state: ExtWorld } ! {FS} {
+func scan_abandoned(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, live: [string], now_ms: int)
+  -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
   -- The same two refusals `dagr_record` makes, for the same two reasons: no run
   -- identity means no "own file" to exclude, and a read outside
   -- AILANG_FS_SANDBOX terminates the run rather than failing.
@@ -765,8 +811,8 @@ func scan_abandoned(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
     if dl.present == false then { note: "", next_state: dl.next_state }
     else {
       let own = run_file_name(cfg.own_pane, cfg.session_ms);
-      let r = scan_files(cfg, p, dl.next_state, dl.entries, own, live);
-      { note: abandoned_report(r.items), next_state: r.next_state }
+      let r = scan_files(cfg, p, dl.next_state, dl.entries, own, live, now_ms);
+      { note: abandoned_report(r.items, cfg.sweep_settle), next_state: r.next_state }
     }
   }
 }
@@ -781,8 +827,13 @@ func scan_abandoned(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
 -- sweep runs, deliberately: a sweep that fails should not retry on every
 -- subsequent tool call and re-report the same panes for the rest of the
 -- session. At-most-once is the correct shape for an advisory report.
+-- `{Clock}` JOINED THE ROW when the sweep gained the power to settle: a
+-- settlement stamps `ended_at` and appends an event, and both need a real time.
+-- The clock is read ONCE, after the pane enumeration, so every task this sweep
+-- settles across every file carries the same instant -- which is true (they were
+-- all observed by one `pane list`) and reads correctly in the run file.
 func sweep_once(cfg: HerdrConfig, ctx: ExtCtx)
-  -> { note: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  -> { note: string, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
   -- No run identity means no ownership test, and without the test the only
   -- rule left is a name prefix, which is exactly the rule that must not be
@@ -817,7 +868,8 @@ func sweep_once(cfg: HerdrConfig, ctx: ExtCtx)
         -- RECORDS a session left frozen mid-flight. The 2026-09-01 measurement
         -- hit the second and was told about the first, because only the first
         -- existed. Same pane list, so it costs no extra herdr call.
-        let ab = scan_abandoned(cfg, p, panes.next_state, ctx.workdir, live_pane_ids(ls.out));
+        let t = p.clock_now(panes.next_state);
+        let ab = scan_abandoned(cfg, p, t.next_state, ctx.workdir, live_pane_ids(ls.out), t.now_ms);
         { note: "${panes.note}${ab.note}", next_state: ab.next_state }
       }
     }

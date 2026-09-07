@@ -102,11 +102,9 @@ when the session ended, instead of reading `working` for ever.
 
 Two things it does NOT do, both named in this issue:
 
-- **The older 11 rows across five previous run files are untouched.** Those
-  sessions are gone; nothing renames their candidates now. That needs the startup
-  sweep to settle by MEASUREMENT (`pane list` says the pane is gone → `lost`),
-  which is a separate change and the one this issue's Fix section pairs with
-  settle-on-exit.
+- **The older 11 rows across five previous run files are untouched by settle-on-exit.**
+  Those sessions are gone; nothing renames their candidates now. **Built separately
+  the same day — see the next section.**
 - **It requires two opt-ins** — `HERDR_DAGR_SETTLE_ON_EXIT=1` and the host's
   `MOTOKO_EXIT_PUBLISH_ROOT` grant — and neither is set in `agent_confined`
   today, so nothing changes for this repo's own container until the compose file
@@ -142,3 +140,42 @@ extension yields, `plugin pane open` absent from the call log and `pane get
 w1:pOP` present in it. Asserting the probe and not merely the absence of the open
 is deliberate: the silent-stale-suppression failure is invisible to a case that
 only checks that no pane appeared.
+
+
+## Progress (2026-09-07) — the startup sweep now repairs, not only reports
+
+Status stays **open**, because Option A (one file instead of two) is still the
+answer to the drift and still undecided. What changed is the second half of this
+issue's Fix section: *"an orphan sweep that also marks rows `lost` when the pane
+is gone would close the older 11."* It does now, under `HERDR_SWEEP_SETTLE=1`.
+
+The sweep already computed exactly the right population — `abandoned_tasks`,
+tasks whose latest attempt is in flight on a pane absent from `pane list`. It
+reported them in a sentence that finding 4 recorded as *"correct and nobody will
+ever act on it from a tool result."* It now settles each one `lost · heuristic`
+in the foreign file, adds a note naming this session as the settler, and
+republishes through the same tmp-then-rename transaction the producer uses.
+
+**`lost` is the verdict `do_check` already writes for `agent_not_found`** — the
+same observation reached by a different route — so the sweep invents nothing.
+It is not `settled_unverified`; that is for an attempt nobody can observe, and
+this one WAS observed, just not by its own session.
+
+**Why this is not the "fabricated settlement" F-5 §5.5 forbids.** That sentence
+is about the pane that is STILL ALIVE with its orchestrator gone: there nothing
+has been measured and a note is the honest act. The pane's ABSENCE is positive
+proof, the same standard P2-6 sets for closing one. A foreign task on a live
+pane is left exactly as it was — asserted end to end by a third session's record
+in the gate fixture.
+
+**Opt-in, and deliberately so.** §5.5 as signed off says to record a note and
+"never a fabricated settlement", so going further is the operator's call, not an
+inherited default. The report stays the default behaviour. Flipping it is one
+line in `register.ail` if the owner wants it.
+
+Gate: `verify_herdr_owner_tag` grew a case, and c5b grew an assertion. Both
+falsifications were run: settling regardless of the knob, and dropping the
+liveness conjunct. The first initially passed — c5b only ever read the report
+sentence, so an unconditional settle would have left it claiming "Nothing was
+changed" about a file it had just rewritten — which is why c5b now asserts on the
+call log too.

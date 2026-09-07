@@ -166,6 +166,14 @@ export pure func run_settled_tmp(dagr_dir: string, own_pane: string, session_ms:
   tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/run-w1-p1-1756000000000.json.settled")]
   { "${run_file(dagr_dir, own_pane, session_ms)}.settled" }
 
+-- The tmp a SWEEPER uses to republish somebody else's run file. Keyed by the
+-- sweeping session, not by the file's owner: two sessions sweeping the same
+-- directory must not share a temporary inode, which is `run_tmp`'s rule applied
+-- to the one case where the writer is not the owner.
+export pure func sweep_tmp(path: string, own_pane: string, session_ms: string) -> string
+  tests [(("/w/.dagr/run-w1-p9-100.json", "w1:p1", "200"), "/w/.dagr/run-w1-p9-100.json.sweep-w1-p1-200")]
+  { "${path}.sweep-${slug(own_pane)}-${session_ms}" }
+
 -- Written once per session, next to the run file, when the run file exists and
 -- does not parse. Its presence is what makes "tell the model once" once.
 export pure func refused_marker(dagr_dir: string, own_pane: string, session_ms: string) -> string
@@ -684,6 +692,25 @@ pure func has_str(xs: [string], needle: string) -> bool {
   }
 }
 
+-- BOTH CONDITIONS, and the pane one is what makes this a fact rather than a
+-- guess. An in-flight attempt whose pane is STILL THERE may be a delegate of a
+-- session that is still running; saying it is abandoned would be the same class
+-- of misreport this file exists to prevent, pointed the other way.
+--
+-- EXTRACTED 2026-09-07 so the REPORT and the SETTLEMENT cannot drift. They are
+-- the same claim about the same task, made to a person and to a document, and
+-- two copies of this predicate would eventually disagree about which.
+export pure func task_is_abandoned(t: Json, live: [string]) -> bool {
+  match last_of(arr_field(t, "attempts")) {
+    None => false,
+    Some(a) => {
+      let pane = sfield(field(a, "locator"), "pane");
+      attempt_is_terminal(sfield(a, "state")) == false
+        && pane != "" && has_str(live, pane) == false
+    }
+  }
+}
+
 pure func abandoned_of(ts: [Json], live: [string]) -> [string] {
   match ts {
     [] => [],
@@ -694,13 +721,7 @@ pure func abandoned_of(ts: [Json], live: [string]) -> [string] {
         None => tail,
         Some(a) => {
           let pane = sfield(field(a, "locator"), "pane");
-          -- BOTH CONDITIONS, and the pane one is what makes this a fact rather
-          -- than a guess. An in-flight attempt whose pane is STILL THERE may be
-          -- a delegate of a session that is still running; saying it is
-          -- abandoned would be the same class of misreport this file exists to
-          -- prevent, pointed the other way.
-          if attempt_is_terminal(sfield(a, "state")) == false
-             && pane != "" && has_str(live, pane) == false
+          if task_is_abandoned(t, live)
           then "${id} (${sfield(t, "kind")}) on pane ${pane}" :: tail
           else tail
         }
@@ -889,17 +910,97 @@ export pure func abandoned_tasks_str(content: string, live: [string]) -> string
   ]
   { join(",", abandoned_tasks(content, live)) }
 
+pure func abandoned_ids_of(ts: [Json], live: [string]) -> [string] {
+  match ts {
+    [] => [],
+    t :: rest => {
+      let tail = abandoned_ids_of(rest, live);
+      if task_is_abandoned(t, live) && sfield(t, "id") != ""
+      then sfield(t, "id") :: tail
+      else tail
+    }
+  }
+}
+
+export pure func abandoned_ids(content: string, live: [string]) -> [string] {
+  match decode(content) {
+    Err(_) => [],
+    Ok(doc) => abandoned_ids_of(tasks_of(doc), live)
+  }
+}
+
+export pure func abandoned_ids_str(content: string, live: [string]) -> string
+  tests [
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1"]), "mot-dlg-5"),
+    -- the pane is alive: NOT abandoned, and this is the conjunct that keeps a
+    -- concurrent session's live delegates out of another session's settlement
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1", "w1:p8"]), ""),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"done\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}",
+      ["w1:p1"]), ""),
+    (("not json", ["w1:p1"]), "")
+  ]
+  { join(",", abandoned_ids(content, live)) }
+
+-- SETTLING SOMEONE ELSE'S RECORD, and the verdict is the one this producer
+-- already writes for exactly this observation.
+--
+-- `lost · heuristic` is what `do_check` writes when herdr answers
+-- `agent_not_found`: the pane is gone and no answer file was written. The sweep
+-- makes the SAME observation by a different route -- the pane is absent from
+-- `pane list` -- so it writes the same verdict rather than inventing one. It is
+-- not `settled_unverified`: that is for an attempt nobody can observe any more,
+-- and this one WAS observed, just not by its own session.
+--
+-- WHY THIS IS NOT THE "FABRICATED SETTLEMENT" F-5 §5.5 FORBIDS. That sentence
+-- is about the pane that is STILL ALIVE with its orchestrator gone -- there,
+-- nothing has been measured and the honest act is a note. Here the pane's
+-- absence is positive proof, which is the same standard P2-6 sets for closing
+-- one. `task_is_abandoned`'s liveness conjunct is what keeps the two apart, and
+-- a task on a live pane is left exactly as it was.
+--
+-- IDEMPOTENT BY `settle`'s CONTRACT: an already-terminal attempt returns the
+-- document untouched, so two sessions sweeping the same file write the same
+-- bytes and the second changes nothing.
+export pure func settle_abandoned(doc: Json, live: [string], sweeper: string, now_ms: int) -> Json {
+  settle_abandoned_ids(doc, abandoned_ids_of(tasks_of(doc), live), sweeper, now_ms)
+}
+
+pure func settle_abandoned_ids(doc: Json, ids: [string], sweeper: string, now_ms: int) -> Json {
+  match ids {
+    [] => doc,
+    id :: rest =>
+      settle_abandoned_ids(
+        add_note(
+          settle(doc, id, "lost", "failed", "heuristic", "",
+                 "the pane is gone and no answer file was written", now_ms),
+          id,
+          "settled by the startup sweep of a later session (${sweeper}); the session that delegated this never observed the end",
+          now_ms),
+        rest, sweeper, now_ms)
+  }
+}
+
 pure func count_str(xs: [string]) -> int {
   match xs { [] => 0, _ :: rest => 1 + count_str(rest) }
 }
 
 -- REPORT, NEVER REPAIR, and the sentence says which. A model told "there is a
 -- stale record" without being told it is not its to fix will try to fix it.
-export pure func abandoned_report(items: [string]) -> string
+-- THE SENTENCE HAS TO SAY WHICH OF THE TWO THINGS HAPPENED. Finding 4 of the
+-- PLAN-001 run recorded that the report-only version "is correct and nobody
+-- will ever act on it from a tool result" -- so when the sweep DOES act, saying
+-- "nothing was changed" would be false, and saying nothing would hide a write to
+-- a file this session does not own. Both halves are spelled out.
+export pure func abandoned_report(items: [string], settled: bool) -> string
   tests [
-    ([], ""),
-    ((["run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8"]),
-     "\n\nStale delegation record: 1 task in another session's dagr run file is recorded still in flight on a pane that no longer exists (run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8). Nothing was changed: this session is not that file's writer and never writes to it. The record is stale, not the work — that delegate is gone, and its result, if any, was never collected.")
+    (([], false), ""),
+    (([], true), ""),
+    ((["run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8"], false),
+     "\n\nStale delegation record: 1 task in another session's dagr run file is recorded still in flight on a pane that no longer exists (run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8). Nothing was changed: this session is not that file's writer and never writes to it. The record is stale, not the work — that delegate is gone, and its result, if any, was never collected."),
+    ((["run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8"], true),
+     "\n\nStale delegation record: 1 task in another session's dagr run file is recorded still in flight on a pane that no longer exists (run-w1-p6-100.json — mot-dlg-5 (review) on pane w1:p8). HERDR_SWEEP_SETTLE is set, so each was settled `lost` in that file and a note recording this session as the settler was added. The record is stale, not the work — that delegate is gone, and its result, if any, was never collected.")
   ]
   {
     match items {
@@ -908,7 +1009,12 @@ export pure func abandoned_report(items: [string]) -> string
         let n = count_str(items);
         let noun = if n == 1 then "task" else "tasks";
         let verb = if n == 1 then "is" else "are";
-        "\n\nStale delegation record: ${intToStr(n)} ${noun} in another session's dagr run file ${verb} recorded still in flight on a pane that no longer exists (${join(", ", items)}). Nothing was changed: this session is not that file's writer and never writes to it. The record is stale, not the work — ${if n == 1 then "that delegate is" else "those delegates are"} gone, and ${if n == 1 then "its result" else "their results"}, if any, ${if n == 1 then "was" else "were"} never collected."
+        let action =
+          if settled then
+            "HERDR_SWEEP_SETTLE is set, so ${if n == 1 then "each was" else "each was"} settled `lost` in that file and a note recording this session as the settler was added."
+          else
+            "Nothing was changed: this session is not that file's writer and never writes to it.";
+        "\n\nStale delegation record: ${intToStr(n)} ${noun} in another session's dagr run file ${verb} recorded still in flight on a pane that no longer exists (${join(", ", items)}). ${action} The record is stale, not the work — ${if n == 1 then "that delegate is" else "those delegates are"} gone, and ${if n == 1 then "its result" else "their results"}, if any, ${if n == 1 then "was" else "were"} never collected."
       }
     }
   }
