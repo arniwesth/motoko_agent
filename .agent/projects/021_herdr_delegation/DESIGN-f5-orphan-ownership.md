@@ -1,10 +1,30 @@
 # Design: F-5 — who owns an orphaned delegate
 
 Date: 2026-08-31
-Status: **Accepted 2026-08-31 (owner sign-off on all three §6 decision points; see §6).
-Extension half implemented the same day (MOT-133: tag at spawn, report-only startup sweep); the
-TUI's `HERDR_REAP_ON_EXIT` rung (§5.3, MOT-134) is still to build.**
-Closes (if accepted): `RESEARCH-herdr-delegation-surface.md` §5.1 / §6 F-5 — the last dependency of
+Status: **Accepted 2026-08-31 (owner sign-off on all three §6 decision points; see §6), and
+fully implemented as of 2026-09-05.** Rungs 1, 2 and 4 landed the day of acceptance (MOT-133: tag
+at spawn, report-only startup sweep; gate `make verify_herdr_owner_tag`). **Rung 3
+(`HERDR_REAP_ON_EXIT`, §5.3, MOT-134) is built** — not where this page put it. It did not land as
+TUI code beside `releaseHerdrReporter`; it landed as the ABI slot whose absence forced that
+placement. Commit `cec2e25f` *"ABI 7.0: extension-declared exit intent, replacing the herdr TUI
+reaper"* adds `ExitIntent` / `ExitAction` to `motoko-ext-abi` 7.0, **deletes
+`src/tui/src/herdr-reap.ts`**, and moves execution to `src/tui/src/exit-actions.ts` against a
+manifest the host renders at every turn end (`src/core/ext/exit_manifest.ail`). Design:
+[`DESIGN-exit-intent-abi.md`](DESIGN-exit-intent-abi.md). Gate: `make verify_exit_intent`.
+**One §5.3 mechanic changed with the move, deliberately, and this page is now the wrong record of
+it.** §5.3 says *"enumerate via `agent list`"*. The extension cannot: its exit atom's effect row is
+`{FS}` by design, so `herdr.exit_actions` reads its OWN dagr run file — already keyed by producer
+pane and session, so the panes it names are this session's by construction — and emits one
+`ClosePane` per task whose latest attempt is non-terminal (`dagr.open_delegate_panes`), never its
+own pane. The ownership proof did not weaken: each action carries `mot-owner` key and value, and
+the **host** re-reads `pane list` at exit and closes only a pane still carrying that exact token
+(`exit-actions.ts:paneProofHolds`). That is a fresher check than enumeration at turn end could
+have been. §5.3's O3 promise survives unchanged — a blocked delegate's latest attempt is
+non-terminal, so it is closed like any other.
+Live in the confined container: `HERDR_REAP_ON_EXIT=1` is set in
+`.devcontainer/agent_confined/docker-compose.yml`; `HERDR_SWEEP_STALE` is deliberately unset, so
+rung 4 stays report-only as §6 decided.
+Closes: `RESEARCH-herdr-delegation-surface.md` §5.1 / §6 F-5 — the last dependency of
 [`DESIGN-dagr-as-delegation-view.md`](DESIGN-dagr-as-delegation-view.md) §8.
 Provenance: §2 measured this session (2026-08-31, live herdr `w5`); everything else cites
 `MEASUREMENTS-2026-08-22.md` (P2-6, M-extra-4, M-extra-6) or code.

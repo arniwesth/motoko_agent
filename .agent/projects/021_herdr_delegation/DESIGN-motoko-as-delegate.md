@@ -1,7 +1,22 @@
 # Motoko as a delegate kind — validated recipe, verification, and why it is not in PR #174
 
 Date: 2026-08-23
-Status: **Design + measurements. Not implemented.** Recommended as its own change; see §5.
+Status: **Implemented 2026-08-23**, as §5 asked — its own change, not folded into PR #174.
+Commit `c28999a1` *"motoko as a delegate — a second lifecycle, gated on the answer file"*. The
+recipe below is what the code does: `pane run` with the task as argv[2], the answer file as the
+gate and never the agent state (§3.2), an explicit `pane close` rather than a settle that never
+comes (§3.3). **Two things the code settled that this page did not:** the handle is minted by
+`types.motoko_handle` and nothing is renamed, so §3.1's `agent rename` recipe is superseded (it
+still works; it is no longer needed); and the kind is admitted only when the operator's
+`HERDR_ALLOWED_KINDS` lists it — the package default is `claude` alone
+(`types.default_allowed_kinds`), and the confined container permits `claude,motoko`. Recursion is
+bounded by `HERDR_DELEGATE_DEPTH` against `HERDR_MAX_DELEGATE_DEPTH`, default 1, so a motoko
+delegate cannot spawn one (`types.default_max_depth`, `depth_allows`).
+Measured on the live path 2026-09-05:
+[`MEASUREMENTS-2026-09-05-plan001-live-run.md`](MEASUREMENTS-2026-09-05-plan001-live-run.md) —
+motoko delegates start in 0.0 s, come up on the right branch, and both report-shaped tasks settled
+`done/verified`. The same run is where every delegated task that had to WRITE A SOURCE FILE failed,
+for reasons that are not this lifecycle's (that page, findings 1 and 5).
 Linear: **MOT-127**. Relates to MOT-121 (PR #174), MOT-125, MOT-120.
 Provenance: prototyped end to end by the operator's tester; the measurements in §2 are theirs,
 those in §3 are this session's verification and one correction that improves the recipe.
