@@ -47,6 +47,7 @@ import pkg/sunholo/motoko_ext_abi/types (
 )
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle)
+import src/core/test/herdr_fixture (argv_text, envelope, herdr_error, strings_of)
 
 -- ---------------------------------------------------------------------------
 -- A filesystem in the world token
@@ -119,34 +120,8 @@ func fs_dir(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
   { ok: true, error: "", next_state: world }
 }
 
-func envelope(stdout: string, stderr: string, code: int) -> string {
-  encode(jo([kv("stdout", js(stdout)), kv("stderr", js(stderr)),
-             kv("exit_code", jnum(_int_to_float(code)))]))
-}
-
-func herdr_error(code: string) -> string {
-  encode(jo([kv("error", jo([kv("code", js(code)), kv("message", js("scripted"))]))]))
-}
-
-func strings_of(xs: [Json]) -> [string] {
-  match xs {
-    [] => [],
-    x :: rest => (match asString(x) { Some(s) => s, None => "" }) :: strings_of(rest)
-  }
-}
-
 func cmd_of(args_json: string) -> string {
   match decode(args_json) { Err(_) => "", Ok(o) => sfield(o, "cmd") }
-}
-
-func argv_text(args_json: string) -> string {
-  match decode(args_json) {
-    Err(_) => "",
-    Ok(o) => match get(o, "args") {
-      None => "",
-      Some(a) => match asArray(a) { Some(xs) => join(" ", strings_of(xs)), None => "" }
-    }
-  }
 }
 
 func argv_list(args_json: string) -> [string] {
