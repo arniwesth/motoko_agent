@@ -1,0 +1,210 @@
+-- The graded session for a herdr DST profile: `NOTE-2026-09-03-herdr-under-dst.md`
+-- §7 step 2's DEMONSTRATION half. A `Delegate` runs through the REAL traced
+-- driver with `motoko-ext-herdr` installed, and every herdr CLI call it makes is
+-- served from `WorldState.ext_effects` instead of reaching the live multiplexer.
+--
+-- WHAT IT SETTLED, and it was the item that made step 2 risky. That note's §8
+-- listed one inference it could not check: "no run has yet exercised a
+-- `ToolProvider` dispatch end to end — register entry 19 — so the first attempt
+-- may find a seam the compose run did not." Every other profile in the tree
+-- mediates a `ResponseInterceptor` (compose) or nothing at all. There is no
+-- seam: the dispatch arrives, the hook runs, the scripted answers are consumed
+-- in order, and the delegation completes. The world clock proves the serving —
+-- the tool result says the spawn took 0.6s, which is this file's own
+-- 97+101+103+107+109+113ms of scripted durations and not a real herdr.
+--
+-- WHAT IT IS NOT, YET. There is no `ProfileDefinition`, no discovery, no
+-- validate/replay pair and no CLASSIFICATION/STATEMENT/CLAIM lines. Those are
+-- the profile RECORD's half of step 2 and each of their fields has to be
+-- measured for herdr rather than copied from compose. This half is what the
+-- record would be a claim about.
+--
+-- THE SEQUENCE IS THE FRAGILE PART AND THAT IS DELIBERATE. `ext_effects` is
+-- served IN ORDER and never matched against argv, so this fixture pins the exact
+-- call sequence a successful claude `Delegate` makes. A change to that sequence
+-- breaks this file loudly, which is the point: writing it caught two real
+-- things — the startup sweep's `pane list` coming FIRST (entry 0), and the
+-- retry's baseline `agent get` landing between the readiness gate and the prompt
+-- (entry 4), added hours earlier the same day.
+module scripts/dst/herdr_graded_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/ai (Message, ToolCall)
+import std/result (Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (RecordingWorld, prose_step)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state)
+import src/core/dst_interaction (Interaction)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtRuntime, ExtEntry, ExtRegistry, BudgetPlan
+)
+import pkg/sunholo/motoko_ext_herdr/register as Herdr (register_with_config)
+
+-- ---------------------------------------------------------------------------
+-- The scripted herdr, as the world serves it
+-- ---------------------------------------------------------------------------
+--
+-- `ext_effects` is served IN ORDER and never matched against argv
+-- (`ports.world_ext_effect`), so this list is the exact call sequence a
+-- successful claude `Delegate` makes, and a wrong order is a wrong test rather
+-- than a failure. Read off `herdr.do_delegate` at HEAD:
+--
+--   1 pane split          2 agent start      3 agent explain
+--   4 agent get           5 agent prompt     6 pane report-metadata
+--
+-- STEP 4 IS NEW TODAY and is exactly the kind of thing this spike is for: the
+-- retry's baseline read (`prompt_with_retry`) added a call between the readiness
+-- gate and the prompt. A fixture written against last week's code would serve
+-- the prompt's answer to the `agent get` and desynchronise everything after it.
+--
+-- THE TRAILING SLACK ENTRY IS LOAD-BEARING, for `driver_plus_compose_dst`'s
+-- reason: an EMPTY queue does not fail, it falls through to a REAL exec — which
+-- in this container would spawn the live herdr against the operator's own
+-- panes. Sized one longer than the expectation so an off-by-one is a wrong
+-- answer rather than a real subprocess.
+func bash_envelope(stdout: string) -> string {
+  "{\"tool\":\"BashExec\",\"cmd\":\"herdr\",\"exit_code\":0,\"stdout\":\"${stdout}\",\"stderr\":\"\",\"truncated\":false}"
+}
+
+func eff(duration_ms: int, exit_code: int, stdout: string)
+  -> { tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int } {
+  { tool_call_id: "", duration_ms: duration_ms, code: "", message: "",
+    content: bash_envelope(stdout), exit_code: exit_code }
+}
+
+-- Durations 101..113 and codes 127/131: distinct from every queue constant in
+-- the tree (S7), which uses 41…61, 43/47/53/59 and 79/83.
+func herdr_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+  [ -- 0. THE STARTUP SWEEP, and missing it is what this spike caught. `sweep_once`
+    --    runs on the FIRST tool call, before `do_delegate` does anything, and
+    --    issues `pane list`. A fixture that starts at the split serves the
+    --    split's answer to the sweep and desynchronises every entry after it —
+    --    which is precisely the failure mode `ext_effects` being served IN ORDER
+    --    rather than matched by argv makes possible.
+    eff(97, 127, "{\\\"result\\\":{\\\"panes\\\":[{\\\"pane_id\\\":\\\"w9:p0\\\"}]}}"),
+    -- 1. pane split -> a pane id
+    eff(101, 127, "{\\\"result\\\":{\\\"pane\\\":{\\\"pane_id\\\":\\\"w9:pS\\\"},\\\"type\\\":\\\"pane_info\\\"}}"),
+    -- 2. agent start
+    eff(103, 127, "{\\\"result\\\":{}}"),
+    -- 3. agent explain -> READY (the rule id `explain_says_ready` looks for)
+    eff(107, 127, "{\\\"agent\\\":\\\"claude\\\",\\\"matched_rule\\\":{\\\"id\\\":\\\"live_prompt_box\\\",\\\"state\\\":\\\"idle\\\"},\\\"state\\\":\\\"idle\\\"}"),
+    -- 4. agent get -> the retry's baseline status
+    eff(109, 127, "{\\\"result\\\":{\\\"agent\\\":{\\\"agent_status\\\":\\\"idle\\\",\\\"pane_id\\\":\\\"w9:pS\\\"}}}"),
+    -- 5. agent prompt -> accepted
+    eff(113, 127, "{\\\"result\\\":{}}"),
+    -- 6. pane report-metadata (the mot-owner tag)
+    eff(127, 127, "{\\\"result\\\":{}}"),
+    -- 7. dagr publish's `mv`
+    eff(131, 127, ""),
+    -- SLACK: never consumed if the sequence above is right.
+    eff(137, 131, "{\\\"slack\\\":true}")]
+}
+
+func delegate_call() -> ToolCall {
+  { id: "tc-spike-1", name: "Delegate",
+    arguments: "{\"prompt\":\"do a small thing\",\"kind\":\"claude\",\"task_kind\":\"impl\"}" }
+}
+
+func tool_step(tc: ToolCall) -> ScriptedStep {
+  { prose: "", tool_calls: [tc], input_tokens: 1, output_tokens: 1,
+    finish_reason: "tool_calls", chunks: [], error_code: "", error_message: "",
+    advance_ms: 0 }
+}
+
+func spike_script() -> [ScriptedStep] {
+  [tool_step(delegate_call()), prose_step("done")]
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func history() -> [Message] { [msg("system", "s"), msg("user", "delegate something")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func world_env() -> [{ key: string, value: string }] {
+  [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
+   { key: "MOTOKO_HEADLESS", value: "1" }]
+}
+
+func graded_world() -> WorldState {
+  { empty_world_state() |
+    script: spike_script(),
+    approvals: [],
+    env: world_env(),
+    ext_effects: herdr_effects() }
+}
+
+-- The real registration, wholesale. `register_with_config` reads HERDR_ENV,
+-- HERDR_BIN_PATH and HERDR_PANE_ID from the PROCESS environment — the ambient
+-- registration read this profile would have to disclose exactly as compose
+-- discloses its own — so the runner sets them.
+func herdr_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { entries: [{ id: "herdr", caps: Herdr.register_with_config(()) }] },
+    strict_mode: false, verification: v }
+}
+
+func run_graded(w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  Session.run_v2_session_traced(
+    herdr_rt(), "spike", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+pure func result_msgs(r: TracedSessionResult) -> [Message] {
+  match r.result { Ok(msgs) => msgs, Err(_) => [] }
+}
+
+pure func tool_texts(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" then m.content :: tool_texts(rest) else tool_texts(rest)
+  }
+}
+
+func show_each(xs: [string]) -> () ! {IO} {
+  match xs { [] => (), x :: rest => { let _ = println("    | ${x}"); show_each(rest) } }
+}
+
+pure func any_contains(xs: [string], needle: string) -> bool {
+  match xs { [] => false, x :: rest => if contains(x, needle) then true else any_contains(rest, needle) }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  let r = run_graded(graded_world());
+  let msgs = result_msgs(r);
+  let tools = tool_texts(msgs);
+  let dispatched = List.length(tools) > 0;
+  -- The delegation SUCCEEDED, not merely reached the hook: an error result also
+  -- mentions the pane.
+  let succeeded = any_contains(tools, "is running `claude` in pane w9:pS");
+  -- THE ELAPSED FIGURE IS THE DETERMINISM ASSERTION. `0.6s` is
+  -- 97+101+103+107+109+113 = 630ms of THIS FILE'S scripted durations, read back
+  -- off the world clock through the extension's own two `clock_now` readings: a
+  -- run that reached a real herdr could not produce it, and neither could one
+  -- that consumed a different NUMBER of entries, since each is ~100ms.
+  --
+  -- ITS RESOLUTION IS A TENTH OF A SECOND, and that is measured rather than
+  -- assumed: changing one duration by 1ms leaves this assertion green, because
+  -- `format_ms` rounds. So it pins the COUNT and the ORDER of the queue, not the
+  -- exact clock. Stated because the first version of this comment claimed more.
+  let served = any_contains(tools, "Starting it took 0.6s");
+  let _ = println("HERDR-GRADED: a ToolProvider dispatch reached the extension:      ${show(dispatched)}");
+  let _ = println("HERDR-GRADED: the delegation completed against the scripted herdr: ${show(succeeded)}");
+  let _ = println("HERDR-GRADED: elapsed is the scripted durations, so nothing ran:   ${show(served)}");
+  if dispatched && succeeded && served then
+    println("HERDR-GRADED: PASS — register entry 19's open inference is answered: the ToolProvider path IS reachable under DST")
+  else {
+    let _ = println("HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world");
+    let _ = show_each(tools);
+    exit(1)
+  }
+}

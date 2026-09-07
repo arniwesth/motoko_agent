@@ -299,3 +299,17 @@ not print the site); that the graded session for herdr needs no world change bey
 used (every port herdr calls has a scripted arm, but no run has yet exercised a `ToolProvider`
 dispatch end to end — register entry 19 — so the first attempt may find a seam the compose run did
 not).
+
+**The second inference is now MEASURED and it held: there is no seam** (2026-09-07,
+`scripts/dst/herdr_graded_dst.ail`, `make herdr_graded`). A `Delegate` dispatches through the real
+traced driver to herdr's `ToolProvider`, every herdr CLI call is served from
+`WorldState.ext_effects`, and the delegation completes — the tool result reports the spawn taking
+0.6s, which is that file's own scripted durations and not a live multiplexer. **Step 2's flagged
+risk is retired**; what remains of step 2 is the profile RECORD, whose every field has to be
+measured for herdr rather than copied.
+
+Two things writing it caught, both of which a record-first order would have hit later and more
+expensively: the startup sweep issues `pane list` BEFORE `do_delegate` does anything, so a fixture
+starting at `pane split` desynchronises the whole queue; and the prompt retry added an `agent get`
+between the readiness gate and the prompt hours earlier the same day, which a fixture written from
+the note would have got wrong.

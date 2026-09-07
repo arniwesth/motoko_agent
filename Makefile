@@ -443,7 +443,40 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   conformance stream_parity latency_pair test_coverage_selftest \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
-  registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest
+  registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest \
+  herdr_graded
+
+# The graded session for a herdr DST profile (021 step 2's demonstration half).
+#
+# THE ENVIRONMENT IS SET HERE AND THAT IS A DISCLOSURE, NOT A CONVENIENCE.
+# `motoko-ext-herdr`'s `register_with_config` reads HERDR_ENV, HERDR_BIN_PATH and
+# HERDR_PANE_ID through `std/env` BEFORE any hook is dispatched — the same
+# ambient registration read the compose profile discloses for MOTOKO_PROFILE_DIR
+# — so a run that does not set them registers zero tools and the session proves
+# nothing. Set here, they are visible to a reader of this target.
+#
+# HERDR_DAGR_PANE IS PINNED OFF, and not because the view is unwelcome: this
+# container exports it as 1, and inheriting it makes the extension issue two more
+# CLI calls that the fixture would then have to serve. A gate whose call sequence
+# depends on the operator's environment is not a deterministic gate.
+#
+# HERDR_BIN_PATH names the real binary and NOTHING RUNS IT: every call is served
+# from WorldState.ext_effects, and the fixture carries one entry of slack so an
+# off-by-one produces a wrong answer rather than falling through to a live exec
+# against the operator's own panes.
+.PHONY: herdr_graded
+herdr_graded:
+	@set -eu; \
+	out=$$(mktemp); \
+	if ! env HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
+	       HERDR_DELEGATE_DIR=./.tmp-herdr-graded/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-graded/dagr \
+	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	     --ai-stub --entry main scripts/dst/herdr_graded_dst.ail < /dev/null > $$out 2>&1; then \
+		grep -v '^{"schema_version"' $$out; rm -f $$out; rm -rf ./.tmp-herdr-graded; exit 1; \
+	fi; \
+	grep '^HERDR-GRADED' $$out || true; \
+	rm -f $$out; rm -rf ./.tmp-herdr-graded
 
 # corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
 #
