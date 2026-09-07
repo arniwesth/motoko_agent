@@ -1,7 +1,7 @@
 # ADR-002: Waiting is a step-machine state served by a port, and task completion is a runtime act
 
-Date: 2026-09-06 (v1, v2 and v2.1 the same day)
-Status: **Proposed (v2.1 — v2 supersedes v1 after an adversarial review; v2.1 adds D6 at the owner's request, unreviewed).** v1 was reviewed by Codex
+Date: 2026-09-06 (v1 through v3 the same day)
+Status: **Proposed (v3 — D6 lifted out into [`ADR-003`](ADR-003-session-snapshot-and-resume.md); D2's request id re-cited; nothing else changed. v2.1 was reviewed by Codex ([`REVIEW-adr002-v2.1-verdicts-codex.md`](REVIEW-adr002-v2.1-verdicts-codex.md)): reject as written, D2/D5/D6 rejected, D1/D3/D4 accepted with corrections; v3 folds only the D6 removal and the one D2 correction that ADR-003 settles. The remaining v2.1 corrections to D1–D5 are still outstanding and are listed in that review's closing section.)** v1 was reviewed by Codex
 ([`REVIEW-adr002-verdicts-codex.md`](REVIEW-adr002-verdicts-codex.md), reviewed HEAD `407d673`):
 overall *reject as written; retain the owner's park-and-wake direction*. D1, D3, D4 accepted with
 corrections; D2 and D5 rejected. v2 folds all 26 corrections. The direction is unchanged and is
@@ -90,6 +90,18 @@ not to carry forward:
 very big advantage if Motoko could load an old session and run from the same state"). Nothing
 else changed. D6 has not been reviewed.
 
+**v2.1 → v3.** The v2.1 review rejected D6 on five grounds (§3 there: the boot tuple is a
+new-turn initializer, not a continuation; the named snapshot sites cannot see a failed turn's
+state; the decoder is total; identity and single-writer rules are absent; stage 2 has no owner
+once the TUI's child exits) and found that D2's request id, `session_id` plus a per-run park
+ordinal, collides once D6 reuses the session id across resumes (§2 D2 there). D6 is a different
+subject from this ADR — what a session's durable state is and who owns it — so it was lifted
+out into [`ADR-003`](ADR-003-session-snapshot-and-resume.md), which answers the five grounds
+and has been through four review rounds. v3 makes exactly two edits: D6 becomes a one-line
+dependency on ADR-003 D7, and D2's request id is re-cited from ADR-003 D5. The review's other
+corrections to D1–D5 (the D2 precedence refactor, the D3 descriptor sum, the D5 safe default,
+the provider-call arithmetic) are **not** folded here and remain outstanding for a v4.
+
 Not retracted: the direction; the answer-first branch of `do_check_motoko` really does settle
 `done` when the agent is already gone (`herdr.ail:1066–1087`, `agent get` confined to the
 no-answer `else` at `:1089–1090`); the four-circumstances-one-report ambiguity of motoko's `idle`
@@ -105,8 +117,8 @@ no-answer `else` at `:1089–1090`); the four-circumstances-one-report ambiguity
 | D2 | Waits carried in `StepState`; a "waiting" candidate class decided in the driver *before* guards and persist policy and *after* pending tools, approvals and DP7 rejection; `Park` in `decide`; `wake_read` on `Ports` with a named host protocol and the full replay set approval has | 8–12 days after the surface exists |
 | D3 | One `WaitDescriptor` type; producer in the `Delegate` envelope; core consumer lifts it before capping; register/update/remove semantics named; settlement stays with `DelegateCheck`, called once after the wake | 3–4 days, split host / extension / core |
 | D4 | The multi-turn wait is the same park; closes ADR-001's threading debt only when its plan carries every listed successor and a between-turn frame | unscheduled, unpriced |
-| D5 | D1, D3's producer and D6 stage 1 now; the `Ports` field, wake types, safe default and scanner recognition **before or with** PLAN-001 P2; activation after P2 is green, under ADR-001 D6 | — |
-| D6 | A session snapshot is the tuple the loop already boots from — history, `WorldState`, prior counts, extension artifacts, model, profile, system-prefix digest — written at every turn end and at every park, read back by `--resume`. Stage 1 needs no D2; stage 2 makes a park durable | 3–4 days stage 1; 1–2 days stage 2 |
+| D5 | D1 and D3's producer now; the `Ports` field, wake types, safe default and scanner recognition **before or with** PLAN-001 P2; activation after P2 is green, under ADR-001 D6 | — |
+| D6 | **Durable park is ADR-003 D7.** Session snapshot and resume are decided in [`ADR-003`](ADR-003-session-snapshot-and-resume.md); this ADR's `Park` writes the continuation snapshot ADR-003 D7 names, and `--park-exits` is scheduled there | priced in ADR-003 |
 
 The number this ADR is judged on: the specified successful path — `Delegate`, park and wake,
 `DelegateCheck`, final — must cost **≤ 4 provider calls**, verification excluded and said so.
@@ -235,9 +247,16 @@ waits → `Park`; empty × open waits → `Park`; solver feedback and DP7 reject
 `ParkRequest = { request_id: string, step: int, waits: [WaitDescriptor] }`,
 `WakeInput = { request_id: string, wait_id: string, outcome: WakeOutcome, next_state: WorldState }`,
 `WakeOutcome = Settled(string) | Lost(string) | OperatorInput(string) | TimedOut | HostError(string) | Aborted`.
-`request_id` is `session_id` plus a per-run park ordinal; a reply whose `request_id` or
-`wait_id` does not match the outstanding request is dropped and logged, never applied to a
-different pending wait.
+`request_id` is the run's `run_id` plus a park ordinal — `<session_id>.g<generation>.r<run
+ordinal>.p<park ordinal>` — where `run_id` is the identity ADR-003 D5 hands every traced run
+as an argument. (v2.1 said `session_id` plus a per-run ordinal; that collides once ADR-003
+keeps the session id across resumes, since a second run under the same id restarts the
+ordinal at zero. `run_id` is unique across resumes because ADR-003's `generation` advances on
+every snapshot write, published or not.) A reply whose `request_id` or `wait_id` does not
+match the outstanding request is dropped and logged, never applied to a different pending
+wait. A resume that carries a resolved wake re-issues the request under the resumed run's
+`run_id` and rewrites the persisted reply to match (ADR-003 D7), so this drop rule is
+unchanged by resume.
 
 **The host protocol (new; nothing existing serves it).** The runtime emits a `wake_request`
 event on stdout carrying the `ParkRequest`; the TUI replies with a `wake_reply` command on
@@ -326,68 +345,32 @@ from `done`/`RunSummary`) in which `Operator` `ParkEntered`/`WakeReceived` and t
 ordinal live. `restart`'s effect on a pending request is left open. Gate: a two-turn replay with
 an intervening model change and a restart-or-EOF control. Unscheduled.
 
-### D6 — A session snapshot at every boundary, and `--resume`
+### D6 — Durable park: ADR-003 D7
 
-**The object.** The loop boots from exactly one tuple: `c2_initial_state_with_counts(history,
-provider, world, prior_counts)` (`session.ail:709`), plus the model, the profile and the
-extension artifacts the driver threads beside it. A *snapshot* is that tuple serialised:
-`{ session_id, model, profile, system_prefix_digest, history: [Message], world: WorldState,
-prior_counts, ext_artifacts, step_counts, written_at, reason }`. `WorldState` already has its
-codec (`world_json` / `world_of_json`, `ext_world.ail:515`, `:543`) and after PLAN-001 P2 it
-carries the ordinal; messages already cross the extension ABI as JSON (`history_slice`,
-`packages/motoko-ext-abi/types.ail:547`); core gains a `[Message]` codec of its own, with a
-round-trip test. Extension state that lives on disk under `.motoko` is already durable and is
-not in the snapshot.
+Superseded. v2.1's D6 (session snapshot and `--resume`) was rejected on five grounds by the
+v2.1 review and is decided in [`ADR-003`](ADR-003-session-snapshot-and-resume.md), which
+answers each. What this ADR keeps from it is one dependency, in both directions:
 
-**Not the log.** The JSONL log records payload digests, not payloads, and compaction rewrites
-history without logging the rewritten form (`session.ail:350` emits the fact, not the messages).
-Reconstructing a session from the log is lossy; D6 does not attempt it.
+- **`Park` writes a snapshot.** Immediately after `ParkEntered` and before `wake_read` blocks,
+  the run writes ADR-003's `ContinuationSnapshot` with `reason: Park` carrying `open_waits`
+  and the outstanding `ParkRequest` (ADR-003 D1's `park` body field, added when D2's types
+  exist; D3 there for the writer). Path 1 of ADR-003 D7 — runtime alive, `wake_read` returns —
+  is this ADR's default and costs nothing beyond that write.
+- **`--park-exits` is ADR-003's.** A park that exits the runtime, a host that owns the
+  outstanding request through the suspended-child state, the persisted wake consumed exactly
+  once through `wake_read` from a seeded `wakes` cursor, and the `Lost`/`Aborted` exits are
+  ADR-003 D7, unscheduled there until this ADR's D2 activates and the between-turn frame (D4
+  here) exists.
+- **Identity is ADR-003's.** `request_id` (D2 above) is built on ADR-003 D5's `run_id`; the
+  resumed frame opens at the snapshot's ordinal (ADR-003 D3).
 
-**Stage 1 — turn boundary, needs nothing from D2.** The snapshot is written where the turn's
-exit manifest is published (`session.ail:2486` inside a run; `:3416` in the multi-turn loop),
-atomically (temp then rename), to `.motoko/sessions/<session_id>/snapshot.json`, replacing the
-previous one. `reason` is `turn_end`, `budget_exhausted`, `abort`, `error` or `suspend`. The
-step-budget termination and the `restart`/`SessionSuspend` path both write one before exiting,
-which is the repair the open issue
-[`../../issues/step-budget-exhaustion-starts-a-fresh-session.md`](../../issues/step-budget-exhaustion-starts-a-fresh-session.md)
-asks for: reaching the budget becomes a snapshot followed by a wait for the operator, not a
-fresh session. `--resume <session_id>` (an `InvocationConfig` field beside `task`,
-`model_override`, `workdir_override`, `rpc.ail:245`) reads the snapshot, checks its
-`system_prefix_digest` against the prompt about to be sent, and seeds
-`conversation_loop_v2_with_policy` with the history, world and counts. The TUI's respawn
-already carries an empty task and waits for input (`index.ts:938`); a resumed runtime does the
-same, with the history on screen.
-
-**Stage 2 — park boundary, with D2.** `ParkEntered` is followed by a snapshot with `reason:
-"park"` carrying `open_waits` and the outstanding `ParkRequest`. A parked session may then
-**exit** instead of blocking (`--park-exits`, off by default), and the host waiter resumes it
-with `--resume` on the wake, delivering the `WakeInput` as the first command. That is a durable
-wait: the process and the pane are not held for the duration, which removes the cost §Consequences
-names for D2, and a wait can outlive a container restart. On resume every open wait is
-re-observed before anything else (D2's file observation with initial read); a wait whose pane is
-gone and whose answer is absent wakes `Lost`.
-
-**Why the snapshot is a DST object.** The tuple is the same thing the recording adapter persists
-for replay: a world and the interactions that produced it. One format means resume is a
-fixture — run to a boundary, snapshot, reload into a fresh driver, continue — with the ordinal
-asserted to continue from the snapshot's value, not from zero, and the `RecordAfterTerminal`
-frame rule (`dst_invariants.ail:788–806`) satisfied by a resumed run opening a new frame that
-cites the snapshot's final ordinal. A snapshot written at a park and one written at a turn end
-replay through the same path.
-
-**Identity.** A resumed run keeps the old `session_id` and appends to its log and its
-`.motoko/sessions/<id>/` directory; the resume is itself a ledger event
-(`SessionResumed({ from_snapshot, reason, written_at })`) so the wire shows the seam. A resume
-into a different profile or model is a `model_change` on the resumed session, not a new one.
-
-**Refusals.** A snapshot whose `system_prefix_digest` differs from the live prompt is refused by
-default and accepted with `--resume-force`, which writes the mismatch into `SessionResumed`.
-A snapshot from an older schema version is refused; there is no migration in v1 of this.
+What v2.1's D6 claimed about the step-budget issue is repaired by ADR-003 D2 + D5 + D6, not
+here.
 
 ### D5 — Sequencing
 
-1. **Now, host + extension + core:** D1; D3's producer; **D6 stage 1** (snapshot writer at the
-   two publish sites, the `[Message]` codec, `--resume`, the refusal rules, the resume fixture).
+1. **Now, host + extension + core:** D1; D3's producer. (ADR-003 D8 step 1 — the typed
+   suspension, the codecs and the in-process resume — runs in parallel and is sequenced there.)
 2. **Now, core, priced as core:** D3's consumer and registration; `open_waits` in loop and step
    state; the guard's `ExtCtx` field.
 3. **Before or with PLAN-001 P2:** the `Ports` field with a safe unbound default, the wake types,
@@ -398,8 +381,9 @@ A snapshot from an older schema version is refused; there is no migration in v1 
 4. **After P2 is green, under ADR-001 D6:** activation — the driver classification, `Park`,
    the host protocol, the recording and scripted adapters, the interaction identity, the two
    events, the fixtures, and the live measurement.
-5. **D6 stage 2** lands with 4 (it is a snapshot inside `Park`), and `--park-exits` stays off
-   until one live run has resumed a parked session.
+5. **The `Park` snapshot write** lands with 4 (it is one `file_replace` inside `Park`, ADR-003
+   D3); `--park-exits` and the rest of ADR-003 D7 stay off until 4's gate and D4's frame both
+   hold.
 6. **D4:** when 4's gate has held for one live run.
 
 The freeze note in `derive.py` cites this ADR as the reason a sixth class exists.
@@ -416,16 +400,15 @@ wake (0), `DelegateCheck` (2), final (3), with an optional verification call (4)
 is reported separately. This measures the specified path; it does not replay the failed-worker
 and takeover history, which is not a path this ADR makes cheap.
 
-**D6 adds** a `[Message]` codec and its round-trip test, a snapshot schema version, one
-ledger event, two publish-site edits above `session.ail`'s pins, and the resume fixture. It
-removes the fresh-session-on-budget behaviour the open issue records.
+**ADR-003 adds**, on this ADR's behalf, one `file_replace` call inside `Park` and the `park`
+field of its continuation body; everything else a durable park needs is priced there.
 
 **What gets simpler.** The orchestrator stops polling. `DelegateCheck` is called when there is
 something to collect. The guard stops refereeing waiting once it reads wait state.
 
 **What does not.** Motoko's external `idle` stays ambiguous for interactive panes. The dagr
 run file is still written only by the extension, on the settle call. A parked session holds a
-pane and a process for the duration unless D6 stage 2's `--park-exits` is on; only `Timer`
+pane and a process for the duration unless ADR-003 D7's `--park-exits` is on; only `Timer`
 bounds it. The host runs child waiters on the
 model's behalf and must reap them on every exit path 020's reporter already handles.
 
@@ -439,31 +422,34 @@ model's behalf and must reap them on every exit path 020's reporter already hand
 - **Nested delegation.** A parked delegate waiting on its own delegate is two parks on two panes;
   `depth` in `register.ail` bounds recursion and nothing here changes it.
 - **Whether `InjectUserMessage` and the wake message share a decision variant.**
-- **D6: open waits across a resume.** Re-observed on resume is the rule; whether a delegate
-  pane that survived the gap can still be waited on by state, or only by answer file, is not
-  decided.
-- **D6: what the resumed TUI shows.** The full history, or the last turn plus a marker; and
-  whether a snapshot's `history` should be the compacted form the provider saw (it is, in this
-  design) or the pre-compaction transcript as well.
-- **D6: snapshot retention.** One per session, replaced in place, is the v1 rule; whether to
-  keep the park-boundary snapshots for post-mortem is open.
+- **Open waits across a resume.** Decided in ADR-003 D7: re-observation is the recovery path
+  only when no resolved wake exists; a resolved wake is consumed exactly once through
+  `wake_read`. Whether a delegate pane that survived the gap can still be waited on **by
+  state**, or only by answer file, is still open and is shared with ADR-003's "Not decided".
+- (v2.1's "what the resumed TUI shows" and "snapshot retention" are decided in ADR-003 D6 and
+  D3: the full history with a marker; the retained history, never the compacted form; three
+  post-mortem generations.)
 - **Whether the truncated-arguments diagnosis is right.** It needs raw provider evidence; the
   live-run fix now preserves the raw length for the next occurrence.
 
 ## Implementation handoff
 
 A PLAN-002 in this directory carries D5's steps 1–5 in order, each with its gate; D4 gets an
-explicitly unscheduled section. D6 stage 1 is the second item after the herdr probe, because
-it pays off on its own and its fixture is the template for D2's. Its first item is the herdr message probe. Its step-4 section is
-written against P2's landed shape. O5 is its fallback item if step 3 slips past P2.
+explicitly unscheduled section. Its first item is the herdr message probe. Its step-4 section
+is written against P2's landed shape. O5 is its fallback item if step 3 slips past P2. Session
+snapshot and resume are PLAN-003's (ADR-003), which runs beside it; PLAN-002's step 5 cites
+PLAN-003's `file_replace` port rather than adding its own writer. Before PLAN-002 is written,
+this ADR still owes a v4 that folds the v2.1 review's outstanding corrections to D1–D5.
 
 ## Cross-references
 
+- [`ADR-003-session-snapshot-and-resume.md`](ADR-003-session-snapshot-and-resume.md) — supersedes v2.1's D6; D5 there (`run_id`, the lease) is what D2's `request_id` is built on; D7 there is the durable park.
+- [`REVIEW-adr002-v2.1-verdicts-codex.md`](REVIEW-adr002-v2.1-verdicts-codex.md) — the v2.1 review; §2 D2 the request-id collision and the precedence defect, §3 the five D6 grounds, "Required ADR changes" the corrections still outstanding for v4.
 - [`REVIEW-adr002-verdicts-codex.md`](REVIEW-adr002-verdicts-codex.md) — the v1 review; §7.2 has the executable precedence model, §7.3 the scanner mutant, §7.6 the raw re-measurement.
 - [`ADR-001-sequencing-the-dst-architecture-caps.md`](ADR-001-sequencing-the-dst-architecture-caps.md) D2, D6, "Not decided".
 - [`PLAN-001-implement-adr-001.md`](PLAN-001-implement-adr-001.md) §2.1.
 - [`../020_herdr_agent_integration/ADR-001-herdr-agent-integration.md`](../020_herdr_agent_integration/ADR-001-herdr-agent-integration.md) D1–D3.
 - [`../021_herdr_delegation/DESIGN-motoko-as-delegate.md`](../021_herdr_delegation/DESIGN-motoko-as-delegate.md) §3; [`../021_herdr_delegation/DESIGN-dagr-as-delegation-view.md`](../021_herdr_delegation/DESIGN-dagr-as-delegation-view.md) §3.3, §4.2.
 - [`../021_herdr_delegation/MEASUREMENTS-2026-09-05-plan001-live-run.md`](../021_herdr_delegation/MEASUREMENTS-2026-09-05-plan001-live-run.md), as corrected by the review.
-- [`../../issues/step-budget-exhaustion-starts-a-fresh-session.md`](../../issues/step-budget-exhaustion-starts-a-fresh-session.md) — the failure D6 stage 1 repairs; its sibling abort/error findings are the same class.
+- [`../../issues/step-budget-exhaustion-starts-a-fresh-session.md`](../../issues/step-budget-exhaustion-starts-a-fresh-session.md) — repaired by ADR-003 D2 + D5 + D6, not by this ADR.
 - Code at `8980ba6`: `phase_vocab.ail:449` (`StepDecision`), `:867` (message cap); `step_machine.ail:93`, `:114`, `:128`, `:279–377`; `session.ail:350`, `:684–697`, `:709`, `:2394`, `:2486`, `:3416`, `:2438–2487`, `:3017–3080`, `:3367–3430`, `:3387`, `:3415–3426`, `:3582–3586`; `ports.ail:789`, `:979–983`, `:1718–1745`, `:2556–2572`; `tool_phase.ail:435–445`; `stub_step.ail:205–213`; `dst_interaction.ail:59–66`; `dst_replay.ail:707–718`, `:793–824`; `ext_world.ail:515`, `:543`, `:515–553`; `rpc.ail:245`; `packages/motoko-ext-abi/types.ail:547`; `index.ts:938`; `dst_invariants.ail:788–806`, `:1742–1769`; `rpc.ail:218–237`; `herdr.ail:112`, `:164–167`, `:935–943`, `:1057–1132`; `types.ail:706–718`, `:749–758`; `dagr.ail:40–42`, `:386–392`; `derive.py:14–22`, `:151–154`; `herdr-agent-state.ts:43`, `:46`, `:278–286`, `:295–301`, `:330–351`; `ui.ts:790`, `:2726–2745`, `:4046–4049`; `index.ts:513–519`, `:572–575`, `:605–606`, `:820–827`, `:870–883`; `runtime-process.ts:592–600`, `:754–778`.

@@ -1,0 +1,82 @@
+flowchart TB
+  %% 013 ADR-003 v4.1 — ONE SESSION'S STATES under suspend, resume and park, and what each
+  %% transition writes. A state map drawn as a flowchart: rounded nodes are states of the
+  %% session (not of the process — a session outlives its runtime child), edge labels are the
+  %% event and, after a slash, the snapshot written (reason · writer). Generation g is the
+  %% snapshot counter; it advances on every in-run write, published or not (D5).
+  %% Colour = role: green a state the runtime holds in memory · gray-solid a state that exists
+  %% only on disk (no process holds it) · amber the resumer's decision · red a refusal · purple
+  %% D7's park states (unscheduled) · teal-dashed the terminal outcomes of a wait.
+  %% Layout note: the renderer lays same-rank nodes in a row and ranks by edges, so the four
+  %% groups are subgraphs in the order a session passes through them — in memory, on disk, a
+  %% fresh process, and D7's park states last because they are unscheduled.
+  %% Grounded 2026-09-06: ADR-003 v4.1 at HEAD 97827bf. D7 states are ADR-003's named list:
+  %% Running · ParkRequested · SuspendedWaiting · WakeResolved(g) · Resuming(g), with the
+  %% Lost / Aborted exits its v3 review asked for. NOTHING here exists at HEAD.
+
+  subgraph MEM["In memory — the runtime child holds the session (D2, D5, D6)"]
+    direction TB
+    fresh(["<b>fresh session</b><br/>generation 0 · run_ordinal 0 · run_id session.g0.r0"]):::mem
+    running(["<b>Running</b><br/>a traced run under RunIdentity<br/>step_idx counts toward step_budget"]):::mem
+    suspended(["<b>Suspended (BudgetExhausted)</b><br/>held in memory by the conversation loop<br/>herdr: blocked · TUI: input unlocked · headless: exit non-zero"]):::mem
+    idle(["<b>Between turns</b><br/>conversation loop reading stdin<br/>generation := written.generation · run_ordinal 0"]):::mem
+  end
+  fresh -->|"first task"| running
+  running -->|"step_idx == step_budget<br/>/ ContinuationSnapshot · g+1 · child"| suspended
+  suspended -->|"continue<br/>step_idx 0 · totals zero · counts carried"| running
+  running -->|"done / TurnSnapshot · g+1 · child"| idle
+  running -->|"non-budget error<br/>written: None · run_ordinal + 1"| idle
+  idle -->|"user_message"| running
+  idle -->|"model_change: compat.model rewritten"| idle
+  suspended -->|"model_change: held snapshot rewritten"| suspended
+
+  subgraph DISK["On disk — no process holds the session (D3's writer rule)"]
+    direction TB
+    onRestart[("<b>Restart</b><br/>metadata update g+1, same history and world<br/>written by the child at its restart arm, before SessionSuspend<br/>no snapshot yet → a fresh TurnSnapshot from the loop's history")]:::disk
+    onAbort[("<b>Abort</b><br/>metadata update g+1<br/>written by the host from its exit handler, after the child has exited")]:::disk
+    onDisk[("<b>TurnEnd / BudgetExhausted / Park</b><br/>the last in-run write · lease released on host exit")]:::disk
+  end
+  idle -->|"restart"| onRestart
+  suspended -->|"restart"| onRestart
+  idle -->|"abort · exit"| onAbort
+  suspended -->|"abort · exit"| onAbort
+  idle -.->|"host quits · crash · container restart"| onDisk
+  suspended -.->|"host quits · crash · container restart"| onDisk
+
+  subgraph RES["A fresh process — --resume &lt;session_id&gt; (D4, D5, D6)"]
+    direction TB
+    resumer{{"<b>--resume</b><br/>lease → strict decode → runtime for the invoked profile<br/>→ budget and prompt from the stored task → digest compare<br/>→ SessionResumed(from_generation, from_ordinal, …)"}}:::decision
+    refused["<b>refused</b><br/>SchemaVersion · Workdir · ExtSet (same profile) · Prompt (same profile, unless --resume-force)<br/>Leased (live owner pid) · HistoryDigest · HeadPrefix · Transcript · Size · WorldField"]:::refusal
+  end
+  onRestart -->|"TUI respawn passes --resume; --profile already flows"| resumer
+  onAbort -->|"operator, later"| resumer
+  onDisk -->|"operator, later"| resumer
+  resumer -->|"any Refusal"| refused
+  resumer -->|"TurnSnapshot: history on screen, marker line"| idle
+  resumer -->|"ContinuationSnapshot; on a profile switch:<br/>head prefix replaced, ext_artifacts reset"| suspended
+
+  subgraph PARK["D7 · durable park — unscheduled until ADR-002 D2 activates and the between-turn frame exists"]
+    direction TB
+    parkReq(["<b>ParkRequested</b><br/>ContinuationSnapshot · reason Park · g+1<br/>written after ParkEntered, before wake_read blocks"]):::park
+    suspWait(["<b>SuspendedWaiting</b><br/>--park-exits: the child has exited<br/>the host's suspended-child state owns the ParkRequest<br/>no exit actions run · lease and reporter kept"]):::park
+    wakeRes(["<b>WakeResolved(g)</b><br/>snapshot.&lt;g&gt;.wake.json holds the WakeInput"]):::park
+    resuming(["<b>Resuming(g)</b><br/>--resume · WakeGeneration checked · wakes cursor seeded<br/>request_id rewritten to the re-issued request<br/>first decide parks; wake_read serves from the cursor, exactly once, recorded"]):::park
+    lost["<b>Lost</b><br/>TUI quit (exit actions kill the delegates) · herdr server restart<br/>the snapshot stays; the next resume re-observes and wakes Lost"]:::outcome
+    aborted["<b>Aborted</b><br/>abort or restart while suspended<br/>the request is cancelled; the snapshot stays resumable"]:::outcome
+  end
+  running -->|"decide → Park (ADR-002 D2)"| parkReq
+  parkReq -->|"path 1: runtime alive, wake_read returns"| running
+  parkReq -->|"path 2: --park-exits · run_suspended(park)"| suspWait
+  suspWait -->|"the wait's answer arrives"| wakeRes
+  wakeRes -->|"host respawns with --resume"| resuming
+  resuming --> running
+  suspWait -.-> lost
+  suspWait -.-> aborted
+  onDisk -.->|"a Park snapshot with no wake file:<br/>re-park under a new request, re-observe"| resumer
+
+  classDef mem fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef disk fill:#2a2f3a,stroke:#9aa4b2,color:#d5dbe5,stroke-width:2px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef refusal fill:#3b1d24,stroke:#f7768e,color:#f5c6ce;
+  classDef park fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef outcome fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-dasharray:6 4;
