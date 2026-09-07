@@ -145,6 +145,27 @@ export pure func run_tmp(dagr_dir: string, own_pane: string, session_ms: string)
   tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/run-w1-p1-1756000000000.json.tmp")]
   { "${run_file(dagr_dir, own_pane, session_ms)}.tmp" }
 
+-- THE SETTLE-ON-EXIT CANDIDATE: the run file as it would read if this session
+-- ended right now, rewritten beside the live one on every publish and renamed
+-- over it by the HOST at clean exit (ABI 7.1 `PublishFile`).
+--
+-- WHY IT IS WRITTEN EAGERLY AND NOT AT EXIT. The exit render's effect row is
+-- `! {FS}` and carries no `Clock`, so a document composed there could not stamp
+-- `ended_at` with anything true. Written here it is stamped with the same
+-- `now_ms` as the write beside it, which is the LAST MOMENT THIS PRODUCER
+-- OBSERVED ANYTHING -- the most truthful time available for "this attempt was
+-- never seen again", and the one a reader can reconcile against the events
+-- above it. The cost is a second render per publish, doubling the constant on
+-- the O(n^2) byte growth `DESIGN-dagr` §6 already flags; it is not a new shape
+-- of cost.
+--
+-- SAME DIRECTORY, same reason as `run_tmp`, and a DIFFERENT NAME from it: this
+-- one must survive the publish that writes it, and `run_tmp` is renamed away
+-- mid-transaction.
+export pure func run_settled_tmp(dagr_dir: string, own_pane: string, session_ms: string) -> string
+  tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/run-w1-p1-1756000000000.json.settled")]
+  { "${run_file(dagr_dir, own_pane, session_ms)}.settled" }
+
 -- Written once per session, next to the run file, when the run file exists and
 -- does not parse. Its presence is what makes "tell the model once" once.
 export pure func refused_marker(dagr_dir: string, own_pane: string, session_ms: string) -> string
@@ -742,6 +763,79 @@ pure func open_panes_of(ts: [Json], seen: [string]) -> [string] {
 -- Distinct panes whose latest attempt is still in flight. An unparseable or
 -- absent file yields nothing — the same fail-closed reading `abandoned_tasks`
 -- takes, and here it means "close nothing", which is the safe direction.
+-- The ids of tasks whose latest attempt is still in flight -- the same
+-- population `open_panes_of` walks, keyed by task rather than by pane, because
+-- an attempt with no locator still has to be settled and would be invisible to
+-- a pane list.
+pure func open_ids_of(ts: [Json]) -> [string] {
+  match ts {
+    [] => [],
+    t :: rest =>
+      match last_of(arr_field(t, "attempts")) {
+        None => open_ids_of(rest),
+        Some(a) =>
+          if attempt_is_terminal(sfield(a, "state")) == false && sfield(t, "id") != ""
+          then sfield(t, "id") :: open_ids_of(rest)
+          else open_ids_of(rest)
+      }
+  }
+}
+
+export pure func open_task_ids(doc: Json) -> [string] { open_ids_of(tasks_of(doc)) }
+
+-- Asserted through the string wrapper, for `show_argv`'s reason in `types.ail`:
+-- a list is not a literal. The settlement itself is asserted end to end in
+-- `scripts/verify_exit_intent.ail`, against a document `dagr check --strict`
+-- then has to accept.
+export pure func open_task_ids_str(content: string) -> string
+  tests [
+    ("{\"tasks\":[{\"id\":\"a\",\"attempts\":[{\"state\":\"working\"}]}]}", "a"),
+    -- terminal attempts are not in flight, whatever their task says
+    ("{\"tasks\":[{\"id\":\"a\",\"attempts\":[{\"state\":\"done\"}]}]}", ""),
+    -- only the LATEST attempt counts: a retry reopens a settled task
+    ("{\"tasks\":[{\"id\":\"a\",\"attempts\":[{\"state\":\"lost\"},{\"state\":\"working\"}]}]}", "a"),
+    -- an in-flight attempt with NO pane is still ours to settle, which is the
+    -- whole reason this is keyed by task and not by locator
+    ("{\"tasks\":[{\"id\":\"a\",\"attempts\":[{\"state\":\"queued\"}]},{\"id\":\"b\",\"attempts\":[{\"state\":\"done\"}]}]}", "a"),
+    ("{\"tasks\":[]}", ""),
+    ("not json", "")
+  ]
+  {
+    match decode(content) {
+      Err(_) => "",
+      Ok(doc) => join(",", open_task_ids(doc))
+    }
+  }
+
+-- THE SESSION-END SETTLEMENT, and every word of its state choice is deliberate.
+--
+-- `settled_unverified · heuristic` is the SAME verdict `do_check` writes for
+-- P2-3 (an agent that settled with no answer file), and it is right here for
+-- the same reason: nothing observed says the work failed, only that no envelope
+-- arrived and now none ever will. It is NOT `lost`. `lost` is this producer's
+-- word for a MEASURED absence -- `agent_not_found` from a real `agent get` --
+-- and the exit path measures nothing: the panes may still be running, and even
+-- when the reap is on, the close is best-effort and proof-gated and may be
+-- refused. Writing `lost` here would be the producer asserting an observation
+-- it did not make, which is the one failure this whole design exists to avoid.
+--
+-- The reason names the session, not the delegate, because that is what changed.
+export pure func settle_at_session_end(doc: Json, now_ms: int) -> Json {
+  settle_ids(doc, open_task_ids(doc), now_ms)
+}
+
+pure func settle_ids(doc: Json, ids: [string], now_ms: int) -> Json {
+  match ids {
+    [] => doc,
+    id :: rest =>
+      settle_ids(
+        settle(doc, id, "settled_unverified", "settled_unverified", "heuristic", "",
+               "the session that delegated this ended while the attempt was in flight; no answer was ever collected",
+               now_ms),
+        rest, now_ms)
+  }
+}
+
 export pure func open_delegate_panes(content: string) -> [string] {
   match decode(content) {
     Err(_) => [],

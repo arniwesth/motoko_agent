@@ -152,7 +152,12 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- in-flight work on every clean exit. `agent_confined` sets it for itself,
     -- because in a disposable container quota burn dominates and no operator
     -- work lives in a pane.
-    reap_on_exit: getEnvOr("HERDR_REAP_ON_EXIT", "") == "1"
+    reap_on_exit: getEnvOr("HERDR_REAP_ON_EXIT", "") == "1",
+    -- OFF BY DEFAULT TOO, and harmless when on without the host's grant: the
+    -- action is published and refused. On, with a grant, it is what stops the
+    -- run file recording delegates as `working` for ever once the session that
+    -- delegated them is gone (`DESIGN-dagr-as-delegation-view.md` §6).
+    settle_on_exit: getEnvOr("HERDR_DAGR_SETTLE_ON_EXIT", "") == "1"
   };
 
   -- The whole gate. Empty tools is a silent, correct no-op; it is not an error

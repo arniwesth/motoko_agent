@@ -59,11 +59,12 @@ import std/io (println, exit)
 import std/json (Json, encode, jo, kv, js, ja)
 import std/list as List (length)
 import std/string (contains)
+import std/crypto (sha256Hex)
 import std/fs (writeFileResult, mkdirAll, removeFileResult)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx, ExtWorld, ExtPorts, ExtFileRead, BudgetPlan, empty_ext_world,
-  Capability, ExitIntent, ExitAction, ClosePane,
+  Capability, ExitIntent, ExitAction, ClosePane, PublishFile,
   ExtEntry, ExtRegistry, ExtRuntime, VerificationConfig
 )
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
@@ -78,12 +79,12 @@ import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks)
 -- This session is pane `w1:p1`, clock `200`, so its token value is `w1:p1:200`
 -- and its run file is `.tmp-verify-exit-intent/.dagr/run-w1-p1-200.json` (relative,
 -- so the decoy plant stays inside the FS sandbox).
-func mk_cfg(reap: bool, session_ms: string) -> HerdrConfig {
+func mk_cfg(reap: bool, settle: bool, session_ms: string) -> HerdrConfig {
   { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
     allowed_kinds: "claude", depth: 0, max_depth: 1, motoko_script: "./x.sh",
     session_ms: session_ms, sweep_stale: false, dagr_dir: ".tmp-verify-exit-intent/.dagr",
     dagr_pane: false, start_timeout_ms: 1000, check_wait_ms: 1000,
-    max_output_chars: 16000, reap_on_exit: reap }
+    max_output_chars: 16000, reap_on_exit: reap, settle_on_exit: settle }
 }
 
 -- One task in flight on w1:pA, one settled on w1:pB, and one that names the
@@ -98,6 +99,19 @@ func run_file_content() -> string {
 func run_file_present(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
   if contains(path, "run-w1-p1-200.json")
   then { present: true, content: run_file_content(), next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+-- Every attempt terminal: the shape a session that collected all its delegates
+-- leaves behind.
+func run_file_all_settled_content() -> string {
+  let a = "{\"id\":\"mot-dlg-1\",\"attempts\":[{\"state\":\"done\",\"locator\":{\"pane\":\"w1:pA\"}}]}";
+  "{\"dagr\":3,\"tasks\":[${a}],\"events\":[]}"
+}
+
+func run_file_all_settled(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, "run-w1-p1-200.json")
+  then { present: true, content: run_file_all_settled_content(), next_state: world }
   else { present: false, content: "", next_state: world }
 }
 
@@ -135,7 +149,11 @@ func mk_runtime(caps: [Capability]) -> ExtRuntime {
 }
 
 func hooks(reap: bool, session_ms: string) -> [Capability] ! {IO, Process, FS, Clock} {
-  make_hooks(mk_cfg(reap, session_ms), ["Delegate", "DelegateCheck"])
+  hooks_with(reap, false, session_ms)
+}
+
+func hooks_with(reap: bool, settle: bool, session_ms: string) -> [Capability] ! {IO, Process, FS, Clock} {
+  make_hooks(mk_cfg(reap, settle, session_ms), ["Delegate", "DelegateCheck"])
 }
 
 -- ---------------------------------------------------------------------------
@@ -168,7 +186,10 @@ func enabled_flags(intents: [RenderedIntent]) -> [bool] {
 -- case can assert on the whole action rather than on one field of it.
 func action_text(a: ExitAction) -> string {
   match a {
-    ClosePane(c) => "close:${c.pane}|${c.token_key}|${c.token_value}"
+    ClosePane(c) => "close:${c.pane}|${c.token_key}|${c.token_value}",
+    -- The digest is rendered in full: a case that matched a prefix would pass
+    -- against a precondition computed over the wrong bytes.
+    PublishFile(f) => "publish:${f.tmp}|${f.dest}|${f.expect_sha256}"
   }
 }
 
@@ -197,9 +218,27 @@ func has_text(xs: [ExitAction], needle: string) -> bool {
   has_string(action_texts(xs), needle)
 }
 
+func has_text_list(xs: [string], needle: string) -> bool { has_string(xs, needle) }
+
+-- `[bool]` has no Eq instance, and a length-plus-head check would pass for a
+-- second intent nobody asked about. Rendering the flags makes the assertion
+-- exact and the failure message readable.
+func flags_text(xs: [bool]) -> string {
+  match xs {
+    [] => "",
+    b :: rest => "${if b then "T" else "F"}${flags_text(rest)}"
+  }
+}
+
 func render(reap: bool, session_ms: string, read: (ExtWorld, string) -> ExtFileRead ! {FS})
   -> [RenderedIntent] ! {IO, Process, FS, Clock} {
-  let caps = hooks(reap, session_ms);
+  render_with(reap, false, session_ms, read)
+}
+
+func render_with(reap: bool, settle: bool, session_ms: string,
+                 read: (ExtWorld, string) -> ExtFileRead ! {FS})
+  -> [RenderedIntent] ! {IO, Process, FS, Clock} {
+  let caps = hooks_with(reap, settle, session_ms);
   let ctx = mk_ctx(ports_reading(read));
   dispatch_exit_intents(mk_runtime(caps), ctx).intents
 }
@@ -358,6 +397,68 @@ func case_decoy_is_cleaned_up() -> bool ! {IO, FS} {
          "could not remove ${decoy_path()}; the next run's decoy plant would still pass (it overwrites), but a stray run file under .tmp-verify-exit-intent is state this gate should not leave")
 }
 
+-- ---------------------------------------------------------------------------
+-- ABI 7.1: the publish verb
+-- ---------------------------------------------------------------------------
+
+-- The whole point of settle-on-exit: two tasks are in flight in the fixture, so
+-- the file this session leaves behind must not go on saying they are.
+func case_settle_publishes_the_candidate_over_the_run_file() -> bool ! {IO, Process, FS, Clock} {
+  let acts = actions_of(render_with(false, true, "200", run_file_present));
+  let dir = ".tmp-verify-exit-intent/.dagr";
+  let want = "publish:${dir}/run-w1-p1-200.json.settled|${dir}/run-w1-p1-200.json|${sha256Hex(run_file_content())}";
+  report("with settle on: one publish, naming the candidate, the run file, and the digest of what was read",
+         List.length(acts) == 1 && first_text(acts) == want,
+         "got ${show(List.length(acts))} action(s), first `${first_text(acts)}`, wanted `${want}`")
+}
+
+-- The precondition has to be computed over the bytes the render actually read,
+-- or the host refuses every publish and the feature is dead on arrival. This is
+-- the case that catches a digest taken over the candidate, the path, or "".
+func case_digest_is_of_the_live_file_the_render_read() -> bool ! {IO, Process, FS, Clock} {
+  let acts = actions_of(render_with(false, true, "200", run_file_present));
+  let d = sha256Hex(run_file_content());
+  report("the precondition is the digest of the live run file, not of anything else",
+         has_text(acts, "publish:.tmp-verify-exit-intent/.dagr/run-w1-p1-200.json.settled|.tmp-verify-exit-intent/.dagr/run-w1-p1-200.json|${d}"),
+         "the digest must be sha256 of the content the render read, so the host can refuse a file that changed after it")
+}
+
+-- TWO KNOBS, TWO VERBS. Each asks for its own thing and neither implies the
+-- other, which is the property an operator who wants an honest file without
+-- killing in-flight work depends on.
+func case_the_two_knobs_are_independent() -> bool ! {IO, Process, FS, Clock} {
+  let neither = actions_of(render_with(false, false, "200", run_file_present));
+  let reap_only = action_texts(actions_of(render_with(true, false, "200", run_file_present)));
+  let settle_only = action_texts(actions_of(render_with(false, true, "200", run_file_present)));
+  let both = actions_of(render_with(true, true, "200", run_file_present));
+  report("reap and settle are independent: neither, either, or both",
+         List.length(neither) == 0
+           && List.length(reap_only) == 1 && has_text_list(reap_only, "close:w1:pA|mot-owner|w1:p1:200")
+           && List.length(settle_only) == 1 && has_text_list(settle_only, "publish:.tmp-verify-exit-intent/.dagr/run-w1-p1-200.json.settled|.tmp-verify-exit-intent/.dagr/run-w1-p1-200.json|${sha256Hex(run_file_content())}")
+           && List.length(both) == 2,
+         "neither=${show(List.length(neither))} reap_only=${show(List.length(reap_only))} settle_only=${show(List.length(settle_only))} both=${show(List.length(both))}")
+}
+
+-- A session that delegated nothing, or whose delegates all settled, has nothing
+-- to say at exit — and must not put a rename in the exit path to say it.
+func case_nothing_in_flight_publishes_nothing() -> bool ! {IO, Process, FS, Clock} {
+  let acts = actions_of(render_with(true, true, "200", run_file_all_settled));
+  report("nothing in flight: no publish, and no close either",
+         List.length(acts) == 0,
+         "got ${show(List.length(acts))}; a document with no non-terminal attempt needs no settlement")
+}
+
+-- `enabled: false` publishes an empty action list and the host honours it, so
+-- the flag has to be true when EITHER knob is on or the settlement is silently
+-- disabled for anyone who turned on only that one.
+func case_intent_is_enabled_by_either_knob() -> bool ! {IO, Process, FS, Clock} {
+  let settle_only = enabled_flags(render_with(false, true, "200", run_file_present));
+  let neither = enabled_flags(render_with(false, false, "200", run_file_present));
+  report("the intent is enabled by either knob, and disclosed when neither is set",
+         flags_text(settle_only) == "T" && flags_text(neither) == "F",
+         "settle_only=${flags_text(settle_only)} neither=${flags_text(neither)}")
+}
+
 export func main() -> () ! {IO, Process, FS, Clock, Env} {
   let r1 = case_registered_either_way();
   let r2 = case_off_renders_nothing_but_discloses();
@@ -369,8 +470,14 @@ export func main() -> () ! {IO, Process, FS, Clock, Env} {
   let r8 = case_render_reads_through_the_port_and_only_the_port();
   let r9 = case_manifest_var_is_the_agreed_name();
   let r10 = case_decoy_is_cleaned_up();
-  let all_ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10;
-  if all_ok then println("verify_exit_intent: 10 cases OK")
+  let r11 = case_settle_publishes_the_candidate_over_the_run_file();
+  let r12 = case_digest_is_of_the_live_file_the_render_read();
+  let r13 = case_the_two_knobs_are_independent();
+  let r14 = case_nothing_in_flight_publishes_nothing();
+  let r15 = case_intent_is_enabled_by_either_knob();
+  let all_ok = r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10
+               && r11 && r12 && r13 && r14 && r15;
+  if all_ok then println("verify_exit_intent: 15 cases OK")
   else {
     let _ = println("verify_exit_intent: FAILED");
     exit(1)

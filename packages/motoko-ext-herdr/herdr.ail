@@ -26,12 +26,13 @@ module sunholo/motoko_ext_herdr/herdr
 
 import std/option (Option, Some, None)
 import std/string (length, substring, contains)
+import std/crypto (sha256Hex)
 import std/json (Json, jo, kv, js, jnum, jb, get, asString)
 
 import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
-  ExitAction, ExitIntentOutcome, ClosePane, PaneCloseAction,
+  ExitAction, ExitIntentOutcome, ClosePane, PaneCloseAction, PublishFile, PublishFileAction,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg, ToolSchema,
   ToolCallEnvelope, ToolResultEnvelope
@@ -40,6 +41,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   run_file, run_tmp, refused_marker, pane_marker, operator_pane_marker, load_doc, render, task_title,
   task_kind_or_default, known_task_kinds, task_of_key, can_link_retry, is_empty_run,
   open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
+  run_settled_tmp, settle_at_session_end, open_task_ids_str,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
   open_delegate_panes
 )
@@ -106,7 +108,15 @@ export type HerdrConfig = {
   -- knob in `register.ail`, and CAPTURED. Off by default: reaping destroys
   -- in-flight work on every clean exit, including the answer-file case the
   -- delegation gate exists to honour.
-  reap_on_exit: bool
+  reap_on_exit: bool,
+  -- ABI 7.1's publish verb, resolved at registration for `reap_on_exit`'s
+  -- reason: the render cannot reach `Env`. INDEPENDENT of the reap because the
+  -- two do different things -- one ends the delegates, the other tells the
+  -- truth about them afterwards -- and an operator may reasonably want the
+  -- second without the first. It is ALSO not sufficient on its own: the host
+  -- refuses every publish unless the operator granted a root
+  -- (`MOTOKO_EXIT_PUBLISH_ROOT`), so this knob asks and that grant permits.
+  settle_on_exit: bool
 }
 
 export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
@@ -306,7 +316,7 @@ type DagrWrite = { note: string, next_state: ExtWorld }
 -- a retry. Telling the graph and not the caller is its own kind of misreport.
 type DagrStep = { doc: Json, note: string }
 
-func publish(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, doc: Json)
+func publish(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, doc: Json, settled: Json)
   -> DagrWrite ! {IO, Process, FS} {
   let live = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
   let tmp = run_tmp(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
@@ -327,7 +337,22 @@ func publish(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, doc: Json)
         { note: "\n\n(The dagr view is stale: publishing `${live}` failed and the previous version stands.)",
           next_state: cleaned.next_state }
       }
-      else { note: "", next_state: mv.next_state }
+      else {
+        -- THE SETTLE-ON-EXIT CANDIDATE, written after the live file and
+        -- therefore NEWER than it -- which is the host's freshness guard
+        -- (ABI 7.1: it refuses a rename whose tmp is older than its dest).
+        -- Best-effort in the strongest sense: a failure here is not reported,
+        -- because nothing is wrong with the run file that was just published
+        -- and the only consequence is that a session-end settlement will be
+        -- refused for want of a candidate. Written unconditionally rather than
+        -- only when `settle_on_exit` is set, so that turning the knob on does
+        -- not have to wait for the next publish to take effect.
+        let cand = run_settled_tmp(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+        let c = if path_is_safe(cand)
+                then p.file_write(mv.next_state, cand, render(settled))
+                else { ok: true, error: "", next_state: mv.next_state };
+        { note: "", next_state: c.next_state }
+      }
     }
   }
 }
@@ -367,7 +392,10 @@ func dagr_record(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
         -- publish note is about whether the recording reached disk.
         Some(doc) => {
           let step = f(doc, now_ms);
-          let pub = publish(cfg, p, cur.next_state, step.doc);
+          -- Composed HERE because this is where a real clock is: see
+          -- `dagr.run_settled_tmp` for why the exit render cannot do it.
+          let pub = publish(cfg, p, cur.next_state, step.doc,
+                            settle_at_session_end(step.doc, now_ms));
           { note: "${step.note}${pub.note}", next_state: pub.next_state }
         }
       }
@@ -1421,8 +1449,31 @@ export func exit_actions(cfg: HerdrConfig, ctx: ExtCtx) -> ExitIntentOutcome ! {
     else {
       let read = ctx.ports.file_read(ctx.world, path);
       if read.present == false then { actions: [], next_state: read.next_state }
-      else { actions: close_actions(cfg, open_delegate_panes(read.content)),
-             next_state: read.next_state }
+      else {
+        -- TWO VERBS, TWO KNOBS, and they are not the same question. The reap
+        -- ENDS delegates; the publish tells the truth about them afterwards. An
+        -- operator who wants an honest run file without killing in-flight work
+        -- gets exactly that, and one who wants the reap without rewriting a
+        -- file gets that too.
+        let closes = if cfg.reap_on_exit
+                     then close_actions(cfg, open_delegate_panes(read.content))
+                     else [];
+        -- NOTHING IN FLIGHT, NOTHING TO SETTLE. Publishing a document identical
+        -- to the live one would be a rename that changes nothing, and it would
+        -- put a write in the exit path of every session that never delegated.
+        let publishes =
+          if cfg.settle_on_exit && open_task_ids_str(read.content) != ""
+          then [PublishFile({
+                 tmp: run_settled_tmp(cfg.dagr_dir, cfg.own_pane, cfg.session_ms),
+                 dest: path,
+                 -- The precondition is the digest of what this render just
+                 -- read. If anything rewrites the run file between now and
+                 -- exit, the host refuses rather than clobbering it.
+                 expect_sha256: sha256Hex(read.content)
+               })]
+          else [];
+        { actions: closes ++ publishes, next_state: read.next_state }
+      }
     }
   }
 }
@@ -1449,6 +1500,10 @@ export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO,
     -- disclosure changes with the environment, and the manifest is where "off"
     -- becomes visible: `enabled: false` with an empty action list says the
     -- extension is there and was asked, which "no atom at all" cannot say.
-    ExitIntent("delegate-panes", cfg.reap_on_exit, at_exit)
+    -- ENABLED BY EITHER KNOB. `enabled: false` publishes an empty action list
+    -- and the host honours it, so an intent disabled here can do nothing at
+    -- all -- which would silently disable the settlement for anyone who turned
+    -- only that one on.
+    ExitIntent("delegate-panes", cfg.reap_on_exit || cfg.settle_on_exit, at_exit)
   ]
 }

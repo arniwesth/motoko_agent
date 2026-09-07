@@ -1079,7 +1079,59 @@ export type PaneCloseAction = {
   token_value: string
 }
 
+-- Publish a file the extension already wrote, by rename, onto a destination it
+-- already owns. The second verb, added 7.1 for dagr settle-on-exit — the
+-- consumer the 7.0 review said `PublishFile` should wait for.
+--
+-- READ THE PARAGRAPH ABOVE BEFORE THIS ONE. 7.0 dropped a `PublishFile` whose
+-- payload was a pair of FREE PATHS, and nothing here reopens that. The v1 shape
+-- let a manifest name any source and any destination; this one is refused
+-- unless BOTH paths sit inside a root the HOST resolves from its own
+-- environment (`MOTOKO_EXIT_PUBLISH_ROOT`) and the operator had to set. Unset,
+-- and no publish in any manifest can execute at all — the same opt-in shape as
+-- the reap, and for the same reason: a cleanup that writes should be something
+-- the operator turned on, not something an install decides.
+--
+-- WHY A RENAME AND NOT A WRITE. The extension writes its content while it is
+-- ALIVE, at turn end, through its own routed ports and inside the runtime's FS
+-- sandbox; the host's whole half is one `rename` syscall. So the exit path
+-- performs no serialization, holds no content, spawns nothing, and cannot blow
+-- a timeout. It also means the manifest never carries file BYTES — a manifest
+-- that could carry content would be an arbitrary-write surface again, wearing
+-- a different shape.
+--
+-- `expect_sha256` IS THE GENERATION PRECONDITION, and it is required rather
+-- than optional because an absent precondition must never decay into an
+-- unconditional overwrite -- the `token_key` lesson above, applied before it
+-- can be learned twice. It is the SHA-256 of the content the extension last
+-- observed at `dest`, lowercase hex; the host hashes `dest` at exit and
+-- refuses the rename unless they agree. There is NO "publish if absent" mode:
+-- `dest` must already exist. A producer that has not written its file yet has
+-- nothing to settle and should emit no action, and encoding that case as an
+-- empty field would put a mode back into a value that malformed input decays
+-- to.
+--
+-- A DIGEST AND NOT A BYTE COUNT, which was the first draft of this field and
+-- was wrong twice over. `std/string.length` counts RUNES: for a run file
+-- carrying a task title with one non-ASCII character -- a model-authored
+-- string, so the ordinary case rather than the exotic one -- the extension's
+-- count and the host's `stat().size` disagree, every publish is refused, and
+-- the feature fails silently and only on real data. A digest also catches the
+-- concurrent write that a size cannot: an edit that happens to preserve the
+-- length. `std/crypto.sha256Hex` and node's `createHash("sha256")` were
+-- checked to agree byte-for-byte on UTF-8 input before this was frozen.
+--
+-- The host additionally refuses the rename unless `tmp` is at least as new as
+-- `dest`. That is the HOST's rule, not this contract's -- a manifest cannot
+-- influence it, and a future host may only strengthen it.
+export type PublishFileAction = {
+  tmp: string,
+  dest: string,
+  expect_sha256: string
+}
+
 export type ExitAction = ClosePane(PaneCloseAction)
+                       | PublishFile(PublishFileAction)
 
 -- The render's answer, and it carries a SUCCESSOR for the same reason the four
 -- other outcome types do (WI-B2b): the render reads FS-backed state, it reads

@@ -366,6 +366,18 @@ close it by implementation.
   there is no ABI slot for "session ended" — 017 prices adding one at 16 packages. The first landing
   should accept this and say so in the pane's own words (a `note` event on `Delegate`: "settles only
   on `DelegateCheck`"); a settle-on-exit hook is an ABI decision for the owner, not for this design.
+  **BUILT 2026-09-07, and the sentence above is now history.** The slot arrived in two parts: ABI
+  7.0's `ExitIntent` (the trigger) and 7.1's `PublishFile` (the verb). On every publish the producer
+  writes a second document beside the live one — the run file as it would read if the session ended
+  now — and at clean exit the host renames it over the live file. The candidate is composed HERE and
+  not at exit because the exit render's row is `! {FS}` and carries no `Clock`: a document composed
+  there could not stamp `ended_at` with anything true. The settlement is
+  `settled_unverified · heuristic`, the SAME verdict `do_check` writes for P2-3, and deliberately
+  **not** `lost`: `lost` is this producer's word for a measured absence, and the exit path measures
+  nothing — the panes may still be running, and even with the reap on the close is best-effort and
+  proof-gated. Two knobs, independent: `HERDR_DAGR_SETTLE_ON_EXIT=1` asks, and the host's
+  `MOTOKO_EXIT_PUBLISH_ROOT` grant permits. Gated by five cases in `scripts/verify_exit_intent.ail`
+  and nine in `src/tui/src/exit-actions.test.ts`.
 - **Per-check cost.** Every `DelegateCheck` becomes read → modify → `writeFile(tmp)` → `mv`. Measured
   ≈0.8 ms for the publish (§7.7) plus one file read, inside a call that already blocks up to
   `check_wait_ms` (20 s) of the 30 s process wall. Negligible, but it is inside that wall.
@@ -452,8 +464,9 @@ at their sections):
 
 3. **`retry_of` on `Delegate`** — **decided: in v1** (§3.6). Bundled with `task_kind` as one
    schema migration.
-4. **Settle-on-exit** (§6) — **still open, and stays with the owner.** An ABI-slot question; the
-   first landing writes a `note` and stops.
+4. **Settle-on-exit** (§6) — **CLOSED 2026-09-07.** It was an ABI-slot question and the slot now
+   exists (7.0's `ExitIntent` trigger, 7.1's `PublishFile` verb); see §6 for what the settlement
+   writes and why it is `settled_unverified` rather than `lost`.
 5. **`lost` classification** (§4) — **measured, closed.**
    [`MEASUREMENTS-2026-08-31-failure-codes.md`](MEASUREMENTS-2026-08-31-failure-codes.md):
    `agent_not_found` (from wait or get) ⇔ gone → `lost`; `server_not_running` ⇔ herdr unwell →

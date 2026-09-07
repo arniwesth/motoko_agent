@@ -2275,7 +2275,7 @@ verify_exit_intent:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
 		scripts/verify_exit_intent.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
-	[ $$rc -eq 0 ] || (echo "verify_exit_intent: the extension-declared exit intent regressed (ABI 7.0)" && exit 1)
+	[ $$rc -eq 0 ] || (echo "verify_exit_intent: the extension-declared exit intent regressed (ABI 7.0/7.1)" && exit 1)
 
 # MOT-137: under HERDR_DAGR_PANE=1 the extension opens the dagr view itself, on
 # the first delegation, AT MOST ONCE — and a refused open neither fails the

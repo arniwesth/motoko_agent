@@ -87,6 +87,31 @@ the older 11 rows are likewise untouched.
 Commit `PLAN-001 live-run fix 4: yield the dagr view to the operator's` on
 `arniwesth/013-dst-architecture-adr`.
 
+## Progress (2026-09-07) — settle-on-exit is built
+
+Status stays **open**: settle-on-exit closes the rows this issue's Evidence table
+lists, and Option A (one file instead of two) is still undecided, so the two
+files still describe the same work from different observations.
+
+What is built: ABI 7.1's `PublishFile` verb plus the producer half. The producer
+writes a settled candidate beside the run file on every publish, and the host
+renames it over the live file at clean exit. Three of the four stale rows in the
+table above are exactly this case — a delegate the orchestrator took over and
+never checked again — and they would now settle `settled_unverified · heuristic`
+when the session ended, instead of reading `working` for ever.
+
+Two things it does NOT do, both named in this issue:
+
+- **The older 11 rows across five previous run files are untouched.** Those
+  sessions are gone; nothing renames their candidates now. That needs the startup
+  sweep to settle by MEASUREMENT (`pane list` says the pane is gone → `lost`),
+  which is a separate change and the one this issue's Fix section pairs with
+  settle-on-exit.
+- **It requires two opt-ins** — `HERDR_DAGR_SETTLE_ON_EXIT=1` and the host's
+  `MOTOKO_EXIT_PUBLISH_ROOT` grant — and neither is set in `agent_confined`
+  today, so nothing changes for this repo's own container until the compose file
+  sets them (`.devcontainer` is read-only from inside the container).
+
 `herdr.ail:ensure_dagr_pane` now consults `operator_view_open` before it opens
 anything: if `.dagr/.pane` — the sentinel `scripts/dagr-pane.sh` writes when the
 operator opens a view by hand — names a pane, the id goes through `herdr pane

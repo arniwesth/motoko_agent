@@ -61,7 +61,8 @@ import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx,
   ExtRuntime,
   ExitAction,
-  ClosePane
+  ClosePane,
+  PublishFile
 )
 import src/core/ext/runtime (RenderedIntent, dispatch_exit_intents)
 
@@ -107,6 +108,19 @@ export pure func action_json(a: ExitAction) -> Json {
       -- here and none is read from here.
       kv("token_key", js(c.token_key)),
       kv("token_value", js(c.token_value))
+    ]),
+    -- 7.1. NO CONTENT AND NO EXECUTABLE, same as above: two paths and a size.
+    -- The bytes were written by the extension at turn end through its own
+    -- routed ports; the host's half is a rename, and it refuses that rename
+    -- unless both paths sit under the root IT resolved from its own
+    -- environment. `expect_sha256` is the generation precondition and is
+    -- required -- a publish that lost it in transit must be refused, never
+    -- promoted to an unconditional overwrite.
+    PublishFile(f) => jo([
+      kv("kind", js("publish_file")),
+      kv("tmp", js(f.tmp)),
+      kv("dest", js(f.dest)),
+      kv("expect_sha256", js(f.expect_sha256))
     ])
   }
 }
