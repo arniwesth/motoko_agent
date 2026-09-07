@@ -487,10 +487,20 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # nothing: the exit code is propagated untouched and a sweep with only these
 # red still exits 2. scripts/dst/sweep_summary.sh also reports a target on this
 # list that PASSES, so the list cannot outlive the failure it describes.
-# Empty at HEAD: the D22 pair (test_coverage, test_coverage_selftest --
-# `prompts_test.ail` 0/6 and a `stale_skip_record`) has passed since the skip
-# record was brought current, and the summary's reverse check said to drop it.
-DST_KNOWN_RED :=
+# The D22 pair (test_coverage, test_coverage_selftest -- `prompts_test.ail` 0/6
+# and a `stale_skip_record`) was dropped once it passed, per the summary's
+# reverse check.
+#
+# depth_canary -- listed 2026-09-07, PLAN-003 §5: tier 1, seed 23 exceeds its
+# ceiling of 90 (seeds 7 and 11 and tier 0 pass). Bisected to 8980ba6 (PLAN-001
+# live-run fix 1), which added a per-call `decode` of tool arguments before
+# dispatch: the canary header's SECOND case, a per-step frame-cost change on the
+# tool-phase path, not a new O(|trace|) traversal. Disposition pending the
+# owner's re-measure of seed 23's floor (run_depth_canary.sh header, tolerance-1
+# bisection with the fix in place) and a pin bump with the reason recorded, or
+# moving the decode off the per-step frame. Drop this entry when the summary
+# reports it PASSED.
+DST_KNOWN_RED := depth_canary
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report

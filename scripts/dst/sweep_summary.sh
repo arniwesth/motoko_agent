@@ -100,7 +100,7 @@ else
 	echo
 	printf '  FAILED (%s):\n' "$n_failed"
 	for t in $new; do printf '    %-28s NEW — this one is yours\n' "$t"; done
-	for t in $old; do printf '    %-28s known-red since D22\n' "$t"; done
+	for t in $old; do printf '    %-28s known-red — listed in DST_KNOWN_RED, reason in the Makefile comment\n' "$t"; done
 fi
 
 for t in $fixed; do
