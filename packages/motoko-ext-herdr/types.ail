@@ -1463,6 +1463,44 @@ export pure func argv_report_owner_str(pane: string, own_pane: string, session_m
 export pure func argv_pane_list() -> [string]
   { ["pane", "list"] }
 
+-- ---------------------------------------------------------------------------
+-- Validating a candidate before publishing it
+-- ---------------------------------------------------------------------------
+--
+-- `DESIGN-dagr-as-delegation-view.md` §6 is explicit that the producer "should
+-- always write and never require the binary", deliberately overriding the
+-- shipped skill's "no validator, no writing" rule, and moves the guarantee to
+-- CI. THAT RULE IS KEPT. What is added is narrower than the rule forbids: the
+-- producer still never REQUIRES dagr, and still publishes when it is absent or
+-- unusable. It declines to publish only in the one case §6 does not cover —
+-- dagr present, running, and saying the candidate is INVALID.
+--
+-- Publishing a document the validator in this container has just rejected is
+-- not "writing when nobody reads it"; it is writing something known broken to a
+-- file something is watching.
+export pure func argv_dagr_check(path: string) -> [string]
+  { ["check", path, "--strict"] }
+
+export pure func argv_dagr_check_str(path: string) -> string
+  tests [("/w/.dagr/run.json.tmp", "check /w/.dagr/run.json.tmp --strict")]
+  { show_argv(argv_dagr_check(path)) }
+
+-- THE EXIT CODE DECIDES, AND ONLY 1 STOPS A PUBLISH. dagr's own documented
+-- codes are 0 clean, 1 findings, 2 "the validator could not read the file at
+-- all — a path or tooling problem, never a document problem". A missing binary
+-- arrives as the shell's 127, and the tool runtime's own "no outcome" is -1.
+-- Everything that is not 0 or 1 means WE COULD NOT TELL, and the honest answer
+-- to not being able to tell is §6's: publish.
+export pure func dagr_says_invalid(code: int) -> bool
+  tests [
+    (0, false),   -- clean
+    (1, true),    -- findings: the one case that stops a publish
+    (2, false),   -- validator could not read it — a tooling problem, not the document's
+    (127, false), -- no dagr on PATH; §6's "never require the binary"
+    (-1, false)   -- no subprocess outcome at all
+  ]
+  { code == 1 }
+
 export pure func argv_pane_list_str() -> string
   tests [((), "pane list")]
   { show_argv(argv_pane_list()) }

@@ -51,6 +51,7 @@ import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
   known_kind, kind_allowed, grants_relaxation, kind_model_args,
   prompt_is_retryable, max_prompt_attempts, agent_status_of,
+  argv_dagr_check, dagr_says_invalid,
   allowed_kind_count, sole_allowed_kind,
   path_is_safe, path_within, argv_is_safe, show_argv, has_shell_tokens,
   argv_split, argv_start, argv_start_model, argv_prompt, argv_get, argv_explain, argv_close,
@@ -122,7 +123,12 @@ export type HerdrConfig = {
   settle_on_exit: bool,
   -- F-5 rung 4, upgraded from REPORTING to REPAIRING -- and only for the case
   -- the sweep has positive proof of. See `dagr.settle_abandoned`.
-  sweep_settle: bool
+  sweep_settle: bool,
+  -- The dagr binary, for validating a candidate before publishing it. NOT a
+  -- requirement: absent or unusable, the publish proceeds exactly as it did
+  -- before this existed (`types.dagr_says_invalid`), which is what keeps
+  -- `DESIGN-dagr` §6's "never require the binary" true.
+  dagr_bin: string
 }
 
 export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
@@ -403,7 +409,26 @@ func publish(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, doc: Json, settled: Jso
       { note: "\n\n(The dagr view is stale: `${tmp}` could not be written — ${wrote.error}.)",
         next_state: wrote.next_state }
     else {
-      let mv = run_cmd(p, wrote.next_state, "mv", [tmp, live]);
+      -- STEP 2 OF THE SKILL'S OWN TRANSACTION, which this producer had skipped:
+      -- write the candidate, CHECK IT, and only then rename. §6 moved that
+      -- guarantee to CI so that a missing dagr could never stop a write, and
+      -- that is preserved exactly — `dagr_says_invalid` is true for ONE exit
+      -- code, and every other outcome, including "no such binary", publishes.
+      --
+      -- What it stops is the case §6 does not describe: dagr is here, it ran,
+      -- and it says the candidate is broken. Renaming that over the live file
+      -- would show an error state to every viewer watching it, which is the
+      -- thing the skill's step 2 exists to prevent.
+      let vet = run_cmd(p, wrote.next_state, cfg.dagr_bin, argv_dagr_check(tmp));
+      if dagr_says_invalid(vet.code) then {
+        -- The live file is untouched and still valid; the candidate is what is
+        -- wrong. Leave nothing half-published behind.
+        let cleaned = p.file_remove(vet.next_state, tmp);
+        { note: "\n\n(The dagr view was NOT updated: `dagr check --strict` rejected the candidate document, so the previous version stands. This is a producer bug — the run file this extension would have written does not satisfy the contract.)",
+          next_state: cleaned.next_state }
+      }
+      else {
+      let mv = run_cmd(p, vet.next_state, "mv", [tmp, live]);
       if mv.code != 0 then {
         -- Leave no half-published candidate behind for the next call to trip
         -- over; the live file is untouched and still valid.
@@ -426,6 +451,7 @@ func publish(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, doc: Json, settled: Jso
                 then p.file_write(mv.next_state, cand, render(settled))
                 else { ok: true, error: "", next_state: mv.next_state };
         { note: "", next_state: c.next_state }
+      }
       }
     }
   }

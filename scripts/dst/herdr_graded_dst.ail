@@ -55,6 +55,7 @@ import pkg/sunholo/motoko_ext_herdr/register as Herdr (register_with_config)
 --
 --   1 pane split          2 agent start      3 agent explain
 --   4 agent get           5 agent prompt     6 pane report-metadata
+--   7 dagr check          8 mv
 --
 -- STEP 4 IS NEW TODAY and is exactly the kind of thing this spike is for: the
 -- retry's baseline read (`prompt_with_retry`) added a call between the readiness
@@ -98,10 +99,15 @@ func herdr_effects() -> [{ tool_call_id: string, duration_ms: int, code: string,
     eff(113, 127, "{\\\"result\\\":{}}"),
     -- 6. pane report-metadata (the mot-owner tag)
     eff(127, 127, "{\\\"result\\\":{}}"),
-    -- 7. dagr publish's `mv`
+    -- 7. THE PUBLISH'S `dagr check --strict` on the candidate. Added when the
+    --    producer gained step 2 of the skill's transaction; before that the
+    --    publish went straight to `mv`. Exit 0 in the envelope = clean, so the
+    --    rename below happens.
     eff(131, 127, ""),
+    -- 8. dagr publish's `mv`
+    eff(137, 127, ""),
     -- SLACK: never consumed if the sequence above is right.
-    eff(137, 131, "{\\\"slack\\\":true}")]
+    eff(139, 131, "{\\\"slack\\\":true}")]
 }
 
 func delegate_call() -> ToolCall {

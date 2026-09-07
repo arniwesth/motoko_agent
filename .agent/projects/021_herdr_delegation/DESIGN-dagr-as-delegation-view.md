@@ -365,6 +365,18 @@ close it by implementation.
   (§3.2), and checks every published document with `dagr check --strict --json` against a
   pinned v0.3.1 binary. CI already installs Z3
   for the contract gate; a pinned dagr download is the same shape.
+  **NARROWED 2026-09-07, and the rule above is kept.** The producer now runs
+  `dagr check --strict` on the candidate between the write and the rename —
+  step 2 of the skill's own transaction, which this producer had skipped. It
+  still never REQUIRES the binary: `types.dagr_says_invalid` is true for exit 1
+  and nothing else, so a missing dagr (127), a validator that could not read the
+  file (2) and "no subprocess outcome" (-1) all publish exactly as before. What
+  it stops is the one case this bullet does not describe — dagr present, running,
+  and rejecting the candidate. Renaming that over the live file would show an
+  error state to every viewer watching it, which is what step 2 exists to
+  prevent. Both halves are pinned by `verify_dagr_producer` cases 20 and 21, and
+  case 21 exists specifically so that tightening the classifier to `code != 0`
+  fails loudly rather than silently stopping production wherever dagr is absent.
 - **A task the model stops polling never settles.** `do_check` is the only terminal write point.
   A model that calls `Delegate` and moves on — which the tool description permits — leaves the task
   `working` for ever, with no `attempt_settled` and no stale-liveness signal (§3.1). This is a

@@ -204,7 +204,7 @@ func mk_cfg(sweep_stale: bool, sweep_settle: bool) -> HerdrConfig {
     start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
     -- ABI 7.0: the exit intent is declared either way; this says whether it
     -- renders actions. These gates exercise the tool paths, not the exit path.
-    reap_on_exit: false, settle_on_exit: false, sweep_settle: sweep_settle }
+    reap_on_exit: false, settle_on_exit: false, sweep_settle: sweep_settle, dagr_bin: "dagr" }
 }
 
 func delegate_call() -> ToolCallEnvelope {

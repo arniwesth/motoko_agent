@@ -209,6 +209,16 @@ func scripted(ms: int, status: string, gone: bool, fail_at: string)
       else
         { output: envelope("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"${status}\",\"pane_id\":\"w1:pA\"}}}", "", 0),
           exit_code: 0, next_state: world }
+    -- THE PUBLISH'S VALIDATOR. `fail_at == "vet"` is dagr saying the candidate
+    -- is invalid — exit 1, its documented "findings" code — which is the ONE
+    -- outcome that stops a publish. Every other code, including a missing
+    -- binary, publishes; `dagr_says_invalid` is the classifier.
+    else if contains(argv, "check") && contains(argv, "--strict") then
+      if fail_at == "vet" then { output: envelope("", "ERROR E150 tasks[0] — scripted rejection", 1), exit_code: 1, next_state: world }
+      -- 127 is the shell's "command not found": no dagr on PATH. §6's rule is
+      -- that this must NOT stop a publish, and case 21 asserts it.
+      else if fail_at == "vet_missing" then { output: envelope("", "dagr: command not found", 127), exit_code: 1, next_state: world }
+      else { output: envelope("", "", 0), exit_code: 0, next_state: world }
     else if contains(argv, "pane list") then
       { output: envelope("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"}]}}", "", 0), exit_code: 0, next_state: world }
     else
@@ -262,7 +272,7 @@ func mk_cfg() -> HerdrConfig {
     start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
     -- ABI 7.0: the exit intent is declared either way; this says whether it
     -- renders actions. These gates exercise the tool paths, not the exit path.
-    reap_on_exit: false, settle_on_exit: false, sweep_settle: false }
+    reap_on_exit: false, settle_on_exit: false, sweep_settle: false, dagr_bin: "dagr" }
 }
 
 func run_file_path() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
@@ -608,7 +618,34 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && contains(d19, "code `agent_not_ready`\",\"reason\""));
   emit(s19.world);
 
+  -- 20. THE PUBLISH REFUSES A CANDIDATE ITS OWN VALIDATOR REJECTS (2026-09-07).
+  --     `DESIGN-dagr` §6 moved this guarantee to CI so a missing dagr could
+  --     never stop a write, and that is unchanged — what is new is the case §6
+  --     does not describe: dagr present, running, saying the document is
+  --     broken. The live file must keep the PREVIOUS content, and the model
+  --     must be told, because this can only be a producer bug.
+  let before20 = read_file(s19.world, run_file_path());
+  let s20 = drive(s19.world, ports_failing_at(20000, "working", false, "vet"),
+                  delegate_call("c20", "rejected candidate", "claude", "impl", ""));
+  let a25 = check("a candidate dagr rejects is NOT published, and the previous version stands",
+                  read_file(s20.world, run_file_path()) == before20
+                    && contains("${s20.out}${s20.err}", "dagr view was NOT updated")
+                    && contains("${s20.out}${s20.err}", "producer bug"));
+  emit(s20.world);
+
+  -- 21. §6'S RULE, PINNED: "the producer should always write and never require
+  --     the binary". A validator that cannot run — 127, no dagr on PATH — must
+  --     leave the publish exactly as it was before validation existed. Without
+  --     this case, tightening `dagr_says_invalid` to `code != 0` would silently
+  --     make a container without dagr stop producing a run file at all.
+  let s21 = drive(s20.world, ports_failing_at(21000, "working", false, "vet_missing"),
+                  delegate_call("c21", "no validator here", "claude", "impl", ""));
+  let a26 = check("a validator that cannot run does not stop the publish (§6: never require the binary)",
+                  s21.code == 0
+                    && contains(read_file(s21.world, run_file_path()), "mot-dlg-21000"));
+  emit(s21.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
      && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 && a17b
-     && a18 && a19 && a20 && a21 && a22 && a23 && a24 then () else exit(1)
+     && a18 && a19 && a20 && a21 && a22 && a23 && a24 && a25 && a26 then () else exit(1)
 }

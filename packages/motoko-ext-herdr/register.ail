@@ -166,7 +166,11 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- still a write to a document this session does not own, so the operator
     -- turns it on rather than inheriting it. The default stays the report,
     -- which is what §5.5 describes.
-    sweep_settle: getEnvOr("HERDR_SWEEP_SETTLE", "") == "1"
+    sweep_settle: getEnvOr("HERDR_SWEEP_SETTLE", "") == "1",
+    -- PATH BY DEFAULT, and a knob only because a container may put it
+    -- elsewhere. Never required: `publish` treats "cannot run it" exactly as it
+    -- treats "not installed", which is §6's rule.
+    dagr_bin: getEnvOr("MOTOKO_DAGR_BIN", "dagr")
   };
 
   -- The whole gate. Empty tools is a silent, correct no-op; it is not an error

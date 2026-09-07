@@ -2255,14 +2255,22 @@ check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_h
 HERDR_GATE_CAPS = Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream
 
 verify_herdr_gate:
-	@env -u HERDR_ENV -u HERDR_BIN_PATH -u HERDR_PANE_ID \
+	@out=$$(env -u HERDR_ENV -u HERDR_BIN_PATH -u HERDR_PANE_ID \
 		ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
-		scripts/verify_herdr_gate.ail -- expect-empty 2>/dev/null | grep -E '^(OK|FAIL)' \
-		|| (echo "verify_herdr_gate: the gate leaked tools outside a herdr pane" && exit 1)
+		scripts/verify_herdr_gate.ail -- expect-empty 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)' || true; \
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q '^FAIL'; then \
+		echo "verify_herdr_gate: the gate leaked tools outside a herdr pane"; \
+		exit 1; \
+	fi
 	@if [ "$$HERDR_ENV" = "1" ]; then \
-		ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
-		  scripts/verify_herdr_gate.ail -- expect-tools 2>/dev/null | grep -E '^(OK|FAIL)' \
-		  || (echo "verify_herdr_gate: the gate did not advertise its tools inside a herdr pane" && exit 1); \
+		out=$$(ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		  scripts/verify_herdr_gate.ail -- expect-tools 2>/dev/null); rc=$$?; \
+		echo "$$out" | grep -E '^(OK|FAIL)' || true; \
+		if [ $$rc -ne 0 ] || echo "$$out" | grep -q '^FAIL'; then \
+		  echo "verify_herdr_gate: the gate did not advertise its tools inside a herdr pane"; \
+		  exit 1; \
+		fi; \
 	else \
 		echo "  (skipping the in-pane leg: not running under herdr)"; \
 	fi
@@ -2396,7 +2404,10 @@ verify_dagr_producer:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
 		scripts/verify_mot136_dagr_producer.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
-	[ $$rc -eq 0 ] || (echo "verify_dagr_producer: the producer's lifecycle mapping regressed (MOT-136)" && exit 1); \
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q '^FAIL'; then \
+		echo "verify_dagr_producer: the producer's lifecycle mapping regressed (MOT-136)"; \
+		exit 1; \
+	fi; \
 	if [ -x "$(DAGR_BIN)" ]; then \
 		n=0; bad=0; \
 		echo "$$out" | grep '^DAGR_DOC ' | sed 's/^DAGR_DOC //' | while IFS= read -r doc; do \
