@@ -1,7 +1,7 @@
 # ADR-002: Waiting is a step-machine state served by a port, and task completion is a runtime act
 
 Date: 2026-09-06 (v1 through v3 the same day)
-Status: **Proposed (v3 — D6 lifted out into [`ADR-003`](ADR-003-session-snapshot-and-resume.md); D2's request id re-cited; nothing else changed. v2.1 was reviewed by Codex ([`REVIEW-adr002-v2.1-verdicts-codex.md`](REVIEW-adr002-v2.1-verdicts-codex.md)): reject as written, D2/D5/D6 rejected, D1/D3/D4 accepted with corrections; v3 folds only the D6 removal and the one D2 correction that ADR-003 settles. The remaining v2.1 corrections to D1–D5 are still outstanding and are listed in that review's closing section.)** v1 was reviewed by Codex
+Status: **Proposed (v3 — D6 lifted out into [`ADR-003`](ADR-003-session-journal-and-resume.md); D2's request id re-cited; nothing else changed. v2.1 was reviewed by Codex ([`REVIEW-adr002-v2.1-verdicts-codex.md`](REVIEW-adr002-v2.1-verdicts-codex.md)): reject as written, D2/D5/D6 rejected, D1/D3/D4 accepted with corrections; v3 folds only the D6 removal and the one D2 correction that ADR-003 settles. The remaining v2.1 corrections to D1–D5 are still outstanding and are listed in that review's closing section.)** v1 was reviewed by Codex
 ([`REVIEW-adr002-verdicts-codex.md`](REVIEW-adr002-verdicts-codex.md), reviewed HEAD `407d673`):
 overall *reject as written; retain the owner's park-and-wake direction*. D1, D3, D4 accepted with
 corrections; D2 and D5 rejected. v2 folds all 26 corrections. The direction is unchanged and is
@@ -96,7 +96,7 @@ state; the decoder is total; identity and single-writer rules are absent; stage 
 once the TUI's child exits) and found that D2's request id, `session_id` plus a per-run park
 ordinal, collides once D6 reuses the session id across resumes (§2 D2 there). D6 is a different
 subject from this ADR — what a session's durable state is and who owns it — so it was lifted
-out into [`ADR-003`](ADR-003-session-snapshot-and-resume.md), which answers the five grounds
+out into [`ADR-003`](ADR-003-session-journal-and-resume.md), which answers the five grounds
 and has been through four review rounds. v3 makes exactly two edits: D6 becomes a one-line
 dependency on ADR-003 D7, and D2's request id is re-cited from ADR-003 D5. The review's other
 corrections to D1–D5 (the D2 precedence refactor, the D3 descriptor sum, the D5 safe default,
@@ -118,7 +118,7 @@ no-answer `else` at `:1089–1090`); the four-circumstances-one-report ambiguity
 | D3 | One `WaitDescriptor` type; producer in the `Delegate` envelope; core consumer lifts it before capping; register/update/remove semantics named; settlement stays with `DelegateCheck`, called once after the wake | 3–4 days, split host / extension / core |
 | D4 | The multi-turn wait is the same park; closes ADR-001's threading debt only when its plan carries every listed successor and a between-turn frame | unscheduled, unpriced |
 | D5 | D1 and D3's producer now; the `Ports` field, wake types, safe default and scanner recognition **before or with** PLAN-001 P2; activation after P2 is green, under ADR-001 D6 | — |
-| D6 | **Durable park is ADR-003 D7.** Session snapshot and resume are decided in [`ADR-003`](ADR-003-session-snapshot-and-resume.md); this ADR's `Park` writes the continuation snapshot ADR-003 D7 names, and `--park-exits` is scheduled there | priced in ADR-003 |
+| D6 | **Durable park is ADR-003 D7.** Session snapshot and resume are decided in [`ADR-003`](ADR-003-session-journal-and-resume.md); this ADR's `Park` writes the continuation snapshot ADR-003 D7 names, and `--park-exits` is scheduled there | priced in ADR-003 |
 
 The number this ADR is judged on: the specified successful path — `Delegate`, park and wake,
 `DelegateCheck`, final — must cost **≤ 4 provider calls**, verification excluded and said so.
@@ -348,7 +348,7 @@ an intervening model change and a restart-or-EOF control. Unscheduled.
 ### D6 — Durable park: ADR-003 D7
 
 Superseded. v2.1's D6 (session snapshot and `--resume`) was rejected on five grounds by the
-v2.1 review and is decided in [`ADR-003`](ADR-003-session-snapshot-and-resume.md), which
+v2.1 review and is decided in [`ADR-003`](ADR-003-session-journal-and-resume.md), which
 answers each. What this ADR keeps from it is one dependency, in both directions:
 
 - **`Park` writes a snapshot.** Immediately after `ParkEntered` and before `wake_read` blocks,
@@ -443,7 +443,7 @@ this ADR still owes a v4 that folds the v2.1 review's outstanding corrections to
 
 ## Cross-references
 
-- [`ADR-003-session-snapshot-and-resume.md`](ADR-003-session-snapshot-and-resume.md) — supersedes v2.1's D6; D5 there (`run_id`, the lease) is what D2's `request_id` is built on; D7 there is the durable park.
+- [`ADR-003-session-journal-and-resume.md`](ADR-003-session-journal-and-resume.md) — supersedes v2.1's D6; D5 there (`run_id`, the lease) is what D2's `request_id` is built on; D7 there is the durable park.
 - [`REVIEW-adr002-v2.1-verdicts-codex.md`](REVIEW-adr002-v2.1-verdicts-codex.md) — the v2.1 review; §2 D2 the request-id collision and the precedence defect, §3 the five D6 grounds, "Required ADR changes" the corrections still outstanding for v4.
 - [`REVIEW-adr002-verdicts-codex.md`](REVIEW-adr002-verdicts-codex.md) — the v1 review; §7.2 has the executable precedence model, §7.3 the scanner mutant, §7.6 the raw re-measurement.
 - [`ADR-001-sequencing-the-dst-architecture-caps.md`](ADR-001-sequencing-the-dst-architecture-caps.md) D2, D6, "Not decided".

@@ -11,7 +11,7 @@ and v3 of this plan follows its D8: **P1 kept with four parts changed by deletio
 P3 reshaped, P4 as D7.** §6 lists the deltas. Everything §0 decided and everything §5 measured
 stands.
 Grounded at: HEAD `97827bf` on branch `arniwesth/013-dst-architecture-adr`.
-Governing decision: `ADR-003-session-snapshot-and-resume.md` version 6.1, which its last review
+Governing decision: `ADR-003-session-journal-and-resume.md` version 6.1, which its last review
 says PLAN-003 v3 may be written against.
 
 **Thesis.** A run that reaches its step budget stops being an internal error whose history
@@ -748,7 +748,7 @@ are private at HEAD and are exported in P1 Part 3, with `History` reached throug
 
 ## Cross-references
 
-- The ADR: `ADR-003-session-snapshot-and-resume.md` v6.1, with its six reviews; v6.1's D8 is
+- The ADR: `ADR-003-session-journal-and-resume.md` v6.1, with its six reviews; v6.1's D8 is
   this plan's phase order.
 - This plan's reviews: `REVIEW-plan003-verdicts-fable.md` (v1) and
   `REVIEW-plan003-v2-verdicts-fable.md` (v2), whose gate audits P1 still relies on;

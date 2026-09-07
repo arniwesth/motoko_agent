@@ -5,7 +5,9 @@ Status: **Proposed (v6.1 — journal-only; v6 folds the eight required changes o
 v6.1 applies the v6 review's eight line edits, unreviewed. PLAN-003 v3 may be written against
 this version).** v6 was reviewed by Claude Fable (`REVIEW-adr003-v6-verdicts-fable.md`, HEAD
 `97827bf`): *accept with corrections; PLAN-003 v3 can be written after three items are settled
-in a v6.1*; D5 and D7 accepted clean. v5
+in a v6.1*; D5 and D7 accepted clean. **This file was
+`ADR-003-session-snapshot-and-resume.md` through v6.1 and was renamed on 2026-09-07 to match
+its title; the review files cite it by the old name.** v5
 was reviewed by Claude Fable (`REVIEW-adr003-v5-verdicts-fable.md`, HEAD `97827bf`, also against
 the oh-my-pi source): *accept the direction; return for a v6*; D5 and D7 accepted clean; all six
 v4.1→v5 retractions judged factually right, one with a qualification that v6 folds. v1–v4
