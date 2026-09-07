@@ -176,6 +176,17 @@ pure func last_delegate_signal(msgs: [Msg], seen: int) -> int {
   }
 }
 
+-- READING PROSE IS THE WORKAROUND, AND IT IS SCOPED, NOT FORGOTTEN (2026-09-07).
+-- These strings come from deterministic code in `herdr.ail` rather than from the
+-- model, which is what makes them safe to read at all — but re-wording one of
+-- them degrades this predicate silently, and a delegate is only one of the
+-- things a session can legitimately be waiting on. The structural shape is a
+-- `WorkInFlight` capability plus an `ExtCtx` field, scoped in
+-- `.agent/projects/021_herdr_delegation/DESIGN-work-in-flight-capability.md`;
+-- it is two source-breaking ABI additions, so it is a decision the ABI freeze
+-- forces rather than one that can be taken later. Until that is answered, this
+-- stands, and it fails in the safe direction: a re-wording costs a NUDGE, never
+-- a wrong allowance to stop.
 export pure func has_open_delegate(ctx: ExtCtx) -> bool {
   last_delegate_signal(ctx.history_slice, 0) == 1
 }
