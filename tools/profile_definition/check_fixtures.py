@@ -302,12 +302,27 @@ def check_barrier_count(abi, disp):
     name in the profile, either installed or omitted. Naming it is not a
     coverage claim; INSTALLING it is, and that is WI-C5's.
     """
-    # B8: the five 5.x slots this derivation reasons about are now the five
+    # B8: the five 5.x slots this derivation reasons about became the five
     # capability KINDS whose payload is an outcome-returning hook. Named by
     # kind id (the coverage artifact's `capability_kind_id`), and each row is
     # read off the `Capability` payload rather than an `ExtensionHooks` field.
+    #
+    # WIDENED 2026-09-07, BY DECISION RATHER THAN INHERITANCE. `exit_intent`
+    # (ABI 7.0) and `work_in_flight` (7.3) are outcome-returning hooks declaring
+    # `! {FS}` -- the same shape that selects the five above -- and were absent
+    # here because this list was fixed at 5.x and re-expressed, not re-derived,
+    # at B8. Leaving them out UNDER-COUNTS the barriers, which is the unsafe
+    # direction: the zero-trigger below fires when the count reaches zero, and a
+    # count that omits row-carrying slots can reach zero while slots that
+    # perform effects still stand.
+    #
+    # The scope of this list is an ADR-scope question (Amendment A withheld
+    # criterion 1; see the docstring), so this widening was taken deliberately
+    # and the two profile records that carry the count in PROSE moved with it.
+    # `check_barrier_prose` below is what stops them drifting apart again.
     slots = ["budget_shaper", "compactor", "tool_provider",
-             "response_interceptor", "solver_judge"]
+             "response_interceptor", "solver_judge",
+             "exit_intent", "work_in_flight"]
     payloads = capability_payloads(abi)
 
     slot_barriers, covered, gated = [], [], []
@@ -332,14 +347,20 @@ def check_barrier_count(abi, disp):
         if kind == "Gated":
             gated.append(slot)
         elif row:
-            slot_barriers.append((slot, row))
+            # The KIND travels with the barrier so the line below can state it.
+            # It used to print "unconditionally dispatched" for every barrier,
+            # which was true while all of them were -- and became false the
+            # moment `exit_intent` (Lifecycle) entered the set.
+            slot_barriers.append((slot, row, kind))
         else:
             covered.append(slot)
 
     n = len(slot_barriers)
     print(f"  ✓ SLOT-level barrier count DERIVED from the ABI rows and the dispatch table: {n}")
-    for slot, row in slot_barriers:
-        print(f"      BARRIER  {slot}: unconditionally dispatched, declares ! {{{row}}}"
+    for slot, row, kind in slot_barriers:
+        how = ("unconditionally dispatched" if kind == "Unconditional"
+               else "dispatched at a lifecycle boundary, and performs that row whenever it is")
+        print(f"      BARRIER  {slot}: {how}, declares ! {{{row}}}"
               f"  (outcome returns world state: {'yes' if returns_world[slot] else 'NO'})")
     for slot in covered:
         print(f"      coverable {slot}: unconditionally dispatched, declares NO row")
@@ -355,7 +376,61 @@ def check_barrier_count(abi, disp):
              "      profile version bump. See the header of src/core/dst_driver_only.ail.")
 
     print(f"    → {n} slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone")
+    check_barrier_prose([slot for slot, _r, _k in slot_barriers])
     check_per_extension_barriers(slot_barriers, returns_world)
+
+
+def check_barrier_prose(barrier_slots):
+    """The profile records state the barrier count in PROSE. Tie it to the derivation.
+
+    WHY THIS EXISTS. Two profile records carry the barrier count as English --
+    "Three barrier slots stand for it -- on_pre_step, on_response_intercept and
+    on_solver_candidate" -- and NOTHING compared that sentence to the derivation
+    it paraphrases. It went stale twice without a red: at ABI 7.0 (`exit_intent`)
+    and again at 7.3 (`work_in_flight`), and was found by a session reading the
+    prose rather than by any gate. That is `check_abi_version`'s defect class
+    exactly, in the artifact next door, so it gets the same treatment.
+
+    The subjects are DERIVED by glob for `check_abi_version`'s stated reason: a
+    profile that lands without joining a hand-kept list is not under-covered
+    loudly, it is under-covered silently.
+
+    What is checked is the count and the NAMES. A sentence that says the right
+    number while naming the wrong slots is the stale-transcription shape this
+    file is named for.
+    """
+    n = len(barrier_slots)
+    subjects = sorted((REPO / "src/core").glob("dst_driver*.ail"))
+    seen = 0
+    for path in subjects:
+        text = path.read_text()
+        if "barrier slots stand for it" not in text:
+            continue
+        seen += 1
+        rel = path.relative_to(REPO)
+        if f"{n} barrier slots stand for it" not in text:
+            fail(f"{rel} states a barrier count that is not {n}, which is what the ABI rows and the "
+                 f"dispatch table derive. The derived barriers are {barrier_slots}. A profile record "
+                 "that paraphrases a derivation must move with it.")
+        # THE WINDOW IS THE CLAUSE, NOT THE FILE. Checked against the whole text
+        # this guard passes a record whose barrier LIST is wrong as long as the
+        # missing name appears in some later sentence -- measured by falsifying
+        # it, which is the only reason this is a window.
+        start = text.index("barrier slots stand for it")
+        end = text.index("criterion 1 fails", start)
+        clause = text[start:end]
+        for slot in barrier_slots:
+            if f"`{slot}`" not in clause:
+                fail(f"{rel} claims {n} barrier slots but its sentence does not name `{slot}`, "
+                     f"which the derivation counts as one. The derived set is {barrier_slots}.")
+        for slot in ("budget_shaper", "tool_provider", "describe_tools", "prompt_shaper", "tool_policy"):
+            if slot not in barrier_slots and f"`{slot}`" in clause:
+                fail(f"{rel} names `{slot}` among its barrier slots and the derivation does not "
+                     f"count it as one. The derived set is {barrier_slots}.")
+    if seen == 0:
+        fail("no profile record carries the barrier sentence, so this guard compared nothing. "
+             "An assertion with no subject cannot be told from one that does not run.")
+    print(f"  ✓ the barrier count and slot names in {seen} profile record(s) match the derivation")
 
 
 COVERAGE = REPO / "src/core/dst_profile_coverage.ail"
@@ -543,7 +618,7 @@ def check_per_extension_barriers(slot_barriers, returns_world):
                  "      barrier count for it is unknown, not zero.")
         port_mediated = e["verdict"] == "PORT-MEDIATED"
         nothing_to_tag = e["ext_ports_calls"] == 0
-        for slot, row in slot_barriers:
+        for slot, row, _kind in slot_barriers:
             if port_mediated and nothing_to_tag and returns_world[slot]:
                 cleared.setdefault(ext_id, []).append(slot)
             else:

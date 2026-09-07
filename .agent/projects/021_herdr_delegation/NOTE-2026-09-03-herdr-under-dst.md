@@ -242,12 +242,19 @@ same idea as `WorldState.files`, built by hand. What they are not:
   kinds (`check_fixtures.check_barrier_count`: budget_shaper, compactor, tool_provider,
   response_interceptor, solver_judge). `ExitIntent` (7.0) and `WorkInFlight` (7.3) are absent, and
   both are outcome-returning hooks declaring `! {FS}` — the shape the other five are selected by.
-  Whether they belong in the barrier set is **an ADR-scope decision, not a repair**: that file
+  Whether they belong in the barrier set was **an ADR-scope decision, not a repair**: that file
   states its criterion scope was fixed by Amendment A and that admitting a measurement outside it
-  "is an ADR-scope act and not this file's". If the answer is that they belong, three artifacts move
-  together — the slot list, and the count carried in PROSE by both
-  `dst_driver_plus_compose.ail` and `dst_driver_plus_no_ops.ail` ("Three barrier slots", "the
-  barrier count for it is 3"). Left for the owner rather than inherited.
+  "is an ADR-scope act and not this file's".
+  **DECIDED AND TAKEN 2026-09-07: they belong.** The barrier count is 3 → **5**, and the three
+  artifacts moved together — `check_barrier_count`'s slot list, and the count carried in PROSE by
+  `dst_driver_plus_compose.ail` and `dst_driver_plus_no_ops.ail`. The deciding argument is the
+  direction of the error: leaving row-carrying slots out UNDER-counts, and the count reaching ZERO
+  is a trigger that says an extension has become installable — so an under-count can fire that
+  trigger while slots that perform effects still stand. Per-(extension, slot) pairs went 54 → 90,
+  70 standing.
+  A fourth artifact was added rather than moved: `check_barrier_prose` now fails if a profile
+  record's sentence and the derivation disagree on the count OR on the names. Nothing compared them
+  before, which is why the prose went stale twice without a red.
 - **A fourth profile is a fourth consumer of register entry 14** (the `driver_only`-verbatim waiver
   condition in the fault catalogue). Not a blocker, but the count moves.
 - **Register entry 8** — the bridge hardcodes `workdir: "."` and `timeout_ms: 0` on the
