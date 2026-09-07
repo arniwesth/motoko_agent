@@ -449,17 +449,12 @@ export pure func grants_relaxation(kind: string) -> bool
 -- carrying a shell token is refused rather than sent (same rule as
 -- `path_is_safe`). Empty means "CLI default" and adds nothing, which keeps
 -- today's behaviour byte-identical when the caller says nothing.
+-- ASSERTED THROUGH `kind_model_args_str`, not here: a list is not a literal and
+-- `tests [...]` evaluates literal expected values only — the constraint
+-- `show_argv`'s header states for every builder in this file. Eight cases were
+-- written here against list literals and reported as eight failures from the
+-- day they landed; they are the same eight, on the wrapper, and they pass.
 export pure func kind_model_args(k: string, model: string) -> [string]
-  tests [
-    (("claude", "claude-fable-5"), ["--model", "claude-fable-5"]),
-    (("codex", "gpt-5.3-codex"), ["-m", "gpt-5.3-codex"]),
-    (("claude", ""), []),
-    (("codex", ""), []),
-    (("gemini", "gemini-2.5-pro"), []),
-    (("motoko", "whatever"), []),
-    (("claude", "a;b"), []),
-    (("claude", "a`id`"), [])
-  ]
   {
     if model == "" || has_shell_tokens(model) then []
     else if k == "claude" then ["--model", model]
@@ -506,13 +501,11 @@ export pure func argv_start(name: string, kind: string, pane: string, timeout_ms
 -- `model` is operator-supplied free text; `kind_model_args` refuses anything
 -- with a shell token, so an accepted model keeps `argv_is_safe` green and a
 -- refused one degrades to CLI-default rather than failing the delegation.
+-- ASSERTED THROUGH `argv_start_model_str`. The four cases below this line until
+-- 2026-09-07 named a STRING as the expected value of a `[string]` — every one
+-- reported "expected ..., got [agent, start, ...]", which is a shape mismatch
+-- and not a disagreement about argv. They moved to the wrapper unchanged.
 export pure func argv_start_model(name: string, kind: string, pane: string, timeout_ms: int, model: string) -> [string]
-  tests [
-    (("mot-dlg-7", "claude", "w1:pA", 20000, ""), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000"),
-    (("mot-dlg-7", "claude", "w1:pA", 20000, "claude-fable-5"), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5"),
-    (("mot-dlg-8", "codex", "w1:pB", 20000, "gpt-5.3-codex"), "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never -m gpt-5.3-codex"),
-    (("mot-dlg-7", "claude", "w1:pA", 20000, "a;b"), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000")
-  ]
   {
     let base = ["agent", "start", name, "--kind", kind, "--pane", pane,
                 "--timeout", intToStr(timeout_ms)];
@@ -603,8 +596,18 @@ export pure func argv_start_str(name: string, kind: string, pane: string, timeou
 
 export pure func argv_start_model_str(name: string, kind: string, pane: string, timeout_ms: int, model: string) -> string
   tests [
+    -- no model: byte-identical to `argv_start`, which is what keeps a caller
+    -- that says nothing about the model on today's behaviour.
+    (("mot-dlg-7", "claude", "w1:pA", 20000, ""),
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000"),
     (("mot-dlg-7", "claude", "w1:pA", 20000, "claude-fable-5"),
-     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5")
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5"),
+    -- codex carries BOTH the relaxation flags and the model, in that order.
+    (("mot-dlg-8", "codex", "w1:pB", 20000, "gpt-5.3-codex"),
+     "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never -m gpt-5.3-codex"),
+    -- a shell token degrades to the CLI default rather than failing the call
+    (("mot-dlg-7", "claude", "w1:pA", 20000, "a;b"),
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000")
   ]
   { show_argv(argv_start_model(name, kind, pane, timeout_ms, model)) }
 
@@ -615,6 +618,26 @@ export pure func kind_default_args_str(k: string) -> string
     ("gemini", "")
   ]
   { show_argv(kind_default_args(k)) }
+
+-- The eight cases `kind_model_args` could not state about itself. The pair that
+-- earns this wrapper is the last two: an operator's model string is free text,
+-- and a shell token in it renders EMPTY — the delegate then runs on the CLI
+-- default and the call still succeeds. That is the design
+-- (`DESIGN-delegate-model-selection.md` says so, and says the silence is the
+-- open policy question), so it is asserted rather than left to be rediscovered.
+export pure func kind_model_args_str(k: string, model: string) -> string
+  tests [
+    (("claude", "claude-fable-5"), "--model claude-fable-5"),
+    (("codex", "gpt-5.3-codex"), "-m gpt-5.3-codex"),
+    (("claude", ""), ""),
+    (("codex", ""), ""),
+    -- a kind with no model flag takes the model and drops it, silently
+    (("gemini", "gemini-2.5-pro"), ""),
+    (("motoko", "whatever"), ""),
+    (("claude", "a;b"), ""),
+    (("claude", "a`id`"), "")
+  ]
+  { show_argv(kind_model_args(k, model)) }
 
 export pure func argv_prompt_str(target: string, text: string) -> string
   tests [(("mot-dlg-7", "Read the task."), "agent prompt mot-dlg-7 Read the task.")]

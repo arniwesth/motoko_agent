@@ -8,7 +8,9 @@ title, now true of the code as well.** No Linear issue yet. Corrected 2026-09-07
   "Updated/added docs" and does not mention it). `Delegate` takes an optional `model`;
   `types.kind_model_args` maps it to `claude --model` / `codex -m` and to nothing for every other
   kind; `types.argv_start_model` appends it after `--` beside `kind_default_args`. The per-kind
-  flag map §1 priced as "moderate" is those two functions.
+  flag map §1 priced as "moderate" is those two functions, and it is **gated**: four assertions in
+  `scripts/verify_mot136_dagr_producer.ail` (`make verify_dagr_producer`) cover passthrough after
+  `--`, the metacharacter refusal, and that the ask is recorded verbatim on the attempt either way.
 - **§1's motoko half is NOT built.** `types.argv_split` still emits its three `--env` pairs and no
   `MODEL=`, so a `model` on a motoko `Delegate` is silently ignored. This was the *one-line* half.
 - **No policy, as §3–§4 predicted.** The only validation is `has_shell_tokens`, and a refused model
