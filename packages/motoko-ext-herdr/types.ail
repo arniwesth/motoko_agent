@@ -1057,8 +1057,18 @@ export pure func code_hint(code: string) -> string
       " The delegate accepted input but its state never changed, which in practice means it is not really at an agent prompt — check `agent explain`."
     else if code == "agent_not_found" then
       " No agent with that name or pane is live. It has been closed, or it was never started."
+    -- CORRECTED 2026-09-07 AGAINST A MEASUREMENT, herdr 0.8.2. This said "the
+    -- pane holds an agent herdr did not start, so it cannot be prompted. Only
+    -- agents started with `agent start` are promptable." Both sentences are
+    -- false: a DETECTED claude, running in a pane nothing had `agent start`ed,
+    -- accepted a prompt and executed it. Who started the agent is not the rule.
+    -- herdr's own message names the real one -- "not an active named agent" --
+    -- and what actually fails is the NAME binding: a self-reported agent
+    -- (motoko, 020 D1) has none, which is why `DESIGN-motoko-as-delegate` §1
+    -- sends that lifecycle's task as argv instead.
+    -- MEASUREMENTS-2026-09-07-prompt-delivery.md has both cases.
     else if code == "agent_not_ready" then
-      " The pane holds an agent herdr did not start, so it cannot be prompted. Only agents started with `agent start` are promptable."
+      " herdr does not hold that pane as an active NAMED agent, so it will not route a prompt to it. This is about the name binding rather than about who started the agent: a self-reported agent (a motoko delegate) is never promptable, and one herdr started should be. Nothing was delivered — a refusal on this code leaves the pane untouched."
     else if code == "agent_blocked" then
       " The delegate is waiting on an approval prompt. Answer it in the pane, or send keys to it."
     else if code == "agent_explain_unavailable" then

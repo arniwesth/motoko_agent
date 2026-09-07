@@ -1,8 +1,12 @@
 # Design: retrying a refused `agent prompt` — scope for finding C's mitigation
 
 Date: 2026-09-07
-Status: **Scope only. Nothing built.** Blocked on ONE cheap measurement (§3.1) that does not
-require reproducing finding C.
+Status: **Scope only. Nothing built — and NO LONGER BLOCKED.** §3.1 was run on 2026-09-07 against
+live herdr 0.8.2 and the answer is in
+[`MEASUREMENTS-2026-09-07-prompt-delivery.md`](MEASUREMENTS-2026-09-07-prompt-delivery.md):
+**an `agent_not_ready` refusal delivers nothing** (4/4, pane byte-identical), so §3's hazard does
+not apply to this code and §5 is licensed on the delivery axis. The same run also proved §2's
+description of the code WRONG in a way that sharpens finding C — see §3.2.
 Relates to: finding C in [`HANDOFF-2026-09-03-patch-state-and-what-remains.md`](HANDOFF-2026-09-03-patch-state-and-what-remains.md)
 (`agent_not_ready` on an agent herdr itself started, 2/2 reproducible);
 [`MEASUREMENTS-2026-09-02-run-file-truthfulness.md`](MEASUREMENTS-2026-09-02-run-file-truthfulness.md)
@@ -23,8 +27,8 @@ If finding C is a race, a bounded retry is the mitigation, and it is *extension*
 under DST without ever reproducing the herdr-side fault. Two things make it narrower than it
 sounds: only **one** failure code is a candidate (§2), and the time budget is not an obstacle (§4).
 
-The blocker is not cost. It is a single unverified assumption about whether the refused prompt was
-**delivered** (§3), and §3.1 is a way to settle that in one command without reproducing the race.
+The blocker was not cost but a single assumption about whether the refused prompt was **delivered**
+(§3). It was measured on 2026-09-07 and cleared: nothing is delivered (§3.2).
 
 ## 1. What happens today
 
@@ -46,15 +50,16 @@ wrong; it is simply final on the first refusal.
 
 | code | meaning | retry? |
 |---|---|---|
-| `agent_not_ready` | *"the pane holds an agent herdr did not start, so it cannot be prompted"* | **candidate** — a ROUTING refusal: herdr declines to route the prompt at all, so nothing was delivered |
+| `agent_not_ready` | herdr: *"not an active named agent"*. (This row first quoted the extension's own gloss, "the pane holds an agent herdr did not start" — §3.2 measured that false and it is corrected in `types.ail`.) | **YES, measured** — the refusal delivers nothing, 4/4 |
 | `agent_prompt_stalled` | *"the delegate accepted input but its state never changed"* | **no** — it says ACCEPTED. A retry is a second delivery |
 | `timeout` | the herdr CLI itself did not return | **no** — genuinely undecidable; the prompt may be in flight |
 | `agent_not_found` | no agent with that name or pane is live | **no** — retrying cannot summon it |
 | `agent_blocked` | waiting on an approval prompt | **no** — a thing to report, not to repeat |
 | `server_not_running` | herdr is unwell | **no** — nothing in this call will fix it |
 
-So the retry set is **`{agent_not_ready}`** — one code, chosen because it is the only one whose own
-wording asserts non-delivery.
+So the retry set is **`{agent_not_ready}`** — one code, and since 2026-09-07 the only one whose
+non-delivery is MEASURED rather than inferred from its own wording. The other five keep their
+verdicts on reasoning alone, and `timeout` is undecidable by construction rather than unmeasured.
 
 ## 3. The assumption this rests on, stated plainly
 
@@ -67,7 +72,23 @@ receives its prompt twice is worse than one that fails cleanly: it may do the wo
 answer file twice, or interleave two runs in one pane. Today's close-on-failure is what makes the
 current behaviour safe, and any retry gives that up.
 
-### 3.1 How to settle it in one command, without reproducing finding C
+### 3.2 ANSWERED 2026-09-07, and the control case was the surprise
+
+The subject behaved as hoped: a self-reported motoko refused with `agent_not_ready` and the pane
+was byte-identical afterwards, four times out of four. Retry is safe here.
+
+The CONTROL did not. A **detected** claude — in a pane nothing had `agent start`ed — **accepted the
+prompt and executed it**. So this design's §2 reasoning ("a routing refusal because herdr did not
+start it") had the right conclusion for the wrong reason, and the extension's error text, which
+said the same thing, was simply false. herdr's rule is the NAME binding, not provenance. The text
+is corrected in `types.ail`; the table of who is promptable is in the measurement.
+
+That also sharpens finding C rather than explaining it: a claude herdr did NOT start is promptable,
+and one it DID start must be — yet finding C's was refused as "not an active named agent". herdr
+lost a name binding for an agent it had just started. Still not reproduced here, still a live-repro
+item, but an upstream report can now say precisely what to look for.
+
+### 3.1 How it was settled, in one command, without reproducing finding C
 
 `agent prompt` **refuses reported agents** — that is why the motoko lifecycle passes its task as
 argv[2] instead (`DESIGN-motoko-as-delegate` §1). So `agent_not_ready` can be produced *on demand*
@@ -100,7 +121,7 @@ Two extra attempts with a probe between them is single-digit *milliseconds* of w
 backoff is chosen, against a **30 s** process wall of which ~4 s is already spent. Budget does not
 constrain this design; §3 does.
 
-## 5. The shape, if §3.1 clears it
+## 5. The shape, now that §3.1 has cleared it
 
 - **Bounded and small**: at most 2 extra attempts. A refusal that survives three attempts is not a
   race and should fail exactly as it does today.
