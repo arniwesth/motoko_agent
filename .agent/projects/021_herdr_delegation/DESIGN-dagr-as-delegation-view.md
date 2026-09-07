@@ -554,3 +554,82 @@ Third pass, 2026-08-31 — decisions and measurements, no new design:
 - Owner decisions recorded: `retry_of` in v1 (§3.6); `task_kind` in v1, bundled (§3.1); answer
   envelope free-text now / tolerant later / strict only on evidence (§4.2).
 - Remaining open: F-5 (the dependency) and settle-on-exit (§8 item 4).
+
+## 10. The drift question: one run file or two
+
+Written 2026-09-07. **Three documents already send readers here** — the drift issue twice, and
+`MEASUREMENTS-2026-09-05-plan001-live-run.md` finding 4 — and until now this section did not exist.
+The question had been referenced, priced and scheduled without ever being stated.
+
+### 10.1 The question
+
+An operator running a plan keeps a run file of their own (`.dagr/run-plan001.json` in the live run:
+11 tasks with deps and owners, maintained by hand). This producer keeps its own, keyed by pane and
+session. **Both describe the same work and they disagree.** Should the extension write into the
+operator's file instead?
+
+Measured drift, 2026-09-06 08:35: the extension's file recorded four delegates as `working` whose
+panes no longer existed, because the orchestrator took each task over and never called
+`DelegateCheck` again. Neither file is wrong by its own contract. Together they are not one truth.
+
+### 10.2 The constraint that decides it, and it is not a preference
+
+**`dagr` cannot merge.** The binary is read-only — `check`, `view`, `stats`, `pane-cwd`, `--skill`
+and nothing else (v0.3.1, `dagr --help`). Its README is explicit: *"whoever produces the data owns
+it."* So there is no partial update available to anybody: **every writer replaces the whole
+document**, and two writers on one file means lost updates unless something orders them.
+
+Within ONE session the ordering is fine, and that is worth saying because it is the reassuring half:
+the model's plan edits and the extension's writes are both tool calls in the same loop, so they
+never interleave mid-call, and `dagr_record` re-reads the file on every write rather than carrying
+a document across calls (its header says so, deliberately).
+
+**The hazard is that the model's edit cycle spans turns.** It reads the file in one tool call,
+reasons, and writes a whole replacement in another — the `tmp` → `dagr check --strict` → `mv` loop.
+The extension writes in between, on every `Delegate` and every `DelegateCheck`. So the model's write
+is built on a stale read and silently drops whatever the extension recorded since. In the live run
+the orchestrator made **~20 such edits while delegating**, so this is the ordinary case, not a race
+that needs bad luck.
+
+### 10.3 What settle-on-exit does to option A, which is new since the issue was written
+
+Settle-on-exit (2026-09-07) publishes a settled copy of the run file at clean exit, through ABI
+7.1's `PublishFile`, whose precondition is **the digest of the document the render read**. Point
+that at the operator's plan file and the precondition does exactly what it should: any operator edit
+after the last render makes the digest stale and the host refuses the publish. Correct, and it means
+**settle-on-exit would routinely no-op under option A** — on precisely the runs where the operator
+is most active. The startup sweep's repair has the same shape.
+
+That is not an argument that the precondition is wrong. It is evidence that a document with two
+whole-file writers cannot carry a generation guarantee for either of them.
+
+### 10.4 The options
+
+- **A1 — the extension writes the operator's file.** The issue's option A: `Delegate` takes a
+  `dagr_task` naming a task in an operator-supplied file, and attempts land there. One file, one
+  view, the plan's deps and owners intact. **Cost: it gives up §5's one-writer rule by
+  construction**, and §10.2's clobber is then a routine event that no discipline the model is asked
+  to follow can prevent — the live run shows the model rewriting the whole document as its normal
+  mode. §10.3 applies.
+- **A2 — invert the ownership: the operator supplies a plan INPUT, the extension owns the state.**
+  Not in the issue, and it is the option §10.2 points at. The operator declares intent — task ids,
+  titles, deps — in a file the extension READS and never writes; the extension emits those tasks
+  into its own run file and attaches attempts to them; the operator's dagr view points at the
+  extension's file. One document, deps preserved, **one writer**, and settle-on-exit and the sweep
+  keep working unchanged. Cost: the operator no longer hand-edits the live document, which is a
+  real loss of control and the thing to weigh; and taking a task over by hand needs a way to say so.
+- **B — two files, one view (shipped).** What option B delivered on 2026-09-06: the extension yields
+  the screen when an operator view is open. The drift remains, unread.
+- **B+ — B, plus a link.** The extension's run file names the operator's plan in a `note`, so a
+  reader of either can find the other. Cheap, honest, and does not pretend the two agree.
+
+### 10.5 Recommendation
+
+**A2, or B+ if the operator's hand-editing of the live document is not negotiable.** A1 is the
+option the issue proposed and the one I would not build: it trades a visible disagreement between
+two honest documents for an invisible one inside a single document, and §10.3 shows it also disables
+two mechanisms that were built this month.
+
+What would change the recommendation: a `dagr` that can merge — a `dagr set-attempt`-shaped command
+that owns the format and applies a partial update. Then A1 is straightforward and preferable, and
+the ask belongs upstream with `aemrebarut/herdr-dagr` rather than here.

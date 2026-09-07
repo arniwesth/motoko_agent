@@ -54,7 +54,13 @@ panes that no longer exist. `.dagr/` holds 15 such files. Context:
 ## Fix
 
 This needs the owner's decision first; the question is recorded in
-`DESIGN-dagr-as-delegation-view.md` §10. The two candidate shapes:
+`DESIGN-dagr-as-delegation-view.md` §10 — **which did not exist until 2026-09-07.** Three documents
+pointed at it, including this one twice. It now states the question, the constraint that decides it
+(`dagr` is READ-ONLY, so every writer replaces the whole document), and **a third option the two
+below do not cover**: invert the ownership, so the operator supplies a plan INPUT the extension
+reads and never writes, and the extension keeps sole ownership of the state document. That preserves
+the one-writer rule §5 rests on, which option 1 gives up by construction. The two shapes as
+originally recorded:
 
 1. **The extension writes into the plan file.** `Delegate` takes an optional `dagr_task` naming a
    task id in an operator-supplied run file; the extension opens the attempt there instead of in
