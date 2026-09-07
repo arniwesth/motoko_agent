@@ -630,6 +630,41 @@ option the issue proposed and the one I would not build: it trades a visible dis
 two honest documents for an invisible one inside a single document, and §10.3 shows it also disables
 two mechanisms that were built this month.
 
-What would change the recommendation: a `dagr` that can merge — a `dagr set-attempt`-shaped command
-that owns the format and applies a partial update. Then A1 is straightforward and preferable, and
-the ask belongs upstream with `aemrebarut/herdr-dagr` rather than here.
+What would change the recommendation: a `dagr` that can merge — a command that owns the format and
+applies a partial update. **That now exists, and this section has to be read differently because of
+it** (2026-09-07, same day).
+
+### 10.6 `dagr apply` exists, on a fork, unreleased
+
+`aemrebarut/herdr-dagr` was forked to `motoko-agent/herdr-dagr`, branch `apply-command`, and the
+command is built and tested there: `dagr apply <run.json> --patch <patch.json> [--strict]`, RFC 6902
+(`test`/`add`/`replace`/`remove`), applied under dagr's own read-modify-write, validated against the
+contract, published by atomic rename. 483 lines added and none deleted; the upstream validator
+`check(doc: &Doc)` is reused untouched, and the document is never round-tripped through `Doc`
+because that struct sets no `deny_unknown_fields` and would silently drop any producer field the
+contract does not model.
+
+Exercised against one of this repo's own run files: a compare-and-append applies and the result
+still passes `dagr check --strict`; re-sending the same patch is refused with duplicate-id errors
+and the file is unchanged; a stale `test` is refused by name. The concurrency property §10.2 says is
+missing is therefore available: **a lost update becomes a refusal.**
+
+**This does not simply promote A1, and the reason is a supply-chain trade rather than a technical
+one.** Today `DAGR_VERSION` pins v0.3.1 and CI fetches that release asset by sha256 — the pin and
+the digest exist precisely so this container runs a published upstream binary. Adopting A1 now means
+running a dagr **we build from our own fork**, which is a different and larger commitment than any
+option in §10.4. So the decision gains an axis it did not have:
+
+| | run pinned upstream v0.3.1 | run our fork |
+|---|---|---|
+| **A1** (extension writes the operator's file) | not viable — §10.2 stands | viable, via `dagr apply` |
+| **A2** (invert ownership) | viable | viable |
+| **B / B+** | viable | viable |
+
+A2 and B+ are unchanged by any of this: **neither needs `apply` at all.** A2 remains the
+recommendation for a tree that wants to keep running a pinned upstream release.
+
+The path that makes A1 cheap without the supply-chain trade is upstreaming `apply` — the branch is
+deliberately shaped for it (additive, no reformatting of upstream code, `main.rs` +84/−0) and no PR
+has been opened yet. If it is accepted and released, the table above collapses back to one column
+and A1 becomes straightforward, which is what the original sentence predicted.
