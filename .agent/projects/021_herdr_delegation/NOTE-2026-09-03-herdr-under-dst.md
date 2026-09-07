@@ -221,12 +221,33 @@ same idea as `WorldState.files`, built by hand. What they are not:
   `HERDR_ENV`, `HERDR_BIN_PATH`, `HERDR_PANE_ID`; tagging needs `MOTOKO_SESSION_MS`. The make
   target sets them for the `ailang run` process; the profile discloses the `Env` grant across
   registration the way compose discloses `Env`/`FS`.
-- **The shared omission string is wrong about herdr.** `barrier_reason()` at
-  `dst_driver_plus_compose.ail:516` is applied wholesale to the list at `:535`, which includes
-  `herdr`, and says *"Three barrier slots stand for it — on_pre_step, on_response_intercept and
-  on_solver_candidate each declare a non-empty ABI effect row"*. herdr binds none of the three
-  (§2.4). When herdr leaves the omit list this reason must be split, and it is a finding for
-  project 009's register regardless.
+- ~~**The shared omission string is wrong about herdr.**~~ **RETRACTED 2026-09-07 — this finding
+  was a misreading, and acting on it would have made a correct artifact wrong.** The bullet said
+  `barrier_reason()` is false for herdr because herdr binds none of `on_pre_step`,
+  `on_response_intercept`, `on_solver_candidate` (true — it binds `DescribeTools`, `ToolProvider`,
+  `ExitIntent` and, since 7.3, `WorkInFlight`). But the sentence is a claim about the ABI's SLOT
+  SURFACE, not about what any extension binds. `make profile_definition` prints the derivation it
+  mirrors, in its own words:
+
+      ✓ SLOT-level barrier count DERIVED from the ABI rows and the dispatch table: 3
+          BARRIER  compactor / response_interceptor / solver_judge
+        → 3 slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone
+
+  "No extension is installable" — the three barriers stand for every extension in the list whatever
+  it binds, so the reason is accurate for herdr and needs no split. Checked further: none of the
+  eleven extensions sharing that reason binds all three, so the misreading would have condemned the
+  whole list, not just this entry.
+
+- **What IS stale there, and it is a different thing.** The derivation reasons over five capability
+  kinds (`check_fixtures.check_barrier_count`: budget_shaper, compactor, tool_provider,
+  response_interceptor, solver_judge). `ExitIntent` (7.0) and `WorkInFlight` (7.3) are absent, and
+  both are outcome-returning hooks declaring `! {FS}` — the shape the other five are selected by.
+  Whether they belong in the barrier set is **an ADR-scope decision, not a repair**: that file
+  states its criterion scope was fixed by Amendment A and that admitting a measurement outside it
+  "is an ADR-scope act and not this file's". If the answer is that they belong, three artifacts move
+  together — the slot list, and the count carried in PROSE by both
+  `dst_driver_plus_compose.ail` and `dst_driver_plus_no_ops.ail` ("Three barrier slots", "the
+  barrier count for it is 3"). Left for the owner rather than inherited.
 - **A fourth profile is a fourth consumer of register entry 14** (the `driver_only`-verbatim waiver
   condition in the fault catalogue). Not a blocker, but the count moves.
 - **Register entry 8** — the bridge hardcodes `workdir: "."` and `timeout_ms: 0` on the
