@@ -17,6 +17,30 @@ export pure func guard_message() -> string {
   "You returned an empty response but the task is not marked complete. Continue working on the task, or if you are genuinely finished, state your final answer or conclusion explicitly. ${guard_marker()}"
 }
 
+-- THE SAME SILENCE, TWO CAUSES, AND UNTIL ABI 7.2 THEY WERE INDISTINGUISHABLE.
+-- A step that ends `finish_reason: "length"` with no text and no tool call did
+-- not decline to answer: it was CUT OFF at the output-token cap, having spent
+-- the whole budget reasoning. Measured on the PLAN-001 live run — five such
+-- steps per stalled worker — where this guard told the model it "returned an
+-- empty response", which is true, useless, and points at the wrong layer. The
+-- model cannot act on it, and the operator reading the transcript concludes the
+-- model went quiet.
+--
+-- The advice differs because the remedy differs: there is nothing to "continue"
+-- into, only a next attempt that has to be SHORTER or has to lead with the
+-- tool call.
+export pure func truncated_message() -> string {
+  "Your previous response was cut off at the output-token limit before it produced anything — the reasoning filled the entire budget. Do not simply retry: make the next response shorter, and if you intend to call a tool, emit the tool call FIRST, before any explanation. ${guard_marker()}"
+}
+
+-- `length` is the OpenAI-family name and the one Motoko's providers report.
+-- Matched exactly rather than by prefix: an unknown reason is "no opinion"
+-- (`ExtCtx.finish_reason`), and guessing from a substring would misread a
+-- provider that invents `length_limit_not_reached`.
+export pure func was_truncated(ctx: ExtCtx) -> bool {
+  ctx.finish_reason == "length"
+}
+
 export pure func budget() -> int {
   2
 }
@@ -31,9 +55,13 @@ export pure func count_markers(history: [Msg]) -> int {
   }
 }
 
+-- The BUDGET IS SHARED between the two messages, deliberately: both are the
+-- same marker, so a model that is truncated twice and then silent once has had
+-- three nudges and gets no more. Counting them separately would double the
+-- guard's budget for a model in the worst shape.
 export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
   if is_blank(candidate) && count_markers(ctx.history_slice) < max_feedback
-  then ContinueWithFeedback(guard_message())
+  then ContinueWithFeedback(if was_truncated(ctx) then truncated_message() else guard_message())
   else NoDecision
 }
 
@@ -150,7 +178,9 @@ pure func zero_token_telemetry() -> TokenTelemetry {
   { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
 }
 
-func test_ctx(history: [Msg]) -> ExtCtx {
+func test_ctx(history: [Msg]) -> ExtCtx { test_ctx_reason(history, "") }
+
+func test_ctx_reason(history: [Msg], reason: string) -> ExtCtx {
   {
     task: "t",
     step: 0,
@@ -164,6 +194,7 @@ func test_ctx(history: [Msg]) -> ExtCtx {
     budget_remaining: 1,
     history_slice: history,
     state_key: "k",
+    finish_reason: reason,
     context_limit: 0,
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
@@ -206,6 +237,37 @@ pure func test_decide_stops_at_budget() -> bool
       NoDecision => true,
       _ => false
     }
+  }
+
+-- The differential the field exists for: same blank candidate, same history,
+-- two different provider reasons, two different messages.
+pure func test_truncation_and_silence_get_different_advice() -> bool
+  tests [((), true)]
+  {
+    let truncated = match decide_with_budget(test_ctx_reason([], "length"), "", 2) {
+      ContinueWithFeedback(m) => m,
+      _ => ""
+    };
+    let silent = match decide_with_budget(test_ctx_reason([], "stop"), "", 2) {
+      ContinueWithFeedback(m) => m,
+      _ => ""
+    };
+    contains(truncated, "cut off at the output-token limit")
+      && contains(silent, "returned an empty response")
+      && truncated != silent
+      -- both still carry the marker, so the shared budget still counts them
+      && contains(truncated, guard_marker()) && contains(silent, guard_marker())
+  }
+
+-- An unknown or absent reason must fall through to the original message rather
+-- than to the truncation advice, which would be a confident wrong diagnosis.
+pure func test_unknown_reason_is_no_opinion() -> bool
+  tests [((), true)]
+  {
+    not was_truncated(test_ctx_reason([], ""))
+      && not was_truncated(test_ctx_reason([], "tool_calls"))
+      && not was_truncated(test_ctx_reason([], "length_limit_not_reached"))
+      && was_truncated(test_ctx_reason([], "length"))
   }
 
 pure func test_decide_ignores_non_blank_candidate() -> bool

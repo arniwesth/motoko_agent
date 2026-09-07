@@ -552,6 +552,31 @@ export type ExtCtx = {
   -- rather than guessing with a stale heuristic. Eliminates the duplicate
   -- model-registry tables that previously lived in motoko_ext_compaction_ai.
   context_limit: int,
+  -- 7.2: THE PROVIDER'S finish reason for the step this context describes, or
+  -- "" when this context does not follow a provider result (a pre-step shaper,
+  -- a tool-phase context, a budget or system-prompt context).
+  --
+  -- IT IS THE PROVIDER'S AND NOT THE LOOP'S. `C2LoopState.last_finish_reason`
+  -- is overloaded with harness pseudo-reasons -- `hybrid_bash`,
+  -- `await_approval`, `persist_nudge`, `solver_feedback`, `dp7_rejected`,
+  -- `stream_error` -- which are control states of the driver and not statements
+  -- about the model's response. An extension that saw those would be reading
+  -- the driver's private vocabulary and would break when it changed. The host
+  -- fills this from `StepResult.finish_reason` at the one site where the raw
+  -- result is in scope.
+  --
+  -- WHY IT IS HERE AT ALL. A finalize hook cannot otherwise tell a response
+  -- TRUNCATED at the output-token cap (`"length"`, zero tool calls, empty text)
+  -- from a model that simply said nothing -- measured on the PLAN-001 live run,
+  -- where five steps per stalled worker ended exactly that way and the guard
+  -- told the model it "returned an empty response", which was true and useless.
+  -- `telemetry.last_output_tokens` cannot separate them either: the cap is not
+  -- in this record, and `context_limit` is the INPUT window.
+  --
+  -- TREAT AN UNKNOWN VALUE AS "no opinion". Providers do not agree on this
+  -- string beyond `stop`/`length`/`tool_calls`, so match the ones you act on
+  -- and fall through on the rest.
+  finish_reason: string,
   ports: ExtPorts,
   artifacts: Json,
   telemetry: TokenTelemetry,
