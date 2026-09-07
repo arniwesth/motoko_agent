@@ -37,7 +37,7 @@ module scripts/verify_mot136_dagr_producer
 
 import std/io (println, exit)
 import std/json (Json, jo, ja, kv, js, jnum, encode, decode, get, asString, asArray, asObject)
-import std/string (contains, join, intToStr)
+import std/string (contains, join, intToStr, length)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -141,7 +141,7 @@ func argv_list(args_json: string) -> [string] {
 -- or "prompt". It replaces the old `split_ok` boolean because F3 is a failure
 -- AFTER the split — the pane, the agent and the task file are all spent — and a
 -- flag that fails the split cannot reach it.
-func scripted(status: string, gone: bool, fail_at: string)
+func scripted(ms: int, status: string, gone: bool, fail_at: string)
   -> (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS} {
   func(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
     let cmd = cmd_of(args_json);
@@ -174,11 +174,38 @@ func scripted(status: string, gone: bool, fail_at: string)
              next_state: put_file(world, "/tmp/.last-agent-start", argv) }
     -- THE F3 SHAPE, MEASURED 2026-09-01: the pane split, the agent started and
     -- the readiness gate passed, and only then did `agent prompt` refuse.
-    else if contains(argv, "agent prompt") then
-      if fail_at == "prompt" then { output: envelope("", herdr_error("agent_not_ready"), 1), exit_code: 1, next_state: world }
-      else { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: world }
+    -- PROMPT REFUSALS ARE COUNTED, not merely switched on. `prompt_with_retry`
+    -- makes up to three attempts, so a fixture that can only fail ALL of them
+    -- cannot express the case the retry exists for: refused once, then
+    -- accepted. The tally lives in the world, which is the only state a
+    -- scripted port has.
+    --
+    --   "prompt"        every attempt is refused        (the pre-retry case)
+    --   "prompt_once"   the FIRST is refused, then it succeeds
+    --   "prompt_stall"  every attempt refused with a code that must NOT retry
+    else if contains(argv, "agent prompt") then {
+      -- KEYED PER CASE. The world threads from one `drive` to the next, so a
+      -- single counter path accumulates across cases: by case 19 it already
+      -- held case 9's three attempts. That is not cosmetic — it made case 16
+      -- pass by never refusing at all, which is the opposite of what it claims
+      -- to test. `ms` is unique per case and is the case's own identity.
+      let tries = "/tmp/.prompt-tries-${intToStr(ms)}";
+      let seen = length(read_file(world, tries));
+      let w2 = put_file(world, tries, "${read_file(world, tries)}x");
+      if fail_at == "prompt" || fail_at == "prompt_moved" then { output: envelope("", herdr_error("agent_not_ready"), 1), exit_code: 1, next_state: w2 }
+      else if fail_at == "prompt_stall" then { output: envelope("", herdr_error("agent_prompt_stalled"), 1), exit_code: 1, next_state: w2 }
+      else if fail_at == "prompt_once" && seen == 0 then { output: envelope("", herdr_error("agent_not_ready"), 1), exit_code: 1, next_state: w2 }
+      else { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: w2 }
+    }
     else if contains(argv, "agent get") || contains(argv, "agent wait") then
       if gone then { output: envelope("", herdr_error("agent_not_found"), 1), exit_code: 1, next_state: world }
+      -- "prompt_moved": the agent's status CHANGES once a prompt has been
+      -- attempted, which is the shape the retry's probe exists for — a refusal
+      -- that may have been delivered anyway. The baseline is read before any
+      -- attempt, so it sees `status`; every read after one sees "working".
+      else if fail_at == "prompt_moved" && length(read_file(world, "/tmp/.prompt-tries-${intToStr(ms)}")) > 0 then
+        { output: envelope("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"working\",\"pane_id\":\"w1:pA\"}}}", "", 0),
+          exit_code: 0, next_state: world }
       else
         { output: envelope("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"${status}\",\"pane_id\":\"w1:pA\"}}}", "", 0),
           exit_code: 0, next_state: world }
@@ -202,7 +229,7 @@ func ports_at(ms: int, status: string, gone: bool, split_ok: bool) -> ExtPorts {
 func ports_failing_at(ms: int, status: string, gone: bool, fail_at: string) -> ExtPorts {
   let base = noop_ext_ports();
   { ai_step: base.ai_step,
-    tool_handle: scripted(status, gone, fail_at),
+    tool_handle: scripted(ms, status, gone, fail_at),
     file_read: fs_read,
     file_write: fs_write,
     file_remove: fs_remove,
@@ -521,7 +548,67 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && contains(last_split_argv(s15.world), "MODEL=") == false);
   emit(s15.world);
 
+  -- 16. THE RETRY (2026-09-07). Refused once with `agent_not_ready`, accepted on
+  --     the second attempt: the delegation SUCCEEDS and the task is open and
+  --     working, where before this it was a failed row and a dead pane. This is
+  --     finding C surviving rather than being fixed — the herdr-side cause is
+  --     untouched.
+  let s16 = drive(s15.world, ports_failing_at(16000, "working", false, "prompt_once"),
+                  delegate_call("c16", "retried work", "claude", "impl", ""));
+  let a21 = check("a prompt refused once with agent_not_ready is retried and the delegation succeeds",
+                  s16.code == 0
+                    && contains(read_file(s16.world, run_file_path()), "\"state\":\"working\"")
+                    && contains(s16.out, "is running `claude`"));
+  emit(s16.world);
+
+  -- 17. Refused every time: the outcome is what it always was — closed pane,
+  --     failed task, the model told — and the RECEIPT now says how many tries,
+  --     because `verified` grades a claim about the spawn.
+  let s17 = drive(s16.world, ports_failing_at(17000, "working", false, "prompt"),
+                  delegate_call("c17", "never accepted", "claude", "impl", ""));
+  let d17 = read_file(s17.world, run_file_path());
+  let a22 = check("a prompt refused every time still fails, and the receipt counts the attempts",
+                  s17.code == 1
+                    && contains(d17, "\"result\":\"failed\"")
+                    && contains(d17, "agent_not_ready")
+                    && contains(d17, "after 3 attempts"));
+  emit(s17.world);
+
+  -- 18. THE CODE THAT MUST NEVER BE RETRIED. `agent_prompt_stalled` says the
+  --     delegate ACCEPTED the input, so a second attempt is a second delivery.
+  --     One attempt, and the receipt must not claim more.
+  let s18 = drive(s17.world, ports_failing_at(18000, "working", false, "prompt_stall"),
+                  delegate_call("c18", "stalled work", "claude", "impl", ""));
+  let d18 = read_file(s18.world, run_file_path());
+  -- SCOPED TO THIS TASK'S RECEIPT, not to the document. A bare
+  -- `contains(doc, "attempts")` matches the two EARLIER tasks that were retried,
+  -- so it would fail while the code was right — which is what it did. Matching
+  -- the closing quote is what proves nothing follows the code inside the string.
+  let a23 = check("agent_prompt_stalled is never retried: it says the input was accepted",
+                  s18.code == 1
+                    && contains(d18, "code `agent_prompt_stalled`\",")
+                    && contains(d18, "code `agent_prompt_stalled`, after") == false);
+  emit(s18.world);
+
+  -- 19. THE PROBE. Same retryable code as case 17, but the agent's status MOVES
+  --     after the refusal — so the prompt may have landed after all, and a
+  --     second delivery is the one outcome worse than a clean failure. Exactly
+  --     one attempt, and the receipt must not claim more.
+  let s19 = drive(s18.world, ports_failing_at(19000, "idle", false, "prompt_moved"),
+                  delegate_call("c19", "moved after refusal", "claude", "impl", ""));
+  let d19 = read_file(s19.world, run_file_path());
+  -- Scoped to the receipt, for case 18's reason: two EARLIER tasks in this same
+  -- document were retried three times, so a document-wide "no attempt count"
+  -- assertion is false no matter how this case behaves. The closing quote is
+  -- what pins "nothing follows the code", and only this task's receipt ends
+  -- there.
+  let a24 = check("a refusal is NOT retried once the agent has moved: it may have been delivered",
+                  s19.code == 1
+                    && contains(d19, "\"id\":\"mot-dlg-19000·a1\"")
+                    && contains(d19, "code `agent_not_ready`\",\"reason\""));
+  emit(s19.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
      && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 && a17b
-     && a18 && a19 && a20 then () else exit(1)
+     && a18 && a19 && a20 && a21 && a22 && a23 && a24 then () else exit(1)
 }

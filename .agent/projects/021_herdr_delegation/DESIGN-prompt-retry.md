@@ -1,7 +1,8 @@
 # Design: retrying a refused `agent prompt` — scope for finding C's mitigation
 
 Date: 2026-09-07
-Status: **Scope only. Nothing built — and NO LONGER BLOCKED.** §3.1 was run on 2026-09-07 against
+Status: **BUILT 2026-09-07.** §5 as written, with one addition §5 did not anticipate — see the
+note at the end of §5. Was: scope only, then unblocked by §3.1. §3.1 was run on 2026-09-07 against
 live herdr 0.8.2 and the answer is in
 [`MEASUREMENTS-2026-09-07-prompt-delivery.md`](MEASUREMENTS-2026-09-07-prompt-delivery.md):
 **an `agent_not_ready` refusal delivers nothing** (4/4, pane byte-identical), so §3's hazard does
@@ -137,6 +138,15 @@ constrain this design; §3 does.
   last of three attempts while reading as a claim about one.
 - **No new knob.** A retry policy an operator can turn off is a policy nobody will have on when the
   race bites.
+
+**AS BUILT, and the one thing this section did not anticipate.** Building it exposed a defect in the
+GATE rather than in the design: `verify_mot136_dagr_producer` threads one world through every case,
+so a shared attempt counter accumulated across them — case 9's three refusals were still on the
+tally by the time the retry cases ran. The effect was not cosmetic: the refuse-once-then-succeed
+case passed by never refusing at all, which is the exact opposite of what it claims to test. The
+counter is now keyed per case by its own `ms`. Two assertions had the same shape of error — a
+document-wide `contains(doc, "attempts")` matches EARLIER tasks that were legitimately retried — and
+are now scoped to the receipt they are about.
 
 ## 6. Ripple
 

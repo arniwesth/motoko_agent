@@ -1320,6 +1320,46 @@ export pure func agent_pane_of(stdout: string) -> string
 
 -- A settled delegate. `done` and `idle` were BOTH observed as the resting state
 -- after a completed turn, so accepting only one of them would hang the poll.
+-- ---------------------------------------------------------------------------
+-- Retrying a refused `agent prompt`
+-- ---------------------------------------------------------------------------
+--
+-- ONE CODE, AND THE MEASUREMENT IS WHY (2026-09-07, herdr 0.8.2,
+-- `MEASUREMENTS-2026-09-07-prompt-delivery.md`). Every other refusal either
+-- says it ACCEPTED the input, or cannot be helped by repeating:
+--
+--   agent_prompt_stalled   "accepted input but its state never changed" -- a
+--                          retry is a SECOND DELIVERY
+--   timeout                the CLI did not return; the prompt may be in flight.
+--                          Undecidable by construction, not merely unmeasured
+--   agent_not_found        the agent is gone; repeating cannot summon it
+--   agent_blocked          waiting on an approval; a thing to report
+--   server_not_running     herdr is unwell; nothing in this call fixes it
+--
+-- `agent_not_ready` is the only one whose non-delivery is MEASURED: four
+-- refusals in a row left the pane byte-identical and the agent idle. So a retry
+-- on this code cannot double-deliver, and a retry on any other might.
+export pure func prompt_is_retryable(code: string) -> bool
+  tests [
+    ("agent_not_ready", true),
+    ("agent_prompt_stalled", false),
+    ("timeout", false),
+    ("agent_not_found", false),
+    ("agent_blocked", false),
+    ("server_not_running", false),
+    ("", false),
+    ("something_new_upstream_invented", false)
+  ]
+  { code == "agent_not_ready" }
+
+-- THREE ATTEMPTS TOTAL, so two retries. A refusal that survives three is not a
+-- race and should fail exactly as it did before this existed. The cost is
+-- bounded and small: `agent prompt` measured 3-5ms and `agent get` 4ms, against
+-- a 30s process wall of which `agent start` has already spent ~3.9s.
+export pure func max_prompt_attempts() -> int
+  tests [((), 3)]
+  { 3 }
+
 export pure func is_settled(status: string) -> bool
   tests [
     ("done", true), ("idle", true),

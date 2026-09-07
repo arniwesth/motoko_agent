@@ -50,6 +50,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
   known_kind, kind_allowed, grants_relaxation, kind_model_args,
+  prompt_is_retryable, max_prompt_attempts, agent_status_of,
   allowed_kind_count, sole_allowed_kind,
   path_is_safe, path_within, argv_is_safe, show_argv, has_shell_tokens,
   argv_split, argv_start, argv_start_model, argv_prompt, argv_get, argv_explain, argv_close,
@@ -293,6 +294,60 @@ func explain_failure(step: string, argv: [string], run: HerdrRun) -> string {
 func spawn_receipt(run: HerdrRun) -> string {
   if run.code == -1 then "no subprocess outcome: the tool runtime returned no readable result"
   else "herdr exit ${show(run.code)}, code `${failure_code(run.code, run.err)}`"
+}
+
+-- The receipt on a spawn that took more than one try. The count is not
+-- decoration: the `verified` evidence tier on that dagr row grades a claim about
+-- the SPAWN, and "herdr exit 1, code `agent_not_ready`" would read as a claim
+-- about one attempt while describing the last of three.
+func spawn_receipt_attempts(run: HerdrRun, attempts: int) -> string {
+  if attempts <= 1 then spawn_receipt(run)
+  else "${spawn_receipt(run)}, after ${show(attempts)} attempts"
+}
+
+type PromptOutcome = { run: HerdrRun, attempts: int }
+
+-- SUBMIT THE TASK, RETRYING ONLY WHAT IS SAFE TO RETRY.
+--
+-- Finding C: a claude that `agent start` had just started, and that PASSED the
+-- readiness gate, was refused with `agent_not_ready` -- twice out of two. The
+-- cause is herdr-side (it lost the name binding for an agent it had just
+-- started) and is not fixed here. This makes a delegation survive it.
+--
+-- WHY THIS IS SAFE, and it is measured rather than argued
+-- (`MEASUREMENTS-2026-09-07-prompt-delivery.md`): an `agent_not_ready` refusal
+-- delivers NOTHING. Four refusals in a row left the pane byte-identical and the
+-- agent idle. `prompt_is_retryable` admits that code and no other, because every
+-- other refusal either says it accepted the input or cannot be helped by
+-- repeating.
+--
+-- THE PROBE IS NOT REDUNDANT WITH THAT MEASUREMENT. It was taken against a
+-- SELF-REPORTED agent, and finding C is about a STARTED one -- the case where
+-- herdr is already behaving unexpectedly, which is precisely when its documented
+-- semantics are worth least. So before each retry the agent's status is re-read,
+-- and if it has moved off what it was when the first attempt was refused, the
+-- prompt is treated as POSSIBLY DELIVERED and the loop stops. A delegate that
+-- receives its task twice is worse than one that fails cleanly.
+--
+-- A status the probe cannot read is treated as CHANGED, not as unchanged: the
+-- direction that stops retrying is the direction that cannot double-deliver.
+func prompt_with_retry(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, name: string, text: string,
+                       baseline: string, attempt: int) -> PromptOutcome ! {IO, Process, FS} {
+  let pr = run_herdr(cfg, p, w, argv_prompt(name, text));
+  if pr.code == 0 then { run: pr, attempts: attempt }
+  else if attempt >= max_prompt_attempts()
+          || prompt_is_retryable(failure_code(pr.code, pr.err)) == false
+  then { run: pr, attempts: attempt }
+  else {
+    let g = run_herdr(cfg, p, pr.next_state, argv_get(name));
+    let now = if g.code == 0 then agent_status_of(g.out) else "";
+    if now == "" || now != baseline then
+      -- Either the agent moved, or we could not tell. Stop and report the
+      -- refusal we have; the caller closes the pane exactly as before.
+      { run: { out: pr.out, err: pr.err, code: pr.code, next_state: g.next_state },
+        attempts: attempt }
+    else prompt_with_retry(cfg, p, g.next_state, name, text, baseline, attempt + 1)
+  }
 }
 
 -- ---------------------------------------------------------------------------
@@ -1128,13 +1183,21 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
             else {
               -- NO `--wait`. See the header.
               let text = task_wrapper_prompt(task, answer);
-              let pr = run_herdr(cfg, p, ex.next_state, argv_prompt(name, text));
+              -- THE BASELINE FOR THE RETRY PROBE, read BEFORE the first attempt
+              -- so a refusal can be compared against the state that preceded it
+              -- rather than against another post-refusal reading. One `agent
+              -- get`, 4ms. If it cannot be read the baseline is "", which
+              -- `prompt_with_retry` treats as "cannot tell" and never retries.
+              let base = run_herdr(cfg, p, ex.next_state, argv_get(name));
+              let baseline = if base.code == 0 then agent_status_of(base.out) else "";
+              let po = prompt_with_retry(cfg, p, base.next_state, name, text, baseline, 1);
+              let pr = po.run;
               if pr.code != 0 then {
                 let cleaned = run_herdr(cfg, p, pr.next_state, argv_close(pane));
                 let tf = p.clock_now(cleaned.next_state);
                 let rec = dagr_failed(cfg, p, tf.next_state, ctx.workdir, clock.now_ms, tf.now_ms,
                                       name, task_title(prompt), task_kind, kind, pane, name,
-                                      spawn_receipt(pr),
+                                      spawn_receipt_attempts(pr, po.attempts),
                                       "the `${kind}` agent started and passed the readiness gate, but `herdr agent prompt` refused the task; the pane was closed again",
                                       "verified");
                 { result: err_result(call.id, "Delegate", "${explain_failure("Submitting the task to the delegate", argv_prompt(name, text), pr)}${rec.note}"), next_state: rec.next_state }
