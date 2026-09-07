@@ -1,0 +1,82 @@
+flowchart TB
+  %% 013 ADR-003 v6.1 — ONE SESSION'S STATES under suspend, resume and park, and what each
+  %% transition writes to the journal. A state map drawn as a flowchart: rounded nodes are states
+  %% of the session (not of the process — a session outlives its runtime child), edge labels are
+  %% the event and, after a slash, the journal entry the HOST writes for it. Supersedes the v4.1
+  %% checkpoint drawing: there is no snapshot, no generation; every transition is an entry.
+  %% Colour = role: green a state the runtime holds in memory · gray-solid the journal, which is
+  %% the only thing that exists when no process holds the session · amber the resumer's decision ·
+  %% red a refusal · purple D7's park states (unscheduled) · teal-dashed the terminal outcomes of
+  %% a wait.
+  %% Layout note: the renderer lays same-rank nodes in a row and ranks by edges, so the four
+  %% groups are subgraphs in the order a session passes through them — in memory, the journal, a
+  %% fresh process, and D7's park states last because they are unscheduled.
+  %% Grounded 2026-09-07: ADR-003 v6.1 at HEAD 97827bf (committed at bbe28dd). D7 states are
+  %% ADR-003's named list with the Lost / Aborted exits. NOTHING here exists at HEAD.
+
+  subgraph MEM["In memory — the runtime child holds the session (D2, D5, D6)"]
+    direction TB
+    fresh(["<b>fresh session</b><br/>resume_count 0 · run_ordinal 0 · run_id session.r0.0<br/>the host writes the header; the first run's seed becomes N history entries"]):::mem
+    running(["<b>Running</b><br/>a traced run under RunIdentity<br/>every history change emitted as it happens — one message per entry<br/>step_idx counts toward step_budget"]):::mem
+    suspended(["<b>Suspended (BudgetExhausted)</b><br/>held in memory by the conversation loop<br/>herdr: blocked · TUI: input unlocked · headless: exit non-zero"]):::mem
+    idle(["<b>Between turns</b><br/>conversation loop reading stdin<br/>run_ordinal + 1 on the next run"]):::mem
+  end
+  fresh -->|"first task / run_started"| running
+  running -->|"step_idx == step_budget<br/>/ suspended entry"| suspended
+  suspended -->|"continue<br/>step_idx 0 · totals zero · counts carried / history_appended"| running
+  running -->|"done / run_finished with cumulative and world_ordinal"| idle
+  running -->|"non-budget error / run_finished"| idle
+  idle -->|"user_message / history_appended, run_started"| running
+  idle -->|"model_change / settings"| idle
+  suspended -->|"model_change / settings"| suspended
+
+  subgraph JOURNAL["The journal — .motoko/sessions/&lt;id&gt;/journal.jsonl, the only thing that exists when no process holds the session"]
+    direction TB
+    leaf[("<b>leaf = the last entry on the active branch</b><br/>one entry per line · id, parent_id, seq · a tree<br/>history entries carry an incremental digest_after · a checkpoint is a history_replaced pointer")]:::disk
+    exited[("<b>exit entry</b><br/>reason: abort · exit · restart · child_exit · host_exit, plus pending_tool_calls<br/>written by the host from its exit handler and, synchronously, from its process-exit hook")]:::disk
+    crashed[("<b>a crash: the journal ends at the last flushed entry</b><br/>the assistant's tool calls are already journaled before the tool phase runs<br/>so the last entry may be an unpaired call")]:::disk
+  end
+  idle -->|"abort · exit · restart"| exited
+  suspended -->|"abort · exit · restart"| exited
+  running -.->|"child killed · host crash · container restart"| crashed
+  idle -.->|"host crash"| leaf
+  suspended -.->|"host crash"| leaf
+  exited --> leaf
+  crashed --> leaf
+
+  subgraph RES["A fresh child — --resume &lt;journal&gt;, under the host's lease (D4, D5, D6)"]
+    direction TB
+    resumer{{"<b>--resume</b><br/>lease → read the journal ambiently → fold from the leaf<br/>→ runtime for the invoked profile → budget and prompt from header.boot.task<br/>→ digest compare → SessionResumed(resume_count, from_id, from_ordinal, …)<br/>the folded history on screen with a marker line; a trailing unpaired call stripped and named<br/>on a profile switch the head prefix is replaced and the seed journaled as history_replaced"}}:::decision
+    refused["<b>refused</b><br/>Header · Entry(seq, field) · Digest(seq) · HeadPrefix · Transcript · Pairing(seq)<br/>Workdir · ExtSet (same profile) · Prompt (same profile, unless --resume-force) · Leased · Schema"]:::refusal
+  end
+  leaf -->|"TUI respawn after restart passes --resume; --profile already flows"| resumer
+  leaf -->|"operator, later"| resumer
+  resumer -->|"any Refusal"| refused
+  resumer -->|"last = run_finished or exit"| idle
+  resumer -->|"last = suspended"| suspended
+
+  subgraph PARK["D7 · durable park — unscheduled until ADR-002 D2 activates and the between-turn frame exists"]
+    direction TB
+    parkReq(["<b>ParkRequested</b><br/>ParkEntered appended and emitted / park entry with open waits and the request"]):::park
+    suspWait(["<b>SuspendedWaiting</b><br/>--park-exits: the child has exited / run_suspended(park)<br/>the host's suspended-child state owns the ParkRequest<br/>no exit actions run · lease and reporter kept"]):::park
+    wakeRes(["<b>WakeResolved</b><br/>the answer arrives / wake entry, a child of the park entry"]):::park
+    resuming(["<b>Resuming</b><br/>--resume · the fold finds park + wake · wakes cursor seeded, request_id rewritten<br/>first decide parks; wake_read serves from the cursor once — a run_started follows"]):::park
+    lost["<b>Lost</b><br/>TUI quit (exit actions kill the delegates) · herdr server restart<br/>the journal stays; the next resume re-observes and wakes Lost"]:::outcome
+    aborted["<b>Aborted</b><br/>abort or restart while suspended / exit entry<br/>the request is cancelled; the journal stays resumable"]:::outcome
+  end
+  running -->|"decide → Park (ADR-002 D2)"| parkReq
+  parkReq -->|"path 1: runtime alive, wake_read returns / wake entry"| running
+  parkReq -->|"path 2: --park-exits"| suspWait
+  suspWait -->|"the wait's answer arrives"| wakeRes
+  wakeRes -->|"host respawns with --resume"| resuming
+  resuming -->|"recorded under the recording adapter"| running
+  suspWait -.-> lost
+  suspWait -.-> aborted
+  leaf -.->|"a park entry with no wake child:<br/>re-park under a new request, re-observe"| resumer
+
+  classDef mem fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef disk fill:#2a2f3a,stroke:#9aa4b2,color:#d5dbe5,stroke-width:2px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef refusal fill:#3b1d24,stroke:#f7768e,color:#f5c6ce;
+  classDef park fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef outcome fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-dasharray:6 4;

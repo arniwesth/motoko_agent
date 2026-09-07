@@ -1,0 +1,16 @@
+module tools/driver_leaf_inventory/fixtures/form_unadvanced_indirect
+
+-- FORM 2 of the four PLAN §2.1 names: an un-advanced leaf behind a named
+-- indirection (the alias bypass).
+--
+-- The port call is wrapped in a local `let f` closure and the successor is
+-- discarded at the use site. The script follows the indirection and reports
+-- it un-advanced-and-unwitnessed.
+
+import src/core/ports (Ports, WorldState)
+
+export func read_flag_alias(ports: Ports, world: WorldState, key: string) -> string ! {Env} {
+  let f = \w. ports.env_get(w, key, "");
+  let got = f(world);
+  got.value
+}

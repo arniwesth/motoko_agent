@@ -14,8 +14,9 @@
 #     (checks/agent-socket-probe.py measures it on the operator's side); a docker socket would hand this
 #     container host root.
 #   * herdr and the agent CLIs are BAKED IN *because* the agent cannot install anything. Corollary the
-#     operator owns: the agent cannot upgrade its own harness either — `agent.sh build` is the upgrade path,
-#     and it resolves the current release of each one on the host every time (see the version-arg note below).
+#     operator owns: the agent cannot upgrade its own harness either — `agent.sh build` is the upgrade path.
+#     Herdr's version is resolved on the host on every build (see the version-arg note below); the agent
+#     CLIs float at npm `latest`, re-resolved inside the build (see `the agents herdr starts`).
 #
 # Build context is the REPOSITORY ROOT, not this directory: install-prerequisites.sh runs against a copy of
 # the tree. See docker-compose.yml.
@@ -175,6 +176,70 @@ RUN arch="$(uname -m)" \
     && install -o root -g root -m 0755 /tmp/herdr /usr/local/bin/herdr \
     && rm -f /tmp/herdr \
     && herdr --version
+
+# ---------------------------------------------------------------------------- Herdr Studio (herdr-gui)
+# Web/PWA client for Herdr (powerfooI/herdr-studio, MIT): local socket
+# bridge + React dashboard for workspaces, tabs, panes, terminals, agents,
+# files, and diffs. Verified end to end in the running container 2026-09-06:
+# source build (bun install root+web+server, build:web,
+# compile:linux-arm64) produced herdr-gui 0.5.2, which served the dashboard
+# on 127.0.0.1:8787 with Herdr 0.8.2 reachable, and rendered correctly via
+# agent-browser (snapshot + screenshot).
+#
+# PREBUILT RELEASE ARCHIVE, not a source build: web/ + server/ need three
+# `bun install`s and a ~16s Vite build, and the result is a ~92 MB static
+# binary identical to what the release publishes -- so compiling from source
+# here would burn build minutes to reproduce a published artifact. The
+# release archive ships exactly one binary plus a VERSION file (measured
+# 2026-09-06: herdr-gui-linux-<arch>/{herdr-gui,VERSION}).
+#
+# PINNED BY VERSION ARG WITH PER-ARCH SHA256 DEFAULTS HERE, deliberately NOT
+# in versions.env. That file is the set of pins `agent.sh upgrade`
+# re-resolves from upstream on demand, which is right for the harness --
+# herdr and the agent CLIs -- and wrong for a companion GUI whose version
+# nobody is racing. This is the same call PLAYWRIGHT_VERSION and the hand
+# tools already make, and the same reason HERDR_SIDEBAR_REF is pinned by
+# tag rather than auto-resolved: bumping it should mean someone read the
+# diff. To upgrade: bump the three defaults below and rebuild.
+#
+# INTEGRITY follows the herdr block above: the release publishes a
+# `<archive>.sha256` beside each archive, and the pinned hashes below were
+# read from those files (v0.5.2, 2026-09-06; the arm64 archive was
+# additionally downloaded and its digest recomputed to match). `sha256sum -c`
+# fails the build on a corrupted or truncated download, and the VERSION grep
+# fails it on a mislabelled archive.
+#
+# INSTALLED AS ROOT into /usr/local/bin, for the same reason herdr is:
+# what the operator installed cannot be overwritten in place, so
+# `agent.sh build` remains the upgrade path. Same caveat too --
+# ~/.local/bin is writable and earlier on PATH, so against a determined
+# self-update this is a speed bump, not a control (cf. GH_PROMPT_DISABLED).
+# The bridge listens on 127.0.0.1 by default (container-loopback, auth bypassed by Studio design).
+# Reaching it from the host is a host-side compose decision, not an image one, and it is made in
+# docker-compose.yml's `ports:` block — host 127.0.0.1 only, with the bridge restarted on 0.0.0.0
+# inside (which switches Studio to token auth). See that block for both halves.
+USER root
+ARG HERDR_STUDIO_VERSION=0.5.2
+ARG HERDR_STUDIO_SHA256_LINUX_ARM64=db54ba1246a75523843a841a0cb9e3f85eced7cbf41c5eed5f347a9bde81e339
+ARG HERDR_STUDIO_SHA256_LINUX_X64=84de7f4499e4158ddf4b643512675f34efb9a382ca0488529b3b612ff30ebf1a
+RUN set -eu; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      aarch64|arm64) plat=linux-arm64; sha="${HERDR_STUDIO_SHA256_LINUX_ARM64}" ;; \
+      x86_64|amd64)  plat=linux-x64;   sha="${HERDR_STUDIO_SHA256_LINUX_X64}" ;; \
+      *) echo "no herdr-studio release asset for $arch" >&2; exit 1 ;; \
+    esac; \
+    if ! command -v xz >/dev/null; then apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/*; fi; \
+    archive="herdr-gui-v${HERDR_STUDIO_VERSION}-${plat}.tar.xz"; \
+    curl -fsSL -o "/tmp/${archive}" \
+      "https://github.com/powerfooI/herdr-studio/releases/download/v${HERDR_STUDIO_VERSION}/${archive}"; \
+    printf '%s  /tmp/%s\n' "${sha}" "${archive}" | sha256sum -c -; \
+    tar -xJf "/tmp/${archive}" -C /tmp "herdr-gui-${plat}/herdr-gui" "herdr-gui-${plat}/VERSION"; \
+    grep -qx "herdr-gui ${HERDR_STUDIO_VERSION} ${plat}" "/tmp/herdr-gui-${plat}/VERSION"; \
+    install -o root -g root -m 0755 "/tmp/herdr-gui-${plat}/herdr-gui" /usr/local/bin/herdr-gui; \
+    rm -rf "/tmp/${archive}" "/tmp/herdr-gui-${plat}"; \
+    herdr-gui --version
+
 
 # ---------------------------------------------------------------------------- headless web access
 # `agent-browser` (vercel-labs) — browser automation built for agents rather than for test suites:
@@ -389,23 +454,28 @@ USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
 # ---------------------------------------------------------------------------- the agents herdr starts
-# Pinned by the same host-resolved-arg mechanism as herdr, for the same caching reason. `bun install -g`
-# rather than npm: bun is already first on PATH from install-prerequisites.sh, and its global prefix is
-# ~/.bun/bin, which is inside the image rather than a root-owned tree.
+# ALWAYS LATEST, by decision 2026-09-06: reproducibility of these three leaf CLIs is not a goal, so they
+# float on the npm `latest` dist-tag instead of a pinned build arg. `bun install -g` rather than npm:
+# bun is already first on PATH from install-prerequisites.sh, and its global prefix is ~/.bun/bin, which
+# is inside the image rather than a root-owned tree.
+#
+# AGENTS_CACHE_BUST is what makes "latest" true rather than aspirational. A bare `…@latest` instruction
+# never changes, so Docker would reuse the cached layer forever and the image would keep whatever was
+# current the day it was first built, indefinitely and invisibly. agent.sh exports a fresh timestamp for
+# this arg on every `build`/`upgrade`, and because the RUN below references it, the layer invalidates and
+# the tags re-resolve. Building with plain `docker compose` leaves it empty and the layer caches normally —
+# that staleness is then at least visible, in the echo below.
 #
 # Each `herdr integration install` is run at BUILD time. It writes into the agent's own config directories
 # (~/.claude, ~/.codex, ~/.config/herdr), and nothing mounts /home/motoko — so an install done at runtime
 # would be discarded by the next `agent.sh stop`. Session identity and lifecycle reporting are what these
 # buy; herdr detects the agents without them, but cannot restore their native sessions.
-ARG CLAUDE_CODE_VERSION
-ARG CODEX_VERSION
-ARG OMP_VERSION
-RUN test -n "${CLAUDE_CODE_VERSION}" && test -n "${CODEX_VERSION}" && test -n "${OMP_VERSION}" \
-    || { echo "agent CLI versions are required — build through agent.sh, which resolves them" >&2; exit 1; }
-RUN bun install -g \
-        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-        "@openai/codex@${CODEX_VERSION}" \
-        "@oh-my-pi/pi-coding-agent@${OMP_VERSION}" \
+ARG AGENTS_CACHE_BUST=
+RUN echo "installing agent CLIs at npm latest (cache-bust: ${AGENTS_CACHE_BUST:-none})" \
+    && bun install -g \
+        "@anthropic-ai/claude-code@latest" \
+        "@openai/codex@latest" \
+        "@oh-my-pi/pi-coding-agent@latest" \
     && claude --version \
     && codex --version \
     && omp --version

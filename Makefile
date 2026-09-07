@@ -443,7 +443,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   conformance stream_parity latency_pair test_coverage_selftest \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
-  registry_multiplicity
+  registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest
 
 # corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
 #
@@ -487,10 +487,20 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # nothing: the exit code is propagated untouched and a sweep with only these
 # red still exits 2. scripts/dst/sweep_summary.sh also reports a target on this
 # list that PASSES, so the list cannot outlive the failure it describes.
-# Empty at HEAD: the D22 pair (test_coverage, test_coverage_selftest --
-# `prompts_test.ail` 0/6 and a `stale_skip_record`) has passed since the skip
-# record was brought current, and the summary's reverse check said to drop it.
-DST_KNOWN_RED :=
+# The D22 pair (test_coverage, test_coverage_selftest -- `prompts_test.ail` 0/6
+# and a `stale_skip_record`) was dropped once it passed, per the summary's
+# reverse check.
+#
+# depth_canary -- listed 2026-09-07, PLAN-003 §5: tier 1, seed 23 exceeds its
+# ceiling of 90 (seeds 7 and 11 and tier 0 pass). Bisected to 8980ba6 (PLAN-001
+# live-run fix 1), which added a per-call `decode` of tool arguments before
+# dispatch: the canary header's SECOND case, a per-step frame-cost change on the
+# tool-phase path, not a new O(|trace|) traversal. Disposition pending the
+# owner's re-measure of seed 23's floor (run_depth_canary.sh header, tolerance-1
+# bisection with the fix in place) and a pin bump with the reason recorded, or
+# moving the decode off the per-step frame. Drop this entry when the summary
+# reports it PASSED.
+DST_KNOWN_RED := depth_canary
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
@@ -2179,7 +2189,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_dagr_producer verify_exit_intent
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_delegate_kind verify_dagr_producer verify_exit_intent
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2280,6 +2290,27 @@ verify_herdr_dagr_pane:
 		scripts/verify_mot137_dagr_pane.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_herdr_dagr_pane: the auto-opened dagr view regressed (MOT-137)" && exit 1)
+
+# 2026-09-06: a `Delegate` with no `kind` is refused when the operator permits
+# more than one and set no default, rather than defaulted. The failure it pins
+# is measured, not hypothetical — the PLAN-001 live run started two claude panes
+# against a task written for motoko workers under
+# HERDR_ALLOWED_KINDS=claude,motoko, and the operator's first report of the
+# session was "it started claude code instances and not motoko".
+#
+# FIVE CASES, FOUR OF THEM THE CORNERS OF ONE CONDITION (`cfg.kind == "" &&
+# allowed_kind_count > 1`), because the two that must NOT refuse are the
+# expensive half: the shipped single-kind default, and an operator who set
+# HERDR_DELEGATE_KIND. The fifth reads `describe_tools` directly and asserts the
+# schema requires `kind` exactly when the handler does — a schema that advises
+# omitting it while the handler refuses the omission costs a turn every time and
+# the model can only learn it by being refused.
+.PHONY: verify_delegate_kind
+verify_delegate_kind:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_delegate_kind_required.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_delegate_kind: Delegate defaulted a kind the operator did not choose" && exit 1)
 
 # MOT-136: the dagr producer, in two legs.
 #
@@ -2416,6 +2447,11 @@ build: sync_packages check_core build_tui
 run: build
 	clear
 	MOTOKO_CONFIG=$(PROFILE) ./scripts/run-agent.sh
+
+# Run motoko without building
+motoko:
+	clear
+	MOTOKO_CONFIG=$(PROFILE) ./scripts/run-agent.sh $(ARGS)
 
 # Optional live calibration only; not part of compaction_dst or CI.
 # Requires OPENROUTER_API_KEY and uses Qwen for both agent and compaction_ai.
@@ -2758,6 +2794,20 @@ ext_call_inventory_selftest:
 	@python3 tools/ext_call_inventory/derive.py --self-test
 
 # ---------------------------------------------------------------------------
+# PLAN-001 P-INV (ADR-001 D2 §2.1): the driver-side leaf inventory — every
+# direct Ports/ContextReader field call by driver-side code with its
+# RequestClass, the aggregate-helper graph, and the ten-field exempt list.
+# RequestClass names frozen here (EnvRead, FileRead, ClockRead, ToolExec,
+# ModelStep); P2 Part 1 consumes the enum.
+# ---------------------------------------------------------------------------
+.PHONY: driver_leaf_inventory driver_leaf_inventory_selftest
+driver_leaf_inventory:
+	@python3 tools/driver_leaf_inventory/derive.py
+
+driver_leaf_inventory_selftest:
+	@python3 tools/driver_leaf_inventory/derive.py --self-test
+
+# ---------------------------------------------------------------------------
 # ADR-001 Amendment A, WI-D12: CLASSIFIER 3 -- the extension-closure
 # ambient-source inventory. The fourth deferred gate mechanism, admitted
 # 2026-08-06 by both acceptance reviewers.
@@ -2931,3 +2981,28 @@ agent_confined_r7:
 	  echo "(set R7_BASELINE=<path> to use another location)"; \
 	  exit 2; }
 	@python3 .devcontainer/agent_confined/checks/r7_git_audit.py --root "$$PWD" --verify "$(R7_BASELINE)"
+
+# `make studio` starts Herdr Studio in the agent container and prints the login URL.
+#
+# HOST-SIDE like the two targets above: it shells out to agent.sh. Idempotent — if the bridge
+# already answers, nothing is started and the current token is just printed. A (re)start binds
+# 0.0.0.0 inside the container (the compose `ports:` block explains why container-loopback is
+# unreachable from the host); that bind switches Studio to token auth, so the printed URL carries
+# `?token=` for one-click copying into the browser. The token is host-loopback-scoped and rotates
+# on rebuild — convenient, not a secret to store.
+HERDR_STUDIO_PORT ?= 8787
+.PHONY: studio
+studio:
+	@agent=.devcontainer/agent_confined/agent.sh; \
+	if ! $$agent run curl -fsS -m3 http://127.0.0.1:8787/healthz >/dev/null 2>&1; then \
+	  echo "starting herdr-gui in the agent container…"; \
+	  $$agent run bash -lc 'mkdir -p "$$HOME/.config/herdr-gui" && setsid nohup herdr-gui --host 0.0.0.0 --port 8787 >"$$HOME/.config/herdr-gui/bridge.log" 2>&1 < /dev/null &'; \
+	fi; \
+	token=""; \
+	for i in $$(seq 1 30); do \
+	  token=$$($$agent run cat /home/motoko/.config/herdr-gui/auth-token 2>/dev/null | tr -d '\r\n '); \
+	  if [ -n "$$token" ] && $$agent run curl -fsS -m3 http://127.0.0.1:8787/healthz >/dev/null 2>&1; then break; fi; \
+	  sleep 1; \
+	done; \
+	[ -n "$$token" ] || { echo "studio did not come up — check ~/.config/herdr-gui/bridge.log in the container"; exit 1; }; \
+	echo "Herdr Studio: http://localhost:$(HERDR_STUDIO_PORT)?token=$$token"

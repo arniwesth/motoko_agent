@@ -1,0 +1,14 @@
+module tools/driver_leaf_inventory/fixtures/form_unadvanced_direct
+
+-- FORM 1 of the four PLAN §2.1 names: an un-advanced direct leaf.
+--
+-- A `ports.env_get` call whose successor is discarded: the binding takes
+-- `.value` and drops `.next_state`. The script reports it
+-- un-advanced-and-unwitnessed.
+
+import src/core/ports (Ports, WorldState)
+
+export func read_flag(ports: Ports, world: WorldState, key: string) -> string ! {Env} {
+  let got = ports.env_get(world, key, "");
+  got.value
+}

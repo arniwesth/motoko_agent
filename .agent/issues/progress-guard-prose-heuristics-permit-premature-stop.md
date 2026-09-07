@@ -82,3 +82,75 @@ profiles are already at `max_steps:1010`.
 - Related but distinct: `.agent/issues/compaction-summary-loses-task-control-state.md` addresses the
   compaction *summary/capsule* steering the model toward wrap-up; this issue is about the *guard's*
   stop-permission logic once the model does try to wrap up.
+
+## Second occurrence (2026-09-05): the same prose heuristic in the other direction — a busy-poll
+
+The guard's stop-permission logic is prose-driven, and prose cuts both ways. In the PLAN-001 live
+run (`.motoko/logfile/session_2026-09-05T16-06-34-724Z.jsonl`, orchestrator turn "Launch it",
+session `1788636426215`) the orchestrator delegated a task, ended its answer with *"I'll settle it
+when the answer lands"*, and stopped. That is the correct behaviour: the work is in another pane
+and nothing the orchestrator can do advances it. The guard read the sentence as an incomplete task
+(steps 6 and 76):
+
+> You stopped while your own response indicates the task is still in progress. Continue the
+> existing task now.
+
+So the orchestrator continued, and the only thing it could do was poll. That turn ran 193 steps:
+55 `DelegateCheck` calls (each "has not written its answer yet … waited 20 s"), ~60
+`herdr pane read`, two `send-text` nudges into the worker, one bare `sleep 90`, then a takeover.
+The user's verdict: *"The polling does not seem to work."*
+
+This is the same defect as above. The guard consults the model's sentences instead of runtime
+state. Here the runtime state that would have settled it is "a delegate this session owns is
+`working` and no answer file exists", which the herdr extension knows and the guard does not ask.
+
+Addition to the fix list:
+
+- The guard should treat "waiting on a delegate" as an allowed stop. Either the herdr extension
+  exposes an in-flight count the guard can read from `ctx`, or the `Delegate` tool result's
+  *"this call did not wait for it"* sentence becomes a structured flag the guard honours. A model
+  that has open delegates and says it is waiting is not stopping early.
+- Deterministic test: a candidate ending "I'll settle it when the answer lands" with one open
+  delegate in the history slice must produce `NoDecision`; the same sentence with zero open
+  delegates must still produce `ContinueWithFeedback`.
+
+Context: `.agent/projects/021_herdr_delegation/MEASUREMENTS-2026-09-05-plan001-live-run.md`
+finding 5.
+
+## Progress (2026-09-06)
+
+Status stays **open**: only the "Second occurrence" addition is fixed. The four
+compaction-era fix items above (the runtime counter, the stale compaction-mention
+overrides, the broadened incomplete detection, and `qwen36-compaction-live`'s
+`max_steps`) are untouched.
+
+Commit `PLAN-001 live-run fix 5: waiting on a delegate is an allowed stop` on
+`arniwesth/013-dst-architecture-adr`.
+
+`progress_contract_guard.ail` now carries `has_open_delegate(ctx)`, and
+`decide_with_budget` will not nudge while it is true. The signal is the cheapest
+truthful one available: `ExtCtx` has no in-flight delegate count — the herdr
+extension knows one and the ABI has no slot for it — so the guard reads the
+sentences the herdr extension itself wrote into **tool-role** messages of
+`ctx.history_slice`. Those strings are produced by deterministic code in
+`packages/motoko-ext-herdr/herdr.ail`, not by the model, which is what makes this
+a runtime-state read and not one more prose rule. The last delegate signal in the
+slice wins, so a collected delegate stops being open and a second launch reopens.
+
+Three judgements the issue did not settle:
+
+- **`BLOCKED` is not open.** A delegate waiting for someone to answer a prompt on
+  its screen will not progress on its own, so stopping on it is a thing to report,
+  not work in flight. The guard keeps nudging.
+- **Assistant messages are excluded**, for `history_has_contract`'s trap-#1
+  reason: a candidate quoting the tool result back would otherwise write its own
+  permission to stop.
+- **Re-wording the herdr result strings degrades this to a nudge**, not to a wrong
+  allowance. That is the safe direction, and it is why a structured flag on
+  `ExtCtx` is still the better long-term shape.
+
+Four deterministic tests, the first two as the section names them:
+`test_open_delegate_makes_waiting_an_allowed_stop` (waiting candidate + one open
+delegate → `NoDecision`), `test_no_open_delegate_still_nudges` (same candidate,
+empty slice → `ContinueWithFeedback`), plus `test_settled_delegate_is_not_open`
+and `test_assistant_prose_cannot_open_a_delegate`.
