@@ -577,6 +577,14 @@ export type ExtCtx = {
   -- string beyond `stop`/`length`/`tool_calls`, so match the ones you act on
   -- and fall through on the rest.
   finish_reason: string,
+  -- 7.3: what OTHER extensions declared outstanding, aggregated by the host
+  -- from every registered `WorkInFlight` atom. Empty means nothing is, and
+  -- empty is also what a declarer's own bootstrap context carries.
+  --
+  -- IT IS A FACT ABOUT THE WORLD, NOT ABOUT THE MODEL. That is the whole
+  -- distinction it buys a finalize hook: "the model's answer sounds unfinished"
+  -- is a claim about prose, and "a delegate is still running" is not.
+  work_in_flight: [WorkItem],
   ports: ExtPorts,
   artifacts: Json,
   telemetry: TokenTelemetry,
@@ -1174,6 +1182,41 @@ export type ExitAction = ClosePane(PaneCloseAction)
 -- WI-D1 found in production.
 export type ExitIntentOutcome = { actions: [ExitAction], next_state: ExtWorld }
 
+-- =========================================================================
+-- 7.3: WorkInFlight -- one extension telling the rest of the system that it is
+-- waiting on something.
+--
+-- THE PROBLEM IT REPLACES. `progress_contract_guard` decided whether a session
+-- was legitimately waiting by READING ENGLISH SENTENCES that
+-- `motoko-ext-herdr` had written into tool-role messages. The strings came from
+-- deterministic code rather than from the model, which is what made it safe
+-- ENOUGH -- but re-wording one of them degraded the guard silently, and a
+-- delegate is only one of the things a session can be waiting on.
+--
+-- WHY IT IS NOT A FIELD THE HOST FILLS. `ExtCtx` is built by the core, and for
+-- the core to fill "how many delegates are open" it would have to know what a
+-- delegate is -- exactly what 7.0 removed when it deleted the TUI's reaper. The
+-- host must aggregate a fact it does not understand, which is what a capability
+-- is for.
+--
+-- WHAT A `label` IS FOR: diagnostics and nothing else. A consumer that switches
+-- on labels has re-created the coupling this removes. The only question the ABI
+-- promises to answer is "is anything outstanding", and `detail` is a sentence
+-- for a person.
+-- =========================================================================
+export type WorkItem = {
+  label: string,
+  detail: string
+}
+
+-- `next_state` IS REQUIRED, and not for symmetry. The barrier derivation
+-- classifies a slot by (rowed, dispatched unconditionally, returns explicit
+-- world state); `ExitIntent`'s v1 returned a bare list, read `std/fs` ambiently,
+-- and `make driver_plus_no_ops` rejected it because a rowed unconditional slot
+-- returning NO world state makes every extension in the tree non-zero-barrier
+-- at a stroke. This slot has the same shape and would fail the same gate.
+export type WorkOutcome = { items: [WorkItem], next_state: ExtWorld }
+
 -- Neutral hooks for record-update construction. Each result is the identity for
 -- its host dispatcher: empty concatenations/patches, no policy opinion, and
 -- pass/delegate/no-intercept/no-decision for the chaining and first-match folds.
@@ -1204,6 +1247,16 @@ export type Capability
   -- FS-backed state the extension already owns. `! {FS}` is the whole
   -- enforcement: a render that wanted to spawn a subprocess could not.
   | ExitIntent(string, bool, (ExtCtx) -> ExitIntentOutcome ! {FS})
+  -- 7.3. POSITIONAL for `ExitIntent`'s reason. `label` names the declarer in
+  -- diagnostics; the render answers what it is waiting on. `! {FS}` because the
+  -- honest answers live in files an extension already owns -- and because a
+  -- slot consulted this often must not be able to spawn anything.
+  --
+  -- THE RENDER RECEIVES A BOOTSTRAP CONTEXT whose own `work_in_flight` is
+  -- empty. A declarer reports what IT is waiting on and has no business reading
+  -- the aggregate it is about to contribute to; the empty list is that rule
+  -- made structural rather than written down.
+  | WorkInFlight(string, (ExtCtx) -> WorkOutcome ! {FS})
 
 -- The registry entry: D5's owner-bearing shape. `id` is the host's install
 -- stamp (`"${name}#${idx}"`), `caps` the registration list UNCHANGED in list

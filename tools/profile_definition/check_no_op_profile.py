@@ -165,7 +165,7 @@ def parse_output(path):
 # ---------------------------------------------------------------------------
 
 
-EXPECTED_CAPABILITY_KINDS = 9
+EXPECTED_CAPABILITY_KINDS = 10
 
 
 def abi_slots():
@@ -180,7 +180,8 @@ def abi_slots():
     row (or the reverse) is a FAIL, never a skip.
     """
     kinds = capability_kind_ids()
-    # NINE at ABI 7.0 (`ExitIntent`), eight before it. Pinned rather than
+    # TEN at ABI 7.3 (`WorkInFlight`), nine at 7.0 (`ExitIntent`), eight before
+    # it. Pinned rather than
     # derived on purpose: the count is what makes a kind added to the ABI and
     # forgotten here a FAIL instead of a silent skip, so it moves by hand, once,
     # with the variant.

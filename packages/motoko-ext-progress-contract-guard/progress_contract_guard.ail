@@ -176,19 +176,28 @@ pure func last_delegate_signal(msgs: [Msg], seen: int) -> int {
   }
 }
 
--- READING PROSE IS THE WORKAROUND, AND IT IS SCOPED, NOT FORGOTTEN (2026-09-07).
--- These strings come from deterministic code in `herdr.ail` rather than from the
--- model, which is what makes them safe to read at all — but re-wording one of
--- them degrades this predicate silently, and a delegate is only one of the
--- things a session can legitimately be waiting on. The structural shape is a
--- `WorkInFlight` capability plus an `ExtCtx` field, scoped in
--- `.agent/projects/021_herdr_delegation/DESIGN-work-in-flight-capability.md`;
--- it is two source-breaking ABI additions, so it is a decision the ABI freeze
--- forces rather than one that can be taken later. Until that is answered, this
--- stands, and it fails in the safe direction: a re-wording costs a NUDGE, never
--- a wrong allowance to stop.
+-- STRUCTURAL SINCE ABI 7.3, AND NO LONGER PROSE. This read the sentences
+-- `herdr.ail` wrote into tool-role messages, because until 7.3 there was no
+-- channel between two extensions at all. It now reads what every extension
+-- DECLARED, aggregated by the host, and it is no longer delegate-specific:
+-- a compose job or any other extension's outstanding work answers it too.
+--
+-- The prose reader below is KEPT, and it is not dead code — see
+-- `has_open_delegate`. The transcript is the only source that survives
+-- compaction dropping the run file's session, and an extension that is not
+-- registered declares nothing.
+export pure func declared_work_in_flight(ctx: ExtCtx) -> bool {
+  match ctx.work_in_flight { [] => false, _ => true }
+}
+
+-- EITHER SOURCE IS ENOUGH, and the asymmetry is deliberate. A false "something
+-- is in flight" costs one missed nudge; a false "nothing is" hands the model
+-- permission to stop while its delegate is still working, which is the failure
+-- this guard exists to prevent. So the two are OR-ed rather than the structural
+-- one replacing the textual one outright: 7.3 makes the answer reliable when it
+-- is available, and the transcript still answers when it is not.
 export pure func has_open_delegate(ctx: ExtCtx) -> bool {
-  last_delegate_signal(ctx.history_slice, 0) == 1
+  declared_work_in_flight(ctx) || last_delegate_signal(ctx.history_slice, 0) == 1
 }
 
 export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
@@ -201,6 +210,39 @@ export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback
   then ContinueWithFeedback(guard_message())
   else NoDecision
 }
+
+-- The point of 7.3, as a differential: same candidate, same EMPTY history — so
+-- the prose reader has nothing to go on — and one declared work item is the
+-- whole difference between a nudge and silence.
+pure func test_declared_work_suppresses_the_nudge() -> bool
+  tests [((), true)]
+  {
+    -- The fixture `test_continues_under_budget` uses, so the ONLY variable is
+    -- the declaration. Its history carries no delegate sentence at all, which
+    -- is what makes this a test of the capability and not of the prose reader.
+    let hist = [user("x ${guard_marker()}")];
+    let nudged = match decide_with_budget(test_ctx(contract_task(), hist), failure_candidate(), 2) {
+      ContinueWithFeedback(_) => true,
+      _ => false
+    };
+    let quiet = match decide_with_budget(
+        test_ctx_work(contract_task(), hist,
+                      [{ label: "delegate", detail: "delegates still in flight: mot-dlg-1" }]),
+        failure_candidate(), 2) {
+      NoDecision => true,
+      _ => false
+    };
+    nudged && quiet
+  }
+
+-- The OR, not a replacement: an extension that declares nothing must not turn
+-- the transcript signal off.
+pure func test_prose_still_answers_when_nothing_is_declared() -> bool
+  tests [((), true)]
+  {
+    declared_work_in_flight(test_ctx("t", [])) == false
+      && declared_work_in_flight(test_ctx_work("t", [], [{ label: "x", detail: "y" }]))
+  }
 
 export pure func decide(ctx: ExtCtx, candidate: string) -> FinalizeDecision {
   decide_with_budget(ctx, candidate, budget())
@@ -325,7 +367,9 @@ pure func zero_token_telemetry() -> TokenTelemetry {
   { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
 }
 
-func test_ctx(task: string, history: [Msg]) -> ExtCtx {
+func test_ctx(task: string, history: [Msg]) -> ExtCtx { test_ctx_work(task, history, []) }
+
+func test_ctx_work(task: string, history: [Msg], work: [WorkItem]) -> ExtCtx {
   {
     task: task,
     step: 0,
@@ -340,6 +384,7 @@ func test_ctx(task: string, history: [Msg]) -> ExtCtx {
     history_slice: history,
     state_key: "k",
     finish_reason: "",
+    work_in_flight: work,
     context_limit: 0,
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),

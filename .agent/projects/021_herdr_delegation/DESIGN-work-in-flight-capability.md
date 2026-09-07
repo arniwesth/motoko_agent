@@ -1,8 +1,9 @@
 # Design: `WorkInFlight` — letting one extension tell another that work is outstanding
 
 Date: 2026-09-07
-Status: **Scope only. Nothing built. Needs an owner decision BEFORE the ABI freeze**, because both
-halves of it are source-breaking additions that a freeze closes off.
+Status: **Built 2026-09-07 as ABI 7.3** — option 1 of §7, taken whole with producer and consumer in
+the same change. This page is kept as the reasoning; §4.1 is the one part the code did NOT follow,
+and the correction is recorded there.
 Provenance: everything measured against the tree at `cc137f2` (ABI 7.2). The ripple figures in §5
 are counted, not estimated, and the comparable in §5.1 is `cec2e25f`'s actual diffstat.
 
@@ -81,7 +82,18 @@ And on `ExtCtx`:
   work_in_flight: [WorkItem],
 ```
 
-### 4.1 The ordering problem, and the precedent that solves it
+### 4.1 The ordering problem — and what the code actually did
+
+**CORRECTION (2026-09-07, as built).** This section proposed rendering at turn end and consuming the
+value on the NEXT turn, mirroring `ExitIntent`, and accepted one-turn staleness as the price. The
+implementation does something simpler and fresher: at the post-response site the context is built
+**twice** — once with `work_in_flight: []` as the bootstrap the render receives, then again with the
+aggregate. No `C2LoopState` field, no staleness, and the dispatcher additionally re-empties the
+field per atom so no declarer can see a partial list whose contents would depend on registry order.
+The paragraph below is the design that was superseded; it is kept because the circularity it
+identifies is real and is what the two-build shape answers.
+
+### 4.1a The ordering problem, and the precedent that was proposed
 
 **A render that needs an `ExtCtx` cannot run while the `ExtCtx` is being built.** That circularity
 is the first thing that kills a naive version of this.

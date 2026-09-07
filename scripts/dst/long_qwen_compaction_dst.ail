@@ -220,6 +220,7 @@ func headroom_direct_ctx(limit: int, msgs: [Msg]) -> ExtCtx {
     history_slice: msgs,
     state_key: "issue-165",
     finish_reason: "",
+    work_in_flight: [],
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(),
@@ -1229,6 +1230,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
     history_slice: [],
     state_key: "k",
     finish_reason: "",
+    work_in_flight: [],
     ports: {
       -- S12: this shim PERFORMS a provider call, so it must return the world
       -- `model_step` advanced. It previously handed `empty_world_state()` in and

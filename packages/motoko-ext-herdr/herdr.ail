@@ -33,6 +33,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
   ExitAction, ExitIntentOutcome, ClosePane, PaneCloseAction, PublishFile, PublishFileAction,
+  WorkInFlight, WorkItem, WorkOutcome,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg, ToolSchema,
   ToolCallEnvelope, ToolResultEnvelope
@@ -41,7 +42,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   run_file, run_tmp, refused_marker, pane_marker, operator_pane_marker, load_doc, render, task_title,
   task_kind_or_default, known_task_kinds, task_of_key, can_link_retry, is_empty_run,
   open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
-  run_settled_tmp, settle_at_session_end, open_task_ids_str,
+  run_settled_tmp, settle_at_session_end, open_task_ids_str, run_file,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
   abandoned_ids, settle_abandoned, sweep_tmp,
   open_delegate_panes
@@ -1530,6 +1531,42 @@ export func exit_actions(cfg: HerdrConfig, ctx: ExtCtx) -> ExitIntentOutcome ! {
   }
 }
 
+-- ABI 7.3. WHAT THIS SESSION IS WAITING ON, answered from the run file rather
+-- than from the sentences this extension writes into tool results.
+--
+-- `open_task_ids` is the SAME predicate `settle_at_session_end` settles and the
+-- dagr view draws: a task whose latest attempt is non-terminal. So the answer
+-- the guard now reads is the answer the graph shows, and the two cannot drift
+-- into disagreeing — which the prose version could and eventually would.
+--
+-- BLOCKED IS NOT OPEN, and the run file already encodes that: a blocked
+-- delegate's attempt is settled or noted, not left in flight, so nothing extra
+-- is needed here to preserve the judgement `progress_contract_guard` made when
+-- it read prose. A delegate waiting for someone to answer a prompt on its
+-- screen will not progress on its own; that is a thing to report, not work
+-- to wait for.
+--
+-- EVERY FAILURE ANSWERS "NOTHING", which is the safe direction: it costs a
+-- nudge, never a wrong permission to stop.
+export func work_in_flight(cfg: HerdrConfig, ctx: ExtCtx) -> WorkOutcome ! {FS} {
+  if cfg.session_ms == "" || cfg.own_pane == "" then { items: [], next_state: ctx.world }
+  else {
+    let path = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
+    if path_is_safe(path) == false then { items: [], next_state: ctx.world }
+    else {
+      let read = ctx.ports.file_read(ctx.world, path);
+      if read.present == false then { items: [], next_state: read.next_state }
+      else {
+        let n = open_task_ids_str(read.content);
+        { items: if n == "" then []
+                 else [{ label: "delegate",
+                         detail: "delegates still in flight: ${n}" }],
+          next_state: read.next_state }
+      }
+    }
+  }
+}
+
 export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO, Process, FS, Clock} {
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
@@ -1542,6 +1579,7 @@ export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO,
   };
   -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   let at_exit = func(ctx: ExtCtx) -> ExitIntentOutcome ! {FS} { exit_actions(cfg, ctx) };
+  let waiting = func(ctx: ExtCtx) -> WorkOutcome ! {FS} { work_in_flight(cfg, ctx) };
   [
     DescribeTools(describe),
     -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this list only
@@ -1556,6 +1594,10 @@ export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO,
     -- and the host honours it, so an intent disabled here can do nothing at
     -- all -- which would silently disable the settlement for anyone who turned
     -- only that one on.
-    ExitIntent("delegate-panes", cfg.reap_on_exit || cfg.settle_on_exit, at_exit)
+    ExitIntent("delegate-panes", cfg.reap_on_exit || cfg.settle_on_exit, at_exit),
+    -- NO KNOB. Unlike the reap and the settle this performs nothing and changes
+    -- nothing — it answers a question — and an extension that answers only when
+    -- configured to is an extension whose answer cannot be relied on.
+    WorkInFlight("delegate", waiting)
   ]
 }

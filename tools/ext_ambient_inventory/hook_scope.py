@@ -111,6 +111,10 @@ CAPABILITY_KINDS: dict[str, tuple[int, tuple[int, ...]]] = {
     # a hook binding, exactly as `ToolProvider`'s names are data and its handle
     # is the binding.
     "ExitIntent": (3, (2,)),
+    # 7.3: (label, render). `label` is DATA -- a word for diagnostics -- and the
+    # render is the binding. No `enabled` third field: unlike the exit intent
+    # this performs nothing, so there is no operator opt-in to resolve.
+    "WorkInFlight": (2, (1,)),
 }
 
 #: Rejection shapes this module adds to the parent's five.  Each is a REJECTION.

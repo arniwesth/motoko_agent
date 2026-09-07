@@ -24,7 +24,7 @@
 --                           slot classified nowhere. A row-shape validator
 --                           accepts it. Only counting per SLOT rejects it.
 --
---   `seven_unconditional`   each of the SEVEN unconditionally-dispatched slots
+--   `seven_unconditional`   each of the EIGHT unconditionally-dispatched slots
 --                           excluded in turn. D5's prose says six. Under six,
 --                           the `on_describe_tools` case loads clean and then
 --                           fails closed on the first model step.
@@ -415,8 +415,12 @@ pure func only(ids: [AtomIds], keep: string) -> [AtomIds] {
   }
 }
 
--- Each of the SEVEN unconditionally-dispatched slots, excluded in turn, with
--- the others covered. SEVEN, one GATED and one LIFECYCLE at ABI 7.0. An earlier
+-- Each of the EIGHT unconditionally-dispatched slots, excluded in turn, with
+-- the others covered. EIGHT at ABI 7.3, one GATED and one LIFECYCLE; SEVEN at
+-- 7.0. `WorkInFlight` is the eighth and IS unconditional: unlike `ExitIntent`
+-- it carries no operator opt-in and needs nothing named by the host, and it is
+-- dispatched on the same branch `ResponseInterceptor` is — every step that
+-- produced a provider result. An earlier
 -- 7.0 draft made it eight by filing `ExitIntent` as unconditional, on the
 -- argument that its render runs at every turn end for every atom; the render is
 -- in fact gated by the operator opt-in AND by whether the host named a manifest
@@ -433,9 +437,9 @@ func seven_unconditional() -> bool ! {IO} {
 func sweep_slots(xs: [AtomRef], seen: int, acc: bool) -> bool ! {IO} {
   match xs {
     [] => {
-      let ok = seen == 7;
-      let _ = if ok then println("  ✓ all SEVEN unconditionally-dispatched slots reject exclusion (D5's prose says six)")
-              else println("  ✗ expected 7 unconditionally-dispatched slots, swept ${show(seen)}");
+      let ok = seen == 8;
+      let _ = if ok then println("  ✓ all EIGHT unconditionally-dispatched slots reject exclusion (D5's prose says six)")
+              else println("  ✗ expected 8 unconditionally-dispatched slots, swept ${show(seen)}");
       acc && ok
     },
     s :: rest => {
