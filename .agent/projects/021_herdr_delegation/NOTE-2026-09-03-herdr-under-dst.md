@@ -274,6 +274,35 @@ scenarios with dotted ids — `herdr.l1.owner_tag.*`, `herdr.l1.dagr_producer.*`
 chain it into `DST_TARGETS` (`Makefile:436`). This buys `scenario=`/`seed=`/`trace` reporting and
 the anti-silent-drop count for a few hours' work and changes no behaviour.
 
+**STEP 2 CANNOT BE SPLIT, and attempting it 2026-09-08 is how that was established.** The record and
+the acceptance script are one item, not two, and the reason is the basis field rather than
+convenience.
+
+`dst_profile.recognised_producers` is a CLOSED set of five, and for herdr only one of them can carry
+a `WorldMediated` entry:
+
+| producer | verdict for herdr |
+|---|---|
+| `ext_ambient_inventory` (classifier 3) | **AMBIENT** — 1 source, `register.ail:26 std/env.getEnvOr`. Cannot establish criterion 2, whatever the source is |
+| `ext_call_inventory` (classifier 2) | its own note: "never on its own for WorldMediated" |
+| `effect_inventory` (classifier 1) | recognised, not load-bearing |
+| `declared_row` | criterion 1 only; `tool_provider` and `work_in_flight` both declare non-empty rows |
+| `discovery` | **the only one left**, and it measures all three clauses over a RECORDED, VALIDATED, STRICTLY REPLAYED run |
+
+And the profile cannot dodge it by excluding those slots: `work_in_flight[0]` is unconditionally
+dispatched with a non-empty row, and D5 forbids installing an extension with an
+unconditionally-dispatched hook excluded. So a herdr profile is either backed by discovery or it
+does not exist — there is no honest intermediate, and a record naming `discovery` before the run
+exists would be a basis with nothing behind it, which is exactly what that producer's own note
+forbids.
+
+**What this does NOT change:** `make herdr_graded` runs the session and the dispatch works. What is
+missing is the recording → `check_discovery` → `validate_program` → strict-replay chain that turns
+that run into evidence. A draft record was written and deleted rather than committed; its measured
+content is reusable and is quoted in the entry above (four atoms; `exit_intent[0]` the one
+legitimately excludable slot, being Lifecycle; `tool_provider[0]` and `work_in_flight[0]` the two
+that must rest on discovery).
+
 **Step 2 — the profile.** `src/core/dst_driver_plus_herdr.ail` v1 mirroring the compose record;
 `scripts/dst/driver_plus_herdr_dst.ail` running the graded session (`Delegate` →
 `DelegateCheck` working → `DelegateCheck` done) against a scripted transcript, then
