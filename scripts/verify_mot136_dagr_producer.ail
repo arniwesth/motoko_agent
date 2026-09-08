@@ -306,6 +306,15 @@ func delegate_plan_call(id: string, prompt: string, dagr_task: string) -> ToolCa
                    kv("task_kind", js("impl")), kv("dagr_task", js(dagr_task))]) }
 }
 
+-- A2's second channel: the model was told the plan path in conversation and
+-- passes it here, with no `HERDR_DAGR_PLAN` anywhere.
+func delegate_declare_call(id: string, prompt: string, dagr_task: string, dagr_plan: string) -> ToolCallEnvelope {
+  { id: id, tool: "Delegate",
+    arguments: jo([kv("prompt", js(prompt)), kv("kind", js("claude")),
+                   kv("task_kind", js("impl")), kv("dagr_task", js(dagr_task)),
+                   kv("dagr_plan", js(dagr_plan))]) }
+}
+
 func delegate_call(id: string, prompt: string, kind: string, task_kind: string, retry_of: string) -> ToolCallEnvelope {
   delegate_call_model(id, prompt, kind, task_kind, retry_of, "")
 }
@@ -709,7 +718,88 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && contains(d23, "\"id\":\"P1A·a2\""));
   emit(s23.world);
 
+  -- 24. THE MODEL DECLARES THE PLAN, and this is the case the 2026-09-08
+  --     failure would have caught. `mk_cfg()` carries NO `dagr_plan`, so the
+  --     container channel is off exactly as it is in a checkout whose
+  --     `.devcontainer` is mounted read-only. The plan reaches the producer
+  --     only because the operator said its path and the model passed it on.
+  --
+  --     A SECOND PLAN FILE WITH IDS THIS RUN FILE HAS NEVER SEEN, deliberately:
+  --     P1A and P1B are already in the document from cases 22-23, so attaching
+  --     to one of those would prove nothing about where the plan came from.
+  --     `Q1` can only be here if the declaration was read.
+  let declared_plan = put_file(s23.world, "/tmp/.dagr/plan-declared.json",
+    "{\"dagr\":3,\"tasks\":[{\"id\":\"Q1\",\"title\":\"declared by the model\",\"kind\":\"impl\",\"deps\":[]},{\"id\":\"Q2\",\"kind\":\"impl\",\"deps\":[\"Q1\"]}]}");
+  let s24 = drive_cfg(mk_cfg(), declared_plan,
+                      ports_at(24000, "working", false, true),
+                      delegate_declare_call("c24", "work the declared plan", "Q1", "/tmp/.dagr/plan-declared.json"));
+  let d24 = read_file(s24.world, run_file_path());
+  let a30 = check("a plan named by the model seeds and attaches, with no HERDR_DAGR_PLAN set",
+                  s24.code == 0
+                    && contains(d24, "\"id\":\"Q1\"")
+                    && contains(d24, "\"deps\":[\"Q1\"]")
+                    && contains(d24, "\"id\":\"Q1·a1\"")
+                    && contains(d24, "\"id\":\"mot-dlg-24000\"") == false
+                    && contains(s24.out, "is in effect for the rest of this session"));
+  -- THE DECLARATION IS ON DISK, keyed by pane and session like every other
+  -- per-run path, because that is the whole mechanism: this extension holds no
+  -- state between tool calls.
+  let a30b = check("the declaration is recorded in the session's plan marker",
+                   read_file(s24.world, "/tmp/.dagr/.plan-w1-p1-200") == "/tmp/.dagr/plan-declared.json");
+  emit(s24.world);
+
+  -- 25. AND IT STICKS. The operator names the plan once, in their first
+  --     sentence; a model that had to repeat the path on every call would drop
+  --     it, and the graph would go back to accumulating parallel work. This
+  --     call passes NO `dagr_plan` and must still attach.
+  let s25 = drive_cfg(mk_cfg(), s24.world,
+                      ports_at(25000, "working", false, true),
+                      delegate_plan_call("c25", "the next task in the declared plan", "Q2"));
+  let d25 = read_file(s25.world, run_file_path());
+  let a31 = check("a later delegation inherits the declared plan without naming it again",
+                  s25.code == 0
+                    && contains(d25, "\"id\":\"Q2·a1\"")
+                    && contains(d25, "\"id\":\"mot-dlg-25000\"") == false);
+  emit(s25.world);
+
+  -- 26. A PLAN IN EFFECT THAT CANNOT BE READ SAYS SO. This is the failure mode
+  --     the container channel had and the reason it went undiagnosed for a
+  --     whole session: seeding nothing is indistinguishable from having no plan
+  --     unless the producer says which it is. The work still runs — a refused
+  --     linkage never refuses the delegation (§3.6).
+  let s26 = drive_cfg(mk_cfg(), s25.world,
+                      ports_at(26000, "working", false, true),
+                      delegate_declare_call("c26", "name a plan that is not there", "Q3", "/tmp/.dagr/nope.json"));
+  --     `Q3` and not `Q1`: an unreadable plan does not UN-seed what a readable
+  --     one already put in the document, and it must not — those tasks carry
+  --     this producer's own observations now. So the id has to be one the
+  --     document has never held for the refusal to be about the plan at all.
+  --     Both halves of the diagnosis have to be present: which id could not be
+  --     found, and why no plan could supply it. Either alone is what left the
+  --     2026-09-08 session guessing.
+  let a32 = check("a plan in effect with no file behind it is reported, and the work is opened as new",
+                  s26.code == 0
+                    && contains(s26.out, "there is no such file")
+                    && contains(s26.out, "was NOT linked")
+                    && contains(read_file(s26.world, run_file_path()), "\"id\":\"mot-dlg-26000\""));
+  emit(s26.world);
+
+  -- 27. A PLAN OUTSIDE THE SANDBOX IS REFUSED BEFORE IT IS READ, not around
+  --     the read: a path outside AILANG_FS_SANDBOX terminates the run rather
+  --     than returning an error, so the check cannot be a `catch`. The previous
+  --     declaration survives, because a refused declaration must not quietly
+  --     retire a working one.
+  let s27 = drive_cfg(mk_cfg(), s26.world,
+                      ports_at(27000, "working", false, true),
+                      delegate_declare_call("c27", "name a plan outside the sandbox", "Q1", "/etc/passwd"));
+  let a33 = check("a plan outside the working directory is refused with its reason, and nothing is recorded",
+                  s27.code == 0
+                    && contains(s27.out, "outside Motoko's filesystem sandbox")
+                    && read_file(s27.world, "/tmp/.dagr/.plan-w1-p1-200") == "/tmp/.dagr/nope.json");
+  emit(s27.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
      && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 && a17b
-     && a18 && a19 && a20 && a21 && a22 && a23 && a24 && a25 && a26 && a27 && a27b && a28 && a29 then () else exit(1)
+     && a18 && a19 && a20 && a21 && a22 && a23 && a24 && a25 && a26 && a27 && a27b && a28 && a29
+     && a30 && a30b && a31 && a32 && a33 then () else exit(1)
 }

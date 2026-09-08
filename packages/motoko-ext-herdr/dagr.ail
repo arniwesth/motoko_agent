@@ -310,6 +310,29 @@ export pure func pane_marker(dagr_dir: string, own_pane: string, session_ms: str
   tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/.pane-w1-p1-1756000000000")]
   { "${dagr_dir}/.pane-${slug(own_pane)}-${session_ms}" }
 
+-- THE DECLARED-PLAN SENTINEL (A2's second channel), and it exists because the
+-- first channel asked the wrong person.
+--
+-- `HERDR_DAGR_PLAN` made the plan a property of the CONTAINER. Measured
+-- 2026-09-08: an operator said "start implementing `.dagr/run-plan003.json`",
+-- the model understood it well enough to pass `dagr_task: "P1P1"` unprompted,
+-- and the linkage was refused because nothing had exported that variable — in
+-- a container whose `.devcontainer` is mounted read-only, so the one channel
+-- that existed could not be used from inside at all. Which plan is being
+-- implemented changes every day; which container this is does not.
+--
+-- So the model may declare it, and this file is where that declaration lives
+-- between tool calls. Keyed by producer pane AND session like every other path
+-- here (`pane_marker` says why), so a Motoko restarted in the same pane starts
+-- with no plan rather than inheriting the last one's.
+--
+-- IT HOLDS THE PATH, not a bit: `dagr_record` reads it on every write point,
+-- including the check-side ones, so a plan declared at the first `Delegate` is
+-- still in effect at the `DelegateCheck` that settles it.
+export pure func plan_marker(dagr_dir: string, own_pane: string, session_ms: string) -> string
+  tests [(("/w/.dagr", "w1:p1", "1756000000000"), "/w/.dagr/.plan-w1-p1-1756000000000")]
+  { "${dagr_dir}/.plan-${slug(own_pane)}-${session_ms}" }
+
 -- THE OPERATOR'S SENTINEL, and it is not this producer's to write.
 -- `scripts/dagr-pane.sh` writes the pane id of a HAND-OPENED dagr view here,
 -- for the same reason `pane_marker` exists: a pane is only ours to touch if we

@@ -39,7 +39,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   ToolCallEnvelope, ToolResultEnvelope
 )
 import pkg/sunholo/motoko_ext_herdr/dagr (
-  run_file, run_tmp, refused_marker, pane_marker, operator_pane_marker, load_doc, render, task_title,
+  run_file, run_tmp, refused_marker, pane_marker, plan_marker, operator_pane_marker, load_doc, render, task_title,
   task_kind_or_default, known_task_kinds, task_of_key, can_link_retry, is_empty_run,
   open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
   run_settled_tmp, settle_at_session_end, open_task_ids_str, run_file,
@@ -163,7 +163,7 @@ func delegate_params(allowed: string, must_choose: bool) -> string {
     else
       "Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.";
   let required = if must_choose then "[\"prompt\",\"kind\"]" else "[\"prompt\"]";
-  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model the delegate should run on: claude `--model`, codex `-m`, motoko the MODEL environment variable. Free string; empty means that agent's own default. Shell metacharacters are refused and fall back to the default. Ignored by kinds with no model transport.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"dagr_task\":{\"type\":\"string\",\"description\":\"The id of a task in the operator's plan that this delegation is work on. Use it whenever the work corresponds to a planned task: the attempt is recorded against that task, so the plan's dependencies and titles stay attached to what actually happened. An id that names no planned task is refused and the delegation is recorded as new work instead — it is never an error, and the result says so.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model the delegate should run on: claude `--model`, codex `-m`, motoko the MODEL environment variable. Free string; empty means that agent's own default. Shell metacharacters are refused and fall back to the default. Ignored by kinds with no model transport.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"dagr_plan\":{\"type\":\"string\",\"description\":\"Path to the operator's dagr plan file, when they have named one — for example `.dagr/run-plan003.json` from 'start implementing this dagr graph'. Pass it on the FIRST Delegate of the session; it is remembered for the rest of it. The plan's tasks, titles and dependencies are then seeded into the delegation view so `dagr_task` can attach this work to one of them. The file is read and never written, and a path outside the working directory is refused with the reason in the result.\"},\"dagr_task\":{\"type\":\"string\",\"description\":\"The id of a task in the operator's plan that this delegation is work on. Use it whenever the work corresponds to a planned task: the attempt is recorded against that task, so the plan's dependencies and titles stay attached to what actually happened. An id that names no planned task is refused and the delegation is recorded as new work instead — it is never an error, and the result says so.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
 }
 
 func check_params() -> string {
@@ -468,6 +468,55 @@ func publish(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, doc: Json, settled: Jso
 -- no state but the world token. That the file is the state is also what makes
 -- `settle`'s idempotence meaningful: the transition is computed against what is
 -- actually on disk.
+-- WHICH PLAN IS IN EFFECT, in precedence order: what the model was told this
+-- session (`dagr_plan` on a `Delegate`, remembered in `plan_marker`), then
+-- `HERDR_DAGR_PLAN`. The declaration wins because it is the more specific
+-- statement: the variable says what this container usually works on, the
+-- declaration says what this session was actually asked to implement.
+--
+-- READ ON EVERY WRITE POINT, not just the delegating one, so a plan named at
+-- the first `Delegate` is still in effect at the `DelegateCheck` that settles
+-- the work — and so a plan that gains tasks mid-session seeds them at the next
+-- write rather than at the next restart.
+func plan_in_effect(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld)
+  -> { path: string, next_state: ExtWorld } ! {FS} {
+  let m = p.file_read(w, plan_marker(cfg.dagr_dir, cfg.own_pane, cfg.session_ms));
+  { path: if m.present && m.content != "" then m.content else cfg.dagr_plan,
+    next_state: m.next_state }
+}
+
+-- THE DECLARATION ITSELF, written before anything is spent so that the same
+-- call's `dagr_open` seeds from it.
+--
+-- REFUSED THE WAY EVERY OTHER LINKAGE HERE IS REFUSED (§3.6): a plan this
+-- producer cannot read costs the model its `dagr_task` attachment and nothing
+-- else — the delegation still runs, and the result says what happened. The one
+-- thing it must not do is fail silently, which is precisely how the container
+-- channel failed on 2026-09-08.
+--
+-- SANDBOX-CHECKED BEFORE THE FIRST READ, not around it: a path outside
+-- AILANG_FS_SANDBOX terminates the run rather than returning an error a handler
+-- could report (`do_delegate` makes the same check for the same reason).
+func declare_plan(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, declared: string)
+  -> { note: string, next_state: ExtWorld } ! {FS} {
+  if declared == "" then { note: "", next_state: w }
+  else if cfg.session_ms == "" || path_within(workdir, cfg.dagr_dir) == false then
+    { note: " NOTE: `dagr_plan` was NOT recorded — this session writes no run file, so there is no delegation view for a plan to seed.",
+      next_state: w }
+  else if path_is_safe(declared) == false || path_within(workdir, declared) == false then
+    { note: " NOTE: the plan `${declared}` was NOT recorded — it is outside Motoko's filesystem sandbox (`${workdir}`) or holds a shell metacharacter. Name a plan file under the working directory; until one is named, delegations are recorded as new work.",
+      next_state: w }
+  else {
+    let dir = p.dir_make(w, cfg.dagr_dir);
+    let m = p.file_write(dir.next_state, plan_marker(cfg.dagr_dir, cfg.own_pane, cfg.session_ms), declared);
+    if m.ok == false then
+      { note: " NOTE: the plan `${declared}` could not be recorded (${m.error}), so it is not in effect.", next_state: m.next_state }
+    else
+      { note: " The operator's plan `${declared}` is in effect for the rest of this session — `dagr_task` on this and every later call attaches work to its tasks, and the run file carries the plan's titles and dependencies. It is read and never written; if it cannot be read, the next sentence says so.",
+        next_state: m.next_state }
+  }
+}
+
 func dagr_record(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
                  now_ms: int, f: (Json, int) -> DagrStep) -> DagrWrite ! {IO, Process, FS} {
   -- No run identity, no run file: the name is keyed by session and a shared
@@ -500,16 +549,32 @@ func dagr_record(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
           -- a second task with the same id. Idempotent: a task already here is
           -- left alone, which is what keeps the plan from reaching back in and
           -- overwriting this producer's observations.
-          let plan = if cfg.dagr_plan == "" || path_is_safe(cfg.dagr_plan) == false
-                     then { present: false, content: "", next_state: cur.next_state }
-                     else p.file_read(cur.next_state, cfg.dagr_plan);
+          let eff = plan_in_effect(cfg, p, cur.next_state);
+          let plan = if eff.path == "" || path_is_safe(eff.path) == false
+                     then { present: false, content: "", next_state: eff.next_state }
+                     else p.file_read(eff.next_state, eff.path);
           let seeded = seed_from_plan(doc, plan.present, plan.content, now_ms);
+          -- A PLAN IN EFFECT THAT CANNOT BE READ IS SAID OUT LOUD, EVERY TIME.
+          -- `seed_from_plan` treats an absent or unparseable plan as "no plan",
+          -- which is the right thing for the DOCUMENT — a producer does not
+          -- guess at an operator's file — and the wrong thing to stay quiet
+          -- about, because the model then watches its `dagr_task` refused with
+          -- no way to learn why. Not once-per-session: this is a broken
+          -- configuration, not a fact, and it stops the moment it is fixed.
+          let plan_note =
+            if eff.path == "" then ""
+            else if plan.present == false then
+              " NOTE: the plan `${eff.path}` is in effect but there is no such file, so no plan task was seeded and `dagr_task` cannot attach to one."
+            else match decode(plan.content) {
+              Err(_) => " NOTE: the plan `${eff.path}` is in effect but does not parse as JSON, so no plan task was seeded and `dagr_task` cannot attach to one.",
+              Ok(_) => ""
+            };
           let step = f(seeded, now_ms);
           -- Composed HERE because this is where a real clock is: see
           -- `dagr.run_settled_tmp` for why the exit render cannot do it.
           let pub = publish(cfg, p, plan.next_state, step.doc,
                             settle_at_session_end(step.doc, now_ms));
-          { note: "${step.note}${pub.note}", next_state: pub.next_state }
+          { note: "${step.note}${plan_note}${pub.note}", next_state: pub.next_state }
         }
       }
     }
@@ -629,8 +694,8 @@ func dagr_open(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_
       -- never the work, and the model is told in the result because it has no
       -- other way to learn its delegation is not where it asked for it.
       { doc: add_note(open_task_model(doc, key, title, kind, actor, pane, loc_agent, ms, model), key,
-                      "dagr_task `${dagr_task}` was not linked (no task with that id is in this run file or the operator's plan); opened as new work", ms),
-        note: "${first} NOTE: `dagr_task` `${dagr_task}` was NOT linked — no task with that id is in this run file or in the operator's plan. This delegation is on the record as new work." }
+                      "dagr_task `${dagr_task}` was not linked (no task with that id is in this run file, and no plan in effect declares one); opened as new work", ms),
+        note: "${first} NOTE: `dagr_task` `${dagr_task}` was NOT linked — no task with that id is in this run file, and no plan in effect declares one. If the operator named a plan file, pass its path as `dagr_plan` on this call and the plan's tasks become attachable. This delegation is on the record as new work." }
     else if retry_of == "" then
       { doc: open_task_model(doc, key, title, kind, actor, pane, loc_agent, ms, model), note: first }
     else {
@@ -1073,6 +1138,10 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   -- A2: the operator's plan task this delegation is work on. Empty is every
   -- configuration that existed before the plan did.
   let dagr_task = arg_str(call.arguments, "dagr_task", "");
+  -- A2's SECOND CHANNEL: the operator names the plan in conversation and the
+  -- model passes it here. Sticky for the session (`plan_marker`), so it is
+  -- asked for once and every later `Delegate` and `DelegateCheck` inherits it.
+  let dagr_plan = arg_str(call.arguments, "dagr_plan", "");
 
   if prompt == "" then
     { result: err_result(call.id, "Delegate", "Delegate requires a non-empty `prompt`."), next_state: ctx.world }
@@ -1103,9 +1172,13 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   else if path_is_safe(cwd) == false then
     { result: err_result(call.id, "Delegate", "The working directory `${cwd}` contains a shell metacharacter and cannot be passed safely."), next_state: ctx.world }
   else {
+    -- BEFORE THE CLOCK AND BEFORE THE SPAWN, so that this same call's
+    -- `dagr_open` seeds from the plan the model just named rather than the next
+    -- one doing it. Costs one small write, and only when a plan is declared.
+    let plan = declare_plan(cfg, p, ctx.world, ctx.workdir, dagr_plan);
     -- The name is seeded from the clock so it is unique among live agents and
     -- monotonic across runs in the same pane.
-    let clock = p.clock_now(ctx.world);
+    let clock = p.clock_now(plan.next_state);
     let name = delegate_name(clock.now_ms);
     let task = task_path(cfg.work_dir, name);
     let answer = answer_path(cfg.work_dir, name);
@@ -1197,7 +1270,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
               let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
               { result: {
                   tool_call_id: call.id, tool: "Delegate", exit_code: 0,
-                  stdout: "Delegate `${h}` is running motoko${model_note(kind, model)} in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.${tag.note}${rec.note}${view.note}",
+                  stdout: "Delegate `${h}` is running motoko${model_note(kind, model)} in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.${plan.note}${tag.note}${rec.note}${view.note}",
                   stderr: "", metadata: meta_kind(h, pane, motoko_kind())
                 },
                 next_state: view.next_state }
@@ -1277,7 +1350,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
                     tool_call_id: call.id,
                     tool: "Delegate",
                     exit_code: 0,
-                    stdout: "Delegate `${name}` is running `${kind}`${model_note(kind, model)} in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.${tag.note}${rec.note}${view.note}",
+                    stdout: "Delegate `${name}` is running `${kind}`${model_note(kind, model)} in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.${plan.note}${tag.note}${rec.note}${view.note}",
                     stderr: "",
                     metadata: meta_kind(name, pane, kind)
                   },

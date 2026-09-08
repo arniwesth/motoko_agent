@@ -214,3 +214,32 @@ Gates: `verify_dagr_producer` cases 22, 22b, 23 — seeding with deps, the hand-
 an `operator` attempt at `reported`, the attachment opening no second task, the plan file never
 written, and re-reading the plan not resetting an observed task. All three falsifications fail the
 build.
+
+## Progress (2026-09-08, second entry)
+
+**A2's channel was widened after it failed its first live use.** The A2 landing earlier the same
+day (`HERDR_DAGR_PLAN` + `Delegate.dagr_task`) was correct and unusable here: the variable is
+container-scoped, and this repo's `.devcontainer` is mounted read-only, so the only way to name a
+plan was from outside the container. Measured: an operator wrote `.dagr/run-plan003.json`, told a
+fresh session to implement it, and the model passed `dagr_task: "P1P1"` on its first `Delegate`
+unprompted — refused, opened as new work, and the operator was shown the delegation view instead of
+their graph.
+
+`Delegate` now takes **`dagr_plan`**, the path to the operator's plan, remembered for the session in
+`.dagr/.plan-<pane>-<session>` and inherited by every later `Delegate` and `DelegateCheck`.
+Precedence: the declaration beats the variable. `DESIGN-dagr-as-delegation-view.md` §10.5.1 carries
+the reasoning and what it cost.
+
+**The diagnosis gap is closed too, and that is the half that matters for this issue.** A plan in
+effect that cannot be read now reports itself on every write point until it is fixed, and the
+`dagr_task` refusal names the repair (`pass dagr_plan`) rather than only the symptom. Silence was
+what turned a one-line misconfiguration into a session spent looking at the wrong document.
+
+Status stays **open**: this is the ergonomics of A2, not the drift. The drift is closed for any
+session that names its plan — one document, one view, the plan's deps intact — and remains for a
+session that does not. Settle-on-exit and the orphan sweep for the older 11 rows are still untouched.
+
+Gate: `verify_mot136_dagr_producer.ail` cases 24-27 — a model-declared plan seeds and attaches with
+`HERDR_DAGR_PLAN` unset, the declaration is on disk, a later call inherits it without naming it
+again, an unreadable plan is reported and the work opened as new, and a path outside the sandbox is
+refused with its reason while the previous declaration stands.
