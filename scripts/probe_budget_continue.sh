@@ -80,8 +80,25 @@
 #      when every step's provider call completed. CONDITION CHECKED: no
 #      `stream_error_retry` event in either run.
 #
-#  A3  The resumed run's stdout shows `run_suspended` immediately before
-#      `run_summary`, and no `error` event: the D2 wire contract in live form.
+#  A3  The EXHAUSTED run's stdout shows `run_suspended` immediately before
+#      `run_summary`, and neither run emits an `error` event: the D2 wire
+#      contract in live form.
+#
+#      RE-TARGETED BY P1 PART 6, and the reason is worth stating because P1
+#      Part 1 wrote its assertions as the specification and Part 2's precedent
+#      is that a later part EDITS a named clause rather than relaxing an
+#      unnamed one. This clause originally asked the RESUMED run for the
+#      suspension record, which is not a property of the code under test: the
+#      exhausted run suspends because `max_steps` says so, while the resumed
+#      run suspends only if the model happens to need five more steps. With
+#      this file's own default task — eight commands, five of them consumed by
+#      the exhausted run — it never does; it finishes the remaining three and
+#      stops. Measured after P1 Parts 4-6: the exhausted run pairs
+#      `run_suspended` with `run_summary` exactly as D2 requires, and the
+#      resumed run ended `finish_reason=stop steps_executed=4`. Asserting a
+#      suspension there would have made the gate a question about the model.
+#      The re-target is to the run the contract is about; the pairing is still
+#      asserted on the resumed run whenever it DID reach the budget.
 #
 #  A4  (P3, informational only) one `session_id` across both runs. In P1 each
 #      traced run derives its own (`session.ail:3137-3139`), so this is expected
@@ -93,7 +110,8 @@
 # plus the operator's line — 3 for a `[system, user]` seed, against the ~12+1
 # a five-step run should produce — A3 finds no `run_suspended` at all and an
 # `error` event on the exhausted run, and A2's resumed count restarts from a
-# fresh payload. It goes green with P1 Parts 4-6 (P1 Part 6's gate).
+# fresh payload. It goes green with P1 Parts 4-6 (P1 Part 6's gate), and did:
+# 6/6 at P1 Part 6 against openrouter/anthropic/claude-haiku-4.5.
 #
 # USAGE
 #   scripts/probe_budget_continue.sh                 # live run, then judge
@@ -244,17 +262,41 @@ else:
           "finish_reason=%s" % ex_sum["finish_reason"])
 
 # --- A3: the D2 wire contract in live form ----------------------------------
-names = [e.get("type") for e in resumed]
-before_summary = "<no summary>"
-if "run_summary" in names:
+# ASSERTED ON THE RUN THAT SUSPENDED, which is the EXHAUSTED one. P1 Part 6
+# re-targeted this from `resumed`; see the A3 note in the header for why that
+# was a slip and not a specification.
+def record_before_summary(run):
+    names = [e.get("type") for e in run]
+    if "run_summary" not in names:
+        return "<no summary>"
     i = names.index("run_summary")
-    before_summary = names[i - 1] if i > 0 else "<first record>"
-check("A3 resumed run emits run_suspended immediately before run_summary",
-      before_summary == "run_suspended",
-      "record before run_summary = %s" % before_summary)
-check("A3 resumed run emits no error event",
-      not of_type(resumed, "error"),
-      "error events = %d" % len(of_type(resumed, "error")))
+    return names[i - 1] if i > 0 else "<first record>"
+
+check("A3 exhausted run emits run_suspended immediately before run_summary",
+      record_before_summary(exhausted) == "run_suspended",
+      "record before run_summary = %s" % record_before_summary(exhausted))
+
+# The resumed run is held to the SAME rule, but only when it reached the budget
+# too — whether it does is the model's business (with the default eight-command
+# task it has three commands left and finishes inside five steps), so this is a
+# conditional assertion and not a coin toss dressed as one.
+if re_sum is not None and re_sum.get("finish_reason") == "max_steps":
+    check("A3 resumed run also suspended, and emits run_suspended before its run_summary",
+          record_before_summary(resumed) == "run_suspended",
+          "record before run_summary = %s" % record_before_summary(resumed))
+else:
+    print("probe: A3 resumed-run pairing NOT APPLICABLE — the resumed run finished "
+          "on finish_reason=%s, so it had no suspension to emit"
+          % (re_sum.get("finish_reason") if re_sum else "<no summary>"))
+
+# No `error` event on EITHER run. Outside headless the outer loops match
+# `suspended` before `result` and emit no ErrorEvent for a suspension
+# (session.ail; ADR-003 v6.1 D2), and the probe runs with MOTOKO_HEADLESS unset.
+errors = of_type(exhausted, "error") + of_type(resumed, "error")
+check("A3 neither run emits an error event",
+      not errors,
+      "error events = %d%s" % (len(errors),
+                               "" if not errors else " (%s)" % [e.get("message") for e in errors]))
 
 # --- A4: P3, reported and not asserted --------------------------------------
 ids = sorted({e["session_id"] for e in exhausted + resumed if "session_id" in e})

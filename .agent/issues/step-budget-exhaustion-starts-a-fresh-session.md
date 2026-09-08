@@ -2,7 +2,40 @@
 
 ## Status
 
-open
+**Repaired in memory; on the journal at P3.**
+
+Repaired by PLAN-003 P1 (ADR-003 v6.1 D2/D5/D6) on branch `arniwesth/013-plan003-and-herdr`.
+The repairing commit is P1 Part 6, `ADR-003 D2: P1 Part 6 — the host's run_suspended case, and
+the first judging number`, whose parent is `fdfd34a`; it is named by subject, parent and branch
+rather than by hash for the reason P1 Part 2 gave when it closed
+`max-steps-termination-discriminated-by-error-message-string.md`: this part is one commit and a
+commit cannot contain its own hash. The hash is recorded in that commit's report.
+
+WHAT IS REPAIRED, AND WHAT IS NOT. Reaching the step budget is now a typed suspension, not an
+`Internal` failure: the run carries its history out as a `Continuation`, the conversation loop
+HOLDS it between turns, and the operator's next line is appended to the exhausted turn's history
+and resumes THAT run. Measured live — this issue's own symptom, inverted:
+
+    run 0: provider payloads [2, 4, 6]    -> run_suspended(r0.0, budget_exhausted, 3), max_steps
+    run 1: provider payloads [9, 11, 13]  -> run_suspended(r0.1, budget_exhausted, 3), max_steps
+    run 2: provider payloads [16, 18, 20] -> stop
+
+Each `continue` opens on the exhausted history plus the operator's message (8+1, then 15+1)
+instead of restarting at a fresh payload, no `error` event is emitted, and the model's closing
+summary names every command across all three runs. The `steps_executed_so_far` this issue's
+"Expected behaviour" asks about is carried as the continuation's `cumulative`, seeded into the
+resumed run's `prior_counts` — so `MotokoRuntimeStatus` reports the carried-over counts rather
+than 0.
+
+IN MEMORY ONLY. The continuation lives in the conversation loop's process. `restart`, `abort`
+and `exit` still drop it, and so does a crash — the second of ADR-003's judging numbers ("a run
+that dies at step N resumes with N steps of history") is P3's, on the journal the host writes
+from the wire. The two `session_id`s this issue's evidence shows also remain two in P1: each
+traced run derives its own, and one id across a resume is P3's identity work.
+
+The `error` this issue quotes is also gone from the interactive path — outside `MOTOKO_HEADLESS`
+the outer loops match `suspended` before `result` and emit no `ErrorEvent`. Headless still
+receives it until PLAN-003 P3 Part 6 switches the plain and JSON loggers.
 
 ## Branch
 

@@ -208,3 +208,68 @@ describe("SessionLogger filename unification (M4a)", () => {
     expect(markdown).toContain("[ailang] check: passed | verify: verified | committed: yes | ran: yes");
   });
 });
+
+// ADR-003 v6.1 D2 / PLAN-003 P1 Part 6. Two facts about the suspension the host has to keep, and
+// the second is the one a literal reading of the plan would have broken.
+describe("SessionLogger and the run_suspended record", () => {
+  let projectRoot: string;
+
+  beforeEach(() => {
+    projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-logger-suspend-"));
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  it("writes a transcript line that is not an error line", async () => {
+    const logger = new SessionLogger(projectRoot, "test-tui-version");
+    logger.log({
+      type: "run_suspended",
+      session_id: "session_0",
+      run_id: "session_0.r0.0",
+      reason: "budget_exhausted",
+      step: 5,
+    });
+    await logger.close();
+
+    const markdown = fs.readFileSync(logger.markdownPath, "utf8");
+    expect(markdown).toContain("Run suspended: budget_exhausted at step 5");
+    expect(markdown).toContain("session_0.r0.0");
+    // The whole point of D2 is that reaching the budget is no longer a failure. A transcript that
+    // said "Error:" here would be the old story told in a new place.
+    expect(markdown).not.toContain("Error:");
+  });
+
+  // THE REGRESSION THIS PINS. index.ts's non-TTY path drains the streams on `run_suspended` before
+  // handing the event to the logger UI. It must drain WITHOUT closing: in P1 the headless wire is
+  // `run_suspended`, `run_summary`, `error`, and `log()` returns early once `closed` is set — so a
+  // `close()` there would drop the `run_summary`, which is exactly the tail
+  // M-MOTOKO-EVAL-HARNESS-HARDENING gap #1 added the drain to protect.
+  it("flush() puts the record on disk and still accepts the run_summary that follows", async () => {
+    const logger = new SessionLogger(projectRoot, "test-tui-version");
+    logger.log({
+      type: "run_suspended",
+      session_id: "session_0",
+      run_id: "session_0.r0.0",
+      reason: "budget_exhausted",
+      step: 5,
+    });
+    await logger.flush();
+
+    // Everything written before the flush is on the fd, with the stream still open.
+    const afterFlush = fs.readFileSync(logger.filePath, "utf8");
+    expect(afterFlush).toContain('"type":"run_suspended"');
+
+    logger.log({ type: "run_summary", finish_reason: "max_steps", steps_executed: 5 } as never);
+    await logger.close();
+
+    const lines = fs
+      .readFileSync(logger.filePath, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => JSON.parse(l) as { type: string });
+    expect(lines.map((l) => l.type)).toEqual(["run_suspended", "run_summary"]);
+  });
+});

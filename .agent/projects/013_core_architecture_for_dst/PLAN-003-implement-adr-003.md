@@ -691,6 +691,57 @@ instruction and is green. The canary pin was not touched; on 2026-09-07 the owne
 reason, pending the re-measure; the summary script's reverse check reports it the day it
 passes (Open question 9).
 
+### P1 Part 6, 2026-09-08: the first judging number, and the herdr `blocked` measurement
+
+**The first judging number is GREEN, twice over, in two independent drivers.**
+
+`scripts/probe_budget_continue.sh` against `openrouter/anthropic/claude-haiku-4.5`, profile
+`max_steps` 5, two consecutive live runs with identical readings — **6/6 assertions, exit 0**:
+
+    probe: exhausted run payloads = [2, 4, 6, 8, 10]
+    probe: resumed   run payloads = [13, 15, 17, 19]
+    probe: exhausted run_summary  = finish_reason=max_steps steps_executed=5 error='step budget exhausted'
+    probe: resumed   run_summary  = finish_reason=stop steps_executed=4 error=''
+      PASS A1 resumed payload carries the exhausted history + 1 — resumed first msg_count=13, expected 13
+      PASS A2 exhausted run executed the profile's 5 steps — steps_executed=5
+      PASS A2 resumed run_summary counts its own steps — steps_executed=4, provider calls prepared=4
+      PASS A2 exhausted run finished on the step budget — finish_reason=max_steps
+      PASS A3 exhausted run emits run_suspended immediately before run_summary
+      PASS A3 neither run emits an error event — error events = 0
+
+**Before P1** the same probe read `resumed run payloads = [3, 5, 7, 9, 11]` and `FAIL A1 …
+resumed first msg_count=3, expected 13` (P1 Part 1's commit message, measured at `cbf50f3`).
+The turn's twelve messages died in the driver's `Fail` arm and the operator's `continue`
+re-opened the pre-turn history plus one line. They now cross.
+
+**The same number, measured a second way, through the TUI in a real TTY** — the manual check
+the Part 6 gate names, taken in a herdr pane (`herdr pane split`, `bun src/tui/src/index.ts`,
+profile `max_steps` 3). Three chained runs in ONE session log, from the JSONL the host wrote:
+
+    run 0: payloads=[2, 4, 6]    run_suspended=(…r0.0, budget_exhausted, 3)  summary=(max_steps, 3)  errors=0
+    run 1: payloads=[9, 11, 13]  run_suspended=(…r0.1, budget_exhausted, 3)  summary=(max_steps, 3)  errors=0
+    run 2: payloads=[16, 18, 20] run_suspended=none                          summary=(stop, 3)       errors=0
+
+Each resume opens on the exhausted history plus one — 8+1 = 9, then 15+1 = 16 — the ordinal
+advances `r0.0 → r0.1` (D5's rule, live), `steps_executed` is per run, and no `error` event is
+emitted on any of the three. The operator typed `continue` twice as plain input with **no
+`/restart`**, and the model's closing summary names `probe-1 through probe-8`: the eight
+commands span three runs and it saw all of them.
+
+**The herdr `blocked` measurement**, taken inside the pane during the suspension:
+
+    $ herdr agent get w1:p1G
+    {"result":{"agent":{"agent":"motoko","agent_status":"blocked", … "pane_id":"w1:p1G"}}}
+
+with the TUI's own status line reading `[λ] state: suspended | step 2` and, after the last
+`continue`, `agent_status` returning to `done` (herdr's name for the idle it reaches after
+unseen work). **The message half is NOT readable back over the CLI**: `--message` is accepted
+by `herdr pane report-agent` but `agent get`, `agent list` and `pane list` all omit it from
+their JSON — it is a display field of herdr's sidebar. The text is therefore pinned by the
+exhaustive-list test and by a new assertion on the exact string
+(`herdr-agent-state.test.ts`), which is the compile-time half the gate names, and the live
+half measured here is the `blocked` state.
+
 ---
 
 ## 6. What changed, by version

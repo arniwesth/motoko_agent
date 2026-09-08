@@ -880,6 +880,24 @@ async function main(): Promise<void> {
           });
           return;
         }
+        // ADR-003 v6.1 D2 / PLAN-003 P1 Part 6. `run_suspended` is drained here for the same
+        // reason as `done` and `error` — it is the last thing a suspended run says before the
+        // records that end it, and a `process.exit` racing the WriteStream loses them.
+        //
+        // IT DRAINS BUT DOES NOT CLOSE, and that difference is load-bearing rather than a
+        // shortcut. In P1 the headless wire is `run_suspended`, `run_summary`, `error`: the plain
+        // and JSON loggers are unchanged in this phase and still exit on the `error` (which is
+        // P3 Part 6's to remove), so records follow this one and `SessionLogger.log` returns
+        // early once `close()` has set `closed`. Closing here would therefore drop the
+        // `run_summary` — precisely the tail M-MOTOKO-EVAL-HARNESS-HARDENING gap #1 added this
+        // drain to protect. When P3 makes `run_suspended` terminal for headless, this becomes a
+        // `close()` beside the other two.
+        if (event.type === "run_suspended") {
+          void logger.flush().then(() => {
+            ui.handleEvent(event);
+          });
+          return;
+        }
         ui.handleEvent(event);
       },
       () => {
@@ -915,6 +933,14 @@ async function main(): Promise<void> {
       openaiBaseUrl,
       aiOptionsJson,
       (event) => {
+        // ADR-003 v6.1 D2 / PLAN-003 P1 Part 6: `run_suspended` must NOT set this. `errorOccurred`
+        // is read only on runtime EXIT, where it means "the process died after saying why, so
+        // recover into awaiting-a-task instead of ending the session". A suspended runtime has not
+        // died — it is alive and holding the exhausted turn's continuation for the operator's next
+        // line — and outside headless it emits no `error` at all (session.ail's outer loops match
+        // `suspended` before `result`). Setting it here would arm the recovery branch for a
+        // process that never took it, and would then fire on whatever unrelated exit came later.
+        // The `=== "error"` test below is what keeps that true; a future `||` here would break it.
         if (event.type === "error") errorOccurred = true;
         logger.log(event);
         ui.handleEvent(event);

@@ -787,7 +787,14 @@ function formatTimestamp(now: Date = new Date()): string {
   return `${hh}:${mm}:${ss}.${mmm}`;
 }
 
-export type RunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error";
+/**
+ * ADR-003 v6.1 D2 adds `suspended`: a run that reached its step budget stopped, but it is holding
+ * the exhausted turn's history and the operator's next line CONTINUES it. It is deliberately
+ * neither `idle` (which means nothing is held and the next line starts a fresh run) nor `error`
+ * (ADR-003's whole point is that the budget is no longer a failure), and it is not an
+ * `isWaitingState` — nothing is running, so there is no spinner and nothing for ESC to abort.
+ */
+export type RunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended";
 type HintPhase = "thinking" | "tools";
 type ToolRowStatus = "queued" | "running" | "done" | "failed";
 type PlannedToolStatus = "planned" | "running" | "done" | "error" | "planned_unexecuted" | "runtime_only" | "filtered";
@@ -2759,6 +2766,32 @@ export class AgentUI {
         this.tui.setFocus(this.cmdInput);
         this.updateStatus();
         break;
+
+      // ADR-003 v6.1 D2 / PLAN-003 P1 Part 6. The run reached its step budget and SUSPENDED: the
+      // runtime is alive and is holding the exhausted turn's continuation, so the operator's next
+      // line resumes that run with its history rather than starting a fresh one.
+      //
+      // The three lines after the message are the same three `done` and `error` run, and for the
+      // same reason in each case: the run is over (`setRunState` off the waiting states, which
+      // stops the spinner and releases ESC), `taskDone = true` so `shouldLockPlainInput` admits
+      // the next plain line and routes it to `sendUserMessage` in the LIVE process, and focus
+      // returns to the input so that line can be typed without a click. Without `taskDone` the
+      // operator would be locked out of the very turn the suspension exists to allow, and the only
+      // way forward would be a `/restart` — which is the bug ADR-003 was written to remove.
+      //
+      // `run_suspended` arrives immediately BEFORE `run_summary` (session.ail's `c2_suspend`
+      // appends and emits it before `c2_finalize`), and no `error` follows it outside headless.
+      case "run_suspended":
+        this.composeFooterStatus = "";
+        this.setRunState("suspended");
+        this.appendHistoryStyled(
+          `Run suspended: ${event.reason} at step ${event.step}. Send a message ("continue") to resume this run with its history.`,
+          chalk.yellowBright,
+        );
+        this.taskDone = true;
+        this.tui.setFocus(this.cmdInput);
+        this.updateStatus();
+        break;
       case "tool_calls":
         this.setRunState("tools_wait");
         this.appendHistoryStyled("Waiting for delegated tool results...", chalk.dim);
@@ -4230,6 +4263,10 @@ export class AgentUI {
       this.waitState.state === "thinking" ? ((s: string) => chalk.blueBright.bold(s)) :
       (this.waitState.state === "tools_wait" || this.waitState.state === "tools_run") ? chalk.yellow :
       this.waitState.state === "error" ? chalk.red :
+      // Suspended is yellow, with `tools_wait`: both mean "stopped, waiting on someone else".
+      // The fall-through below is the IDLE green, which would show a run holding an unfinished
+      // turn in the same colour as one holding nothing.
+      this.waitState.state === "suspended" ? chalk.yellow :
       ((s: string) => chalk.greenBright.bold(s));
     let line2 = stateColor(line2Base);
     if (this.latestContextUsage) {

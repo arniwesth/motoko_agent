@@ -47,21 +47,36 @@ describe("run-state mapping", () => {
   it("maps every Motoko run state to a herdr state", () => {
     // Exhaustive by construction: the array is typed as the full union, so adding a RunState
     // member without extending mapRunState fails to compile here as well as at the ui.ts call site.
-    const all: MotokoRunState[] = ["idle", "thinking", "tools_wait", "tools_run", "error"];
+    const all: MotokoRunState[] = ["idle", "thinking", "tools_wait", "tools_run", "error", "suspended"];
     expect(all.map((s) => mapRunState(s).state)).toEqual([
       "idle",
       "working",
       "working",
       "working",
       "blocked",
+      "blocked",
     ]);
   });
 
-  it("carries a message only for the blocked state", () => {
+  it("carries a message only for the blocked states", () => {
     expect(mapRunState("error").message).toMatch(/error/);
+    expect(mapRunState("suspended").message).toMatch(/continue/);
     for (const s of ["idle", "thinking", "tools_wait", "tools_run"] as MotokoRunState[]) {
       expect(mapRunState(s).message).toBeUndefined();
     }
+  });
+
+  // ADR-003 v6.1 D2. `suspended` and `error` are both `blocked`, so the STATE alone cannot tell an
+  // operator (or `herdr agent get`) which one a pane is in — the message is the whole difference,
+  // and a copy-paste that gave the new arm the old text would pass every assertion above.
+  it("distinguishes suspended from error by the message herdr shows", () => {
+    const suspended = mapRunState("suspended");
+    const errored = mapRunState("error");
+    expect(suspended.state).toBe(errored.state);
+    expect(suspended.message).not.toBe(errored.message);
+    // PLAN-003 P1 Part 6 pins the text: it has to name the cause and the remedy, because the
+    // sidebar row is the only place an operator watching a fleet of panes sees either.
+    expect(suspended.message).toBe("suspended: step budget — send continue");
   });
 });
 

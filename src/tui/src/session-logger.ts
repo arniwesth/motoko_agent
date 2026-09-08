@@ -2,7 +2,10 @@ import * as fs from "fs";
 import * as path from "path";
 import type { AgentEvent } from "./runtime-process.js";
 
-type TranscriptState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error";
+// ADR-003 v6.1 D2 adds `suspended` — a run stopped on its step budget, holding the turn's history
+// for the operator's next line. It is a state and not just a line so `ensureThinkingLine` treats
+// the resumed turn as a fresh reasoning phase, exactly as it does after `error`.
+type TranscriptState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended";
 
 function formatTimestamp(now: Date = new Date()): string {
   const hh = String(now.getHours()).padStart(2, "0");
@@ -344,6 +347,16 @@ export class SessionLogger {
         this.setState("error");
         this.writeTranscriptLine(`Error: ${event.message}`);
         break;
+      // ADR-003 v6.1 D2 / PLAN-003 P1 Part 6. Distinct from `error` in the transcript as well as
+      // on the wire: someone reading a transcript to find out why a run stopped must be able to
+      // tell "it hit the budget and is waiting for you" from "it failed", and the line before
+      // `run_summary` is where they look.
+      case "run_suspended":
+        this.setState("suspended");
+        this.writeTranscriptLine(
+          `Run suspended: ${event.reason} at step ${event.step} (run ${event.run_id}). Waiting for the operator to continue.`,
+        );
+        break;
       case "done":
         this.setState("idle");
         break;
@@ -356,6 +369,27 @@ export class SessionLogger {
     if (this.closed) return;
     this.jsonlStream.write(`${JSON.stringify(event)}\n`);
     this.logTranscriptEvent(event);
+  }
+
+  /**
+   * Push everything already written out to the OS, WITHOUT closing.
+   *
+   * ADR-003 v6.1 D2 / PLAN-003 P1 Part 6. `close()` is what the non-TTY path uses before a
+   * handler that calls `process.exit` — exit drops a WriteStream's pending buffer, which is
+   * M-MOTOKO-EVAL-HARNESS-HARDENING gap #1. `run_suspended` needs the same protection and cannot
+   * use the same call: in P1 it is followed on the same wire by `run_summary` and (in headless)
+   * `error`, and `log()` returns early once `closed` is set, so closing there would drop exactly
+   * the tail gap #1 exists to keep.
+   *
+   * The zero-length write is the drain: a Writable processes queued chunks in order, so its
+   * callback cannot run before every chunk written ahead of it has reached the fd.
+   */
+  flush(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    return Promise.all([
+      new Promise<void>((resolve) => this.jsonlStream.write("", () => resolve())),
+      new Promise<void>((resolve) => this.markdownStream.write("", () => resolve())),
+    ]).then(() => undefined);
   }
 
   close(): Promise<void> {

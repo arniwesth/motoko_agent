@@ -40,7 +40,7 @@ import { spawn, spawnSync } from "child_process";
  * passes it a `RunState`, so a new `RunState` member that is absent here fails to typecheck at the
  * call site rather than silently reporting nothing.
  */
-export type MotokoRunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error";
+export type MotokoRunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended";
 
 /** The four states herdr's `pane report-agent --state` accepts. */
 export type HerdrState = "idle" | "working" | "blocked" | "unknown";
@@ -67,7 +67,7 @@ export interface HerdrReport {
 /**
  * Motoko's run state -> herdr's lifecycle vocabulary.
  *
- * Four of the five are direct. `error` is a judgment call, recorded in ADR-001 D3: herdr defines
+ * Four of the six are direct. `error` is a judgment call, recorded in ADR-001 D3: herdr defines
  * `blocked` as "recognized an approval or question UI", and Motoko has no approval UI at all — that
  * absence is why project 018 runs delegates with permission bypass on. But `blocked` is the state
  * that turns the sidebar row red, rolls up to the tab and workspace, and satisfies
@@ -77,6 +77,15 @@ export interface HerdrReport {
  *
  * If Motoko ever grows a real approval prompt, that becomes the true `blocked` and this mapping
  * must be revisited — see ADR-001 Consequences.
+ *
+ * `suspended` (ADR-003 v6.1 D2, PLAN-003 P1 Part 6) is the one state where `blocked` needs no
+ * argument: a run that reached its step budget is stopped and WAITING FOR THE OPERATOR, which is
+ * what herdr's `blocked` means and what `herdr agent wait --until blocked` is for. It is not
+ * `idle` — an idle Motoko has nothing held and the next line starts a fresh run, where a suspended
+ * one holds the exhausted turn's history and the next line continues it. And it is not `error`:
+ * ADR-003's whole point is that reaching the budget is no longer a failure. The two therefore
+ * differ in the MESSAGE, which is the only thing herdr shows beside a blocked row, and the message
+ * says what to send.
  */
 export function mapRunState(state: MotokoRunState): HerdrReport {
   switch (state) {
@@ -88,6 +97,8 @@ export function mapRunState(state: MotokoRunState): HerdrReport {
       return { state: "working" };
     case "error":
       return { state: "blocked", message: "the run ended in an error — see the pane" };
+    case "suspended":
+      return { state: "blocked", message: "suspended: step budget — send continue" };
   }
 }
 
