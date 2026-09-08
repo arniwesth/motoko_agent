@@ -14,7 +14,7 @@
 --
 -- What did not exist was a BRIDGE from a run to an `ExecutionUnderTest`. Until
 -- WI-C3 the whole D7 suite had exactly one construction site — a hand-authored
--- fixture — so all sixteen families ran against a constructed value and its
+-- fixture — so every family ran against a constructed value and its
 -- mutants. This script is the first thing in the tree that drives the real
 -- driver, converts what it returns into an `ExecutionUnderTest`, and asks the
 -- invariant set about it.
@@ -73,7 +73,7 @@ import src/core/dst_execution (execution_of, emission_count)
 import src/core/dst_invariants (
   ExecutionUnderTest, NoReplay,
   Violation, stream_parity_findings, rules_of, join_str, has_rule,
-  evaluate, violations_in, EmissionParity, record_variant
+  evaluate, violations_in, EmissionParity, JournalFold, first_message, record_variant
 )
 
 func zero_rates() -> CostRates {
@@ -322,12 +322,25 @@ func check_execution(
              "a non-recording adapter recorded ${show(List.length(logged))} chunk texts");
 
   -- THE WHOLE SET over a real run, PINNED rather than printed. This is the
-  -- first thing in the tree that evaluates all sixteen D7 families against an
+  -- first thing in the tree that evaluates the WHOLE invariant set against an
   -- execution a run produced, and a printed count is a number nobody checks —
   -- asserting the exact rule set is what turns a future regression red.
   let all = evaluate(x);
   let _ = println("STREAM_TRACE ${label} ${pipe_join(trace_stream_texts(trace.records))}");
-  let _ = println("  [${label}] all sixteen families over the real run: ${show(List.length(all))} finding(s)${if List.length(all) == 0 then "" else " — ${rule_list(all)}"}");
+  -- PLAN-003 P3 Part 2's DELIBERATE RED, printed so the row below reads as a
+  -- plan step and not as a regression. `JournalFold` (ADR-003 v6.1 D4) folds the
+  -- journal-class records of this trace and compares the result with what the
+  -- run ended holding. NOTHING EMITS A JOURNAL-CLASS EVENT YET — P3 Part 3 does
+  -- — so the fold sees a header and no history and disagrees with `final` on
+  -- every field that has a value. This is the only place in the tree where a
+  -- REAL run is bridged into an `ExecutionUnderTest` (`dst_execution.execution_of`
+  -- has exactly one other caller, and it is in this file), so it is the only
+  -- place the red can be observed. P3 Part 3 turns it green by emitting the
+  -- events, and this comment and the line below go with it.
+  let journal_red = violations_in(all, JournalFold);
+  let _ = if List.length(journal_red) == 0 then () else
+    println("  [${label}] EXPECTED RED (PLAN-003 P3 Part 2): the JournalFold family reports ${show(List.length(journal_red))} finding(s) because no journal-class event is emitted yet — P3 Part 3 closes it. First: ${first_message(journal_red)}");
+  let _ = println("  [${label}] the whole invariant set over the real run: ${show(List.length(all))} finding(s)${if List.length(all) == 0 then "" else " — ${rule_list(all)}"}");
   let set_ok = report("${label}: the whole invariant set reports exactly its expected rules",
                       strings_equal(rules_of(all), expected_family_rules),
                       "expected [${join_str(expected_family_rules)}]; got [${rule_list(all)}]");

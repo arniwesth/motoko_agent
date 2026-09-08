@@ -6,7 +6,7 @@
 
 module src/core/phase_vocab
 
-import std/ai (Message, ToolCall, StepResult)
+import std/ai (Message, ToolCall, ImagePart, StepResult)
 import std/crypto (sha256Hex)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode)
 import std/list as List (length)
@@ -299,8 +299,52 @@ export pure func canonical_messages_raw(msgs: [Message]) -> string {
   match msgs {
     [] => "m-end;"
     m :: rest =>
-      "m{${frame("role", m.role)}${frame("content", m.content)}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}}${canonical_messages_raw(rest)}"
+      "m{${canonical_message_body(m)}}${canonical_messages_raw(rest)}"
   }
+}
+
+-- The four fields both canonical forms have always framed, factored out so that
+-- `canonical_messages_raw` and `canonical_message_frame` below cannot drift
+-- apart. Byte-identical to what `canonical_messages_raw` inlined before
+-- ADR-003 P3 Part 2 split it out: `m{` ++ this ++ `}` per message.
+pure func canonical_message_body(m: Message) -> string {
+  "${frame("role", m.role)}${frame("content", m.content)}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}"
+}
+
+pure func canonical_images(images: [ImagePart]) -> string {
+  match images {
+    [] => "im-end;"
+    i :: rest =>
+      "im{${frame("source", i.source)}${frame("mime", i.mime)}}${canonical_images(rest)}"
+  }
+}
+
+-- ADR-003 v6.1 D4's CHAIN FRAME, and PLAN-003 P3 Part 2's settlement of the
+-- plan's open question 8. One message's canonical form, and it is the frame
+-- `canonical_messages_raw` builds PLUS AN `images` FRAME.
+--
+-- WHY THE IMAGES FRAME IS NOT OPTIONAL. Both canonical forms above omit
+-- `images` — `canonical_messages` because it predates vision inputs, and
+-- `canonical_messages_raw` because it is `canonical_messages` with the content
+-- normalisation removed. A journal chain built on either would accept a history
+-- whose image parts had been swapped, dropped or re-sourced: the digests would
+-- match and the model would have seen a different conversation. `journal.ail`'s
+-- codec keeps `images` for exactly that reason (the ABI's `Msg` drops it), and a
+-- chain blind to the field the codec was written to preserve would be a seal
+-- over four fifths of the message.
+--
+-- THE CHAIN AND THE CHILD SHARE THIS ONE FUNCTION. `journal.chain_digest_after`
+-- is the only caller today; the emit sites of P3 Part 3 reach it through that.
+-- Two definitions of the frame would be two definitions of the chain digest,
+-- which is the failure mode ADR-003 D1 refuses for the message ENCODER and
+-- refuses here for the same reason.
+--
+-- The `m{...}` wrapper is kept so a frame reads as one message of the raw form
+-- and the length-prefixed framing (`frame`) keeps the concatenation injective;
+-- the trailing `m-end;` of a full list is NOT part of a single frame, because a
+-- frame is concatenated onto a previous digest and never onto another frame.
+export pure func canonical_message_frame(m: Message) -> string {
+  "m{${canonical_message_body(m)}${canonical_images(m.images)}}"
 }
 
 export pure func digest_messages(msgs: [Message]) -> string {

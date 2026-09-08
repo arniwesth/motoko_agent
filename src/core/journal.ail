@@ -38,8 +38,9 @@ module src/core/journal
 
 import std/ai (Message, ToolCall, ImagePart)
 import std/crypto (sha256Hex)
-import std/json (Json, jo, ja, kv, js, encode, get, asString, asArray)
+import std/json (Json, jo, ja, kv, js, jb, jint, encode, get, has, asString, asArray, asObject, getString, getInt, getBool, getArray)
 import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import src/core/config (CostRates)
 import src/core/phase_vocab (
@@ -51,8 +52,13 @@ import src/core/phase_vocab (
   system_is_head_prefix,
   take_system_prefix,
   canonical_messages_raw,
-  digest_messages
+  canonical_message_frame,
+  digest_messages,
+  LedgerRecord, WireRecord, LedgerEvent,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
+  SessionStart, RunSummary, RunSuspended
 )
+import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, TokenTelemetry)
 
 -- ============================================================================
@@ -234,8 +240,49 @@ export pure func chain_digest_base(seed: [Message]) -> string {
   digest_messages(seed)
 }
 
+-- ONE FRAME, NOT `canonical_messages_raw([m])`, since PLAN-003 P3 Part 2 settled
+-- the plan's open question 8: `phase_vocab.canonical_message_frame` is that
+-- frame PLUS an `images` frame, because both older canonical forms omit
+-- `images` and a chain blind to an image change would accept a history that
+-- differs from what the provider saw. The frame's own comment carries the
+-- argument; this is its only caller, which is what makes the chain digest have
+-- exactly one definition.
 export pure func chain_digest_after(previous: string, m: Message) -> string {
-  "sha256:${sha256Hex("${previous}${canonical_messages_raw([m])}")}"
+  "sha256:${sha256Hex("${previous}${canonical_message_frame(m)}")}"
+}
+
+-- The chain over a whole list, which is the base a run's seed establishes and
+-- the value `fold_journal` recomputes entry by entry. `List.foldl` rather than
+-- recursion for the reason `messages_of_json` gives: a history is unbounded.
+pure func chain_step(previous: string, m: Message) -> string {
+  chain_digest_after(previous, m)
+}
+
+export pure func chain_digest_over(base: string, ms: [Message]) -> string {
+  List.foldl(chain_step, base, ms)
+}
+
+-- THE JOURNAL'S CHAIN STARTS FROM THE EMPTY HISTORY, and that is a decision
+-- this part makes rather than one it inherits, so it is written down.
+--
+-- ADR-003 D1 gives a `history_seeded` event a whole-list `digest`
+-- (`digest_messages`) and gives every `history_appended` entry an INCREMENTAL
+-- `digest_after`. The two are different functions over different inputs, so a
+-- fold cannot check one against the other — and D1's third host arm ("compare
+-- `digest` with the last history entry's `digest_after`") needs them to be the
+-- same quantity to work at all.
+--
+-- The fold resolves it in the only direction that keeps every digest it reads
+-- CHECKABLE: the journal has no `history_seeded` entry type (D1's ten types do
+-- not include one — the host expands a seed into `history_appended` entries),
+-- so the chain is a fold of `chain_digest_after` over the journal's own history
+-- messages, based at `chain_digest_base([])`, and a `history_replaced` re-bases
+-- it to `chain_digest_base(head_prefix ++ messages)` — the post-replacement
+-- history the child actually holds. Every one of those is recomputable from the
+-- entries alone, which is what a chain is for; a digest the fold has to take on
+-- trust seals nothing.
+export pure func chain_empty_base() -> string {
+  chain_digest_base([])
 }
 
 -- ============================================================================
@@ -470,6 +517,1381 @@ export pure func messages_of_json(j: Json) -> Result[[Message], string] {
       if acc.err != "" then Err(acc.err) else Ok(reverse_messages(acc.out))
     }
   }
+}
+
+-- ============================================================================
+-- ADR-003 D4's REFUSAL, and why a fold refuses instead of repairing.
+--
+-- Eleven reasons a journal cannot be resumed, and every one of them is a REFUSAL
+-- rather than a fallback. D4 rule 2 says it in as many words — "any missing or
+-- malformed field is `Refusal::Entry(seq, field)`. No fallbacks" — and the
+-- reason is the one `messages_of_json`'s header already gives: a world token
+-- that half-decodes is still a usable world, and a HISTORY that half-decodes is
+-- a lie about what the model saw.
+--
+-- Six are the fold's (`Header`, `Entry`, `Digest`, `HeadPrefix`, `Transcript`,
+-- `Pairing`) and five are D5's compatibility rows (`Workdir`, `ExtSet`,
+-- `Prompt`, `Leased`, `Schema`), which `resume_refusal` below applies against a
+-- decoded header. The compatibility five are separated from the six because
+-- they are refusals about the INVOCATION and not about the file: a journal that
+-- fails one of them is still a well-formed journal, and `--resume-force`
+-- overrides exactly two of them (D5).
+-- ============================================================================
+
+export type Refusal
+  = Header
+  | Entry(int, string)
+  | Digest(int)
+  | HeadPrefix
+  | Transcript(string)
+  | Pairing(int)
+  | Workdir
+  | ExtSet
+  | Prompt
+  | Leased
+  | Schema
+
+export pure func refusal_id(r: Refusal) -> string {
+  match r {
+    Header => "header",
+    Entry(_, _) => "entry",
+    Digest(_) => "digest",
+    HeadPrefix => "head-prefix",
+    Transcript(_) => "transcript",
+    Pairing(_) => "pairing",
+    Workdir => "workdir",
+    ExtSet => "ext-set",
+    Prompt => "prompt",
+    Leased => "leased",
+    Schema => "schema"
+  }
+}
+
+-- Each message names the entry it refused and what the rule was, because a
+-- refusal a person cannot act on is indistinguishable from a crash.
+export pure func refusal_message(r: Refusal) -> string {
+  match r {
+    Header =>
+      "[header] the first entry on the path is not a `header`; D4 rule 1 makes the header the root of every resumable path, and a path that starts anywhere else is a path through a file this fold did not write",
+    Entry(seq, field) =>
+      "[entry] entry ${show(seq)} is missing or malformed at '${field}'; D4 rule 2 decodes strictly and has no fallbacks",
+    Digest(seq) =>
+      "[digest] entry ${show(seq)} carries a `digest_after` that is not the chain digest recomputed through it; the chain is what makes a resumed history the same history, and an entry the chain does not reach is an entry someone else wrote",
+    HeadPrefix =>
+      "[head-prefix] the folded history's system messages do not form a head prefix (`phase_vocab.system_is_head_prefix`); a system message that is not pinned at the head is a system message the compactor may move",
+    Transcript(detail) =>
+      "[transcript] the folded history is not a valid transcript: ${detail}",
+    Pairing(seq) =>
+      "[pairing] the message contributed by entry ${show(seq)} breaks tool-call pairing — a tool result that answers no call in the assistant before it, or an assistant whose calls are left unanswered by anything but the end of the history; `history_valid_transcript` does not check this (it checks each message alone), so the fold owns the rule",
+    Workdir =>
+      "[workdir] the header's canonical workdir is not the invoked one; D5 refuses a resume across workdirs and `--resume-force` does NOT override it, because every relative path in the history would mean something else",
+    ExtSet =>
+      "[ext-set] the extension-set digest of the invoked profile differs from the header's; D5 refuses, and `--resume-force` overrides",
+    Prompt =>
+      "[prompt] the system-prefix digest of the invoked profile differs from the header's under the SAME profile; D5 refuses, and `--resume-force` overrides — a profile SWITCH is accepted instead and replaces the head prefix",
+    Leased =>
+      "[leased] the session is leased by a live host; D3 has one writer, and a second process appending to the same journal is two writers",
+    Schema =>
+      "[schema] the header's `schema_version` is not 1; a journal written by another schema is not a journal this fold can read, and guessing is D4 rule 2's fallback under another name"
+  }
+}
+
+-- ============================================================================
+-- D1's ENTRY ENVELOPE, and the ten entry types.
+--
+-- `{ id, parent_id, seq, at_ms, type, … }`. `id` is host-assigned and opaque to
+-- the child; `parent_id` is the leaf at the time of the append, and `null` on
+-- the header; `seq` is the file position.
+--
+-- THE ENTRIES ARRIVE AS `Json` AND NOT AS A TYPED SUM, and that is what makes
+-- the strict decoders load-bearing rather than decorative: the fold's input is
+-- a JSONL file the host wrote (D3), read back by `rpc.run_with_config` with the
+-- ambient `readFile` (D6 step 2), and a typed input would have moved the
+-- decoding somewhere this module could not check it. `[Json]` in, `SessionState`
+-- or `Refusal` out.
+--
+-- TEN TYPES AND NO `history_seeded`. D1's table lists `history_seeded` as a
+-- CHILD EVENT with three host arms — expand into N `history_appended` entries,
+-- rewrite as a `history_replaced` after a profile switch, or compare and drop —
+-- so it never becomes an entry of its own. `park` and `wake` are D7's and wait
+-- for PLAN-003 P4.
+-- ============================================================================
+
+export type JournalEntry = {
+  id: string,
+  parent_id: string,
+  seq: int,
+  at_ms: int,
+  kind: string,
+  raw: Json
+}
+
+pure func at_string(j: Json, key: string, seq: int) -> Result[string, Refusal] {
+  match getString(j, key) { None => Err(Entry(seq, key)), Some(s) => Ok(s) }
+}
+
+pure func at_int(j: Json, key: string, seq: int) -> Result[int, Refusal] {
+  match getInt(j, key) { None => Err(Entry(seq, key)), Some(n) => Ok(n) }
+}
+
+pure func at_bool(j: Json, key: string, seq: int) -> Result[bool, Refusal] {
+  match getBool(j, key) { None => Err(Entry(seq, key)), Some(b) => Ok(b) }
+}
+
+pure func at_array(j: Json, key: string, seq: int) -> Result[[Json], Refusal] {
+  match getArray(j, key) { None => Err(Entry(seq, key)), Some(xs) => Ok(xs) }
+}
+
+pure func at_object(j: Json, key: string, seq: int) -> Result[Json, Refusal] {
+  match get(j, key) {
+    None => Err(Entry(seq, key)),
+    Some(v) => match asObject(v) { None => Err(Entry(seq, key)), Some(_) => Ok(v) }
+  }
+}
+
+-- An OPTIONAL key, and the distinction the strict decoder must keep: absent is
+-- a value (`None`), present-and-wrong is a refusal. `getInt` collapses the two
+-- into `None`, so the presence test is `has` and the decode follows it.
+pure func opt_int(j: Json, key: string, seq: int) -> Result[Option[int], Refusal] {
+  if not has(j, key) then Ok(None)
+  else match getInt(j, key) { None => Err(Entry(seq, key)), Some(n) => Ok(Some(n)) }
+}
+
+pure func opt_json(j: Json, key: string) -> Option[Json] {
+  if not has(j, key) then None else get(j, key)
+}
+
+pure func opt_string(j: Json, key: string, seq: int) -> Result[Option[string], Refusal] {
+  if not has(j, key) then Ok(None)
+  else match getString(j, key) { None => Err(Entry(seq, key)), Some(s) => Ok(Some(s)) }
+}
+
+-- The envelope. `parent_id` is `""` for the root: JSON `null` and a missing key
+-- are the same thing here and both mean "no parent", which is the one place
+-- this decoder is not strict and says so — D1 writes the field as
+-- `string | null`.
+export pure func journal_entry_of_json(j: Json) -> Result[JournalEntry, Refusal] {
+  match at_int(j, "seq", -1) {
+    Err(e) => Err(e),
+    Ok(seq) => match at_string(j, "id", seq) {
+      Err(e) => Err(e),
+      Ok(id) => match at_int(j, "at_ms", seq) {
+        Err(e) => Err(e),
+        Ok(at_ms) => match at_string(j, "type", seq) {
+          Err(e) => Err(e),
+          Ok(kind) => {
+            let parent = match getString(j, "parent_id") { None => "", Some(p) => p };
+            let e: JournalEntry = {
+              id: id, parent_id: parent, seq: seq, at_ms: at_ms, kind: kind, raw: j
+            };
+            Ok(e)
+          }
+        }
+      }
+    }
+  }
+}
+
+-- D1's `header`, first line, host-written.
+export type HeaderEntry = {
+  schema_version: int,
+  session_id: string,
+  workdir: string,
+  profile: string,
+  ext_set_digest: string,
+  model: string,
+  system_prefix_digest: string,
+  boot: BootInputs
+}
+
+pure func boot_of_json(j: Json, seq: int) -> Result[BootInputs, Refusal] {
+  match at_object(j, "boot", seq) {
+    Err(e) => Err(e),
+    Ok(b) => match at_string(b, "task", seq) {
+      Err(_) => Err(Entry(seq, "boot.task")),
+      Ok(task) => match at_string(b, "env_url", seq) {
+        Err(_) => Err(Entry(seq, "boot.env_url")),
+        Ok(env_url) => match at_bool(b, "hybrid_tools", seq) {
+          Err(_) => Err(Entry(seq, "boot.hybrid_tools")),
+          Ok(hybrid) => match at_object(b, "budget", seq) {
+            Err(_) => Err(Entry(seq, "boot.budget")),
+            Ok(bp) => match at_int(bp, "total", seq) {
+              Err(_) => Err(Entry(seq, "boot.budget.total")),
+              Ok(total) => match at_int(bp, "solver", seq) {
+                Err(_) => Err(Entry(seq, "boot.budget.solver")),
+                Ok(solver) => match at_int(bp, "verifier", seq) {
+                  Err(_) => Err(Entry(seq, "boot.budget.verifier")),
+                  Ok(verifier) => match at_int(b, "step_budget", seq) {
+                    Err(_) => Err(Entry(seq, "boot.step_budget")),
+                    Ok(step_budget) => match at_bool(b, "ohmy_pi", seq) {
+                      Err(_) => Err(Entry(seq, "boot.ohmy_pi")),
+                      Ok(ohmy) => match at_int(b, "max_cost_millicents", seq) {
+                        Err(_) => Err(Entry(seq, "boot.max_cost_millicents")),
+                        Ok(max_cost) => match at_object(b, "cost_rates", seq) {
+                          Err(_) => Err(Entry(seq, "boot.cost_rates")),
+                          Ok(cr) => match at_int(cr, "input_per_1m_millicents", seq) {
+                            Err(_) => Err(Entry(seq, "boot.cost_rates.input_per_1m_millicents")),
+                            Ok(in_rate) => match at_int(cr, "output_per_1m_millicents", seq) {
+                              Err(_) => Err(Entry(seq, "boot.cost_rates.output_per_1m_millicents")),
+                              Ok(out_rate) => {
+                                let boot: BootInputs = {
+                                  task: task,
+                                  env_url: env_url,
+                                  hybrid_tools: hybrid,
+                                  budget: { total: total, solver: solver, verifier: verifier },
+                                  step_budget: step_budget,
+                                  ohmy_pi: ohmy,
+                                  max_cost_millicents: max_cost,
+                                  cost_rates: {
+                                    input_per_1m_millicents: in_rate,
+                                    output_per_1m_millicents: out_rate
+                                  }
+                                };
+                                Ok(boot)
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- `schema_version` is checked HERE and refused as `Refusal::Schema` rather than
+-- as `Entry(seq, "schema_version")`: a version this fold does not know is not a
+-- malformed field, it is a file written by a program that is not this one, and
+-- D5 lists it as its own compatibility row.
+export pure func header_of_entry(e: JournalEntry) -> Result[HeaderEntry, Refusal] {
+  if e.kind != "header" then Err(Header)
+  else match at_int(e.raw, "schema_version", e.seq) {
+    Err(err) => Err(err),
+    Ok(v) =>
+      if v != 1 then Err(Schema)
+      else match at_string(e.raw, "session_id", e.seq) {
+        Err(err) => Err(err),
+        Ok(session_id) => match at_string(e.raw, "workdir", e.seq) {
+          Err(err) => Err(err),
+          Ok(workdir) => match at_string(e.raw, "profile", e.seq) {
+            Err(err) => Err(err),
+            Ok(profile) => match at_string(e.raw, "ext_set_digest", e.seq) {
+              Err(err) => Err(err),
+              Ok(ext_set) => match at_string(e.raw, "model", e.seq) {
+                Err(err) => Err(err),
+                Ok(model) => match at_string(e.raw, "system_prefix_digest", e.seq) {
+                  Err(err) => Err(err),
+                  Ok(sysd) => match boot_of_json(e.raw, e.seq) {
+                    Err(err) => Err(err),
+                    Ok(boot) => {
+                      let h: HeaderEntry = {
+                        schema_version: v,
+                        session_id: session_id,
+                        workdir: workdir,
+                        profile: profile,
+                        ext_set_digest: ext_set,
+                        model: model,
+                        system_prefix_digest: sysd,
+                        boot: boot
+                      };
+                      Ok(h)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+  }
+}
+
+export type AppendedEntry = {
+  run_id: string,
+  step: int,
+  message: Message,
+  replaces_previous: bool,
+  digest_after: string
+}
+
+export pure func appended_of_entry(e: JournalEntry) -> Result[AppendedEntry, Refusal] {
+  match at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match at_int(e.raw, "step", e.seq) {
+      Err(err) => Err(err),
+      Ok(step) => match at_object(e.raw, "message", e.seq) {
+        Err(err) => Err(err),
+        Ok(mj) => match message_of_json_at(mj, "message") {
+          Err(detail) => Err(Entry(e.seq, detail)),
+          Ok(m) => match at_bool(e.raw, "replaces_previous", e.seq) {
+            Err(err) => Err(err),
+            Ok(rep) => match at_string(e.raw, "digest_after", e.seq) {
+              Err(err) => Err(err),
+              Ok(d) => {
+                let a: AppendedEntry = {
+                  run_id: run_id, step: step, message: m,
+                  replaces_previous: rep, digest_after: d
+                };
+                Ok(a)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export type ReplacedEntry = {
+  run_id: string,
+  step: int,
+  reason: string,
+  first_kept: Option[int],
+  messages: [Message],
+  digest_after: string
+}
+
+export pure func replaced_of_entry(e: JournalEntry) -> Result[ReplacedEntry, Refusal] {
+  match at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match at_int(e.raw, "step", e.seq) {
+      Err(err) => Err(err),
+      Ok(step) => match at_string(e.raw, "reason", e.seq) {
+        Err(err) => Err(err),
+        Ok(reason) => match opt_int(e.raw, "first_kept", e.seq) {
+          Err(err) => Err(err),
+          Ok(first_kept) => match at_array(e.raw, "messages", e.seq) {
+            Err(err) => Err(err),
+            Ok(_) => match messages_of_json(getOr_messages(e.raw)) {
+              Err(detail) => Err(Entry(e.seq, detail)),
+              Ok(ms) => match at_string(e.raw, "digest_after", e.seq) {
+                Err(err) => Err(err),
+                Ok(d) => {
+                  let r: ReplacedEntry = {
+                    run_id: run_id, step: step, reason: reason,
+                    first_kept: first_kept, messages: ms, digest_after: d
+                  };
+                  Ok(r)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func getOr_messages(j: Json) -> Json {
+  match get(j, "messages") { None => ja([]), Some(v) => v }
+}
+
+export type StateDeltaEntry = {
+  run_id: string,
+  step: int,
+  cumulative: RuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts_digest: string,
+  ext_artifacts: Option[Json]
+}
+
+pure func counts_of_json(j: Json, key: string, seq: int) -> Result[RuntimeStatusCounts, Refusal] {
+  match at_object(j, key, seq) {
+    Err(e) => Err(e),
+    Ok(c) => match at_int(c, "provider_calls_started", seq) {
+      Err(_) => Err(Entry(seq, "${key}.provider_calls_started")),
+      Ok(started) => match at_int(c, "provider_calls_completed", seq) {
+        Err(_) => Err(Entry(seq, "${key}.provider_calls_completed")),
+        Ok(completed) => match at_int(c, "stage_applied_total", seq) {
+          Err(_) => Err(Entry(seq, "${key}.stage_applied_total")),
+          Ok(applied) => match at_int(c, "stage_rejected_total", seq) {
+            Err(_) => Err(Entry(seq, "${key}.stage_rejected_total")),
+            Ok(rejected) => match at_int(c, "compaction_ai_applied", seq) {
+              Err(_) => Err(Entry(seq, "${key}.compaction_ai_applied")),
+              Ok(ai) => {
+                let counts: RuntimeStatusCounts = {
+                  provider_calls_started: started,
+                  provider_calls_completed: completed,
+                  stage_applied_total: applied,
+                  stage_rejected_total: rejected,
+                  compaction_ai_applied: ai
+                };
+                Ok(counts)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func telemetry_of_json(j: Json, key: string, seq: int) -> Result[TokenTelemetry, Refusal] {
+  match at_object(j, key, seq) {
+    Err(e) => Err(e),
+    Ok(t) => match at_int(t, "last_input_tokens", seq) {
+      Err(_) => Err(Entry(seq, "${key}.last_input_tokens")),
+      Ok(li) => match at_int(t, "last_output_tokens", seq) {
+        Err(_) => Err(Entry(seq, "${key}.last_output_tokens")),
+        Ok(lo) => match at_int(t, "last_estimated_input_tokens", seq) {
+          Err(_) => Err(Entry(seq, "${key}.last_estimated_input_tokens")),
+          Ok(le) => {
+            let tel: TokenTelemetry = {
+              last_input_tokens: li,
+              last_output_tokens: lo,
+              last_estimated_input_tokens: le
+            };
+            Ok(tel)
+          }
+        }
+      }
+    }
+  }
+}
+
+export pure func state_delta_of_entry(e: JournalEntry) -> Result[StateDeltaEntry, Refusal] {
+  match at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match at_int(e.raw, "step", e.seq) {
+      Err(err) => Err(err),
+      Ok(step) => match counts_of_json(e.raw, "cumulative", e.seq) {
+        Err(err) => Err(err),
+        Ok(counts) => match telemetry_of_json(e.raw, "telemetry", e.seq) {
+          Err(err) => Err(err),
+          Ok(tel) => match at_string(e.raw, "ext_artifacts_digest", e.seq) {
+            Err(err) => Err(err),
+            Ok(dig) => {
+              let d: StateDeltaEntry = {
+                run_id: run_id, step: step, cumulative: counts, telemetry: tel,
+                ext_artifacts_digest: dig, ext_artifacts: opt_json(e.raw, "ext_artifacts")
+              };
+              Ok(d)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export type RunStartedEntry = { run_id: string }
+
+export pure func run_started_of_entry(e: JournalEntry) -> Result[RunStartedEntry, Refusal] {
+  match at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => { let r: RunStartedEntry = { run_id: run_id }; Ok(r) }
+  }
+}
+
+-- `world_ordinal` is decoded and carried and NOTHING READS IT YET: PLAN-001 P2
+-- has not landed `ordinal` on the world (`ports.ail` has none), so the host
+-- writes 0 and D5's `from_ordinal` rule waits for it. Decoding it strictly now
+-- costs nothing and makes the schema stable across that landing.
+export type RunFinishedEntry = {
+  run_id: string,
+  cumulative: RuntimeStatusCounts,
+  world_ordinal: int,
+  finish_reason: string
+}
+
+export pure func run_finished_of_entry(e: JournalEntry) -> Result[RunFinishedEntry, Refusal] {
+  match at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match counts_of_json(e.raw, "cumulative", e.seq) {
+      Err(err) => Err(err),
+      Ok(counts) => match at_int(e.raw, "world_ordinal", e.seq) {
+        Err(err) => Err(err),
+        Ok(ord) => match at_string(e.raw, "finish_reason", e.seq) {
+          Err(err) => Err(err),
+          Ok(reason) => {
+            let r: RunFinishedEntry = {
+              run_id: run_id, cumulative: counts, world_ordinal: ord, finish_reason: reason
+            };
+            Ok(r)
+          }
+        }
+      }
+    }
+  }
+}
+
+-- BOTH FIELDS OPTIONAL, and the entry is legal with neither present: D1 writes
+-- them `model?` / `profile?` because a `model_change` says one and a profile
+-- switch says the other, and an entry that had to carry both would make the
+-- host invent the half it was not told.
+export type SettingsEntry = { model: Option[string], profile: Option[string] }
+
+export pure func settings_of_entry(e: JournalEntry) -> Result[SettingsEntry, Refusal] {
+  match opt_string(e.raw, "model", e.seq) {
+    Err(err) => Err(err),
+    Ok(model) => match opt_string(e.raw, "profile", e.seq) {
+      Err(err) => Err(err),
+      Ok(profile) => { let s: SettingsEntry = { model: model, profile: profile }; Ok(s) }
+    }
+  }
+}
+
+export type SuspendedEntry = { run_id: string, reason: string, step: int }
+
+export pure func suspended_of_entry(e: JournalEntry) -> Result[SuspendedEntry, Refusal] {
+  match at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match at_string(e.raw, "reason", e.seq) {
+      Err(err) => Err(err),
+      Ok(reason) => match at_int(e.raw, "step", e.seq) {
+        Err(err) => Err(err),
+        Ok(step) => {
+          let s: SuspendedEntry = { run_id: run_id, reason: reason, step: step };
+          Ok(s)
+        }
+      }
+    }
+  }
+}
+
+export type ResumedEntry = {
+  resume_count: int,
+  from_id: string,
+  from_ordinal: int,
+  profile_from: string,
+  profile_to: string,
+  prompt_digest_from: string,
+  prompt_digest_to: string,
+  forced: bool
+}
+
+export pure func resumed_of_entry(e: JournalEntry) -> Result[ResumedEntry, Refusal] {
+  match at_int(e.raw, "resume_count", e.seq) {
+    Err(err) => Err(err),
+    Ok(rc) => match at_string(e.raw, "from_id", e.seq) {
+      Err(err) => Err(err),
+      Ok(from_id) => match at_int(e.raw, "from_ordinal", e.seq) {
+        Err(err) => Err(err),
+        Ok(from_ord) => match at_string(e.raw, "profile_from", e.seq) {
+          Err(err) => Err(err),
+          Ok(pf) => match at_string(e.raw, "profile_to", e.seq) {
+            Err(err) => Err(err),
+            Ok(pt) => match at_string(e.raw, "prompt_digest_from", e.seq) {
+              Err(err) => Err(err),
+              Ok(df) => match at_string(e.raw, "prompt_digest_to", e.seq) {
+                Err(err) => Err(err),
+                Ok(dt) => match at_bool(e.raw, "forced", e.seq) {
+                  Err(err) => Err(err),
+                  Ok(forced) => {
+                    let r: ResumedEntry = {
+                      resume_count: rc, from_id: from_id, from_ordinal: from_ord,
+                      profile_from: pf, profile_to: pt,
+                      prompt_digest_from: df, prompt_digest_to: dt, forced: forced
+                    };
+                    Ok(r)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export type ExitEntry = { reason: string, pending_tool_calls: [string] }
+
+@allow_empty_ok("an `exit` entry with no pending tool calls is the ordinary case — a clean exit strips nothing, and `[]` is its correct decoding")
+pure func strings_of_json(xs: [Json], seq: int, field: string) -> Result[[string], Refusal] {
+  match xs {
+    [] => Ok([]),
+    j :: rest => match asString(j) {
+      None => Err(Entry(seq, field)),
+      Some(s) => match strings_of_json(rest, seq, field) {
+        Err(e) => Err(e),
+        Ok(ss) => Ok(s :: ss)
+      }
+    }
+  }
+}
+
+export pure func exit_of_entry(e: JournalEntry) -> Result[ExitEntry, Refusal] {
+  match at_string(e.raw, "reason", e.seq) {
+    Err(err) => Err(err),
+    Ok(reason) => match at_array(e.raw, "pending_tool_calls", e.seq) {
+      Err(err) => Err(err),
+      Ok(xs) => match strings_of_json(xs, e.seq, "pending_tool_calls") {
+        Err(err) => Err(err),
+        Ok(ids) => { let x: ExitEntry = { reason: reason, pending_tool_calls: ids }; Ok(x) }
+      }
+    }
+  }
+}
+
+-- The ten types, as data, so a gate can assert the set rather than read it. The
+-- same argument `all_families()` and `all_hook_slots()` make: a hand-written set
+-- that validates while incomplete is this project's recurring failure.
+export pure func all_entry_types() -> [string] {
+  ["header", "history_appended", "history_replaced", "state_delta",
+   "run_started", "run_finished", "settings", "suspended", "resumed", "exit"]
+}
+
+-- ============================================================================
+-- D4's FOLD.
+--
+-- `fold_journal(entries, leaf) -> Result[SessionState, Refusal]`, the six rules
+-- in the order oh-my-pi's `buildSessionContext` applies them:
+--
+--   1. PATH.      From `leaf` to the root by `parent_id`, stopping at the first
+--                 repeated id; reversed. The first entry must be the `header`.
+--   2. DECODE.    Strictly, per entry. No fallbacks.
+--   3. HISTORY.   The history entries in path order, one message each, an entry
+--                 with `replaces_previous` dropping the message the previous
+--                 history entry contributed; from the latest `history_replaced`
+--                 the head system prefix, then that entry's messages, then the
+--                 entries after it (or from `first_kept`). Every entry's
+--                 `digest_after` recomputed and checked; the result must satisfy
+--                 `system_is_head_prefix`, `history_valid_transcript` and the
+--                 fold's OWN pairing rule.
+--   4. DANGLING.  A trailing assistant whose calls have no results loses them,
+--                 and they are reported.
+--   5. COUNTS.    From the last `state_delta`; `model`/`profile` from the last
+--                 `settings`.
+--   6. BOUNDARY.  From the last entry's type.
+--
+-- WHY THE PAIRING RULE IS THE FOLD'S AND NOT `phase_vocab`'s.
+-- `history_valid_transcript` walks each message ALONE — a tool message needs a
+-- non-empty `tool_call_id`, an assistant's calls need non-empty ids — and never
+-- looks at two messages together. Pairing is a relation between an assistant and
+-- the results after it, so a fold that leaned on the seal would be a fold that
+-- checked nothing about correlation and would happily resume a history the
+-- provider rejects. In the harness the `ToolPairing` family is the same rule
+-- over the trace.
+--
+-- WHY DANGLING CALLS ARE STRIPPED RATHER THAN REFUSED. A crash mid tool-phase
+-- is exactly that shape: the assistant with its `tool_calls` is journaled before
+-- the tool phase runs, so a journal that ends there is a CORRECT journal of an
+-- interrupted run. The provider must never see an unpaired call, so the fold
+-- drops them and hands the ids to the TUI (D6, "on a crash resume it names the
+-- dangling calls"). On the hybrid path the journaled assistant carries no calls
+-- until the batch entry replaces it, so a crash there strips nothing — which is
+-- the behaviour the replacement rule was designed to give.
+-- ============================================================================
+
+-- D4's `last`, minus `Parked` — PLAN-003 P4's, with its two entry types.
+-- `BoundaryOpen` is the case D4's list does not name because a well-formed
+-- journal does not usually end there: the last entry is a `history_appended` or
+-- a `state_delta`, which is what a journal looks like DURING a run and what a
+-- `kill -9` leaves behind. Naming it is what lets D6 step 5 route it (between
+-- turns, with the folded history) instead of matching non-exhaustively.
+export type Boundary
+  = BoundaryRunFinished(string, int)
+  | BoundarySuspended(string, int)
+  | BoundaryExit(string)
+  | BoundaryOpen(string)
+
+export pure func boundary_id(b: Boundary) -> string {
+  match b {
+    BoundaryRunFinished(_, _) => "run_finished",
+    BoundarySuspended(_, _) => "suspended",
+    BoundaryExit(_) => "exit",
+    BoundaryOpen(kind) => "open:${kind}"
+  }
+}
+
+export type SessionState = {
+  header: HeaderEntry,
+  history: [Message],
+  dangling: [string],
+  cumulative: RuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts: Json,
+  model: string,
+  profile: string,
+  last: Boundary
+}
+
+-- A message and the entry that contributed it. The seq rides along because
+-- `Refusal::Pairing(seq)` names an ENTRY and the pairing rule is a property of
+-- MESSAGES; without it the refusal could only say "somewhere in the history".
+type HistMsg = { seq: int, m: Message }
+
+pure func cons_hist(acc: [HistMsg], h: HistMsg) -> [HistMsg] { h :: acc }
+pure func reverse_hist(xs: [HistMsg]) -> [HistMsg] { List.foldl(cons_hist, [], xs) }
+
+pure func cons_entry(acc: [JournalEntry], e: JournalEntry) -> [JournalEntry] { e :: acc }
+pure func reverse_entries(xs: [JournalEntry]) -> [JournalEntry] { List.foldl(cons_entry, [], xs) }
+
+pure func cons_str(acc: [string], s: string) -> [string] { s :: acc }
+pure func reverse_strings(xs: [string]) -> [string] { List.foldl(cons_str, [], xs) }
+
+pure func hist_messages(xs: [HistMsg]) -> [Message] {
+  List.map(hist_message, xs)
+}
+
+pure func hist_message(h: HistMsg) -> Message { h.m }
+
+pure func contains_string(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_string(rest, t) }
+}
+
+pure func without_string(xs: [string], t: string) -> [string] {
+  match xs { [] => [], x :: rest => if x == t then without_string(rest, t) else x :: without_string(rest, t) }
+}
+
+pure func call_ids(cs: [ToolCall]) -> [string] {
+  match cs { [] => [], c :: rest => c.id :: call_ids(rest) }
+}
+
+pure func drop_hist(n: int, xs: [HistMsg]) -> [HistMsg] {
+  if n <= 0 then xs
+  else match xs { [] => [], _ :: rest => drop_hist(n - 1, rest) }
+}
+
+pure func take_system_hist(xs: [HistMsg]) -> [HistMsg] {
+  match xs {
+    [] => [],
+    h :: rest => if h.m.role == "system" then h :: take_system_hist(rest) else []
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Rule 1: the path.
+-- ----------------------------------------------------------------------------
+
+pure func find_entry(es: [JournalEntry], id: string) -> Option[JournalEntry] {
+  match es {
+    [] => None,
+    e :: rest => if e.id == id then Some(e) else find_entry(rest, id)
+  }
+}
+
+-- Leaf to root, prepending as it climbs, so the result comes out ROOT FIRST
+-- without a reversal. `seen` is D4 rule 1's "stopping at the first repeated id"
+-- — a parent chain that revisits an id is a cycle, and a fold that followed it
+-- would not terminate. Recursion depth is the PATH length, not the file's.
+pure func path_up(es: [JournalEntry], id: string, seen: [string], acc: [JournalEntry]) -> [JournalEntry] {
+  if id == "" then acc
+  else if contains_string(seen, id) then acc
+  else match find_entry(es, id) {
+    None => acc,
+    Some(e) => path_up(es, e.parent_id, id :: seen, e :: acc)
+  }
+}
+
+type EnvAcc = { out: [JournalEntry], err: Option[Refusal] }
+
+pure func decode_envelope_step(acc: EnvAcc, j: Json) -> EnvAcc {
+  match acc.err {
+    Some(_) => acc,
+    None => match journal_entry_of_json(j) {
+      Err(r) => { out: acc.out, err: Some(r) },
+      Ok(e) => { out: e :: acc.out, err: None }
+    }
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Rule 3: the history, its chain, and the accumulator that carries both.
+-- ----------------------------------------------------------------------------
+--
+-- `rev_msgs` is NEWEST FIRST. Appending to the head is O(1) and
+-- `replaces_previous` is a `tail`, which is the operation the rule actually
+-- names; the forward list is built once at the end. A history is unbounded, so
+-- `++ [m]` per entry would be quadratic in the thing the journal exists to make
+-- cheap.
+--
+-- `digest` is the chain through the last contribution and `digest_prev` is the
+-- chain through the one BEFORE it, because a `replaces_previous` entry chains
+-- from the entry before the replaced one (D1) — that is what pins the hybrid
+-- batch's augmented assistant to the plain one it supersedes, and a fold that
+-- appended instead breaks the chain exactly there.
+type FoldAcc = {
+  err: Option[Refusal],
+  rev_msgs: [HistMsg],
+  digest: string,
+  digest_prev: string,
+  cumulative: RuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts: Json,
+  model: string,
+  profile: string,
+  last: Boundary
+}
+
+pure func fold_append(acc: FoldAcc, e: JournalEntry) -> FoldAcc {
+  match appended_of_entry(e) {
+    Err(r) => { acc | err: Some(r) },
+    Ok(a) => {
+      let base = if a.replaces_previous then acc.digest_prev else acc.digest;
+      let kept = if a.replaces_previous
+                 then match acc.rev_msgs { [] => [], _ :: rest => rest }
+                 else acc.rev_msgs;
+      let expected = chain_digest_after(base, a.message);
+      if a.digest_after != expected then { acc | err: Some(Digest(e.seq)) }
+      else {
+        acc | rev_msgs: hist_msg(e.seq, a.message) :: kept,
+              digest: expected,
+              digest_prev: base,
+              last: BoundaryOpen("history_appended")
+      }
+    }
+  }
+}
+
+pure func fold_replace(acc: FoldAcc, e: JournalEntry) -> FoldAcc {
+  match replaced_of_entry(e) {
+    Err(r) => { acc | err: Some(r) },
+    Ok(rep) => {
+      let forward = reverse_hist(acc.rev_msgs);
+      let prefix = take_system_hist(forward);
+      let kept = match rep.first_kept { None => [], Some(i) => drop_hist(i, forward) };
+      let replacement = tag_messages(e.seq, rep.messages);
+      let emitted = prefix ++ replacement ++ kept;
+      let expected = chain_digest_base(hist_messages(prefix ++ replacement));
+      if rep.digest_after != expected then { acc | err: Some(Digest(e.seq)) }
+      else {
+        acc | rev_msgs: reverse_hist(emitted),
+              digest: expected,
+              digest_prev: acc.digest,
+              last: BoundaryOpen("history_replaced")
+      }
+    }
+  }
+}
+
+pure func hist_msg(seq: int, m: Message) -> HistMsg { { seq: seq, m: m } }
+
+pure func tag_messages(seq: int, ms: [Message]) -> [HistMsg] {
+  match ms { [] => [], m :: rest => hist_msg(seq, m) :: tag_messages(seq, rest) }
+}
+
+pure func fold_entry(acc: FoldAcc, e: JournalEntry) -> FoldAcc {
+  match acc.err {
+    Some(_) => acc,
+    None =>
+      if e.kind == "history_appended" then fold_append(acc, e)
+      else if e.kind == "history_replaced" then fold_replace(acc, e)
+      else if e.kind == "state_delta" then match state_delta_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(d) => {
+          acc | cumulative: d.cumulative,
+                telemetry: d.telemetry,
+                ext_artifacts: match d.ext_artifacts { None => acc.ext_artifacts, Some(v) => v },
+                last: BoundaryOpen("state_delta")
+        }
+      }
+      else if e.kind == "settings" then match settings_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(s) => {
+          acc | model: match s.model { None => acc.model, Some(m) => m },
+                profile: match s.profile { None => acc.profile, Some(p) => p },
+                last: BoundaryOpen("settings")
+        }
+      }
+      else if e.kind == "run_started" then match run_started_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(_) => { acc | last: BoundaryOpen("run_started") }
+      }
+      else if e.kind == "run_finished" then match run_finished_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(f) => { acc | last: BoundaryRunFinished(f.run_id, f.world_ordinal) }
+      }
+      else if e.kind == "suspended" then match suspended_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(s) => { acc | last: BoundarySuspended(s.run_id, s.step) }
+      }
+      else if e.kind == "resumed" then match resumed_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(_) => { acc | last: BoundaryOpen("resumed") }
+      }
+      else if e.kind == "exit" then match exit_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(x) => { acc | last: BoundaryExit(x.reason) }
+      }
+      else if e.kind == "header" then { acc | err: Some(Header) }
+      -- AN UNKNOWN TYPE IS A REFUSAL, not a skip. `park` and `wake` arrive with
+      -- PLAN-003 P4 and a fold that ignored what it did not recognise would
+      -- resume a parked session as though it had never parked.
+      else { acc | err: Some(Entry(e.seq, "type=${e.kind}")) }
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Rules 3b and 4: pairing, and the dangling calls.
+-- ----------------------------------------------------------------------------
+
+type PairAcc = {
+  err: Option[Refusal],
+  open_ids: [string],
+  cur_ids: [string],
+  cur_seq: int
+}
+
+pure func pair_step(acc: PairAcc, h: HistMsg) -> PairAcc {
+  match acc.err {
+    Some(_) => acc,
+    None =>
+      if h.m.role == "tool" then
+        if contains_string(acc.cur_ids, h.m.tool_call_id)
+        then { acc | open_ids: without_string(acc.open_ids, h.m.tool_call_id) }
+        else { acc | err: Some(Pairing(h.seq)) }
+      else if List.length(acc.open_ids) > 0 then
+        -- Something that is not a result for the open batch arrived while calls
+        -- were still open: D4's "every call except a trailing one is answered".
+        -- The refusal names the ASSISTANT that made them, not the interloper.
+        { acc | err: Some(Pairing(acc.cur_seq)) }
+      else if List.length(h.m.tool_calls) > 0 then
+        { acc | open_ids: call_ids(h.m.tool_calls), cur_ids: call_ids(h.m.tool_calls), cur_seq: h.seq }
+      else acc
+  }
+}
+
+pure func strip_dangling(dangling: [string], cur_seq: int, xs: [HistMsg]) -> [HistMsg] {
+  match xs {
+    [] => [],
+    h :: rest =>
+      if h.seq == cur_seq && List.length(h.m.tool_calls) > 0
+      then hist_msg(h.seq, { h.m | tool_calls: keep_calls(dangling, h.m.tool_calls) })
+             :: strip_dangling(dangling, cur_seq, rest)
+      else h :: strip_dangling(dangling, cur_seq, rest)
+  }
+}
+
+pure func keep_calls(dangling: [string], cs: [ToolCall]) -> [ToolCall] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      if contains_string(dangling, c.id) then keep_calls(dangling, rest)
+      else c :: keep_calls(dangling, rest)
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- The fold itself.
+-- ----------------------------------------------------------------------------
+
+export pure func fold_journal(entries: [Json], leaf: string) -> Result[SessionState, Refusal] {
+  let env0: EnvAcc = { out: [], err: None };
+  let decoded = List.foldl(decode_envelope_step, env0, entries);
+  match decoded.err {
+    Some(r) => Err(r),
+    None => {
+      let all = reverse_entries(decoded.out);
+      let path = path_up(all, leaf, [], []);
+      match path {
+        [] => Err(Header),
+        head_entry :: rest => match header_of_entry(head_entry) {
+          Err(r) => Err(r),
+          Ok(header) => {
+            let acc0: FoldAcc = {
+              err: None,
+              rev_msgs: [],
+              digest: chain_empty_base(),
+              digest_prev: chain_empty_base(),
+              cumulative: zero_runtime_status_counts(),
+              telemetry: zero_token_telemetry(),
+              ext_artifacts: empty_ext_artifacts(),
+              model: header.model,
+              profile: header.profile,
+              last: BoundaryOpen("header")
+            };
+            let acc = List.foldl(fold_entry, acc0, rest);
+            match acc.err {
+              Some(r) => Err(r),
+              None => finish_fold(header, acc)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func finish_fold(header: HeaderEntry, acc: FoldAcc) -> Result[SessionState, Refusal] {
+  let forward = reverse_hist(acc.rev_msgs);
+  let pair0: PairAcc = { err: None, open_ids: [], cur_ids: [], cur_seq: -1 };
+  let pairs = List.foldl(pair_step, pair0, forward);
+  match pairs.err {
+    Some(r) => Err(r),
+    None => {
+      let dangling = pairs.open_ids;
+      let stripped = if List.length(dangling) == 0 then forward
+                     else strip_dangling(dangling, pairs.cur_seq, forward);
+      let msgs = hist_messages(stripped);
+      if not system_is_head_prefix(msgs, true) then Err(HeadPrefix)
+      else match history_from_seed(msgs) {
+        Err(e) => Err(Transcript(e)),
+        Ok(h) =>
+          if not history_valid_transcript(h)
+          then Err(Transcript("a tool message with no tool_call_id, or a tool call with no id"))
+          else {
+            let st: SessionState = {
+              header: header,
+              history: msgs,
+              dangling: dangling,
+              cumulative: acc.cumulative,
+              telemetry: acc.telemetry,
+              ext_artifacts: acc.ext_artifacts,
+              model: acc.model,
+              profile: acc.profile,
+              last: acc.last
+            };
+            Ok(st)
+          }
+      }
+    }
+  }
+}
+
+-- The continuation a resumed run is rebuilt from (D6 step 5). It is here rather
+-- than in the resume script because `Continuation` is this module's type and the
+-- projection is total: everything but the boot inputs comes off the folded
+-- state, and the boot inputs are the header's by construction.
+export pure func continuation_of_session(s: SessionState, step_idx: int, nudges_used: int) -> Continuation {
+  {
+    history: s.history,
+    step_idx: step_idx,
+    cumulative: s.cumulative,
+    telemetry: s.telemetry,
+    ext_artifacts: s.ext_artifacts,
+    nudges_used: nudges_used,
+    model: s.model,
+    profile: s.profile,
+    boot: s.header.boot
+  }
+}
+
+-- ============================================================================
+-- D5's COMPATIBILITY ROWS — the five refusals that are about the INVOCATION.
+--
+-- Checked by the resumer against the header and the runtime it just built
+-- (D6 step 3). They live here, beside the fold, because the header they read is
+-- the fold's output and because `--resume-force`'s exact reach is a decision
+-- with a blast radius: it overrides the extension set and the system prompt and
+-- it overrides NEITHER the workdir NOR the lease. A forced resume into another
+-- directory would reinterpret every relative path in the history; a forced
+-- resume past a live lease would give D3's one writer a second one.
+--
+-- PLAN-003 P3 Part 5 is the caller. This part gives the rows their definition
+-- and their tests.
+-- ============================================================================
+
+export type ResumeContext = {
+  workdir: string,
+  ext_set_digest: string,
+  system_prefix_digest: string,
+  profile: string,
+  leased: bool,
+  force: bool
+}
+
+export pure func resume_refusal(h: HeaderEntry, ctx: ResumeContext) -> Option[Refusal] {
+  if ctx.leased then Some(Leased)
+  else if h.workdir != ctx.workdir then Some(Workdir)
+  else if h.ext_set_digest != ctx.ext_set_digest && not ctx.force then Some(ExtSet)
+  -- A PROFILE SWITCH IS ACCEPTED (D5) and is not a prompt refusal: the resumer
+  -- replaces the head system prefix and resets `ext_artifacts`. The prompt
+  -- digest is therefore only compared UNDER THE SAME PROFILE.
+  else if h.profile == ctx.profile && h.system_prefix_digest != ctx.system_prefix_digest && not ctx.force
+  then Some(Prompt)
+  else None
+}
+
+-- ============================================================================
+-- THE ENTRY ENCODERS, AND THE HOST'S ID ASSIGNMENT — ONE FUNCTION, TWO READERS.
+--
+-- `journal_lines_of_records` is the TWIN of what ADR-003 D3's host writer does:
+-- it takes the journal-class `WireRecord`s of a run's trace, in trace order,
+-- and produces the JSONL lines the host would have appended — sequential ids,
+-- `parent_id` pointing at the previous line, the `header` first, and D1's three
+-- `history_seeded` arms collapsed to the one that applies to a single run's
+-- trace (expand the seed into N `history_appended` entries).
+--
+-- IT IS ONE FUNCTION BECAUSE IT HAS TWO CALLERS, and the second does not exist
+-- yet: `dst_invariants.journal_fold_findings` (PLAN-003 P3 Part 2, the family
+-- that is red until the emits land) and P3 Part 5's resume script, which folds a
+-- journal built from a traced run's own records to prove the cross-process
+-- resume. Two copies of "as the host would" would be two notions of the journal,
+-- and the second copy is where a fold silently starts agreeing with itself.
+-- ANYONE LOOKING FOR IT: it is here, in `journal.ail`, and not in
+-- `dst_invariants` — a leaf module so the resume script can reach it without
+-- importing the invariant set.
+--
+-- WHAT THE TWIN IS NOT. It is not the host's writer. The host's is TypeScript
+-- (P3 Part 4), it holds the leaf and the seq counter across a whole session, and
+-- it resolves `first_kept` against a running message count. This one folds one
+-- run's trace with `at_ms` standing in for a clock it does not have — a pure
+-- function cannot read one, and the fold never looks at `at_ms`.
+-- ============================================================================
+
+pure func entry_id(n: int) -> string {
+  if n < 10 then "000${show(n)}"
+  else if n < 100 then "00${show(n)}"
+  else if n < 1000 then "0${show(n)}"
+  else show(n)
+}
+
+export pure func counts_json(c: RuntimeStatusCounts) -> Json {
+  jo([
+    kv("provider_calls_started", jint(c.provider_calls_started)),
+    kv("provider_calls_completed", jint(c.provider_calls_completed)),
+    kv("stage_applied_total", jint(c.stage_applied_total)),
+    kv("stage_rejected_total", jint(c.stage_rejected_total)),
+    kv("compaction_ai_applied", jint(c.compaction_ai_applied))
+  ])
+}
+
+export pure func telemetry_json(t: TokenTelemetry) -> Json {
+  jo([
+    kv("last_input_tokens", jint(t.last_input_tokens)),
+    kv("last_output_tokens", jint(t.last_output_tokens)),
+    kv("last_estimated_input_tokens", jint(t.last_estimated_input_tokens))
+  ])
+}
+
+export pure func boot_json(b: BootInputs) -> Json {
+  jo([
+    kv("task", js(b.task)),
+    kv("env_url", js(b.env_url)),
+    kv("hybrid_tools", jb(b.hybrid_tools)),
+    kv("budget", jo([
+      kv("total", jint(b.budget.total)),
+      kv("solver", jint(b.budget.solver)),
+      kv("verifier", jint(b.budget.verifier))
+    ])),
+    kv("step_budget", jint(b.step_budget)),
+    kv("ohmy_pi", jb(b.ohmy_pi)),
+    kv("max_cost_millicents", jint(b.max_cost_millicents)),
+    kv("cost_rates", jo([
+      kv("input_per_1m_millicents", jint(b.cost_rates.input_per_1m_millicents)),
+      kv("output_per_1m_millicents", jint(b.cost_rates.output_per_1m_millicents))
+    ]))
+  ])
+}
+
+export pure func header_kvs(h: HeaderEntry) -> [{key: string, value: Json}] {
+  [kv("schema_version", jint(h.schema_version)),
+   kv("session_id", js(h.session_id)),
+   kv("workdir", js(h.workdir)),
+   kv("profile", js(h.profile)),
+   kv("ext_set_digest", js(h.ext_set_digest)),
+   kv("model", js(h.model)),
+   kv("system_prefix_digest", js(h.system_prefix_digest)),
+   kv("boot", boot_json(h.boot))]
+}
+
+export pure func empty_boot() -> BootInputs {
+  {
+    task: "",
+    env_url: "",
+    hybrid_tools: false,
+    budget: { total: 0, solver: 0, verifier: 0 },
+    step_budget: 0,
+    ohmy_pi: false,
+    max_cost_millicents: 0,
+    cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+  }
+}
+
+-- The header a HARNESS twin writes, and every field of it is either known from
+-- the identity or honestly empty. `workdir`, `ext_set_digest` and
+-- `system_prefix_digest` are the host's (it computes them from the runtime it
+-- built), and a twin that invented values for them would be inventing the three
+-- inputs to D5's compatibility rows.
+export pure func harness_header(id: RunIdentity, model: string) -> HeaderEntry {
+  {
+    schema_version: 1,
+    session_id: id.session_id,
+    workdir: "",
+    profile: id.profile,
+    ext_set_digest: "",
+    model: model,
+    system_prefix_digest: "",
+    boot: empty_boot()
+  }
+}
+
+type TwinAcc = {
+  lines: [Json],
+  seq: int,
+  parent: string,
+  digest: string,
+  run_id: string,
+  seeded: bool
+}
+
+pure func cons_json(acc: [Json], j: Json) -> [Json] { j :: acc }
+pure func reverse_json(xs: [Json]) -> [Json] { List.foldl(cons_json, [], xs) }
+
+pure func twin_line(acc: TwinAcc, kind: string, kvs: [{key: string, value: Json}]) -> TwinAcc {
+  let id = entry_id(acc.seq);
+  let envelope = [kv("id", js(id)),
+                  kv("parent_id", js(acc.parent)),
+                  kv("seq", jint(acc.seq)),
+                  kv("at_ms", jint(acc.seq)),
+                  kv("type", js(kind))];
+  {
+    acc | lines: jo(envelope ++ kvs) :: acc.lines,
+          seq: acc.seq + 1,
+          parent: id
+  }
+}
+
+-- The ROOT's `parent_id` is `""`, which `journal_entry_of_json` reads as "no
+-- parent" — D1 writes the field `string | null` and the fold's path walk stops
+-- on either.
+pure func twin_root(acc: TwinAcc, kind: string, kvs: [{key: string, value: Json}]) -> TwinAcc {
+  twin_line({ acc | parent: "" }, kind, kvs)
+}
+
+pure func twin_seed_messages(acc: TwinAcc, run_id: string, ms: [Message]) -> TwinAcc {
+  match ms {
+    [] => acc,
+    m :: rest => {
+      let d = chain_digest_after(acc.digest, m);
+      let next = twin_line(acc, "history_appended", [
+        kv("run_id", js(run_id)),
+        kv("step", jint(0)),
+        kv("message", message_json(m)),
+        kv("replaces_previous", jb(false)),
+        kv("digest_after", js(d))
+      ]);
+      twin_seed_messages({ next | digest: d }, run_id, rest)
+    }
+  }
+}
+
+pure func twin_event(acc: TwinAcc, e: LedgerEvent) -> TwinAcc {
+  match e {
+    SessionStart(i) =>
+      twin_line({ acc | run_id: i.run_id }, "run_started", [kv("run_id", js(i.run_id))]),
+
+    -- D1's THREE HOST ARMS, collapsed to the one a single run's trace exercises.
+    -- The first `HistorySeeded` of the path is expanded into N
+    -- `history_appended` entries (arm 1); a later one is DROPPED (arm 3, the
+    -- compare-and-drop, whose comparison the host makes and the fold never
+    -- sees). Arm 2 — the profile-switch rewrite into a `history_replaced` — is
+    -- the resumer's and belongs to P3 Part 5, which is why it is not here.
+    HistorySeeded(i) =>
+      if acc.seeded then acc
+      else match messages_of_json(i.messages) {
+        -- A seed that does not decode is journaled VERBATIM into one entry, so
+        -- the fold refuses it at `Entry(seq, "message")` rather than being handed
+        -- a journal the twin quietly repaired.
+        Err(_) => twin_line({ acc | seeded: true }, "history_appended", [
+          kv("run_id", js(i.run_id)),
+          kv("step", jint(0)),
+          kv("message", i.messages),
+          kv("replaces_previous", jb(false)),
+          kv("digest_after", js(i.digest))
+        ]),
+        Ok(ms) => twin_seed_messages({ acc | seeded: true, run_id: i.run_id }, i.run_id, ms)
+      },
+
+    HistoryAppended(i) => {
+      let next = twin_line({ acc | run_id: i.run_id }, "history_appended", [
+        kv("run_id", js(i.run_id)),
+        kv("step", jint(i.step)),
+        kv("message", i.message),
+        kv("replaces_previous", jb(i.replaces_previous)),
+        kv("digest_after", js(i.digest_after))
+      ]);
+      { next | digest: i.digest_after }
+    },
+
+    HistoryReplaced(i) => {
+      let base = [kv("run_id", js(i.run_id)),
+                  kv("step", jint(i.step)),
+                  kv("reason", js(i.reason)),
+                  kv("messages", i.messages),
+                  kv("digest_after", js(i.digest_after))];
+      let kvs = match i.first_kept { None => base, Some(n) => base ++ [kv("first_kept", jint(n))] };
+      let next = twin_line({ acc | run_id: i.run_id }, "history_replaced", kvs);
+      { next | digest: i.digest_after }
+    },
+
+    StateDelta(i) => {
+      let base = [kv("run_id", js(i.run_id)),
+                  kv("step", jint(i.step)),
+                  kv("cumulative", counts_json(i.cumulative)),
+                  kv("telemetry", telemetry_json(i.telemetry)),
+                  kv("ext_artifacts_digest", js(i.ext_artifacts_digest))];
+      let kvs = match i.ext_artifacts { None => base, Some(v) => base ++ [kv("ext_artifacts", v)] };
+      twin_line({ acc | run_id: i.run_id }, "state_delta", kvs)
+    },
+
+    -- A resume that switched profile is TWO entries, and D5 says why: the
+    -- `resumed` entry records both sides of every comparison the host made, and
+    -- the accepted switch is separately a `settings` entry, because that is the
+    -- entry the fold reads `profile` from (rule 5).
+    SessionResumed(i) => {
+      let resumed = twin_line(acc, "resumed", [
+        kv("resume_count", jint(i.resume_count)),
+        kv("from_id", js(i.from_id)),
+        kv("from_ordinal", jint(i.from_ordinal)),
+        kv("profile_from", js(i.profile_from)),
+        kv("profile_to", js(i.profile_to)),
+        kv("prompt_digest_from", js(i.prompt_digest_from)),
+        kv("prompt_digest_to", js(i.prompt_digest_to)),
+        kv("forced", jb(i.forced))
+      ]);
+      if i.profile_to == i.profile_from then resumed
+      else twin_line(resumed, "settings", [kv("profile", js(i.profile_to))])
+    },
+
+    RunSuspended(i) =>
+      twin_line({ acc | run_id: i.run_id }, "suspended", [
+        kv("run_id", js(i.run_id)),
+        kv("reason", js(i.reason)),
+        kv("step", jint(i.step))
+      ]),
+
+    -- `RunSummaryInfo` carries no `run_id` — it is the run's summary and the run
+    -- is the frame it is in — so the entry takes the id the twin has been
+    -- carrying since `run_started`. `world_ordinal` is 0 until PLAN-001 P2 lands
+    -- `ordinal` on the world, which is the plan's stated wait, and the fold
+    -- ignores the value.
+    RunSummary(i) =>
+      twin_line(acc, "run_finished", [
+        kv("run_id", js(acc.run_id)),
+        kv("cumulative", counts_json(i.cumulative)),
+        kv("world_ordinal", jint(0)),
+        kv("finish_reason", js(i.finish_reason))
+      ]),
+
+    _ => acc
+  }
+}
+
+pure func twin_record(acc: TwinAcc, r: LedgerRecord) -> TwinAcc {
+  match r {
+    WireRecord(e) => twin_event(acc, e),
+    _ => acc
+  }
+}
+
+export pure func journal_lines_of_records(header: HeaderEntry, records: [LedgerRecord]) -> [Json] {
+  let acc0: TwinAcc = {
+    lines: [], seq: 0, parent: "", digest: chain_empty_base(), run_id: "", seeded: false
+  };
+  let with_header = twin_root(acc0, "header", header_kvs(header));
+  let acc = List.foldl(twin_record, with_header, records);
+  reverse_json(acc.lines)
+}
+
+-- The leaf of a linear journal is its last line. Held as a function because the
+-- fold takes the leaf as an ARGUMENT (D1: the host holds it in memory; a branch
+-- operation would move it off the last entry) and a caller that passed the wrong
+-- one would fold a prefix and never know.
+pure func last_id_step(acc: string, j: Json) -> string {
+  match getString(j, "id") { None => acc, Some(id) => id }
+}
+
+export pure func journal_leaf(lines: [Json]) -> string {
+  List.foldl(last_id_step, "", lines)
 }
 
 -- ============================================================================
@@ -746,4 +2168,599 @@ pure func test_default_run_identity_is_r0_0() -> bool
   {
     let id = default_run_identity("sess_1");
     id.session_id == "sess_1" && id.run_id == "sess_1.r0.0" && id.profile == ""
+  }
+
+-- ============================================================================
+-- P3 Part 2's tests: the fold, its refusals, and the chain.
+--
+-- THE FIXTURES ARE BUILT BY THE TWIN, not hand-written as JSON, and that is
+-- deliberate: `journal_lines_of_records` is the function
+-- `dst_invariants.journal_fold_findings` and P3 Part 5's resume script both go
+-- through, so a test that bypassed it would test a fold nobody calls that way.
+-- Each refusal fixture is then ONE MUTATION of a list that folds cleanly — the
+-- mutant discipline `invariants_dst` uses, for the same reason: a refusal
+-- asserted over a wholly invented list is green on a fold that refuses
+-- everything.
+-- ============================================================================
+
+pure func t_sys() -> Message { msg("system", "you are motoko") }
+pure func t_user() -> Message { msg("user", "list the files") }
+
+pure func t_assistant_calls() -> Message {
+  {
+    role: "assistant",
+    content: "",
+    tool_calls: [{ id: "call_1", name: "BashExec", arguments: "{\"command\":\"ls\"}" }],
+    tool_call_id: "",
+    images: []
+  }
+}
+
+pure func t_tool_result() -> Message {
+  { role: "tool", content: "AGENTS.md", tool_calls: [], tool_call_id: "call_1", images: [] }
+}
+
+pure func t_seed() -> [Message] { [t_sys(), t_user()] }
+
+pure func t_seed_digest() -> string {
+  chain_digest_over(chain_empty_base(), t_seed())
+}
+
+pure func t_identity() -> RunIdentity { default_run_identity("sess_1") }
+
+pure func t_run_id() -> string { "sess_1.r0.0" }
+
+pure func t_counts() -> RuntimeStatusCounts { counts(2, 2) }
+
+pure func t_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 120, last_output_tokens: 40, last_estimated_input_tokens: 100 }
+}
+
+pure func t_seeded() -> LedgerRecord {
+  WireRecord(HistorySeeded({
+    run_id: t_run_id(),
+    messages: messages_json(t_seed()),
+    digest: t_seed_digest()
+  }))
+}
+
+pure func t_start() -> LedgerRecord {
+  WireRecord(SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: t_run_id() }))
+}
+
+pure func t_append(step: int, m: Message, replaces: bool, digest: string) -> LedgerRecord {
+  WireRecord(HistoryAppended({
+    run_id: t_run_id(), step: step, message: message_json(m),
+    replaces_previous: replaces, digest_after: digest
+  }))
+}
+
+pure func t_delta() -> LedgerRecord {
+  WireRecord(StateDelta({
+    run_id: t_run_id(), step: 1, cumulative: t_counts(), telemetry: t_telemetry(),
+    ext_artifacts_digest: "sha256:ext", ext_artifacts: None
+  }))
+}
+
+pure func t_summary() -> LedgerRecord {
+  WireRecord(RunSummary({
+    model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
+    input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
+    duration_ms: 5, error: "", cumulative: t_counts()
+  }))
+}
+
+-- A run whose journal folds: seed, one assistant with a call, its result, a
+-- state delta, the summary. Every digest is the chain's, computed here the way
+-- the child will compute it in P3 Part 3.
+pure func t_good_records() -> [LedgerRecord] {
+  let d_assistant = chain_digest_after(t_seed_digest(), t_assistant_calls());
+  let d_tool = chain_digest_after(d_assistant, t_tool_result());
+  [t_start(),
+   t_seeded(),
+   t_append(1, t_assistant_calls(), false, d_assistant),
+   t_append(1, t_tool_result(), false, d_tool),
+   t_delta(),
+   t_summary()]
+}
+
+pure func t_good_lines() -> [Json] {
+  journal_lines_of_records(harness_header(t_identity(), "m"), t_good_records())
+}
+
+pure func t_fold(lines: [Json]) -> Result[SessionState, Refusal] {
+  fold_journal(lines, journal_leaf(lines))
+}
+
+-- ---------------------------------------------------------------------------
+-- Mutation helpers. Each changes ONE field of ONE line.
+-- ---------------------------------------------------------------------------
+
+pure func replace_kv(kvs: [{key: string, value: Json}], key: string, v: Json) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [kv(key, v)],
+    x :: rest => if x.key == key then kv(key, v) :: rest else x :: replace_kv(rest, key, v)
+  }
+}
+
+pure func drop_kv(kvs: [{key: string, value: Json}], key: string) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    x :: rest => if x.key == key then drop_kv(rest, key) else x :: drop_kv(rest, key)
+  }
+}
+
+pure func with_field(j: Json, key: string, v: Json) -> Json {
+  match asObject(j) { None => j, Some(kvs) => jo(replace_kv(kvs, key, v)) }
+}
+
+pure func without_field(j: Json, key: string) -> Json {
+  match asObject(j) { None => j, Some(kvs) => jo(drop_kv(kvs, key)) }
+}
+
+pure func at_idx(lines: [Json], idx: int) -> Json {
+  match lines {
+    [] => jo([]),
+    x :: rest => if idx <= 0 then x else at_idx(rest, idx - 1)
+  }
+}
+
+pure func set_idx(lines: [Json], idx: int, j: Json) -> [Json] {
+  match lines {
+    [] => [],
+    x :: rest => if idx <= 0 then j :: rest else x :: set_idx(rest, idx - 1, j)
+  }
+}
+
+pure func drop_head(lines: [Json]) -> [Json] {
+  match lines { [] => [], _ :: rest => rest }
+}
+
+pure func mutate_field(lines: [Json], idx: int, key: string, v: Json) -> [Json] {
+  set_idx(lines, idx, with_field(at_idx(lines, idx), key, v))
+}
+
+pure func remove_field(lines: [Json], idx: int, key: string) -> [Json] {
+  set_idx(lines, idx, without_field(at_idx(lines, idx), key))
+}
+
+pure func refused_with(r: Result[SessionState, Refusal], id: string) -> bool {
+  match r { Ok(_) => false, Err(e) => refusal_id(e) == id }
+}
+
+-- ---------------------------------------------------------------------------
+-- The good list folds, and everything else is measured against it.
+-- ---------------------------------------------------------------------------
+
+pure func test_a_clean_journal_folds_to_the_run_it_records() -> bool
+  tests [((), true)]
+  {
+    match t_fold(t_good_lines()) {
+      Err(_) => false,
+      Ok(s) =>
+        List.length(s.history) == 4
+          && encode(messages_json(s.history))
+               == encode(messages_json(t_seed() ++ [t_assistant_calls(), t_tool_result()]))
+          && List.length(s.dangling) == 0
+          && s.cumulative.provider_calls_completed == 2
+          && s.telemetry.last_input_tokens == 120
+          && boundary_id(s.last) == "run_finished"
+          && s.header.session_id == "sess_1"
+          && s.model == "m"
+    }
+  }
+
+-- THE TWIN'S SHAPE, asserted rather than described: the header is first, the
+-- seed becomes ONE ENTRY PER MESSAGE (D1's arm 1), and the chain of parent ids
+-- is unbroken. Without this, a fold that agreed with a twin producing one entry
+-- per BATCH would pass every other row here.
+pure func test_the_twin_writes_one_entry_per_message() -> bool
+  tests [((), true)]
+  {
+    let lines = t_good_lines();
+    let kinds = List.map(line_kind, lines);
+    List.length(lines) == 8
+      && join_kinds(kinds) == "header,run_started,history_appended,history_appended,history_appended,history_appended,state_delta,run_finished"
+      && journal_leaf(lines) == "0007"
+      && List.length(all_entry_types()) == 10
+  }
+
+pure func line_kind(j: Json) -> string {
+  match getString(j, "type") { None => "?", Some(k) => k }
+}
+
+pure func join_kinds(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${join_kinds(rest)}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- One fixture per Refusal variant.
+-- ---------------------------------------------------------------------------
+
+-- THE HEADER IS THE ROOT, so a path that reaches a first entry of any other
+-- type is refused before a single message is read. The mutation is the file
+-- without its first line, which is what a truncated-at-the-front journal is.
+pure func test_refusal_header_and_schema() -> bool
+  tests [((), true)]
+  {
+    let headless = drop_head(t_good_lines());
+    let wrong_schema = mutate_field(t_good_lines(), 0, "schema_version", jint(2));
+    refused_with(fold_journal(headless, journal_leaf(headless)), "header")
+      && refused_with(t_fold(wrong_schema), "schema")
+  }
+
+pure func test_refusal_entry_names_the_missing_field() -> bool
+  tests [((), true)]
+  {
+    let no_run_id = remove_field(t_good_lines(), 6, "run_id");
+    let bad_message = mutate_field(t_good_lines(), 2, "message", js("not an object"));
+    (match t_fold(no_run_id) { Ok(_) => false, Err(e) => match e { Entry(seq, f) => seq == 6 && f == "run_id", _ => false } })
+      && refused_with(t_fold(bad_message), "entry")
+  }
+
+-- THE CHAIN IS THE SEAL. A message swapped for another one leaves every field
+-- well-formed and every count intact; only the digest can see it.
+pure func test_refusal_digest_catches_a_swapped_message() -> bool
+  tests [((), true)]
+  {
+    let swapped = mutate_field(t_good_lines(), 3, "message", message_json(msg("tool", "something else")));
+    let broken = mutate_field(t_good_lines(), 4, "digest_after", js("sha256:not-the-chain"));
+    (match t_fold(swapped) { Ok(_) => false, Err(e) => match e { Digest(seq) => seq == 3, _ => false } })
+      && refused_with(t_fold(broken), "digest")
+  }
+
+-- A SYSTEM MESSAGE THAT ARRIVES LATE is not a system message the compactor will
+-- keep pinned, so the fold refuses rather than resuming a history whose head is
+-- a different head from the one the run had.
+pure func test_refusal_head_prefix_and_transcript() -> bool
+  tests [((), true)]
+  {
+    let late_system = msg("system", "late");
+    let d_late = chain_digest_after(t_seed_digest(), late_system);
+    let late = [t_start(), t_seeded(), t_append(1, late_system, false, d_late), t_delta(), t_summary()];
+    let late_lines = journal_lines_of_records(harness_header(t_identity(), "m"), late);
+
+    -- A tool call with an EMPTY id, answered by a tool message with an empty
+    -- `tool_call_id`: pairing is satisfied (the result answers the call the
+    -- assistant made) and `history_valid_transcript` is not, which is the one
+    -- shape that separates the two rules.
+    let blank_call: Message = {
+      role: "assistant", content: "", tool_calls: [{ id: "", name: "BashExec", arguments: "{}" }],
+      tool_call_id: "", images: []
+    };
+    let blank_result: Message = {
+      role: "tool", content: "out", tool_calls: [], tool_call_id: "", images: []
+    };
+    let d1 = chain_digest_after(t_seed_digest(), blank_call);
+    let d2 = chain_digest_after(d1, blank_result);
+    let blank = [t_start(), t_seeded(), t_append(1, blank_call, false, d1),
+                 t_append(1, blank_result, false, d2), t_delta(), t_summary()];
+    let blank_lines = journal_lines_of_records(harness_header(t_identity(), "m"), blank);
+
+    refused_with(fold_journal(late_lines, journal_leaf(late_lines)), "head-prefix")
+      && refused_with(fold_journal(blank_lines, journal_leaf(blank_lines)), "transcript")
+  }
+
+-- A RESULT THAT ANSWERS NOTHING. `history_valid_transcript` is green on this
+-- history — the tool message has a non-empty `tool_call_id` — which is exactly
+-- why the pairing rule is the fold's own.
+pure func test_refusal_pairing_is_the_folds_own_rule() -> bool
+  tests [((), true)]
+  {
+    let stray: Message = {
+      role: "tool", content: "out", tool_calls: [], tool_call_id: "call_9", images: []
+    };
+    let d = chain_digest_after(chain_digest_after(t_seed_digest(), t_assistant_calls()), stray);
+    let rs = [t_start(), t_seeded(),
+              t_append(1, t_assistant_calls(), false, chain_digest_after(t_seed_digest(), t_assistant_calls())),
+              t_append(1, stray, false, d), t_delta(), t_summary()];
+    let lines = journal_lines_of_records(harness_header(t_identity(), "m"), rs);
+    let seal_is_green = match history_from_seed(t_seed() ++ [t_assistant_calls(), stray]) {
+      Err(_) => false,
+      Ok(h) => history_valid_transcript(h)
+    };
+    seal_is_green && refused_with(fold_journal(lines, journal_leaf(lines)), "pairing")
+  }
+
+-- D5's four INVOCATION refusals, and the exact reach of `--resume-force`.
+pure func refusal_is(o: Option[Refusal], id: string) -> bool {
+  match o { None => false, Some(r) => refusal_id(r) == id }
+}
+
+pure func test_refusal_compatibility_rows() -> bool
+  tests [((), true)]
+  {
+    let h: HeaderEntry = {
+      schema_version: 1, session_id: "sess_1", workdir: "/w", profile: "dogfood",
+      ext_set_digest: "sha256:ext", model: "m", system_prefix_digest: "sha256:sys",
+      boot: empty_boot()
+    };
+    let ok_ctx: ResumeContext = {
+      workdir: "/w", ext_set_digest: "sha256:ext", system_prefix_digest: "sha256:sys",
+      profile: "dogfood", leased: false, force: false
+    };
+    (match resume_refusal(h, ok_ctx) { None => true, Some(_) => false })
+      && refusal_is(resume_refusal(h, { ok_ctx | leased: true }), "leased")
+      && refusal_is(resume_refusal(h, { ok_ctx | workdir: "/elsewhere" }), "workdir")
+      && refusal_is(resume_refusal(h, { ok_ctx | ext_set_digest: "sha256:other" }), "ext-set")
+      && refusal_is(resume_refusal(h, { ok_ctx | system_prefix_digest: "sha256:other" }), "prompt")
+      -- force overrides the extension set and the prompt, and NEITHER the
+      -- workdir nor the lease.
+      && (match resume_refusal(h, { ok_ctx | ext_set_digest: "sha256:other", force: true }) { None => true, Some(_) => false })
+      && (match resume_refusal(h, { ok_ctx | system_prefix_digest: "sha256:other", force: true }) { None => true, Some(_) => false })
+      && refusal_is(resume_refusal(h, { ok_ctx | workdir: "/elsewhere", force: true }), "workdir")
+      && refusal_is(resume_refusal(h, { ok_ctx | leased: true, force: true }), "leased")
+      -- A PROFILE SWITCH IS ACCEPTED and is not a prompt refusal (D5).
+      && (match resume_refusal(h, { ok_ctx | profile: "probe-budget", system_prefix_digest: "sha256:other" }) { None => true, Some(_) => false })
+  }
+
+-- ---------------------------------------------------------------------------
+-- The hybrid replacement, both ways.
+-- ---------------------------------------------------------------------------
+--
+-- The plain assistant is journaled at `session.ail:2944` before the tool phase;
+-- the hybrid batch at `:2251` carries the AUGMENTED assistant, which replaces
+-- it. `replaces_previous` chains from the entry BEFORE the replaced one, so the
+-- same list with the flag cleared is refused AT THAT ENTRY'S DIGEST — which is
+-- what makes the replacement unfakeable.
+pure func t_plain_assistant() -> Message { msg("assistant", "running ls") }
+
+pure func t_augmented_assistant() -> Message {
+  {
+    role: "assistant",
+    content: "running ls",
+    tool_calls: [{ id: "call_1", name: "BashExec", arguments: "{\"command\":\"ls\"}" }],
+    tool_call_id: "",
+    images: []
+  }
+}
+
+pure func t_hybrid_records(replaces: bool) -> [LedgerRecord] {
+  let d_plain = chain_digest_after(t_seed_digest(), t_plain_assistant());
+  let d_aug = chain_digest_after(t_seed_digest(), t_augmented_assistant());
+  let d_tool = chain_digest_after(d_aug, t_tool_result());
+  [t_start(), t_seeded(),
+   t_append(1, t_plain_assistant(), false, d_plain),
+   t_append(1, t_augmented_assistant(), replaces, d_aug),
+   t_append(1, t_tool_result(), false, d_tool),
+   t_delta(), t_summary()]
+}
+
+pure func test_hybrid_replacement_folds_and_is_unfakeable() -> bool
+  tests [((), true)]
+  {
+    let good = journal_lines_of_records(harness_header(t_identity(), "m"), t_hybrid_records(true));
+    let flag_cleared = journal_lines_of_records(harness_header(t_identity(), "m"), t_hybrid_records(false));
+    (match fold_journal(good, journal_leaf(good)) {
+       Err(_) => false,
+       Ok(s) =>
+         List.length(s.history) == 4
+           && encode(messages_json(s.history))
+                == encode(messages_json(t_seed() ++ [t_augmented_assistant(), t_tool_result()]))
+     })
+      && (match fold_journal(flag_cleared, journal_leaf(flag_cleared)) {
+            Ok(_) => false,
+            Err(e) => match e { Digest(seq) => seq == 5, _ => false }
+          })
+  }
+
+-- ---------------------------------------------------------------------------
+-- The checkpoint, `first_kept: None`.
+-- ---------------------------------------------------------------------------
+--
+-- `apply_checkpoint` keeps no tail at HEAD, so the fold emits the head system
+-- prefix, then the summary message, then every history entry AFTER the
+-- replacement — and the two messages the checkpoint compacted away are gone.
+pure func test_checkpoint_folds_to_prefix_summary_then_later_entries() -> bool
+  tests [((), true)]
+  {
+    let a1 = msg("assistant", "first");
+    let a2 = msg("assistant", "second");
+    let summary = msg("assistant", "[checkpoint summary]");
+    let after_1 = chain_digest_after(t_seed_digest(), a1);
+    let after_2 = chain_digest_after(after_1, a2);
+    let replaced_digest = chain_digest_base([t_sys(), summary]);
+    let a3 = msg("assistant", "third");
+    let after_3 = chain_digest_after(replaced_digest, a3);
+    let rs = [t_start(), t_seeded(),
+              t_append(1, a1, false, after_1),
+              t_append(2, a2, false, after_2),
+              WireRecord(HistoryReplaced({
+                run_id: t_run_id(), step: 3, reason: "checkpoint", first_kept: None,
+                messages: messages_json([summary]), digest_after: replaced_digest
+              })),
+              t_append(3, a3, false, after_3),
+              t_delta(), t_summary()];
+    let lines = journal_lines_of_records(harness_header(t_identity(), "m"), rs);
+    match fold_journal(lines, journal_leaf(lines)) {
+      Err(_) => false,
+      Ok(s) =>
+        List.length(s.history) == 3
+          && encode(messages_json(s.history)) == encode(messages_json([t_sys(), summary, a3]))
+    }
+  }
+
+-- ---------------------------------------------------------------------------
+-- The dangling call.
+-- ---------------------------------------------------------------------------
+--
+-- A crash mid tool-phase: the assistant with two calls is journaled before the
+-- phase runs, one result lands, and the journal stops. The provider must never
+-- see the unanswered call, so the fold DROPS it from the message and REPORTS it
+-- — a refusal here would make crash-resume impossible, which is D4 rule 4's
+-- whole point.
+pure func test_trailing_unpaired_call_is_stripped_and_reported() -> bool
+  tests [((), true)]
+  {
+    let two_calls: Message = {
+      role: "assistant", content: "",
+      tool_calls: [
+        { id: "call_1", name: "BashExec", arguments: "{}" },
+        { id: "call_2", name: "BashExec", arguments: "{}" }
+      ],
+      tool_call_id: "", images: []
+    };
+    let d_a = chain_digest_after(t_seed_digest(), two_calls);
+    let d_t = chain_digest_after(d_a, t_tool_result());
+    let rs = [t_start(), t_seeded(),
+              t_append(1, two_calls, false, d_a),
+              t_append(1, t_tool_result(), false, d_t)];
+    let lines = journal_lines_of_records(harness_header(t_identity(), "m"), rs);
+    match fold_journal(lines, journal_leaf(lines)) {
+      Err(_) => false,
+      Ok(s) =>
+        List.length(s.dangling) == 1
+          && contains_string(s.dangling, "call_2")
+          && List.length(s.history) == 4
+          && assistant_call_count(s.history) == 1
+          && boundary_id(s.last) == "open:history_appended"
+    }
+  }
+
+pure func assistant_call_count(ms: [Message]) -> int {
+  match ms {
+    [] => 0,
+    m :: rest => List.length(m.tool_calls) + assistant_call_count(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The images frame, which is why `canonical_message_frame` exists.
+-- ---------------------------------------------------------------------------
+--
+-- BOTH OLDER CANONICAL FORMS OMIT `images`, so a chain built on
+-- `canonical_messages_raw` is IDENTICAL for two messages that differ only in
+-- what the model was shown. This row asserts the negative first — the old form
+-- cannot see the change — and then asserts the chain does.
+pure func t_image_message(source: string) -> Message {
+  {
+    role: "user", content: "what is in this",
+    tool_calls: [], tool_call_id: "",
+    images: [{ source: source, mime: "image/png" }]
+  }
+}
+
+pure func test_the_chain_sees_an_image_change() -> bool
+  tests [((), true)]
+  {
+    let a = t_image_message("iVBORw0KGgoAAAA=");
+    let b = t_image_message("/9j/4AAQSkZJRg==");
+    let old_form_is_blind = canonical_messages_raw([a]) == canonical_messages_raw([b]);
+    let frame_sees_it = canonical_message_frame(a) != canonical_message_frame(b);
+    let base = t_seed_digest();
+    let d_a = chain_digest_after(base, a);
+    let rs = [t_start(), t_seeded(), t_append(1, a, false, d_a), t_delta(), t_summary()];
+    let lines = journal_lines_of_records(harness_header(t_identity(), "m"), rs);
+    let swapped = mutate_field(lines, 4, "message", message_json(b));
+    old_form_is_blind
+      && frame_sees_it
+      && chain_digest_after(base, a) != chain_digest_after(base, b)
+      && (match fold_journal(lines, journal_leaf(lines)) { Ok(_) => true, Err(_) => false })
+      && (match fold_journal(swapped, journal_leaf(swapped)) {
+            Ok(_) => false,
+            Err(e) => match e { Digest(seq) => seq == 4, _ => false }
+          })
+  }
+
+-- THE FOLD AND THE CHILD SHARE THE ONE FRAME. Pinned as an equality against
+-- `phase_vocab.canonical_message_frame` rather than against a transcribed
+-- string, because a golden string here would be a second definition of the
+-- thing this row exists to say has only one.
+pure func test_chain_digest_after_is_the_shared_frame() -> bool
+  tests [((), true)]
+  {
+    let m = t_assistant_calls();
+    let base = "sha256:base";
+    chain_digest_after(base, m) == "sha256:${sha256Hex("${base}${canonical_message_frame(m)}")}"
+      && chain_digest_over(base, [m, t_tool_result()])
+           == chain_digest_after(chain_digest_after(base, m), t_tool_result())
+      && chain_empty_base() == digest_messages([])
+  }
+
+-- ---------------------------------------------------------------------------
+-- The boundary, and the continuation the resumer rebuilds from it.
+-- ---------------------------------------------------------------------------
+pure func test_boundary_and_continuation_projection() -> bool
+  tests [((), true)]
+  {
+    let rs = [t_start(), t_seeded(),
+              t_append(1, t_assistant_calls(), false, chain_digest_after(t_seed_digest(), t_assistant_calls())),
+              t_append(1, t_tool_result(), false, chain_digest_after(chain_digest_after(t_seed_digest(), t_assistant_calls()), t_tool_result())),
+              t_delta(),
+              WireRecord(RunSuspended({ session_id: "sess_1", run_id: t_run_id(), reason: "budget_exhausted", step: 3 }))];
+    let lines = journal_lines_of_records(harness_header(t_identity(), "m"), rs);
+    match fold_journal(lines, journal_leaf(lines)) {
+      Err(_) => false,
+      Ok(s) => {
+        let c = continuation_of_session(s, 0, 0);
+        boundary_id(s.last) == "suspended"
+          && (match s.last { BoundarySuspended(rid, step) => rid == t_run_id() && step == 3, _ => false })
+          && c.cumulative.provider_calls_completed == 2
+          && List.length(c.history) == 4
+          && continuation_task(c) == ""
+      }
+    }
+  }
+
+-- THE THREE ENTRY TYPES NO `LedgerEvent` PRODUCES, and they are tested here
+-- because that is exactly why they would otherwise go untested. `settings` and
+-- `resumed` come from a `SessionResumed` the twin splits in two (D5's accepted
+-- profile switch is separately a `settings` entry, because rule 5 reads
+-- `profile` from there); `exit` has NO child producer at all — it is the host's,
+-- written from its exit handler and the child-exit callback (D1) — so its line
+-- is built here the way the host will build it. A decoder with no fixture is a
+-- decoder that compiles.
+pure func t_exit_line(seq: int, parent: string, reason: string, pending: [Json]) -> Json {
+  jo([kv("id", js(entry_id(seq))),
+      kv("parent_id", js(parent)),
+      kv("seq", jint(seq)),
+      kv("at_ms", jint(seq)),
+      kv("type", js("exit")),
+      kv("reason", js(reason)),
+      kv("pending_tool_calls", ja(pending))])
+}
+
+pure func test_settings_resumed_and_exit_entries() -> bool
+  tests [((), true)]
+  {
+    let resumed = WireRecord(SessionResumed({
+      resume_count: 2, from_id: "0007", from_ordinal: 42,
+      profile_from: "dogfood", profile_to: "probe-budget",
+      prompt_digest_from: "sha256:p0", prompt_digest_to: "sha256:p1", forced: false
+    }));
+    let rs = [resumed, t_start(), t_seeded(), t_delta(), t_summary()];
+    let lines = journal_lines_of_records(harness_header(t_identity(), "m"), rs);
+    let with_exit = lines ++ [t_exit_line(List.length(lines), journal_leaf(lines), "restart", [js("call_7")])];
+    let bad_exit = lines ++ [t_exit_line(List.length(lines), journal_leaf(lines), "restart", [jint(7)])];
+    -- The resume is TWO entries, and the second is what the fold reads `profile`
+    -- from — a `resumed` entry alone would leave the folded profile at the
+    -- header's, which is the profile the session was resumed AWAY from.
+    join_kinds(List.map(line_kind, lines))
+      == "header,resumed,settings,run_started,history_appended,history_appended,state_delta,run_finished"
+      && (match t_fold(lines) {
+            Err(_) => false,
+            Ok(st) => st.profile == "probe-budget" && boundary_id(st.last) == "run_finished"
+          })
+      && (match fold_journal(with_exit, journal_leaf(with_exit)) {
+            Err(_) => false,
+            Ok(st) => boundary_id(st.last) == "exit"
+                        && (match st.last { BoundaryExit(r) => r == "restart", _ => false })
+          })
+      -- STRICT ALL THE WAY DOWN: a pending-call list holding a number is a
+      -- malformed field and not a list to coerce.
+      && (match fold_journal(bad_exit, journal_leaf(bad_exit)) {
+            Ok(_) => false,
+            Err(e) => match e { Entry(seq, f) => seq == 8 && f == "pending_tool_calls", _ => false }
+          })
+      -- AN UNKNOWN TYPE IS REFUSED, which is what keeps P4's `park` and `wake`
+      -- from being silently skipped by a fold that predates them.
+      && (match t_fold(mutate_field(lines, 6, "type", js("park"))) {
+            Ok(_) => false,
+            Err(e) => match e { Entry(seq, f) => seq == 6 && f == "type=park", _ => false }
+          })
   }

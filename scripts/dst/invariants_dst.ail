@@ -103,7 +103,8 @@ import src/core/ports (
 -- one: `empty_final_state` is the shape for an execution with no history, and
 -- writing the four fields out here would be a second definition of "empty" for
 -- the fold to disagree with.
-import src/core/journal (empty_final_state)
+import std/ai (Message)
+import src/core/journal (empty_final_state, FinalState)
 import src/core/ext/ctx_defaults (zero_token_telemetry, empty_ext_artifacts)
 import src/core/dst_fault_catalogue (
   fault_class_tool_failed,
@@ -122,7 +123,7 @@ import src/core/dst_invariants (
   InvariantFamily,
   TerminalSummary, EmissionParity, PhaseTransitions, ToolPairing,
   BudgetAccounting, BoundedProgress, CheckpointHistory, OutcomeAgreement,
-  ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene,
+  ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene, JournalFold,
   Violation,
   all_families, family_id, family_obligation,
   violation_rule, violation_message, violation_family,
@@ -620,7 +621,7 @@ pure func quantity_lines(qs: [NamedCount]) -> string {
 func scenario_the_fixture_survives() -> bool ! {IO} {
   let _ = println("\n-- the surviving fixture --");
   let vs = evaluate(fixture());
-  let a = report("the fixture satisfies all twelve families", List.length(vs) == 0,
+  let a = report("the fixture satisfies all ${show(List.length(all_families()))} families", List.length(vs) == 0,
                  "violations: ${rule_list(vs)}\n      first: ${first_message(vs)}");
   let b = report("invariants_ok agrees", invariants_ok(fixture()), "invariants_ok disagreed with evaluate");
   let c = match first_failed_invariant(fixture()) {
@@ -989,8 +990,8 @@ pure func break_chain(rs: [LedgerRecord]) -> [LedgerRecord] {
   }
 }
 
-func scenario_mutants_family_9_to_12() -> bool ! {IO} {
-  let _ = println("\n-- mutants: families 9-12 --");
+func scenario_mutants_family_9_to_13() -> bool ! {IO} {
+  let _ = println("\n-- mutants: families 9-13 --");
   let f = fixture();
   let log = fixture_log();
 
@@ -1045,7 +1046,22 @@ func scenario_mutants_family_9_to_12() -> bool ! {IO} {
   let m12 = mutant("a forbidden effect site reached",
                    { f | forbidden_effect_sites: ["compose.on_response_intercept"] },
                    "forbidden-effect-site");
-  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10 && m11 && m12
+  -- F13. ADR-003 D4's fold. The fixture RAN NOTHING, so its `final` is the
+  -- empty one and a fold over a trace with no journal-class record agrees with
+  -- it — which is a legitimate green and a useless one. The mutant is a `final`
+  -- that holds a history the journal does not, which is EXACTLY the shape every
+  -- real fixture is in at PLAN-003 P3 Part 2 and which P3 Part 3's emits close.
+  let m13 = mutant("a final state the journal does not account for",
+                   { f | final: final_with_history() },
+                   "journal-fold-disagrees");
+  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10 && m11 && m12 && m13
+}
+
+pure func final_with_history() -> FinalState {
+  { history: [{ role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] }],
+    cumulative: zero_runtime_status_counts(),
+    telemetry: zero_token_telemetry(),
+    ext_artifacts: empty_ext_artifacts() }
 }
 
 pure func regressing_chunks() -> Interaction {
@@ -1084,6 +1100,7 @@ pure func all_mutant_violations(f: ExecutionUnderTest) -> [Violation] {
     ++ evaluate(mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m" })), "")))
     ++ evaluate(mutate_outcome(f, 4, ok_out(-1, "47")))
     ++ evaluate({ f | ambient_rng_reads: 1 })
+    ++ evaluate({ f | final: final_with_history() })
 }
 
 pure func families_without(fs: [InvariantFamily], vs: [Violation]) -> [string] {
@@ -1167,7 +1184,10 @@ func print_gap(gs: [string]) -> () ! {IO} {
 
 export func main() -> () ! {IO} {
   let _ = println("=== invariants_dst (D7, ${invariant_set_version()}) ===");
-  let _ = println("  i D7's twelve families:");
+  -- THIRTEEN, not twelve: D7 named twelve and ADR-003 v6.1 D4 adds
+  -- `JournalFold`. The count is read off `all_families()` rather than written
+  -- out, so the line cannot go stale the way this one just did.
+  let _ = println("  i ${show(List.length(all_families()))} families (D7's twelve, plus ADR-003 D4's journal fold):");
   let _ = print_obligations(all_families());
 
   let c1 = scenario_the_fixture_survives();
@@ -1177,7 +1197,7 @@ export func main() -> () ! {IO} {
   let c5 = scenario_stream_parity_branches_are_entered();
   let c6 = scenario_mutants_family_1_to_4();
   let c7 = scenario_mutants_family_5_to_8();
-  let c8 = scenario_mutants_family_9_to_12();
+  let c8 = scenario_mutants_family_9_to_13();
   let c9 = scenario_every_family_is_reached_by_a_mutant();
   let c10 = scenario_discovery_contract();
   let c11 = scenario_family_evidence();

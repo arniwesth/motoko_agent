@@ -7,7 +7,8 @@
 --   "The runner applies reusable invariants to the returned outcome and
 --    complete trace."
 --
--- The twelve families below are each a runnable function over ONE execution —
+-- The thirteen families below — D7's twelve, plus ADR-003 v6.1 D4's
+-- `JournalFold` — are each a runnable function over ONE execution —
 -- outcome plus complete trace, never per step. D7's thirteenth statement ("the
 -- discovery contract is itself an invariant") is over a PAIR of executions and
 -- is `discovery_contract_findings` at the bottom, kept separate rather than
@@ -193,7 +194,14 @@ import src/core/dst_generator (
 
 -- ADR-003 v6.1 D4. `journal.ail` is a leaf (it imports no `session` and no
 -- `dst_*`), so this edge is acyclic in the direction the plan states.
-import src/core/journal (FinalState)
+import src/core/journal (
+  FinalState,
+  RunIdentity, default_run_identity,
+  SessionState, Refusal, refusal_id,
+  harness_header, journal_lines_of_records, journal_leaf, fold_journal,
+  messages_json
+)
+import std/json (encode)
 import src/core/ports (
   WorldState,
   ToolOutcomeRecord, ToolRecordDecoded, ToolRecordUndecodable,
@@ -206,7 +214,7 @@ import src/core/ports (
 export pure func invariant_set_version() -> string { "invariant-set/1" }
 
 -- ============================================================================
--- PART 1 — the twelve families, and D7's own words for each
+-- PART 1 — the thirteen families, and D7's own words for its twelve
 -- ============================================================================
 
 export type InvariantFamily
@@ -222,6 +230,13 @@ export type InvariantFamily
   | WorldTransitions
   | VirtualTime
   | HarnessHygiene
+  -- ADR-003 v6.1 D4's family, and the THIRTEENTH — D7 named twelve. It is here
+  -- rather than folded into `CheckpointHistory` because the two check different
+  -- artifacts: that family validates the checkpoint chain the framework already
+  -- owns, and this one folds the SESSION JOURNAL and compares the result with
+  -- what the run ended holding. A family that did both would report one verdict
+  -- for two obligations.
+  | JournalFold
 
 export pure func family_id(f: InvariantFamily) -> string {
   match f {
@@ -236,13 +251,15 @@ export pure func family_id(f: InvariantFamily) -> string {
     ReplayConsistency => "replay-consistency",
     WorldTransitions => "world-transitions",
     VirtualTime => "virtual-time",
-    HarnessHygiene => "harness-hygiene"
+    HarnessHygiene => "harness-hygiene",
+    JournalFold => "journal-fold"
   }
 }
 
--- D7's twelve bullets, transcribed. Carried as data rather than as comments so
--- the acceptance script can assert that every family it runs is a family D7
--- names, and so a family added here without an obligation is visible.
+-- D7's twelve bullets, transcribed, plus ADR-003 v6.1 D4's sentence for the
+-- thirteenth. Carried as data rather than as comments so the acceptance script
+-- can assert that every family it runs has an obligation behind it, and so a
+-- family added here without one is visible.
 export pure func family_obligation(f: InvariantFamily) -> string {
   match f {
     TerminalSummary =>
@@ -268,7 +285,9 @@ export pure func family_obligation(f: InvariantFamily) -> string {
     VirtualTime =>
       "monotonic virtual time and deadline derivation",
     HarnessHygiene =>
-      "zero discovery-generator failures, matcher mismatches, forbidden effects, and ambient RNG reads"
+      "zero discovery-generator failures, matcher mismatches, forbidden effects, and ambient RNG reads",
+    JournalFold =>
+      "a fold of the run's journal-class records reproduces the state the run ended holding, field by field"
   }
 }
 
@@ -280,7 +299,8 @@ export pure func family_obligation(f: InvariantFamily) -> string {
 export pure func all_families() -> [InvariantFamily] {
   [TerminalSummary, EmissionParity, PhaseTransitions, ToolPairing,
    BudgetAccounting, BoundedProgress, CheckpointHistory, OutcomeAgreement,
-   ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene]
+   ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene,
+   JournalFold]
 }
 
 -- ============================================================================
@@ -337,6 +357,8 @@ export type Violation
   | HarnessFailureObserved(string, int)
   | AmbientRngRead(int)
   | ForbiddenEffectSite(string)
+  -- F13 journal fold (ADR-003 v6.1 D4)
+  | JournalFoldDisagrees(string)
 
 export pure func violation_family(v: Violation) -> InvariantFamily {
   match v {
@@ -376,7 +398,8 @@ export pure func violation_family(v: Violation) -> InvariantFamily {
     GeneratorBoundFailure(_, _, _) => HarnessHygiene,
     HarnessFailureObserved(_, _) => HarnessHygiene,
     AmbientRngRead(_) => HarnessHygiene,
-    ForbiddenEffectSite(_) => HarnessHygiene
+    ForbiddenEffectSite(_) => HarnessHygiene,
+    JournalFoldDisagrees(_) => JournalFold
   }
 }
 
@@ -418,7 +441,8 @@ export pure func violation_rule(v: Violation) -> string {
     GeneratorBoundFailure(_, _, _) => "generator-bound-failure",
     HarnessFailureObserved(_, _) => "harness-failure-observed",
     AmbientRngRead(_) => "ambient-rng-read",
-    ForbiddenEffectSite(_) => "forbidden-effect-site"
+    ForbiddenEffectSite(_) => "forbidden-effect-site",
+    JournalFoldDisagrees(_) => "journal-fold-disagrees"
   }
 }
 
@@ -497,7 +521,9 @@ export pure func violation_message(v: Violation) -> string {
     AmbientRngRead(n) =>
       "[ambient-rng-read] the run performed ${n} ambient RNG read(s); D7 requires zero, because an unrouted source of randomness is a determinism failure that no seed can reproduce",
     ForbiddenEffectSite(site) =>
-      "[forbidden-effect-site] the run reached '${site}', which the profile declares forbidden; D5's exclusion is the profile's whole claim and a reached exclusion retires it"
+      "[forbidden-effect-site] the run reached '${site}', which the profile declares forbidden; D5's exclusion is the profile's whole claim and a reached exclusion retires it",
+    JournalFoldDisagrees(field) =>
+      "[journal-fold-disagrees] a fold of the run's journal-class records disagrees with what the run ended holding at '${field}'; ADR-003 D4 makes resume a PURE FOLD of the journal, so the fold over a run's own trace must reproduce that run's final state exactly — a field that differs is a resume that would open on a different conversation than the one that was suspended, and a 'refusal:' field is the fold declining to read the journal at all"
   }
 }
 
@@ -537,7 +563,7 @@ export pure func violations_in(vs: [Violation], f: InvariantFamily) -> [Violatio
 -- ============================================================================
 --
 -- D7: "the returned outcome and complete trace". Both live in `DstResult`. The
--- rest of this record is the context the twelve families need that the result
+-- rest of this record is the context the families need that the result
 -- type does not carry, and every field is something a runner HAS rather than
 -- something it would have to derive.
 
@@ -1658,12 +1684,88 @@ export pure func hygiene_findings(x: ExecutionUnderTest) -> [Violation] {
 }
 
 -- ============================================================================
+-- FAMILY 13 — the journal fold (ADR-003 v6.1 D4)
+-- ============================================================================
+--
+-- Take the journal-class `WireRecord`s of the returned trace, give them the ids
+-- and parents the HOST would give them, fold, and compare the result with
+-- `x.final` field by field.
+--
+-- THE ID ASSIGNMENT IS NOT HERE. It is `journal.journal_lines_of_records`, and
+-- it is there rather than here for one reason: PLAN-003 P3 Part 5's resume
+-- script folds a journal built the same way, and two copies of "as the host
+-- would" would be two notions of the journal — the second copy being where a
+-- fold quietly starts agreeing with itself. `journal.ail` is a leaf, so the
+-- resume script can reach it without importing the invariant set.
+--
+-- WHY THE COMPARISON IS FIELD BY FIELD AND NOT A RECORD EQUALITY. A single
+-- boolean would say "the fold disagrees" and nothing else; the field name is
+-- what turns a red row into a repair. `history` is compared through the codec's
+-- encoding rather than by length, because two histories of the same length that
+-- differ in one message are exactly what a broken replacement rule produces.
+--
+-- WHY A REFUSAL IS A DISAGREEMENT AND NOT ITS OWN RULE. A fold that refuses has
+-- not reproduced `final`, which is the obligation; the field carries
+-- `refusal:<id>` so the message still says which rule refused. One rule for one
+-- obligation, which is what `sample_violations` counts.
+--
+-- RED AT THIS COMMIT, BY CONSTRUCTION. Nothing emits a journal-class event yet
+-- (PLAN-003 P3 Part 3 does), so on a real run the fold sees a header and no
+-- history and reports `history` against a `final.history` that has at least the
+-- seed. That red is the check that this family reads the trace at all — a family
+-- that were green here would be green because it was never asked.
+pure func journal_final_findings(s: SessionState, f: FinalState) -> [Violation] {
+  let hist = if encode(messages_json(s.history)) == encode(messages_json(f.history)) then []
+             else [JournalFoldDisagrees("history")];
+  let counts =
+    (if s.cumulative.provider_calls_started == f.cumulative.provider_calls_started then []
+     else [JournalFoldDisagrees("cumulative.provider_calls_started")])
+    ++ (if s.cumulative.provider_calls_completed == f.cumulative.provider_calls_completed then []
+        else [JournalFoldDisagrees("cumulative.provider_calls_completed")])
+    ++ (if s.cumulative.stage_applied_total == f.cumulative.stage_applied_total then []
+        else [JournalFoldDisagrees("cumulative.stage_applied_total")])
+    ++ (if s.cumulative.stage_rejected_total == f.cumulative.stage_rejected_total then []
+        else [JournalFoldDisagrees("cumulative.stage_rejected_total")])
+    ++ (if s.cumulative.compaction_ai_applied == f.cumulative.compaction_ai_applied then []
+        else [JournalFoldDisagrees("cumulative.compaction_ai_applied")]);
+  let tel =
+    (if s.telemetry.last_input_tokens == f.telemetry.last_input_tokens then []
+     else [JournalFoldDisagrees("telemetry.last_input_tokens")])
+    ++ (if s.telemetry.last_output_tokens == f.telemetry.last_output_tokens then []
+        else [JournalFoldDisagrees("telemetry.last_output_tokens")])
+    ++ (if s.telemetry.last_estimated_input_tokens == f.telemetry.last_estimated_input_tokens then []
+        else [JournalFoldDisagrees("telemetry.last_estimated_input_tokens")]);
+  let art = if encode(s.ext_artifacts) == encode(f.ext_artifacts) then []
+            else [JournalFoldDisagrees("ext_artifacts")];
+  hist ++ counts ++ tel ++ art
+}
+
+-- The identity the twin stamps the synthesized header with. It is the DEFAULT
+-- one (`r0.0`, profile ""), because a bridged execution carries no `RunIdentity`
+-- — `TracedSessionResult` does not return one — and the fold reads nothing off
+-- it that the comparison uses. When P3 Part 5 folds a real journal it uses the
+-- header the HOST wrote, which is the only place those fields are known.
+pure func journal_twin_identity() -> RunIdentity {
+  default_run_identity("dst")
+}
+
+export pure func journal_fold_findings(x: ExecutionUnderTest) -> [Violation] {
+  let records = trace_of(x.result).records;
+  let lines = journal_lines_of_records(harness_header(journal_twin_identity(), ""), records);
+  match fold_journal(lines, journal_leaf(lines)) {
+    Err(r) => [JournalFoldDisagrees("refusal:${refusal_id(r)}")],
+    Ok(s) => journal_final_findings(s, x.final)
+  }
+}
+
+-- ============================================================================
 -- PART 6 — the whole set
 -- ============================================================================
 
--- Every family, in D7's order, over one execution. The order is D7's rather
--- than a dependency order because nothing here depends on anything else here:
--- twelve independent readings of one execution, which is what makes "the first
+-- Every family, in D7's order with ADR-003 D4's last, over one execution. The
+-- order is D7's rather than a dependency order because nothing here depends on
+-- anything else here: thirteen independent readings of one execution, which is
+-- what makes "the first
 -- failed invariant" (D8) a meaningful field rather than an artefact of
 -- evaluation order.
 export pure func evaluate(x: ExecutionUnderTest) -> [Violation] {
@@ -1679,6 +1781,7 @@ export pure func evaluate(x: ExecutionUnderTest) -> [Violation] {
     ++ world_transition_findings(x)
     ++ virtual_time_findings(x)
     ++ hygiene_findings(x)
+    ++ journal_fold_findings(x)
 }
 
 export pure func invariants_ok(x: ExecutionUnderTest) -> bool {
@@ -1715,7 +1818,13 @@ export pure func family_evidence(x: ExecutionUnderTest) -> [FamilyEvidence] {
    { family: family_id(ReplayConsistency), evaluated: obligation_id(x.replay) != "no-replay", inputs: log },
    { family: family_id(WorldTransitions), evaluated: log > 0, inputs: log },
    { family: family_id(VirtualTime), evaluated: true, inputs: log },
-   { family: family_id(HarnessHygiene), evaluated: true, inputs: log }]
+   { family: family_id(HarnessHygiene), evaluated: true, inputs: log },
+   -- ALWAYS EVALUATED, and its inputs are the trace's records: the fold runs on
+   -- an empty journal too, and an empty fold against a non-empty `final` is the
+   -- disagreement this family exists to report. A row that called itself
+   -- un-evaluated when the trace carried no journal-class record would hide
+   -- exactly the state PLAN-003 P3 Part 2 lands in.
+   { family: family_id(JournalFold), evaluated: true, inputs: records }]
 }
 
 -- ============================================================================
@@ -1728,9 +1837,12 @@ export pure func family_evidence(x: ExecutionUnderTest) -> [FamilyEvidence] {
 --  normalized trace."
 --
 -- This is an invariant over a PAIR of executions and cannot be evaluated by a
--- runner holding one, which is why it is not a thirteenth family: a family that
+-- runner holding one, which is why it is not a family AT ALL: a family that
 -- silently passed whenever it had only one run would be a vacuous green of
--- exactly the kind S8's complement describes.
+-- exactly the kind S8's complement describes. (The thirteenth FAMILY is
+-- ADR-003 v6.1 D4's `JournalFold`, which is over one execution like the other
+-- twelve; D7's thirteenth STATEMENT below is a different thing with an
+-- unfortunately equal ordinal.)
 
 export type DeterminismFinding
   = LogLengthDiffers(int, int)
@@ -1836,7 +1948,7 @@ export pure func has_determinism_rule(fs: [DeterminismFinding], rule: string) ->
 pure func test_every_family_has_a_rule_and_an_obligation() -> bool
   tests [((), true)]
   {
-    List.length(all_families()) == 12
+    List.length(all_families()) == 13
       && all_families_distinct(all_families(), [])
       && all_obligations_nonempty(all_families())
   }
@@ -1934,7 +2046,7 @@ pure func test_rules_are_distinct_across_families() -> bool
   tests [((), true)]
   {
     let vs = sample_violations();
-    List.length(vs) == 37 && rules_distinct(vs, [])
+    List.length(vs) == 38 && rules_distinct(vs, [])
   }
 
 pure func rules_distinct(vs: [Violation], seen: [string]) -> bool {
@@ -1965,7 +2077,8 @@ pure func sample_violations() -> [Violation] {
    NegativeAdvance(0, -1), ChunkOffsetRegression(0, 1, 0), DeadlineDerivation(0, "d"),
    ClockBalance(1, 0),
    GeneratorBoundFailure("b", 1, 2), HarnessFailureObserved("k", 0), AmbientRngRead(1),
-   ForbiddenEffectSite("s")]
+   ForbiddenEffectSite("s"),
+   JournalFoldDisagrees("history")]
 }
 
 -- Every sample must map to a family D7 names, and every family must be reached
