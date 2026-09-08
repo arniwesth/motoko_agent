@@ -37,7 +37,7 @@ module scripts/verify_mot136_dagr_producer
 
 import std/io (println, exit)
 import std/json (Json, jo, ja, kv, js, jnum, encode, decode, get, asString, asArray, asObject)
-import std/string (contains, join, intToStr)
+import std/string (contains, join, intToStr, length)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -47,6 +47,7 @@ import pkg/sunholo/motoko_ext_abi/types (
 )
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle)
+import src/core/test/herdr_fixture (argv_text, envelope, herdr_error, strings_of)
 
 -- ---------------------------------------------------------------------------
 -- A filesystem in the world token
@@ -119,34 +120,8 @@ func fs_dir(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
   { ok: true, error: "", next_state: world }
 }
 
-func envelope(stdout: string, stderr: string, code: int) -> string {
-  encode(jo([kv("stdout", js(stdout)), kv("stderr", js(stderr)),
-             kv("exit_code", jnum(_int_to_float(code)))]))
-}
-
-func herdr_error(code: string) -> string {
-  encode(jo([kv("error", jo([kv("code", js(code)), kv("message", js("scripted"))]))]))
-}
-
-func strings_of(xs: [Json]) -> [string] {
-  match xs {
-    [] => [],
-    x :: rest => (match asString(x) { Some(s) => s, None => "" }) :: strings_of(rest)
-  }
-}
-
 func cmd_of(args_json: string) -> string {
   match decode(args_json) { Err(_) => "", Ok(o) => sfield(o, "cmd") }
-}
-
-func argv_text(args_json: string) -> string {
-  match decode(args_json) {
-    Err(_) => "",
-    Ok(o) => match get(o, "args") {
-      None => "",
-      Some(a) => match asArray(a) { Some(xs) => join(" ", strings_of(xs)), None => "" }
-    }
-  }
 }
 
 func argv_list(args_json: string) -> [string] {
@@ -166,7 +141,7 @@ func argv_list(args_json: string) -> [string] {
 -- or "prompt". It replaces the old `split_ok` boolean because F3 is a failure
 -- AFTER the split — the pane, the agent and the task file are all spent — and a
 -- flag that fails the split cannot reach it.
-func scripted(status: string, gone: bool, fail_at: string)
+func scripted(ms: int, status: string, gone: bool, fail_at: string)
   -> (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS} {
   func(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
     let cmd = cmd_of(args_json);
@@ -189,7 +164,7 @@ func scripted(status: string, gone: bool, fail_at: string)
       if fail_at == "split" then { output: envelope("", herdr_error("pane_split_failed"), 1), exit_code: 1, next_state: world }
       else
         { output: envelope("{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"},\"type\":\"pane_info\"}}", "", 0),
-          exit_code: 0, next_state: world }
+          exit_code: 0, next_state: put_file(world, "/tmp/.last-pane-split", argv) }
     else if contains(argv, "agent explain") then
       { output: envelope("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}", "", 0),
         exit_code: 0, next_state: world }
@@ -199,14 +174,51 @@ func scripted(status: string, gone: bool, fail_at: string)
              next_state: put_file(world, "/tmp/.last-agent-start", argv) }
     -- THE F3 SHAPE, MEASURED 2026-09-01: the pane split, the agent started and
     -- the readiness gate passed, and only then did `agent prompt` refuse.
-    else if contains(argv, "agent prompt") then
-      if fail_at == "prompt" then { output: envelope("", herdr_error("agent_not_ready"), 1), exit_code: 1, next_state: world }
-      else { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: world }
+    -- PROMPT REFUSALS ARE COUNTED, not merely switched on. `prompt_with_retry`
+    -- makes up to three attempts, so a fixture that can only fail ALL of them
+    -- cannot express the case the retry exists for: refused once, then
+    -- accepted. The tally lives in the world, which is the only state a
+    -- scripted port has.
+    --
+    --   "prompt"        every attempt is refused        (the pre-retry case)
+    --   "prompt_once"   the FIRST is refused, then it succeeds
+    --   "prompt_stall"  every attempt refused with a code that must NOT retry
+    else if contains(argv, "agent prompt") then {
+      -- KEYED PER CASE. The world threads from one `drive` to the next, so a
+      -- single counter path accumulates across cases: by case 19 it already
+      -- held case 9's three attempts. That is not cosmetic — it made case 16
+      -- pass by never refusing at all, which is the opposite of what it claims
+      -- to test. `ms` is unique per case and is the case's own identity.
+      let tries = "/tmp/.prompt-tries-${intToStr(ms)}";
+      let seen = length(read_file(world, tries));
+      let w2 = put_file(world, tries, "${read_file(world, tries)}x");
+      if fail_at == "prompt" || fail_at == "prompt_moved" then { output: envelope("", herdr_error("agent_not_ready"), 1), exit_code: 1, next_state: w2 }
+      else if fail_at == "prompt_stall" then { output: envelope("", herdr_error("agent_prompt_stalled"), 1), exit_code: 1, next_state: w2 }
+      else if fail_at == "prompt_once" && seen == 0 then { output: envelope("", herdr_error("agent_not_ready"), 1), exit_code: 1, next_state: w2 }
+      else { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: w2 }
+    }
     else if contains(argv, "agent get") || contains(argv, "agent wait") then
       if gone then { output: envelope("", herdr_error("agent_not_found"), 1), exit_code: 1, next_state: world }
+      -- "prompt_moved": the agent's status CHANGES once a prompt has been
+      -- attempted, which is the shape the retry's probe exists for — a refusal
+      -- that may have been delivered anyway. The baseline is read before any
+      -- attempt, so it sees `status`; every read after one sees "working".
+      else if fail_at == "prompt_moved" && length(read_file(world, "/tmp/.prompt-tries-${intToStr(ms)}")) > 0 then
+        { output: envelope("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"working\",\"pane_id\":\"w1:pA\"}}}", "", 0),
+          exit_code: 0, next_state: world }
       else
         { output: envelope("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"${status}\",\"pane_id\":\"w1:pA\"}}}", "", 0),
           exit_code: 0, next_state: world }
+    -- THE PUBLISH'S VALIDATOR. `fail_at == "vet"` is dagr saying the candidate
+    -- is invalid — exit 1, its documented "findings" code — which is the ONE
+    -- outcome that stops a publish. Every other code, including a missing
+    -- binary, publishes; `dagr_says_invalid` is the classifier.
+    else if contains(argv, "check") && contains(argv, "--strict") then
+      if fail_at == "vet" then { output: envelope("", "ERROR E150 tasks[0] — scripted rejection", 1), exit_code: 1, next_state: world }
+      -- 127 is the shell's "command not found": no dagr on PATH. §6's rule is
+      -- that this must NOT stop a publish, and case 21 asserts it.
+      else if fail_at == "vet_missing" then { output: envelope("", "dagr: command not found", 127), exit_code: 1, next_state: world }
+      else { output: envelope("", "", 0), exit_code: 0, next_state: world }
     else if contains(argv, "pane list") then
       { output: envelope("{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"}]}}", "", 0), exit_code: 0, next_state: world }
     else
@@ -227,7 +239,7 @@ func ports_at(ms: int, status: string, gone: bool, split_ok: bool) -> ExtPorts {
 func ports_failing_at(ms: int, status: string, gone: bool, fail_at: string) -> ExtPorts {
   let base = noop_ext_ports();
   { ai_step: base.ai_step,
-    tool_handle: scripted(status, gone, fail_at),
+    tool_handle: scripted(ms, status, gone, fail_at),
     file_read: fs_read,
     file_write: fs_write,
     file_remove: fs_remove,
@@ -244,8 +256,14 @@ func mk_ctx(ports: ExtPorts, world: ExtWorld) -> ExtCtx {
     hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
     env_server_url: "", budget_remaining: 4, history_slice: [],
     state_key: "test", context_limit: 0, ports: ports,
+    finish_reason: "",
+    work_in_flight: [],
     artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
     world: world }
+}
+
+func mk_cfg_plan(plan: string) -> HerdrConfig {
+  { mk_cfg() | dagr_plan: plan }
 }
 
 func mk_cfg() -> HerdrConfig {
@@ -258,7 +276,7 @@ func mk_cfg() -> HerdrConfig {
     start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
     -- ABI 7.0: the exit intent is declared either way; this says whether it
     -- renders actions. These gates exercise the tool paths, not the exit path.
-    reap_on_exit: false }
+    reap_on_exit: false, settle_on_exit: false, sweep_settle: false, dagr_bin: "dagr", dagr_plan: "" }
 }
 
 func run_file_path() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
@@ -270,11 +288,31 @@ func run_file_path() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
 type Step = { world: ExtWorld, out: string, err: string, code: int }
 
 func drive(world: ExtWorld, ports: ExtPorts, call: ToolCallEnvelope) -> Step ! {IO, Process, FS, Clock} {
-  let r = on_tool_handle(mk_cfg(), mk_ctx(ports, world), call);
+  drive_cfg(mk_cfg(), world, ports, call)
+}
+
+func drive_cfg(cfg: HerdrConfig, world: ExtWorld, ports: ExtPorts, call: ToolCallEnvelope) -> Step ! {IO, Process, FS, Clock} {
+  let r = on_tool_handle(cfg, mk_ctx(ports, world), call);
   match r.decision {
     Handled(res) => { world: r.next_state, out: res.stdout, err: res.stderr, code: res.exit_code },
     Delegate => { world: r.next_state, out: "", err: "on_tool_handle delegated the call", code: 1 }
   }
+}
+
+-- A2: a delegation that names the operator's plan task.
+func delegate_plan_call(id: string, prompt: string, dagr_task: string) -> ToolCallEnvelope {
+  { id: id, tool: "Delegate",
+    arguments: jo([kv("prompt", js(prompt)), kv("kind", js("claude")),
+                   kv("task_kind", js("impl")), kv("dagr_task", js(dagr_task))]) }
+}
+
+-- A2's second channel: the model was told the plan path in conversation and
+-- passes it here, with no `HERDR_DAGR_PLAN` anywhere.
+func delegate_declare_call(id: string, prompt: string, dagr_task: string, dagr_plan: string) -> ToolCallEnvelope {
+  { id: id, tool: "Delegate",
+    arguments: jo([kv("prompt", js(prompt)), kv("kind", js("claude")),
+                   kv("task_kind", js("impl")), kv("dagr_task", js(dagr_task)),
+                   kv("dagr_plan", js(dagr_plan))]) }
 }
 
 func delegate_call(id: string, prompt: string, kind: string, task_kind: string, retry_of: string) -> ToolCallEnvelope {
@@ -292,6 +330,11 @@ func delegate_call_model(id: string, prompt: string, kind: string, task_kind: st
 -- answers blindly, so without this the model flag would be asserted only against
 -- the run file and never against the call that carries it.
 func last_start_argv(world: ExtWorld) -> string { read_file(world, "/tmp/.last-agent-start") }
+
+-- The last `pane split` argv. A motoko delegate never reaches `agent start`, so
+-- this is the ONLY place its model can be asserted: the split is where `MODEL`
+-- is handed over (`types.argv_split`).
+func last_split_argv(world: ExtWorld) -> string { read_file(world, "/tmp/.last-pane-split") }
 
 func check_call(id: string, name: string) -> ToolCallEnvelope {
   { id: id, tool: "DelegateCheck", arguments: jo([kv("name", js(name))]) }
@@ -498,8 +541,265 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && contains(last_start_argv(s12.world), "--model") == false);
   let a17 = check("the refused model ask is still recorded verbatim",
                   contains(read_file(s12.world, run_file_path()), "\"model\":\"a;b\""));
+  -- AND IT IS SAID, not merely done (2026-09-07). The refusal is silent by
+  -- policy; the transcript claiming the delegate runs on the refused model is a
+  -- different thing, and was true until this assertion existed.
+  let a17b = check("a refused model is described as refused, not as the model in use",
+                   contains(s12.out, "REFUSED")
+                     && contains(s12.out, "runs on its own default")
+                     && contains(s12.out, "with model `a;b`") == false);
   emit(s12.world);
 
+  -- 13. THE MOTOKO HALF OF THE MODEL STORY (2026-09-07). A motoko delegate is a
+  --     shell running `run-agent.sh`, not an `agent start`, so its model cannot
+  --     ride a flag after `--`. It rides the pane split as `MODEL`, which the
+  --     receiving Motoko resolves ahead of its configured profile.
+  let s13 = drive(s12.world, ports_at(13000, "working", false, true),
+                  delegate_call_model("c13", "motoko model work", "motoko", "impl", "", "openrouter/meta/muse-spark-1.3"));
+  let a18 = check("a motoko delegate's model rides the pane split as MODEL",
+                  s13.code == 0
+                    && contains(last_split_argv(s13.world), "--env MODEL=openrouter/meta/muse-spark-1.3"));
+  emit(s13.world);
+
+  -- 14. The same degradation as the flag path: a shell token yields no MODEL at
+  --     all, so the delegate resolves its own model rather than the call failing.
+  let s14 = drive(s13.world, ports_at(14000, "working", false, true),
+                  delegate_call_model("c14", "motoko metachar", "motoko", "impl", "", "a;b"));
+  let a19 = check("a motoko model with metacharacters is refused from the split",
+                  s14.code == 0
+                    && contains(last_split_argv(s14.world), "MODEL=") == false);
+  emit(s14.world);
+
+  -- 15. AND THE OTHER DIRECTION, which is the half that catches a model threaded
+  --     unconditionally: claude takes its model as a flag, so ITS split must not
+  --     carry MODEL — a variable the claude CLI does not read, in a pane holding
+  --     no Motoko.
+  let s15 = drive(s14.world, ports_at(15000, "working", false, true),
+                  delegate_call_model("c15", "claude model work", "claude", "impl", "", "claude-fable-5"));
+  let a20 = check("a claude delegate's split carries no MODEL: its transport is the flag",
+                  s15.code == 0
+                    && contains(last_start_argv(s15.world), "--model claude-fable-5")
+                    && contains(last_split_argv(s15.world), "MODEL=") == false);
+  emit(s15.world);
+
+  -- 16. THE RETRY (2026-09-07). Refused once with `agent_not_ready`, accepted on
+  --     the second attempt: the delegation SUCCEEDS and the task is open and
+  --     working, where before this it was a failed row and a dead pane. This is
+  --     finding C surviving rather than being fixed — the herdr-side cause is
+  --     untouched.
+  let s16 = drive(s15.world, ports_failing_at(16000, "working", false, "prompt_once"),
+                  delegate_call("c16", "retried work", "claude", "impl", ""));
+  let a21 = check("a prompt refused once with agent_not_ready is retried and the delegation succeeds",
+                  s16.code == 0
+                    && contains(read_file(s16.world, run_file_path()), "\"state\":\"working\"")
+                    && contains(s16.out, "is running `claude`"));
+  emit(s16.world);
+
+  -- 17. Refused every time: the outcome is what it always was — closed pane,
+  --     failed task, the model told — and the RECEIPT now says how many tries,
+  --     because `verified` grades a claim about the spawn.
+  let s17 = drive(s16.world, ports_failing_at(17000, "working", false, "prompt"),
+                  delegate_call("c17", "never accepted", "claude", "impl", ""));
+  let d17 = read_file(s17.world, run_file_path());
+  let a22 = check("a prompt refused every time still fails, and the receipt counts the attempts",
+                  s17.code == 1
+                    && contains(d17, "\"result\":\"failed\"")
+                    && contains(d17, "agent_not_ready")
+                    && contains(d17, "after 3 attempts"));
+  emit(s17.world);
+
+  -- 18. THE CODE THAT MUST NEVER BE RETRIED. `agent_prompt_stalled` says the
+  --     delegate ACCEPTED the input, so a second attempt is a second delivery.
+  --     One attempt, and the receipt must not claim more.
+  let s18 = drive(s17.world, ports_failing_at(18000, "working", false, "prompt_stall"),
+                  delegate_call("c18", "stalled work", "claude", "impl", ""));
+  let d18 = read_file(s18.world, run_file_path());
+  -- SCOPED TO THIS TASK'S RECEIPT, not to the document. A bare
+  -- `contains(doc, "attempts")` matches the two EARLIER tasks that were retried,
+  -- so it would fail while the code was right — which is what it did. Matching
+  -- the closing quote is what proves nothing follows the code inside the string.
+  let a23 = check("agent_prompt_stalled is never retried: it says the input was accepted",
+                  s18.code == 1
+                    && contains(d18, "code `agent_prompt_stalled`\",")
+                    && contains(d18, "code `agent_prompt_stalled`, after") == false);
+  emit(s18.world);
+
+  -- 19. THE PROBE. Same retryable code as case 17, but the agent's status MOVES
+  --     after the refusal — so the prompt may have landed after all, and a
+  --     second delivery is the one outcome worse than a clean failure. Exactly
+  --     one attempt, and the receipt must not claim more.
+  let s19 = drive(s18.world, ports_failing_at(19000, "idle", false, "prompt_moved"),
+                  delegate_call("c19", "moved after refusal", "claude", "impl", ""));
+  let d19 = read_file(s19.world, run_file_path());
+  -- Scoped to the receipt, for case 18's reason: two EARLIER tasks in this same
+  -- document were retried three times, so a document-wide "no attempt count"
+  -- assertion is false no matter how this case behaves. The closing quote is
+  -- what pins "nothing follows the code", and only this task's receipt ends
+  -- there.
+  let a24 = check("a refusal is NOT retried once the agent has moved: it may have been delivered",
+                  s19.code == 1
+                    && contains(d19, "\"id\":\"mot-dlg-19000·a1\"")
+                    && contains(d19, "code `agent_not_ready`\",\"reason\""));
+  emit(s19.world);
+
+  -- 20. THE PUBLISH REFUSES A CANDIDATE ITS OWN VALIDATOR REJECTS (2026-09-07).
+  --     `DESIGN-dagr` §6 moved this guarantee to CI so a missing dagr could
+  --     never stop a write, and that is unchanged — what is new is the case §6
+  --     does not describe: dagr present, running, saying the document is
+  --     broken. The live file must keep the PREVIOUS content, and the model
+  --     must be told, because this can only be a producer bug.
+  let before20 = read_file(s19.world, run_file_path());
+  let s20 = drive(s19.world, ports_failing_at(20000, "working", false, "vet"),
+                  delegate_call("c20", "rejected candidate", "claude", "impl", ""));
+  let a25 = check("a candidate dagr rejects is NOT published, and the previous version stands",
+                  read_file(s20.world, run_file_path()) == before20
+                    && contains("${s20.out}${s20.err}", "dagr view was NOT updated")
+                    && contains("${s20.out}${s20.err}", "producer bug"));
+  emit(s20.world);
+
+  -- 21. §6'S RULE, PINNED: "the producer should always write and never require
+  --     the binary". A validator that cannot run — 127, no dagr on PATH — must
+  --     leave the publish exactly as it was before validation existed. Without
+  --     this case, tightening `dagr_says_invalid` to `code != 0` would silently
+  --     make a container without dagr stop producing a run file at all.
+  let s21 = drive(s20.world, ports_failing_at(21000, "working", false, "vet_missing"),
+                  delegate_call("c21", "no validator here", "claude", "impl", ""));
+  let a26 = check("a validator that cannot run does not stop the publish (§6: never require the binary)",
+                  s21.code == 0
+                    && contains(read_file(s21.world, run_file_path()), "mot-dlg-21000"));
+  emit(s21.world);
+
+  -- 22. OPTION A2 (DESIGN §10.4): the operator declares the plan, this producer
+  --     owns the state. The plan carries two structural tasks and one the
+  --     operator did by hand; a delegation then attaches its attempt to a
+  --     DECLARED task rather than opening a second one with the same id.
+  let planned = put_file(s21.world, "/tmp/.dagr/plan.json",
+    "{\"dagr\":3,\"tasks\":[{\"id\":\"P1A\",\"title\":\"declared\",\"kind\":\"impl\",\"deps\":[]},{\"id\":\"P1B\",\"kind\":\"impl\",\"deps\":[\"P1A\"]},{\"id\":\"INV\",\"state\":\"done\"}]}");
+  let s22 = drive_cfg(mk_cfg_plan("/tmp/.dagr/plan.json"), planned,
+                      ports_at(22000, "working", false, true),
+                      delegate_plan_call("c22", "work on the plan", "P1A"));
+  let d22 = read_file(s22.world, run_file_path());
+  let a27 = check("the operator's plan is seeded: declared tasks, their deps, and the hand-done one settled",
+                  s22.code == 0
+                    && contains(d22, "\"id\":\"P1A\"")
+                    && contains(d22, "\"deps\":[\"P1A\"]")
+                    && contains(d22, "\"actor\":\"operator\"")
+                    && contains(d22, "declared `done` in the operator's plan"));
+  -- THE ATTACHMENT, which is what makes this A2 and not merely "seed a plan".
+  -- The delegation names P1A, so its attempt belongs to P1A — an INITIAL one,
+  -- because a declared task has none yet — and NO mot-dlg-* task is opened for
+  -- it. Without this the plan's tasks would sit queued for ever beside a
+  -- parallel set of the producer's own, which is the two-documents problem
+  -- moved inside one file.
+  let a27b = check("a delegation naming a plan task attaches to it, and opens no second task",
+                   contains(d22, "\"id\":\"P1A·a1\"")
+                     && contains(d22, "\"id\":\"mot-dlg-22000\"") == false
+                     && contains(s22.out, "recorded against the plan task `P1A`"));
+  -- THE HALF THAT MAKES IT A2 RATHER THAN A1: the plan file is READ and never
+  -- written. If this producer ever wrote it, the operator's document would have
+  -- two writers again and §10.2's clobber would be back.
+  let a28 = check("the plan file itself is never written",
+                  read_file(s22.world, "/tmp/.dagr/plan.json") == read_file(planned, "/tmp/.dagr/plan.json"));
+  emit(s22.world);
+
+  -- 23. SEEDING IS IDEMPOTENT, and this is the case that pins it. P1A now
+  --     carries an attempt and state `working` from case 22. Re-reading the
+  --     plan must leave it ALONE: a seeder that re-emitted a declared task
+  --     would reset it to `queued` with no attempts, silently deleting an
+  --     observation with an operator's declaration. The plan describes
+  --     intent; once a task exists here its state is this producer's.
+  let s23 = drive_cfg(mk_cfg_plan("/tmp/.dagr/plan.json"), s22.world,
+                      ports_at(23000, "working", false, true),
+                      delegate_plan_call("c23", "second go at the same plan task", "P1A"));
+  let d23 = read_file(s23.world, run_file_path());
+  let a29 = check("re-reading the plan does not reset a task this producer has observed",
+                  s23.code == 0
+                    && contains(d23, "\"id\":\"P1A·a1\"")
+                    && contains(d23, "\"id\":\"P1A·a2\""));
+  emit(s23.world);
+
+  -- 24. THE MODEL DECLARES THE PLAN, and this is the case the 2026-09-08
+  --     failure would have caught. `mk_cfg()` carries NO `dagr_plan`, so the
+  --     container channel is off exactly as it is in a checkout whose
+  --     `.devcontainer` is mounted read-only. The plan reaches the producer
+  --     only because the operator said its path and the model passed it on.
+  --
+  --     A SECOND PLAN FILE WITH IDS THIS RUN FILE HAS NEVER SEEN, deliberately:
+  --     P1A and P1B are already in the document from cases 22-23, so attaching
+  --     to one of those would prove nothing about where the plan came from.
+  --     `Q1` can only be here if the declaration was read.
+  let declared_plan = put_file(s23.world, "/tmp/.dagr/plan-declared.json",
+    "{\"dagr\":3,\"tasks\":[{\"id\":\"Q1\",\"title\":\"declared by the model\",\"kind\":\"impl\",\"deps\":[]},{\"id\":\"Q2\",\"kind\":\"impl\",\"deps\":[\"Q1\"]}]}");
+  let s24 = drive_cfg(mk_cfg(), declared_plan,
+                      ports_at(24000, "working", false, true),
+                      delegate_declare_call("c24", "work the declared plan", "Q1", "/tmp/.dagr/plan-declared.json"));
+  let d24 = read_file(s24.world, run_file_path());
+  let a30 = check("a plan named by the model seeds and attaches, with no HERDR_DAGR_PLAN set",
+                  s24.code == 0
+                    && contains(d24, "\"id\":\"Q1\"")
+                    && contains(d24, "\"deps\":[\"Q1\"]")
+                    && contains(d24, "\"id\":\"Q1·a1\"")
+                    && contains(d24, "\"id\":\"mot-dlg-24000\"") == false
+                    && contains(s24.out, "is in effect for the rest of this session"));
+  -- THE DECLARATION IS ON DISK, keyed by pane and session like every other
+  -- per-run path, because that is the whole mechanism: this extension holds no
+  -- state between tool calls.
+  let a30b = check("the declaration is recorded in the session's plan marker",
+                   read_file(s24.world, "/tmp/.dagr/.plan-w1-p1-200") == "/tmp/.dagr/plan-declared.json");
+  emit(s24.world);
+
+  -- 25. AND IT STICKS. The operator names the plan once, in their first
+  --     sentence; a model that had to repeat the path on every call would drop
+  --     it, and the graph would go back to accumulating parallel work. This
+  --     call passes NO `dagr_plan` and must still attach.
+  let s25 = drive_cfg(mk_cfg(), s24.world,
+                      ports_at(25000, "working", false, true),
+                      delegate_plan_call("c25", "the next task in the declared plan", "Q2"));
+  let d25 = read_file(s25.world, run_file_path());
+  let a31 = check("a later delegation inherits the declared plan without naming it again",
+                  s25.code == 0
+                    && contains(d25, "\"id\":\"Q2·a1\"")
+                    && contains(d25, "\"id\":\"mot-dlg-25000\"") == false);
+  emit(s25.world);
+
+  -- 26. A PLAN IN EFFECT THAT CANNOT BE READ SAYS SO. This is the failure mode
+  --     the container channel had and the reason it went undiagnosed for a
+  --     whole session: seeding nothing is indistinguishable from having no plan
+  --     unless the producer says which it is. The work still runs — a refused
+  --     linkage never refuses the delegation (§3.6).
+  let s26 = drive_cfg(mk_cfg(), s25.world,
+                      ports_at(26000, "working", false, true),
+                      delegate_declare_call("c26", "name a plan that is not there", "Q3", "/tmp/.dagr/nope.json"));
+  --     `Q3` and not `Q1`: an unreadable plan does not UN-seed what a readable
+  --     one already put in the document, and it must not — those tasks carry
+  --     this producer's own observations now. So the id has to be one the
+  --     document has never held for the refusal to be about the plan at all.
+  --     Both halves of the diagnosis have to be present: which id could not be
+  --     found, and why no plan could supply it. Either alone is what left the
+  --     2026-09-08 session guessing.
+  let a32 = check("a plan in effect with no file behind it is reported, and the work is opened as new",
+                  s26.code == 0
+                    && contains(s26.out, "there is no such file")
+                    && contains(s26.out, "was NOT linked")
+                    && contains(read_file(s26.world, run_file_path()), "\"id\":\"mot-dlg-26000\""));
+  emit(s26.world);
+
+  -- 27. A PLAN OUTSIDE THE SANDBOX IS REFUSED BEFORE IT IS READ, not around
+  --     the read: a path outside AILANG_FS_SANDBOX terminates the run rather
+  --     than returning an error, so the check cannot be a `catch`. The previous
+  --     declaration survives, because a refused declaration must not quietly
+  --     retire a working one.
+  let s27 = drive_cfg(mk_cfg(), s26.world,
+                      ports_at(27000, "working", false, true),
+                      delegate_declare_call("c27", "name a plan outside the sandbox", "Q1", "/etc/passwd"));
+  let a33 = check("a plan outside the working directory is refused with its reason, and nothing is recorded",
+                  s27.code == 0
+                    && contains(s27.out, "outside Motoko's filesystem sandbox")
+                    && read_file(s27.world, "/tmp/.dagr/.plan-w1-p1-200") == "/tmp/.dagr/nope.json");
+  emit(s27.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
-     && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 then () else exit(1)
+     && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 && a17b
+     && a18 && a19 && a20 && a21 && a22 && a23 && a24 && a25 && a26 && a27 && a27b && a28 && a29
+     && a30 && a30b && a31 && a32 && a33 then () else exit(1)
 }

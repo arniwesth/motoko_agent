@@ -111,8 +111,23 @@ is treated as a truncation.
 
 ### Item 2 — the output budget (not done, and not repo-side)
 
-Unchanged and still an upstream ask through the `ailang-feedback` route.
-`std/ai.step` has no output-token parameter, and this branch adds none.
+**FILED UPSTREAM 2026-09-07 — ticket `fb_cc1cb8fb23e1ead1`**, category `limitation`, via the
+`ailang-feedback` skill's MCP channel (`submit_feedback`, public inbox), against AILANG
+v0.33.1-85-gde5a141e4-dirty. It had been "still an upstream ask" since 2026-09-06 and nothing had
+sent it.
+
+Re-checked before filing rather than quoting this page: **all three** step variants lack the bound,
+not only `step` — `stepWithCache` (`ai.ail:225`) and `stepWithStream` (`:330`) too, and
+`stepWithStream` is the one Motoko actually calls (`ai_compat.ail:196`). `output_tokens` appears in
+that module only on the RESULT (`:159`, `:286`), so the result half of the pair exists and the
+request half does not.
+
+The ask is in preference order: an optional bound on the variants; failing that, surface the
+effective cap on `StepResult` so a program can compute headroom; failing both, document where the
+default is set. The third alone would have saved this investigation.
+
+This does not change item 2's status here — the cap is still not raisable from this repo, and
+nothing on this branch adds a way.
 
 ### Item 3 — the `empty_stop_guard` nudge (NOT DONE — the guard cannot see it)
 

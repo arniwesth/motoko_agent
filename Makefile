@@ -435,7 +435,7 @@ DST_LOG  ?= .ailang/dst-last.log
 
 DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   profile_definition smoke_driver corpus_pr strict_replay world_state \
-  corpus_rotating driver_plus_compose driver_only seeded_generator \
+  corpus_rotating driver_plus_compose driver_plus_herdr driver_only seeded_generator \
   event_vocabulary phase_c_l1 recorded_stream driver_plus_no_ops \
   ext_hook_scope_selftest invariants run_report discovery program_persistence \
   compaction_dst fault_catalogue ext_ambient_inventory_selftest \
@@ -443,7 +443,83 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   conformance stream_parity latency_pair test_coverage_selftest \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
-  registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest
+  registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest \
+  herdr_graded
+
+# The graded session for a herdr DST profile (021 step 2's demonstration half).
+#
+# THE ENVIRONMENT IS SET HERE AND THAT IS A DISCLOSURE, NOT A CONVENIENCE.
+# `motoko-ext-herdr`'s `register_with_config` reads HERDR_ENV, HERDR_BIN_PATH and
+# HERDR_PANE_ID through `std/env` BEFORE any hook is dispatched — the same
+# ambient registration read the compose profile discloses for MOTOKO_PROFILE_DIR
+# — so a run that does not set them registers zero tools and the session proves
+# nothing. Set here, they are visible to a reader of this target.
+#
+# HERDR_DAGR_PANE IS PINNED OFF, and not because the view is unwelcome: this
+# container exports it as 1, and inheriting it makes the extension issue two more
+# CLI calls that the fixture would then have to serve. A gate whose call sequence
+# depends on the operator's environment is not a deterministic gate.
+#
+# HERDR_BIN_PATH names the real binary and NOTHING RUNS IT: every call is served
+# from WorldState.ext_effects, and the fixture carries one entry of slack so an
+# off-by-one produces a wrong answer rather than falling through to a live exec
+# against the operator's own panes.
+.PHONY: herdr_graded
+herdr_graded:
+	@set -eu; \
+	out=$$(mktemp); \
+	if ! env HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
+	       HERDR_DELEGATE_DIR=./.tmp-herdr-graded/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-graded/dagr \
+	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	     --ai-stub --entry main scripts/dst/herdr_graded_dst.ail < /dev/null > $$out 2>&1; then \
+		grep -v '^{"schema_version"' $$out; rm -f $$out; rm -rf ./.tmp-herdr-graded; exit 1; \
+	fi; \
+	grep '^HERDR-GRADED' $$out || true; \
+	rm -f $$out; rm -rf ./.tmp-herdr-graded
+
+# `driver_plus_herdr` v1 — the FOURTH conformant profile, and the first whose
+# covered substance is a TOOL dispatch.
+#
+# WHY IT IS A SEPARATE TARGET FROM `herdr_graded`, WHICH RUNS THE SAME SCRIPT.
+# Per D10 nothing transfers between profiles and each earns its own coverage, so
+# every profile in this tree owns a target that can go red on its own —
+# `driver_only`, `driver_plus_no_ops`, `driver_plus_compose` and now this. The
+# two targets read DIFFERENT halves of one run's output: `herdr_graded` shows the
+# RUN (did a ToolProvider dispatch reach the extension, was it served from the
+# world, does it replay), and this one shows the RECORD it licenses (the
+# classification entries, the disclosure, the coverage statement). Sharing a
+# script rather than a fixture is deliberate: the record cites `discovery` as the
+# basis for both its criterion-2 entries, and `discovery`'s evidence is exactly
+# the session `herdr_graded` drives. A record checked against a DIFFERENT run
+# would be checked against evidence it does not rest on.
+#
+# THE CAPABILITIES ARE THE PROFILE'S OWN DISCLOSURE, NOT A CONVENIENCE, and here
+# the disclosure is narrower than compose's: herdr's `register_with_config` reads
+# the environment at register.ail:26 before any hook is dispatched and AILANG
+# capabilities are per PROCESS, so Env cannot be withheld. It reads no files at
+# registration — FS is granted for the DRIVER's sake. What carries the
+# determinism claim instead is the record -> strict-replay identity the script
+# asserts, and `HERDR_*` is set in this recipe so a reader can see exactly what
+# the one ambient source is given.
+#
+# The `grep -v` hides the machine-readable lines the run emits; the exit status
+# is the script's own, taken before any pipeline, because a `|` here would
+# report the grep's status instead of the run's.
+.PHONY: driver_plus_herdr
+driver_plus_herdr:
+	@set -eu; \
+	out=$$(mktemp); \
+	if ! env HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
+	       HERDR_DELEGATE_DIR=./.tmp-herdr-profile/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-profile/dagr \
+	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	     --ai-stub --entry main scripts/dst/herdr_graded_dst.ail < /dev/null > $$out 2>&1; then \
+		grep -v '^{"schema_version"' $$out; rm -f $$out; rm -rf ./.tmp-herdr-profile; exit 1; \
+	fi; \
+	grep -v '^INSTALLED \|^OMITTED \|^DISCLOSURE \|^CLASSIFICATION \|^STATEMENT \|^CLAIM \|^{"schema_version"' $$out; \
+	rm -f $$out; rm -rf ./.tmp-herdr-profile; \
+	ailang test src/core/dst_driver_plus_herdr.ail > /dev/null && echo "  ✓ src/core/dst_driver_plus_herdr.ail"
 
 # corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
 #
@@ -2222,14 +2298,22 @@ check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_h
 HERDR_GATE_CAPS = Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream
 
 verify_herdr_gate:
-	@env -u HERDR_ENV -u HERDR_BIN_PATH -u HERDR_PANE_ID \
+	@out=$$(env -u HERDR_ENV -u HERDR_BIN_PATH -u HERDR_PANE_ID \
 		ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
-		scripts/verify_herdr_gate.ail -- expect-empty 2>/dev/null | grep -E '^(OK|FAIL)' \
-		|| (echo "verify_herdr_gate: the gate leaked tools outside a herdr pane" && exit 1)
+		scripts/verify_herdr_gate.ail -- expect-empty 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)' || true; \
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q '^FAIL'; then \
+		echo "verify_herdr_gate: the gate leaked tools outside a herdr pane"; \
+		exit 1; \
+	fi
 	@if [ "$$HERDR_ENV" = "1" ]; then \
-		ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
-		  scripts/verify_herdr_gate.ail -- expect-tools 2>/dev/null | grep -E '^(OK|FAIL)' \
-		  || (echo "verify_herdr_gate: the gate did not advertise its tools inside a herdr pane" && exit 1); \
+		out=$$(ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		  scripts/verify_herdr_gate.ail -- expect-tools 2>/dev/null); rc=$$?; \
+		echo "$$out" | grep -E '^(OK|FAIL)' || true; \
+		if [ $$rc -ne 0 ] || echo "$$out" | grep -q '^FAIL'; then \
+		  echo "verify_herdr_gate: the gate did not advertise its tools inside a herdr pane"; \
+		  exit 1; \
+		fi; \
 	else \
 		echo "  (skipping the in-pane leg: not running under herdr)"; \
 	fi
@@ -2275,7 +2359,7 @@ verify_exit_intent:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
 		scripts/verify_exit_intent.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
-	[ $$rc -eq 0 ] || (echo "verify_exit_intent: the extension-declared exit intent regressed (ABI 7.0)" && exit 1)
+	[ $$rc -eq 0 ] || (echo "verify_exit_intent: the extension-declared exit intent regressed (ABI 7.0/7.1)" && exit 1)
 
 # MOT-137: under HERDR_DAGR_PANE=1 the extension opens the dagr view itself, on
 # the first delegation, AT MOST ONCE — and a refused open neither fails the
@@ -2363,7 +2447,10 @@ verify_dagr_producer:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
 		scripts/verify_mot136_dagr_producer.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
-	[ $$rc -eq 0 ] || (echo "verify_dagr_producer: the producer's lifecycle mapping regressed (MOT-136)" && exit 1); \
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q '^FAIL'; then \
+		echo "verify_dagr_producer: the producer's lifecycle mapping regressed (MOT-136)"; \
+		exit 1; \
+	fi; \
 	if [ -x "$(DAGR_BIN)" ]; then \
 		n=0; bad=0; \
 		echo "$$out" | grep '^DAGR_DOC ' | sed 's/^DAGR_DOC //' | while IFS= read -r doc; do \

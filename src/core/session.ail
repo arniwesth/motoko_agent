@@ -53,6 +53,7 @@ import src/core/ext/exit_manifest (publish_exit_manifest, manifest_path_var)
 import src/core/ext/runtime (
   dispatch_response_intercept,
   dispatch_solver_candidate,
+  dispatch_work_in_flight,
   dispatch_pre_step_chain,
   PreStepStage,
   StageApplied,
@@ -1595,6 +1596,14 @@ func mk_v2_ext_ctx(
   budget: BudgetPlan,
   history: [Message],
   context_limit: int,
+  -- ABI 7.2. The PROVIDER's reason, "" where this context does not follow a
+  -- provider result -- see `ExtCtx.finish_reason`. Passed rather than read off
+  -- `st.last_finish_reason`, which by then also carries the driver's own
+  -- pseudo-reasons.
+  finish_reason: string,
+  -- ABI 7.3. The host's aggregate of every `WorkInFlight` declaration, or []
+  -- where none has been gathered — see the call sites.
+  work_in_flight: [WorkItem],
   ports: ExtPorts,
   artifacts: Json,
   telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
@@ -1617,6 +1626,8 @@ func mk_v2_ext_ctx(
     budget_remaining: remaining,
     history_slice: messages_to_msgs(history),
     state_key: "core:ext:v2",
+    finish_reason: finish_reason,
+    work_in_flight: work_in_flight,
     context_limit: context_limit,
     ports: ports,
     artifacts: artifacts,
@@ -2548,7 +2559,7 @@ func c2_loop(
               -- comment above says this arm is prone to. The successor that
               -- disappears with the resolution is the resolution's own; the one
               -- that must survive is `input.next_state`, and it does, in `post`.
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), policy.step.compaction.context_limit, ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), policy.step.compaction.context_limit, "", [], ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
               match resolution {
                 ApprovalDenied(reason) => {
                   let denied_event = NativeToolDenied({
@@ -2592,7 +2603,7 @@ func c2_loop(
           -- requests and nothing else. The dispatcher below therefore starts
           -- from the same world it would have started from, and `done.world` —
           -- the successor that IS load-bearing here — is untouched.
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, policy.step.compaction.context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, policy.step.compaction.context_limit, "", [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let calls_event = NativeToolCalls({
             request_id: request_id,
@@ -2713,7 +2724,7 @@ func c2_loop(
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
           let ext_context_limit = if effective_input_limit(context_limit) - pinned_tokens < 0 then 0 else effective_input_limit(context_limit) - pinned_tokens;
-          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, "", [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
@@ -2856,7 +2867,24 @@ func c2_loop(
                   let applied = apply_state_delta(step_state, phase.delta);
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
+                  -- ABI 7.3. BUILT TWICE, and the first one is not waste. A
+                  -- `WorkInFlight` render takes an `ExtCtx`, so there has to be
+                  -- a context before there is an aggregate; the bootstrap
+                  -- carries `[]` and the dispatcher re-empties it per atom, so
+                  -- no declarer can read a half-built list whose contents would
+                  -- depend on registry order.
+                  --
+                  -- DISPATCHED HERE AND NOWHERE ELSE, once per step. This is
+                  -- the context `dispatch_solver_candidate` receives, which is
+                  -- where the only consumer runs. The pre-step and tool-phase
+                  -- contexts keep `[]` — not because the answer would be
+                  -- uninteresting there, but because gathering it would put an
+                  -- FS round-trip into three more dispatches per step to
+                  -- answer a question nothing currently asks. Widening it later
+                  -- is this same three-line shape at those sites.
+                  let boot_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
+                  let work = dispatch_work_in_flight(rt, boot_ctx);
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, work.items, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, work.next_state);
                   let trace_after_model = c2_trace_wire_events(ledger_append(trace_after_call, WireRecord(end_event)), phase.events);
                   -- WI-B2b. Bound rather than matched inline, because the
                   -- successor has to outlive the match: `intercepted.next_state`
@@ -3489,6 +3517,8 @@ func publish_turn_exit_manifest(
     budget_remaining: budget.total,
     history_slice: [],
     state_key: "core:ext:exit",
+    finish_reason: "",
+    work_in_flight: [],
     context_limit: 0,
     ports: ext_ports_of(ports, named.next_state, env_url),
     artifacts: empty_ext_artifacts(),

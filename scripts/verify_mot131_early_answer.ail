@@ -82,6 +82,8 @@ func mk_ctx(ports: ExtPorts) -> ExtCtx {
     hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
     env_server_url: "", budget_remaining: 4, history_slice: [],
     state_key: "test", context_limit: 0, ports: ports,
+    finish_reason: "",
+    work_in_flight: [],
     artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
     world: empty_ext_world() }
 }
@@ -99,7 +101,7 @@ func mk_cfg() -> HerdrConfig {
     start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
     -- ABI 7.0: the exit intent is declared either way; this says whether it
     -- renders actions. These gates exercise the tool paths, not the exit path.
-    reap_on_exit: false }
+    reap_on_exit: false, settle_on_exit: false, sweep_settle: false, dagr_bin: "dagr", dagr_plan: "" }
 }
 
 func check_call() -> ToolCallEnvelope {

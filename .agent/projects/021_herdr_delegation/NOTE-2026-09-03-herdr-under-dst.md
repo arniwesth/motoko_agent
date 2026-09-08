@@ -221,12 +221,40 @@ same idea as `WorldState.files`, built by hand. What they are not:
   `HERDR_ENV`, `HERDR_BIN_PATH`, `HERDR_PANE_ID`; tagging needs `MOTOKO_SESSION_MS`. The make
   target sets them for the `ailang run` process; the profile discloses the `Env` grant across
   registration the way compose discloses `Env`/`FS`.
-- **The shared omission string is wrong about herdr.** `barrier_reason()` at
-  `dst_driver_plus_compose.ail:516` is applied wholesale to the list at `:535`, which includes
-  `herdr`, and says *"Three barrier slots stand for it — on_pre_step, on_response_intercept and
-  on_solver_candidate each declare a non-empty ABI effect row"*. herdr binds none of the three
-  (§2.4). When herdr leaves the omit list this reason must be split, and it is a finding for
-  project 009's register regardless.
+- ~~**The shared omission string is wrong about herdr.**~~ **RETRACTED 2026-09-07 — this finding
+  was a misreading, and acting on it would have made a correct artifact wrong.** The bullet said
+  `barrier_reason()` is false for herdr because herdr binds none of `on_pre_step`,
+  `on_response_intercept`, `on_solver_candidate` (true — it binds `DescribeTools`, `ToolProvider`,
+  `ExitIntent` and, since 7.3, `WorkInFlight`). But the sentence is a claim about the ABI's SLOT
+  SURFACE, not about what any extension binds. `make profile_definition` prints the derivation it
+  mirrors, in its own words:
+
+      ✓ SLOT-level barrier count DERIVED from the ABI rows and the dispatch table: 3
+          BARRIER  compactor / response_interceptor / solver_judge
+        → 3 slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone
+
+  "No extension is installable" — the three barriers stand for every extension in the list whatever
+  it binds, so the reason is accurate for herdr and needs no split. Checked further: none of the
+  eleven extensions sharing that reason binds all three, so the misreading would have condemned the
+  whole list, not just this entry.
+
+- **What IS stale there, and it is a different thing.** The derivation reasons over five capability
+  kinds (`check_fixtures.check_barrier_count`: budget_shaper, compactor, tool_provider,
+  response_interceptor, solver_judge). `ExitIntent` (7.0) and `WorkInFlight` (7.3) are absent, and
+  both are outcome-returning hooks declaring `! {FS}` — the shape the other five are selected by.
+  Whether they belong in the barrier set was **an ADR-scope decision, not a repair**: that file
+  states its criterion scope was fixed by Amendment A and that admitting a measurement outside it
+  "is an ADR-scope act and not this file's".
+  **DECIDED AND TAKEN 2026-09-07: they belong.** The barrier count is 3 → **5**, and the three
+  artifacts moved together — `check_barrier_count`'s slot list, and the count carried in PROSE by
+  `dst_driver_plus_compose.ail` and `dst_driver_plus_no_ops.ail`. The deciding argument is the
+  direction of the error: leaving row-carrying slots out UNDER-counts, and the count reaching ZERO
+  is a trigger that says an extension has become installable — so an under-count can fire that
+  trigger while slots that perform effects still stand. Per-(extension, slot) pairs went 54 → 90,
+  70 standing.
+  A fourth artifact was added rather than moved: `check_barrier_prose` now fails if a profile
+  record's sentence and the derivation disagree on the count OR on the names. Nothing compared them
+  before, which is why the prose went stale twice without a red.
 - **A fourth profile is a fourth consumer of register entry 14** (the `driver_only`-verbatim waiver
   condition in the fault catalogue). Not a blocker, but the count moves.
 - **Register entry 8** — the bridge hardcodes `workdir: "."` and `timeout_ms: 0` on the
@@ -245,6 +273,35 @@ scenarios with dotted ids — `herdr.l1.owner_tag.*`, `herdr.l1.dagr_producer.*`
 `scripts/dst/herdr_l1_dst.ail`, give it a make target with the narrowest caps that pass, and
 chain it into `DST_TARGETS` (`Makefile:436`). This buys `scenario=`/`seed=`/`trace` reporting and
 the anti-silent-drop count for a few hours' work and changes no behaviour.
+
+**STEP 2 CANNOT BE SPLIT, and attempting it 2026-09-08 is how that was established.** The record and
+the acceptance script are one item, not two, and the reason is the basis field rather than
+convenience.
+
+`dst_profile.recognised_producers` is a CLOSED set of five, and for herdr only one of them can carry
+a `WorldMediated` entry:
+
+| producer | verdict for herdr |
+|---|---|
+| `ext_ambient_inventory` (classifier 3) | **AMBIENT** — 1 source, `register.ail:26 std/env.getEnvOr`. Cannot establish criterion 2, whatever the source is |
+| `ext_call_inventory` (classifier 2) | its own note: "never on its own for WorldMediated" |
+| `effect_inventory` (classifier 1) | recognised, not load-bearing |
+| `declared_row` | criterion 1 only; `tool_provider` and `work_in_flight` both declare non-empty rows |
+| `discovery` | **the only one left**, and it measures all three clauses over a RECORDED, VALIDATED, STRICTLY REPLAYED run |
+
+And the profile cannot dodge it by excluding those slots: `work_in_flight[0]` is unconditionally
+dispatched with a non-empty row, and D5 forbids installing an extension with an
+unconditionally-dispatched hook excluded. So a herdr profile is either backed by discovery or it
+does not exist — there is no honest intermediate, and a record naming `discovery` before the run
+exists would be a basis with nothing behind it, which is exactly what that producer's own note
+forbids.
+
+**What this does NOT change:** `make herdr_graded` runs the session and the dispatch works. What is
+missing is the recording → `check_discovery` → `validate_program` → strict-replay chain that turns
+that run into evidence. A draft record was written and deleted rather than committed; its measured
+content is reusable and is quoted in the entry above (four atoms; `exit_intent[0]` the one
+legitimately excludable slot, being Lifecycle; `tool_provider[0]` and `work_in_flight[0]` the two
+that must rest on discovery).
 
 **Step 2 — the profile.** `src/core/dst_driver_plus_herdr.ail` v1 mirroring the compose record;
 `scripts/dst/driver_plus_herdr_dst.ail` running the graded session (`Delegate` →
@@ -271,3 +328,17 @@ not print the site); that the graded session for herdr needs no world change bey
 used (every port herdr calls has a scripted arm, but no run has yet exercised a `ToolProvider`
 dispatch end to end — register entry 19 — so the first attempt may find a seam the compose run did
 not).
+
+**The second inference is now MEASURED and it held: there is no seam** (2026-09-07,
+`scripts/dst/herdr_graded_dst.ail`, `make herdr_graded`). A `Delegate` dispatches through the real
+traced driver to herdr's `ToolProvider`, every herdr CLI call is served from
+`WorldState.ext_effects`, and the delegation completes — the tool result reports the spawn taking
+0.6s, which is that file's own scripted durations and not a live multiplexer. **Step 2's flagged
+risk is retired**; what remains of step 2 is the profile RECORD, whose every field has to be
+measured for herdr rather than copied.
+
+Two things writing it caught, both of which a record-first order would have hit later and more
+expensively: the startup sweep issues `pane list` BEFORE `do_delegate` does anything, so a fixture
+starting at `pane split` desynchronises the whole queue; and the prompt retry added an `agent get`
+between the readiness gate and the prompt hours earlier the same day, which a fixture written from
+the note would have got wrong.

@@ -302,12 +302,27 @@ def check_barrier_count(abi, disp):
     name in the profile, either installed or omitted. Naming it is not a
     coverage claim; INSTALLING it is, and that is WI-C5's.
     """
-    # B8: the five 5.x slots this derivation reasons about are now the five
+    # B8: the five 5.x slots this derivation reasons about became the five
     # capability KINDS whose payload is an outcome-returning hook. Named by
     # kind id (the coverage artifact's `capability_kind_id`), and each row is
     # read off the `Capability` payload rather than an `ExtensionHooks` field.
+    #
+    # WIDENED 2026-09-07, BY DECISION RATHER THAN INHERITANCE. `exit_intent`
+    # (ABI 7.0) and `work_in_flight` (7.3) are outcome-returning hooks declaring
+    # `! {FS}` -- the same shape that selects the five above -- and were absent
+    # here because this list was fixed at 5.x and re-expressed, not re-derived,
+    # at B8. Leaving them out UNDER-COUNTS the barriers, which is the unsafe
+    # direction: the zero-trigger below fires when the count reaches zero, and a
+    # count that omits row-carrying slots can reach zero while slots that
+    # perform effects still stand.
+    #
+    # The scope of this list is an ADR-scope question (Amendment A withheld
+    # criterion 1; see the docstring), so this widening was taken deliberately
+    # and the two profile records that carry the count in PROSE moved with it.
+    # `check_barrier_prose` below is what stops them drifting apart again.
     slots = ["budget_shaper", "compactor", "tool_provider",
-             "response_interceptor", "solver_judge"]
+             "response_interceptor", "solver_judge",
+             "exit_intent", "work_in_flight"]
     payloads = capability_payloads(abi)
 
     slot_barriers, covered, gated = [], [], []
@@ -332,14 +347,20 @@ def check_barrier_count(abi, disp):
         if kind == "Gated":
             gated.append(slot)
         elif row:
-            slot_barriers.append((slot, row))
+            # The KIND travels with the barrier so the line below can state it.
+            # It used to print "unconditionally dispatched" for every barrier,
+            # which was true while all of them were -- and became false the
+            # moment `exit_intent` (Lifecycle) entered the set.
+            slot_barriers.append((slot, row, kind))
         else:
             covered.append(slot)
 
     n = len(slot_barriers)
     print(f"  ✓ SLOT-level barrier count DERIVED from the ABI rows and the dispatch table: {n}")
-    for slot, row in slot_barriers:
-        print(f"      BARRIER  {slot}: unconditionally dispatched, declares ! {{{row}}}"
+    for slot, row, kind in slot_barriers:
+        how = ("unconditionally dispatched" if kind == "Unconditional"
+               else "dispatched at a lifecycle boundary, and performs that row whenever it is")
+        print(f"      BARRIER  {slot}: {how}, declares ! {{{row}}}"
               f"  (outcome returns world state: {'yes' if returns_world[slot] else 'NO'})")
     for slot in covered:
         print(f"      coverable {slot}: unconditionally dispatched, declares NO row")
@@ -355,7 +376,61 @@ def check_barrier_count(abi, disp):
              "      profile version bump. See the header of src/core/dst_driver_only.ail.")
 
     print(f"    → {n} slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone")
+    check_barrier_prose([slot for slot, _r, _k in slot_barriers])
     check_per_extension_barriers(slot_barriers, returns_world)
+
+
+def check_barrier_prose(barrier_slots):
+    """The profile records state the barrier count in PROSE. Tie it to the derivation.
+
+    WHY THIS EXISTS. Two profile records carry the barrier count as English --
+    "Three barrier slots stand for it -- on_pre_step, on_response_intercept and
+    on_solver_candidate" -- and NOTHING compared that sentence to the derivation
+    it paraphrases. It went stale twice without a red: at ABI 7.0 (`exit_intent`)
+    and again at 7.3 (`work_in_flight`), and was found by a session reading the
+    prose rather than by any gate. That is `check_abi_version`'s defect class
+    exactly, in the artifact next door, so it gets the same treatment.
+
+    The subjects are DERIVED by glob for `check_abi_version`'s stated reason: a
+    profile that lands without joining a hand-kept list is not under-covered
+    loudly, it is under-covered silently.
+
+    What is checked is the count and the NAMES. A sentence that says the right
+    number while naming the wrong slots is the stale-transcription shape this
+    file is named for.
+    """
+    n = len(barrier_slots)
+    subjects = sorted((REPO / "src/core").glob("dst_driver*.ail"))
+    seen = 0
+    for path in subjects:
+        text = path.read_text()
+        if "barrier slots stand for it" not in text:
+            continue
+        seen += 1
+        rel = path.relative_to(REPO)
+        if f"{n} barrier slots stand for it" not in text:
+            fail(f"{rel} states a barrier count that is not {n}, which is what the ABI rows and the "
+                 f"dispatch table derive. The derived barriers are {barrier_slots}. A profile record "
+                 "that paraphrases a derivation must move with it.")
+        # THE WINDOW IS THE CLAUSE, NOT THE FILE. Checked against the whole text
+        # this guard passes a record whose barrier LIST is wrong as long as the
+        # missing name appears in some later sentence -- measured by falsifying
+        # it, which is the only reason this is a window.
+        start = text.index("barrier slots stand for it")
+        end = text.index("criterion 1 fails", start)
+        clause = text[start:end]
+        for slot in barrier_slots:
+            if f"`{slot}`" not in clause:
+                fail(f"{rel} claims {n} barrier slots but its sentence does not name `{slot}`, "
+                     f"which the derivation counts as one. The derived set is {barrier_slots}.")
+        for slot in ("budget_shaper", "tool_provider", "describe_tools", "prompt_shaper", "tool_policy"):
+            if slot not in barrier_slots and f"`{slot}`" in clause:
+                fail(f"{rel} names `{slot}` among its barrier slots and the derivation does not "
+                     f"count it as one. The derived set is {barrier_slots}.")
+    if seen == 0:
+        fail("no profile record carries the barrier sentence, so this guard compared nothing. "
+             "An assertion with no subject cannot be told from one that does not run.")
+    print(f"  ✓ the barrier count and slot names in {seen} profile record(s) match the derivation")
 
 
 COVERAGE = REPO / "src/core/dst_profile_coverage.ail"
@@ -543,7 +618,7 @@ def check_per_extension_barriers(slot_barriers, returns_world):
                  "      barrier count for it is unknown, not zero.")
         port_mediated = e["verdict"] == "PORT-MEDIATED"
         nothing_to_tag = e["ext_ports_calls"] == 0
-        for slot, row in slot_barriers:
+        for slot, row, _kind in slot_barriers:
             if port_mediated and nothing_to_tag and returns_world[slot]:
                 cleared.setdefault(ext_id, []).append(slot)
             else:
@@ -749,6 +824,8 @@ def check_abi_version():
              "recorded abi_version cannot be checked against the package that declares it")
     live = m.group(1)
 
+    # ---- rule 1: PROSE, in profile records only ---------------------------
+    #
     # EVERY profile, not only `driver_only`. One fact deserves one guard, and a
     # second profile is exactly how the first one's transcription went unnoticed
     # for eleven items — nothing was comparing it to anything.
@@ -762,6 +839,17 @@ def check_abi_version():
     # derived rather than appended to: it is every `src/core/dst_driver*.ail`
     # and every `scripts/dst/driver_*_dst.ail`, and a profile that lands without
     # joining it is a profile this guard does not check.
+    #
+    # THIS GLOB IS DELIBERATELY NARROW AND MUST STAY SO, which is the opposite
+    # of what rule 2 below does, so the reason belongs here. In a profile record
+    # the words "ABI 7.3" are a PIN: the record describes the surface this tree
+    # has now. Everywhere else in the tree they are PROVENANCE — `herdr.ail`'s
+    # "ABI 7.1's publish verb", `session.ail`'s "ABI 7.2. The PROVIDER's reason",
+    # `verify_exit_intent.ail`'s "ABI 7.1: the publish verb" — and those are
+    # correct forever. A prose sweep widened past profile records would demand
+    # they all say 7.3 and would destroy the one thing they record, which is
+    # WHEN a thing landed. So prose is checked here, narrowly, and rule 2 checks
+    # the pins instead.
     subjects = sorted((REPO / "src/core").glob("dst_driver*.ail")) \
         + sorted((REPO / "scripts/dst").glob("driver_*_dst.ail"))
     if len(subjects) < 4:
@@ -780,16 +868,79 @@ def check_abi_version():
                 fail(f"{path.relative_to(REPO)} names 'ABI {stale}' and "
                      f"{ABI_TOML.relative_to(REPO)} declares {live}. A profile record or manifest "
                      "that pins the wrong ABI pins nothing.")
-        for arg in re.findall(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S):
-            seen += 1
-            if arg != live:
-                fail(f"{path.relative_to(REPO)} builds a manifest with abi_version '{arg}' and the "
-                     f"ABI package declares {live}")
     if seen == 0:
         fail("no profile record names an ABI version at all, so this guard re-derived nothing. "
              "An assertion with no subject cannot be told from one that does not run.")
-    print(f"  ✓ the ABI version every profile record names is the one the package declares: {live} "
-          f"({seen} site(s) across {len([p for p in subjects if p.exists()])} file(s))")
+    print(f"  ✓ the ABI version every profile record's prose names is the one the package "
+          f"declares: {live} ({seen} site(s) across "
+          f"{len([p for p in subjects if p.exists()])} file(s))")
+
+    # ---- rule 2: PINS, wherever they are ----------------------------------
+    #
+    # WHY THIS EXISTS SEPARATELY, 2026-09-08. Rule 1 was written for a manifest
+    # argument that said `4.0` while the ABI was `5.0`, and it scoped itself by
+    # the profile-record NAMING CONVENTION. The defect class is wider than the
+    # convention: EIGHT acceptance scripts outside the glob built a manifest
+    # through the same `driver_only_manifest(...)` call, in the same argument
+    # slot, with the same stale `"4.0"` — and `dst_profile.ail`'s own
+    # `fixture_manifest()` made nine. The guard written because one file pinned
+    # 4.0 sat next to nine more for as long as it existed.
+    #
+    # So this rule derives its subjects by CONTENT, not by name: every tracked
+    # `.ail` file in the tree. There is no naming convention to fall out of.
+    #
+    # WHAT COUNTS AS A PIN, and why prose does not:
+    #   * the `abi_version` argument of a `*_manifest(...)` constructor. It is
+    #     the first bare `"<major>.<minor>"` in the call by construction of
+    #     `driver_only_manifest`'s signature — `source_revision` ("HEAD") and
+    #     `toolchain` ("ailang 0.33.0") are never bare version literals.
+    #   * an `abi_version: "..."` record field.
+    # Both are claims about the ABI this tree HAS. Prose is a claim about when
+    # something landed, and rule 1 says why that must not be swept.
+    #
+    # THE DEEPER HOLE THIS DOES NOT CLOSE, stated because a gate that hides its
+    # own limit is worth less than one that names it: `validate_manifest` in
+    # `src/core/dst_profile.ail` gives `abi_version` a PRESENCE check and no
+    # equality check, while five sibling version fields get `version_matches`
+    # against their live value. That asymmetry is why these pins can drift at
+    # all, and it is visible in `fixture_manifest()` itself — every field under
+    # a `version_matches` rule is written as a live CALL, every field without
+    # one is written as a stale LITERAL. Closing it needs the ABI version
+    # exported from `packages/motoko-ext-abi` as a function, since it is
+    # declared only in that package's `ailang.toml` and no AILANG module can
+    # read it. Until then this Python sweep is the only equality check there is.
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "-z", "*.ail"], cwd=REPO).decode().split("\0")
+    pin_files = sorted(REPO / f for f in tracked if f)
+    if len(pin_files) < 50:
+        fail(f"`git ls-files '*.ail'` returned {len(pin_files)} file(s); this tree has far more, "
+             "so the pin sweep is scanning a fraction of what it claims to and would pass by "
+             "looking at almost nothing.")
+    pins = 0
+    drifted = []
+    for path in pin_files:
+        if not path.exists():
+            continue
+        text = path.read_text()
+        found = re.findall(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S) \
+            + re.findall(r'abi_version:\s*"([0-9]+\.[0-9]+)"', text)
+        for arg in found:
+            pins += 1
+            if arg != live:
+                drifted.append(f"{path.relative_to(REPO)}: pinned '{arg}'")
+    if pins == 0:
+        fail("the pin sweep found no manifest `abi_version` pin anywhere in the tree, so it "
+             "re-derived nothing. An assertion with no subject cannot be told from one that "
+             "does not run.")
+    if drifted:
+        fail(f"{ABI_TOML.relative_to(REPO)} declares ABI {live}, and these pin something else:\n  "
+             + "\n  ".join(drifted)
+             + f"\n\nA manifest whose whole job is exact reproducibility pins a contract this "
+               f"tree does not have. These are inert metadata strings — no assertion reads them "
+               f"and no digest covers them (`trajectory_key` digests interactions only) — so the "
+               f"repair is to set each to {live}.")
+    print(f"  ✓ every manifest ABI pin in the tree is the declared one: {live} "
+          f"({pins} pin(s) across {len(pin_files)} tracked .ail file(s))")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,126 @@
+-- The scripted herdr the L1 gates share.
+--
+-- WHY THIS MODULE EXISTS. Five `scripts/verify_*.ail` gates drive
+-- `motoko-ext-herdr`'s hook against a fake multiplexer, and each hand-rolled
+-- the same fake: a world that is a call log, the `bash_exec` envelope the
+-- extension's `run_cmd` expects, the herdr error shape, and the always-succeeds
+-- port stubs. Measured 2026-09-07 before extracting: thirteen helpers appeared
+-- in three to five scripts each, BYTE-IDENTICAL in every copy but one, and that
+-- one (`log_text` in `verify_delegate_kind_required`) had already diverged
+-- structurally while staying semantically equal. That is what drift looks like
+-- one edit before it becomes real.
+--
+-- `NOTE-2026-09-03-herdr-under-dst.md` §7 names this as step 1 of putting herdr
+-- under DST, and the reason is the same: a scripted herdr that lives in one
+-- place can be handed to the DST world later, and five copies cannot.
+--
+-- WHAT IS DELIBERATELY NOT HERE, and there are two reasons.
+--
+-- `mk_cfg`, `mk_ctx`, `delegate_call`, `scripted` and `run_case` differ in every
+-- gate and SHOULD -- they are each gate's subject and its fixture, not shared
+-- machinery. Only the parts that were identical moved, so nothing here encodes
+-- what any particular gate is testing.
+--
+-- The always-succeeds PORT STUBS (`fixed_clock`, `ok_write`, `ok_dir`) stayed
+-- local too, for a mechanical reason worth recording: they carry effect rows
+-- (`! {Clock}`, `! {FS}`), and referencing an effectful function across a module
+-- boundary surfaces that row AT THE REFERENCE SITE, where a local definition
+-- did not. Sharing nine lines would have meant adding `! {Clock}` to five
+-- gates' `ports*` builders and to whatever calls them. The wire-format helpers
+-- below are the ones that must not drift; three-line stubs that return
+-- `ok: true` are not.
+--
+-- NO DEPENDENCY ON THE HERDR PACKAGE. This imports the ABI and nothing else, so
+-- `src/core` gains no edge to an extension. The gates import both.
+module src/core/test/herdr_fixture
+
+import std/json (Json, jo, ja, kv, js, jnum, encode, decode, get, asArray, asString)
+import std/string (contains, join)
+import std/option (Some, None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld)
+
+-- ---------------------------------------------------------------------------
+-- The world IS the call log
+-- ---------------------------------------------------------------------------
+--
+-- `ExtWorld` is `{ token: Json }` and every port threads it, so a JSON array in
+-- the token records what the extension did, in order, with no ambient state.
+-- That is the whole determinism story for these gates: assert on the log and
+-- you are asserting on the calls the hook actually made.
+
+export func record(w: ExtWorld, entry: string) -> ExtWorld {
+  { token: ja(log_of(w) ++ [js(entry)]) }
+}
+
+export func log_of(w: ExtWorld) -> [Json] {
+  match asArray(w.token) { Some(xs) => xs, None => [] }
+}
+
+export func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (match asString(x) { Some(s) => s, None => "" }) :: strings_of(rest)
+  }
+}
+
+export func log_lines(w: ExtWorld) -> [string] {
+  match asArray(w.token) {
+    None => [],
+    Some(xs) => strings_of(xs)
+  }
+}
+
+export func log_text(w: ExtWorld) -> string { join("\n", log_lines(w)) }
+
+-- ---------------------------------------------------------------------------
+-- The wire the extension speaks
+-- ---------------------------------------------------------------------------
+
+-- `run_cmd` sends a tool call whose arguments carry `args`; this is the argv it
+-- put there, joined, which is what a gate asserts against.
+export func argv_text(args_json: string) -> string {
+  match decode(args_json) {
+    Err(_) => "",
+    Ok(o) => match get(o, "args") {
+      None => "",
+      Some(a) => match asArray(a) { Some(xs) => join(" ", strings_of(xs)), None => "" }
+    }
+  }
+}
+
+-- What `bash_exec` returns and `types.bash_field`/`bash_exit` decode. A gate
+-- that builds this by hand is a gate that can disagree with the decoder.
+export func envelope(stdout: string, stderr: string, code: int) -> string {
+  encode(jo([kv("stdout", js(stdout)), kv("stderr", js(stderr)),
+             kv("exit_code", jnum(_int_to_float(code)))]))
+}
+
+-- herdr's own error shape, the one `types.failure_code` classifies. The message
+-- is deliberately the literal "scripted": no gate should assert on it, and one
+-- that does is asserting on the fake rather than on the extension.
+export func herdr_error(code: string) -> string {
+  encode(jo([kv("error", jo([kv("code", js(code)), kv("message", js("scripted"))]))]))
+}
+
+-- ---------------------------------------------------------------------------
+-- Assertions
+-- ---------------------------------------------------------------------------
+--
+-- BOTH DIRECTIONS, always. `all_contained` alone cannot catch a gate that
+-- reports the wrong file or closes the wrong pane, which is why every gate here
+-- carries a must-NOT list beside its must list.
+
+export func all_contained(hay: string, needles: [string]) -> bool {
+  match needles {
+    [] => true,
+    n :: rest => if contains(hay, n) then all_contained(hay, rest) else false
+  }
+}
+
+export func none_contained(hay: string, needles: [string]) -> bool {
+  match needles {
+    [] => true,
+    n :: rest => if contains(hay, n) then false else none_contained(hay, rest)
+  }
+}

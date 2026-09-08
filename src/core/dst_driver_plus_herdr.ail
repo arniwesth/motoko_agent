@@ -1,0 +1,479 @@
+-- `driver_plus_herdr` — the fourth D5 profile, and the first whose covered
+-- substance is a TOOL dispatch.
+--
+-- WHAT IT ADDS THAT NO PREDECESSOR HAS. `driver_plus_compose` installs one
+-- effectful extension and mediates ONE hook, `on_response_intercept`; it
+-- EXCLUDES its tool path, because `handle_compose_tool` reaches ambient AI
+-- before it reaches anything routed. So until this profile no run in this tree
+-- had ever dispatched a `ToolProvider` to an installed extension, and the
+-- project register carried that as an open question (entry 19).
+--
+-- IT IS ANSWERED. `scripts/dst/herdr_graded_dst.ail` (`make herdr_graded`)
+-- drives a `Delegate` through the real traced driver with `motoko-ext-herdr`
+-- installed, serves every herdr CLI call from `WorldState.ext_effects`, and then
+-- RECORDS the run, grades it with `check_discovery`, validates it as an
+-- `ExecutionProgram`, reconstitutes a world from it and STRICTLY REPLAYS it to
+-- an identical interaction log. Nine origin-tagged extension effects, recorded
+-- and reproduced.
+--
+-- WHY THAT CHAIN AND NOT A CLASSIFIER, which is the only reason this record can
+-- exist at all. `dst_profile.recognised_producers` is a CLOSED set of five and
+-- for herdr exactly one can carry a `WorldMediated` entry:
+--
+--   ext_ambient_inventory  AMBIENT — one source, and it is
+--                          `register.ail:26 std/env.getEnvOr`. Closure-scoped
+--                          and whole-extension, so a registration read taints
+--                          the verdict for every hook. Cannot clear criterion 2.
+--   ext_call_inventory     its own note: "never on its own for WorldMediated".
+--   effect_inventory       recognised, not load-bearing.
+--   declared_row           criterion 1 only, and both rowed slots below declare
+--                          non-empty rows.
+--   discovery              what is left, and what the graded run produces.
+--
+-- And the profile cannot dodge it by excluding the awkward slots:
+-- `work_in_flight[0]` is unconditionally dispatched with a non-empty declared
+-- row, and D5 forbids installing an extension with an unconditionally-dispatched
+-- hook excluded. A herdr profile is backed by discovery or it does not exist.
+-- An earlier attempt at this record was written and deleted for precisely that
+-- reason, before the chain existed.
+--
+-- WHY herdr AND NOT compaction_ai, which WI-D27 §10.3 priced as next. One
+-- measurement, from `make ext_ambient_inventory` at HEAD:
+--
+--     herdr    -- 1 ambient source(s), 46 ExtPorts field call(s) in closure
+--     compose  -- 8 ambient source(s), 36 ExtPorts field call(s) in closure
+--
+-- ONE ambient source in the whole transitive closure and it is a registration
+-- env read; every effect herdr's HOOKS perform goes through `ExtPorts`. That is
+-- why the tool path can be covered here and could not be there.
+--
+-- WHAT THIS RECORD DOES NOT CLAIM, stated rather than left to be discovered.
+-- `exercised_fault_classes` is EMPTY. NOTE-2026-09-03 §7 step 2 asks for the
+-- `extension_effect_fault` waiver to be dropped and a fault row injecting a
+-- failing `pane split`; the graded fixture could express it — its second entry
+-- is the split's answer — but no run exercises it, and naming the class here
+-- would be a claim with no run behind it, which is the same error the deleted
+-- draft made about `discovery`.
+module src/core/dst_driver_plus_herdr
+
+import std/list as List (length)
+
+import src/core/dst_profile (
+  ProfileDefinition,
+  ExecutionManifest,
+  ProfileRejection,
+  AttributionRef,
+  Classifier2Call,
+  CoverageSubstance,
+  RoutedSetClaim,
+  ClassificationBasis,
+  Criterion2Clauses,
+  ClauseStatus,
+  HookClassification,
+  HookClassificationEntry,
+  InstalledPackage,
+  OmittedExtension,
+  PackageVersion,
+  EffectFree, WorldMediated, ExplicitlyExcluded,
+  Substantively,
+  no_criterion_2,
+  waivers_from,
+  coverage_substance,
+  coverage_statement,
+  routed_set_claim,
+  validate_definition_at_load,
+  profile_rules_version
+)
+import src/core/dst_attribution_table as Attr (
+  CoreSite,
+  attribution_rules_version
+)
+import src/core/dst_fault_catalogue as Fault (
+  FaultClass, fault_catalogue, conditional_class_ids, fault_catalogue_version
+)
+import src/core/dst_profile_coverage as Cov (
+  coverage_rules_version,
+  AtomRef,
+  AtomIds,
+  CapabilityDisclosureIds,
+  atom_id,
+  atom_ids_id,
+  atoms_at_zero,
+  capability_kind_id,
+  CapabilityKind, DescribeToolsKind, ToolProviderKind, ExitIntentKind, WorkInFlightKind
+)
+import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
+
+export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
+
+-- v1. First issue; there is no predecessor to re-issue from.
+export pure func herdr_profile_version() -> string { "1" }
+
+-- The revision the measurements below were taken at.
+export pure func measured_at() -> string { "8470c3f" }
+
+-- THE ABI VERSION THIS PROFILE IS PINNED TO, exported so the acceptance script
+-- builds its manifest from the record rather than from a second literal.
+--
+-- IT IS GUARDED, and only because of the sentence next to it: `check_abi_version`
+-- re-derives the live version from `packages/motoko-ext-abi/ailang.toml` and
+-- compares it against every `ABI x.y` occurrence in `src/core/dst_driver*.ail`,
+-- so the `extension.abi` adapter boundary below says "ABI 7.3" in prose and that
+-- is what goes red the day the package moves. A bare string constant matches
+-- neither of the guard's two patterns and would have been invisible to it.
+export pure func herdr_abi_version() -> string { "7.3" }
+
+-- D5 field 8. The attribution table's live identity, RECORDED rather than
+-- restated: `Attr.table_identity()` is the producer and the acceptance script
+-- asserts equality, so a table correction that skipped this profile goes red.
+export pure func herdr_attribution_ref() -> AttributionRef {
+  { source_revision: "c0fbf10",
+    content_hash: "sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4" }
+}
+
+export pure func installed_extension_ids() -> [string] { ["herdr"] }
+
+pure func package_of(id: string) -> InstalledPackage {
+  { extension_id: id, package_id: "sunholo/motoko_ext_herdr", version: "0.1.0",
+    source_path: "packages/motoko-ext-herdr/register.ail" }
+}
+
+pure func packages_of(ids: [string]) -> [InstalledPackage] {
+  match ids { [] => [], id :: rest => package_of(id) :: packages_of(rest) }
+}
+
+pure func versions_of(ps: [InstalledPackage]) -> [PackageVersion] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let v: PackageVersion = { package_id: p.package_id, version: p.version };
+      v :: versions_of(rest)
+    }
+  }
+}
+
+-- THE ATOM LIST IS A CLAIM ABOUT herdr's OWN REGISTRATION, and it is checked
+-- elsewhere rather than trusted here: `make ext_hook_scope_selftest` derives the
+-- per-extension atom count from the capability list `make_hooks` returns and
+-- pins herdr at FOUR. Read off `packages/motoko-ext-herdr/herdr.ail`:
+--
+--   DescribeTools(describe)                          the two tool schemas
+--   ToolProvider(tools, handle)                      Delegate / DelegateCheck
+--   ExitIntent("delegate-panes", enabled, at_exit)   7.0
+--   WorkInFlight("delegate", waiting)                7.3
+pure func registered_atoms() -> [AtomRef] {
+  Cov.atoms_at_zero([DescribeToolsKind, ToolProviderKind, ExitIntentKind, WorkInFlightKind])
+}
+
+-- D5 field 9. ONE EXCLUSION, and it is the LIFECYCLE slot.
+--
+-- `exit_intent[0]` is dispatched at a lifecycle boundary — clean process exit —
+-- which the graded session does not reach: it drives a `Delegate` and a prose
+-- step and returns. D5 permits excluding a lifecycle slot for exactly that
+-- reason and forbids excluding an unconditionally-dispatched one, so this is the
+-- only one of the four that MAY be left out, and it is left out because the run
+-- this profile grades genuinely does not exercise it rather than because it
+-- would be awkward to cover. Its own coverage is `make verify_exit_intent`, at
+-- L1, seventeen cases.
+export pure func excluded_slot_ids() -> [string] { ["exit_intent[0]"] }
+
+-- THE TWO SUBSTANTIVE ENTRIES, and they are what this profile exists to add.
+--
+-- `tool_provider[0]` — `on_tool_handle`. Nine origin-tagged `ExtensionEffect`
+-- interactions in the recorded program, reproduced identically by the replay.
+-- Only the `ExtPorts` recording adapter writes that class, so an ambient call
+-- would have left none; the origin is stamped by the fold in `ext/runtime.ail`,
+-- not by the hook and not by the recorder; and `ToolHandleOutcome` returns
+-- `next_state`, so the world successor is explicit. All three clauses.
+--
+-- `work_in_flight[0]` — 7.3, and it MUST be covered rather than may be:
+-- unconditionally dispatched with a non-empty declared row. It reads through
+-- `ctx.ports.file_read` and returns `next_state` in `WorkOutcome`, and it is
+-- dispatched on every step of the graded run, so the same recorded program
+-- carries its evidence too.
+export pure func criterion_2_slot_ids() -> [string] {
+  ["tool_provider[0]", "work_in_flight[0]"]
+}
+
+pure func contains_str(xs: [string], s: string) -> bool {
+  match xs { [] => false, x :: rest => if x == s then true else contains_str(rest, s) }
+}
+
+-- `describe_tools[0]` declares NO effect row in the ABI — `() -> [ToolSchema]` —
+-- so criterion 1 clears it on the declared row and no measurement is claimed
+-- for it.
+pure func classification_of(id: string) -> HookClassification {
+  if contains_str(excluded_slot_ids(), id) then ExplicitlyExcluded
+  else if contains_str(criterion_2_slot_ids(), id) then WorldMediated
+  else EffectFree
+}
+
+-- THE BASIS IS THE POINT OF THIS RECORD. `discovery` for the two substantive
+-- entries and nothing else could be: see the module header for why the other
+-- four producers cannot carry them.
+pure func basis_of(id: string) -> ClassificationBasis {
+  if contains_str(excluded_slot_ids(), id) then
+    { producer: "disclosure", revision: measured_at() }
+  else if contains_str(criterion_2_slot_ids(), id) then
+    { producer: "discovery", revision: measured_at() }
+  else
+    { producer: "declared_row", revision: measured_at() }
+}
+
+pure func clauses_of(id: string) -> Criterion2Clauses {
+  if contains_str(criterion_2_slot_ids(), id) then
+    { ports: Substantively, origin_tag: Substantively, world_state: Substantively }
+  else no_criterion_2()
+}
+
+pure func entries_for(ext_id: string, atoms: [AtomRef]) -> [HookClassificationEntry] {
+  match atoms {
+    [] => [],
+    a :: rest => {
+      let id = atom_id(a);
+      let e: HookClassificationEntry =
+        { extension_id: ext_id, hook_id: id, classification: classification_of(id),
+          basis: basis_of(id), clauses: clauses_of(id) };
+      e :: entries_for(ext_id, rest)
+    }
+  }
+}
+
+pure func classifications_of(ids: [string]) -> [HookClassificationEntry] {
+  match ids { [] => [], id :: rest => entries_for(id, registered_atoms()) ++ classifications_of(rest) }
+}
+
+pure func atom_ids_of(atoms: [AtomRef]) -> [AtomIds] {
+  match atoms { [] => [], a :: rest => ({ kind: capability_kind_id(a.kind), index: a.index }) :: atom_ids_of(rest) }
+}
+
+pure func drop_atom_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(ids, atom_ids_id(x)) then drop_atom_ids(rest, ids) else x :: drop_atom_ids(rest, ids)
+  }
+}
+
+pure func keep_atom_ids(xs: [AtomIds], ids: [string]) -> [AtomIds] {
+  match xs {
+    [] => [],
+    x :: rest => if contains_str(ids, atom_ids_id(x)) then x :: keep_atom_ids(rest, ids) else keep_atom_ids(rest, ids)
+  }
+}
+
+pure func disclosures_of(ids: [string]) -> [CapabilityDisclosureIds] {
+  match ids {
+    [] => [],
+    id :: rest => {
+      let d: CapabilityDisclosureIds =
+        { extension_id: id,
+          atoms: atom_ids_of(registered_atoms()),
+          covered: drop_atom_ids(atom_ids_of(registered_atoms()), excluded_slot_ids()),
+          excluded: keep_atom_ids(atom_ids_of(registered_atoms()), excluded_slot_ids()) };
+      d :: disclosures_of(rest)
+    }
+  }
+}
+
+pure func omit_each(ids: [string], reason: string) -> [OmittedExtension] {
+  match ids { [] => [], id :: rest => ({ extension_id: id, reason: reason }) :: omit_each(rest, reason) }
+}
+
+pure func barrier_reason() -> string {
+  "NOT INSTALLED, and un-installable in a conformant profile at this revision rather than declined. 5 barrier slots stand for it — `compactor` (on_pre_step), `response_interceptor`, `solver_judge` and `work_in_flight` are unconditionally dispatched, and `exit_intent` is dispatched at a lifecycle boundary and performs its row whenever that boundary is exercised; every one declares a non-empty ABI effect row, so criterion 1 fails on the declared row and D5 forbids installing an extension with any unconditionally-dispatched hook excluded. Criterion 2 is not available either, and that is a MEASUREMENT rather than an absence of one: classifier 3 (make ext_ambient_inventory) reports this extension AMBIENT — at least one ambient effect source in its transitive module closure — so criterion 2's first clause FAILS on evidence. AND THE GRADED SESSION DOES NOT RESCUE IT: this profile records exactly ONE graded session, through herdr, and an extension the session never dispatches has no dynamic evidence either, so citing `discovery` for it would be a basis with no run behind it. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: world-MEDIATION of the effects it performs, which is a port-surface change and not anything this profile can decide."
+}
+
+-- D5 field 10. Seventeen, and herdr is not among them for the first time in the
+-- project — it is the installed one.
+pure func not_installed() -> [OmittedExtension] {
+  omit_each(["a2a", "agentcli", "ailang_docs", "compaction_ai", "compaction_structural",
+             "compose", "context_mode", "decision_framework", "empty_stop_guard",
+             "exa_search", "mcp", "microrag", "omnigraph", "progress_contract_guard",
+             "repetition_guard", "scratchpad", "test_dummy"], barrier_reason())
+}
+
+export pure func driver_plus_herdr() -> ProfileDefinition {
+  let cat = fault_catalogue();
+  let ids = installed_extension_ids();
+  {
+    profile_id: herdr_profile_id(),
+    profile_version: herdr_profile_version(),
+
+    installed_packages: packages_of(ids),
+    hook_classifications: classifications_of(ids),
+    disclosures: disclosures_of(ids),
+
+    adapter_boundaries: [
+      { boundary_id: "provider.model_step", included: true,
+        note: "Ports.model_step and the ProviderExchange it returns; the graded session's two steps cross it, and the second exists so the first's tool result has somewhere to go" },
+      { boundary_id: "provider.wire_parser", included: false,
+        note: "the provider's on-the-wire response parser. D3 excludes wire-parser faults from the fault catalogue, and this field is what scopes that exclusion to a named boundary rather than leaving it as prose" },
+      { boundary_id: "tool.envelope_dispatch", included: true,
+        note: "tool_envelope_dispatch and tool_phase's typed ToolCallEnvelope contract. INCLUDED AND CROSSED BY A PROFILE FOR THE FIRST TIME: the graded session's model emits a native `Delegate` tool call, and that is what carries a dispatch to an installed extension's ToolProvider. Register entry 19 recorded that no run in this tree had done it" },
+      { boundary_id: "tool.process_exec", included: true,
+        note: "Ports.tool_exec, whose ToolExecution threads successor state (A12), reached here through the ext bridge: herdr's `run_cmd` goes to ExtPorts.tool_handle and lands on ext_effect_exec. NINE scripted herdr calls cross it in the graded session and are recorded as ExtensionEffect interactions" },
+      { boundary_id: "approval.stdin_channel", included: false,
+        note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test. The graded run makes zero approval reads and the discovery witness says so" },
+      { boundary_id: "extension.abi", included: true,
+        note: "the motoko-ext-abi hook surface at ABI 7.3 (WorkInFlight; 7.1 added PublishFile, 7.0 ExitIntent, 6.0 the Capability list at B8). INCLUDED: herdr's four atoms are dispatched across it, and what crosses includes EFFECTS rather than only dispatch" },
+      { boundary_id: "extension.ext_ports", included: true,
+        note: "the ExtPorts surface an extension uses to reach the world. INCLUDED, and this profile's claim on it is stronger than driver_plus_compose's: classifier 3 reports 46 ExtPorts field calls in herdr's closure against ONE ambient source anywhere in it, and that source is a registration env read rather than a hook path. The graded session records nine of those calls as origin-tagged interactions and the replay reproduces all nine" }
+    ],
+
+    resource_models: [
+      { model_id: "tool.all_or_nothing",
+        promise: "a failed tool call performs no partial logical update; the call either completes and is observable in the ledger or it does not and is not" },
+      { model_id: "tool.deadline_outcome_is_stated",
+        promise: "a tool completing after its declared deadline states whether the work completed before or after the observation; the outcome is never left ambiguous" },
+      { model_id: "provider.no_partial_commit",
+        promise: "a provider error, including a partial stream followed by an error, commits no message to the conversation; the logical state is the state before the step" },
+      { model_id: "approval.single_shot",
+        promise: "an approval decision is taken once per request and is not re-read; a denial is terminal for that request rather than retried" },
+      { model_id: "extension.effects_are_recorded_and_attributed",
+        promise: "every effect an installed hook performs arrives through an ExtPorts field call, is recorded as an interaction in the execution program, and carries the performing extension's own id as its origin. The contrapositive is what makes it falsifiable: an effect NOT in the log did not go through a port, so a hook performing more than the log records has broken this promise rather than merely gone unobserved. For this profile the claim is checked twice over — the discovery witness balances nine extension effects against a count derived from herdr's control flow rather than from the recorder, and the graded session's tool result reports the spawn taking 0.6s, which is the sum of the durations the world served, so a herdr call that escaped the ports would show up as a clock that did not add up" }
+    ],
+
+    diagnostic_projections: [
+      { projection_id: "ledger.trace",
+        note: "the LedgerTrace the traced driver returns; D6's recorded axis" },
+      { projection_id: "ledger.run_summary",
+        note: "the single final RunSummary record every terminal path emits (D6.1, WI-A9)" },
+      { projection_id: "result.interaction_log",
+        note: "what the world served the driver, in order (D6, WI-A9). For this profile it carries the ExtensionEffect class, which is where every criterion-2 entry's evidence is read" },
+      { projection_id: "result.replay_metadata",
+        note: "the interpretation context a trace is useless without (D8)" }
+    ],
+
+    forbidden_capabilities: [
+      { capability: "Clock",
+        instrument: "make world_state — the Clock poison PAIR. AND FOR THE INSTALLED SET, on a measurement rather than an argument: classifier 3 reports ONE ambient source in herdr's whole closure and it is an Env read, so there is no ambient Clock anywhere in it and herdr reads time only through ExtPorts.clock_now. The graded run's clock advances are recorded, and the discovery witness balances the world's own clock delta against the sum of the recorded advances" },
+      { capability: "AI",
+        instrument: "make world_state — the provider poison PAIR. UNLIKE driver_plus_compose THIS IS NOT A NAMED LIMIT: compose had to exclude its tool path because handle_compose_tool reaches ambient AI, and herdr's tool path reaches no provider at all — classifier 3 finds no ambient AI source in its closure. That difference is exactly why tool_provider[0] is COVERED here and excluded there" },
+      { capability: "Process",
+        instrument: "make world_state — the typed tool-contract poison PAIR. SUBSTANTIVE for the installed set: herdr runs every multiplexer call through run_cmd -> ExtPorts.tool_handle and classifier 3 finds no ambient Process source in its closure. The graded session serves all nine herdr calls from WorldState.ext_effects; a run that reached the real binary would have opened panes in the operator's own workspace, which is why that fixture carries a slack entry and why reconstitution_balance is asserted before the replay" },
+      { capability: "Rand",
+        instrument: "make world_state — no module under src/core/*.ail reaches std/rand, checked structurally; D1 names an ambient RNG as a prohibited hiding place for world state. For the installed set, classifier 3 reports no ambient Rand source in herdr's closure, and the graded run's census records zero runtime random draws" },
+      { capability: "Env",
+        instrument: "**GRANTED TO THIS PROFILE'S RUNS, NOT WITHHELD, AND THE POISON PAIR DOES NOT COVER IT.** herdr's register_with_config reads the environment at packages/motoko-ext-herdr/register.ail:26 (std/env.getEnvOr) before any hook is dispatched, and AILANG capabilities are per PROCESS. This is the SINGLE ambient source classifier 3 finds in the entire closure — the whole of herdr's ambient surface is that one line — and `make herdr_graded` sets HERDR_ENV, HERDR_BIN_PATH and HERDR_PANE_ID in the target so a reader can see what is granted. What carries the determinism claim in its place is the RECORD -> STRICT REPLAY identity the acceptance script asserts, which a registration read varying with the host could not survive. DISCLOSED, per ADR-001's goal line clause 2, which closes registration effects by the per-process-capability measurement rather than by routing" },
+      { capability: "FS",
+        instrument: "**GRANTED, and the reason differs from driver_plus_compose's in a way worth stating.** compose grants FS because its config load reads real files at registration; herdr's registration reads NO files — classifier 3 finds no ambient FS source anywhere in its closure. FS is granted here for the DRIVER's sake rather than the extension's, and herdr's own filesystem access — the run file, the task file, the sweep sentinel, the settled candidate — is entirely through ExtPorts.file_read / file_write / file_remove / dir_make. Three of those four write recorded interaction classes (WI-D19), and the discovery witness balances all three: four writes, three dir_makes, zero removes, each derived from herdr's control flow rather than read off the log" }
+    ],
+
+    waived_fault_classes: waivers_from(cat, conditional_class_ids(cat)),
+
+    -- EMPTY, AND IT IS THIS RECORD'S ONE ACKNOWLEDGED GAP. See the module
+    -- header: the fault row NOTE-2026-09-03 §7 asks for is not written, and
+    -- claiming the class without a run that exercises it would repeat the error
+    -- that got the first draft of this file deleted.
+    exercised_fault_classes: [],
+
+    attribution_ref: herdr_attribution_ref(),
+    omitted_extensions: not_installed(),
+
+    -- ONE SITE, and it is the same one `driver_plus_compose` declares — which is
+    -- a MEASURED result rather than a copy: the reachable core set is
+    -- `unconditional_core_sites()` plus the attributed rows the install set makes
+    -- reachable, and the attribution table's attributed rows belong to
+    -- `test_dummy` and `scratchpad`. This profile installs neither, so installing
+    -- herdr adds no attributed row and the unrouted set does not grow.
+    unrouted_reachable_sites: [
+      { site_key: "src/core/test/stub_step.ail:203",
+        instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read. For THIS profile there is a second, sharper instrument: the graded session's discovery witness balances the world's own clock delta against the sum of the recorded advances, and herdr's two `clock_now` readings are among them — a run that had reached the live adapter could not balance",
+        why_unroutable: "live_ports' clock adapter — the one place the driver's call graph reads a real wall clock, by design. It is IN this profile's reachable set even though a deterministic run binds the scripted adapter instead: D4's profile-reachable is INSTALLATION-scoped, not execution-scoped (A10 decision 1)." }
+    ],
+    scan_roots: ["src/core", "packages/motoko-ext-herdr"]
+  }
+}
+
+export pure func herdr_routed_claim() -> RoutedSetClaim {
+  routed_set_claim(driver_plus_herdr())
+}
+
+export pure func herdr_substance() -> CoverageSubstance {
+  coverage_substance(driver_plus_herdr())
+}
+
+export pure func herdr_coverage_statement() -> string {
+  coverage_statement(driver_plus_herdr())
+}
+
+export pure func herdr_manifest(
+  source_revision: string,
+  toolchain: string,
+  abi_version: string,
+  normalized_configuration: string,
+  classifier_2_set: [string],
+  unrouted_fields: [string],
+  scan_root_commit: string
+) -> ExecutionManifest {
+  {
+    source_revision: source_revision,
+    toolchain: toolchain,
+    extension_packages: versions_of(driver_plus_herdr().installed_packages),
+    abi_version: abi_version,
+    profile_id: herdr_profile_id(),
+    profile_version: herdr_profile_version(),
+    event_vocabulary_version: Vocab.event_vocabulary_version(),
+    normalized_configuration: normalized_configuration,
+    classifier_2_set: classifier_2_set,
+    unrouted_fields: unrouted_fields,
+    scan_roots: driver_plus_herdr().scan_roots,
+    scan_root_commit: scan_root_commit,
+    profile_rules_version: profile_rules_version(),
+    coverage_rules_version: Cov.coverage_rules_version(),
+    attribution_rules_version: Attr.attribution_rules_version(),
+    fault_catalogue_version: Fault.fault_catalogue_version()
+  }
+}
+
+export pure func validate_herdr_profile(
+  loading_against: string,
+  discovered: [CoreSite],
+  calls: [Classifier2Call],
+  catalogue: [FaultClass]
+) -> [ProfileRejection] {
+  validate_definition_at_load(driver_plus_herdr(), loading_against, discovered, calls, catalogue)
+}
+
+-- WHAT NO PROFILE RECORD IN THIS TREE HAS CARRIED BEFORE: TWO substantively
+-- world-mediating hooks, and one of them a TOOL dispatch. `driver_plus_compose`
+-- carries one, and it is an intercept; `driver_only` and `driver_plus_no_ops`
+-- carry none. If a later edit relaxes either number this test is what says so.
+pure func test_four_atoms_one_exclusion_two_on_discovery() -> bool
+  tests [((), true)]
+  {
+    List.length(registered_atoms()) == 4
+      && List.length(excluded_slot_ids()) == 1
+      && List.length(criterion_2_slot_ids()) == 2
+      && List.length(driver_plus_herdr().omitted_extensions) == 17
+  }
+
+pure func test_two_hooks_mediate_substantively() -> bool
+  tests [((), true)]
+  {
+    let s = herdr_substance();
+    s.installed_extensions == 1
+      && s.covered_hooks == 3
+      && s.criterion_1_hooks == 1
+      && s.criterion_2_hooks == 2
+      && s.excluded_hooks == 1
+      && s.no_op_hooks == 0
+      && s.world_mediating_hooks == 2
+  }
+
+pure func omitted_ids(os: [OmittedExtension]) -> [string] {
+  match os { [] => [], o :: rest => o.extension_id :: omitted_ids(rest) }
+}
+
+pure func disjoint(xs: [string], ys: [string]) -> bool {
+  match xs { [] => true, x :: rest => if contains_str(ys, x) then false else disjoint(rest, ys) }
+}
+
+-- Installed plus omitted is the whole installable set. The COUNT is a claim
+-- about `ailang.toml`; what is asserted here is DISJOINTNESS, which nothing
+-- outside this file would notice.
+pure func test_installed_and_omitted_are_disjoint() -> bool
+  tests [((), true)]
+  {
+    disjoint(omitted_ids(driver_plus_herdr().omitted_extensions), installed_extension_ids())
+  }

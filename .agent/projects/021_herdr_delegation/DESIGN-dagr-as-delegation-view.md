@@ -348,6 +348,13 @@ close it by implementation.
 - **Whole-file rewrite per event.** The document is append-only in content and rewritten entire on
   each write, so a run with *n* settlements writes O(n²) bytes. Fine for a dozen delegates; not fine
   for a long-lived orchestrator. Needs a cap or rotation before it runs unattended.
+  **STILL OPEN, and the constant doubled on 2026-09-07**: settle-on-exit writes a second document
+  beside the live one on every publish. The shape of the cost is unchanged and the fix is the same
+  one — a cap or rotation — but the coefficient is now 2. What WAS fixed the same day is the
+  *directory's* unbounded growth, which is a different problem with the same smell: `.dagr/`
+  accumulated a run file, a view-pane marker and a settled candidate per session and never removed
+  any of them. The startup sweep now prunes the two SCRATCH shapes — never a record — under
+  `HERDR_SWEEP_STALE=1`, gated on the owning pane being absent from `pane list`.
 - **dagr absent must be a no-op.** Producing the file costs nothing when nobody reads it, so the
   producer should always write and never require the binary — mirroring `register.ail`'s existing
   gate philosophy (compute `provided_tools`; offer nothing rather than something that fails).
@@ -358,6 +365,18 @@ close it by implementation.
   (§3.2), and checks every published document with `dagr check --strict --json` against a
   pinned v0.3.1 binary. CI already installs Z3
   for the contract gate; a pinned dagr download is the same shape.
+  **NARROWED 2026-09-07, and the rule above is kept.** The producer now runs
+  `dagr check --strict` on the candidate between the write and the rename —
+  step 2 of the skill's own transaction, which this producer had skipped. It
+  still never REQUIRES the binary: `types.dagr_says_invalid` is true for exit 1
+  and nothing else, so a missing dagr (127), a validator that could not read the
+  file (2) and "no subprocess outcome" (-1) all publish exactly as before. What
+  it stops is the one case this bullet does not describe — dagr present, running,
+  and rejecting the candidate. Renaming that over the live file would show an
+  error state to every viewer watching it, which is what step 2 exists to
+  prevent. Both halves are pinned by `verify_dagr_producer` cases 20 and 21, and
+  case 21 exists specifically so that tightening the classifier to `code != 0`
+  fails loudly rather than silently stopping production wherever dagr is absent.
 - **A task the model stops polling never settles.** `do_check` is the only terminal write point.
   A model that calls `Delegate` and moves on — which the tool description permits — leaves the task
   `working` for ever, with no `attempt_settled` and no stale-liveness signal (§3.1). This is a
@@ -366,6 +385,18 @@ close it by implementation.
   there is no ABI slot for "session ended" — 017 prices adding one at 16 packages. The first landing
   should accept this and say so in the pane's own words (a `note` event on `Delegate`: "settles only
   on `DelegateCheck`"); a settle-on-exit hook is an ABI decision for the owner, not for this design.
+  **BUILT 2026-09-07, and the sentence above is now history.** The slot arrived in two parts: ABI
+  7.0's `ExitIntent` (the trigger) and 7.1's `PublishFile` (the verb). On every publish the producer
+  writes a second document beside the live one — the run file as it would read if the session ended
+  now — and at clean exit the host renames it over the live file. The candidate is composed HERE and
+  not at exit because the exit render's row is `! {FS}` and carries no `Clock`: a document composed
+  there could not stamp `ended_at` with anything true. The settlement is
+  `settled_unverified · heuristic`, the SAME verdict `do_check` writes for P2-3, and deliberately
+  **not** `lost`: `lost` is this producer's word for a measured absence, and the exit path measures
+  nothing — the panes may still be running, and even with the reap on the close is best-effort and
+  proof-gated. Two knobs, independent: `HERDR_DAGR_SETTLE_ON_EXIT=1` asks, and the host's
+  `MOTOKO_EXIT_PUBLISH_ROOT` grant permits. Gated by five cases in `scripts/verify_exit_intent.ail`
+  and nine in `src/tui/src/exit-actions.test.ts`.
 - **Per-check cost.** Every `DelegateCheck` becomes read → modify → `writeFile(tmp)` → `mv`. Measured
   ≈0.8 ms for the publish (§7.7) plus one file read, inside a call that already blocks up to
   `check_wait_ms` (20 s) of the 30 s process wall. Negligible, but it is inside that wall.
@@ -452,8 +483,9 @@ at their sections):
 
 3. **`retry_of` on `Delegate`** — **decided: in v1** (§3.6). Bundled with `task_kind` as one
    schema migration.
-4. **Settle-on-exit** (§6) — **still open, and stays with the owner.** An ABI-slot question; the
-   first landing writes a `note` and stops.
+4. **Settle-on-exit** (§6) — **CLOSED 2026-09-07.** It was an ABI-slot question and the slot now
+   exists (7.0's `ExitIntent` trigger, 7.1's `PublishFile` verb); see §6 for what the settlement
+   writes and why it is `settled_unverified` rather than `lost`.
 5. **`lost` classification** (§4) — **measured, closed.**
    [`MEASUREMENTS-2026-08-31-failure-codes.md`](MEASUREMENTS-2026-08-31-failure-codes.md):
    `agent_not_found` (from wait or get) ⇔ gone → `lost`; `server_not_running` ⇔ herdr unwell →
@@ -534,3 +566,171 @@ Third pass, 2026-08-31 — decisions and measurements, no new design:
 - Owner decisions recorded: `retry_of` in v1 (§3.6); `task_kind` in v1, bundled (§3.1); answer
   envelope free-text now / tolerant later / strict only on evidence (§4.2).
 - Remaining open: F-5 (the dependency) and settle-on-exit (§8 item 4).
+
+## 10. The drift question: one run file or two
+
+Written 2026-09-07. **Three documents already send readers here** — the drift issue twice, and
+`MEASUREMENTS-2026-09-05-plan001-live-run.md` finding 4 — and until now this section did not exist.
+The question had been referenced, priced and scheduled without ever being stated.
+
+### 10.1 The question
+
+An operator running a plan keeps a run file of their own (`.dagr/run-plan001.json` in the live run:
+11 tasks with deps and owners, maintained by hand). This producer keeps its own, keyed by pane and
+session. **Both describe the same work and they disagree.** Should the extension write into the
+operator's file instead?
+
+Measured drift, 2026-09-06 08:35: the extension's file recorded four delegates as `working` whose
+panes no longer existed, because the orchestrator took each task over and never called
+`DelegateCheck` again. Neither file is wrong by its own contract. Together they are not one truth.
+
+### 10.2 The constraint that decides it, and it is not a preference
+
+**`dagr` cannot merge.** The binary is read-only — `check`, `view`, `stats`, `pane-cwd`, `--skill`
+and nothing else (v0.3.1, `dagr --help`). Its README is explicit: *"whoever produces the data owns
+it."* So there is no partial update available to anybody: **every writer replaces the whole
+document**, and two writers on one file means lost updates unless something orders them.
+
+Within ONE session the ordering is fine, and that is worth saying because it is the reassuring half:
+the model's plan edits and the extension's writes are both tool calls in the same loop, so they
+never interleave mid-call, and `dagr_record` re-reads the file on every write rather than carrying
+a document across calls (its header says so, deliberately).
+
+**The hazard is that the model's edit cycle spans turns.** It reads the file in one tool call,
+reasons, and writes a whole replacement in another — the `tmp` → `dagr check --strict` → `mv` loop.
+The extension writes in between, on every `Delegate` and every `DelegateCheck`. So the model's write
+is built on a stale read and silently drops whatever the extension recorded since. In the live run
+the orchestrator made **~20 such edits while delegating**, so this is the ordinary case, not a race
+that needs bad luck.
+
+### 10.3 What settle-on-exit does to option A, which is new since the issue was written
+
+Settle-on-exit (2026-09-07) publishes a settled copy of the run file at clean exit, through ABI
+7.1's `PublishFile`, whose precondition is **the digest of the document the render read**. Point
+that at the operator's plan file and the precondition does exactly what it should: any operator edit
+after the last render makes the digest stale and the host refuses the publish. Correct, and it means
+**settle-on-exit would routinely no-op under option A** — on precisely the runs where the operator
+is most active. The startup sweep's repair has the same shape.
+
+That is not an argument that the precondition is wrong. It is evidence that a document with two
+whole-file writers cannot carry a generation guarantee for either of them.
+
+### 10.4 The options
+
+- **A1 — the extension writes the operator's file.** The issue's option A: `Delegate` takes a
+  `dagr_task` naming a task in an operator-supplied file, and attempts land there. One file, one
+  view, the plan's deps and owners intact. **Cost: it gives up §5's one-writer rule by
+  construction**, and §10.2's clobber is then a routine event that no discipline the model is asked
+  to follow can prevent — the live run shows the model rewriting the whole document as its normal
+  mode. §10.3 applies.
+- **A2 — invert the ownership: the operator supplies a plan INPUT, the extension owns the state.**
+  Not in the issue, and it is the option §10.2 points at. The operator declares intent — task ids,
+  titles, deps — in a file the extension READS and never writes; the extension emits those tasks
+  into its own run file and attaches attempts to them; the operator's dagr view points at the
+  extension's file. One document, deps preserved, **one writer**, and settle-on-exit and the sweep
+  keep working unchanged. Cost: the operator no longer hand-edits the live document, which is a
+  real loss of control and the thing to weigh; and taking a task over by hand needs a way to say so.
+- **B — two files, one view (shipped).** What option B delivered on 2026-09-06: the extension yields
+  the screen when an operator view is open. The drift remains, unread.
+- **B+ — B, plus a link.** The extension's run file names the operator's plan in a `note`, so a
+  reader of either can find the other. Cheap, honest, and does not pretend the two agree.
+
+### 10.5 Recommendation
+
+**DECIDED AND BUILT 2026-09-08: A2.** `HERDR_DAGR_PLAN` names a dagr document the producer READS
+and never writes; its declared tasks are seeded into the producer's own run file with their deps,
+and `Delegate` gained `dagr_task` so an attempt is recorded against a planned task instead of
+opening a parallel one. Seeding is idempotent and one-directional — a task already present is left
+alone, so the plan can add work mid-run but can never reach back and overwrite an observation.
+
+§10.4's stated cost of A2 — "taking a task over by hand needs a way to say so" — is answered rather
+than carried: a plan task declared in a terminal state is emitted with ONE attempt whose actor is
+`operator` and whose evidence is `reported`, saying in the document that this producer did not
+observe it. That shape is not a preference; `dagr check` rejects a `done` task with no attempts as
+E150 ("nothing settled it"), measured against v0.3.1 before the code was written.
+
+### 10.5.1 The second channel, and why the first one was not enough (2026-09-08, same day)
+
+`HERDR_DAGR_PLAN` shipped as the only way to name the plan, and it was measured failing the first
+time it was used for real. The operator said *"start implementing this dagr graph
+`.dagr/run-plan003.json`"*; the model understood that well enough to pass `dagr_task: "P1P1"`
+unprompted on its first `Delegate`; the linkage was refused, the delegation was recorded as
+parallel work, and the operator got the delegation view instead of the graph they had just written.
+Nothing was broken. The variable was simply not set, and **could not be set from inside**: this
+repo's `.devcontainer` is mounted read-only precisely so the agent cannot rewrite its own
+confinement, and that is the file the other three `HERDR_` knobs live in.
+
+The variable was the wrong granularity, not the wrong mechanism. `HERDR_DAGR_PANE` and
+`HERDR_REAP_ON_EXIT` describe a CONTAINER — disposable, no operator layout to protect, true for
+every session it ever runs. Which plan is being implemented is true for one session and changes
+with the next sentence.
+
+So `Delegate` gained **`dagr_plan`**, and the operator's own words are now the configuration. It is
+remembered for the session in `.dagr/.plan-<pane>-<session>` (`dagr.plan_marker`), keyed by producer
+pane and session like every other path here, so it is asked for once and every later `Delegate` and
+`DelegateCheck` inherits it. Precedence is declaration over variable: the variable says what this
+container usually works on, the declaration says what this session was actually asked to do.
+
+Three things the failure taught, each pinned by a case in `verify_mot136_dagr_producer.ail`:
+
+- **A plan that seeds nothing must say which nothing it is** (case 26). `seed_from_plan` treats an
+  absent or unparseable plan as "no plan", which is right for the document — a producer does not
+  guess at an operator's file — and is exactly what made this invisible for a whole session. So
+  `dagr_record` now reports a plan in effect that it could not read, on every write point, until it
+  is fixed. And the `dagr_task` refusal names the repair rather than only the symptom.
+- **An unreadable plan does not un-seed what a readable one already seeded** (case 26 again). Those
+  tasks carry this producer's observations by then; the plan describes intent, and §10.5's
+  one-directional rule runs in this direction too.
+- **A declared path is sandbox-checked before it is read** (case 27), not around the read: a path
+  outside `AILANG_FS_SANDBOX` terminates the run rather than returning an error a handler could
+  report, so the check cannot be a `catch`. A refused declaration leaves the previous one standing.
+
+What did NOT change: the plan file is still read and never written, the child of §10.4's A1/A2 split
+is unmoved, and no new pane, view or file is introduced. The model may name the plan; it still
+cannot write it.
+
+The recommendation as it stood before the decision:
+
+**A2, or B+ if the operator's hand-editing of the live document is not negotiable.** A1 is the
+option the issue proposed and the one I would not build: it trades a visible disagreement between
+two honest documents for an invisible one inside a single document, and §10.3 shows it also disables
+two mechanisms that were built this month.
+
+What would change the recommendation: a `dagr` that can merge — a command that owns the format and
+applies a partial update. **That now exists, and this section has to be read differently because of
+it** (2026-09-07, same day).
+
+### 10.6 `dagr apply` exists, on a fork, unreleased
+
+`aemrebarut/herdr-dagr` was forked to `motoko-agent/herdr-dagr`, branch `apply-command`, and the
+command is built and tested there: `dagr apply <run.json> --patch <patch.json> [--strict]`, RFC 6902
+(`test`/`add`/`replace`/`remove`), applied under dagr's own read-modify-write, validated against the
+contract, published by atomic rename. 483 lines added and none deleted; the upstream validator
+`check(doc: &Doc)` is reused untouched, and the document is never round-tripped through `Doc`
+because that struct sets no `deny_unknown_fields` and would silently drop any producer field the
+contract does not model.
+
+Exercised against one of this repo's own run files: a compare-and-append applies and the result
+still passes `dagr check --strict`; re-sending the same patch is refused with duplicate-id errors
+and the file is unchanged; a stale `test` is refused by name. The concurrency property §10.2 says is
+missing is therefore available: **a lost update becomes a refusal.**
+
+**This does not simply promote A1, and the reason is a supply-chain trade rather than a technical
+one.** Today `DAGR_VERSION` pins v0.3.1 and CI fetches that release asset by sha256 — the pin and
+the digest exist precisely so this container runs a published upstream binary. Adopting A1 now means
+running a dagr **we build from our own fork**, which is a different and larger commitment than any
+option in §10.4. So the decision gains an axis it did not have:
+
+| | run pinned upstream v0.3.1 | run our fork |
+|---|---|---|
+| **A1** (extension writes the operator's file) | not viable — §10.2 stands | viable, via `dagr apply` |
+| **A2** (invert ownership) | viable | viable |
+| **B / B+** | viable | viable |
+
+A2 and B+ are unchanged by any of this: **neither needs `apply` at all.** A2 remains the
+recommendation for a tree that wants to keep running a pinned upstream release.
+
+The path that makes A1 cheap without the supply-chain trade is upstreaming `apply` — the branch is
+deliberately shaped for it (additive, no reformatting of upstream code, `main.rs` +84/−0) and no PR
+has been opened yet. If it is accepted and released, the table above collapses back to one column
+and A1 becomes straightforward, which is what the original sentence predicted.

@@ -449,17 +449,12 @@ export pure func grants_relaxation(kind: string) -> bool
 -- carrying a shell token is refused rather than sent (same rule as
 -- `path_is_safe`). Empty means "CLI default" and adds nothing, which keeps
 -- today's behaviour byte-identical when the caller says nothing.
+-- ASSERTED THROUGH `kind_model_args_str`, not here: a list is not a literal and
+-- `tests [...]` evaluates literal expected values only — the constraint
+-- `show_argv`'s header states for every builder in this file. Eight cases were
+-- written here against list literals and reported as eight failures from the
+-- day they landed; they are the same eight, on the wrapper, and they pass.
 export pure func kind_model_args(k: string, model: string) -> [string]
-  tests [
-    (("claude", "claude-fable-5"), ["--model", "claude-fable-5"]),
-    (("codex", "gpt-5.3-codex"), ["-m", "gpt-5.3-codex"]),
-    (("claude", ""), []),
-    (("codex", ""), []),
-    (("gemini", "gemini-2.5-pro"), []),
-    (("motoko", "whatever"), []),
-    (("claude", "a;b"), []),
-    (("claude", "a`id`"), [])
-  ]
   {
     if model == "" || has_shell_tokens(model) then []
     else if k == "claude" then ["--model", model]
@@ -490,11 +485,35 @@ export pure func kind_default_args(k: string) -> [string]
 -- `pane split --cwd`), the wrap never fires and `req.args` survives. That
 -- recovers the WI-D24 holder stamping 018 §2.4 had to give up.
 
-export pure func argv_split(cwd: string, depth_env: string) -> [string]
+-- `model` IS THE MOTOKO PATH'S WHOLE MODEL TRANSPORT
+-- (`DESIGN-delegate-model-selection.md` §1). claude and codex take a flag after
+-- `--` (`kind_model_args`); a motoko delegate is `./scripts/run-agent.sh` in a
+-- shell, and that script reads `MODEL` from its environment. Verified on the
+-- receiving side before this was added: `models.resolveRuntimeModel` returns a
+-- non-blank `MODEL` ahead of the profile's configured model, and `index.ts`
+-- protects every variable already present in the environment, so an inherited
+-- `MODEL` is not overwritten by config.
+--
+-- EMPTY EMITS NOTHING, and that is not the same as emitting `MODEL=`. The two
+-- pairs above it are deliberately blank — `--env ANTHROPIC_API_KEY=` CLEARS a
+-- credential (021 §7 item 4). A blank `MODEL=` would read as the same gesture
+-- while doing the opposite of what a caller who said nothing about the model
+-- wants: `resolveRuntimeModel` trims and falls through, so it is inert today,
+-- and it would be a false statement about the pane's environment for anyone
+-- reading it. Omission says "this pane resolves its own model", which is true.
+--
+-- A SHELL TOKEN DEGRADES TO OMISSION, matching `kind_model_args` exactly rather
+-- than failing the delegation. Both halves of §1 therefore answer a bad model
+-- string the same way, which is the property worth having; that the answer is
+-- SILENT is the open policy question that design records, and it is not made
+-- worse here.
+export pure func argv_split(cwd: string, depth_env: string, model: string) -> [string]
   {
-    ["pane", "split", "--current", "--direction", "right", "--cwd", cwd,
-     "--no-focus", "--env", "ANTHROPIC_API_KEY=", "--env", "OPENAI_API_KEY=",
-     "--env", depth_env]
+    let base = ["pane", "split", "--current", "--direction", "right", "--cwd", cwd,
+                "--no-focus", "--env", "ANTHROPIC_API_KEY=", "--env", "OPENAI_API_KEY=",
+                "--env", depth_env];
+    if model == "" || has_shell_tokens(model) then base
+    else base ++ ["--env", "MODEL=${model}"]
   }
 
 -- `--timeout` MUST be passed and MUST be below Motoko's 30s process wall.
@@ -506,13 +525,11 @@ export pure func argv_start(name: string, kind: string, pane: string, timeout_ms
 -- `model` is operator-supplied free text; `kind_model_args` refuses anything
 -- with a shell token, so an accepted model keeps `argv_is_safe` green and a
 -- refused one degrades to CLI-default rather than failing the delegation.
+-- ASSERTED THROUGH `argv_start_model_str`. The four cases below this line until
+-- 2026-09-07 named a STRING as the expected value of a `[string]` — every one
+-- reported "expected ..., got [agent, start, ...]", which is a shape mismatch
+-- and not a disagreement about argv. They moved to the wrapper unchanged.
 export pure func argv_start_model(name: string, kind: string, pane: string, timeout_ms: int, model: string) -> [string]
-  tests [
-    (("mot-dlg-7", "claude", "w1:pA", 20000, ""), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000"),
-    (("mot-dlg-7", "claude", "w1:pA", 20000, "claude-fable-5"), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5"),
-    (("mot-dlg-8", "codex", "w1:pB", 20000, "gpt-5.3-codex"), "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never -m gpt-5.3-codex"),
-    (("mot-dlg-7", "claude", "w1:pA", 20000, "a;b"), "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000")
-  ]
   {
     let base = ["agent", "start", name, "--kind", kind, "--pane", pane,
                 "--timeout", intToStr(timeout_ms)];
@@ -588,9 +605,19 @@ export pure func show_argv(xs: [string]) -> string
   tests [([], ""), (["agent", "get", "x"], "agent get x")]
   { join(" ", xs) }
 
-export pure func argv_split_str(cwd: string, depth_env: string) -> string
-  tests [(("/w/m", "HERDR_DELEGATE_DEPTH=1"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1")]
-  { show_argv(argv_split(cwd, depth_env)) }
+export pure func argv_split_str(cwd: string, depth_env: string, model: string) -> string
+  tests [
+    -- no model: byte-identical to the argv this builder emitted before the
+    -- model half landed, which is what keeps every non-motoko delegate unmoved.
+    (("/w/m", "HERDR_DELEGATE_DEPTH=1", ""), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1"),
+    (("/w/m", "HERDR_DELEGATE_DEPTH=1", "openrouter/x-ai/grok-4"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1 --env MODEL=openrouter/x-ai/grok-4"),
+    -- a slash-and-dash model name is the ordinary case and carries no token
+    (("/w/m", "HERDR_DELEGATE_DEPTH=2", "anthropic/claude-sonnet-4-6"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=2 --env MODEL=anthropic/claude-sonnet-4-6"),
+    -- refused, and refused SILENTLY: the pane resolves its own model
+    (("/w/m", "HERDR_DELEGATE_DEPTH=1", "a;rm -rf /"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1"),
+    (("/w/m", "HERDR_DELEGATE_DEPTH=1", "a`id`"), "pane split --current --direction right --cwd /w/m --no-focus --env ANTHROPIC_API_KEY= --env OPENAI_API_KEY= --env HERDR_DELEGATE_DEPTH=1")
+  ]
+  { show_argv(argv_split(cwd, depth_env, model)) }
 
 export pure func argv_start_str(name: string, kind: string, pane: string, timeout_ms: int) -> string
   tests [
@@ -603,8 +630,18 @@ export pure func argv_start_str(name: string, kind: string, pane: string, timeou
 
 export pure func argv_start_model_str(name: string, kind: string, pane: string, timeout_ms: int, model: string) -> string
   tests [
+    -- no model: byte-identical to `argv_start`, which is what keeps a caller
+    -- that says nothing about the model on today's behaviour.
+    (("mot-dlg-7", "claude", "w1:pA", 20000, ""),
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000"),
     (("mot-dlg-7", "claude", "w1:pA", 20000, "claude-fable-5"),
-     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5")
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000 -- --model claude-fable-5"),
+    -- codex carries BOTH the relaxation flags and the model, in that order.
+    (("mot-dlg-8", "codex", "w1:pB", 20000, "gpt-5.3-codex"),
+     "agent start mot-dlg-8 --kind codex --pane w1:pB --timeout 20000 -- -s danger-full-access -a never -m gpt-5.3-codex"),
+    -- a shell token degrades to the CLI default rather than failing the call
+    (("mot-dlg-7", "claude", "w1:pA", 20000, "a;b"),
+     "agent start mot-dlg-7 --kind claude --pane w1:pA --timeout 20000")
   ]
   { show_argv(argv_start_model(name, kind, pane, timeout_ms, model)) }
 
@@ -615,6 +652,26 @@ export pure func kind_default_args_str(k: string) -> string
     ("gemini", "")
   ]
   { show_argv(kind_default_args(k)) }
+
+-- The eight cases `kind_model_args` could not state about itself. The pair that
+-- earns this wrapper is the last two: an operator's model string is free text,
+-- and a shell token in it renders EMPTY — the delegate then runs on the CLI
+-- default and the call still succeeds. That is the design
+-- (`DESIGN-delegate-model-selection.md` says so, and says the silence is the
+-- open policy question), so it is asserted rather than left to be rediscovered.
+export pure func kind_model_args_str(k: string, model: string) -> string
+  tests [
+    (("claude", "claude-fable-5"), "--model claude-fable-5"),
+    (("codex", "gpt-5.3-codex"), "-m gpt-5.3-codex"),
+    (("claude", ""), ""),
+    (("codex", ""), ""),
+    -- a kind with no model flag takes the model and drops it, silently
+    (("gemini", "gemini-2.5-pro"), ""),
+    (("motoko", "whatever"), ""),
+    (("claude", "a;b"), ""),
+    (("claude", "a`id`"), "")
+  ]
+  { show_argv(kind_model_args(k, model)) }
 
 export pure func argv_prompt_str(target: string, text: string) -> string
   tests [(("mot-dlg-7", "Read the task."), "agent prompt mot-dlg-7 Read the task.")]
@@ -1000,8 +1057,18 @@ export pure func code_hint(code: string) -> string
       " The delegate accepted input but its state never changed, which in practice means it is not really at an agent prompt — check `agent explain`."
     else if code == "agent_not_found" then
       " No agent with that name or pane is live. It has been closed, or it was never started."
+    -- CORRECTED 2026-09-07 AGAINST A MEASUREMENT, herdr 0.8.2. This said "the
+    -- pane holds an agent herdr did not start, so it cannot be prompted. Only
+    -- agents started with `agent start` are promptable." Both sentences are
+    -- false: a DETECTED claude, running in a pane nothing had `agent start`ed,
+    -- accepted a prompt and executed it. Who started the agent is not the rule.
+    -- herdr's own message names the real one -- "not an active named agent" --
+    -- and what actually fails is the NAME binding: a self-reported agent
+    -- (motoko, 020 D1) has none, which is why `DESIGN-motoko-as-delegate` §1
+    -- sends that lifecycle's task as argv instead.
+    -- MEASUREMENTS-2026-09-07-prompt-delivery.md has both cases.
     else if code == "agent_not_ready" then
-      " The pane holds an agent herdr did not start, so it cannot be prompted. Only agents started with `agent start` are promptable."
+      " herdr does not hold that pane as an active NAMED agent, so it will not route a prompt to it. This is about the name binding rather than about who started the agent: a self-reported agent (a motoko delegate) is never promptable, and one herdr started should be. Nothing was delivered — a refusal on this code leaves the pane untouched."
     else if code == "agent_blocked" then
       " The delegate is waiting on an approval prompt. Answer it in the pane, or send keys to it."
     else if code == "agent_explain_unavailable" then
@@ -1253,6 +1320,46 @@ export pure func agent_pane_of(stdout: string) -> string
 
 -- A settled delegate. `done` and `idle` were BOTH observed as the resting state
 -- after a completed turn, so accepting only one of them would hang the poll.
+-- ---------------------------------------------------------------------------
+-- Retrying a refused `agent prompt`
+-- ---------------------------------------------------------------------------
+--
+-- ONE CODE, AND THE MEASUREMENT IS WHY (2026-09-07, herdr 0.8.2,
+-- `MEASUREMENTS-2026-09-07-prompt-delivery.md`). Every other refusal either
+-- says it ACCEPTED the input, or cannot be helped by repeating:
+--
+--   agent_prompt_stalled   "accepted input but its state never changed" -- a
+--                          retry is a SECOND DELIVERY
+--   timeout                the CLI did not return; the prompt may be in flight.
+--                          Undecidable by construction, not merely unmeasured
+--   agent_not_found        the agent is gone; repeating cannot summon it
+--   agent_blocked          waiting on an approval; a thing to report
+--   server_not_running     herdr is unwell; nothing in this call fixes it
+--
+-- `agent_not_ready` is the only one whose non-delivery is MEASURED: four
+-- refusals in a row left the pane byte-identical and the agent idle. So a retry
+-- on this code cannot double-deliver, and a retry on any other might.
+export pure func prompt_is_retryable(code: string) -> bool
+  tests [
+    ("agent_not_ready", true),
+    ("agent_prompt_stalled", false),
+    ("timeout", false),
+    ("agent_not_found", false),
+    ("agent_blocked", false),
+    ("server_not_running", false),
+    ("", false),
+    ("something_new_upstream_invented", false)
+  ]
+  { code == "agent_not_ready" }
+
+-- THREE ATTEMPTS TOTAL, so two retries. A refusal that survives three is not a
+-- race and should fail exactly as it did before this existed. The cost is
+-- bounded and small: `agent prompt` measured 3-5ms and `agent get` 4ms, against
+-- a 30s process wall of which `agent start` has already spent ~3.9s.
+export pure func max_prompt_attempts() -> int
+  tests [((), 3)]
+  { 3 }
+
 export pure func is_settled(status: string) -> bool
   tests [
     ("done", true), ("idle", true),
@@ -1355,6 +1462,44 @@ export pure func argv_report_owner_str(pane: string, own_pane: string, session_m
 -- unchanged: the `mot-owner` token and nothing else.
 export pure func argv_pane_list() -> [string]
   { ["pane", "list"] }
+
+-- ---------------------------------------------------------------------------
+-- Validating a candidate before publishing it
+-- ---------------------------------------------------------------------------
+--
+-- `DESIGN-dagr-as-delegation-view.md` §6 is explicit that the producer "should
+-- always write and never require the binary", deliberately overriding the
+-- shipped skill's "no validator, no writing" rule, and moves the guarantee to
+-- CI. THAT RULE IS KEPT. What is added is narrower than the rule forbids: the
+-- producer still never REQUIRES dagr, and still publishes when it is absent or
+-- unusable. It declines to publish only in the one case §6 does not cover —
+-- dagr present, running, and saying the candidate is INVALID.
+--
+-- Publishing a document the validator in this container has just rejected is
+-- not "writing when nobody reads it"; it is writing something known broken to a
+-- file something is watching.
+export pure func argv_dagr_check(path: string) -> [string]
+  { ["check", path, "--strict"] }
+
+export pure func argv_dagr_check_str(path: string) -> string
+  tests [("/w/.dagr/run.json.tmp", "check /w/.dagr/run.json.tmp --strict")]
+  { show_argv(argv_dagr_check(path)) }
+
+-- THE EXIT CODE DECIDES, AND ONLY 1 STOPS A PUBLISH. dagr's own documented
+-- codes are 0 clean, 1 findings, 2 "the validator could not read the file at
+-- all — a path or tooling problem, never a document problem". A missing binary
+-- arrives as the shell's 127, and the tool runtime's own "no outcome" is -1.
+-- Everything that is not 0 or 1 means WE COULD NOT TELL, and the honest answer
+-- to not being able to tell is §6's: publish.
+export pure func dagr_says_invalid(code: int) -> bool
+  tests [
+    (0, false),   -- clean
+    (1, true),    -- findings: the one case that stops a publish
+    (2, false),   -- validator could not read it — a tooling problem, not the document's
+    (127, false), -- no dagr on PATH; §6's "never require the binary"
+    (-1, false)   -- no subprocess outcome at all
+  ]
+  { code == 1 }
 
 export pure func argv_pane_list_str() -> string
   tests [((), "pane list")]

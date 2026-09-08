@@ -152,7 +152,29 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- in-flight work on every clean exit. `agent_confined` sets it for itself,
     -- because in a disposable container quota burn dominates and no operator
     -- work lives in a pane.
-    reap_on_exit: getEnvOr("HERDR_REAP_ON_EXIT", "") == "1"
+    reap_on_exit: getEnvOr("HERDR_REAP_ON_EXIT", "") == "1",
+    -- OFF BY DEFAULT TOO, and harmless when on without the host's grant: the
+    -- action is published and refused. On, with a grant, it is what stops the
+    -- run file recording delegates as `working` for ever once the session that
+    -- delegated them is gone (`DESIGN-dagr-as-delegation-view.md` §6).
+    settle_on_exit: getEnvOr("HERDR_DAGR_SETTLE_ON_EXIT", "") == "1",
+    -- OFF BY DEFAULT, and this one is a deliberate half-step past what F-5 §5.5
+    -- signed off on. That section says to record a NOTE on another session's run
+    -- file and "never a fabricated settlement". A `lost` written from the pane's
+    -- measured ABSENCE is not fabricated -- it is the same verdict `do_check`
+    -- writes for `agent_not_found`, reached by a different route -- but it is
+    -- still a write to a document this session does not own, so the operator
+    -- turns it on rather than inheriting it. The default stays the report,
+    -- which is what §5.5 describes.
+    sweep_settle: getEnvOr("HERDR_SWEEP_SETTLE", "") == "1",
+    -- PATH BY DEFAULT, and a knob only because a container may put it
+    -- elsewhere. Never required: `publish` treats "cannot run it" exactly as it
+    -- treats "not installed", which is §6's rule.
+    dagr_bin: getEnvOr("MOTOKO_DAGR_BIN", "dagr"),
+    -- OFF BY DEFAULT — empty is every configuration that existed before A2.
+    -- The operator points this at a dagr document holding task ids, titles,
+    -- kinds and deps; this producer reads it and never writes it.
+    dagr_plan: getEnvOr("HERDR_DAGR_PLAN", "")
   };
 
   -- The whole gate. Empty tools is a silent, correct no-op; it is not an error

@@ -1,7 +1,35 @@
 # Design: choosing a delegate's model — the transports exist, the policy does not
 
 Date: 2026-08-26
-Status: **Design + measurements. Not implemented. No Linear issue yet.**
+Status: **Partly implemented; the transport is in, the policy is not — which is this page's own
+title, now true of the code as well.** No Linear issue yet. Corrected 2026-09-07 against the tree:
+
+- **§1's `agent start` half is BUILT** (2026-09-05, in commit `47fe3a7`, whose subject reads
+  "Updated/added docs" and does not mention it). `Delegate` takes an optional `model`;
+  `types.kind_model_args` maps it to `claude --model` / `codex -m` and to nothing for every other
+  kind; `types.argv_start_model` appends it after `--` beside `kind_default_args`. The per-kind
+  flag map §1 priced as "moderate" is those two functions, and it is **gated**: four assertions in
+  `scripts/verify_mot136_dagr_producer.ail` (`make verify_dagr_producer`) cover passthrough after
+  `--`, the metacharacter refusal, and that the ask is recorded verbatim on the attempt either way.
+- **§1's motoko half is BUILT** (2026-09-07). `types.argv_split` takes the model and appends a
+  fourth `--env MODEL=<x>` pair to the pane split; `do_delegate` passes it only when the kind is
+  motoko, because the split is shared by both lifecycles and claude/codex take theirs as a flag.
+  Verified on the receiving side before it was written, which §1 asserted but did not show:
+  `models.resolveRuntimeModel` returns a non-blank `MODEL` **ahead of** the profile's configured
+  model, and `index.ts` protects every variable already in the environment from config overwrite —
+  so the variable this sends actually decides the delegate's model. Empty emits nothing rather than
+  `MODEL=`, which would read like the deliberate credential-clearing `--env KEY=` pairs beside it
+  while meaning the opposite. Gated by three cases in `verify_mot136_dagr_producer.ail`, including
+  the one that catches a model threaded to claude's split as well.
+- **No policy, as §3–§4 predicted** — now on both transports, which is the honest cost of building
+  the second one. The only validation is `has_shell_tokens`, and a refused model
+  **degrades silently to the agent's own default** rather than failing the call — a delegate then runs on a
+  model nobody chose and nothing says so. A shell-safe but bogus model (a typo, a retired id) is
+  still accepted by every layer and still fails inside the answer-file window, which is this page's
+  third route to P2-3.
+- **§2.4's permission-mode finding is unaddressed**: nothing anywhere refuses a model that would put
+  the delegate in manual mode, where it cannot run unattended at all.
+
 **2026-09-06: the failure this design predicts has now happened on the live path.** In the
 PLAN-001 run the model called `Delegate` twice without `kind`; `register.ail:61` fell back to
 `default_kind()` = `claude`, two claude-code panes started against a task written for motoko
@@ -11,8 +39,9 @@ silent default is a guess. The smallest change consistent with §5 is: when more
 allowed, a `Delegate` without `kind` is refused with the allowed list, not defaulted. Record:
 [`MEASUREMENTS-2026-09-05-plan001-live-run.md`](MEASUREMENTS-2026-09-05-plan001-live-run.md) finding 3.
 **That smallest change is now implemented** — commit `PLAN-001 live-run fix 3: refuse a Delegate
-that does not name its kind`, gated by `make verify_delegate_kind`. It is only the KIND half; the
-`model` policy this document is otherwise about is unchanged. One thing the paragraph above did not
+that does not name its kind` (`75ab532`), gated by `make verify_delegate_kind`. It is the KIND half
+only. (This paragraph as first written said the `model` policy was "unchanged"; it had in fact
+changed the day before — see the status block above.) One thing the paragraph above did not
 settle and the code had to: `register.ail:61` read `getEnvOr("HERDR_DELEGATE_KIND", default_kind())`,
 so `cfg.kind` was `claude` whether the operator had chosen claude or chosen nothing, and no caller
 could tell an operator decision from a fallback. It now defaults to `""`, and the fallback order is
