@@ -3933,3 +3933,125 @@ pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool
       && counts.stage_rejected_total == 0
       && counts.compaction_ai_applied == 1
   }
+
+-- ============================================================================
+-- PLAN-003 P1 Part 1 — THE TWO PURE UNIT TESTS, RED FIRST (ADR-003 D5, D6).
+--
+-- WHY THEY ARE HERE AND NOT IN A DST FIXTURE. §0.6: a deterministic run drives
+-- the traced entry directly and never reaches the conversation loop
+-- (`:3359–3366`), so the in-process `continue` has no deterministic fixture and
+-- cannot get one. It is verified three ways instead — the DST fixture for the
+-- suspension INSIDE the traced run (`phase_c2_wiring_scenarios.ail`), these two
+-- pure tests for the loop's rule and the resume constructor, and one live probe
+-- (`scripts/probe_budget_continue.sh`). This file is where the second one goes,
+-- following `test_decision_fail_reason_mapping` above.
+--
+-- BOTH ARE RED AT THIS COMMIT, ON PURPOSE. P1 Part 5 lands
+-- `c2_state_from_continuation` and the loop's `run_ordinal` rule; neither
+-- exists here, and the plan puts the acceptance test first. The three stub
+-- bodies below are the unimplemented halves — each names the exact expression
+-- Part 5 replaces it with, and each returns the value the runtime produces
+-- TODAY, which is nothing: there is no run identity in the loop at all, and the
+-- resume path recurses with the pre-turn history (`:3418–3427`), dropping the
+-- exhausted run's messages, counts and nudge tally on the floor. That drop is
+-- what the assertions below describe the repair of.
+--
+-- WHAT MUST NOT HAPPEN TO THEM: filling a stub in with the assertion's own
+-- literals rather than with Part 5's rule. The rule is stated in the comment
+-- above each stub, and the assertion is the table it has to satisfy.
+-- ============================================================================
+
+-- D5's identity rule, first half: ONE traced run per ordinal, both the `Ok` and
+-- the `Err` arm of both outer loops, no reset (nothing is written in P1, so
+-- there is nothing for a reset to key on).
+--
+-- STUB — P1 Part 5 replaces the body with `run_ordinal + 1`.
+pure func next_run_ordinal(_run_ordinal: int) -> int { 0 }
+
+-- D5's identity rule, second half: the run id the NEXT traced run is stamped
+-- with. `session_id` is the run's derived id (`:1440–1447`) until P3 forwards
+-- the session's; `resume_count` is read ambiently from MOTOKO_RESUME_COUNT in
+-- `rpc.run_with_config` (§0.8 — NOT through `ports.env_get`, which would be a
+-- new helped `EnvRead` and re-pin five fixtures) and is 0 for every run before
+-- P3.
+--
+-- STUB — P1 Part 5 replaces the body with
+--   "${session_id}.r${show(resume_count)}.${show(run_ordinal)}"
+pure func run_id_for(_session_id: string, _resume_count: int, _run_ordinal: int) -> string { "" }
+
+-- The rule as a table: the ordinal advances by one per traced run, and the id
+-- is the three fields joined in that order. The second row is the one the ADR
+-- is about — a second run in the same process is `.2`, not a fresh session.
+pure func test_run_ordinal_rule() -> bool
+  tests [((), true)]
+  {
+    next_run_ordinal(0) == 1
+      && next_run_ordinal(1) == 2
+      && next_run_ordinal(7) == 8
+      && run_id_for("session_42", 0, 1) == "session_42.r0.1"
+      && run_id_for("session_42", 0, 2) == "session_42.r0.2"
+      && run_id_for("session_42", 3, 1) == "session_42.r3.1"
+  }
+
+-- The observable half of D6's `c2_state_from_continuation(c, provider)`: what
+-- the resumed run's `C2LoopState` carries from the continuation and what it
+-- resets. The state itself cannot be built in a `pure` test — `C2LoopState`
+-- holds a `Ports` and a `WorldState`, and every constructor of those is
+-- effectful — so the rule is pinned over the projection instead, which is
+-- exactly the seven decisions D6 makes and nothing else.
+type ResumeStateShape = {
+  msgs_len: int,
+  step_idx: int,
+  totals_cost_millicents: int,
+  prior_calls_completed: int,
+  nudges_used: int,
+  pending_tool_calls: int,
+  trace_len: int,
+  emissions_len: int
+}
+
+-- STUB — P1 Part 5 replaces the body with the projection of the real
+-- `c2_state_from_continuation(c, provider)`:
+--   msgs = c.history, step_idx = 0, totals = zero_totals(),
+--   prior_counts = c.cumulative, nudges_used = c.nudges_used,
+--   every pending field empty, trace empty, emissions empty
+-- (`ext_artifacts` and `telemetry` come from `c` too; they are not integers and
+-- are pinned by `journal.ail`'s round-trip test in P1 Part 3 instead).
+--
+-- The `-1`s are not a placeholder value chosen for convenience: they are what
+-- says the constructor does not exist yet. `c2_initial_state_with_counts`
+-- (`:709`) is the only constructor at this commit and it starts from a SEED —
+-- it re-derives `nudges_used` from the message list (`:727`) and takes its
+-- counts from an argument the resume path never supplies.
+pure func c2_state_from_continuation_shape(_history_len: int, _cumulative_calls_completed: int, _nudges_used: int) -> ResumeStateShape {
+  {
+    msgs_len: -1,
+    step_idx: -1,
+    totals_cost_millicents: -1,
+    prior_calls_completed: -1,
+    nudges_used: -1,
+    pending_tool_calls: -1,
+    trace_len: -1,
+    emissions_len: -1
+  }
+}
+
+-- The continuation of the DST fixture's run, read as a resume: eight messages,
+-- three completed provider calls, no nudges. The step index and the totals
+-- RESET (the next run counts its own steps and its own cost); the history and
+-- the cumulative counts CARRY (that is the whole of the repair); the pending
+-- fields, the trace and the emissions start empty (a resumed run's trace is its
+-- own, and P3's journal is what makes the earlier one durable).
+pure func test_c2_state_from_continuation_resets_and_carries() -> bool
+  tests [((), true)]
+  {
+    let st = c2_state_from_continuation_shape(8, 3, 0);
+    st.msgs_len == 8
+      && st.prior_calls_completed == 3
+      && st.nudges_used == 0
+      && st.step_idx == 0
+      && st.totals_cost_millicents == 0
+      && st.pending_tool_calls == 0
+      && st.trace_len == 0
+      && st.emissions_len == 0
+  }

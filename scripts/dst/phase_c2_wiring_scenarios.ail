@@ -8,17 +8,20 @@ module scripts/dst/phase_c2_wiring_scenarios
 import std/io (println, exit)
 import std/list (length)
 import std/ai (Message, ToolCall, ToolSchema, StreamChunk)
-import std/option (None)
+import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (contains)
-import std/json (jo)
+import std/json (jo, JString)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/phase_vocab (
   CompactionStageRecord,
   DecisionRecord,
   EmptyStopFinalize,
+  LedgerEvent,
   LedgerRecord,
   LedgerTrace,
+  ProviderCallPrepared,
+  RunSummary,
   TraceStageApplied,
   TraceStagePassed,
   TraceStageRejected,
@@ -26,11 +29,14 @@ import src/core/phase_vocab (
   WireRecord,
   empty_ledger_trace,
   ledger_append,
-  ledger_record_name
+  ledger_record_name,
+  is_run_summary,
+  run_summary_finish_reason,
+  to_schema_v1_kvs
 )
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
-import src/core/test/stub_step (Scripted, prose_step, chunked_prose_step, tool_step, tool_step_finish, empty_rt, deny_all_rt, scripted_ports, scripted_world_state)
+import src/core/test/stub_step (Scripted, prose_step, chunked_prose_step, tool_step, tool_step_finish, continuing_token_step, empty_rt, deny_all_rt, scripted_ports, scripted_world_state)
 import src/core/ports (ScriptedStep)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import src/core/tool_contract (ToolCallEnvelope)
@@ -741,6 +747,269 @@ func scripted_exchange_reports_played_chunks_scenario() -> Scenario {
   { id: "phase_c.c2.scripted_exchange_reports_the_chunks_it_played", seed: "fixed", run: scenario_scripted_exchange_reports_the_chunks_it_played }
 }
 
+-- ============================================================================
+-- ADR-003 D2 ACCEPTANCE, RED FIRST (PLAN-003 v3.1, P1 Part 1).
+--
+-- WHAT THIS ROW IS FOR. A run that reaches its step budget must stop being an
+-- internal error whose history dies in the driver's `Fail` arm and become a
+-- typed suspension that carries the loop state out of the run. This is the
+-- in-memory half of that, asserted DIRECTLY ON THE RETURNED VALUE: the fold
+-- over a journal is P3's, and a fixture that went through it would be testing
+-- the fold rather than the suspension.
+--
+-- IT IS RED ON PURPOSE AT THIS COMMIT. P1 Part 1 lands the acceptance test
+-- before the code, so the four `suspended` / `final` checks below and the
+-- `run_suspended` ledger check fail here and go green with P1 Part 4. Every
+-- other check in the row is green today and must STAY green: they are what
+-- says the change is a widening rather than a rewrite.
+--
+-- THE TWO SHIMS, AND WHY THEY EXIST. `TracedSessionResult` has no `suspended`
+-- and no `final` field at this commit (`session.ail:175–180`), so the target
+-- assertions cannot name them and still compile — and a file that does not
+-- compile takes the other eighteen scenarios and `ailang check` down with it,
+-- which is not what "red" is supposed to buy. `suspended_view` and
+-- `final_history` are therefore the ONE line each that P1 Part 4 rewrites:
+--
+--   suspended_view -> match traced.suspended {
+--                       Some(c) => Some({ history: c.history,
+--                                         provider_calls_completed: c.cumulative.provider_calls_completed,
+--                                         step_idx: c.step_idx }),
+--                       None => None }
+--   final_history  -> traced.final.history
+--
+-- Nothing else in this scenario changes when the fields land. The assertions
+-- ARE the specification; the shims are the missing accessor, and they return
+-- what the driver hands back today: no continuation and no history, which is
+-- exactly the loss ADR-003 is about.
+--
+-- THE SCRIPT AND THE ARITHMETIC. `step_budget` is 3 and every scripted step is
+-- a CONTINUING one — `continuing_token_step` (`stub_step.ail:771–781`), one
+-- `BashExec` call with `finish_reason: "tool_calls"`. A plain assistant reply
+-- would finalize at the first step (a `stop` finish reason goes straight to
+-- `Finalize`, `step_machine.ail:128–129`) and the budget would never be
+-- reached. `scenario_max_steps` (`terminal_trace_dst.ail:127–134`) is the
+-- precedent, with a budget of 2. Each continuing step appends an assistant
+-- message AND a tool result (denied by `deny_all_rt`, still a tool-role
+-- message), so from the seed of system+user:
+--
+--   step 0: payload 2 -> history 4      step 1: payload 4 -> history 6
+--   step 2: payload 6 -> history 8      step 3: budget reached, no call
+--
+-- 8 is the number pinned at first green, and the two payload checks below
+-- corroborate it FROM THE WIRE at this commit — `provider_call_prepared` is
+-- emitted three times and its last `msg_count` is 6 — so the pin is derived
+-- rather than guessed. `provider_calls_completed == 3` and `step_idx == 3`
+-- are the same three steps counted the other two ways.
+-- ============================================================================
+
+-- The third runner. `run_scripted` hardcodes `step_budget` 8 and
+-- `run_scripted_task` varies the task; this one varies the budget, which is
+-- the only knob the suspension needs.
+func run_scripted_with_budget(rt: ExtRuntime, step_budget: int, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(rt, "task", "", false, budget(), "phase-c-model", history(), ".", step_budget, false, 0, zero_rates(), Scripted(script))
+}
+
+-- Five steps against a budget of three: the BUDGET ends the run, not the
+-- script running out, which is a different terminal path.
+func continuing_script() -> [ScriptedStep] {
+  [
+    continuing_token_step(100, 50, "tc1"),
+    continuing_token_step(100, 50, "tc2"),
+    continuing_token_step(100, 50, "tc3"),
+    continuing_token_step(100, 50, "tc4"),
+    continuing_token_step(100, 50, "tc5")
+  ]
+}
+
+-- P1 Part 4 REPLACES THIS BODY (see the header). Until then the driver returns
+-- no continuation, which is what makes the four target checks red.
+func suspended_view(_traced: TracedSessionResult) -> Option[{ history: [Message], provider_calls_completed: int, step_idx: int }] {
+  None
+}
+
+-- P1 Part 4 REPLACES THIS BODY with `traced.final.history`. Today the `Err`
+-- arm of `traced.result` carries an `AIError` and nothing else, so there is no
+-- history to return: D4's projection does not exist yet.
+func final_history(_traced: TracedSessionResult) -> [Message] {
+  []
+}
+
+-- The wire name of any `LedgerEvent`, including ones that do not exist yet:
+-- every arm of `to_schema_v1_kvs` leads with `kv("type", js(...))`
+-- (`phase_vocab.ail:789–826`), so this reads `RunSuspended` correctly the day
+-- the variant lands, with no edit here. Same shape as the driver's own
+-- `event_type_from_projected` (`session.ail:315–325`).
+func event_wire_name(e: LedgerEvent) -> string {
+  match to_schema_v1_kvs(e) {
+    [] => "",
+    x :: _ => match x.value { JString(s) => s, _ => "" }
+  }
+}
+
+func record_wire_name(r: LedgerRecord) -> string {
+  match r {
+    WireRecord(e) => event_wire_name(e),
+    _ => ledger_record_name(r)
+  }
+}
+
+-- The record immediately before the RunSummary. D2 puts `RunSuspended` there
+-- and nothing after the summary, which is `RecordAfterTerminal`'s clause
+-- (`dst_invariants.ail:788–796`) asserted here on the value.
+func name_before_summary(records: [LedgerRecord], prev: string) -> string {
+  match records {
+    [] => "<no summary>",
+    r :: rest => if is_run_summary(r) then prev else name_before_summary(rest, record_wire_name(r))
+  }
+}
+
+func records_after_summary(records: [LedgerRecord], seen: bool, acc: int) -> int {
+  match records {
+    [] => acc,
+    r :: rest => records_after_summary(rest, seen || is_run_summary(r), if seen then acc + 1 else acc)
+  }
+}
+
+func count_wire_named(records: [LedgerRecord], name: string) -> int {
+  match records {
+    [] => 0,
+    r :: rest => (if record_wire_name(r) == name then 1 else 0) + count_wire_named(rest, name)
+  }
+}
+
+func prepared_msg_count(r: LedgerRecord, fallback: int) -> int {
+  match r {
+    WireRecord(e) =>
+      match e {
+        ProviderCallPrepared(i) => i.msg_count,
+        _ => fallback
+      },
+    _ => fallback
+  }
+}
+
+func last_prepared_msg_count(records: [LedgerRecord], acc: int) -> int {
+  match records {
+    [] => acc,
+    r :: rest => last_prepared_msg_count(rest, prepared_msg_count(r, acc))
+  }
+}
+
+func record_summary_error(r: LedgerRecord) -> Option[string] {
+  match r {
+    WireRecord(e) =>
+      match e {
+        RunSummary(i) => Some(i.error),
+        _ => None
+      },
+    _ => None
+  }
+}
+
+func summary_error_of(records: [LedgerRecord]) -> string {
+  match records {
+    [] => "<no summary>",
+    r :: rest =>
+      match record_summary_error(r) {
+        Some(err) => err,
+        None => summary_error_of(rest)
+      }
+  }
+}
+
+func count_error_emissions(events: [LedgerEvent]) -> int {
+  match events {
+    [] => 0,
+    e :: rest => (if event_wire_name(e) == "error" then 1 else 0) + count_error_emissions(rest)
+  }
+}
+
+func message_equal(a: Message, b: Message) -> bool {
+  a.role == b.role && a.content == b.content && a.tool_call_id == b.tool_call_id
+    && length(a.tool_calls) == length(b.tool_calls)
+}
+
+func messages_equal(a: [Message], b: [Message]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { y :: ys => message_equal(x, y) && messages_equal(xs, ys), [] => false }
+  }
+}
+
+-- One row, many clauses: report EVERY failing clause rather than the first, so
+-- the red output is the whole delta between today and D2 and not a bisect.
+func failed_clauses(cs: [{ name: string, ok: bool, detail: string }]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest => (if c.ok then [] else ["${c.name} ${c.detail}"]) ++ failed_clauses(rest)
+  }
+}
+
+func failed_or_ok(cs: [{ name: string, ok: bool, detail: string }]) -> Result[(), ScenarioFailure] {
+  let bad = failed_clauses(cs);
+  match bad {
+    [] => Ok(()),
+    _ => Err({ failed_invariant: "step budget suspends with the run's history", trace: bad })
+  }
+}
+
+func scenario_step_budget_suspends_with_history() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let traced = run_scripted_with_budget(deny_all_rt(), 3, continuing_script());
+
+  let outcome_err = match traced.result { Ok(_) => false, Err(_) => true };
+  let code = match traced.result { Ok(_) => "<ok>", Err(e) => e.code };
+  let returned_history = match traced.result { Ok(h) => length(h), Err(_) => -1 };
+  let reason = match run_summary_finish_reason(traced.trace) {
+    Some(r) => r,
+    None => "<none>"
+  };
+  let summary_err = summary_error_of(traced.trace.records);
+  let prepared = count_wire_named(traced.trace.records, "provider_call_prepared");
+  let last_payload = last_prepared_msg_count(traced.trace.records, -1);
+  let before_summary = name_before_summary(traced.trace.records, "<start>");
+  let trailing = records_after_summary(traced.trace.records, false, 0);
+  let error_emissions = count_error_emissions(traced.emissions);
+
+  let view = suspended_view(traced);
+  let hist_len = match view { Some(s) => length(s.history), None => -1 };
+  let calls_completed = match view { Some(s) => s.provider_calls_completed, None => -1 };
+  let step_idx = match view { Some(s) => s.step_idx, None => -1 };
+  let final_matches = match view {
+    Some(s) => messages_equal(final_history(traced), s.history),
+    None => false
+  };
+
+  failed_or_ok([
+    -- Today's behaviour. Green here, and each one still green after D2 lands:
+    -- the suspension keeps the outcome, the reason and the summary it has.
+    { name: "outcome is Err", ok: outcome_err, detail: "(result=${code})" },
+    -- P1 Part 2 REWRITES THIS LITERAL to "StepBudgetExhausted" when the code
+    -- stops being the message-discriminated `Internal`. Named here so the edit
+    -- is a decision someone makes, not a red row someone relaxes.
+    { name: "Err code is Internal (P1 Part 2 makes it StepBudgetExhausted)", ok: code == "Internal", detail: "(code=${code})" },
+    { name: "run_summary finish_reason is max_steps", ok: reason == "max_steps", detail: "(reason=${reason})" },
+    { name: "the Err arm carries no history", ok: returned_history == -1, detail: "(returned=${show(returned_history)})" },
+    { name: "run_summary.error is non-empty", ok: summary_err != "", detail: "(error='${summary_err}')" },
+    { name: "outcome agrees with the summary", ok: outcome_err && summary_err != "", detail: "(err=${show(outcome_err)} summary_error='${summary_err}')" },
+    { name: "nothing after the run_summary", ok: trailing == 0, detail: "(trailing=${show(trailing)})" },
+    { name: "no error event in emissions", ok: error_emissions == 0, detail: "(errors=${show(error_emissions)})" },
+    -- The wire-side corroboration of the 8 below: three payloads, the last of
+    -- them 6 messages, so the run ended holding 6 + assistant + tool result.
+    { name: "three provider calls prepared", ok: prepared == 3, detail: "(prepared=${show(prepared)})" },
+    { name: "last payload is 6 messages", ok: last_payload == 6, detail: "(msg_count=${show(last_payload)})" },
+    -- RED UNTIL P1 Part 4. ADR-003 D2's suspension, D4's projection.
+    { name: "RED-UNTIL-P4 suspended history is 8", ok: hist_len == 8, detail: "(history=${show(hist_len)}, -1 = no continuation)" },
+    { name: "RED-UNTIL-P4 cumulative provider_calls_completed is 3", ok: calls_completed == 3, detail: "(completed=${show(calls_completed)})" },
+    { name: "RED-UNTIL-P4 step_idx is 3", ok: step_idx == 3, detail: "(step_idx=${show(step_idx)})" },
+    { name: "RED-UNTIL-P4 final.history equals suspended.history", ok: final_matches, detail: "(final=${show(length(final_history(traced)))} suspended=${show(hist_len)})" },
+    { name: "RED-UNTIL-P4 run_suspended immediately precedes run_summary", ok: before_summary == "run_suspended", detail: "(before_summary=${before_summary})" }
+  ])
+}
+
+func step_budget_suspends_with_history_scenario() -> Scenario {
+  { id: "phase_c.c2.step_budget_suspends_with_history", seed: "fixed", run: scenario_step_budget_suspends_with_history }
+}
+
 export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Stream, Trace} {
   let scenarios = [
     decision_record_append_name_round_trip_scenario(),
@@ -761,7 +1030,8 @@ export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Str
 	    progress_contract_combined_chain_blank_owned_by_empty_stop_scenario(),
 	    progress_contract_completion_passes_scenario(),
 	    progress_contract_allowed_compaction_passes_scenario(),
-	    progress_contract_no_contract_passes_scenario()
+	    progress_contract_no_contract_passes_scenario(),
+	    step_budget_suspends_with_history_scenario()
 	  ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then
