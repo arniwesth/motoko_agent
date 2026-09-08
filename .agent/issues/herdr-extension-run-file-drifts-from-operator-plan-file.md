@@ -2,7 +2,9 @@
 
 ## Status
 
-open
+open — narrowed 2026-09-08: the drift's CAUSE is addressed (option A2 built, see the
+2026-09-08 progress note); what keeps it open is that an operator with an existing hand-maintained
+plan file has to move to the new arrangement, and nothing migrates them.
 
 ## Branch
 
@@ -185,3 +187,30 @@ liveness conjunct. The first initially passed — c5b only ever read the report
 sentence, so an unconditional settle would have left it claiming "Nothing was
 changed" about a file it had just rewritten — which is why c5b now asserts on the
 call log too.
+
+
+## Progress (2026-09-08) — option A2 is built
+
+The decision recorded in `DESIGN-dagr-as-delegation-view.md` §10 went to A2: **invert the
+ownership.** `HERDR_DAGR_PLAN` names a dagr document the producer READS and never writes. Its
+declared tasks — ids, titles, kinds, deps — are seeded into the producer's own run file, and
+`Delegate` gained `dagr_task` so an attempt lands on a planned task instead of a parallel one.
+
+Why not this issue's option 1 (the extension writes the operator's file): `dagr` cannot merge at the
+pinned release, so every writer replaces the whole document and the model's edit cycle spans turns.
+§10.3 also found it would disable settle-on-exit, whose precondition is the digest of what the
+render read.
+
+**What this closes:** the two documents become one, with the plan's deps attached to what actually
+happened, and still exactly one writer.
+
+**What it does not close, and why this issue stays open:** an operator already maintaining a plan
+file by hand has to stop editing the live document and start editing a plan input instead. Nothing
+migrates them, and nothing warns them if they keep editing the old file — it would simply be
+ignored. The eleven stale rows in older run files are also untouched by this; they need the startup
+sweep's measurement pass, which is built (2026-09-07) but opt-in.
+
+Gates: `verify_dagr_producer` cases 22, 22b, 23 — seeding with deps, the hand-done task settled by
+an `operator` attempt at `reported`, the attachment opening no second task, the plan file never
+written, and re-reading the plan not resetting an observed task. All three falsifications fail the
+build.

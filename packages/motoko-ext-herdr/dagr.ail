@@ -174,6 +174,113 @@ export pure func sweep_tmp(path: string, own_pane: string, session_ms: string) -
   tests [(("/w/.dagr/run-w1-p9-100.json", "w1:p1", "200"), "/w/.dagr/run-w1-p9-100.json.sweep-w1-p1-200")]
   { "${path}.sweep-${slug(own_pane)}-${session_ms}" }
 
+-- ---------------------------------------------------------------------------
+-- The operator's plan, read and never written (DESIGN §10.4 option A2)
+-- ---------------------------------------------------------------------------
+--
+-- THE OWNERSHIP IS INVERTED, and that is the whole design. The operator
+-- declares INTENT — task ids, titles, kinds, deps — in a file this producer
+-- READS and never writes; the producer keeps sole ownership of the state
+-- document it already owns, seeds the declared tasks into it, and attaches
+-- attempts to them as delegations happen. One document with the plan's deps in
+-- it, and still exactly ONE writer.
+--
+-- WHY NOT WRITE THE OPERATOR'S FILE (§10.4 option A1). `dagr` cannot merge at
+-- the pinned release, so every writer replaces the whole document; the model's
+-- edit cycle spans turns, so its whole-file rewrite silently drops whatever
+-- this producer recorded since it last read. §10.3: it would also disable
+-- settle-on-exit, whose precondition is the digest of what the render read.
+--
+-- SEEDING IS IDEMPOTENT AND ONE-DIRECTIONAL. A plan task already present is
+-- left completely alone — once a task exists here, its state is this producer's
+-- and the plan cannot reach back in and change it. So an operator editing the
+-- plan mid-run adds tasks and never rewrites observations.
+pure func plan_task_of(t: Json, now_ms: int) -> Json {
+  let id = sfield(t, "id");
+  let state = if sfield(t, "state") == "" then "queued" else sfield(t, "state");
+  let base = jo([
+    kv("id", js(id)),
+    kv("title", js(if sfield(t, "title") == "" then id else sfield(t, "title"))),
+    kv("kind", js(if sfield(t, "kind") == "" then "task" else sfield(t, "kind"))),
+    kv("state", js(state)),
+    kv("deps", ja(arr_field(t, "deps")))]);
+  -- A TERMINAL STATE NEEDS AN ATTEMPT, and this is not a formality: `dagr check`
+  -- rejects a `done` task with no attempts as E150, "nothing settled it".
+  -- Measured against the v0.3.1 binary before this was written.
+  --
+  -- So the operator's own work gets an attempt that says who did it and that
+  -- NOBODY CHECKED IT. `reported` is the tier for a claim this producer did not
+  -- observe, and the actor is the operator rather than a delegate, because
+  -- attributing hand-done work to an agent would be the confident-wrong
+  -- reporting this project keeps eliminating. This is §10.4's stated cost of
+  -- A2 — "taking a task over by hand needs a way to say so" — and this is that
+  -- way.
+  if attempt_is_terminal(state) == false then obj_set(base, "attempts", ja([]))
+  else obj_set(base, "attempts", ja([jo([
+    kv("id", js("${id}·a1")),
+    kv("n", jnum(1.0)),
+    kv("cause", jo([kv("type", js("initial"))])),
+    kv("actor", js("operator")),
+    kv("state", js(state)),
+    kv("started_at", js(at(now_ms))),
+    kv("ended_at", js(at(now_ms))),
+    kv("outcome", jo([
+      kv("result", js(state)),
+      kv("evidence", js("reported")),
+      kv("reason", js("declared `${state}` in the operator's plan; this producer did not observe it"))]))])]))
+}
+
+pure func seed_tasks(doc: Json, plan: [Json], now_ms: int) -> Json {
+  match plan {
+    [] => doc,
+    t :: rest => {
+      let id = sfield(t, "id");
+      let next =
+        if id == "" || has_task(doc, id) then doc
+        else with_tasks(doc, tasks_of(doc) ++ [plan_task_of(t, now_ms)]);
+      seed_tasks(next, rest, now_ms)
+    }
+  }
+}
+
+-- An unreadable or absent plan seeds NOTHING and is not an error: the producer
+-- ran without a plan for its whole life before this existed, and a plan it
+-- cannot parse is the operator's to fix, not this producer's to guess at.
+export pure func seed_from_plan(doc: Json, present: bool, content: string, now_ms: int) -> Json {
+  if present == false || content == "" then doc
+  else match decode(content) {
+    Err(_) => doc,
+    Ok(p) => seed_tasks(doc, tasks_of(p), now_ms)
+  }
+}
+
+export pure func seed_from_plan_str(content: string, now_ms: int) -> string
+  tests [
+    -- structure only: declared tasks arrive queued, with their deps, and no attempts
+    (("{\"tasks\":[{\"id\":\"P1A\",\"title\":\"first\",\"kind\":\"impl\",\"deps\":[]},{\"id\":\"P1B\",\"deps\":[\"P1A\"]}]}", 1000),
+     "P1A:queued:0,P1B:queued:0"),
+    -- the operator's own work arrives settled, with ONE attempt to settle it
+    (("{\"tasks\":[{\"id\":\"INV\",\"state\":\"done\"}]}", 1000), "INV:done:1"),
+    -- a plan that does not parse, or is empty, seeds nothing
+    (("not json", 1000), ""),
+    (("{\"tasks\":[]}", 1000), ""),
+    -- a task with no id is not a task
+    (("{\"tasks\":[{\"title\":\"nameless\"}]}", 1000), "")
+  ]
+  {
+    let seeded = seed_from_plan(empty_doc("w1:p1", "200", now_ms), true, content, now_ms);
+    join(",", seeded_summary(tasks_of(seeded)))
+  }
+
+pure func seeded_summary(ts: [Json]) -> [string] {
+  match ts {
+    [] => [],
+    t :: rest =>
+      "${sfield(t, "id")}:${sfield(t, "state")}:${intToStr(count_of(arr_field(t, "attempts")))}"
+        :: seeded_summary(rest)
+  }
+}
+
 -- Written once per session, next to the run file, when the run file exists and
 -- does not parse. Its presence is what makes "tell the model once" once.
 export pure func refused_marker(dagr_dir: string, own_pane: string, session_ms: string) -> string
@@ -535,6 +642,33 @@ export pure func open_failed_task(doc: Json, id: string, title: string, kind: st
 export pure func open_retry(doc: Json, id: string, new_key: string, actor: string,
                             pane: string, agent: string, reason: string, now_ms: int) -> Json {
   open_retry_model(doc, id, new_key, actor, pane, agent, reason, now_ms, "")
+}
+
+-- Attach a delegation's attempt to a task the OPERATOR DECLARED (A2's other
+-- half). Structurally `open_retry_model` with one difference that matters: a
+-- declared task has NO attempts yet, and `open_retry_model` would give its
+-- first attempt `cause: {type: "followup", ref: ""}` — a followup referring to
+-- nothing. The first attempt on a declared task is an INITIAL one; a second is
+-- a followup like any other, so this delegates to `open_retry_model` once there
+-- is something to follow.
+export pure func attach_to_task(doc: Json, id: string, new_key: string, actor: string,
+                                pane: string, agent: string, now_ms: int, model: string) -> Json {
+  match find_task(tasks_of(doc), id) {
+    None => doc,
+    Some(t) =>
+      if count_of(arr_field(t, "attempts")) > 0 then
+        open_retry_model(doc, id, new_key, actor, pane, agent,
+                         "delegated again against the operator's plan", now_ms, model)
+      else {
+        let cause = jo([kv("type", js("initial"))]);
+        let a = new_attempt_model(id, 1, cause, actor, pane, agent, now_ms, model);
+        let t2 = obj_set(obj_set(obj_set(t, "attempts", ja([a])),
+                                 "state", js("working")),
+                         "owner", js(new_key));
+        append_event(with_tasks(doc, map_task(tasks_of(doc), id, func(_x: Json) -> Json { t2 })),
+                     started_event(id, attempt_id(id, 1), actor, now_ms))
+      }
+  }
 }
 
 export pure func open_retry_model(doc: Json, id: string, new_key: string, actor: string,

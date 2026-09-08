@@ -43,6 +43,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   task_kind_or_default, known_task_kinds, task_of_key, can_link_retry, is_empty_run,
   open_task, open_task_model, open_failed_task, open_retry, open_retry_model, settle, mark_blocked, mark_working, latch_ack,
   run_settled_tmp, settle_at_session_end, open_task_ids_str, run_file,
+  seed_from_plan, attach_to_task, has_task,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
   abandoned_ids, settle_abandoned, sweep_tmp, prunable_scratch, prune_report,
   open_delegate_panes
@@ -128,7 +129,10 @@ export type HerdrConfig = {
   -- requirement: absent or unusable, the publish proceeds exactly as it did
   -- before this existed (`types.dagr_says_invalid`), which is what keeps
   -- `DESIGN-dagr` §6's "never require the binary" true.
-  dagr_bin: string
+  dagr_bin: string,
+  -- DESIGN §10.4 option A2: the operator's plan, READ and never written. Empty
+  -- means no plan, which is every configuration that existed before this.
+  dagr_plan: string
 }
 
 export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
@@ -159,7 +163,7 @@ func delegate_params(allowed: string, must_choose: bool) -> string {
     else
       "Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.";
   let required = if must_choose then "[\"prompt\",\"kind\"]" else "[\"prompt\"]";
-  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model the delegate should run on: claude `--model`, codex `-m`, motoko the MODEL environment variable. Free string; empty means that agent's own default. Shell metacharacters are refused and fall back to the default. Ignored by kinds with no model transport.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model the delegate should run on: claude `--model`, codex `-m`, motoko the MODEL environment variable. Free string; empty means that agent's own default. Shell metacharacters are refused and fall back to the default. Ignored by kinds with no model transport.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"dagr_task\":{\"type\":\"string\",\"description\":\"The id of a task in the operator's plan that this delegation is work on. Use it whenever the work corresponds to a planned task: the attempt is recorded against that task, so the plan's dependencies and titles stay attached to what actually happened. An id that names no planned task is refused and the delegation is recorded as new work instead — it is never an error, and the result says so.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
 }
 
 func check_params() -> string {
@@ -491,10 +495,19 @@ func dagr_record(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
         -- The transition's note leads: it is about what was recorded, and the
         -- publish note is about whether the recording reached disk.
         Some(doc) => {
-          let step = f(doc, now_ms);
+          -- SEEDED BEFORE THE TRANSITION, so a `Delegate` naming a plan task
+          -- finds it already present and appends an attempt rather than opening
+          -- a second task with the same id. Idempotent: a task already here is
+          -- left alone, which is what keeps the plan from reaching back in and
+          -- overwriting this producer's observations.
+          let plan = if cfg.dagr_plan == "" || path_is_safe(cfg.dagr_plan) == false
+                     then { present: false, content: "", next_state: cur.next_state }
+                     else p.file_read(cur.next_state, cfg.dagr_plan);
+          let seeded = seed_from_plan(doc, plan.present, plan.content, now_ms);
+          let step = f(seeded, now_ms);
           -- Composed HERE because this is where a real clock is: see
           -- `dagr.run_settled_tmp` for why the exit render cannot do it.
-          let pub = publish(cfg, p, cur.next_state, step.doc,
+          let pub = publish(cfg, p, plan.next_state, step.doc,
                             settle_at_session_end(step.doc, now_ms));
           { note: "${step.note}${pub.note}", next_state: pub.next_state }
         }
@@ -571,7 +584,8 @@ func run_key(handle: string) -> string {
 -- that justified adopting dagr, and it is only worth having if it is true.
 func dagr_open(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_ms: int,
                key: string, title: string, kind: string, actor: string,
-               pane: string, loc_agent: string, retry_of: string, model: string)
+               pane: string, loc_agent: string, retry_of: string, model: string,
+               dagr_task: string)
   -> DagrWrite ! {IO, Process, FS} {
   dagr_record(cfg, p, w, workdir, now_ms, func(doc0: Json, ms: int) -> DagrStep {
     -- ONE NOTE PER RUN, SAYING WHAT THIS GRAPH CANNOT DO (§6). `DelegateCheck`
@@ -602,7 +616,22 @@ func dagr_open(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, now_
     let first = if is_empty_run(doc0) && cfg.dagr_pane == false
                 then " (A dagr pane can show this run live — the operator opens it with `scripts/dagr-pane.sh`. The stock `open-dagr` action will not find it: this run file is keyed by pane and session, and that action looks for `.dagr/run.json`.)"
                 else "";
-    if retry_of == "" then
+    -- A DECLARED TASK WINS OVER OPENING A NEW ONE, and it is checked before
+    -- `retry_of` because the two answer different questions: `retry_of` links
+    -- this work to work THIS EXTENSION did before, and `dagr_task` attaches it
+    -- to work the OPERATOR planned. A call naming both is asking for the plan
+    -- task, and the retry link is the one that gives way.
+    if dagr_task != "" && has_task(doc, dagr_task) then
+      { doc: attach_to_task(doc, dagr_task, key, actor, pane, loc_agent, ms, model),
+        note: "${first} This delegation is recorded against the plan task `${dagr_task}`." }
+    else if dagr_task != "" then
+      -- REFUSED THE WAY `retry_of` IS REFUSED (§3.6): the linkage is declined,
+      -- never the work, and the model is told in the result because it has no
+      -- other way to learn its delegation is not where it asked for it.
+      { doc: add_note(open_task_model(doc, key, title, kind, actor, pane, loc_agent, ms, model), key,
+                      "dagr_task `${dagr_task}` was not linked (no task with that id is in this run file or the operator's plan); opened as new work", ms),
+        note: "${first} NOTE: `dagr_task` `${dagr_task}` was NOT linked — no task with that id is in this run file or in the operator's plan. This delegation is on the record as new work." }
+    else if retry_of == "" then
       { doc: open_task_model(doc, key, title, kind, actor, pane, loc_agent, ms, model), note: first }
     else {
       let target = if owns_name(run_key(retry_of)) then task_of_key(doc, run_key(retry_of)) else "";
@@ -1041,6 +1070,9 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
   -- argv is built (`kind_model_args` degrades to no flag); the raw ask is kept
   -- for the transcript and the run file so a refusal is visible, not silent.
   let model = arg_str(call.arguments, "model", "");
+  -- A2: the operator's plan task this delegation is work on. Empty is every
+  -- configuration that existed before the plan did.
+  let dagr_task = arg_str(call.arguments, "dagr_task", "");
 
   if prompt == "" then
     { result: err_result(call.id, "Delegate", "Delegate requires a non-empty `prompt`."), next_state: ctx.world }
@@ -1160,7 +1192,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
               -- herdr knows, not what this extension called it.
               let rec = dagr_open(cfg, p, t.next_state, ctx.workdir, t.now_ms,
                                   handle_name(h), task_title(prompt), task_kind,
-                                  motoko_kind(), pane, motoko_kind(), retry_of, model);
+                                  motoko_kind(), pane, motoko_kind(), retry_of, model, dagr_task);
               -- AFTER THE PUBLISH, so the view has a file to read at startup.
               let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
               { result: {
@@ -1238,7 +1270,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
                 let t = p.clock_now(tag.next_state);
                 let rec = dagr_open(cfg, p, t.next_state, ctx.workdir, t.now_ms,
                                     name, task_title(prompt), task_kind,
-                                    kind, pane, name, retry_of, model);
+                                    kind, pane, name, retry_of, model, dagr_task);
                 -- AFTER THE PUBLISH, so the view has a file to read at startup.
                 let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
                 { result: {

@@ -637,6 +637,20 @@ whole-file writers cannot carry a generation guarantee for either of them.
 
 ### 10.5 Recommendation
 
+**DECIDED AND BUILT 2026-09-08: A2.** `HERDR_DAGR_PLAN` names a dagr document the producer READS
+and never writes; its declared tasks are seeded into the producer's own run file with their deps,
+and `Delegate` gained `dagr_task` so an attempt is recorded against a planned task instead of
+opening a parallel one. Seeding is idempotent and one-directional — a task already present is left
+alone, so the plan can add work mid-run but can never reach back and overwrite an observation.
+
+§10.4's stated cost of A2 — "taking a task over by hand needs a way to say so" — is answered rather
+than carried: a plan task declared in a terminal state is emitted with ONE attempt whose actor is
+`operator` and whose evidence is `reported`, saying in the document that this producer did not
+observe it. That shape is not a preference; `dagr check` rejects a `done` task with no attempts as
+E150 ("nothing settled it"), measured against v0.3.1 before the code was written.
+
+The recommendation as it stood before the decision:
+
 **A2, or B+ if the operator's hand-editing of the live document is not negotiable.** A1 is the
 option the issue proposed and the one I would not build: it trades a visible disagreement between
 two honest documents for an invisible one inside a single document, and §10.3 shows it also disables

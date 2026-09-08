@@ -262,6 +262,10 @@ func mk_ctx(ports: ExtPorts, world: ExtWorld) -> ExtCtx {
     world: world }
 }
 
+func mk_cfg_plan(plan: string) -> HerdrConfig {
+  { mk_cfg() | dagr_plan: plan }
+}
+
 func mk_cfg() -> HerdrConfig {
   { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "claude",
     allowed_kinds: "claude,motoko", depth: 0, max_depth: 1, motoko_script: "./x.sh",
@@ -272,7 +276,7 @@ func mk_cfg() -> HerdrConfig {
     start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
     -- ABI 7.0: the exit intent is declared either way; this says whether it
     -- renders actions. These gates exercise the tool paths, not the exit path.
-    reap_on_exit: false, settle_on_exit: false, sweep_settle: false, dagr_bin: "dagr" }
+    reap_on_exit: false, settle_on_exit: false, sweep_settle: false, dagr_bin: "dagr", dagr_plan: "" }
 }
 
 func run_file_path() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
@@ -284,11 +288,22 @@ func run_file_path() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
 type Step = { world: ExtWorld, out: string, err: string, code: int }
 
 func drive(world: ExtWorld, ports: ExtPorts, call: ToolCallEnvelope) -> Step ! {IO, Process, FS, Clock} {
-  let r = on_tool_handle(mk_cfg(), mk_ctx(ports, world), call);
+  drive_cfg(mk_cfg(), world, ports, call)
+}
+
+func drive_cfg(cfg: HerdrConfig, world: ExtWorld, ports: ExtPorts, call: ToolCallEnvelope) -> Step ! {IO, Process, FS, Clock} {
+  let r = on_tool_handle(cfg, mk_ctx(ports, world), call);
   match r.decision {
     Handled(res) => { world: r.next_state, out: res.stdout, err: res.stderr, code: res.exit_code },
     Delegate => { world: r.next_state, out: "", err: "on_tool_handle delegated the call", code: 1 }
   }
+}
+
+-- A2: a delegation that names the operator's plan task.
+func delegate_plan_call(id: string, prompt: string, dagr_task: string) -> ToolCallEnvelope {
+  { id: id, tool: "Delegate",
+    arguments: jo([kv("prompt", js(prompt)), kv("kind", js("claude")),
+                   kv("task_kind", js("impl")), kv("dagr_task", js(dagr_task))]) }
 }
 
 func delegate_call(id: string, prompt: string, kind: string, task_kind: string, retry_of: string) -> ToolCallEnvelope {
@@ -645,7 +660,56 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && contains(read_file(s21.world, run_file_path()), "mot-dlg-21000"));
   emit(s21.world);
 
+  -- 22. OPTION A2 (DESIGN §10.4): the operator declares the plan, this producer
+  --     owns the state. The plan carries two structural tasks and one the
+  --     operator did by hand; a delegation then attaches its attempt to a
+  --     DECLARED task rather than opening a second one with the same id.
+  let planned = put_file(s21.world, "/tmp/.dagr/plan.json",
+    "{\"dagr\":3,\"tasks\":[{\"id\":\"P1A\",\"title\":\"declared\",\"kind\":\"impl\",\"deps\":[]},{\"id\":\"P1B\",\"kind\":\"impl\",\"deps\":[\"P1A\"]},{\"id\":\"INV\",\"state\":\"done\"}]}");
+  let s22 = drive_cfg(mk_cfg_plan("/tmp/.dagr/plan.json"), planned,
+                      ports_at(22000, "working", false, true),
+                      delegate_plan_call("c22", "work on the plan", "P1A"));
+  let d22 = read_file(s22.world, run_file_path());
+  let a27 = check("the operator's plan is seeded: declared tasks, their deps, and the hand-done one settled",
+                  s22.code == 0
+                    && contains(d22, "\"id\":\"P1A\"")
+                    && contains(d22, "\"deps\":[\"P1A\"]")
+                    && contains(d22, "\"actor\":\"operator\"")
+                    && contains(d22, "declared `done` in the operator's plan"));
+  -- THE ATTACHMENT, which is what makes this A2 and not merely "seed a plan".
+  -- The delegation names P1A, so its attempt belongs to P1A — an INITIAL one,
+  -- because a declared task has none yet — and NO mot-dlg-* task is opened for
+  -- it. Without this the plan's tasks would sit queued for ever beside a
+  -- parallel set of the producer's own, which is the two-documents problem
+  -- moved inside one file.
+  let a27b = check("a delegation naming a plan task attaches to it, and opens no second task",
+                   contains(d22, "\"id\":\"P1A·a1\"")
+                     && contains(d22, "\"id\":\"mot-dlg-22000\"") == false
+                     && contains(s22.out, "recorded against the plan task `P1A`"));
+  -- THE HALF THAT MAKES IT A2 RATHER THAN A1: the plan file is READ and never
+  -- written. If this producer ever wrote it, the operator's document would have
+  -- two writers again and §10.2's clobber would be back.
+  let a28 = check("the plan file itself is never written",
+                  read_file(s22.world, "/tmp/.dagr/plan.json") == read_file(planned, "/tmp/.dagr/plan.json"));
+  emit(s22.world);
+
+  -- 23. SEEDING IS IDEMPOTENT, and this is the case that pins it. P1A now
+  --     carries an attempt and state `working` from case 22. Re-reading the
+  --     plan must leave it ALONE: a seeder that re-emitted a declared task
+  --     would reset it to `queued` with no attempts, silently deleting an
+  --     observation with an operator's declaration. The plan describes
+  --     intent; once a task exists here its state is this producer's.
+  let s23 = drive_cfg(mk_cfg_plan("/tmp/.dagr/plan.json"), s22.world,
+                      ports_at(23000, "working", false, true),
+                      delegate_plan_call("c23", "second go at the same plan task", "P1A"));
+  let d23 = read_file(s23.world, run_file_path());
+  let a29 = check("re-reading the plan does not reset a task this producer has observed",
+                  s23.code == 0
+                    && contains(d23, "\"id\":\"P1A·a1\"")
+                    && contains(d23, "\"id\":\"P1A·a2\""));
+  emit(s23.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
      && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 && a17b
-     && a18 && a19 && a20 && a21 && a22 && a23 && a24 && a25 && a26 then () else exit(1)
+     && a18 && a19 && a20 && a21 && a22 && a23 && a24 && a25 && a26 && a27 && a27b && a28 && a29 then () else exit(1)
 }

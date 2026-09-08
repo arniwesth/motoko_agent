@@ -170,7 +170,11 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- PATH BY DEFAULT, and a knob only because a container may put it
     -- elsewhere. Never required: `publish` treats "cannot run it" exactly as it
     -- treats "not installed", which is §6's rule.
-    dagr_bin: getEnvOr("MOTOKO_DAGR_BIN", "dagr")
+    dagr_bin: getEnvOr("MOTOKO_DAGR_BIN", "dagr"),
+    -- OFF BY DEFAULT — empty is every configuration that existed before A2.
+    -- The operator points this at a dagr document holding task ids, titles,
+    -- kinds and deps; this producer reads it and never writes it.
+    dagr_plan: getEnvOr("HERDR_DAGR_PLAN", "")
   };
 
   -- The whole gate. Empty tools is a silent, correct no-op; it is not an error
