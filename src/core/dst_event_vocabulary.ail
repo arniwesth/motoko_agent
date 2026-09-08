@@ -6,20 +6,20 @@
 -- its wire projection as a maintained compatibility surface, and this artifact
 -- carries that obligation.
 --
--- One artifact binds, for every one of the 35 `LedgerEvent` variants:
+-- One artifact binds, for every one of the 36 `LedgerEvent` variants:
 --
 --   the variant itself; its wire name; its payload schema; and its
 --   classification as LOGICAL or DISPLAY-ONLY.
 --
 -- This is new construction. `phase_vocab.ledger_record_name` is not a seed and
--- is not grown here: it names three of the 35 and collapses the rest to the
+-- is not grown here: it names three of the 36 and collapses the rest to the
 -- literal "wire", which is a different thing that happens to share a subject.
 --
 -- ============================================================================
 -- The schema is `wire name = f(variant, payload)`, and that is settled
 -- ============================================================================
 --
--- One variant of the 35 is payload-dependent: `StreamDelta` projects to
+-- One variant of the 36 is payload-dependent: `StreamDelta` projects to
 -- `reasoning_delta` or `thinking_delta` selected from `i.kind`. A
 -- one-name-per-variant artifact cannot represent that, so the shape is:
 --
@@ -101,7 +101,7 @@ import src/core/phase_vocab (
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
   ToolArgumentsUndecodable,
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
-  NativeToolResults, SessionSuspend, SessionStart, ErrorEvent, TotalsUpdated,
+  NativeToolResults, SessionSuspend, RunSuspended, SessionStart, ErrorEvent, TotalsUpdated,
   CheckpointTaken, StreamDelta
 )
 
@@ -172,6 +172,7 @@ export pure func event_variant_id(e: LedgerEvent) -> string {
     NativeToolCalls(_) => "NativeToolCalls",
     NativeToolResults(_) => "NativeToolResults",
     SessionSuspend(_) => "SessionSuspend",
+    RunSuspended(_) => "RunSuspended",
     SessionStart(_) => "SessionStart",
     ErrorEvent(_) => "ErrorEvent",
     TotalsUpdated(_) => "TotalsUpdated",
@@ -222,6 +223,7 @@ export pure func event_wire_name(e: LedgerEvent) -> string {
     NativeToolCalls(_) => "native_tool_calls",
     NativeToolResults(_) => "native_tool_results",
     SessionSuspend(_) => "session_suspend",
+    RunSuspended(_) => "run_suspended",
     SessionStart(_) => "session_start",
     ErrorEvent(_) => "error",
     TotalsUpdated(_) => "loop_totals_updated",
@@ -407,6 +409,15 @@ export pure func event_vocabulary() -> [EventRow] {
       payload: [req("session_id"), req("target_profile")],
       -- A control transition naming a target profile — D5 identity.
       classification: Logical, reaches_trace_today: false },
+
+    { variant: "RunSuspended", wire_names: ["run_suspended"],
+      payload: [req("session_id"), req("run_id"), req("reason"), req("step")],
+      -- ADR-003 D2's typed suspension. Logical AND in the trace: unlike
+      -- SessionSuspend above, this one is APPENDED at the site that emits it
+      -- (`session.c2_suspend`), immediately before the RunSummary, so it is
+      -- absent from `d64_gap_register` and `make ledger_parity` compares its
+      -- projected count against its appended one like any other closed variant.
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "SessionStart", wire_names: ["session_start"],
       payload: [req("task"), req("model"), req("mode")],
@@ -672,7 +683,7 @@ export pure func is_logical(rows: [EventRow], variant: string) -> bool {
 }
 
 -- ============================================================================
--- Inline tests. The 35-variant round trip lives in the DST script, because it
+-- Inline tests. The 36-variant round trip lives in the DST script, because it
 -- needs one sample value per constructor.
 -- ============================================================================
 
@@ -692,7 +703,7 @@ pure func has_rule(rs: [VocabularyRejection], rule: string) -> bool {
 pure func test_vocabulary_has_thirty_five_distinct_rows() -> bool
   tests [((), true)]
   {
-    List.length(event_vocabulary()) == 35
+    List.length(event_vocabulary()) == 36
       && no_dups(row_variants(event_vocabulary()), [])
   }
 
@@ -758,7 +769,7 @@ pure func test_classification_partitions_the_vocabulary() -> bool
   tests [((), true)]
   {
     let rows = event_vocabulary();
-    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 35
+    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 36
       && List.length(display_only_variants(rows)) == 6
   }
 

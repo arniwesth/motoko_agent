@@ -40,9 +40,75 @@ check() {
 }
 
 echo "attribution anchors:"
+# PLAN-003 P1 PART 4 RE-BASELINED ALL EIGHT STALE ANCHORS AT ONCE, AND IT IS THE
+# FIRST RE-BASELINE IN THIS FILE'S HISTORY THAT DISPOSES OF A BACKLOG RATHER THAN
+# OF ITS OWN DRIFT. PLAN-003 §0.2 chose the one-re-issue path deliberately: P1
+# moves anchors in three of its six commits (Parts 2, 3 and 4), and re-baselining
+# each would have re-issued the three profiles four times over a fortnight for a
+# set of sites that never changed. Parts 2 and 3 therefore RECORDED their drift
+# in their commit messages and did not re-baseline; this is where the bill comes
+# due, and the eight pins move together:
+#
+#   src/core/session.ail    1164 -> 1205, 1423 -> 1464, 1529 -> 1576  (+41, +41, +47)
+#                           3016 -> 3352, 3126 -> 3466                (+336, +340)
+#   src/core/tool_phase.ail  317 -> 388,   318 -> 389,   413 -> 484   (all +71)
+#
+# The two session offsets differ because the drift is cumulative and not uniform:
+# +41 above the first three is P1's imports and type comments; the last two sit
+# below `c2_final_state`, `c2_continuation` and `c2_suspend`, which Part 4 adds.
+# THE `3016`/`3126` PINS WERE ALREADY 93 LINES STALE at PLAN-003's grounding
+# revision `97827bf` (the sites were at :3109 and :3219 there), so their move is
+# not this part's alone.
+#
+# THE tool_phase.ail ANCHORS ARE NOT PLAN-003'S AT ALL. Nothing in P1 edits that
+# file. `8980ba6` (PLAN-001 live-run fix 1) moved them by inserting the truncated-
+# argument branch above the scratchpad guard, and §0.1 recorded them as red at
+# `97827bf` without an owner. They are disposed of here because a partial
+# re-baseline is what the +2 note above already had to learn not to do.
+#
+# THE D4 JUDGEMENT — "which site is 'the' attributed one" — WAS MADE, AND IT HAS
+# THE SAME ANSWER IT HAD BEFORE. Evidence, not assertion:
+#
+#   * `grep -o 'clock_now.*' src/core/session.ail` over `git show 8c999f2:` (the
+#     last re-baseline) and over the working tree is IDENTICAL — thirteen hits,
+#     same text, same order. No clock site was added, removed, re-argued or
+#     re-routed. `c2_suspend` reads no clock; it finalises through `c2_finalize`,
+#     whose read is the `:1529 -> :1576` anchor and is unchanged.
+#   * All five session.ail anchored expressions were compared line-for-line at
+#     their new offsets against `8c999f2` and are BYTE-IDENTICAL.
+#   * `tool_phase.ail:318 -> :389` (`exec_scratchpad_cell_ws`) and `:413 -> :484`
+#     (`ports.clock_now(handle_world)`) are byte-identical too.
+#   * `tool_phase.ail:317 -> :388` IS THE ONE LINE THAT CHANGED, and it is
+#     recorded as a change rather than as drift, exactly as WI-D20 recorded the
+#     `handle_world` argument. It read
+#         if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
+#     and now reads `else if …` with the identical condition: `8980ba6` inserted
+#     a branch AHEAD of it in the same chain. Same predicate, same call, same
+#     hook, same attribution — what changed is what is tried first. The row's
+#     necessity argument (D4's stated interprocedural gap, its named reviewer) is
+#     untouched.
+#
+# WIDTH: TEN FILES, derived by the widened grep at the item rather than read off
+# the edited file, per the rule above. `tool_phase.ail:318` is an anchor the four
+# discovered-site fixtures pin, so this is the wide form and not the six-file one:
+#
+#   1.  this file                                (the check itself)
+#   2.  src/core/dst_attribution_table.ail       (row 2 + 6 core sites + 2 test literals)
+#   3.  scripts/dst/attribution_table_dst.ail    (omitted_site, head_inventory)
+#   4.  src/core/dst_driver_only.ail             (v26 -> v27 + content hash)
+#   5.  src/core/dst_driver_plus_no_ops.ail      (v15 -> v16 + content hash)
+#   6.  src/core/dst_driver_plus_compose.ail     (v7  -> v8  + content hash)
+#   7.  scripts/dst/driver_only_dst.ail          (discovered-site fixture)
+#   8.  scripts/dst/driver_plus_no_ops_dst.ail   (discovered-site fixture)
+#   9.  scripts/dst/driver_plus_compose_dst.ail  (discovered-site fixture)
+#   10. scripts/dst/profile_definition_dst.ail   (discovered-site fixture)
+#
+# `src/core/session.ail` is the cause rather than a pin, in the sense the older
+# notes mean it.
+
 check src/core/ext/runtime.ail 199 'now()' "the ambient clock read attributed to test_dummy"
-check src/core/tool_phase.ail 317 'is_scratchpad_tool_name' "the mixed guard"
-check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
+check src/core/tool_phase.ail 388 'is_scratchpad_tool_name' "the mixed guard"
+check src/core/tool_phase.ail 389 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
 # WI-D16 RE-BASELINED the five session.ail anchors 881/1126/1232/2677/2787 ->
 # 911/1160/1266/2711/2821, WI-D17 RE-BASELINED THEM AGAIN to
 # 931/1185/1291/2736/2846, and WI-D18 A THIRD TIME to 965/1224/1330/2775/2885 —
@@ -381,10 +447,10 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # compose v5 -> v6.
 
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1164 1423 1529 3016 3126; do
+for l in 1205 1464 1576 3352 3466; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
-check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
+check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
 
 if [ "$fail" -ne 0 ]; then
   echo

@@ -93,6 +93,13 @@ export type AgentEvent =
       exit_code: number;
     }
   | { type: "done"; step: number; output: string }
+  // ADR-003 v6.1 D2. A run that reached its step budget now reports this
+  // INSTEAD OF `error` (except under MOTOKO_HEADLESS, where the child still
+  // emits both until P3 switches the plain and JSON loggers). It arrives
+  // immediately before `run_summary`. The consumers — ui.ts, index.ts,
+  // session-logger.ts, herdr-agent-state.ts — are PLAN-003 P1 Part 6's; this
+  // part lands the wire type so the event is not an unknown one.
+  | { type: "run_suspended"; session_id: string; run_id: string; reason: string; step: number }
   | { type: "error"; message: string }
   | { type: "warning"; message: string }
   | { type: "tool_calls"; request_id: string; tool_calls: DelegatedCall[] }

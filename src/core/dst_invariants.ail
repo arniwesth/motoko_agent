@@ -187,6 +187,9 @@ import src/core/dst_generator (
   generator_installed
 )
 
+-- ADR-003 v6.1 D4. `journal.ail` is a leaf (it imports no `session` and no
+-- `dst_*`), so this edge is acyclic in the direction the plan states.
+import src/core/journal (FinalState)
 import src/core/ports (
   WorldState,
   ToolOutcomeRecord, ToolRecordDecoded, ToolRecordUndecodable,
@@ -592,7 +595,19 @@ export type ExecutionUnderTest = {
   -- zero, and a family that recomputed them would be a second opinion about
   -- somebody else's artifact.
   ambient_rng_reads: int,
-  forbidden_effect_sites: [string]
+  forbidden_effect_sites: [string],
+
+  -- ADR-003 v6.1 D4's comparand: what the run ended holding — history, counts,
+  -- telemetry, artifacts. `dst_execution.execution_of` fills it from
+  -- `TracedSessionResult.final`; a hand-authored fixture fills it with
+  -- `empty_final_state`, which is honest because a fixture ran nothing.
+  --
+  -- NO FAMILY READS IT YET, and that is the plan's shape rather than an
+  -- oversight: `JournalFold` (P3 Part 2) is the reader, and it is red from this
+  -- commit until P3's journal-class events land, because a fold over a trace
+  -- carrying no journal-class records yields an empty history against a
+  -- non-empty `final.history`.
+  final: FinalState
 }
 
 -- ============================================================================
