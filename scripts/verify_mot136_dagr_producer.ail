@@ -798,8 +798,41 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && read_file(s27.world, "/tmp/.dagr/.plan-w1-p1-200") == "/tmp/.dagr/nope.json");
   emit(s27.world);
 
+  -- 28. THE SHAPE A HUMAN ACTUALLY TYPES. The operator says
+  --     ".dagr/run-plan003.json" and the model repeats it; nobody writes an
+  --     absolute path in prose. `path_within` is a lexical prefix test against
+  --     an absolute workdir, so before this case the one path shape that ever
+  --     occurs was refused as "outside the sandbox" while sitting inside it —
+  --     measured on the first live use of `dagr_plan`, 2026-09-08, with the
+  --     schema's own example as the failing value.
+  let rel_plan = put_file(s27.world, "/tmp/plan-rel.json",
+    "{\"dagr\":3,\"tasks\":[{\"id\":\"R1\",\"title\":\"named relatively\",\"kind\":\"impl\",\"deps\":[]}]}");
+  let s28 = drive_cfg(mk_cfg(), rel_plan,
+                      ports_at(28000, "working", false, true),
+                      delegate_declare_call("c28", "name the plan the way a human types it", "R1", "plan-rel.json"));
+  let a34 = check("a plan path relative to the working directory resolves and attaches",
+                  s28.code == 0
+                    && contains(read_file(s28.world, run_file_path()), "\"id\":\"R1·a1\"")
+                    && contains(s28.out, "/tmp/plan-rel.json")
+                    && read_file(s28.world, "/tmp/.dagr/.plan-w1-p1-200") == "/tmp/plan-rel.json");
+  emit(s28.world);
+
+  -- 29. AND TRAVERSAL IS REFUSED BY SHAPE. `path_within` would ACCEPT
+  --     `/tmp/../etc/passwd` — it is a lexical prefix test — so `..` has to be
+  --     rejected before resolution. This is the only path in this file supplied
+  --     by a model rather than by the operator's environment, which is why the
+  --     rule is stricter here than anywhere else.
+  let s29 = drive_cfg(mk_cfg(), s28.world,
+                      ports_at(29000, "working", false, true),
+                      delegate_declare_call("c29", "escape the sandbox", "R1", "../etc/passwd"));
+  let a35 = check("a plan path containing `..` is refused and the previous declaration stands",
+                  s29.code == 0
+                    && contains(s29.out, "may not contain `..`")
+                    && read_file(s29.world, "/tmp/.dagr/.plan-w1-p1-200") == "/tmp/plan-rel.json");
+  emit(s29.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
      && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 && a17b
      && a18 && a19 && a20 && a21 && a22 && a23 && a24 && a25 && a26 && a27 && a27b && a28 && a29
-     && a30 && a30b && a31 && a32 && a33 then () else exit(1)
+     && a30 && a30b && a31 && a32 && a33 && a34 && a35 then () else exit(1)
 }

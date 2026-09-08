@@ -163,7 +163,7 @@ func delegate_params(allowed: string, must_choose: bool) -> string {
     else
       "Agent kind to run. The operator permits only: ${allowed}. Omit it unless you have a specific reason — the default is the fastest kind and the one needing no privilege relaxation.";
   let required = if must_choose then "[\"prompt\",\"kind\"]" else "[\"prompt\"]";
-  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model the delegate should run on: claude `--model`, codex `-m`, motoko the MODEL environment variable. Free string; empty means that agent's own default. Shell metacharacters are refused and fall back to the default. Ignored by kinds with no model transport.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"dagr_plan\":{\"type\":\"string\",\"description\":\"Path to the operator's dagr plan file, when they have named one — for example `.dagr/run-plan003.json` from 'start implementing this dagr graph'. Pass it on the FIRST Delegate of the session; it is remembered for the rest of it. The plan's tasks, titles and dependencies are then seeded into the delegation view so `dagr_task` can attach this work to one of them. The file is read and never written, and a path outside the working directory is refused with the reason in the result.\"},\"dagr_task\":{\"type\":\"string\",\"description\":\"The id of a task in the operator's plan that this delegation is work on. Use it whenever the work corresponds to a planned task: the attempt is recorded against that task, so the plan's dependencies and titles stay attached to what actually happened. An id that names no planned task is refused and the delegation is recorded as new work instead — it is never an error, and the result says so.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
+  "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The complete task statement. The delegate shares none of this conversation, so it must stand alone. Shell metacharacters and code fences are fine here — this text travels in a file, never on a command line.\"},\"kind\":{\"type\":\"string\",\"description\":\"${kind_desc}\"},\"model\":{\"type\":\"string\",\"description\":\"Model the delegate should run on: claude `--model`, codex `-m`, motoko the MODEL environment variable. Free string; empty means that agent's own default. Shell metacharacters are refused and fall back to the default. Ignored by kinds with no model transport.\"},\"task_kind\":{\"type\":\"string\",\"enum\":[\"impl\",\"review\",\"research\",\"test\",\"docs\"],\"description\":\"What sort of work this is, for the delegation view. Nothing depends on it operationally; a wrong value costs a wrong glyph. Omit it if none of the five fits.\"},\"retry_of\":{\"type\":\"string\",\"description\":\"Only when re-issuing a task whose previous delegate failed or under-delivered: the handle of that delegation. It records this as another attempt at the same task rather than as new work. Do not use it to link merely similar tasks.\"},\"dagr_plan\":{\"type\":\"string\",\"description\":\"Path to the operator's dagr plan file, when they have named one — for example `.dagr/run-plan003.json` from 'start implementing this dagr graph'. Relative paths are resolved against the working directory, so pass the operator's words unchanged. Pass it on the FIRST Delegate of the session; it is remembered for the rest of it. The plan's tasks, titles and dependencies are then seeded into the delegation view so `dagr_task` can attach this work to one of them. The file is read and never written, and a path outside the working directory is refused with the reason in the result.\"},\"dagr_task\":{\"type\":\"string\",\"description\":\"The id of a task in the operator's plan that this delegation is work on. Use it whenever the work corresponds to a planned task: the attempt is recorded against that task, so the plan's dependencies and titles stay attached to what actually happened. An id that names no planned task is refused and the delegation is recorded as new work instead — it is never an error, and the result says so.\"},\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the delegate's pane. Defaults to Motoko's own.\"}},\"required\":${required}}"
 }
 
 func check_params() -> string {
@@ -503,17 +503,41 @@ func declare_plan(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, d
   else if cfg.session_ms == "" || path_within(workdir, cfg.dagr_dir) == false then
     { note: " NOTE: `dagr_plan` was NOT recorded — this session writes no run file, so there is no delegation view for a plan to seed.",
       next_state: w }
-  else if path_is_safe(declared) == false || path_within(workdir, declared) == false then
-    { note: " NOTE: the plan `${declared}` was NOT recorded — it is outside Motoko's filesystem sandbox (`${workdir}`) or holds a shell metacharacter. Name a plan file under the working directory; until one is named, delegations are recorded as new work.",
+  -- `..` IS REFUSED BEFORE ANYTHING IS RESOLVED, and this path is the reason
+  -- the rule is stricter here than anywhere else in this file. Every other
+  -- path the extension handles comes from the OPERATOR through the
+  -- environment; this one comes from a MODEL repeating prose. `path_within` is
+  -- a lexical prefix test, so `<workdir>/../etc/passwd` would satisfy it — the
+  -- traversal has to be refused by its shape rather than by the prefix.
+  else if contains(declared, "..") then
+    { note: " NOTE: the plan `${declared}` was NOT recorded — a plan path may not contain `..`. Name a plan file under the working directory.",
       next_state: w }
   else {
-    let dir = p.dir_make(w, cfg.dagr_dir);
-    let m = p.file_write(dir.next_state, plan_marker(cfg.dagr_dir, cfg.own_pane, cfg.session_ms), declared);
-    if m.ok == false then
-      { note: " NOTE: the plan `${declared}` could not be recorded (${m.error}), so it is not in effect.", next_state: m.next_state }
-    else
-      { note: " The operator's plan `${declared}` is in effect for the rest of this session — `dagr_task` on this and every later call attaches work to its tasks, and the run file carries the plan's titles and dependencies. It is read and never written; if it cannot be read, the next sentence says so.",
-        next_state: m.next_state }
+    -- RESOLVED AGAINST THE WORKDIR, and the absence of this line is the bug
+    -- that made the first live use of `dagr_plan` fail on 2026-09-08. The
+    -- operator names the plan in prose — ".dagr/run-plan003.json" — the model
+    -- repeats it verbatim, and `path_within` compares it against an ABSOLUTE
+    -- workdir, so the one path shape a human would ever type was refused as
+    -- "outside the sandbox" while sitting inside it. The schema's own example
+    -- was relative. Everything else in this file works in absolutes because it
+    -- comes from the environment already absolute; only this value does not.
+    let abs = if length(declared) > 0 && substring(declared, 0, 1) == "/"
+              then declared
+              else "${workdir}/${declared}";
+    if path_is_safe(abs) == false || path_within(workdir, abs) == false then
+      { note: " NOTE: the plan `${declared}` was NOT recorded — it resolves to `${abs}`, which is outside Motoko's filesystem sandbox (`${workdir}`) or holds a shell metacharacter. Name a plan file under the working directory; until one is named, delegations are recorded as new work.",
+        next_state: w }
+    else {
+      let dir = p.dir_make(w, cfg.dagr_dir);
+      -- THE MARKER HOLDS THE RESOLVED PATH, not what was typed: `plan_in_effect`
+      -- hands it straight to `file_read`, which has no notion of the workdir.
+      let m = p.file_write(dir.next_state, plan_marker(cfg.dagr_dir, cfg.own_pane, cfg.session_ms), abs);
+      if m.ok == false then
+        { note: " NOTE: the plan `${abs}` could not be recorded (${m.error}), so it is not in effect.", next_state: m.next_state }
+      else
+        { note: " The operator's plan `${abs}` is in effect for the rest of this session — `dagr_task` on this and every later call attaches work to its tasks, and the run file carries the plan's titles and dependencies. It is read and never written; if it cannot be read, the next sentence says so.",
+          next_state: m.next_state }
+    }
   }
 }
 
