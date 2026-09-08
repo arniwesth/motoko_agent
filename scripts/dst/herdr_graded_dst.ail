@@ -71,12 +71,50 @@ import src/core/dst_replay (
   replay_message,
   refusal_message
 )
-import src/core/dst_fault_catalogue (required_class_ids, fault_catalogue_version)
-import src/core/dst_profile (
-  ExecutionManifest, PackageVersion, profile_rules_version
+import src/core/dst_fault_catalogue (
+  FaultClass, fault_catalogue, required_class_ids, fault_catalogue_version
 )
-import src/core/dst_profile_coverage as Cov (coverage_rules_version)
-import src/core/dst_attribution_table as Attr (attribution_rules_version)
+import src/core/dst_profile (
+  ExecutionManifest, PackageVersion, profile_rules_version,
+  ProfileDefinition,
+  ProfileRejection,
+  Classifier2Call,
+  InstalledPackage,
+  OmittedExtension,
+  HookClassificationEntry,
+  ClassificationBasis,
+  Criterion2Clauses,
+  ClauseStatus,
+  Substantively, Vacuously, NotApplicable,
+  EffectFree, WorldMediated, ExplicitlyExcluded,
+  clause_status_id,
+  classification_id,
+  basis_kind_id,
+  producer_kind,
+  rejection_rule,
+  rejection_message,
+  validate_definition_at_load
+)
+import src/core/dst_driver_plus_herdr (
+  driver_plus_herdr,
+  herdr_profile_id,
+  herdr_profile_version,
+  herdr_substance,
+  herdr_coverage_statement,
+  herdr_manifest as record_manifest,
+  herdr_abi_version,
+  installed_extension_ids,
+  criterion_2_slot_ids,
+  excluded_slot_ids,
+  measured_at
+)
+import src/core/dst_profile_coverage as Cov (
+  coverage_rules_version, CapabilityDisclosureIds, AtomIds, atom_ids_id
+)
+import src/core/dst_attribution_table as Attr (
+  attribution_rules_version, CoreSite, unconditional_core_sites,
+  table_source_revision, table_identity
+)
 import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtEntry, ExtRegistry, BudgetPlan
@@ -330,23 +368,13 @@ pure func env_reads_always(resolutions: int) -> [EnvExpectation] {
         { key: "MOTOKO_REPO",        count: resolutions * 2 }]
 }
 
+-- BUILT FROM THE RECORD, not beside it. Every field the record owns —
+-- profile id and version, the package list, the scan roots — comes from
+-- `src/core/dst_driver_plus_herdr.ail`, so a record whose identity drifts from
+-- the run that grades it cannot pass here. Only the fields that describe THIS
+-- PROCESS are supplied by the script.
 func herdr_manifest() -> ExecutionManifest {
-  { source_revision: "HEAD",
-    toolchain: "ailang 0.33.0",
-    extension_packages: [{ package_id: "sunholo/motoko_ext_herdr", version: "0.1.0" }],
-    abi_version: "7.3",
-    profile_id: "driver_plus_herdr",
-    profile_version: "1",
-    event_vocabulary_version: event_vocabulary_version(),
-    normalized_configuration: "{}",
-    classifier_2_set: ["env_get"],
-    unrouted_fields: [],
-    scan_roots: ["src/core", "packages/motoko-ext-herdr"],
-    scan_root_commit: "HEAD",
-    profile_rules_version: profile_rules_version(),
-    coverage_rules_version: Cov.coverage_rules_version(),
-    attribution_rules_version: Attr.attribution_rules_version(),
-    fault_catalogue_version: fault_catalogue_version() }
+  record_manifest("HEAD", "ailang 0.33.0", herdr_abi_version(), "{}", ["env_get"], [], "HEAD")
 }
 
 pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram {
@@ -459,6 +487,256 @@ func scenario_discovery(resolutions: int)
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- THE RECORD: `src/core/dst_driver_plus_herdr.ail`, read back
+-- ---------------------------------------------------------------------------
+--
+-- The chain above is the EVIDENCE; this section is the CLAIM it licenses, and
+-- the order matters. `scenario_discovery` runs the subject and grades it, and
+-- only then does the profile that cites `discovery` as a basis get read back
+-- and checked. A record whose criterion-2 entries did not have that run behind
+-- them would be the fail-open shape `basis` was added to close.
+--
+-- The CLASSIFICATION lines below are COMPUTED from the definition rather than
+-- written, and are the nine-field shape a guard reads:
+--
+--   CLASSIFICATION <ext> <hook> <classification> <producer> <kind>
+--                  <ports> <origin_tag> <world_state>
+
+pure func head_inventory() -> [CoreSite] {
+  unconditional_core_sites()
+    ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
+          routed: false, note: "" },
+        { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process",
+          routed: false, note: "" }]
+}
+
+-- Classifier 2's member call sites in installable extensions: EMPTY at HEAD
+-- since WI-B2b widened `ExtPorts.ai_step`.
+pure func head_classifier_2_calls() -> [Classifier2Call] { [] }
+
+func report_rejections(rs: [ProfileRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => { let _ = println("      ${rejection_message(r)}"); report_rejections(rest) }
+  }
+}
+
+func load(d: ProfileDefinition) -> [ProfileRejection] ! {IO} {
+  validate_definition_at_load(d, table_source_revision(), head_inventory(),
+                              head_classifier_2_calls(), fault_catalogue())
+}
+
+pure func has_rule(rs: [ProfileRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if rejection_rule(r) == rule then true else has_rule(rest, rule)
+  }
+}
+
+-- "This clause BINDS": a MUTATION OF THIS PROFILE that the named rule must
+-- reject. Not a fresh fixture — a fresh fixture would show the rule works on
+-- some definition, and the question is whether it works on this one.
+func binds(label: string, rule: string, d: ProfileDefinition) -> bool ! {IO} {
+  let rs = load(d);
+  let ok = has_rule(rs, rule);
+  let _ = if ok then println("      ↳ BINDS: ${label} → rejected by [${rule}]")
+          else {
+            let _ = println("      ✗ ${label} was NOT rejected by [${rule}] — the clause passes vacuously on this profile");
+            report_rejections(rs)
+          };
+  ok
+}
+
+pure func join_ids(xs: [string]) -> string {
+  match xs { [] => "", x :: rest => match rest { [] => x, _ => "${x}, ${join_ids(rest)}" } }
+}
+
+pure func atom_id_strs(xs: [AtomIds]) -> [string] {
+  match xs { [] => [], x :: rest => atom_ids_id(x) :: atom_id_strs(rest) }
+}
+
+func show_entries(cs: [HookClassificationEntry]) -> () ! {IO} {
+  match cs {
+    [] => (),
+    c :: rest => {
+      let kind = match producer_kind(c.basis.producer) {
+        Some(k) => basis_kind_id(k),
+        None => "UNRECOGNISED"
+      };
+      let _ = println("CLASSIFICATION ${c.extension_id} ${c.hook_id} ${classification_id(c.classification)} ${c.basis.producer} ${kind} ${clause_status_id(c.clauses.ports)} ${clause_status_id(c.clauses.origin_tag)} ${clause_status_id(c.clauses.world_state)}");
+      show_entries(rest)
+    }
+  }
+}
+
+func show_install_lines(ps: [InstalledPackage]) -> () ! {IO} {
+  match ps {
+    [] => (),
+    p :: rest => {
+      let _ = println("INSTALLED ${p.extension_id} ${p.package_id} ${p.version} ${p.source_path}");
+      show_install_lines(rest)
+    }
+  }
+}
+
+func show_omit_lines(os: [OmittedExtension]) -> () ! {IO} {
+  match os {
+    [] => (),
+    o :: rest => { let _ = println("OMITTED ${o.extension_id}"); show_omit_lines(rest) }
+  }
+}
+
+func show_disclosures(ds: [CapabilityDisclosureIds]) -> () ! {IO} {
+  match ds {
+    [] => (),
+    x :: rest => {
+      let _ = println("DISCLOSURE ${x.extension_id}");
+      let _ = println("        atoms:    ${join_ids(atom_id_strs(x.atoms))}");
+      let _ = println("        covered:  ${join_ids(atom_id_strs(x.covered))}");
+      let _ = println("        excluded: ${if List.length(x.excluded) == 0 then "(none)" else join_ids(atom_id_strs(x.excluded))}");
+      show_disclosures(rest)
+    }
+  }
+}
+
+pure func all_reasoned(os: [OmittedExtension]) -> bool {
+  match os { [] => true, o :: rest => if o.reason == "" then false else all_reasoned(rest) }
+}
+
+func scenario_loads_clean() -> bool ! {IO} {
+  let rs = load(driver_plus_herdr());
+  let ok = List.length(rs) == 0;
+  let _ = if ok then
+            println("  ✓ ${herdr_profile_id()} v${herdr_profile_version()} LOADS CLEAN at the bound revision, with herdr INSTALLED, its TOOL path COVERED and only the lifecycle slot excluded")
+          else {
+            let _ = println("  ✗ ${herdr_profile_id()} did NOT load clean: ${show(List.length(rs))} rejection(s)");
+            report_rejections(rs)
+          };
+  ok
+}
+
+-- WHAT STOPS THIS PROFILE PASSING ITS OWN GATE VACUOUSLY. Each mutation is of
+-- THIS definition and each names the rule that must catch it. A rule that fires
+-- on some other fixture but not on this one is a rule this profile does not
+-- actually pass.
+func scenario_the_clauses_bind() -> bool ! {IO} {
+  let d = driver_plus_herdr();
+
+  -- 1. `discovery` is a MEASURED producer and criterion 2 may not rest on an
+  --    ASSUMED one. Move the tool slot back to the declared row — the basis the
+  --    run above exists to replace — and the load must refuse it. This is the
+  --    clause that makes the whole discovery chain load-bearing rather than
+  --    decorative.
+  let assumed = { d | hook_classifications:
+    rebase(d.hook_classifications, "tool_provider[0]",
+           { producer: "declared_row", revision: measured_at() }) };
+  let b1 = binds("the tool slot rests on the DECLARED ROW instead of the run",
+                 "world-mediated-on-an-assumed-basis", assumed);
+
+  -- 2. The set of producers is CLOSED. A basis nobody produces is not a basis,
+  --    and inventing one is how a profile would certify itself.
+  let unknown = { d | hook_classifications:
+    rebase(d.hook_classifications, "work_in_flight[0]",
+           { producer: "herdr_says_so", revision: measured_at() }) };
+  let b2 = binds("a criterion-2 entry cites a producer that does not exist",
+                 "classification-basis-unrecognised", unknown);
+
+  -- 3. A `WorldMediated` entry must RECORD each of criterion 2's three clauses
+  --    as substantive or vacuous. `NotApplicable` on a mediating hook is the
+  --    shape where a profile claims mediation and measures nothing, and the rule
+  --    that catches it fires PER CLAUSE.
+  let na = { d | hook_classifications:
+    reclause(d.hook_classifications, "tool_provider[0]",
+             { ports: NotApplicable, origin_tag: NotApplicable, world_state: NotApplicable }) };
+  let b3 = binds("the tool slot claims mediation and marks all three clauses NotApplicable",
+                 "criterion-2-clause-unrecorded", na);
+
+  -- 4. D5 fields 2 and 9 are two fields describing one decision, and they must
+  --    agree. Drop the exclusion from the DISCLOSURE while the classification
+  --    entry still says excluded.
+  let split = { d | disclosures: uncover(d.disclosures) };
+  let b4 = binds("the disclosure covers a slot the classification excludes",
+                 "classification-disagrees-with-disclosure", split);
+
+  b1 && b2 && b3 && b4
+}
+
+-- Moves every excluded atom back into `covered`, so the disclosure claims full
+-- coverage while the classification entries still carry the exclusion.
+pure func uncover(ds: [CapabilityDisclosureIds]) -> [CapabilityDisclosureIds] {
+  match ds {
+    [] => [],
+    x :: rest => ({ x | covered: x.atoms, excluded: [] }) :: uncover(rest)
+  }
+}
+
+pure func rebase(cs: [HookClassificationEntry], hook: string, b: ClassificationBasis) -> [HookClassificationEntry] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      (if c.hook_id == hook then { c | basis: b } else c) :: rebase(rest, hook, b)
+  }
+}
+
+pure func reclause(cs: [HookClassificationEntry], hook: string, cl: Criterion2Clauses) -> [HookClassificationEntry] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      (if c.hook_id == hook then { c | clauses: cl } else c) :: reclause(rest, hook, cl)
+  }
+}
+
+func scenario_attribution_ref_is_current() -> bool ! {IO} {
+  let live = table_identity();
+  let rec = driver_plus_herdr().attribution_ref;
+  let ok = rec.source_revision == live.source_revision && rec.content_hash == live.content_hash;
+  let _ = if ok then
+            println("  ✓ the recorded attribution reference is current: (${rec.source_revision}, ${rec.content_hash})")
+          else {
+            let _ = println("  ✗ the attribution table was corrected and this profile was not re-issued (D4)");
+            let _ = println("      recorded: (${rec.source_revision}, ${rec.content_hash})");
+            println("      live:     (${live.source_revision}, ${live.content_hash})")
+          };
+  ok
+}
+
+-- THE SUBSTANCE, and it is where this profile differs from all three
+-- predecessors: TWO covered hooks mediate the world substantively, and one of
+-- them is a TOOL dispatch, which no profile in this tree has ever carried.
+func scenario_the_record_shows_the_substance() -> bool ! {IO} {
+  let d = driver_plus_herdr();
+  let _ = show_install_lines(d.installed_packages);
+  let _ = show_omit_lines(d.omitted_extensions);
+  let _ = show_disclosures(d.disclosures);
+  let _ = show_entries(d.hook_classifications);
+  let s = herdr_substance();
+  let _ = println("      ${show(s.criterion_1_hooks)} hook(s) on criterion 1 (basis: declared_row, ASSUMED — ADR:1415)");
+  let _ = println("      ${show(s.criterion_2_hooks)} hook(s) on criterion 2 (basis: discovery, MEASURED — over the run above)");
+  let _ = println("      ${show(s.excluded_hooks)} hook(s) EXPLICITLY EXCLUDED (basis: disclosure) — the lifecycle slot");
+  let _ = println("      ${show(s.no_op_hooks)} criterion-2 hook(s) satisfy the port and origin clauses VACUOUSLY");
+  let _ = println("      ${show(s.world_mediating_hooks)} covered hook(s) mediate the world SUBSTANTIVELY");
+  let _ = println("STATEMENT ${herdr_coverage_statement()}");
+  let _ = println("      ${herdr_coverage_statement()}");
+  let partition_ok = List.length(d.installed_packages) == 1
+                       && List.length(d.omitted_extensions) == 17
+                       && all_reasoned(d.omitted_extensions);
+  let ok = s.covered_hooks == 3 && s.world_mediating_hooks == 2
+             && s.no_op_hooks == 0 && s.excluded_hooks == 1
+             && s.criterion_1_hooks == 1 && partition_ok;
+  let _ = if ok then () else println("      ✗ the substance counts do not describe two substantively mediating hooks among three covered");
+  ok
+}
+
+func scenario_the_record() -> bool ! {IO} {
+  let a = scenario_loads_clean();
+  let b = scenario_attribution_ref_is_current();
+  let c = scenario_the_clauses_bind();
+  let e = scenario_the_record_shows_the_substance();
+  let _ = println("CLAIM record profile=${herdr_profile_id()}/${herdr_profile_version()} measured_at=${measured_at()} covered=${show(herdr_substance().covered_hooks)} mediating=${show(herdr_substance().world_mediating_hooks)} excluded=${show(herdr_substance().excluded_hooks)} criterion_2=${join_ids(criterion_2_slot_ids())} excluded_ids=${join_ids(excluded_slot_ids())}");
+  a && b && c && e
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
   let r = run_graded(graded_world());
   let msgs = result_msgs(r);
@@ -483,8 +761,15 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trac
   let _ = println("HERDR-GRADED: elapsed is the scripted durations, so nothing ran:   ${show(served)}");
   let _ = println("  ---- the discovery chain ----");
   let disc = scenario_discovery(1);
-  if dispatched && succeeded && served && disc then
-    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, and the run is recorded, graded, validated and strictly replayed")
+  -- THE ORDER IS THE ARGUMENT. The record below cites `discovery` as the basis
+  -- for both its criterion-2 entries, and `discovery` is an EXISTENTIAL producer
+  -- whose evidence is one recorded, validated, strictly-replayed session. That
+  -- session is the block above.
+  let _ = println("  ---- the record it licenses ----");
+  let rec = scenario_the_record();
+  let _ = println("HERDR-GRADED: the profile record loads clean and its clauses bind:  ${show(rec)}");
+  if dispatched && succeeded && served && disc && rec then
+    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/1 rests on it")
   else {
     let _ = println("HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world");
     let _ = show_each(tools);

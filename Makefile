@@ -435,7 +435,7 @@ DST_LOG  ?= .ailang/dst-last.log
 
 DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   profile_definition smoke_driver corpus_pr strict_replay world_state \
-  corpus_rotating driver_plus_compose driver_only seeded_generator \
+  corpus_rotating driver_plus_compose driver_plus_herdr driver_only seeded_generator \
   event_vocabulary phase_c_l1 recorded_stream driver_plus_no_ops \
   ext_hook_scope_selftest invariants run_report discovery program_persistence \
   compaction_dst fault_catalogue ext_ambient_inventory_selftest \
@@ -477,6 +477,49 @@ herdr_graded:
 	fi; \
 	grep '^HERDR-GRADED' $$out || true; \
 	rm -f $$out; rm -rf ./.tmp-herdr-graded
+
+# `driver_plus_herdr` v1 — the FOURTH conformant profile, and the first whose
+# covered substance is a TOOL dispatch.
+#
+# WHY IT IS A SEPARATE TARGET FROM `herdr_graded`, WHICH RUNS THE SAME SCRIPT.
+# Per D10 nothing transfers between profiles and each earns its own coverage, so
+# every profile in this tree owns a target that can go red on its own —
+# `driver_only`, `driver_plus_no_ops`, `driver_plus_compose` and now this. The
+# two targets read DIFFERENT halves of one run's output: `herdr_graded` shows the
+# RUN (did a ToolProvider dispatch reach the extension, was it served from the
+# world, does it replay), and this one shows the RECORD it licenses (the
+# classification entries, the disclosure, the coverage statement). Sharing a
+# script rather than a fixture is deliberate: the record cites `discovery` as the
+# basis for both its criterion-2 entries, and `discovery`'s evidence is exactly
+# the session `herdr_graded` drives. A record checked against a DIFFERENT run
+# would be checked against evidence it does not rest on.
+#
+# THE CAPABILITIES ARE THE PROFILE'S OWN DISCLOSURE, NOT A CONVENIENCE, and here
+# the disclosure is narrower than compose's: herdr's `register_with_config` reads
+# the environment at register.ail:26 before any hook is dispatched and AILANG
+# capabilities are per PROCESS, so Env cannot be withheld. It reads no files at
+# registration — FS is granted for the DRIVER's sake. What carries the
+# determinism claim instead is the record -> strict-replay identity the script
+# asserts, and `HERDR_*` is set in this recipe so a reader can see exactly what
+# the one ambient source is given.
+#
+# The `grep -v` hides the machine-readable lines the run emits; the exit status
+# is the script's own, taken before any pipeline, because a `|` here would
+# report the grep's status instead of the run's.
+.PHONY: driver_plus_herdr
+driver_plus_herdr:
+	@set -eu; \
+	out=$$(mktemp); \
+	if ! env HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
+	       HERDR_DELEGATE_DIR=./.tmp-herdr-profile/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-profile/dagr \
+	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	     --ai-stub --entry main scripts/dst/herdr_graded_dst.ail < /dev/null > $$out 2>&1; then \
+		grep -v '^{"schema_version"' $$out; rm -f $$out; rm -rf ./.tmp-herdr-profile; exit 1; \
+	fi; \
+	grep -v '^INSTALLED \|^OMITTED \|^DISCLOSURE \|^CLASSIFICATION \|^STATEMENT \|^CLAIM \|^{"schema_version"' $$out; \
+	rm -f $$out; rm -rf ./.tmp-herdr-profile; \
+	ailang test src/core/dst_driver_plus_herdr.ail > /dev/null && echo "  ✓ src/core/dst_driver_plus_herdr.ail"
 
 # corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
 #
