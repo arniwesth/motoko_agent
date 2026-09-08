@@ -105,10 +105,19 @@ HELPED = {
 }
 
 # The extension-bridge region (ext_ai_step + ext_ports_of, session.ail
-# 808-1197): forwarding/delegating seams, never driver-helped leaves.
-# p.model_step at :816 delegates to the harness override chain; the helped
+# 788-1177): forwarding/delegating seams, never driver-helped leaves.
+# p.model_step at :795 delegates to the harness override chain; the helped
 # ModelStep leaf is dispatch_step's ports.model_step (stub_step.ail:712).
-BRIDGE_SPAN = ("src/core/session.ail", 808, 1197)
+#
+# RE-PINNED, NOT WIDENED (ADR-003 D1, PLAN-003 P1 Part 3). The span was
+# 808-1197 and every line in it moved -20 when `RuntimeStatusCounts` and its two
+# helpers left session.ail for phase_vocab.ail; `ext_ai_step` still opens the
+# region and the `file_write` bridge still closes it, character for character.
+# This is a LINE PIN over unchanged content, the same class of artifact as the
+# attribution anchors, and it is re-pinned here rather than deferred because
+# unlike `make anchors` this gate is GREEN at HEAD and a stale span reports
+# `p.model_step` as an unresolved driver leaf — a fail-closed error, not drift.
+BRIDGE_SPAN = ("src/core/session.ail", 788, 1177)
 
 AGGREGATE_HELPERS = [
     "resolve_context_limit",

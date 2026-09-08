@@ -72,7 +72,13 @@ export pure func history_valid_transcript(h: History) -> bool {
   match h { MkHistory(xs) => valid_message_transcript(xs) }
 }
 
-pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
+-- EXPORTED FOR `journal.ail` (ADR-003 D1, PLAN-003 P1 Part 3). Both were
+-- private until the journal needed them, and both are exported as FUNCTIONS
+-- over `[Message]` — `History` and its constructor stay sealed, and the journal
+-- reaches a validated history through `history_from_seed` like every other
+-- caller. `system_is_head_prefix` is the fold's head check (D4 rule 3);
+-- `take_system_prefix` is what a profile switch replaces (D6 step 4).
+export pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
   match msgs {
     [] => true,
     m :: rest =>
@@ -82,7 +88,7 @@ pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
   }
 }
 
-pure func take_system_prefix(msgs: [Message]) -> [Message] {
+export pure func take_system_prefix(msgs: [Message]) -> [Message] {
   match msgs {
     [] => [],
     m :: rest => if m.role == "system" then m :: take_system_prefix(rest) else []
@@ -109,6 +115,55 @@ pure func valid_message_transcript(msgs: [Message]) -> bool {
     m :: rest =>
       if m.role == "tool" then m.tool_call_id != "" && valid_message_transcript(rest)
       else valid_tool_calls(m.tool_calls) && valid_message_transcript(rest)
+  }
+}
+
+-- ============================================================================
+-- Cumulative runtime counts.
+--
+-- MOVED HERE FROM `session.ail:430–450`, `:544–552` (ADR-003 D1, PLAN-003 P1
+-- Part 3). The type was private to `session.ail` and `Continuation.cumulative`
+-- (`journal.ail`) needs to name it; `journal.ail` cannot import `session.ail`
+-- without a cycle, and this module is already imported by both. No behaviour
+-- change: the three definitions are byte-for-byte what they were, `export`
+-- aside.
+--
+-- WHAT DID NOT MOVE, and it is the same reason in both directions:
+-- `runtime_status_counts(trace)` and `runtime_status_count_one` stay in
+-- `session.ail` because they fold a `LedgerTrace` over records whose meaning is
+-- the driver's, and `zero_totals`/`RuntimeLoopTotals` stay because they are the
+-- per-RUN totals the loop resets and no journal value carries them (ADR-003 D1,
+-- "what the journal never holds").
+-- ============================================================================
+
+export type RuntimeStatusCounts = {
+  provider_calls_started: int,
+  provider_calls_completed: int,
+  stage_applied_total: int,
+  stage_rejected_total: int,
+  compaction_ai_applied: int
+}
+
+export pure func zero_runtime_status_counts() -> RuntimeStatusCounts {
+  {
+    provider_calls_started: 0,
+    provider_calls_completed: 0,
+    stage_applied_total: 0,
+    stage_rejected_total: 0,
+    compaction_ai_applied: 0
+  }
+}
+
+-- The ADD is what a resume is made of: `prior_counts` from the continuation
+-- plus this run's own trace-derived counts (`session.ail:539`), so a suspended
+-- run's provider calls are still counted after the operator continues.
+export pure func runtime_status_counts_add(a: RuntimeStatusCounts, b: RuntimeStatusCounts) -> RuntimeStatusCounts {
+  {
+    provider_calls_started: a.provider_calls_started + b.provider_calls_started,
+    provider_calls_completed: a.provider_calls_completed + b.provider_calls_completed,
+    stage_applied_total: a.stage_applied_total + b.stage_applied_total,
+    stage_rejected_total: a.stage_rejected_total + b.stage_rejected_total,
+    compaction_ai_applied: a.compaction_ai_applied + b.compaction_ai_applied
   }
 }
 
@@ -234,7 +289,13 @@ pure func canonical_messages(msgs: [Message]) -> string {
   }
 }
 
-pure func canonical_messages_raw(msgs: [Message]) -> string {
+-- EXPORTED FOR `journal.ail` (ADR-003 D1, PLAN-003 P1 Part 3). The journal's
+-- two digests are built from exactly these: the seed's `digest` is
+-- `digest_messages` of the whole seed, and a history entry's `digest_after`
+-- chains the previous one through `canonical_messages_raw` of the ONE message
+-- that entry carries — which is why the raw canonical form is exported and not
+-- just the digest over it. See `journal.chain_digest_after`.
+export pure func canonical_messages_raw(msgs: [Message]) -> string {
   match msgs {
     [] => "m-end;"
     m :: rest =>
@@ -242,7 +303,7 @@ pure func canonical_messages_raw(msgs: [Message]) -> string {
   }
 }
 
-pure func digest_messages(msgs: [Message]) -> string {
+export pure func digest_messages(msgs: [Message]) -> string {
   "sha256:${sha256Hex(canonical_messages(msgs))}"
 }
 

@@ -1,0 +1,749 @@
+-- src/core/journal.ail
+-- ADR-003 D1: the session journal's core-side types and its `[Message]` codec.
+--
+-- THIS MODULE IS A LEAF, and that is its whole design constraint. It imports
+-- `phase_vocab`, the extension ABI, `config` and `std/json`, and it imports
+-- NEITHER `session` NOR `ports` NOR `ext_world`:
+--
+--   * not `session`, because `session` must import THIS module (P1 Part 4 puts
+--     `Continuation` and `FinalState` on `TracedSessionResult`) and a cycle
+--     would follow. `phase_vocab` imports `compaction`, `tool_contract` and
+--     `types`; `config` imports no `src/core` module; the ABI is a package.
+--     None of them imports `session`, so the graph stays acyclic.
+--   * not `ports` and not `ext_world`, because the journal carries no
+--     `WorldState` (ADR-003 v6.1's retraction of v4.1's world decoding). What
+--     crosses is `world_ordinal`, an int, and not before PLAN-001 P2 exists.
+--
+-- WHAT IS HERE IN P1 (PLAN-003 P1 Part 3): `Continuation` — the in-memory value
+-- a suspended run carries out, `RunIdentity`, `FinalState` — the comparand the
+-- journal fold is checked against, and the `[Message]` codec with the two
+-- digests D1 defines over messages.
+--
+-- WHAT IS DELIBERATELY NOT HERE: no `Snapshot` (v4.1's on-disk continuation is
+-- retracted — the child writes no file, PLAN-003 §0.8), no `Refusal`, no entry
+-- types, no fold. Those are P3 Part 2's, and they land with the vocabulary
+-- variants and goldens that make them observable. A type added here early would
+-- be a type with no producer and no test.
+--
+-- THE CHILD NEVER WRITES. Everything in this module is pure. The journal file
+-- is the host's (ADR-003 D3, "one writer: the host"); the child's whole
+-- contribution is the events it already emits, and this module is the shape of
+-- their payloads.
+--
+-- Companion to: src/core/phase_vocab.ail (the history seal, the counts, the
+-- canonical forms), src/core/session.ail (the driver that produces these
+-- values, P1 Part 4).
+
+module src/core/journal
+
+import std/ai (Message, ToolCall, ImagePart)
+import std/crypto (sha256Hex)
+import std/json (Json, jo, ja, kv, js, encode, get, asString, asArray)
+import std/list as List (length, map, foldl)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates)
+import src/core/phase_vocab (
+  RuntimeStatusCounts,
+  zero_runtime_status_counts,
+  runtime_status_counts_add,
+  history_from_seed,
+  history_valid_transcript,
+  system_is_head_prefix,
+  take_system_prefix,
+  canonical_messages_raw,
+  digest_messages
+)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, TokenTelemetry)
+
+-- ============================================================================
+-- D1's identities.
+-- ============================================================================
+
+-- `session_id` is the host's, minted once per session and forwarded as
+-- MOTOKO_SESSION_ID; `run_id` is `<session_id>.r<resume_count>.<run_ordinal>`;
+-- `profile` is the profile the run was invoked under, which a resume may switch
+-- (D5, accepted as a `settings` entry).
+--
+-- The traced run RECEIVES this rather than deriving it (P1 Part 4). The
+-- exported entries keep their signatures and build a default — `r0.0`, profile
+-- `""` — which is PLAN-003 §0.7's rule and the reason twenty DST call sites do
+-- not move.
+export type RunIdentity = {
+  session_id: string,
+  run_id: string,
+  profile: string
+}
+
+export pure func default_run_identity(session_id: string) -> RunIdentity {
+  { session_id: session_id, run_id: "${session_id}.r0.0", profile: "" }
+}
+
+-- ============================================================================
+-- D1's continuation.
+-- ============================================================================
+
+-- The loop's boot inputs — D1's `header.boot` object, and the arguments
+-- `c2_loop` is entered with (`session.ail:2378–2392`) minus the ones that are
+-- not inputs at all: `rt` is built per process, `policy` is derived from these,
+-- `model` and `profile` can change mid-session and are therefore continuation
+-- fields rather than boot fields, and `workdir` is session-scoped and lives on
+-- the header beside `session_id`, not here.
+--
+-- `step_budget` is here and `budget` is here and they are NOT the same number:
+-- `budget: BudgetPlan` is the solver/verifier token budget the ABI defines
+-- (`motoko-ext-abi/types.ail:61`), `step_budget` is the loop's step ceiling,
+-- which
+-- `default_budget_plan` happens to seed from the profile's `max_steps`
+-- (`rpc.ail:88–94`). A resume that conflated them would resume with the wrong
+-- ceiling and the bug would look like a budget bug.
+export type BootInputs = {
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates
+}
+
+-- What a suspended run carries out, and what a resumed run is rebuilt from.
+--
+-- IT IS `C2LoopState` MINUS THE LIVE THINGS: no `provider` (a `Ports` is a
+-- bundle of closures and a resumed run opens its own), no `world_state`, no
+-- `trace`, no `emissions` (a resumed run's frame is its own — ADR-003 D1, "what
+-- the journal never holds"), and no `totals`: `RuntimeLoopTotals` is per-run by
+-- construction (`session.ail:381–388`, `step_machine.ail:102–103`) and carrying
+-- it across a resume would silently turn the per-turn cost cap into a
+-- cumulative one. What DOES cross is `cumulative`, the counts, which is the whole of the
+-- repair the ADR is about: a resumed run's `prior_counts` is this field.
+--
+-- The pending-tool fields are absent for the same reason and a sharper one:
+-- a continuation with a half-dispatched tool batch has no meaning in P1 (the
+-- suspension happens at the TOP of a step, `session.ail:2408`, where every
+-- pending field is empty). D4's dangling-call rule is how P3 handles a crash
+-- that lands mid-batch, and it works on the JOURNAL, not on this record.
+export type Continuation = {
+  history: [Message],
+  step_idx: int,
+  cumulative: RuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts: Json,
+  nudges_used: int,
+  model: string,
+  profile: string,
+  boot: BootInputs
+}
+
+-- The task has ONE home, `boot.task`, because D1's header puts it there and the
+-- cross-process resume reads it from exactly there (`rpc.run_with_config`
+-- rebuilds the system prompt from `header.boot.task`, ADR-003 D6 step 4). This
+-- accessor exists so that reading it does not require knowing that.
+export pure func continuation_task(c: Continuation) -> string {
+  c.boot.task
+}
+
+-- D4's comparand: what a fold of the run's journal must reproduce. Set at all
+-- seven of `c2_finalize`'s callers in P1 Part 4, which is why it is a record
+-- and not four parameters.
+export type FinalState = {
+  history: [Message],
+  cumulative: RuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts: Json
+}
+
+-- THE SUSPENSION'S TWO OUTPUTS ARE ONE VALUE. `c2_suspend` returns both
+-- `suspended: Some(c)` and `final`, built from the same `st` at the same
+-- instant, and the P1 Part 1 fixture asserts `final.history == s.history`
+-- (`phase_c2_wiring_scenarios.ail`). Projecting one from the other makes that
+-- equality structural instead of two literals that can drift apart on the next
+-- field either record gains.
+export pure func final_of_continuation(c: Continuation) -> FinalState {
+  {
+    history: c.history,
+    cumulative: c.cumulative,
+    telemetry: c.telemetry,
+    ext_artifacts: c.ext_artifacts
+  }
+}
+
+export pure func empty_final_state(telemetry: TokenTelemetry, ext_artifacts: Json) -> FinalState {
+  {
+    history: [],
+    cumulative: zero_runtime_status_counts(),
+    telemetry: telemetry,
+    ext_artifacts: ext_artifacts
+  }
+}
+
+-- The head system prefix of a continuation's history: what a profile switch
+-- REPLACES (D6 step 4) and what the fold re-emits ahead of a `history_replaced`
+-- (D4 rule 3). Both of those are P3's; the projection is here because
+-- `take_system_prefix` is `phase_vocab`'s and the journal is its only other
+-- caller.
+export pure func continuation_system_prefix(c: Continuation) -> [Message] {
+  take_system_prefix(c.history)
+}
+
+-- The two conditions a continuation's history must satisfy to be resumable, and
+-- they are the SAME two the fold applies to its output (D4 rule 3), asserted
+-- here at the point of production so a malformed continuation is caught in the
+-- process that made it rather than in the one that reads it back.
+--
+-- `history_from_seed` is how the seal is reached: `History` and `MkHistory` are
+-- private to `phase_vocab` and stay that way, so a validated history is a value
+-- this module holds and never a type it names.
+export pure func continuation_history_ok(c: Continuation) -> bool {
+  match history_from_seed(c.history) {
+    Err(_) => false,
+    Ok(h) => history_valid_transcript(h)
+  }
+}
+
+-- `system_is_head_prefix` without going through the seal, for the caller that
+-- has messages and not a continuation — the fold's head check on a candidate
+-- history (D4 rule 3).
+export pure func messages_head_prefix_ok(msgs: [Message]) -> bool {
+  system_is_head_prefix(msgs, true)
+}
+
+-- ============================================================================
+-- D1's digests over `[Message]`.
+--
+-- Two, and they are different functions on purpose:
+--
+--   * `chain_digest_base` is the whole-history digest a `history_seeded` entry
+--     carries as `digest`. It is `phase_vocab.digest_messages`, the same
+--     function `payload_digest` and the checkpoint chain already use, so a
+--     seed's digest is comparable with every digest the log already carries.
+--   * `chain_digest_after` is the INCREMENTAL one a `history_appended` entry
+--     carries. D1's rule verbatim: the digest of the previous entry's
+--     `digest_after` concatenated with the canonical form of THIS message. An
+--     append therefore costs one message's serialisation and not the history's,
+--     which is what makes one-entry-per-message affordable at all.
+--
+-- The entry types that carry them are P3 Part 2's. The RULE is here, with the
+-- codec, because both are functions from `[Message]` to the wire and the fold
+-- must recompute exactly what the child computed — one implementation, two
+-- readers, which is the same argument `session.runtime_status_counts` makes for
+-- its own export.
+-- ============================================================================
+
+export pure func chain_digest_base(seed: [Message]) -> string {
+  digest_messages(seed)
+}
+
+export pure func chain_digest_after(previous: string, m: Message) -> string {
+  "sha256:${sha256Hex("${previous}${canonical_messages_raw([m])}")}"
+}
+
+-- ============================================================================
+-- The `[Message]` codec.
+--
+-- NEW WORK RATHER THAN A REUSE, and the reason is one field: the ABI's `Msg`
+-- has four (`packages/motoko-ext-abi/types.ail:40` — ADR-003 D1 cites `:547`,
+-- which is `ExtCtx.history_slice`, its one consumer) and `Message` has five:
+-- `images` (`std/ai`, `session.ail:3373–3379`). `phase_vocab.msgs_to_messages`
+-- fills it with `[]` while `session.messages_to_msgs` DROPS it
+-- (`src/core/types.ail:10–20`). A journal that round-tripped through `Msg`
+-- would lose every vision input in the history, silently, and a resumed run
+-- would send the model a different conversation than the one it suspended.
+--
+-- THE DECODER IS STRICT: every field of every message must be present and of
+-- the right type, and the error names the field. No fallbacks, no defaults.
+-- That is ADR-003 D4 rule 2 ("any missing or malformed field is
+-- Refusal::Entry(seq, field). No fallbacks") reaching the leaf that will be
+-- asked to decode — and it is the opposite of `ext_world.world_of_json`, which
+-- is total by construction because a world token that half-decodes is still a
+-- usable world. A history that half-decodes is a LIE about what the model saw.
+-- ============================================================================
+
+export pure func tool_call_json(c: ToolCall) -> Json {
+  jo([
+    kv("id", js(c.id)),
+    kv("name", js(c.name)),
+    kv("arguments", js(c.arguments))
+  ])
+}
+
+export pure func image_json(i: ImagePart) -> Json {
+  jo([
+    kv("source", js(i.source)),
+    kv("mime", js(i.mime))
+  ])
+}
+
+-- ALL FIVE FIELDS ARE ALWAYS EMITTED, including the empty ones. The decoder is
+-- strict, so an encoder that omitted `tool_call_id` on an assistant message
+-- would produce entries its own reader refuses; and a field that is present and
+-- empty is distinguishable from a schema that never had it, which is what the
+-- refusal's field name has to mean.
+export pure func message_json(m: Message) -> Json {
+  jo([
+    kv("role", js(m.role)),
+    kv("content", js(m.content)),
+    kv("tool_calls", ja(List.map(tool_call_json, m.tool_calls))),
+    kv("tool_call_id", js(m.tool_call_id)),
+    kv("images", ja(List.map(image_json, m.images)))
+  ])
+}
+
+export pure func messages_json(ms: [Message]) -> Json {
+  ja(List.map(message_json, ms))
+}
+
+pure func req_string(j: Json, key: string, where: string) -> Result[string, string] {
+  match get(j, key) {
+    None => Err("${where}.${key}: missing"),
+    Some(v) => match asString(v) {
+      None => Err("${where}.${key}: not a string"),
+      Some(s) => Ok(s)
+    }
+  }
+}
+
+pure func req_array(j: Json, key: string, where: string) -> Result[[Json], string] {
+  match get(j, key) {
+    None => Err("${where}.${key}: missing"),
+    Some(v) => match asArray(v) {
+      None => Err("${where}.${key}: not an array"),
+      Some(xs) => Ok(xs)
+    }
+  }
+}
+
+pure func tool_call_of_json(j: Json, where: string) -> Result[ToolCall, string] {
+  match req_string(j, "id", where) {
+    Err(e) => Err(e),
+    Ok(id) => match req_string(j, "name", where) {
+      Err(e) => Err(e),
+      Ok(name) => match req_string(j, "arguments", where) {
+        Err(e) => Err(e),
+        Ok(args) => {
+          let c: ToolCall = { id: id, name: name, arguments: args };
+          Ok(c)
+        }
+      }
+    }
+  }
+}
+
+-- RECURSION HERE, `foldl` FOR THE MESSAGE LIST BELOW, and the difference is
+-- measured rather than stylistic. AILANG does not eliminate tail calls, so
+-- depth over a list is the list's length (`session.ail:442–472`, issue #160).
+-- A message's tool-call and image lists are bounded by what one model response
+-- carries; a HISTORY is not bounded by anything, and a fold over ten thousand
+-- messages must not cost ten thousand frames.
+@allow_empty_ok("a message with no tool calls is the common case, not a decode failure — an assistant without calls and a user message both carry []")
+pure func tool_calls_of_json(xs: [Json], where: string) -> Result[[ToolCall], string] {
+  match xs {
+    [] => Ok([]),
+    j :: rest => match tool_call_of_json(j, where) {
+      Err(e) => Err(e),
+      Ok(c) => match tool_calls_of_json(rest, where) {
+        Err(e) => Err(e),
+        Ok(cs) => Ok(c :: cs)
+      }
+    }
+  }
+}
+
+pure func image_of_json(j: Json, where: string) -> Result[ImagePart, string] {
+  match req_string(j, "source", where) {
+    Err(e) => Err(e),
+    Ok(source) => match req_string(j, "mime", where) {
+      Err(e) => Err(e),
+      Ok(mime) => {
+        let i: ImagePart = { source: source, mime: mime };
+        Ok(i)
+      }
+    }
+  }
+}
+
+@allow_empty_ok("a text-only message carries no images — [] is what every message in a history without vision inputs decodes to")
+pure func images_of_json(xs: [Json], where: string) -> Result[[ImagePart], string] {
+  match xs {
+    [] => Ok([]),
+    j :: rest => match image_of_json(j, where) {
+      Err(e) => Err(e),
+      Ok(i) => match images_of_json(rest, where) {
+        Err(e) => Err(e),
+        Ok(is) => Ok(i :: is)
+      }
+    }
+  }
+}
+
+export pure func message_of_json_at(j: Json, where: string) -> Result[Message, string] {
+  match req_string(j, "role", where) {
+    Err(e) => Err(e),
+    Ok(role) => match req_string(j, "content", where) {
+      Err(e) => Err(e),
+      Ok(content) => match req_string(j, "tool_call_id", where) {
+        Err(e) => Err(e),
+        Ok(tool_call_id) => match req_array(j, "tool_calls", where) {
+          Err(e) => Err(e),
+          Ok(raw_calls) => match tool_calls_of_json(raw_calls, "${where}.tool_calls") {
+            Err(e) => Err(e),
+            Ok(calls) => match req_array(j, "images", where) {
+              Err(e) => Err(e),
+              Ok(raw_images) => match images_of_json(raw_images, "${where}.images") {
+                Err(e) => Err(e),
+                Ok(images) => {
+                  let m: Message = {
+                    role: role,
+                    content: content,
+                    tool_calls: calls,
+                    tool_call_id: tool_call_id,
+                    images: images
+                  };
+                  Ok(m)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export pure func message_of_json(j: Json) -> Result[Message, string] {
+  message_of_json_at(j, "message")
+}
+
+-- The accumulator carries the index so a refusal names WHICH message failed,
+-- and the error as a string with "" for none rather than an `Option` so the
+-- fold's step is a plain record update.
+type MessageDecodeAcc = {
+  idx: int,
+  out: [Message],
+  err: string
+}
+
+pure func cons_message(acc: [Message], m: Message) -> [Message] {
+  m :: acc
+}
+
+-- NOT `List.reverse`, AND THIS IS A TOOLCHAIN BUG WORKED AROUND, not a
+-- preference. `std/list.reverse` is implemented as `concat(reverse(rest), [x])`
+-- (`std/list.ail:29–35`), and inside a `tests [...]` cluster the runner resolves
+-- that inner `concat` against the CALLING module's scope rather than
+-- `std/list`'s own. This module transitively has `std/string.concat` in scope
+-- (`phase_vocab` imports it, `:15`), which takes ONE argument, so every
+-- `List.reverse` call inside a test in this file dies with
+--
+--   cluster harness evaluation failed: function expects 1 arguments, got 2
+--   (intermediate result is not a function)
+--
+-- while the SAME call succeeds under `ailang run`. Reduced to a two-import
+-- repro on AILANG v0.33.1-85-gde5a141e4: `import std/list as List (reverse)`
+-- plus `import std/string (concat)`, one `tests` cluster calling
+-- `List.reverse([1,2,3])`, red; drop the `std/string` import, green.
+--
+-- The replacement is a `foldl`, which is what this module wants anyway: a
+-- history is unbounded and `std/list.reverse` is non-tail-recursive, so it
+-- costs one interpreter frame per message — the #160 shape exactly
+-- (`session.ail:442–472`). Frame-free and correct beats correct.
+pure func reverse_messages(ms: [Message]) -> [Message] {
+  List.foldl(cons_message, [], ms)
+}
+
+pure func message_decode_step(acc: MessageDecodeAcc, j: Json) -> MessageDecodeAcc {
+  if acc.err != ""
+  then { idx: acc.idx + 1, out: acc.out, err: acc.err }
+  else match message_of_json_at(j, "messages[${show(acc.idx)}]") {
+    Err(e) => { idx: acc.idx + 1, out: acc.out, err: e },
+    Ok(m) => { idx: acc.idx + 1, out: m :: acc.out, err: "" }
+  }
+}
+
+-- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order), the
+-- same trade `session.runtime_status_counts` makes and for the same reason.
+export pure func messages_of_json(j: Json) -> Result[[Message], string] {
+  match asArray(j) {
+    None => Err("messages: not an array"),
+    Some(xs) => {
+      let acc = List.foldl(message_decode_step, { idx: 0, out: [], err: "" }, xs);
+      if acc.err != "" then Err(acc.err) else Ok(reverse_messages(acc.out))
+    }
+  }
+}
+
+-- ============================================================================
+-- Tests.
+-- ============================================================================
+
+pure func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func tool_calls_eq(a: [ToolCall], b: [ToolCall]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b {
+      [] => false,
+      y :: ys => x.id == y.id && x.name == y.name && x.arguments == y.arguments && tool_calls_eq(xs, ys)
+    }
+  }
+}
+
+pure func images_eq(a: [ImagePart], b: [ImagePart]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b {
+      [] => false,
+      y :: ys => x.source == y.source && x.mime == y.mime && images_eq(xs, ys)
+    }
+  }
+}
+
+pure func message_eq(a: Message, b: Message) -> bool {
+  a.role == b.role
+    && a.content == b.content
+    && a.tool_call_id == b.tool_call_id
+    && tool_calls_eq(a.tool_calls, b.tool_calls)
+    && images_eq(a.images, b.images)
+}
+
+pure func round_trips(m: Message) -> bool {
+  match message_of_json(message_json(m)) {
+    Err(_) => false,
+    Ok(back) => message_eq(m, back) && encode(message_json(back)) == encode(message_json(m))
+  }
+}
+
+-- EVERY ROLE, because each one uses a different subset of the five fields and a
+-- codec that dropped `tool_call_id` would still round-trip a user message.
+pure func test_message_codec_round_trips_every_role() -> bool
+  tests [((), true)]
+  {
+    let system_m = msg("system", "you are motoko");
+    let user_m = msg("user", "list the files");
+    let assistant_m: Message = {
+      role: "assistant",
+      content: "on it",
+      tool_calls: [{ id: "call_1", name: "BashExec", arguments: "{\"command\":\"ls\"}" }],
+      tool_call_id: "",
+      images: []
+    };
+    let tool_m: Message = {
+      role: "tool",
+      content: "AGENTS.md\nREADME.md",
+      tool_calls: [],
+      tool_call_id: "call_1",
+      images: []
+    };
+    round_trips(system_m)
+      && round_trips(user_m)
+      && round_trips(assistant_m)
+      && round_trips(tool_m)
+  }
+
+-- THE FIELD THE ABI'S `Msg` DOES NOT HAVE, and the reason this codec is new
+-- work. Two images, not one: a codec that kept only the head would pass a
+-- one-image test.
+pure func test_message_codec_round_trips_two_images() -> bool
+  tests [((), true)]
+  {
+    let m: Message = {
+      role: "user",
+      content: "what is in these",
+      tool_calls: [],
+      tool_call_id: "",
+      images: [
+        { source: "iVBORw0KGgoAAAA=", mime: "image/png" },
+        { source: "/9j/4AAQSkZJRg==", mime: "image/jpeg" }
+      ]
+    };
+    match message_of_json(message_json(m)) {
+      Err(_) => false,
+      Ok(back) => message_eq(m, back) && List.length(back.images) == 2
+    }
+  }
+
+pure func test_messages_codec_round_trips_a_history() -> bool
+  tests [((), true)]
+  {
+    let history = [msg("system", "s"), msg("user", "u"), msg("assistant", "a")];
+    let wire = messages_json(history);
+    match messages_of_json(wire) {
+      Err(_) => false,
+      Ok(back) =>
+        List.length(back) == 3
+          && encode(messages_json(back)) == encode(messages_json(history))
+    }
+  }
+
+-- THE DECODER REFUSES RATHER THAN DEFAULTS, and the refusal names the field and
+-- the index — which is what P3's `Refusal::Entry(seq, field)` is built from.
+pure func test_message_decoder_is_strict() -> bool
+  tests [((), true)]
+  {
+    let missing_images = jo([
+      kv("role", js("user")),
+      kv("content", js("hi")),
+      kv("tool_calls", ja([])),
+      kv("tool_call_id", js(""))
+    ]);
+    let wrong_type = jo([
+      kv("role", js("user")),
+      kv("content", js("hi")),
+      kv("tool_calls", js("not an array")),
+      kv("tool_call_id", js("")),
+      kv("images", ja([]))
+    ]);
+    let bad_call = jo([
+      kv("role", js("assistant")),
+      kv("content", js("")),
+      kv("tool_calls", ja([jo([kv("id", js("call_1")), kv("name", js("BashExec"))])])),
+      kv("tool_call_id", js("")),
+      kv("images", ja([]))
+    ]);
+    let one_bad = ja([message_json(msg("system", "s")), missing_images]);
+    (match message_of_json(missing_images) { Err(e) => e == "message.images: missing", Ok(_) => false })
+      && (match message_of_json(wrong_type) { Err(e) => e == "message.tool_calls: not an array", Ok(_) => false })
+      && (match message_of_json(bad_call) { Err(e) => e == "message.tool_calls.arguments: missing", Ok(_) => false })
+      && (match messages_of_json(one_bad) { Err(e) => e == "messages[1].images: missing", Ok(_) => false })
+      && (match messages_of_json(js("nope")) { Err(e) => e == "messages: not an array", Ok(_) => false })
+  }
+
+-- THE CONTINUATION OF A THREE-STEP RUN, and the one thing asserted about it is
+-- the thing the ADR is about: `cumulative` is the SUM of the parts, so the
+-- counts a suspended run carries out are the counts the resumed run continues
+-- from. Three steps of one provider call each, plus a prior run that had made
+-- one — six calls started, five completed, and neither number is a coincidence
+-- of the record literal.
+pure func counts(started: int, completed: int) -> RuntimeStatusCounts {
+  {
+    provider_calls_started: started,
+    provider_calls_completed: completed,
+    stage_applied_total: 0,
+    stage_rejected_total: 0,
+    compaction_ai_applied: 0
+  }
+}
+
+pure func test_continuation_cumulative_is_the_sum_of_its_parts() -> bool
+  tests [((), true)]
+  {
+    let prior = counts(3, 3);
+    let step_1 = counts(1, 1);
+    let step_2 = counts(1, 1);
+    let step_3 = counts(1, 0);
+    let this_run = runtime_status_counts_add(runtime_status_counts_add(step_1, step_2), step_3);
+    let history = [
+      msg("system", "s"),
+      msg("user", "u"),
+      msg("assistant", "a1"),
+      msg("assistant", "a2"),
+      msg("assistant", "a3")
+    ];
+    let c: Continuation = {
+      history: history,
+      step_idx: 3,
+      cumulative: runtime_status_counts_add(prior, this_run),
+      telemetry: { last_input_tokens: 120, last_output_tokens: 40, last_estimated_input_tokens: 100 },
+      ext_artifacts: jo([]),
+      nudges_used: 0,
+      model: "openrouter/anthropic/claude-haiku-4.5",
+      profile: "default",
+      boot: {
+        task: "list the files",
+        env_url: "",
+        hybrid_tools: false,
+        budget: { total: 3, solver: 2, verifier: 1 },
+        step_budget: 3,
+        ohmy_pi: false,
+        max_cost_millicents: 0,
+        cost_rates: { input_per_1m_millicents: 60, output_per_1m_millicents: 208 }
+      }
+    };
+    c.cumulative.provider_calls_started == 6
+      && c.cumulative.provider_calls_completed == 5
+      && c.step_idx == 3
+      && continuation_task(c) == "list the files"
+      && continuation_history_ok(c)
+      && List.length(continuation_system_prefix(c)) == 1
+  }
+
+-- `final` IS THE CONTINUATION'S OWN HISTORY, which is what the P1 Part 1
+-- fixture asserts on the wire (`final.history equals suspended.history`).
+pure func test_final_state_projects_the_continuation() -> bool
+  tests [((), true)]
+  {
+    let history = [msg("system", "s"), msg("user", "u")];
+    let c: Continuation = {
+      history: history,
+      step_idx: 1,
+      cumulative: counts(1, 1),
+      telemetry: { last_input_tokens: 10, last_output_tokens: 2, last_estimated_input_tokens: 9 },
+      ext_artifacts: jo([]),
+      nudges_used: 0,
+      model: "m",
+      profile: "p",
+      boot: {
+        task: "t",
+        env_url: "",
+        hybrid_tools: false,
+        budget: { total: 1, solver: 1, verifier: 0 },
+        step_budget: 1,
+        ohmy_pi: false,
+        max_cost_millicents: 0,
+        cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+      }
+    };
+    let f = final_of_continuation(c);
+    encode(messages_json(f.history)) == encode(messages_json(c.history))
+      && f.cumulative.provider_calls_completed == 1
+      && f.telemetry.last_input_tokens == 10
+      && List.length(empty_final_state(c.telemetry, c.ext_artifacts).history) == 0
+  }
+
+-- A history whose system messages are not a head prefix is not resumable, and
+-- neither is one whose tool message answers nothing. Both refusals come from
+-- `phase_vocab`'s seal, reached through `history_from_seed`.
+pure func test_continuation_history_gate_refuses() -> bool
+  tests [((), true)]
+  {
+    let interleaved = [msg("system", "s"), msg("user", "u"), msg("system", "late")];
+    let unanswered: [Message] = [
+      msg("system", "s"),
+      { role: "tool", content: "result", tool_calls: [], tool_call_id: "", images: [] }
+    ];
+    not messages_head_prefix_ok(interleaved)
+      && messages_head_prefix_ok([msg("system", "s"), msg("user", "u")])
+      && (match history_from_seed(unanswered) {
+           Err(_) => false,
+           Ok(h) => not history_valid_transcript(h)
+         })
+  }
+
+-- THE CHAIN IS ORDER-DEPENDENT AND THE BASE IS NOT THE CHAIN. Two appends in
+-- the other order must not produce the same digest — that is the whole property
+-- P3's fold checks an entry against, and a chain built by concatenating
+-- digests unordered would pass a weaker test.
+pure func test_chain_digest_is_incremental_and_ordered() -> bool
+  tests [((), true)]
+  {
+    let seed = [msg("system", "s"), msg("user", "u")];
+    let a = msg("assistant", "first");
+    let b = msg("tool", "second");
+    let base = chain_digest_base(seed);
+    let ab = chain_digest_after(chain_digest_after(base, a), b);
+    let ba = chain_digest_after(chain_digest_after(base, b), a);
+    base != ""
+      && chain_digest_after(base, a) != base
+      && ab != ba
+      && ab == chain_digest_after(chain_digest_after(chain_digest_base(seed), a), b)
+      && chain_digest_base(seed) != chain_digest_base([msg("system", "s")])
+  }
+
+pure func test_default_run_identity_is_r0_0() -> bool
+  tests [((), true)]
+  {
+    let id = default_run_identity("sess_1");
+    id.session_id == "sess_1" && id.run_id == "sess_1.r0.0" && id.profile == ""
+  }

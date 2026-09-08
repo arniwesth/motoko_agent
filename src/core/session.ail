@@ -61,6 +61,14 @@ import src/core/ext/runtime (
   StagePassed
 )
 import src/core/phase_vocab (
+  -- ADR-003 D1: RuntimeStatusCounts and its two helpers were declared HERE
+  -- (`:430–450`, `:544–552` before this commit) and moved to phase_vocab so the
+  -- new leaf `journal.ail` can name them without importing this module, which
+  -- would be a cycle. Re-imported rather than re-declared: there is one
+  -- declaration, and it is the one the journal reads.
+  RuntimeStatusCounts,
+  zero_runtime_status_counts,
+  runtime_status_counts_add,
   LedgerEvent,
   calibrated_tokens_messages,
   calibrated_usage_percent,
@@ -427,26 +435,8 @@ type C2LoopState = {
   emissions: [LedgerEvent]
 }
 
-type RuntimeStatusCounts = {
-  provider_calls_started: int,
-  provider_calls_completed: int,
-  stage_applied_total: int,
-  stage_rejected_total: int,
-  compaction_ai_applied: int
-}
-
 pure func zero_totals() -> RuntimeLoopTotals {
   { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0 }
-}
-
-pure func zero_runtime_status_counts() -> RuntimeStatusCounts {
-  {
-    provider_calls_started: 0,
-    provider_calls_completed: 0,
-    stage_applied_total: 0,
-    stage_rejected_total: 0,
-    compaction_ai_applied: 0
-  }
 }
 
 -- THE FOLD IS `foldl` AND NOT HAND-WRITTEN RECURSION, and that is the whole of
@@ -539,16 +529,6 @@ pure func is_compaction_ai_ext_id(ext_id: string) -> bool {
 -- shape of gate this project refuses.
 export pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
   List.foldl(runtime_status_count_one, zero_runtime_status_counts(), trace.records)
-}
-
-pure func runtime_status_counts_add(a: RuntimeStatusCounts, b: RuntimeStatusCounts) -> RuntimeStatusCounts {
-  {
-    provider_calls_started: a.provider_calls_started + b.provider_calls_started,
-    provider_calls_completed: a.provider_calls_completed + b.provider_calls_completed,
-    stage_applied_total: a.stage_applied_total + b.stage_applied_total,
-    stage_rejected_total: a.stage_rejected_total + b.stage_rejected_total,
-    compaction_ai_applied: a.compaction_ai_applied + b.compaction_ai_applied
-  }
 }
 
 pure func runtime_status_json(
