@@ -111,6 +111,13 @@ export pure func execution_of(
     world: run.world,
     initial_clock_ms: initial_clock_ms,
     emissions: run.emissions,
+    -- ADR-003 v6.1 D4's comparand, CARRIED and not derived. The bridge copies
+    -- what the driver returned; `JournalFold` (P3) folds the journal-class
+    -- records out of `run.trace` and compares its output with this field. A
+    -- bridge that recomputed `final` from the trace would be comparing the fold
+    -- against itself, which is the vacuity this module's header exists to warn
+    -- about.
+    final: run.final,
     replay: replay,
     decision_budget: decision_budget,
     retry_budget: retry_budget,

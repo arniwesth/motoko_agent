@@ -821,17 +821,23 @@ func continuing_script() -> [ScriptedStep] {
   ]
 }
 
--- P1 Part 4 REPLACES THIS BODY (see the header). Until then the driver returns
--- no continuation, which is what makes the four target checks red.
-func suspended_view(_traced: TracedSessionResult) -> Option[{ history: [Message], provider_calls_completed: int, step_idx: int }] {
-  None
+-- P1 PART 4 REPLACED THIS BODY, exactly as the header said it would and with
+-- nothing else in this scenario touched. It is the missing accessor, now
+-- present: `TracedSessionResult.suspended` is `Option[Continuation]` and the
+-- three numbers the assertions want are three of its fields.
+func suspended_view(traced: TracedSessionResult) -> Option[{ history: [Message], provider_calls_completed: int, step_idx: int }] {
+  match traced.suspended {
+    Some(c) => Some({ history: c.history,
+                      provider_calls_completed: c.cumulative.provider_calls_completed,
+                      step_idx: c.step_idx }),
+    None => None
+  }
 }
 
--- P1 Part 4 REPLACES THIS BODY with `traced.final.history`. Today the `Err`
--- arm of `traced.result` carries an `AIError` and nothing else, so there is no
--- history to return: D4's projection does not exist yet.
-func final_history(_traced: TracedSessionResult) -> [Message] {
-  []
+-- P1 PART 4 REPLACED THIS BODY with `traced.final.history` — D4's projection,
+-- which the driver now returns from every terminal arm.
+func final_history(traced: TracedSessionResult) -> [Message] {
+  traced.final.history
 }
 
 -- The wire name of any `LedgerEvent`, including ones that do not exist yet:

@@ -653,6 +653,21 @@ export type HybridBashInfo = { step: int, cmd: string }
 export type PersistNudgeInfo = { step: int, nudge_num: int, budget: int }
 export type SessionStartInfo = { task: string, model: string, mode: string }
 export type SessionSuspendInfo = { session_id: string, target_profile: string }
+
+-- ADR-003 v6.1 D2. The typed suspension's wire record: a run that reached its
+-- step budget stops being an `error` and becomes this. It is APPENDED to the
+-- returned trace immediately before the RunSummary and EMITTED in the same
+-- order, which is what `RecordAfterTerminal` and the D2 wire contract both ask
+-- for, and it is why this variant is NOT in `d64_gap_register`.
+--
+-- `session_id` and `run_id` are D5's identity, carried so a journal fold can
+-- attribute the suspension to the run that produced it without inferring it
+-- from position. `reason` is a code and not prose — `budget_exhausted` is the
+-- only value P1 produces, and D7's park will add its own rather than reuse a
+-- message. `step` is `st.step_idx` at the suspension, which is the step the
+-- resumed run continues FROM (the budget is checked before the call that would
+-- have exceeded it, so no step is half-executed).
+export type RunSuspendedInfo = { session_id: string, run_id: string, reason: string, step: int }
 export type StreamStartInfo = { step: int, stream_id: string, model: string }
 export type StreamEndInfo = { step: int, stream_id: string, status: string }
 export type StreamErrorRetryInfo = { step: int, error: string }
@@ -794,6 +809,7 @@ export type LedgerEvent
   | NativeToolCalls(ToolBatchInfo)           -- [prod] native_tool_calls
   | NativeToolResults(ToolBatchInfo)         -- [prod] native_tool_results
   | SessionSuspend(SessionSuspendInfo)       -- [prod] session_suspend
+  | RunSuspended(RunSuspendedInfo)           -- [prod] run_suspended
   | SessionStart(SessionStartInfo)           -- [prod] session_start
   | ErrorEvent(ErrorInfo)                    -- [prod] error
   | TotalsUpdated(ThinkingInfo)              -- [NEW]  loop_totals_updated
@@ -877,6 +893,7 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     NativeToolCalls(i) => [kv("type", js("native_tool_calls")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool_calls", i.payload)],
     NativeToolResults(i) => [kv("type", js("native_tool_results")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("results", i.payload)],
     SessionSuspend(i) => [kv("type", js("session_suspend")), kv("session_id", js(i.session_id)), kv("target_profile", js(i.target_profile))],
+    RunSuspended(i) => [kv("type", js("run_suspended")), kv("session_id", js(i.session_id)), kv("run_id", js(i.run_id)), kv("reason", js(i.reason)), kv("step", jnum(_int_to_float(i.step)))],
     SessionStart(i) => [kv("type", js("session_start")), kv("task", js(i.task)), kv("model", js(i.model)), kv("mode", js(i.mode))],
     ErrorEvent(i) => [kv("type", js("error")), kv("source", js(i.source)), kv("code", js(i.code)), kv("message", js(i.message))],
     TotalsUpdated(i) => [kv("type", js("loop_totals_updated")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))],
@@ -1319,6 +1336,7 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(NativeToolCalls({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_calls\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"tool_calls\":[]}")
     && golden(NativeToolResults({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_results\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"results\":[]}")
     && golden(SessionSuspend({ session_id: "sid", target_profile: "dogfood" }), "{\"type\":\"session_suspend\",\"session_id\":\"sid\",\"target_profile\":\"dogfood\"}")
+    && golden(RunSuspended({ session_id: "sid", run_id: "sid.r0.0", reason: "budget_exhausted", step: 3 }), "{\"type\":\"run_suspended\",\"session_id\":\"sid\",\"run_id\":\"sid.r0.0\",\"reason\":\"budget_exhausted\",\"step\":3}")
     && golden(SessionStart({ task: "t", model: "m", mode: "v2" }), "{\"type\":\"session_start\",\"task\":\"t\",\"model\":\"m\",\"mode\":\"v2\"}")
     && golden(ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }), "{\"type\":\"error\",\"source\":\"agent_loop_v2\",\"code\":\"Internal\",\"message\":\"bad\"}")
     && golden(TotalsUpdated({ step: 1, text: "", finish_reason: "", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }), "{\"type\":\"loop_totals_updated\",\"step\":1,\"input_tokens\":10,\"output_tokens\":5}")

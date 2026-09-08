@@ -117,7 +117,7 @@ HELPED = {
 # attribution anchors, and it is re-pinned here rather than deferred because
 # unlike `make anchors` this gate is GREEN at HEAD and a stale span reports
 # `p.model_step` as an unresolved driver leaf — a fail-closed error, not drift.
-BRIDGE_SPAN = ("src/core/session.ail", 788, 1177)
+BRIDGE_SPAN = ("src/core/session.ail", 829, 1218)
 
 AGGREGATE_HELPERS = [
     "resolve_context_limit",

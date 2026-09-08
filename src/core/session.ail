@@ -115,6 +115,7 @@ import src/core/phase_vocab (
   NativeToolResults,
   StreamDelta,
   SessionSuspend,
+  RunSuspended,
   SessionStart,
   ErrorEvent,
   StepState,
@@ -148,7 +149,21 @@ import src/core/phase_vocab (
   InjectUserMessage,
   TakeCheckpoint,
   Finalize,
-  Fail
+  Fail,
+  FailInfo
+)
+-- ADR-003 v6.1 D1/D2/D4. THE EDGE THE PLAN SAYS TO ADD, and the direction is
+-- the whole of why `journal.ail` is a leaf: it imports no `session`, so this
+-- import closes no cycle. P1 Part 3 landed the shapes with no producer; this
+-- part gives every one of them one.
+import src/core/journal (
+  RunIdentity,
+  default_run_identity,
+  BootInputs,
+  Continuation,
+  FinalState,
+  final_of_continuation,
+  continuation_history_ok
 )
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
@@ -179,11 +194,37 @@ type SessionPolicy = {
 -- first two. A bridge from a run to an `ExecutionUnderTest` could not be built
 -- without it — `emissions: []` was the only value available, and an empty
 -- witness reads identically to a run that emitted nothing.
+-- ADR-003 v6.1 D2 and D4 add the fourth and fifth channels, and they are
+-- ADDITIVE ON PURPOSE. `REVIEW-adr003-verdicts-fable.md` §3 enumerates thirty
+-- sites across six DST scripts and `dst_execution.ail` that match `.result` as
+-- a `Result`; keeping `result` a two-way `Result` and adding `suspended`
+-- beside it is what lets all thirty compile unchanged, and it is why a
+-- suspension is still `Err({ code: "StepBudgetExhausted", … })` with a
+-- non-empty `RunSummary.error` — `outcome_agreement_findings`
+-- (`dst_invariants.ail:1385–1388`) holds without a third outcome class.
+--
+--   `suspended`  D2's typed suspension: `Some(c)` exactly when the run stopped
+--                on its step budget with a resumable history. The two outer
+--                loops match THIS before they match `result`, and emit no
+--                `ErrorEvent` when it is `Some` (except in headless, until the
+--                loggers switch in P3).
+--   `final`      D4's comparand: what a fold of this run's journal must
+--                reproduce. Set at all seven of `c2_finalize`'s callers through
+--                its `final` parameter, so a new terminal arm cannot forget it
+--                — the parameter is the smaller edit than seven record updates,
+--                and it is unforgettable in the way a record update is not.
+--
+-- On the suspension arm the two are ONE value: `c2_suspend` builds the
+-- `Continuation` from `st` and projects `final` from it with
+-- `final_of_continuation`, so `final.history == suspended.history` is
+-- structural rather than two literals that can drift.
 export type TracedSessionResult = {
   result: Result[[Message], AIError],
   trace: LedgerTrace,
   world: WorldState,
-  emissions: [LedgerEvent]
+  emissions: [LedgerEvent],
+  suspended: Option[Continuation],
+  final: FinalState
 }
 
 -- Convert Motoko's UI/profile model identifier to the provider API model id
@@ -1517,7 +1558,13 @@ func c2_finalize(
   started_at_ms: int,
   trace: LedgerTrace,
   emissions: [LedgerEvent],
-  result: Result[[Message], AIError]
+  result: Result[[Message], AIError],
+  -- ADR-003 v6.1 D4's comparand, a PARAMETER rather than a record update at the
+  -- caller. Seven arms reach this function; seven record updates are seven
+  -- places a new arm can be added without one, and the eighth arm would return
+  -- an empty `final` that reads exactly like a run that ended holding nothing.
+  -- Every caller has `st` in scope and hands `c2_final_state(st)`.
+  final: FinalState
 ) -> TracedSessionResult ! {IO, Clock, Trace} {
   -- The successor of this read is now THREADED into the returned world rather
   -- than discarded. Under the recording adapters this final clock read is an
@@ -1530,7 +1577,12 @@ func c2_finalize(
   let now_ms = reading.now_ms;
   let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit());
   let _ = ledger_emit(session_id, summary);
-  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: reading.next_state, emissions: emissions }
+  -- `suspended: None` HERE, unconditionally, and the suspension sets it with a
+  -- record update on the value this returns (`c2_suspend`). That keeps this the
+  -- sole terminal record LITERAL — the structural guard `make terminal_trace`
+  -- counts exactly one `{ result:` in this file — while still giving D2 its
+  -- fourth channel.
+  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: reading.next_state, emissions: emissions, suspended: None, final: final }
 }
 
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
@@ -2139,6 +2191,76 @@ pure func decision_fail_reason(code: string) -> TerminationReason {
   else TermInternalFailure
 }
 
+-- ADR-003 v6.1 D4's comparand, derived from the loop state ONCE so that all
+-- seven terminal arms agree on what "what the run ended holding" means.
+--
+-- `cumulative` is `prior_counts + counts(st.trace)`, which is the SAME
+-- expression `runtime_status_json` computes for the model's judging number
+-- (`:539` before this commit) and the same one the ADR writes for `c2_suspend`.
+-- Two derivations of a cumulative count is how a resumed run and the tool that
+-- reports its progress end up disagreeing about how many steps happened.
+--
+-- It reads `st.trace` and NOT the trace the arm is about to append to. That is
+-- deliberate and it costs nothing: `runtime_status_count_one` counts only
+-- `ProviderCallPrepared`, `ProviderResult` and compaction stage records, and no
+-- terminal arm appends one of those between `st.trace` and its `c2_finalize`
+-- call — the records they add are the decision, the terminal event and the
+-- RunSummary. Reading `st` alone keeps this a projection of the STATE, which is
+-- what a resumed run is rebuilt from.
+pure func c2_final_state(st: C2LoopState) -> FinalState {
+  {
+    history: st.msgs,
+    cumulative: runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace)),
+    telemetry: ext_token_telemetry(st.telemetry),
+    ext_artifacts: st.ext_artifacts
+  }
+}
+
+-- ADR-003 v6.1 D1's `Continuation`, built from the live loop state. Everything
+-- it carries is `st`'s except `model`, which is the loop's parameter, and
+-- `profile`, which is the run's identity — neither lives in `C2LoopState`.
+--
+-- `boot` is the loop's own entry arguments, and `step_budget` comes from
+-- `policy.step.step_budget` rather than from `budget`: they are different
+-- numbers that `default_budget_plan` happens to seed from the same profile
+-- setting (`rpc.ail:88–94`), and a resume that took the ABI's token budget for
+-- the step ceiling would resume with the wrong one.
+pure func c2_continuation(
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  identity: RunIdentity,
+  st: C2LoopState
+) -> Continuation {
+  let boot: BootInputs = {
+    task: task,
+    env_url: env_url,
+    hybrid_tools: hybrid_tools,
+    budget: budget,
+    step_budget: policy.step.step_budget,
+    ohmy_pi: ohmy_pi,
+    max_cost_millicents: max_cost_millicents,
+    cost_rates: cost_rates
+  };
+  {
+    history: st.msgs,
+    step_idx: st.step_idx,
+    cumulative: runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace)),
+    telemetry: ext_token_telemetry(st.telemetry),
+    ext_artifacts: st.ext_artifacts,
+    nudges_used: st.nudges_used,
+    model: model,
+    profile: identity.profile,
+    boot: boot
+  }
+}
+
 func c2_fail(
   ports: Ports,
   world: WorldState,
@@ -2152,7 +2274,8 @@ func c2_fail(
   message: string,
   retryable: bool,
   trace: LedgerTrace,
-  emissions: [LedgerEvent]
+  emissions: [LedgerEvent],
+  final: FinalState
 ) -> TracedSessionResult ! {IO, Clock, Trace} {
   let cost_event = CostExhausted({
     step: step_idx,
@@ -2174,7 +2297,79 @@ func c2_fail(
     if code == "BudgetExceeded" then ledger_append(trace, WireRecord(cost_event))
     else trace;
   let result: Result[[Message], AIError] = Err({ code: code, message: message, retryable: retryable });
-  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code), message, started_at_ms, trace_with_cost, emissions, result)
+  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code), message, started_at_ms, trace_with_cost, emissions, result, final)
+}
+
+-- ADR-003 v6.1 D2 items 2–4. THE SUSPENSION, and it is `c2_fail`'s sibling
+-- rather than a branch inside it: the two paths differ in what they RETURN, not
+-- in how they finalise, and a flag inside `c2_fail` would have put the
+-- continuation's construction behind a boolean that six other codes also pass
+-- through.
+--
+-- WHAT IT DOES, in the order the ADR states it:
+--   1. builds the `Continuation` from `st` — every field is in scope here
+--      because the `Fail` arm is lexically inside `c2_loop`, which owns `st`
+--      (`REVIEW-adr003-verdicts-fable.md` §3 checked this);
+--   2. GATES it on `continuation_history_ok`, D4 rule 3's two conditions
+--      asserted at the point of production;
+--   3. appends AND emits `RunSuspended` — appended before `c2_finalize` writes
+--      the RunSummary, which is `DoneEvent`'s and `CostExhausted`'s precedent
+--      and what keeps D6.1's "the summary is the final record" true;
+--   4. finalises with `TermMaxSteps` and `result: Err`, so `RunSummary.error`
+--      is non-empty and `outcome_agreement_findings` holds unchanged;
+--   5. sets `suspended: Some(c)` and projects `final` from the SAME `c`.
+--
+-- THE GATE FAILS CLOSED, to `c2_fail`. `c2_step_state` only checks
+-- `history_from_seed`; `continuation_history_ok` also requires
+-- `history_valid_transcript`, so a history this loop was willing to step on can
+-- still be one no resume should be offered. A run whose history cannot be
+-- resumed is not a suspension — it is the internal failure it was before
+-- ADR-003, and it says so on the wire.
+--
+-- NO PENDING TOOL CALLS CAN BE LOST HERE: `decide` handles `pending_tool_calls`
+-- before anything else (`step_machine.ail:114–121`) and only reaches the budget
+-- check on the finish-reason arms (`:93–94`), so the suspension always happens
+-- at the TOP of a step with every pending field empty. That is why
+-- `Continuation` has none of them.
+--
+-- The effect row is `c2_fail`'s, not the loop's: this function appends, emits
+-- and finalises, and does none of the loop's work.
+func c2_suspend(
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  identity: RunIdentity,
+  started_at_ms: int,
+  info: FailInfo,
+  st: C2LoopState,
+  trace: LedgerTrace
+) -> TracedSessionResult ! {IO, Clock, Trace} {
+  let cont = c2_continuation(task, env_url, hybrid_tools, budget, policy, model, ohmy_pi, max_cost_millicents, cost_rates, identity, st);
+  if not continuation_history_ok(cont) then
+    c2_fail(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace, st.emissions, c2_final_state(st))
+  else {
+    let event = RunSuspended({
+      session_id: identity.session_id,
+      run_id: identity.run_id,
+      reason: "budget_exhausted",
+      step: st.step_idx
+    });
+    let _ = ledger_emit(session_id, event);
+    let result: Result[[Message], AIError] = Err({ code: info.code, message: info.message, retryable: info.retryable });
+    let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermMaxSteps, info.message, started_at_ms, ledger_append(trace, WireRecord(event)), st.emissions, result, final_of_continuation(cont));
+    -- The ONE record update on a finalized result in this file, and it is why
+    -- `c2_finalize` writes `suspended: None` unconditionally: the structural
+    -- guard behind `make terminal_trace` counts terminal record LITERALS, and
+    -- there is still exactly one.
+    { finalized | suspended: Some(cont) }
+  }
 }
 
 pure func c2_pending_context(st: C2LoopState) -> [Message] {
@@ -2198,6 +2393,7 @@ func c2_finish_tool_batch(
   max_cost_millicents: int,
   cost_rates: CostRates,
   session_id: string,
+  identity: RunIdentity,
   started_at_ms: int,
   st: C2LoopState,
   trace: LedgerTrace,
@@ -2240,7 +2436,7 @@ func c2_finish_tool_batch(
     trace: trace_with_results,
     emissions: st.emissions
   };
-  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
 }
 
 func c2_continue_tool_batch(
@@ -2256,6 +2452,7 @@ func c2_continue_tool_batch(
   max_cost_millicents: int,
   cost_rates: CostRates,
   session_id: string,
+  identity: RunIdentity,
   started_at_ms: int,
   st: C2LoopState,
   trace: LedgerTrace,
@@ -2263,7 +2460,7 @@ func c2_continue_tool_batch(
   accumulated: [Message]
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match req.remaining {
-    [] => c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace, c2_done_step(st.step_idx), req.stream_id, accumulated),
+    [] => c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, st, trace, c2_done_step(st.step_idx), req.stream_id, accumulated),
     _ => {
       let next_state: C2LoopState = {
         msgs: st.msgs,
@@ -2287,7 +2484,7 @@ func c2_continue_tool_batch(
         trace: trace,
         emissions: st.emissions
       };
-      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
     }
   }
 }
@@ -2312,6 +2509,7 @@ func c2_after_dp7(
 	  st_world_state: WorldState,
   prior_counts: RuntimeStatusCounts,
   session_id: string,
+  identity: RunIdentity,
   started_at_ms: int,
   trace: LedgerTrace,
   emissions: [LedgerEvent],
@@ -2345,7 +2543,7 @@ func c2_after_dp7(
         trace: ledger_append(trace, WireRecord(rejection.event)),
         emissions: emissions
       };
-      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
     },
     None => {
       let next_state: C2LoopState = {
@@ -2370,7 +2568,7 @@ func c2_after_dp7(
         trace: trace,
         emissions: emissions
       };
-      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
     }
   }
 }
@@ -2388,6 +2586,7 @@ func c2_loop(
   max_cost_millicents: int,
   cost_rates: CostRates,
   session_id: string,
+  identity: RunIdentity,
   started_at_ms: int,
   st: C2LoopState
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
@@ -2397,15 +2596,25 @@ func c2_loop(
     -- enumeration missed. It now finalizes like every other.
     Err(reason) => {
       let result: Result[[Message], AIError] = Err({ code: "InvalidHistory", message: reason, retryable: false });
-      c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInvalidHistory, reason, started_at_ms, st.trace, st.emissions, result)
+      c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInvalidHistory, reason, started_at_ms, st.trace, st.emissions, result, c2_final_state(st))
     },
     Ok(step_state) => {
       let decision = decide(step_state, policy.step);
       let trace_with_decision = c2_append_decision(st.trace, st.step_idx, decision);
       match decision {
-        -- Terminal: budget, max steps, compaction exhaustion or internal,
-        -- discriminated by decision_fail_reason.
-        Fail(info) => c2_fail(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision, st.emissions),
+        -- Terminal: budget, compaction exhaustion or internal, discriminated by
+        -- decision_fail_reason — EXCEPT the step budget, which ADR-003 v6.1 D2
+        -- makes a typed suspension rather than a failure. P1 Part 2 gave it a
+        -- code of its own precisely so this split could be a match on the code
+        -- and not on a message string; this is the arm that split needed.
+        --
+        -- `c2_suspend` may still route BACK to `c2_fail` when the history it
+        -- would carry out is not resumable. Every other code goes to `c2_fail`
+        -- as it did before.
+        Fail(info) =>
+          if info.code == "StepBudgetExhausted" then
+            c2_suspend(task, env_url, hybrid_tools, budget, policy, model, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, info, st, trace_with_decision)
+          else c2_fail(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision, st.emissions, c2_final_state(st)),
         Finalize(info) => {
           let done_step = c2_done_step(st.step_idx);
           -- WI-D4. READ, not re-resolved. `session_policy_init` already resolved
@@ -2450,7 +2659,7 @@ func c2_loop(
           -- order is untouched: D6.4 asks for PARITY, not one transition.
           let done_event = DoneEvent({ step: done_step, output: info.output, source: st.finalize_source });
           let trace_with_done = ledger_append(trace_after_empty_floor, WireRecord(done_event));
-          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, st.emissions, Ok(st.msgs));
+          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, st.emissions, Ok(st.msgs), c2_final_state(st));
           -- BEFORE `done`, DELIBERATELY. The TUI exits on `done` without waiting
           -- for this process, so a manifest published after it is a race this
           -- code lost under measurement. See `publish_turn_exit_manifest`.
@@ -2483,7 +2692,7 @@ func c2_loop(
             trace: trace_with_decision,
             emissions: st.emissions
           };
-          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
         },
         TakeCheckpoint(plan) => {
           let cp = apply_checkpoint(step_state, plan);
@@ -2510,7 +2719,7 @@ func c2_loop(
             trace: ledger_append(trace_with_decision, WireRecord(cp.event)),
             emissions: st.emissions
           };
-          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
         },
         AwaitApproval(_) => {
           match st.pending_approval {
@@ -2519,7 +2728,7 @@ func c2_loop(
             None => {
               let msg = "approval requested without pending approval state";
               let result: Result[[Message], AIError] = Err({ code: "Internal", message: msg, retryable: false });
-              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, st.emissions, result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, st.emissions, result, c2_final_state(st))
             },
             Some(req) => {
               -- WI-A12's approval class. The operator's input comes from the
@@ -2560,7 +2769,7 @@ func c2_loop(
                   });
                   let _ = ledger_emit(session_id, denied_event);
                   let denial_msg = policy_denied_message(req.call, reason);
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, ledger_append(trace_with_decision, WireRecord(denied_event)), req, post.accumulated_tool_msgs ++ [denial_msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, post, ledger_append(trace_with_decision, WireRecord(denied_event)), req, post.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
                   let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
@@ -2571,7 +2780,7 @@ func c2_loop(
                   -- because the batch continues and the events would simply
                   -- never appear.
                   let after: C2LoopState = { post | world_state: executed.next_state };
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, after, c2_trace_wire_events(trace_with_decision, executed.emitted), req, after.accumulated_tool_msgs ++ [executed.msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, after, c2_trace_wire_events(trace_with_decision, executed.emitted), req, after.accumulated_tool_msgs ++ [executed.msg])
                 }
               }
             }
@@ -2640,7 +2849,7 @@ func c2_loop(
             -- provider call, and for the same reason: a block appended in the
             -- wrong place satisfies a count and fails order.
             ToolDispatchDone(done) =>
-              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, { st | world_state: done.world }, c2_trace_wire_events(trace_with_calls, done.emitted), tool_step_idx, stream_id, done.msgs),
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { st | world_state: done.world }, c2_trace_wire_events(trace_with_calls, done.emitted), tool_step_idx, stream_id, done.msgs),
             ToolDispatchPending(pending) => {
               let next_state: C2LoopState = {
                 msgs: st.msgs,
@@ -2670,7 +2879,7 @@ func c2_loop(
                 trace: c2_trace_wire_events(trace_with_calls, pending.emitted),
                 emissions: st.emissions
               };
-              c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+              c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
             }
           }
         },
@@ -2726,14 +2935,14 @@ func c2_loop(
               let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
-              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
+              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result, c2_final_state(st))
             },
             -- Terminal: compaction exhausted.
             Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
-              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
+              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result, c2_final_state(st))
             },
             Ok(payload) => {
               let compacted_msgs = payload_messages(payload);
@@ -2838,10 +3047,10 @@ func c2_loop(
                       trace: ledger_append(trace_after_end, WireRecord(retry_event)),
                       emissions: emissions_after_call
                     };
-                    c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                    c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                   } else {
                     -- Terminal: unretried provider/stream failure. WI-D1 made this `exchange.next_state` rather than `st.world_state` — plan rule S12, and the measurement is recorded at `ports.provider_outcome_record`. This edit is deliberately line-count-neutral (S18): the four routed clock anchors below it must not move.
-                    c2_finalize(st.provider, exchange.next_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_end, emissions_after_call, Err(e))
+                    c2_finalize(st.provider, exchange.next_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_end, emissions_after_call, Err(e), c2_final_state(st))
                   }
                 },
                 Ok(result) => {
@@ -2899,7 +3108,7 @@ func c2_loop(
                         trace: ledger_append(trace_after_model, WireRecord(event)),
                         emissions: emissions_after_call
                       };
-                      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                     },
                     NoIntercept => {
                       -- Execute tool calls whenever the model emitted any, not
@@ -2933,7 +3142,7 @@ func c2_loop(
                           trace: trace_after_model,
                           emissions: emissions_after_call
                         };
-                        c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                        c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                       } else {
                         -- `session_emitted_native_tool_call` is the 2026-09-06
                         -- gate; see its declaration for the measurement. It reads
@@ -2978,7 +3187,7 @@ func c2_loop(
                               trace: ledger_append(trace_after_model, WireRecord(event)),
                               emissions: emissions_after_call
                             };
-                            c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                            c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                           },
                           None => {
                             -- WI-B2b. Bound, for the same reason the intercept
@@ -2988,7 +3197,7 @@ func c2_loop(
                             let finalized = dispatch_solver_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content); -- WI-D19
                             match finalized.decision {
                               Accept(output) =>
-	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, output, "ext_solver_accept"),
+	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, identity, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, output, "ext_solver_accept"),
                               ContinueWithFeedback(feedback) => {
                                 let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
                                 let _ = ledger_emit(session_id, event);
@@ -3014,7 +3223,7 @@ func c2_loop(
                                   trace: ledger_append(trace_after_model, WireRecord(event)),
                                   emissions: emissions_after_call
                                 };
-                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                               },
                               NoDecision => {
                                 if should_inject_persist_nudge(policy.step.persist_retries, st.nudges_used, any_writefile_attempt(msgs_with_assistant)) then {
@@ -3046,9 +3255,9 @@ func c2_loop(
                                     trace: ledger_append(trace_after_model, WireRecord(event)),
                                     emissions: emissions_after_call
                                   };
-                                  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                                  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                                 } else
-	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, result.message.content, "") -- WI-D19
+	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, identity, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, result.message.content, "") -- WI-D19
                               }
                             }
                           }
@@ -3100,6 +3309,40 @@ func run_v2_from_messages_traced_with_policy_and_counts(
   provider: PortedProvider,
   prior_counts: RuntimeStatusCounts
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  run_v2_from_messages_traced_with_identity(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts, None)
+}
+
+-- ADR-003 v6.1 D5's identity, arriving at the loop. THE SIBLING PLAN-003 §0.7
+-- NAMES, and the reason it takes an `Option` rather than a `RunIdentity`: the
+-- default identity is built from the run's OWN `session_id`, which
+-- `derive_session_id` mints three lines below and no caller can see. `None`
+-- therefore does not mean "no identity" — it means "the default one, from this
+-- run's derived id", which is exactly §0.7's rule and what keeps the twenty DST
+-- call sites of the three exported entries from moving.
+--
+-- P1 Part 5 is the first `Some` caller: the conversation loop passes
+-- `RunIdentity { session_id, run_id: "<session_id>.r<resume_count>.<ordinal>",
+-- profile }` so a resumed run is attributable to the turn that produced it.
+-- `derive_session_id` STAYS on both paths: the DST fixtures pin the exact
+-- env-read set the policy init performs, and removing the derivation would
+-- change it.
+func run_v2_from_messages_traced_with_identity(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: PortedProvider,
+  prior_counts: RuntimeStatusCounts,
+  requested_identity: Option[RunIdentity]
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- WI-A12's clock class. Two of the four driver clock sites are here, both
   -- BEFORE the loop starts, and both successors must reach the loop's world:
   -- `started.next_state` is what `c2_initial_state_with_counts` receives, not
@@ -3109,9 +3352,13 @@ func run_v2_from_messages_traced_with_policy_and_counts(
   let started = provider.ports.clock_now(derived.next_state);
   let session_id = derived.id;
   let started_at_ms = started.now_ms;
+  let identity = match requested_identity {
+    Some(i) => i,
+    None => default_run_identity(session_id)
+  };
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts));
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts));
   Trace.spanEnd(session_span);
   result
 }
@@ -3219,9 +3466,13 @@ func run_v2_from_messages_with_policy_and_counts(
   let started = provider.ports.clock_now(derived.next_state);
   let session_id = derived.id;
   let started_at_ms = started.now_ms;
+  -- The untraced entry has no caller that can hold an identity — it discards
+  -- the whole `TracedSessionResult` but its `.result` — so it takes the default
+  -- unconditionally rather than an Option nothing would ever fill.
+  let identity = default_run_identity(session_id);
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts)).result;
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts)).result;
   Trace.spanEnd(session_span);
   result
 }
@@ -3386,16 +3637,35 @@ func conversation_loop_v2_with_policy(
         let traced = run_v2_from_messages_traced_with_policy_and_counts(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts);
         let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, traced.world);
         let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
-        match traced.result {
-          Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
-          Err(e) => {
-            let _ = ledger_emit(session_id, ErrorEvent({
-              source: "agent_loop_v2",
-              code: e.code,
-              message: e.message
-            }));
-            conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts)
-          }
+        -- ADR-003 v6.1 D2: `suspended` is matched BEFORE `result`. A
+        -- suspension is an `Err` — it has to be, or thirty match sites and
+        -- `outcome_agreement_findings` would need a third outcome class — so a
+        -- loop that matched `result` first would emit an `error` for a run that
+        -- did not fail, and the TUI would lock the operator out of the very
+        -- turn the suspension exists to let them take.
+        --
+        -- NO HEADLESS CONDITIONAL HERE, unlike the initial-turn arm below: this
+        -- loop returns immediately under `policy.headless` (the guard at its
+        -- top), so a headless run never reaches this arm at all. A conditional
+        -- would be a branch nothing can execute.
+        --
+        -- P1 Part 4 does not yet HOLD the continuation; Part 5 gives this loop
+        -- its `suspended` parameter and the `user_message` resume. Until then
+        -- the recursion is exactly today's, minus the error.
+        match traced.suspended {
+          Some(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
+          None =>
+            match traced.result {
+              Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
+              Err(e) => {
+                let _ = ledger_emit(session_id, ErrorEvent({
+                  source: "agent_loop_v2",
+                  code: e.code,
+                  message: e.message
+                }));
+                conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts)
+              }
+            }
         }
       }
       else conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts)
@@ -3571,16 +3841,45 @@ export func run_v2_with_conversation(
   let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
   let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider.ports, initial_traced.world);
   let initial_counts = runtime_status_counts(initial_traced.trace);
-  match initial_traced.result {
-    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts),
-    Err(e) => {
-      let _ = ledger_emit(session_id, ErrorEvent({
-        source: "agent_loop_v2",
-        code: e.code,
-        message: e.message
-      }));
+  -- ADR-003 v6.1 D2, and this is the arm that DOES need the headless
+  -- conditional. Under `MOTOKO_HEADLESS=1` the conversation loop below returns
+  -- without reading anything, so there is no operator to unlock and the plain
+  -- and JSON loggers still key their non-zero exit off the `error` event
+  -- (`index.ts:517–519`, `:572–575`). Emitting nothing here would turn a
+  -- budget-exhausted headless run into an exit 0, which is a regression in the
+  -- one mode that has no human to notice.
+  --
+  -- The error is emitted AFTER `run_suspended` and after the RunSummary the
+  -- traced run already wrote, so the headless wire order is `run_suspended`,
+  -- `run_summary`, `error` — the same shape as today's `run_summary`, `error`
+  -- with one record inserted. P3 removes it when the loggers switch.
+  match initial_traced.suspended {
+    Some(_) => {
+      let _ = if policy.headless then
+        ledger_emit(session_id, ErrorEvent({
+          source: "agent_loop_v2",
+          code: "StepBudgetExhausted",
+          message: "step budget exhausted"
+        }))
+      else ();
+      -- `live_provider`, byte-for-byte what the `Err` arm below passes today.
+      -- This arm used to BE that arm; the only thing P1 Part 4 changes about it
+      -- is the error emit, and swapping the provider here would be an unrelated
+      -- fix hiding inside a decision's commit.
       conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts)
-    }
+    },
+    None =>
+      match initial_traced.result {
+        Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts),
+        Err(e) => {
+          let _ = ledger_emit(session_id, ErrorEvent({
+            source: "agent_loop_v2",
+            code: e.code,
+            message: e.message
+          }));
+          conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts)
+        }
+      }
   }
   }
 }

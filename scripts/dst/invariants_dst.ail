@@ -98,6 +98,12 @@ import src/core/ports (
   encode_tool_outcome, encode_provider_outcome
 )
 
+-- ADR-003 v6.1 D4. The fixture runs nothing, so its comparand is the empty
+-- one: `empty_final_state` is the shape for an execution with no history, and
+-- writing the four fields out here would be a second definition of "empty" for
+-- the fold to disagree with.
+import src/core/journal (empty_final_state)
+import src/core/ext/ctx_defaults (zero_token_telemetry, empty_ext_artifacts)
 import src/core/dst_fault_catalogue (
   fault_class_tool_failed,
   fault_class_tool_correlation_mismatch,
@@ -388,7 +394,8 @@ pure func fixture() -> ExecutionUnderTest {
     decision_budget: 12,
     retry_budget: 3,
     ambient_rng_reads: 0,
-    forbidden_effect_sites: [] }
+    forbidden_effect_sites: [],
+    final: empty_final_state(zero_token_telemetry(), empty_ext_artifacts()) }
 }
 
 -- ---------------------------------------------------------------------------
