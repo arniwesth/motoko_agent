@@ -2,7 +2,7 @@
 --
 -- WI-A8 acceptance, under ADR-001 D6.
 --
--- The artifact declares a wire name and a payload schema for each of the 36
+-- The artifact declares a wire name and a payload schema for each of the 41
 -- `LedgerEvent` variants. This script is what makes those declarations mean
 -- something: it builds ONE SAMPLE VALUE PER VARIANT and asserts, against the
 -- LIVE projection `phase_vocab.to_schema_v1`, that
@@ -31,7 +31,7 @@ module scripts/dst/event_vocabulary_dst
 import std/io (println, exit)
 import std/list as List (length)
 import std/option (Option, Some, None)
-import std/json (Json, JObject, jo, kv, js, asString, get)
+import std/json (Json, JObject, jo, ja, kv, js, asString, get)
 import src/core/phase_vocab (
   LedgerEvent,
   ProviderCallPrepared, ScratchpadResult, RunSummary, NativeToolDenied, ToolPending,
@@ -41,8 +41,11 @@ import src/core/phase_vocab (
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
   ToolArgumentsUndecodable,
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
-  NativeToolResults, SessionSuspend, RunSuspended, SessionStart, ErrorEvent, TotalsUpdated,
+  NativeToolResults, SessionSuspend, RunSuspended,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
+  SessionStart, ErrorEvent, TotalsUpdated,
   CheckpointTaken, StreamDelta,
+  RuntimeStatusCounts,
   to_schema_v1
 )
 import src/core/dst_event_vocabulary (
@@ -81,7 +84,7 @@ pure func samples() -> [LedgerEvent] {
     RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
       input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
-      duration_ms: 5, error: "" }),
+      duration_ms: 5, error: "", cumulative: counts(2, 1) }),
     NativeToolDenied({ step: 1, stream_id: "s", tool: "t", id: "i", reason: "r" }),
     ToolPending({ step: 1, stream_id: "s", tool: "t", id: "i", reason: "r" }),
     ExtToolHandled({ step: 1, stream_id: "s", tool: "t", id: "i", exit_code: 0 }),
@@ -115,7 +118,25 @@ pure func samples() -> [LedgerEvent] {
     NativeToolResults({ request_id: "rq", step: 1, stream_id: "s", payload: jo([]) }),
     SessionSuspend({ session_id: "sid", target_profile: "p" }),
     RunSuspended({ session_id: "sid", run_id: "sid.r0.0", reason: "budget_exhausted", step: 3 }),
-    SessionStart({ task: "t", model: "m", mode: "v2" }),
+    -- ADR-003 D1's journal class (PLAN-003 P3 Part 1). The two rows with an
+    -- OPTIONAL payload key are sampled with the key ABSENT — `first_kept: None`
+    -- and `ext_artifacts: None` — because that is the branch the round trip can
+    -- get wrong: an `opt(...)` field that the projection emits unconditionally
+    -- would pass with the key present and is only caught when it is missing
+    -- from the value and still appears in the bytes.
+    HistorySeeded({ run_id: "sid.r0.0", messages: ja([]), digest: "sha256:seed" }),
+    HistoryAppended({ run_id: "sid.r0.0", step: 1, message: jo([]),
+      replaces_previous: false, digest_after: "sha256:a" }),
+    HistoryReplaced({ run_id: "sid.r0.0", step: 2, reason: "checkpoint",
+      first_kept: None, messages: ja([]), digest_after: "sha256:r" }),
+    StateDelta({ run_id: "sid.r0.0", step: 3, cumulative: counts(3, 3),
+      telemetry: { last_input_tokens: 1, last_output_tokens: 2,
+                   last_estimated_input_tokens: 3 },
+      ext_artifacts_digest: "sha256:e", ext_artifacts: None }),
+    SessionResumed({ resume_count: 1, from_id: "0007", from_ordinal: 42,
+      profile_from: "p", profile_to: "p", prompt_digest_from: "sha256:p0",
+      prompt_digest_to: "sha256:p0", forced: false }),
+    SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sid.r0.0" }),
     ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }),
     TotalsUpdated({ step: 1, text: "", finish_reason: "", tool_calls: 0, input_tokens: 1,
       output_tokens: 2, cost_usd: 0.0, cache_read_input_tokens: 0,
@@ -128,8 +149,31 @@ pure func samples() -> [LedgerEvent] {
   ]
 }
 
+pure func counts(started: int, completed: int) -> RuntimeStatusCounts {
+  { provider_calls_started: started, provider_calls_completed: completed,
+    stage_applied_total: 0, stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+
 pure func reasoning_delta_sample() -> LedgerEvent {
   StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "reasoning", text: "d" })
+}
+
+-- The PRESENT branch of the two optional payload keys. Like
+-- `reasoning_delta_sample`, these are extra round-trip cases and NOT entries in
+-- `samples()`: that list is one per VARIANT and is what the completeness check
+-- counts, so a second value for a variant already in it would turn
+-- `row-count-mismatch` red for a reason that has nothing to do with the
+-- vocabulary being incomplete.
+pure func first_kept_present_sample() -> LedgerEvent {
+  HistoryReplaced({ run_id: "sid.r0.0", step: 2, reason: "profile_switch",
+    first_kept: Some(4), messages: ja([]), digest_after: "sha256:r" })
+}
+
+pure func ext_artifacts_present_sample() -> LedgerEvent {
+  StateDelta({ run_id: "sid.r0.0", step: 3, cumulative: counts(3, 3),
+    telemetry: { last_input_tokens: 1, last_output_tokens: 2,
+                 last_estimated_input_tokens: 3 },
+    ext_artifacts_digest: "sha256:e2", ext_artifacts: Some(jo([])) })
 }
 
 -- ---------------------------------------------------------------------------
@@ -282,7 +326,7 @@ export func main() -> () ! {IO} {
             report_rejections(rs)
           };
 
-  -- 2. THE ROUND TRIP. All 36 variants against the live projection.
+  -- 2. THE ROUND TRIP. All 41 variants against the live projection.
   let c2 = assert_all(ss);
   let _ = if c2 then println("  ✓ all ${show(List.length(ss))} variants round-trip: wire name and payload schema match the live projection")
           else println("  ✗ at least one variant does not round-trip");
@@ -296,10 +340,20 @@ export func main() -> () ! {IO} {
   let _ = if c3 then println("  ✓ both StreamDelta branches round-trip (reasoning_delta / thinking_delta)")
           else println("  ✗ the StreamDelta branches do not both round-trip");
 
+  -- 3b. THE OPTIONAL PAYLOAD KEYS, present branch. `samples()` carries both
+  --     journal rows with their optional key ABSENT, which is the branch check 2
+  --     drives; check 3's shape applied a second time drives the other, so an
+  --     `opt(...)` declaration that the projection contradicts in either
+  --     direction is red rather than half-tested.
+  let c3b = assert_round_trip(first_kept_present_sample())
+    && assert_round_trip(ext_artifacts_present_sample());
+  let _ = if c3b then println("  ✓ the two optional payload keys round-trip present as well as absent (first_kept / ext_artifacts)")
+          else println("  ✗ an optional payload key does not round-trip when present");
+
   -- 4. The classification, and the D6.4 gap it makes countable.
   let logical = logical_variants(rows);
   let display = display_only_variants(rows);
-  let c4 = List.length(logical) + List.length(display) == 36;
+  let c4 = List.length(logical) + List.length(display) == 41;
   let _ = if c4 then println("  ✓ every variant classified: ${show(List.length(logical))} logical, ${show(List.length(display))} display-only")
           else println("  ✗ the classification does not partition the vocabulary");
   let _ = print_list("display-only", display);
@@ -319,7 +373,7 @@ export func main() -> () ! {IO} {
   let _ = if c6 then println("  ✓ control: an empty vocabulary is rejected")
           else println("  ✗ control: an empty vocabulary validates — the checks above are vacuous");
 
-  if c1 && c2 && c3 && c4 && c6 then println("event_vocabulary_dst PASS")
+  if c1 && c2 && c3 && c3b && c4 && c6 then println("event_vocabulary_dst PASS")
   else {
     let _ = println("event_vocabulary_dst FAIL");
     exit(1)

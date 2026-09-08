@@ -72,7 +72,8 @@ import src/core/phase_vocab (
   ProviderCallPrepared, RunSummary, CostExhausted, CompactionExhausted,
   DoneEvent, CheckpointTaken, TotalsUpdated, StreamDelta, StreamErrorRetry,
   InMemoryStageOutcome, TraceStageApplied,
-  CheckpointInfo
+  CheckpointInfo,
+  zero_runtime_status_counts
 )
 
 import src/core/dst_result (
@@ -322,7 +323,12 @@ pure func fixture_summary(err: string, millicents: int) -> LedgerEvent {
   RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2,
     input_tokens: 24, output_tokens: 26, cache_read_input_tokens: 0,
     cache_creation_input_tokens: 0, total_cost_usd: 0.9, total_cost_millicents: millicents,
-    duration_ms: 3052, error: err })
+    duration_ms: 3052, error: err,
+    -- ADR-003 D1's counts (PLAN-003 P3 Part 1). Zero here on purpose: this
+    -- fixture's families reason about ORDER, terminality and cost, none of
+    -- which reads this field, and a non-zero literal would imply an agreement
+    -- with the fixture's trace that nothing in this file checks.
+    cumulative: zero_runtime_status_counts() })
 }
 
 -- THE RETURNED TRACE. Eighteen records: ten wire, seven decision, one
@@ -721,10 +727,24 @@ func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
   let a = report("the register agrees with the vocabulary in both directions", List.length(vs) == 0,
                  "${rule_list(vs)}\n      ${first_message(vs)}");
   let gap = logical_variants_not_in_trace(event_vocabulary());
-  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3, eleven more by WI-D2)",
-                 List.length(gap) == 2
+  -- SEVEN, not two, since PLAN-003 P3 Part 1: ADR-003 D1's five journal-class
+  -- variants are DECLARED before the part that emits them (§0.3's vocabulary
+  -- gate lands variant, row and golden together; P3 Part 2's fold cannot name a
+  -- variant that does not exist). The five are asserted by NAME as well as by
+  -- count, in the same both-directions style as the closures below: a count of
+  -- seven is satisfied by any seven, and what this row claims is that the two
+  -- old gaps are still the old gaps and the five new ones are exactly D1's.
+  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3, eleven more by WI-D2; ADR-003 D1's five journal-class variants declared-not-yet-emitted at PLAN-003 P3 Part 1)",
+                 List.length(gap) == 7
                    && not contains_str(gap, "DoneEvent")
-                   && not contains_str(gap, "StreamDelta"),
+                   && not contains_str(gap, "StreamDelta")
+                   && contains_str(gap, "ScratchpadResult")
+                   && contains_str(gap, "SessionSuspend")
+                   && contains_str(gap, "HistorySeeded")
+                   && contains_str(gap, "HistoryAppended")
+                   && contains_str(gap, "HistoryReplaced")
+                   && contains_str(gap, "StateDelta")
+                   && contains_str(gap, "SessionResumed"),
                  "the gap is ${List.length(gap)}: ${join_str(gap)}");
   let c = report("every registered gap carries a reason",
                  List.length(parity_gap_reasons()) == List.length(d64_gap_register()),

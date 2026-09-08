@@ -1495,17 +1495,17 @@ func per_step_usage_kvs(result: StepResult, cost_step_mc: int) -> [{key: string,
 -- mapping now lives beside RunSummaryInfo as phase_vocab.finish_reason_wire.
 -- No integer termination code survives at any terminal call site.
 
--- Build the schema-v1 run_summary event. Split out from the finalizer so the
--- record that is projected and the record that is appended are provably the
--- same value, not two constructions that could drift.
+-- Build the schema-v1 run_summary event, split out so the record projected and
+-- the record appended are one value. `cumulative` is ADR-003 D1's session
+-- counts (P3 Part 1); its two lines are PAIRED below to stay anchor-neutral.
 pure func mk_run_summary(
   model: string,
   totals: RuntimeLoopTotals,
   steps_executed: int,
   reason: TerminationReason,
   error_msg: string,
-  duration_ms: int,
-  commit: string
+  duration_ms: int, commit: string,
+  cumulative: RuntimeStatusCounts
 ) -> LedgerEvent {
   RunSummary({
     model: model,
@@ -1518,8 +1518,8 @@ pure func mk_run_summary(
     cache_creation_input_tokens: totals.cache_creation,
     total_cost_usd: millicents_to_usd(totals.cost_millicents),
     total_cost_millicents: totals.cost_millicents,
-    duration_ms: duration_ms,
-    error: error_msg
+    duration_ms: duration_ms, error: error_msg,
+    cumulative: cumulative
   })
 }
 
@@ -1576,7 +1576,7 @@ func c2_finalize(
   -- thread its successor; this makes the existing one do so too.
   let reading = ports.clock_now(world);
   let now_ms = reading.now_ms;
-  let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit());
+  let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit(), final.cumulative);
   let _ = ledger_emit(session_id, summary);
   -- `suspended: None` HERE, unconditionally, and the suspension sets it with a
   -- record update on the value this returns (`c2_suspend`). That keeps this the
@@ -3919,12 +3919,17 @@ func conversation_loop_v2_with_policy(
           tool_call_id: "",
           images: []
         };
+        -- ADR-003 D1/D5: `run_started` names the run it opens. The identity is
+        -- built BEFORE the banner rather than after it — same value, same
+        -- arguments, one line earlier — so the event and the run it announces
+        -- carry one `run_id` instead of two constructions that could drift.
+        let identity = loop_run_identity(session_id, profile, resume_count, run_ordinal);
         let _ = ledger_emit(session_id, SessionStart({
           task: content,
           model: model,
-          mode: "v2"
+          mode: "v2",
+          run_id: identity.run_id
         }));
-        let identity = loop_run_identity(session_id, profile, resume_count, run_ordinal);
         -- ADR-003 v6.1 D6, THE RESUME. When a continuation is held, the
         -- operator's message is appended to ITS history — the exhausted run's,
         -- carried out of the suspension — and the run restarts from

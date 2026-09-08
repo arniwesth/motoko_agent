@@ -8,7 +8,7 @@ module src/core/phase_vocab
 
 import std/ai (Message, ToolCall, StepResult)
 import std/crypto (sha256Hex)
-import std/json (Json, jo, ja, kv, js, jnum, encode)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode)
 import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
@@ -576,7 +576,24 @@ export type RunSummaryInfo = {
   total_cost_usd: float,
   total_cost_millicents: int,
   duration_ms: int,
-  error: string
+  error: string,
+  -- ADR-003 v6.1 D1, the `run_finished` entry's counts (PLAN-003 P3 Part 1).
+  --
+  -- WHY THIS FIELD AND NOT `steps_executed`, WHICH IS ALREADY HERE. Both are
+  -- numbers about the same run and they answer different questions.
+  -- `steps_executed` is `st.step_idx` at finalize — THIS run's loop position,
+  -- reset to 0 by every resume. `cumulative` is
+  -- `runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace))`
+  -- — the session's running counts, carried across a suspension by the
+  -- continuation, and `provider_calls_completed` is the judging number ADR-003's
+  -- TL;DR names ("a run that dies at step N resumes with N steps of history").
+  -- A fold of the journal reproduces this field; it cannot reproduce
+  -- `steps_executed` without also knowing where each run began.
+  --
+  -- The VALUE is `final.cumulative` (`journal.FinalState`), which every one of
+  -- `c2_finalize`'s callers already builds from `c2_final_state(st)`. Nothing
+  -- new is computed for it and nothing new is threaded to reach it.
+  cumulative: RuntimeStatusCounts
 }
 -- D6.2: the typed internal termination reason, mapped exhaustively onto the
 -- wire `finish_reason` string. It lives beside RunSummaryInfo so the wire
@@ -651,7 +668,12 @@ export type ErrorInfo = { source: string, code: string, message: string }
 export type FeedbackInfo = { step: int, feedback: string }
 export type HybridBashInfo = { step: int, cmd: string }
 export type PersistNudgeInfo = { step: int, nudge_num: int, budget: int }
-export type SessionStartInfo = { task: string, model: string, mode: string }
+-- `run_id` is ADR-003 D5's identity on the `run_started` entry (D1): the host
+-- assigns entry ids, but the child says which RUN an entry belongs to, and the
+-- fold attributes by that rather than by position. `<session_id>.r<resume_count>
+-- .<run_ordinal>`, built by the conversation loop, `""` on the paths that have
+-- no identity yet.
+export type SessionStartInfo = { task: string, model: string, mode: string, run_id: string }
 export type SessionSuspendInfo = { session_id: string, target_profile: string }
 
 -- ADR-003 v6.1 D2. The typed suspension's wire record: a run that reached its
@@ -668,6 +690,115 @@ export type SessionSuspendInfo = { session_id: string, target_profile: string }
 -- resumed run continues FROM (the budget is checked before the call that would
 -- have exceeded it, so no step is half-executed).
 export type RunSuspendedInfo = { session_id: string, run_id: string, reason: string, step: int }
+
+-- ============================================================================
+-- ADR-003 v6.1 D1's JOURNAL CLASS (PLAN-003 P3 Part 1).
+--
+-- Five variants that carry the session journal's substance: the history a run
+-- starts from, every message that enters or replaces one, the running counts,
+-- and the resume that opened the frame. The host writes them to the journal
+-- (D3, "one writer: the host"); the child only says them.
+--
+-- NOTHING IN THE DRIVER CONSTRUCTS THESE YET, and that is the shape of this
+-- part rather than an omission. `make event_vocabulary` requires one vocabulary
+-- row and one byte-level golden per `LedgerEvent` variant IN THE SAME COMMIT
+-- (PLAN-003 §0.3), and P3 Part 2's fold cannot name a variant that does not
+-- exist. So the vocabulary lands first, with no emit site: the five rows are
+-- Logical and carry `reaches_trace_today: false`, which puts them on
+-- `dst_invariants.d64_gap_register` with a reason each until P3 Part 3 wires
+-- the sites. A variant that is declared and unemitted is a declared gap; a
+-- variant emitted with no declaration is the artifact-that-validates-while-
+-- incomplete this project's vocabulary gate exists to prevent.
+--
+-- WHY THE MESSAGE PAYLOADS ARE `Json` AND NOT `[Message]`. D1 writes them as
+-- `[Message]` and the WIRE BYTES are exactly that — a JSON array of the codec's
+-- five-field message objects. What cannot be `[Message]` is the field's type
+-- HERE: the codec is `journal.message_json` / `journal.messages_json`
+-- (PLAN-003 P1 Part 3), and `journal.ail` imports THIS module. A `[Message]`
+-- field would force the encoder into `phase_vocab` — a move of what P1 landed —
+-- or a second copy of it, and a journal with two message encoders is a journal
+-- whose chain digest has two definitions. The payload therefore crosses
+-- pre-encoded, which is the `ToolBatchInfo.payload: Json` precedent
+-- (`NativeToolCalls` / `NativeToolResults`) applied to a bigger value.
+-- ============================================================================
+
+-- The history a traced run STARTS from, once per run, before the loop. `digest`
+-- is `digest_messages(messages)` — the whole-seed digest, which is the base the
+-- incremental chain of `HistoryAppended.digest_after` extends. The host has
+-- three arms for it (D1): journal it as N appends for a session's first run,
+-- as a `history_replaced` after a profile switch, or compare-and-drop.
+export type HistorySeededInfo = { run_id: string, messages: Json, digest: string }
+
+-- ONE MESSAGE PER EVENT, never a batch: a batch of N tool results is N
+-- consecutive events, because the host writes one entry per message and
+-- `HistoryReplaced.first_kept` is an INDEX into that one-message-per-entry
+-- sequence. `replaces_previous` is set on the first event of a hybrid-bash
+-- batch, whose augmented assistant supersedes the plain one the previous event
+-- carried; `digest_after` then chains from the entry BEFORE the replaced one,
+-- which is what pins the replacement — a fold that appended instead breaks the
+-- chain exactly there.
+export type HistoryAppendedInfo = {
+  run_id: string,
+  step: int,
+  message: Json,
+  replaces_previous: bool,
+  digest_after: string
+}
+
+-- The checkpoint's replacement, and the profile switch's new head. `first_kept`
+-- is `None` at HEAD and the field is not speculative: `apply_checkpoint`
+-- rebuilds the history as the pinned system prefix plus one summary message and
+-- keeps no tail, so there is no index to report — but the fold's rule ("emit
+-- `messages`, then every history entry after this one, or from `first_kept`
+-- when it is `Some`") is written for both, and a checkpoint that later keeps a
+-- tail must not be a schema change. `Option[int]` rather than a sentinel: -1
+-- would be a value the strict decoder has to special-case, and D4 rule 2 has no
+-- fallbacks.
+export type HistoryReplacedInfo = {
+  run_id: string,
+  step: int,
+  reason: string,
+  first_kept: Option[int],
+  messages: Json,
+  digest_after: string
+}
+
+-- The counts, telemetry and artifacts at a step boundary. `cumulative` is the
+-- same value `RunSummaryInfo.cumulative` carries and is computed the one way
+-- (`runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace))`).
+-- `ext_artifacts` is present ONLY when the digest changed, which is why it is
+-- an `Option[Json]` beside its digest rather than a Json that is sometimes
+-- empty: extension artifacts are the largest thing the journal carries, and a
+-- delta that re-states them at every step turns a session's journal into N
+-- copies of them.
+export type StateDeltaInfo = {
+  run_id: string,
+  step: int,
+  cumulative: RuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts_digest: string,
+  ext_artifacts: Option[Json]
+}
+
+-- The FIRST event a resumed child emits (D6 step 5), and the `resumed` entry the
+-- host writes from it. It carries both sides of every compatibility comparison
+-- the host already made rather than the verdict alone: `profile_from/to` records
+-- an accepted profile switch, and `prompt_digest_from/to` differing is exactly
+-- what tells the host to journal the next `HistorySeeded` as a
+-- `history_replaced` (D1's second arm) instead of comparing digests. `forced` is
+-- `--resume-force`, recorded because a resume that overrode a refusal is not the
+-- same event as one that did not need to.
+export type SessionResumedInfo = {
+  resume_count: int,
+  from_id: string,
+  from_ordinal: int,
+  profile_from: string,
+  profile_to: string,
+  prompt_digest_from: string,
+  prompt_digest_to: string,
+  forced: bool
+}
+
 export type StreamStartInfo = { step: int, stream_id: string, model: string }
 export type StreamEndInfo = { step: int, stream_id: string, status: string }
 export type StreamErrorRetryInfo = { step: int, error: string }
@@ -810,6 +941,24 @@ export type LedgerEvent
   | NativeToolResults(ToolBatchInfo)         -- [prod] native_tool_results
   | SessionSuspend(SessionSuspendInfo)       -- [prod] session_suspend
   | RunSuspended(RunSuspendedInfo)           -- [prod] run_suspended
+  -- ADR-003 v6.1 D1's journal class. [NEW] on the wire and UNEMITTED at this
+  -- commit (PLAN-003 P3 Part 1); the emit sites are P3 Part 3's.
+  --
+  -- `StateDelta` SHARES ITS NAME with the record type declared at the head of
+  -- this module (the `PhaseResult.delta` shape). AILANG keeps types and
+  -- constructors in separate namespaces and resolves a single imported name to
+  -- both, which `model_phase` (the type) and `dst_event_vocabulary` (the
+  -- constructor) now exercise in the same tree. The collision is tolerated
+  -- rather than dodged because ADR-003 D1 names the entry `state_delta` and its
+  -- event `StateDelta` in two places, and a `JournalStateDelta` here would be a
+  -- third name for one thing. Contrast `TerminationReason`'s `Term` prefix
+  -- above: that collision was constructor-against-constructor, which does NOT
+  -- resolve.
+  | HistorySeeded(HistorySeededInfo)         -- [NEW]  history_seeded
+  | HistoryAppended(HistoryAppendedInfo)     -- [NEW]  history_appended
+  | HistoryReplaced(HistoryReplacedInfo)     -- [NEW]  history_replaced
+  | StateDelta(StateDeltaInfo)               -- [NEW]  state_delta
+  | SessionResumed(SessionResumedInfo)       -- [NEW]  session_resumed
   | SessionStart(SessionStartInfo)           -- [prod] session_start
   | ErrorEvent(ErrorInfo)                    -- [prod] error
   | TotalsUpdated(ThinkingInfo)              -- [NEW]  loop_totals_updated
@@ -861,11 +1010,74 @@ func diagnostic_fields_json(fields: [DiagnosticField]) -> [Json] {
   }
 }
 
+-- The journal class's shared sub-objects (ADR-003 D1). Both are nested rather
+-- than flattened: `cumulative` is one value the fold compares field by field
+-- against `FinalState.cumulative`, and five loose `provider_calls_*` keys on
+-- `run_summary` would collide with the flat shape `runtime_status_json` already
+-- publishes for a DIFFERENT audience (the model's status tool).
+--
+-- The key names are `runtime_status_json`'s (`session.ail`), deliberately: the
+-- two objects report the same counts to the host and to the model, and a reader
+-- who learns one learns the other.
+export func runtime_status_counts_json(c: RuntimeStatusCounts) -> Json {
+  jo([
+    kv("provider_calls_started", jnum(_int_to_float(c.provider_calls_started))),
+    kv("provider_calls_completed", jnum(_int_to_float(c.provider_calls_completed))),
+    kv("stage_applied_total", jnum(_int_to_float(c.stage_applied_total))),
+    kv("stage_rejected_total", jnum(_int_to_float(c.stage_rejected_total))),
+    kv("compaction_ai_applied", jnum(_int_to_float(c.compaction_ai_applied)))
+  ])
+}
+
+export func token_telemetry_json(t: TokenTelemetry) -> Json {
+  jo([
+    kv("last_input_tokens", jnum(_int_to_float(t.last_input_tokens))),
+    kv("last_output_tokens", jnum(_int_to_float(t.last_output_tokens))),
+    kv("last_estimated_input_tokens", jnum(_int_to_float(t.last_estimated_input_tokens)))
+  ])
+}
+
+-- `first_kept` and `ext_artifacts` join `done`'s `source` and `thinking`'s two
+-- cache counters as the vocabulary's OPTIONAL payload keys, and they are
+-- optional in the strong sense: absent means "no tail was kept" and "the
+-- artifacts did not change", which is not the same claim as any value the key
+-- could carry. Their rows declare them `opt(...)`, and `event_vocabulary_dst`
+-- drives both branches — `samples()` carries the absent one, `check 3b` the
+-- present one.
+func history_replaced_kvs(i: HistoryReplacedInfo) -> [{key: string, value: Json}] {
+  let head = [
+    kv("type", js("history_replaced")),
+    kv("run_id", js(i.run_id)),
+    kv("step", jnum(_int_to_float(i.step))),
+    kv("reason", js(i.reason))
+  ];
+  let kept = match i.first_kept {
+    None => [],
+    Some(n) => [kv("first_kept", jnum(_int_to_float(n)))]
+  };
+  head ++ kept ++ [kv("messages", i.messages), kv("digest_after", js(i.digest_after))]
+}
+
+func state_delta_kvs(i: StateDeltaInfo) -> [{key: string, value: Json}] {
+  let base = [
+    kv("type", js("state_delta")),
+    kv("run_id", js(i.run_id)),
+    kv("step", jnum(_int_to_float(i.step))),
+    kv("cumulative", runtime_status_counts_json(i.cumulative)),
+    kv("telemetry", token_telemetry_json(i.telemetry)),
+    kv("ext_artifacts_digest", js(i.ext_artifacts_digest))
+  ];
+  match i.ext_artifacts {
+    None => base,
+    Some(a) => base ++ [kv("ext_artifacts", a)]
+  }
+}
+
 export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
   match e {
     ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("system_prefix_count", jnum(_int_to_float(i.system_prefix_count))), kv("system_prefix_chars", jnum(_int_to_float(i.system_prefix_chars))), kv("system_prefix_digest", js(i.system_prefix_digest)), kv("payload_digest", js(i.payload_digest)), kv("model", js(i.model))],
     ScratchpadResult(i) => [kv("type", js("scratchpad_result")), kv("tool_call_id", js(i.tool_call_id)), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("cells_json", js(i.cells_json))],
-    RunSummary(i) => [kv("type", js("run_summary")), kv("model", js(i.model)), kv("motoko_commit", js(i.motoko_commit)), kv("finish_reason", js(i.finish_reason)), kv("steps_executed", jnum(_int_to_float(i.steps_executed))), kv("usage", jo(usage_kvs(i.input_tokens, i.output_tokens, i.cache_read_input_tokens, i.cache_creation_input_tokens))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("duration_ms", jnum(_int_to_float(i.duration_ms))), kv("error", js(i.error))],
+    RunSummary(i) => [kv("type", js("run_summary")), kv("model", js(i.model)), kv("motoko_commit", js(i.motoko_commit)), kv("finish_reason", js(i.finish_reason)), kv("steps_executed", jnum(_int_to_float(i.steps_executed))), kv("usage", jo(usage_kvs(i.input_tokens, i.output_tokens, i.cache_read_input_tokens, i.cache_creation_input_tokens))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("duration_ms", jnum(_int_to_float(i.duration_ms))), kv("error", js(i.error)), kv("cumulative", runtime_status_counts_json(i.cumulative))],
     NativeToolDenied(i) => [kv("type", js("native_tool_denied")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("reason", js(i.reason))],
     ToolPending(i) => [kv("type", js("tool_pending")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("reason", js(i.reason))],
     ExtToolHandled(i) => [kv("type", js("ext_tool_handled")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("exit_code", jnum(_int_to_float(i.exit_code)))],
@@ -894,7 +1106,12 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     NativeToolResults(i) => [kv("type", js("native_tool_results")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("results", i.payload)],
     SessionSuspend(i) => [kv("type", js("session_suspend")), kv("session_id", js(i.session_id)), kv("target_profile", js(i.target_profile))],
     RunSuspended(i) => [kv("type", js("run_suspended")), kv("session_id", js(i.session_id)), kv("run_id", js(i.run_id)), kv("reason", js(i.reason)), kv("step", jnum(_int_to_float(i.step)))],
-    SessionStart(i) => [kv("type", js("session_start")), kv("task", js(i.task)), kv("model", js(i.model)), kv("mode", js(i.mode))],
+    HistorySeeded(i) => [kv("type", js("history_seeded")), kv("run_id", js(i.run_id)), kv("messages", i.messages), kv("digest", js(i.digest))],
+    HistoryAppended(i) => [kv("type", js("history_appended")), kv("run_id", js(i.run_id)), kv("step", jnum(_int_to_float(i.step))), kv("message", i.message), kv("replaces_previous", jb(i.replaces_previous)), kv("digest_after", js(i.digest_after))],
+    HistoryReplaced(i) => history_replaced_kvs(i),
+    StateDelta(i) => state_delta_kvs(i),
+    SessionResumed(i) => [kv("type", js("session_resumed")), kv("resume_count", jnum(_int_to_float(i.resume_count))), kv("from_id", js(i.from_id)), kv("from_ordinal", jnum(_int_to_float(i.from_ordinal))), kv("profile_from", js(i.profile_from)), kv("profile_to", js(i.profile_to)), kv("prompt_digest_from", js(i.prompt_digest_from)), kv("prompt_digest_to", js(i.prompt_digest_to)), kv("forced", jb(i.forced))],
+    SessionStart(i) => [kv("type", js("session_start")), kv("task", js(i.task)), kv("model", js(i.model)), kv("mode", js(i.mode)), kv("run_id", js(i.run_id))],
     ErrorEvent(i) => [kv("type", js("error")), kv("source", js(i.source)), kv("code", js(i.code)), kv("message", js(i.message))],
     TotalsUpdated(i) => [kv("type", js("loop_totals_updated")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))],
     CheckpointTaken(i) => [kv("type", js("history_checkpoint")), kv("reason", js(i.reason)), kv("before_digest", js(i.before_digest)), kv("after_digest", js(i.after_digest))],
@@ -1305,8 +1522,13 @@ pure func test_ledger_projection_golden_bytes() -> bool
   {
     golden(ProviderCallPrepared({ step: 1, msg_count: 2, estimated_input_tokens: 4, system_prefix_count: 1, system_prefix_chars: 3, system_prefix_digest: "s1", payload_digest: "p2", model: "m" }), "{\"type\":\"provider_call_prepared\",\"step\":1,\"msg_count\":2,\"estimated_input_tokens\":4,\"system_prefix_count\":1,\"system_prefix_chars\":3,\"system_prefix_digest\":\"s1\",\"payload_digest\":\"p2\",\"model\":\"m\"}")
     && golden(ScratchpadResult({ tool_call_id: "tc", request_id: "step-1", step: 1, cells_json: "[]" }), "{\"type\":\"scratchpad_result\",\"tool_call_id\":\"tc\",\"request_id\":\"step-1\",\"step\":1,\"cells_json\":\"[]\"}")
-    && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "" }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"\"}")
-    && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 5, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "err" }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"cache_read_input_tokens\":5,\"cache_creation_input_tokens\":0,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"err\"}")
+    -- RE-PINNED at PLAN-003 P3 Part 1: `cumulative` joined RunSummaryInfo, so
+    -- the wire bytes moved. The two cases keep their old split (no cache
+    -- counters / cache counters) and differ now in the counts too — ZERO in the
+    -- first, so the golden pins that an unresumed run publishes zeros rather
+    -- than omitting the object, and non-zero in the second.
+    && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "", cumulative: zero_runtime_status_counts() }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"\",\"cumulative\":{\"provider_calls_started\":0,\"provider_calls_completed\":0,\"stage_applied_total\":0,\"stage_rejected_total\":0,\"compaction_ai_applied\":0}}")
+    && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 5, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "err", cumulative: { provider_calls_started: 5, provider_calls_completed: 4, stage_applied_total: 2, stage_rejected_total: 1, compaction_ai_applied: 1 } }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"cache_read_input_tokens\":5,\"cache_creation_input_tokens\":0,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"err\",\"cumulative\":{\"provider_calls_started\":5,\"provider_calls_completed\":4,\"stage_applied_total\":2,\"stage_rejected_total\":1,\"compaction_ai_applied\":1}}")
     && golden(NativeToolDenied({ step: 1, stream_id: "s", tool: "T", id: "tc", reason: "no" }), "{\"type\":\"native_tool_denied\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"reason\":\"no\"}")
     && golden(ToolPending({ step: 1, stream_id: "s", tool: "T", id: "tc", reason: "wait" }), "{\"type\":\"tool_pending\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"reason\":\"wait\"}")
     && golden(ExtToolHandled({ step: 1, stream_id: "s", tool: "T", id: "tc", exit_code: 0 }), "{\"type\":\"ext_tool_handled\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"exit_code\":0}")
@@ -1337,7 +1559,28 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(NativeToolResults({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_results\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"results\":[]}")
     && golden(SessionSuspend({ session_id: "sid", target_profile: "dogfood" }), "{\"type\":\"session_suspend\",\"session_id\":\"sid\",\"target_profile\":\"dogfood\"}")
     && golden(RunSuspended({ session_id: "sid", run_id: "sid.r0.0", reason: "budget_exhausted", step: 3 }), "{\"type\":\"run_suspended\",\"session_id\":\"sid\",\"run_id\":\"sid.r0.0\",\"reason\":\"budget_exhausted\",\"step\":3}")
-    && golden(SessionStart({ task: "t", model: "m", mode: "v2" }), "{\"type\":\"session_start\",\"task\":\"t\",\"model\":\"m\",\"mode\":\"v2\"}")
+    -- ADR-003 D1's journal class (PLAN-003 P3 Part 1). Eight goldens for five
+    -- variants: `HistoryAppended`, `HistoryReplaced` and `StateDelta` each get
+    -- BOTH states of the payload field that changes their bytes — the
+    -- replacement flag, the kept-tail index, the changed artifacts — because a
+    -- single golden per variant would pin one branch of each and leave the
+    -- other unpinned, which is the shape `DoneEvent.source` and `usage`'s cache
+    -- counters are already double-pinned for.
+    --
+    -- The message payloads are pinned as the Json they cross as: what the
+    -- codec produces is `journal.ail`'s round-tripped concern, and what THIS
+    -- module owes is that the projection passes it through unmodified and puts
+    -- it under the right key.
+    && golden(HistorySeeded({ run_id: "sid.r0.0", messages: ja([jo([kv("role", js("system")), kv("content", js("s"))])]), digest: "sha256:seed" }), "{\"type\":\"history_seeded\",\"run_id\":\"sid.r0.0\",\"messages\":[{\"role\":\"system\",\"content\":\"s\"}],\"digest\":\"sha256:seed\"}")
+    && golden(HistoryAppended({ run_id: "sid.r0.0", step: 3, message: jo([kv("role", js("tool")), kv("tool_call_id", js("tc"))]), replaces_previous: false, digest_after: "sha256:a" }), "{\"type\":\"history_appended\",\"run_id\":\"sid.r0.0\",\"step\":3,\"message\":{\"role\":\"tool\",\"tool_call_id\":\"tc\"},\"replaces_previous\":false,\"digest_after\":\"sha256:a\"}")
+    && golden(HistoryAppended({ run_id: "sid.r0.0", step: 4, message: jo([kv("role", js("assistant"))]), replaces_previous: true, digest_after: "sha256:b" }), "{\"type\":\"history_appended\",\"run_id\":\"sid.r0.0\",\"step\":4,\"message\":{\"role\":\"assistant\"},\"replaces_previous\":true,\"digest_after\":\"sha256:b\"}")
+    && golden(HistoryReplaced({ run_id: "sid.r0.0", step: 7, reason: "checkpoint", first_kept: None, messages: ja([]), digest_after: "sha256:r" }), "{\"type\":\"history_replaced\",\"run_id\":\"sid.r0.0\",\"step\":7,\"reason\":\"checkpoint\",\"messages\":[],\"digest_after\":\"sha256:r\"}")
+    && golden(HistoryReplaced({ run_id: "sid.r1.0", step: 0, reason: "profile_switch", first_kept: Some(4), messages: ja([]), digest_after: "sha256:r2" }), "{\"type\":\"history_replaced\",\"run_id\":\"sid.r1.0\",\"step\":0,\"reason\":\"profile_switch\",\"first_kept\":4,\"messages\":[],\"digest_after\":\"sha256:r2\"}")
+    && golden(StateDelta({ run_id: "sid.r0.0", step: 2, cumulative: { provider_calls_started: 3, provider_calls_completed: 3, stage_applied_total: 1, stage_rejected_total: 0, compaction_ai_applied: 0 }, telemetry: { last_input_tokens: 100, last_output_tokens: 20, last_estimated_input_tokens: 400 }, ext_artifacts_digest: "sha256:e", ext_artifacts: None }), "{\"type\":\"state_delta\",\"run_id\":\"sid.r0.0\",\"step\":2,\"cumulative\":{\"provider_calls_started\":3,\"provider_calls_completed\":3,\"stage_applied_total\":1,\"stage_rejected_total\":0,\"compaction_ai_applied\":0},\"telemetry\":{\"last_input_tokens\":100,\"last_output_tokens\":20,\"last_estimated_input_tokens\":400},\"ext_artifacts_digest\":\"sha256:e\"}")
+    && golden(StateDelta({ run_id: "sid.r0.0", step: 3, cumulative: zero_runtime_status_counts(), telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }, ext_artifacts_digest: "sha256:e2", ext_artifacts: Some(jo([kv("compose", js("v1"))])) }), "{\"type\":\"state_delta\",\"run_id\":\"sid.r0.0\",\"step\":3,\"cumulative\":{\"provider_calls_started\":0,\"provider_calls_completed\":0,\"stage_applied_total\":0,\"stage_rejected_total\":0,\"compaction_ai_applied\":0},\"telemetry\":{\"last_input_tokens\":0,\"last_output_tokens\":0,\"last_estimated_input_tokens\":0},\"ext_artifacts_digest\":\"sha256:e2\",\"ext_artifacts\":{\"compose\":\"v1\"}}")
+    && golden(SessionResumed({ resume_count: 1, from_id: "0007", from_ordinal: 42, profile_from: "dogfood", profile_to: "probe-budget", prompt_digest_from: "sha256:p0", prompt_digest_to: "sha256:p1", forced: true }), "{\"type\":\"session_resumed\",\"resume_count\":1,\"from_id\":\"0007\",\"from_ordinal\":42,\"profile_from\":\"dogfood\",\"profile_to\":\"probe-budget\",\"prompt_digest_from\":\"sha256:p0\",\"prompt_digest_to\":\"sha256:p1\",\"forced\":true}")
+    -- RE-PINNED at PLAN-003 P3 Part 1: `run_id` joined SessionStartInfo.
+    && golden(SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sid.r0.0" }), "{\"type\":\"session_start\",\"task\":\"t\",\"model\":\"m\",\"mode\":\"v2\",\"run_id\":\"sid.r0.0\"}")
     && golden(ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }), "{\"type\":\"error\",\"source\":\"agent_loop_v2\",\"code\":\"Internal\",\"message\":\"bad\"}")
     && golden(TotalsUpdated({ step: 1, text: "", finish_reason: "", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }), "{\"type\":\"loop_totals_updated\",\"step\":1,\"input_tokens\":10,\"output_tokens\":5}")
     && golden(CheckpointTaken({ reason: "r", before_digest: "h2", after_digest: "h1" }), "{\"type\":\"history_checkpoint\",\"reason\":\"r\",\"before_digest\":\"h2\",\"after_digest\":\"h1\"}")

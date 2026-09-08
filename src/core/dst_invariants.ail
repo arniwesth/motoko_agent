@@ -66,8 +66,12 @@
 --      evidence that the event is in `LedgerTrace`".
 --
 -- WI-A14 CLOSED ONE OF THE FIFTEEN; WI-C3 CLOSED A SECOND (`StreamDelta`);
--- **WI-D2 CLOSED ELEVEN MORE, and the register is now TWO.** See
--- `d64_gap_register`.
+-- **WI-D2 CLOSED ELEVEN MORE, and the register went to TWO. PLAN-003 P3 Part 1
+-- took it to SEVEN**, the one move that added rather than closed: ADR-003 D1's
+-- five journal-class variants are declared before the part that emits them,
+-- because the vocabulary gate (§0.3) will not let a variant land without its
+-- row and golden and the fold that names them cannot compile until they exist.
+-- See `d64_gap_register`.
 --
 --   AND THE THREE CHECKS ABOVE WERE NOT ENOUGH ON THEIR OWN, which WI-D2
 --   measured rather than argued. Checks 1 and 2 both compare the register
@@ -688,8 +692,8 @@ export pure func display_only_baseline() -> [string] {
 -- decidable over the returned trace alone" depends on their interleaving. The
 -- driver is the sole appender and that is load-bearing.
 --
--- The remaining two are NOT waived and are NOT reclassified. They are what is
--- left of the work list, and `parity_register_findings` pins this list against
+-- The registered entries are NOT waived and are NOT reclassified. They are what
+-- is left of the work list, and `parity_register_findings` pins this list against
 -- the vocabulary's gap in BOTH directions: a gap nobody registered is
 -- `parity-gap-register-missing`, and a registered variant that is no longer a
 -- gap is `parity-gap-register-stale`. Closing one without editing this list is
@@ -716,9 +720,27 @@ export pure func display_only_baseline() -> [string] {
 -- run at HEAD before this item. A variant emitted 47 times is not a variant no
 -- run reaches, so it is closed and witnessed by `make ledger_parity`'s `handled`
 -- subject rather than excused.
+--
+-- SEVEN AT PLAN-003 P3 PART 1, AND THE GROWTH IS THE DECLARATION ITSELF.
+-- ADR-003 v6.1 D1's five journal-class variants entered `LedgerEvent` with
+-- their rows and goldens and NO EMIT SITE — §0.3's vocabulary gate requires a
+-- variant, its row and its golden in one commit, and P3 Part 2's fold family
+-- cannot compile against a variant that does not exist, so the vocabulary is
+-- two parts ahead of the driver by construction. The shrink-only rule survives
+-- intact in the direction it was written for: a variant may not LEAVE this list
+-- without leaving the vocabulary's gap, and may not leave the gap by being
+-- reclassified DisplayOnly. What it never said, because the case had not
+-- arisen, is that a variant may not be DECLARED before it is emitted. Declaring
+-- it here is the alternative to writing `reaches_trace_today: true` for an
+-- event nothing constructs, which would be a false survey kept flat by a lie.
 export pure func d64_gap_register() -> [string] {
   ["ScratchpadResult",
-   "SessionSuspend"]
+   "SessionSuspend",
+   "HistorySeeded",
+   "HistoryAppended",
+   "HistoryReplaced",
+   "StateDelta",
+   "SessionResumed"]
 }
 
 -- Why each registered variant is still a gap, so the register is a work list
@@ -748,7 +770,17 @@ export pure func parity_gap_reasons() -> [ParityGap] {
   [{ variant: "ScratchpadResult",
      why: "MEASURED 0 `scratchpad_result` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Its two emission sites are in `tool_phase.execute_allowed_tool_call` and both are now inside the returned `emitted` log, so this is a REACHABILITY gap and not a parity one: if a run emits it, it reaches the trace. Closing it needs a run that emits it, and the only such run is one where a tool named `scratchpad` is served by a hook returning `Handled` with a `cells` key in its metadata. WI-D2 declined to construct one — a constructed scenario would close this register entry while establishing nothing about a profile." },
    { variant: "SessionSuspend",
-     why: "MEASURED 0 `session_suspend` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Emitted on the suspend control path; no profile in this tree has a suspend trigger, so the count is 0 rather than small. Same shape as ScratchpadResult: a coverage gap, not a parity one." }]
+     why: "MEASURED 0 `session_suspend` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Emitted on the suspend control path; no profile in this tree has a suspend trigger, so the count is 0 rather than small. Same shape as ScratchpadResult: a coverage gap, not a parity one." },
+   { variant: "HistorySeeded",
+     why: "MEASURED 0 emit sites: `grep -c 'HistorySeeded(' src/core/session.ail` is 0 at this commit, and the variant's only constructions in the tree are the golden in `phase_vocab.ail` and the sample in `scripts/dst/event_vocabulary_dst.ail`. A DECLARATION gap and not a reachability one: PLAN-003 P3 Part 1 lands the vocabulary, P3 Part 3 lands the emit at the traced entry before `c2_loop`. Closing it is a scheduled commit, not an experiment." },
+   { variant: "HistoryAppended",
+     why: "MEASURED 0 emit sites: `grep -c 'HistoryAppended(' src/core/session.ail` is 0 at this commit. Same declaration gap as HistorySeeded. Its close is the largest of the five — ADR-003 D2 lists ELEVEN sites in `session.ail` where `st.msgs` grows or its tail is replaced, one event per message, and the hybrid-bash batch's first event carries `replaces_previous: true`." },
+   { variant: "HistoryReplaced",
+     why: "MEASURED 0 emit sites: `grep -c 'HistoryReplaced(' src/core/session.ail` is 0 at this commit. Same declaration gap. One site at the checkpoint arm, with `first_kept: None` because `apply_checkpoint` keeps no tail at HEAD." },
+   { variant: "StateDelta",
+     why: "MEASURED 0 emit sites: `grep -c 'StateDelta(' src/core/session.ail` is 0 at this commit — the name also denotes a record type in `phase_vocab`, so the grep is over the CONSTRUCTOR form with its paren and the count is still 0. Same declaration gap; P3 Part 3 emits it at every step end and at the checkpoint arm." },
+   { variant: "SessionResumed",
+     why: "MEASURED 0 emit sites: `grep -c 'SessionResumed(' src/core/session.ail` is 0 at this commit. Same declaration gap, and the LAST of the five to close: it is emitted only by a child spawned with `--resume`, which is PLAN-003 P3 Part 5's flag. Until then no run in this tree can produce one, so this entry outlives the other four by two parts." }]
 }
 
 -- ============================================================================
@@ -1831,7 +1863,10 @@ pure func all_obligations_nonempty(fs: [InvariantFamily]) -> bool {
 -- wrong answer, and the module header says why it is wrong.
 --
 -- 14 at WI-A14, 13 at WI-C3 which closed StreamDelta, **TWO at WI-D2** which
--- closed the other eleven. The literal is
+-- closed the other eleven, and **SEVEN at PLAN-003 P3 Part 1**, the one move
+-- that was not a closure: ADR-003 D1's five journal-class variants are declared
+-- two parts before the commit that emits them, for the reason
+-- `d64_gap_register` states. The literal is
 -- deliberately not derived from `d64_gap_register()`: a row asserting the
 -- register equals itself is green after any edit, and shrinking the register is
 -- exactly the move that has to be a deliberate, recorded change.
@@ -1839,7 +1874,7 @@ pure func test_parity_register_agrees_with_the_vocabulary() -> bool
   tests [((), true)]
   {
     List.length(parity_register_findings()) == 0
-      && List.length(d64_gap_register()) == 2
+      && List.length(d64_gap_register()) == 7
       && List.length(display_only_baseline()) == 6
   }
 
