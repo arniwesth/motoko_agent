@@ -64,6 +64,13 @@ timing suspicion. It remains not-reproducible here — nothing in this session r
 started-then-refused sequence — so it stays a live-repro item, but an upstream report can now say
 what to look for.
 
+**Superseded in one part, 2026-09-08.** A search of herdr's tracker found this exact string
+reported on 0.8.2 (#3397) and the mechanism behind it: `agent prompt` gates on identifying the
+**pane foreground process**, and that check failing is what produces "not an active named agent".
+So the name binding is probably intact and the check in front of it is what fails — a sharper
+claim than "lost the binding". See
+[`DECISION-2026-09-08-finding-c-upstream.md`](DECISION-2026-09-08-finding-c-upstream.md).
+
 ## Raw evidence
 
 ```

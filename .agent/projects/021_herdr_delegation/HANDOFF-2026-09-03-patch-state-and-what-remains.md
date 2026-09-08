@@ -132,8 +132,11 @@ Unchanged from 09-02 except that C is now reachable:
   `stat` / `date -r` disagree between GNU and BSD. Left standing rather than papered over.
 - **The max-tokens truncation.** The turn before the 09-01 runaway ended `output_tokens: 4096`,
   `output: ""` — a truncation surfaced to the operator as an empty answer. Separate bug, untouched.
-- **No upstream filings**, decided 2026-09-02 and not revisited. Both candidates are worked around
-  in `scripts/dagr-pane.sh`; neither blocks anything.
+- **No upstream filings**, decided 2026-09-02. Both candidates are worked around in
+  `scripts/dagr-pane.sh`; neither blocks anything. **Finding C was never covered by this** — it
+  arose 09-03 and inherited the posture rather than being judged under it. Judged 2026-09-08 in
+  [`DECISION-2026-09-08-finding-c-upstream.md`](DECISION-2026-09-08-finding-c-upstream.md):
+  still do not file, but for different reasons, and the tracker search there found the mechanism.
 
 ## Before committing, two things that are not this work
 
