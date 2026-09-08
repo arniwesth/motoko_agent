@@ -1,0 +1,24 @@
+-- N>1 of ONE KIND, plus the two-argument constructor.  Two `Compactor` atoms
+-- are enumerated as (Compactor, 0) and (Compactor, 1), not collapsed to one;
+-- `ToolProvider(names, handle)` binds its SECOND argument only.  A delegation
+-- hop precedes the list (`make_caps`), as five of the record-shaped
+-- extensions do today.  Must resolve CLEAN with FOUR atoms.
+module fixture/control_capability_list_same_kind
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepOutcome, ToolCallEnvelope, ToolHandleOutcome)
+
+func pass(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: { PassThrough }, next_state: ctx.world }
+}
+
+func make_caps(_cfg: a) -> [Capability] {
+  let handle = func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+    { decision: { Delegate }, next_state: ctx.world }
+  };
+  [Compactor(pass), Compactor(\ctx _msgs. { decision: PassThrough, next_state: ctx.world }),
+   ToolProvider(["FixtureEcho", "FixtureOther"], handle), DescribeTools(\_ . [])]
+}
+
+export func register_with_config(cfg: a) -> [Capability] {
+  make_caps(cfg)
+}

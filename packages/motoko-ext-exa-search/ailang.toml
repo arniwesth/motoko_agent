@@ -1,0 +1,19 @@
+[package]
+name = "sunholo/motoko_ext_exa_search"
+version = "0.2.7"
+edition = "1"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+"sunholo/motoko_ext_mcp" = { path = "../motoko-ext-mcp" }
+
+[effects]
+max = ["Process", "FS", "Env"]
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_exa_search/register",
+  "sunholo/motoko_ext_exa_search/exa_search",
+  "sunholo/motoko_ext_exa_search/types",
+  "sunholo/motoko_ext_exa_search/prompts"
+]

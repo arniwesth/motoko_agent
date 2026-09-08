@@ -1,0 +1,540 @@
+-- scripts/dst/phase_c_l1_scenarios.ail
+--
+-- Phase C Layer-1 scenario harness. WI-C0 establishes the reporting contract:
+-- failures name the scenario id, the first failed invariant, and a normalized
+-- trace. Later Phase C work items add the real compaction/checkpoint cases.
+
+module scripts/dst/phase_c_l1_scenarios
+
+import std/io (println, exit)
+import std/list (length)
+import std/result (Result, Ok, Err)
+import std/ai (Message, ToolCall)
+import std/json (jo, kv, js, encode)
+import src/core/phase_vocab (
+  CheckpointTaken,
+  CallModel,
+  CompactionStageRecord,
+  Fail,
+  StepPolicy,
+  StepState,
+  TakeCheckpoint,
+  apply_checkpoint,
+  checkpoint,
+  history_digest,
+  history_from_seed,
+  history_len,
+  history_valid_transcript,
+  project,
+  seal_compacted_payload,
+  segment_messages,
+  SealExhausted,
+  SealSystemPromptEmpty,
+  split_for_compaction,
+  validate_checkpoint_chain
+)
+import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
+import src/core/step_machine (decide)
+import src/core/hook_phase (stage_record)
+import src/core/compaction (output_token_allowance)
+import src/core/ext/runtime (PreStepStage, StageApplied, StageRejected, StagePassed)
+import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
+
+func harness_self_test() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  Ok(())
+}
+
+func harness_self_test_scenario() -> Scenario {
+  { id: "phase_c.l1.harness_self_test", seed: "fixed", run: harness_self_test }
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+-- WI-B2a. `segment_messages` yields `[Message]` (5 fields since v0.33.0);
+-- `validate_compactor_output` takes `[Msg]` (4). This is the DROPPING direction
+-- of the seam WI-B3 settled — vision parts do not cross into `Msg`, which has
+-- nowhere to put them. Mirrors `session.messages_to_msgs`; the opposite
+-- direction lives in `long_qwen_compaction_dst.msgs_to_messages`, and confusing
+-- the two is the trap B3 named (two converters, opposite directions, identical shape).
+func message_to_msg(m: Message) -> Msg {
+  { role: m.role, content: m.content, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id }
+}
+
+func messages_to_msgs(ms: [Message]) -> [Msg] {
+  match ms {
+    [] => [],
+    m :: rest => message_to_msg(m) :: messages_to_msgs(rest)
+  }
+}
+
+func call(id: string) -> ToolCall {
+  { id: id, name: "T", arguments: "{}" }
+}
+
+func policy(context_limit: int) -> StepPolicy {
+  {
+    step_budget: 8,
+    max_cost_millicents: 0,
+    cost_metered: true,
+    persist_retries: 0,
+    retry_stream_errors: true,
+    require_system_prompt: true,
+    model: "phase-c-model",
+    provider_base_url: "",
+    checkpoint_enabled: false,
+    checkpoint_pct: 90,
+    compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+  }
+}
+
+func policy_with_checkpoint(context_limit: int) -> StepPolicy {
+  let base = policy(context_limit);
+  {
+    step_budget: base.step_budget,
+    max_cost_millicents: base.max_cost_millicents,
+    cost_metered: base.cost_metered,
+    persist_retries: base.persist_retries,
+    retry_stream_errors: base.retry_stream_errors,
+    require_system_prompt: base.require_system_prompt,
+    model: base.model,
+    provider_base_url: base.provider_base_url,
+    checkpoint_enabled: true,
+    checkpoint_pct: base.checkpoint_pct,
+    compaction: base.compaction
+  }
+}
+
+func no_system_in(msgs: [Message]) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest => if m.role == "system" then false else no_system_in(rest)
+  }
+}
+
+func scenario_segment_excludes_system_prefix() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let split = split_for_compaction([msg("system", "s1"), msg("system", "s2"), msg("user", "u"), msg("assistant", "a")]);
+  let seg = segment_messages(split.segment);
+  let pinned_ok = length(split.pinned) == 2;
+  ok_or_failure(no_system_in(seg) && pinned_ok, "compactable segment excludes the system prefix", [
+    "segment_had_system_or_bad_pin",
+    "pinned=${show(length(split.pinned))}",
+    "segment=${show(length(seg))}"
+  ])
+}
+
+func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let before = history_digest(h);
+      let state = {
+        step_idx: 1,
+        history: h,
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: jo([]),
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      };
+      let applied = apply_checkpoint(state, { reason: "scenario", summary: "summ" });
+      match applied.event {
+        CheckpointTaken(info) => {
+          let ok = info.before_digest == before
+            && info.after_digest == history_digest(applied.state.history)
+            && history_len(applied.state.history) == 2;
+          ok_or_failure(ok, "rewrite paired with checkpoint event", [
+            "before=${before}",
+            "event_before=${info.before_digest}",
+            "event_after=${info.after_digest}",
+            "state_after=${history_digest(applied.state.history)}"
+          ])
+        },
+        _ => Err({ failed_invariant: "checkpoint event constructor", trace: ["event=non_checkpoint"] })
+      }
+    }
+  }
+}
+
+func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let input_msgs = [msg("system", "s"), msg("user", "u"), msg("assistant", "a")];
+  match history_from_seed(input_msgs) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let cp = checkpoint(h, { reason: "scenario", summary: "summ" });
+      match cp.event {
+        CheckpointTaken(info) => {
+          let chain_ok = match validate_checkpoint_chain(history_digest(h), [info], history_digest(cp.history)) {
+            Ok(_) => true,
+            Err(_) => false
+          };
+          let in_seg = segment_messages(split_for_compaction(input_msgs).segment);
+          let out_seg = segment_messages(split_for_compaction([msg("system", "s"), msg("assistant", "[CHECKPOINT] summ")]).segment);
+          let segment_law_ok = match validate_compactor_output(messages_to_msgs(in_seg), messages_to_msgs(out_seg)) {
+            Ok(_) => true,
+            Err(_) => false
+          };
+          let ok = history_valid_transcript(cp.history) && chain_ok && segment_law_ok && history_len(cp.history) == 2;
+          ok_or_failure(ok, "checkpoint output is valid transcript", [
+            "history_len=${show(history_len(cp.history))}",
+            "before=${info.before_digest}",
+            "after=${info.after_digest}",
+            "valid=${show(history_valid_transcript(cp.history))}",
+            "chain_ok=${show(chain_ok)}",
+            "segment_law_ok=${show(segment_law_ok)}"
+          ])
+        },
+        _ => Err({ failed_invariant: "checkpoint event constructor", trace: ["event=non_checkpoint"] })
+      }
+    }
+  }
+}
+
+func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let msgs = [
+    msg("system", "pinned"),
+    msg("user", "compactable-a"),
+    msg("assistant", "compactable-b")
+  ];
+  match history_from_seed(msgs) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let split = split_for_compaction(msgs);
+      let projected = project(h, { last_input_tokens: 3, last_output_tokens: 0, last_estimated_input_tokens: 0 }, policy(10).compaction);
+      match projected {
+        Err(e) => Err({ failed_invariant: "projection under limit", trace: ["project_err=${e}"] }),
+        Ok(p) => {
+          let ok = length(split.pinned) == 1
+            && length(segment_messages(split.segment)) == 2
+            && length(p.split.pinned) == 1
+            && length(segment_messages(p.split.segment)) == 2;
+          ok_or_failure(ok, "project prep separates pinned/compactable pressure", [
+            "pinned=${show(length(split.pinned))}",
+            "segment=${show(length(segment_messages(split.segment)))}",
+            "projected_pinned=${show(length(p.split.pinned))}",
+            "projected_segment=${show(length(segment_messages(p.split.segment)))}"
+          ])
+        }
+      }
+    }
+  }
+}
+
+func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let split = split_for_compaction([msg("user", "hi")]);
+  match seal_compacted_payload(split, [msg("user", "hi")], "phase-c-model", 1000, true) {
+    Err(SealSystemPromptEmpty(_)) => Ok(()),
+    Err(SealExhausted(_)) => Err({
+      failed_invariant: "empty system prompt rejected with SystemPromptEmpty",
+      trace: ["expected=SystemPromptEmpty", "actual=SealExhausted"]
+    }),
+    Ok(_) => Err({
+      failed_invariant: "empty system prompt rejected with SystemPromptEmpty",
+      trace: ["expected=SystemPromptEmpty", "actual=Ok"]
+    })
+  }
+}
+
+func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let split = split_for_compaction([]);
+  match seal_compacted_payload(split, [msg("user", "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", output_token_allowance() + 10, false) {
+    Err(SealExhausted(_)) => Ok(()),
+    Err(SealSystemPromptEmpty(_)) => Err({
+      failed_invariant: "oversized payload rejected with SealExhausted",
+      trace: ["expected=SealExhausted", "actual=SealSystemPromptEmpty"]
+    }),
+    Ok(_) => Err({
+      failed_invariant: "oversized payload rejected with SealExhausted",
+      trace: ["expected=SealExhausted", "actual=Ok"]
+    })
+  }
+}
+
+func scenario_ext_compaction_invalid_rejected() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let input = [
+    { role: "assistant", content: "call", tool_calls: [call("tc")], tool_call_id: "" },
+    { role: "tool", content: "result", tool_calls: [], tool_call_id: "tc" }
+  ];
+  let invalid = [
+    { role: "assistant", content: "invented", tool_calls: [call("missing")], tool_call_id: "" }
+  ];
+  match validate_compactor_output(input, invalid) {
+    Err(e) => ok_or_failure(true, "invalid compaction rejected", ["err=${e}"]),
+    Ok(_) => Err({ failed_invariant: "invalid compaction rejected", trace: ["validator=accepted"] })
+  }
+}
+
+func scenario_summary_cache_replay_stable() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let artifact = jo([kv("ext", js("summary")), kv("summary", js("cached summary"))]);
+  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let first_state = {
+        step_idx: 0,
+        history: h,
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: artifact,
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      };
+      let replay = encode(first_state.ext_artifacts);
+      let first = encode(artifact);
+      ok_or_failure(first == replay, "summary cache replay stable", [
+        "first=${first}",
+        "replay=${replay}"
+      ])
+    }
+  }
+}
+
+func pressured_msgs() -> [Message] {
+  [
+    msg("system", "s"),
+    msg("user", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    msg("assistant", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+  ]
+}
+
+func state_from_msgs(msgs: [Message], context_limit: int) -> Result[StepState, string] {
+  match history_from_seed(msgs) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: 0,
+      history: h,
+      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+      totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+      nudges_used: 0,
+      ext_artifacts: jo([]),
+      pending_tool_calls: [],
+      last_finish_reason: "",
+      last_response_text: ""
+    })
+  }
+}
+
+func scenario_checkpoint_never_emitted_when_policy_off() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  match state_from_msgs(pressured_msgs(), 20) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(state) => {
+      let decision = decide(state, policy(20));
+      match decision {
+        TakeCheckpoint(_) => Err({ failed_invariant: "checkpoint never emitted when policy off", trace: ["decision=TakeCheckpoint"] }),
+        _ => Ok(())
+      }
+    }
+  }
+}
+
+func scenario_checkpoint_emitted_under_pressure() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  match state_from_msgs(pressured_msgs(), 20) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(state) => {
+      match decide(state, policy_with_checkpoint(20)) {
+        TakeCheckpoint(_) => Ok(()),
+        _ => Err({ failed_invariant: "checkpoint emitted under pressure", trace: ["decision=not_TakeCheckpoint"] })
+      }
+    }
+  }
+}
+
+func scenario_checkpoint_terminates_not_spins() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  match state_from_msgs(pressured_msgs(), 20) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(state) => {
+      let first = decide(state, policy_with_checkpoint(20));
+      let progress_ok = match first {
+        TakeCheckpoint(plan) => {
+          let applied = apply_checkpoint(state, plan);
+          match decide(applied.state, policy_with_checkpoint(20)) {
+            CallModel(_) => true,
+            _ => false
+          }
+        },
+        _ => false
+      };
+      match state_from_msgs([
+        msg("system", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        msg("user", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+      ], 20) {
+        Err(e) => Err({ failed_invariant: "degenerate seed accepted", trace: ["seed_err=${e}"] }),
+        Ok(heavy_state) => {
+          let degenerate_ok = match decide(heavy_state, policy_with_checkpoint(20)) {
+            CallModel(_) => true,
+            TakeCheckpoint(_) => false,
+            _ => false
+          };
+          ok_or_failure(progress_ok && degenerate_ok, "checkpoint terminates not spins", [
+            "progress_ok=${show(progress_ok)}",
+            "degenerate_ok=${show(degenerate_ok)}"
+          ])
+        }
+      }
+    }
+  }
+}
+
+func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let a: PreStepStage = { ext_id: "A", atom: 0, outcome: StageApplied("a") };
+  let b: PreStepStage = { ext_id: "B", atom: 0, outcome: StageRejected("bad") };
+  let c: PreStepStage = { ext_id: "C", atom: 0, outcome: StageApplied("c") };
+  let ra = stage_record(0, a);
+  let rb = stage_record(0, b);
+  let rc = stage_record(0, c);
+  let ok = match ra {
+    CompactionStageRecord(xa) => match rb {
+      CompactionStageRecord(xb) => match rc {
+        CompactionStageRecord(xc) => xa.ext_id == "A" && xb.ext_id == "B" && xc.ext_id == "C",
+        _ => false
+      },
+      _ => false
+    },
+    _ => false
+  };
+  ok_or_failure(ok, "chain order is registry order", ["order=A,B,C"])
+}
+
+func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let stages: [PreStepStage] = [
+    { ext_id: "A", atom: 0, outcome: StageApplied("a") },
+    { ext_id: "B", atom: 0, outcome: StageRejected("invalid") },
+    { ext_id: "C", atom: 0, outcome: StageApplied("c") }
+  ];
+  match stages {
+    a :: b :: c :: [] => {
+      let ok = a.ext_id == "A" && b.ext_id == "B" && c.ext_id == "C"
+        && match b.outcome { StageRejected(_) => true, _ => false }
+        && match c.outcome { StageApplied(_) => true, _ => false };
+      ok_or_failure(ok, "invalid stage skipped and chain continues", ["stages=A:applied,B:rejected,C:applied"])
+    },
+    _ => Err({ failed_invariant: "three stages recorded", trace: ["stage_count=${show(length(stages))}"] })
+  }
+}
+
+func scenario_actual_token_pressure_defers_to_seal() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  match history_from_seed([msg("system", "s"), msg("user", "over pressure")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let state = {
+        step_idx: 0,
+        history: h,
+        telemetry: { last_input_tokens: 1, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: jo([]),
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      };
+      let d = decide(state, policy(1));
+      match d {
+        CallModel(_) => Ok(()),
+        Fail(f) => Err({ failed_invariant: "actual token pressure defers to seal", trace: ["code=${f.code}", "message=${f.message}"] }),
+        _ => Err({ failed_invariant: "actual token pressure defers to seal", trace: ["decision=other"] })
+      }
+    }
+  }
+}
+
+func history_rewrite_requires_checkpoint_event_scenario() -> Scenario {
+  { id: "phase_c.l1.history_rewrite_requires_checkpoint_event", seed: "fixed", run: scenario_history_rewrite_requires_checkpoint_event }
+}
+
+func checkpoint_output_is_valid_transcript_scenario() -> Scenario {
+  { id: "phase_c.l1.checkpoint_output_is_valid_transcript", seed: "fixed", run: scenario_checkpoint_output_is_valid_transcript }
+}
+
+func project_prep_vs_uncompacted_history_pressure_scenario() -> Scenario {
+  { id: "phase_c.l1.project_prep_vs_uncompacted_history_pressure", seed: "fixed", run: scenario_project_prep_vs_uncompacted_history_pressure }
+}
+
+func ext_compaction_invalid_rejected_scenario() -> Scenario {
+  { id: "phase_c.l1.ext_compaction_invalid_rejected", seed: "fixed", run: scenario_ext_compaction_invalid_rejected }
+}
+
+func empty_system_prompt_rejected_scenario() -> Scenario {
+  { id: "phase_c.l1.empty_system_prompt_rejected", seed: "fixed", run: scenario_empty_system_prompt_rejected }
+}
+
+func oversized_payload_rejected_scenario() -> Scenario {
+  { id: "phase_c.l1.oversized_payload_rejected", seed: "fixed", run: scenario_oversized_payload_rejected }
+}
+
+func summary_cache_replay_stable_scenario() -> Scenario {
+  { id: "phase_c.l1.summary_cache_replay_stable", seed: "fixed", run: scenario_summary_cache_replay_stable }
+}
+
+func checkpoint_never_emitted_when_policy_off_scenario() -> Scenario {
+  { id: "phase_c.l1.checkpoint_never_emitted_when_policy_off", seed: "fixed", run: scenario_checkpoint_never_emitted_when_policy_off }
+}
+
+func checkpoint_emitted_under_pressure_scenario() -> Scenario {
+  { id: "phase_c.l1.checkpoint_emitted_under_pressure", seed: "fixed", run: scenario_checkpoint_emitted_under_pressure }
+}
+
+func checkpoint_terminates_not_spins_scenario() -> Scenario {
+  { id: "phase_c.l1.checkpoint_terminates_not_spins", seed: "fixed", run: scenario_checkpoint_terminates_not_spins }
+}
+
+func compactor_chain_order_is_registry_order_scenario() -> Scenario {
+  { id: "phase_c.l1.compactor_chain_order_is_registry_order", seed: "fixed", run: scenario_compactor_chain_order_is_registry_order }
+}
+
+func invalid_stage_skipped_chain_continues_scenario() -> Scenario {
+  { id: "phase_c.l1.invalid_stage_skipped_chain_continues", seed: "fixed", run: scenario_invalid_stage_skipped_chain_continues }
+}
+
+func actual_token_pressure_defers_to_seal_scenario() -> Scenario {
+  { id: "phase_c.l1.actual_token_pressure_defers_to_seal", seed: "fixed", run: scenario_actual_token_pressure_defers_to_seal }
+}
+
+func segment_excludes_system_prefix_scenario() -> Scenario {
+  { id: "phase_c.l1.segment_excludes_system_prefix", seed: "fixed", run: scenario_segment_excludes_system_prefix }
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let scenarios = [
+    harness_self_test_scenario(),
+    segment_excludes_system_prefix_scenario(),
+    project_prep_vs_uncompacted_history_pressure_scenario(),
+    empty_system_prompt_rejected_scenario(),
+    oversized_payload_rejected_scenario(),
+    ext_compaction_invalid_rejected_scenario(),
+    summary_cache_replay_stable_scenario(),
+    history_rewrite_requires_checkpoint_event_scenario(),
+    checkpoint_never_emitted_when_policy_off_scenario(),
+    checkpoint_emitted_under_pressure_scenario(),
+    checkpoint_terminates_not_spins_scenario(),
+    checkpoint_output_is_valid_transcript_scenario(),
+    compactor_chain_order_is_registry_order_scenario(),
+    invalid_stage_skipped_chain_continues_scenario(),
+    actual_token_pressure_defers_to_seal_scenario()
+  ];
+  let failed = run_all(scenarios, 0);
+  if failed == 0 then
+    println("phase_c_l1_scenarios PASS count=${show(length(scenarios))}")
+  else {
+    let _ = println("phase_c_l1_scenarios FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}

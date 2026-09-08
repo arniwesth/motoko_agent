@@ -1,0 +1,68 @@
+flowchart TB
+  %% Detail view 1 of 2 (with dst-discovery-replay). Overview: dst-target-system.
+  %% The boundary in SPACE: what crosses the world seam, in what shape, and what stays outside.
+  %% 007 ADR-001 D4 fixes where the environment lives; 009 ADR-001 D1/D3/D4/D5 fix the mechanism.
+  %% Grounded 2026-07-26: 007 after RR1-RR10, 009 at 7b9b4a4c266b229be85de5c09342f2b654c89fe7.
+  %% Nothing here exists at HEAD - this is the target, not the as-built.
+
+  test{"<b>must this effect cross the boundary?</b><br/>009 D1 · required when changing its result could change…"}:::decision
+
+  crossing["the next state-machine decision<br/>messages or tool results appended to history<br/>a ledger record<br/>retry or finalization behaviour<br/>budget or timeout behaviour<br/>the terminal outcome"]:::req
+
+  outside["<b>stays outside the modeled world</b><br/>diagnostic output that cannot influence execution<br/><br/>but it may never be the <i>only</i> copy of an invariant-bearing fact:<br/>the deterministic executor accumulates result, trace, and diagnostics<br/>first · a wrapper may print them afterwards<br/>a live projection sink may mirror events during production, while the<br/>deterministic profile uses a collecting or no-op sink — so reporting IO<br/>never justifies ambient input during execution"]:::rule
+
+  seam["<b>009 D1 · the one semantic seam</b><br/><br/>handle · world_state + world_request →<br/>ordered intermediate emissions · response · next_world_state · observations<br/>or a typed HarnessError<br/><br/>every request returns its successor state explicitly, including on error"]:::seam
+
+  stateRule["<b>state is threaded visibly by the real driver</b><br/>never a SharedMem cursor, a process global, an ambient RNG,<br/>or a mutable test singleton — each of those reintroduces order<br/>dependence and makes parallel test processes unsafe<br/><br/>the runtime virtual clock is permitted only as a synchronized,<br/>asserted <i>mirror</i> of the explicit clock value, never as an<br/>unrecorded source of simulator state"]:::rule
+
+  worldState["<b>world_state is more than a cursor</b><br/>virtual clock · generator or replay state · synthetic environment ·<br/>runtime-random stream · and any logical resource state the profile<br/>promises — an in-memory file map, tool or MCP availability,<br/>approval-channel state<br/><br/>a profile may treat an opaque external tool as a scripted typed<br/>boundary instead of emulating it, but must say so — it may not imply<br/>filesystem or server semantics it does not model"]:::rule
+
+  subgraph SURFACE["007 D4 · the authoritative request surface"]
+    direction TB
+    q1["<b>provider exchange</b> · tagged by origin, main loop or extension<br/>wraps the typed Result with its <b>ordered intermediate-emission log</b>"]:::req
+    q2["<b>tool execution</b> · a typed ToolCallEnvelope carrying deadline<br/>information and a typed result or error — replacing tool_exec, which<br/>was a stringly seam of two strings returning one"]:::req
+    q3["<b>approval</b> · a typed ApprovalResolution"]:::req
+    q4["<b>environment and config reads</b> during the established run"]:::req
+    q5["<b>runtime randomness</b>, if any"]:::req
+    q6["<b>monotonic time</b> · reads return the current world time<br/>without advancing it"]:::req
+    q7["<b>conformant extension effects</b> · origin-tagged by extension id,<br/>explicit successor state returned to the host"]:::req
+  end
+
+  faults["<b>009 D3 · faults enter through this same seam</b><br/>not as injected internal decisions — the state machine and driver<br/>stay production code and decide how to react<br/><br/>provider: retryable · non-retryable · protocol-inconsistent result<br/>partial stream then error · empty terminal response<br/>tool: typed execution error · wrong call id · past-deadline completion<br/>approval: explicit denial · no response before a declared deadline<br/><br/>every outcome also defines its <b>logical world transition</b>: a write-like<br/>fault says whether the update occurred, a drop updates availability,<br/>a deadline says whether work completed — timeout may not leave<br/>logical state ambiguous<br/><br/><i>directly forcing StepDecision, editing ledger state, or bypassing<br/>validation is rejected — it would test a second transition system</i>"]:::fault
+
+  clock["<b>009 D4 · time crosses as a controlled dimension</b><br/>the world owns a monotonic clock; conformant code reads it through<br/>the seam and never reads ambient wall time where the value can<br/>affect behaviour or an asserted trace<br/><br/>advances reject negative or overflowing movement<br/>completion-versus-deadline is a shared pure helper or a conformance-<br/>tested adapter contract, never re-derived in the generator<br/>external shell, MCP, and OS-process timeouts stay real-time and are<br/>never invoked as the clock oracle in a deterministic run"]:::clock
+
+  stream["<b>streaming · the live case of intermediate emissions</b><br/>live: project each chunk at arrival, then append the identical log<br/>to the trace in arrival order, <i>before</i> the final response transition<br/>deterministic: supply timed emissions from the program and project<br/>each at its virtual arrival point<br/>both paths: same ordering and content, no double projection<br/><br/><i>blocked — needs the upstream recorded-stream API</i>"]:::blocked
+
+  subgraph ADAPTERS["one seam, two adapters — dispatch only, never two behaviours"]
+    direction LR
+    live["<b>LiveWorld</b><br/>delegates to evolved production adapters<br/>real provider, tools, approval, clock"]:::mode
+    det["<b>DeterministicWorld</b><br/>interprets the recorded program<br/>no provider is contacted"]:::mode
+  end
+
+  same["the driver uses the <b>same request/response types and the same<br/>transition code</b> in both cases · production state-machine and policy<br/>code does not branch on test mode<br/><br/>the world ends at the external result boundary: production still validates<br/>and interprets StepResult and AIError, correlates tool-call ids, converts<br/>typed outcomes into history messages, applies approval and policy<br/>decisions, updates budgets, and records ledger events —<br/><i>moving any of that into the simulator would violate D5</i>"]:::rule
+
+  fence["<b>009 D5 · the profile fences the boundary</b><br/>an extension is covered only if every hook reachable in the profile is<br/>either deterministic and effect-free for its explicit inputs, or effectful<br/>only through world-mediated ports with explicit state returned<br/><br/>a reached-but-excluded hook, or any direct AI · Process · Net · FS ·<br/>SharedMem · Clock · env · random effect → <b>fail closed</b><br/>a run cannot gain coverage credit because its seed missed a<br/>direct-effect hook<br/><br/>capability flags are necessary but not sufficient: broad IO permits both<br/>reporting and readLine, so the gate also needs a source and ABI routing<br/>audit, poison probes per boundary, and fail-closed profile validation"]:::rule
+
+  test -->|yes| crossing
+  test -->|no| outside
+  crossing --> seam
+  seam -.-> stateRule
+  seam -.-> worldState
+  seam --> SURFACE
+  SURFACE -.-> stream
+  SURFACE --> faults
+  SURFACE --> clock
+  faults --> ADAPTERS
+  clock --> ADAPTERS
+  ADAPTERS --> same
+  same --> fence
+
+  classDef mode fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef seam fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef rule fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef req fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef fault fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+  classDef clock fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef blocked fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;

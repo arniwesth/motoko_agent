@@ -4,8 +4,8 @@ import std/option (Option, Some, None)
 import std/json (Json, jo, kv, js, get, asArray, asString)
 import std/string (contains)
 
-import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtensionHooks, ToolSchema,
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ToolSchema,
   BudgetPlan, BudgetPatch, PromptPatch,
   ToolCallEnvelope, ToolResultEnvelope,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision,
@@ -15,14 +15,6 @@ import pkg/sunholo/motoko_ext_abi/types (
 import pkg/sunholo/motoko_ext_scratchpad/prompts (prompt_patch)
 import pkg/sunholo/motoko_ext_scratchpad/types (tool_name, schema_json)
 import src/core/env_client (exec_scratchpad_cell)
-
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
-  no_budget_patch()
-}
 
 func is_scratchpad_tool(name: string) -> bool {
   name == "scratchpad" || name == "Scratchpad"
@@ -87,29 +79,22 @@ func result_from_exec(call: ToolCallEnvelope, result: { stdout: string, stderr: 
   }
 }
 
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleDecision ! {Net} {
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleOutcome ! {Net, Rand}  { { decision: {
   if not is_scratchpad_tool(call.tool) then Delegate
   else {
     let cells = cells_arg(call.arguments);
     let result = exec_scratchpad_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs);
     Handled(result_from_exec(call, result))
   }
-}
+}, next_state: ctx.world } }
 
-export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net} {
-  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-    on_tool_handle(ctx, call, timeout_secs)
-  };
-  {
-    id: "scratchpad",
-    provided_tools: provided_tools(),
-    on_describe_tools: \_ . on_describe_tools(),
-    on_build_system_prompt: \_ctx. prompt_patch(),
-    on_budget_plan: budget_hook,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
-    on_tool_policy: on_tool_policy,
-    on_tool_handle: handle,
-    on_response_intercept: func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-    on_solver_candidate: func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
-  }
+export func make_hooks(timeout_secs: int) -> [Capability] ! {Net, Rand} {
+  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call, timeout_secs) };
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    DescribeTools(\_ . on_describe_tools()),
+    PromptShaper(\_ctx. prompt_patch()),
+    ToolPolicy(on_tool_policy),
+    ToolProvider(provided_tools(), handle)
+  ]
 }

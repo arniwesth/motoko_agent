@@ -1,0 +1,102 @@
+[
+  {
+    "id": "source-index-joins",
+    "query": "plans related to source_chunks and func_slug",
+    "expected": [
+      {"path": ".agent/projects/002_code_graph/AILANG_Source_Index.md", "heading_contains": "Phase 2"},
+      {"path": ".agent/projects/002_code_graph/ADR-003-clickhouse-source-index.md", "heading_contains": "Tables"},
+      {"path": ".agent/projects/002_code_graph/HANDOFF-source-index-plan.md", "heading_contains": "Decisions already made"}
+    ]
+  },
+  {
+    "id": "project-memory-git",
+    "query": "which plan explains git commits and changed files",
+    "expected": [
+      {"path": ".agent/projects/002_code_graph/RESEARCH-project-memory-index.md", "heading_contains": "Summary"},
+      {"path": ".agent/projects/002_code_graph/RESEARCH-project-memory-index.md", "heading_contains": "Evidence Signals"},
+      {"path": ".agent/projects/002_code_graph/RESEARCH-project-memory-index.md", "heading_contains": "Example Questions"}
+    ]
+  },
+  {
+    "id": "embedding-batching-cost",
+    "query": "benchmark embedding all agent docs batching cost tokens",
+    "expected": [
+      {"path": ".agent/projects/002_code_graph/RESEARCH-project-memory-index.md", "heading_contains": "Batching Finding"},
+      {"path": ".agent/projects/002_code_graph/RESEARCH-project-memory-index.md", "heading_contains": "Local PoC Results"}
+    ]
+  },
+  {
+    "id": "chunking-quality",
+    "query": "tiny markdown heading sections hurt embedding search quality",
+    "expected": [
+      {"path": ".agent/projects/002_code_graph/RESEARCH-project-memory-index.md", "heading_contains": "Chunking Quality Finding"}
+    ]
+  },
+  {
+    "id": "deepseek-reranking",
+    "query": "use local DeepSeek model to rerank summarize extract entities",
+    "expected": [
+      {"path": ".agent/projects/002_code_graph/RESEARCH-project-memory-index.md", "heading_contains": "Local DeepSeek V4 Flash"}
+    ]
+  },
+  {
+    "id": "source-index-extraction",
+    "query": "extract source_files source_lines source_chunks CSV tables",
+    "expected": [
+      {"path": ".agent/projects/002_code_graph/AILANG_Source_Index.md", "heading_contains": "Phase 1"},
+      {"path": ".agent/projects/002_code_graph/ADR-003-clickhouse-source-index.md", "heading_contains": "Tables"}
+    ]
+  },
+  {
+    "id": "source-staleness",
+    "query": "source stale detection sha256 AGENTS.md indexed host fixture",
+    "expected": [
+      {"path": ".agent/projects/002_code_graph/AILANG_Source_Index.md", "heading_contains": "Phase 3"},
+      {"path": ".agent/projects/002_code_graph/HANDOFF-source-index-plan.md", "heading_contains": "What the plan must specify"},
+      {"path": ".agent/projects/002_code_graph/HANDOFF-source-index-implementation.md", "heading_contains": "Test and fixture requirements"}
+    ]
+  },
+  {
+    "id": "token-fallback",
+    "query": "chDB token probing hasToken substring_fallback metadata",
+    "expected": [
+      {"path": ".agent/projects/002_code_graph/AILANG_Source_Index.md", "heading_contains": "Phase 0"},
+      {"path": ".agent/projects/002_code_graph/ADR-003-clickhouse-source-index.md", "heading_contains": "Query Surface"}
+    ]
+  },
+  {
+    "id": "rebase-playbook",
+    "query": "rebase playbook fork hygiene upstream changes modified files",
+    "expected": [
+      {"path": ".agent/plans/Motoko_AILANG_Rebase_Forward.md", "heading_contains": "Rebase playbook"},
+      {"path": ".agent/plans/Motoko_AILANG_Rebase_Forward.md", "heading_contains": "Target Base"},
+      {"path": ".agent/plans/Motoko_AILANG_Rebase_Forward_Handoff.md", "heading_contains": "Context"}
+    ]
+  },
+  {
+    "id": "mlflow-code-changes",
+    "query": "MLflow experiment tracking code changes implementation plan",
+    "expected": [
+      {"path": ".agent/plans/MLflow_Experiment_Tracking_Plan.md", "heading_contains": "Code Changes"},
+      {"path": ".agent/plans/MLflow_Experiment_Tracking_Plan.md", "heading_contains": "Execution Plan"}
+    ]
+  },
+  {
+    "id": "clickstack-integration",
+    "query": "ClickStack log ingestion OpenTelemetry spans devcontainer plan",
+    "expected": [
+      {"path": ".agent/plans/ClickStack_Integration/Plan_C_Log_Ingestion.md"},
+      {"path": ".agent/plans/ClickStack_Integration/Plan_B_Custom_Spans.md"},
+      {"path": ".agent/plans/ClickStack_Integration/Design_Devcontainer_ClickStack.md"}
+    ]
+  },
+  {
+    "id": "tool-call-rendering",
+    "query": "TUI tool call rendering streamed tool plan UX",
+    "expected": [
+      {"path": ".agent/plans/TUI_Tool_Call_Rendering_Implementation_Plan.md"},
+      {"path": ".agent/plans/TUI_Streamed_Tool_Plan_UX.md"},
+      {"path": ".agent/plans/Tool_Dispatch_to_TUI.md"}
+    ]
+  }
+]

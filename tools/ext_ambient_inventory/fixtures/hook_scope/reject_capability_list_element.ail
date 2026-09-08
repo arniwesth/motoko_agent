@@ -1,0 +1,16 @@
+-- A COMPUTED ELEMENT inside a literal list: one atom is a constructor
+-- application and the next is a call that returns one.  The second atom's kind
+-- and binding are unknown to a textual reader.  Fail closed.
+module fixture/reject_capability_list_element
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, FinalizeOutcome)
+
+func judge(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: { NoDecision }, next_state: ctx.world }
+}
+
+func make_atom(_cfg: a) -> Capability { SolverJudge(judge) }
+
+export func register_with_config(cfg: a) -> [Capability] {
+  [SolverJudge(judge), make_atom(cfg)]
+}

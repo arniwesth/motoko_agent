@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1359.5235833333331 1514.1" width="1359.5235833333331" height="1514.1" style="--bg:#1a1b26;--fg:#a9b1d6;--line:#3d59a1;--accent:#7aa2f7;--muted:#565f89;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="SHELL" data-label="Imperative shell — real effect row {AI,FS,Process,IO,Env,Net,SharedMem,Clock,Stream,Trace}">
+  <rect x="495.29295833333333" y="40" width="307.3649999999999" height="436.1" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="495.29295833333333" y="40" width="307.3649999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="507.29295833333333" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Imperative shell — real effect row {AI,FS,Process,IO,Env,Net,SharedMem,Clock,Stream,Trace}</text>
+</g>
+<g class="subgraph" data-id="CORE" data-label="Functional core — pure, L0/L1, no effects">
+  <rect x="70.56308333333334" y="987.7" width="639.4034166666665" height="334.3" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="70.56308333333334" y="987.7" width="639.4034166666665" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="82.56308333333334" y="1001.7" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Functional core — pure, L0/L1, no effects</text>
+</g>
+<g class="subgraph" data-id="PHASES" data-label="Phases — effects only via ports, return PhaseResult">
+  <rect x="115.66599999999994" y="548.1" width="431.704" height="120.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="115.66599999999994" y="548.1" width="431.704" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="127.66599999999994" y="562.1" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Phases — effects only via ports, return PhaseResult</text>
+</g>
+<g class="subgraph" data-id="PORTS" data-label="Ports seam — nondeterminism injected as values">
+  <rect x="422.00845833333324" y="773" width="352.86199999999997" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="422.00845833333324" y="773" width="352.86199999999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="434.00845833333324" y="787" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Ports seam — nondeterminism injected as values</text>
+</g>
+<g class="subgraph" data-id="EXT" data-label="Extensions — ABI v3 / compactor chain">
+  <rect x="802.8704583333332" y="717" width="245.36225000000002" height="198.70000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="802.8704583333332" y="717" width="245.36225000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="814.8704583333332" y="731" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Extensions — ABI v3 / compactor chain</text>
+</g>
+<polyline class="edge" data-from="session" data-to="step_machine" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="decide()" points="534.2400416666667,460.1 534.2400416666668,494.1 64.00000000000011,494.1 64.00000000000011,969.7 194.97608333333346,969.7 194.9760833333333,1031.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="model_phase" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="557.1871249999999,460.1 557.1871250000002,506.1 191.914,506.1 191.91399999999993,592.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="tool_phase" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="580.1342083333333,460.1 580.1342083333334,518.1 333.741,518.1 333.74099999999993,592.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="hook_phase" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="603.0812916666666,460.1 603.0812916666667,530.1 473.345,530.1 473.3449999999999,592.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="dispatch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="provider always Ported" points="648.9754583333333,460.1 648.9754583333333,642.7 674.2461666666668,642.7 674.2461666666668,755 648.9754583333333,755 648.9754583333332,822.6333333333333" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="ports" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="626.028375,460.1 626.0283750000001,642.7 557.3700000000001,642.7 557.3700000000001,755 486.72312500000004,755 486.72312499999987,822.6333333333333" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="phase_vocab" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="seal_compacted_payload" points="694.8696249999999,460.1 694.869625,618.7 1095.3115833333334,618.7 1095.3115833333334,945.7 483.98275,945.7 483.9827499999999,1133.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="extruntime" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="671.9225416666666,460.1 671.9225416666667,630.7 929.2494583333332,630.7 929.2494583333332,761" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="compaction" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="648.9754583333333,460.1 648.9754583333333,1228.2 514.4768333333333,1228.2 514.4768333333333,1252.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="cost_phase" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="740.7637916666665,460.1 740.7637916666667,594.7 1183.6375833333334,594.7 1183.6375833333334,969.7 638.1645,969.7 638.1644999999999,1031.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="model_phase" data-to="phase_vocab" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="191.91399999999993,629 191.91399999999987,957.7 179.51404166666669,957.7 179.51404166666669,957.7 313.38908333333325,957.7 313.38908333333325,1097.5 309.56399999999996,1097.5 309.56399999999996,1133.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="tool_phase" data-to="phase_vocab" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="333.74099999999993,629 333.74099999999993,695 379.3315,695 379.3315,1133.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="tool_phase" data-to="ports" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="333.74099999999993,629 333.74099999999993,695 474.54445833333324,695 474.54445833333324,822.6333333333333" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="tool_phase" data-to="extruntime" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="333.74099999999993,629 333.74099999999993,695 892.4564583333332,695 892.4564583333332,761" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="hook_phase" data-to="phase_vocab" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="473.3449999999999,629 473.3449999999999,695 379.3315,695 379.3315,1133.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="hook_phase" data-to="extruntime" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="473.3449999999999,629 473.3449999999999,695 892.4564583333332,695 892.4564583333332,761" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ports" data-to="phase_vocab" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="474.54445833333324,859.5333333333333 474.54445833333324,921.7 414.21524999999997,921.7 414.21524999999997,1133.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="extruntime" data-to="phase_vocab" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="892.4564583333332,814.8 892.4564583333332,838.8 379.3315,838.8 379.3315,1133.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="session" data-to="ledger" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="single emission authority" points="763.7108749999999,460.1 763.710875,582.7 1257.1375833333334,582.7 1257.1375833333334,1408.3 877.0024583333334,1408.3 877.0024583333334,1420.3" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="phase_vocab" data-to="ledger" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="to_schema_v1" points="332.81983333333335,1204.2 332.81983333333335,1408.3 827.4511249999999,1408.3 827.4511249999999,1420.3" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="supervisor" data-to="rpc" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="648.9754583333333,137.8 648.9754583333333,185.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="rpc" data-to="facade" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="648.9754583333333,239.60000000000002 648.9754583333333,287.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="facade" data-to="session" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="648.9754583333333,341.40000000000003 648.9754583333333,389.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="step_machine" data-to="phase_vocab" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="194.9760833333333,1085.5 194.9760833333333,1109.5 379.3315,1109.5 379.3315,1133.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="step_machine" data-to="recovery" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="194.9760833333333,1085.5 194.9760833333333,1109.5 158.83841666666666,1109.5 158.83841666666666,1133.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="phase_vocab" data-to="compaction" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="379.3315,1204.2 379.3315,1228.2 514.4768333333333,1228.2 514.4768333333333,1252.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="extruntime" data-to="registry" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="892.4564583333332,814.8 892.4564583333332,838.8 942.7152083333333,838.8 942.7152083333333,862.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="session" data-to="step_machine" data-label="decide()">
+  <rect x="36" y="908.4000000000001" width="55.666000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="63.833" y="923.5500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">decide()</text>
+</g>
+<g class="edge-label" data-from="session" data-to="dispatch" data-label="provider always Ported">
+  <rect x="609.7461666666666" y="649.7" width="128.13400000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="673.8131666666666" y="664.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">provider always Ported</text>
+</g>
+<g class="edge-label" data-from="session" data-to="phase_vocab" data-label="seal_compacted_payload">
+  <rect x="1025.8115833333334" y="637.7" width="138.82600000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1095.2245833333334" y="652.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">seal_compacted_payload</text>
+</g>
+<g class="edge-label" data-from="session" data-to="ledger" data-label="single emission authority">
+  <rect x="1190.6375833333332" y="932.4000000000001" width="132.886" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1257.0805833333332" y="947.5500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">single emission authority</text>
+</g>
+<g class="edge-label" data-from="phase_vocab" data-to="ledger" data-label="to_schema_v1">
+  <rect x="291.31983333333335" y="1371" width="82.99000000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="332.81483333333335" y="1386.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">to_schema_v1</text>
+</g>
+<g class="node" data-id="ledger" data-label="Ledger = trace
+schema-v1 JSONL" data-shape="subroutine">
+  <rect x="777.8997916666666" y="1420.3" width="148.65399999999997" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <line x1="785.8997916666666" y1="1420.3" x2="785.8997916666666" y2="1474.1" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <line x1="918.5537916666666" y1="1420.3" x2="918.5537916666666" y2="1474.1" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="852.2267916666666" y="1447.2" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="852.2267916666666" dy="-3.9000000000000012">Ledger = trace</tspan><tspan x="852.2267916666666" dy="16.900000000000002">schema-v1 JSONL</tspan></text>
+</g>
+<g class="node" data-id="class" data-label="class" data-shape="rectangle">
+  <rect x="392.73895833333336" y="445.20000000000005" width="74.554" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="430.01595833333334" y="463.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">class</text>
+</g>
+<g class="node" data-id="supervisor" data-label="supervisor.main
+process entry" data-shape="rectangle">
+  <rect x="579.8354583333332" y="84" width="138.28" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="648.9754583333332" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="648.9754583333332" dy="-3.9000000000000012">supervisor.main</tspan><tspan x="648.9754583333332" dy="16.900000000000002">process entry</tspan></text>
+</g>
+<g class="node" data-id="rpc" data-label="rpc
+builds config, provider = LiveAI" data-shape="rectangle">
+  <rect x="537.5984583333333" y="185.8" width="222.754" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="648.9754583333332" y="212.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="648.9754583333332" dy="-3.9000000000000012">rpc</tspan><tspan x="648.9754583333332" dy="16.900000000000002">builds config, provider = LiveAI</tspan></text>
+</g>
+<g class="node" data-id="facade" data-label="agent_loop_v2
+&lt;i&gt;thin compat facade&lt;/i&gt;" data-shape="rectangle">
+  <rect x="574.6484583333333" y="287.6" width="148.654" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="648.9754583333333" y="314.5" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="648.9754583333333" dy="-3.9000000000000012">agent_loop_v2</tspan><tspan x="648.9754583333333" dy="16.900000000000002"><tspan font-style="italic">thin compat facade</tspan></tspan></text>
+</g>
+<g class="node" data-id="session" data-label="session · c2_loop
+&lt;b&gt;the driver&lt;/b&gt;
+executes decisions · sole ledger emitter" data-shape="rectangle">
+  <rect x="511.29295833333333" y="389.40000000000003" width="275.3649999999999" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="648.9754583333333" y="424.75000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="648.9754583333333" dy="-12.350000000000001">session · c2_loop</tspan><tspan x="648.9754583333333" dy="16.900000000000002"><tspan font-weight="bold">the driver</tspan></tspan><tspan x="648.9754583333333" dy="16.900000000000002">executes decisions · sole ledger emitter</tspan></text>
+</g>
+<g class="node" data-id="step_machine" data-label="step_machine.decide
+StepState &amp;rarr; StepDecision" data-shape="rectangle">
+  <rect x="86.56308333333334" y="1031.7" width="216.82599999999994" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="194.9760833333333" y="1058.6000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="194.9760833333333" dy="-3.9000000000000012">step_machine.decide</tspan><tspan x="194.9760833333333" dy="16.900000000000002">StepState &amp;rarr; StepDecision</tspan></text>
+</g>
+<g class="node" data-id="phase_vocab" data-label="phase_vocab
+sealed History / ProviderPayload
+project · &lt;b&gt;seal (send-gate)&lt;/b&gt; · LedgerEvent" data-shape="rectangle">
+  <rect x="239.7965" y="1133.5" width="279.06999999999994" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="379.3315" y="1168.85" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="379.3315" dy="-12.350000000000001">phase_vocab</tspan><tspan x="379.3315" dy="16.900000000000002">sealed History / ProviderPayload</tspan><tspan x="379.3315" dy="16.900000000000002">project · <tspan font-weight="bold">seal (send-gate)</tspan> · LedgerEvent</tspan></text>
+</g>
+<g class="node" data-id="recovery" data-label="recovery" data-shape="rectangle">
+  <rect x="109.70541666666668" y="1133.5" width="98.26599999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="158.83841666666666" y="1151.95" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">recovery</text>
+</g>
+<g class="node" data-id="compaction" data-label="compaction
+estimate_tokens · usage_percent · exhaustion_pct" data-shape="rectangle">
+  <rect x="343.81983333333335" y="1252.2" width="341.3139999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="514.4768333333333" y="1279.1000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="514.4768333333333" dy="-3.9000000000000012">compaction</tspan><tspan x="514.4768333333333" dy="16.900000000000002">estimate_tokens · usage_percent · exhaustion_pct</tspan></text>
+</g>
+<g class="node" data-id="cost_phase" data-label="cost_phase" data-shape="rectangle">
+  <rect x="582.3625" y="1031.7" width="111.604" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="638.1645" y="1050.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">cost_phase</text>
+</g>
+<g class="node" data-id="model_phase" data-label="model_phase" data-shape="rectangle">
+  <rect x="131.66599999999994" y="592.1" width="120.49600000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="191.91399999999993" y="610.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">model_phase</text>
+</g>
+<g class="node" data-id="tool_phase" data-label="tool_phase" data-shape="rectangle">
+  <rect x="280.1619999999999" y="592.1" width="107.158" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="333.74099999999993" y="610.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">tool_phase</text>
+</g>
+<g class="node" data-id="hook_phase" data-label="hook_phase" data-shape="rectangle">
+  <rect x="415.31999999999994" y="592.1" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="473.3449999999999" y="610.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">hook_phase</text>
+</g>
+<g class="node" data-id="ports" data-label="ports" data-shape="rectangle">
+  <rect x="438.00845833333324" y="822.6333333333333" width="73.072" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="474.54445833333324" y="841.0833333333334" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">ports</text>
+</g>
+<g class="node" data-id="dispatch" data-label="stub_step
+ported_provider &amp;rarr; Ported
+dispatch_step (one-shot call)" data-shape="rectangle">
+  <rect x="539.0804583333332" y="822.6333333333333" width="219.79" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="648.9754583333332" y="857.9833333333333" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="648.9754583333332" dy="-12.350000000000001">stub_step</tspan><tspan x="648.9754583333332" dy="16.900000000000002">ported_provider &amp;rarr; Ported</tspan><tspan x="648.9754583333332" dy="16.900000000000002">dispatch_step (one-shot call)</tspan></text>
+</g>
+<g class="node" data-id="extruntime" data-label="ext/runtime
+chain · arbitration" data-shape="rectangle">
+  <rect x="818.8704583333332" y="761" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="892.4564583333332" y="787.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="892.4564583333332" dy="-3.9000000000000012">ext/runtime</tspan><tspan x="892.4564583333332" dy="16.900000000000002">chain · arbitration</tspan></text>
+</g>
+<g class="node" data-id="registry" data-label="ext/registry_generated" data-shape="rectangle">
+  <rect x="853.1977083333333" y="862.8" width="179.03499999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="942.7152083333333" y="881.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">ext/registry_generated</text>
+</g>
+</svg>

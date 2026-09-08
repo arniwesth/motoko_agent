@@ -1,0 +1,307 @@
+-- Streaming-capture substrate spike for project 009.
+--
+-- This is validation scaffolding, not production code. It probes:
+--   1. the desired provider-exchange shape when the provider/runtime returns
+--      the ordered chunks that it also projects through a live callback;
+--   2. a callback-only compatibility shape using a fail-closed, request-scoped
+--      recorder over SharedMem;
+--   3. success, partial-stream-then-error, scope collision, cleanup/reuse, and
+--      two-scope isolation.
+--
+-- Run:
+--   ailang check stream_capture_probe.ail
+--   ailang run --caps IO,SharedMem --entry main stream_capture_probe.ail
+
+module stream_capture_probe
+
+import std/bytes (fromString, toString, toBase64, fromBase64)
+import std/io (println, exit)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/sharedmem (get, cas, delete)
+import std/string (split)
+
+type ProviderOutcome
+  = ProviderSucceeded(string)
+  | ProviderFailed(string)
+
+type ProviderExchange = {
+  emissions: [string],
+  result: Result[string, string]
+}
+
+pure func outcome_result(outcome: ProviderOutcome) -> Result[string, string] {
+  match outcome {
+    ProviderSucceeded(value) => Ok(value),
+    ProviderFailed(message) => Err(message)
+  }
+}
+
+pure func strings_equal(left: [string], right: [string]) -> bool {
+  match left {
+    [] => match right { [] => true, _ => false },
+    x :: xs =>
+      match right {
+        [] => false,
+        y :: ys => x == y && strings_equal(xs, ys)
+      }
+  }
+}
+
+pure func result_is_ok(result: Result[string, string], expected: string) -> bool {
+  match result {
+    Ok(value) => value == expected,
+    Err(_) => false
+  }
+}
+
+pure func result_is_err(result: Result[string, string], expected: string) -> bool {
+  match result {
+    Ok(_) => false,
+    Err(message) => message == expected
+  }
+}
+
+func project(scope: string, chunk: string) -> () ! {IO} {
+  println("LIVE ${scope} ${toBase64(fromString(chunk))}")
+}
+
+func emit_chunks(
+  scope: string,
+  chunks: [string],
+  on_chunk: (string) -> () ! {IO, SharedMem}
+) -> () ! {IO, SharedMem} {
+  match chunks {
+    [] => (),
+    chunk :: rest => {
+      let _ = on_chunk(chunk);
+      emit_chunks(scope, rest, on_chunk)
+    }
+  }
+}
+
+-- Representation 1: the provider/runtime returns the lossless ordered
+-- emission log while invoking the existing push callback immediately.
+-- The current AILANG API does not provide this result shape; this function
+-- proves the downstream Motoko representation and parity assertions.
+func recorded_provider(
+  scope: string,
+  chunks: [string],
+  outcome: ProviderOutcome,
+  on_chunk: (string) -> () ! {IO, SharedMem}
+) -> ProviderExchange ! {IO, SharedMem} {
+  let _ = emit_chunks(scope, chunks, on_chunk);
+  { emissions: chunks, result: outcome_result(outcome) }
+}
+
+pure func recorder_key(scope: string) -> string {
+  "motoko-dst-stream-capture/v1/${scope}"
+}
+
+-- A scope must be claimed before the callback runs. CAS makes a collision
+-- fail closed instead of attaching one request to another request's log.
+func recorder_open(scope: string) -> bool ! {SharedMem} {
+  cas(recorder_key(scope), None, fromString(""))
+}
+
+func recorder_append(scope: string, chunk: string) -> bool ! {SharedMem} {
+  let key = recorder_key(scope);
+  match get(key) {
+    None => false,
+    Some(previous) => {
+      let before = toString(previous);
+      let encoded = toBase64(fromString(chunk));
+      let after = if before == "" then encoded else "${before},${encoded}";
+      cas(key, Some(previous), fromString(after))
+    }
+  }
+}
+
+pure func decode_parts(parts: [string]) -> Option[[string]] {
+  match parts {
+    [] => Some([]),
+    encoded :: rest =>
+      match fromBase64(encoded) {
+        None => None,
+        Some(raw) =>
+          match decode_parts(rest) {
+            None => None,
+            Some(decoded_rest) => Some(toString(raw) :: decoded_rest)
+          }
+      }
+  }
+}
+
+func recorder_drain(scope: string) -> Option[[string]] ! {SharedMem} {
+  let key = recorder_key(scope);
+  match get(key) {
+    None => None,
+    Some(raw) => {
+      let _ = delete(key);
+      let encoded = toString(raw);
+      if encoded == "" then Some([]) else decode_parts(split(encoded, ","))
+    }
+  }
+}
+
+func capture_and_project(scope: string, chunk: string) -> () ! {IO, SharedMem} {
+  -- Projection happens at callback arrival. Capture uses the same chunk.
+  let _ = project(scope, chunk);
+  if recorder_append(scope, chunk) then ()
+  else println("CAPTURE_ERROR ${scope}")
+}
+
+-- Representation 2: adapt an API that returns only the final result and
+-- exposes chunks solely through a callback.
+func callback_only_provider(
+  scope: string,
+  chunks: [string],
+  outcome: ProviderOutcome,
+  on_chunk: (string) -> () ! {IO, SharedMem}
+) -> Result[string, string] ! {IO, SharedMem} {
+  let _ = emit_chunks(scope, chunks, on_chunk);
+  outcome_result(outcome)
+}
+
+func scoped_provider(
+  scope: string,
+  chunks: [string],
+  outcome: ProviderOutcome
+) -> Result[ProviderExchange, string] ! {IO, SharedMem} {
+  if not recorder_open(scope) then
+    Err("scope collision: ${scope}")
+  else {
+    let callback = func(chunk: string) -> () ! {IO, SharedMem} {
+      capture_and_project(scope, chunk)
+    };
+    let result = callback_only_provider(scope, chunks, outcome, callback);
+    match recorder_drain(scope) {
+      None => Err("recorder missing after callback: ${scope}"),
+      Some(emissions) => Ok({ emissions: emissions, result: result })
+    }
+  }
+}
+
+func test_returned_success() -> bool ! {IO, SharedMem} {
+  let expected = ["alpha", "comma,value", "line\nbreak", "λ"];
+  let callback = func(chunk: string) -> () ! {IO, SharedMem} {
+    project("returned-success", chunk)
+  };
+  let exchange = recorded_provider(
+    "returned-success",
+    expected,
+    ProviderSucceeded("done"),
+    callback
+  );
+  strings_equal(exchange.emissions, expected) && result_is_ok(exchange.result, "done")
+}
+
+func test_returned_partial_error() -> bool ! {IO, SharedMem} {
+  let expected = ["before-error-1", "before-error-2"];
+  let callback = func(chunk: string) -> () ! {IO, SharedMem} {
+    project("returned-error", chunk)
+  };
+  let exchange = recorded_provider(
+    "returned-error",
+    expected,
+    ProviderFailed("provider cut"),
+    callback
+  );
+  strings_equal(exchange.emissions, expected) && result_is_err(exchange.result, "provider cut")
+}
+
+func test_scoped_success() -> bool ! {IO, SharedMem} {
+  let expected = ["alpha", "comma,value", "line\nbreak", "λ"];
+  match scoped_provider("scoped-success", expected, ProviderSucceeded("done")) {
+    Err(_) => false,
+    Ok(exchange) =>
+      strings_equal(exchange.emissions, expected)
+        && result_is_ok(exchange.result, "done")
+  }
+}
+
+func test_scoped_partial_error() -> bool ! {IO, SharedMem} {
+  let expected = ["before-error-1", "before-error-2"];
+  match scoped_provider("scoped-error", expected, ProviderFailed("provider cut")) {
+    Err(_) => false,
+    Ok(exchange) =>
+      strings_equal(exchange.emissions, expected)
+        && result_is_err(exchange.result, "provider cut")
+  }
+}
+
+func test_two_scope_isolation() -> bool ! {IO, SharedMem} {
+  let opened_a = recorder_open("isolation-a");
+  let opened_b = recorder_open("isolation-b");
+  let _ = capture_and_project("isolation-a", "a1");
+  let _ = capture_and_project("isolation-b", "b1");
+  let _ = capture_and_project("isolation-a", "a2");
+  let _ = capture_and_project("isolation-b", "b2");
+  match recorder_drain("isolation-a") {
+    None => false,
+    Some(a) =>
+      match recorder_drain("isolation-b") {
+        None => false,
+        Some(b) =>
+          opened_a
+            && opened_b
+            && strings_equal(a, ["a1", "a2"])
+            && strings_equal(b, ["b1", "b2"])
+      }
+  }
+}
+
+func test_collision_and_cleanup() -> bool ! {IO, SharedMem} {
+  let first_open = recorder_open("collision");
+  let second_open = recorder_open("collision");
+  let _ = capture_and_project("collision", "one");
+  let first_drain = recorder_drain("collision");
+  let reopened = recorder_open("collision");
+  let second_drain = recorder_drain("collision");
+  let first_ok =
+    match first_drain {
+      None => false,
+      Some(xs) => strings_equal(xs, ["one"])
+    };
+  let second_ok =
+    match second_drain {
+      None => false,
+      Some(xs) => strings_equal(xs, [])
+    };
+  first_open && not second_open && first_ok && reopened && second_ok
+}
+
+func report(name: string, passed: bool) -> bool ! {IO} {
+  let status = if passed then "PASS" else "FAIL";
+  let _ = println("${status} ${name}");
+  passed
+}
+
+export func main_returned() -> () ! {IO, SharedMem} {
+  let p1 = report("returned.success", test_returned_success());
+  let p2 = report("returned.partial_error", test_returned_partial_error());
+  if p1 && p2 then println("PASS stream_capture_returned")
+  else exit(1)
+}
+
+export func main_scoped() -> () ! {IO, SharedMem} {
+  let p1 = report("scoped.success", test_scoped_success());
+  let p2 = report("scoped.partial_error", test_scoped_partial_error());
+  let p3 = report("scoped.two_scope_isolation", test_two_scope_isolation());
+  let p4 = report("scoped.collision_and_cleanup", test_collision_and_cleanup());
+  if p1 && p2 && p3 && p4 then println("PASS stream_capture_scoped")
+  else exit(1)
+}
+
+export func main() -> () ! {IO, SharedMem} {
+  let p1 = report("returned.success", test_returned_success());
+  let p2 = report("returned.partial_error", test_returned_partial_error());
+  let p3 = report("scoped.success", test_scoped_success());
+  let p4 = report("scoped.partial_error", test_scoped_partial_error());
+  let p5 = report("scoped.two_scope_isolation", test_two_scope_isolation());
+  let p6 = report("scoped.collision_and_cleanup", test_collision_and_cleanup());
+  if p1 && p2 && p3 && p4 && p5 && p6 then
+    println("PASS stream_capture_probe")
+  else
+    exit(1)
+}

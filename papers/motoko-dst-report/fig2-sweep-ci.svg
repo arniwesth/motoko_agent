@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="500" viewBox="0 0 760 500" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <style>
+    .panel { fill: none; stroke: #999; stroke-width: 1; stroke-dasharray: 4 3; }
+    .box { fill: #fff; stroke: #333; stroke-width: 1.4; }
+    .em { fill: #f2f2f2; stroke: #333; stroke-width: 1.6; }
+    .hd { font-size: 14px; font-weight: bold; fill: #111; }
+    .ph { font-size: 12px; font-weight: bold; fill: #111; }
+    .tx { font-size: 11.5px; fill: #333; }
+    .sm { font-size: 10.5px; fill: #555; font-style: italic; }
+    .ln { stroke: #333; stroke-width: 1.4; fill: none; marker-end: url(#arr2); }
+  </style>
+
+  <!-- Panel A: make dst -->
+  <rect class="panel" x="16" y="14" width="728" height="212"/>
+  <text class="hd" x="30" y="36">A &#183; make dst &#8212; the umbrella sweep (49 targets)</text>
+
+  <rect class="box" x="30" y="52" width="200" height="112" rx="6"/>
+  <text class="ph" x="130" y="74" text-anchor="middle">Phase 1 &#8212; timed, alone</text>
+  <text class="tx" x="130" y="94" text-anchor="middle">corpus_pr</text>
+  <text class="tx" x="130" y="110" text-anchor="middle">wall-clock-gated pass condition</text>
+  <text class="tx" x="130" y="126" text-anchor="middle">default cache, quiet machine</text>
+  <text class="sm" x="130" y="144" text-anchor="middle">a time measured under load is a fact</text>
+  <text class="sm" x="130" y="157" text-anchor="middle">about the machine, not the corpus</text>
+
+  <rect class="box" x="280" y="52" width="200" height="112" rx="6"/>
+  <text class="ph" x="380" y="74" text-anchor="middle">Phase 2 &#8212; parallel fan-out</text>
+  <text class="tx" x="380" y="94" text-anchor="middle">48 targets &#183; -j $DST_JOBS</text>
+  <text class="tx" x="380" y="110" text-anchor="middle">per-target compile-cache lanes</text>
+  <text class="tx" x="380" y="126" text-anchor="middle">--output-sync &#183; --keep-going</text>
+  <text class="sm" x="380" y="144" text-anchor="middle">lanes keep concurrent compiles</text>
+  <text class="sm" x="380" y="157" text-anchor="middle">from interleaving</text>
+
+  <rect class="em" x="530" y="52" width="200" height="112" rx="6"/>
+  <text class="ph" x="630" y="74" text-anchor="middle">Sweep summary</text>
+  <text class="tx" x="630" y="94" text-anchor="middle">exit = worse of the two phases</text>
+  <text class="tx" x="630" y="110" text-anchor="middle">named known-red list</text>
+  <text class="tx" x="630" y="126" text-anchor="middle">reports a listed target that passes</text>
+  <text class="sm" x="630" y="144" text-anchor="middle">the list cannot outlive</text>
+  <text class="sm" x="630" y="157" text-anchor="middle">the failure it describes</text>
+
+  <path class="ln" d="M 230 108 L 280 108"/>
+  <path class="ln" d="M 480 108 L 530 108"/>
+  <text class="sm" x="380" y="196" text-anchor="middle">serial baseline 15m27s at the closing acceptance rerun (warm package caches); parallel timing lands with the sweep branch</text>
+
+  <!-- Panel B: CI -->
+  <rect class="panel" x="16" y="244" width="728" height="240"/>
+  <text class="hd" x="30" y="266">B &#183; CI &#8212; every PR blocked on the deterministic set; search runs nightly</text>
+
+  <rect class="box" x="30" y="282" width="340" height="120" rx="6"/>
+  <text class="ph" x="200" y="302" text-anchor="middle">PR / push &#8212; main job</text>
+  <text class="tx" x="200" y="322" text-anchor="middle">check_core &#183; policy smoke &#183; DST gate list</text>
+  <text class="tx" x="200" y="338" text-anchor="middle">dst_seeded: 5 seeds &#215; 5 families (constant)</text>
+  <text class="tx" x="200" y="354" text-anchor="middle">smoke_parity &#183; test_coverage</text>
+  <text class="tx" x="200" y="370" text-anchor="middle">verify_core (Z3) &#8212; advisory</text>
+  <text class="sm" x="200" y="390" text-anchor="middle">references make targets only, never script paths</text>
+
+  <rect class="box" x="30" y="414" width="340" height="54" rx="6"/>
+  <text class="ph" x="200" y="436" text-anchor="middle">PR / push &#8212; dst_l2 job (&#8776;5 min)</text>
+  <text class="tx" x="200" y="454" text-anchor="middle">bun test of the L2 harness boundary &#8212; needs bun, not AILANG</text>
+
+  <rect class="box" x="404" y="282" width="326" height="88" rx="6"/>
+  <text class="ph" x="567" y="302" text-anchor="middle">Nightly (cron 06:00) &#8212; the search</text>
+  <text class="tx" x="567" y="322" text-anchor="middle">dst_seeded: 500 seeds &#215; 5 families</text>
+  <text class="tx" x="567" y="338" text-anchor="middle">DST_BASE_SEED = $(date +%Y%m%d)</text>
+  <text class="sm" x="567" y="358" text-anchor="middle">the frontier moves every day</text>
+
+  <rect class="em" x="404" y="392" width="326" height="76" rx="6"/>
+  <text class="ph" x="567" y="414" text-anchor="middle">Reproduction</text>
+  <text class="tx" x="567" y="432" text-anchor="middle">DST_BASE_SEED=&#60;seed&#62; DST_SEEDS=1 make &#60;gate&#62;</text>
+  <text class="tx" x="567" y="448" text-anchor="middle">promotion into the fixed suite is by hand</text>
+  <text class="sm" x="567" y="462" text-anchor="middle">no live or network target runs in CI</text>
+
+  <path class="ln" d="M 567 370 L 567 392"/>
+</svg>

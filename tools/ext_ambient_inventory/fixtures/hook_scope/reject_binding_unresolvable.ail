@@ -1,0 +1,20 @@
+-- REJECTION: `hook-binding-unresolvable`.  The `Compactor` atom is bound to a
+-- bare name that is neither a declaration in this closure, nor an import, nor a
+-- local lambda.  An atom whose text cannot be found is an atom that cannot be
+-- scanned.  B8: eight-atom list.
+module fixture/reject_binding_unresolvable
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(\_ctx. { prepend: [], append: [] }),
+    BudgetShaper(\_ctx _plan. { requested_total: None, requested_solver: None, requested_verifier: None }),
+    Compactor(some_hook_from_nowhere),
+    ToolPolicy(\_ctx _call. NoOpinion),
+    ToolProvider([], func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } }),
+    ResponseInterceptor(func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } }),
+    SolverJudge(func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } })
+  ]
+}

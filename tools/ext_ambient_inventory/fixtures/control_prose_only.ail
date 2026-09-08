@@ -1,0 +1,11 @@
+-- RESOLVING CONTROL for source hygiene, inherited from classifier 2.
+-- Both mentions below are prose and a string literal, not imports.  A raw-text
+-- scan reports this file AMBIENT and every extension whose documentation
+-- mentions an effect becomes dirty.
+--
+--   import std/env (getEnvOr)
+module fixtures/control_prose_only
+
+export func emit() -> string {
+  "import std/io (println) and _io_println(s)"
+}

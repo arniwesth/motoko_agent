@@ -2,8 +2,9 @@ module src/core/test/integration_tests
 
 import std/string (repeat)
 import std/result (Result, Ok, Err)
-import std/ai (Message, ToolCall)
-import src/core/compaction (compact_step_with_limit)
+import std/ai (ToolCall)
+import src/core/types (Msg)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_step_with_limit)
 import src/core/test/stub_step (prose_step, tool_step, scripted_to_step_result, terminal_step)
 
 -- Test 1: Cost-budget exhaustion math.
@@ -11,7 +12,7 @@ import src/core/test/stub_step (prose_step, tool_step, scripted_to_step_result, 
 --   step_cost = (100000*60000 + 50000*208000) / 1_000_000 = 16_400 mc
 -- After 3 steps: 3 * 16_400 = 49_200 < 50_000 cap → loop continues.
 -- After 4 steps: 4 * 16_400 = 65_600 >= 50_000 cap → BudgetExceeded fires.
--- The full-loop test (run_v2_with_stub + deny_all_rt + cap=50000) exercises
+-- The full-loop test (run_v2_with_scripted_ports + deny_all_rt + cap=50000) exercises
 -- this path end-to-end; this pure test verifies the arithmetic is correct.
 pure func test_cost_budget_exhausted() -> bool
   tests [((), true)]
@@ -27,13 +28,13 @@ pure func test_cost_budget_exhausted() -> bool
 pure func test_compaction_fires_above_70pct() -> bool
   tests [((), true)]
   {
-    let big_msg: Message = {
+    let big_msg: Msg = {
       role: "tool",
       content: repeat("x", 380),
       tool_calls: [],
       tool_call_id: "t"
     };
-    let user_msg: Message = {
+    let user_msg: Msg = {
       role: "user",
       content: "test",
       tool_calls: [],
@@ -49,7 +50,7 @@ pure func test_compaction_fires_above_70pct() -> bool
 -- A prose_step produces finish_reason="stop" — the loop-exit signal.
 -- A tool_step produces finish_reason="tool_calls" — the loop-recurse signal.
 -- terminal_step (empty script) also returns finish_reason="stop".
--- These invariants are what make run_v2_with_stub safe for integration tests:
+-- These invariants are what make run_v2_with_scripted_ports safe for integration tests:
 -- a scripted prose step terminates the loop without any LLM or tool calls.
 pure func test_pending_deny_path() -> bool
   tests [((), true)]

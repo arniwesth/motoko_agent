@@ -1,0 +1,216 @@
+# The herdr extension's run file and the operator's plan file describe the same work and disagree
+
+## Status
+
+open — narrowed 2026-09-08: the drift's CAUSE is addressed (option A2 built, see the
+2026-09-08 progress note); what keeps it open is that an operator with an existing hand-maintained
+plan file has to move to the new arrangement, and nothing migrates them.
+
+## Branch
+
+`arniwesth/013-dst-architecture-adr` (surfaced during the PLAN-001 live run, 2026-09-05/06)
+
+## Description
+
+Two dagr run files were live for the same work:
+
+- `.dagr/run-plan001.json` — the operator's plan, 11 tasks with deps, maintained by the
+  orchestrating session by hand (edit a copy, `dagr check --strict --json`, `mv`). A dagr pane was
+  open on it before the session started.
+- `.dagr/run-w3-p5-1788624394725.json` — written by `motoko-ext-herdr` per
+  `DESIGN-dagr-as-delegation-view.md` §2, one task per `Delegate` call, keyed by the extension's
+  own pane and session. Under `HERDR_DAGR_PANE=1` the extension opened a second dagr pane (w3:pG)
+  on it at the first delegation. That is the "yet another dagr view" the user objected to.
+
+They drift because they are updated from different observations. The orchestrator settles a task
+in the plan file when it decides the task is done, including when it takes the work over itself.
+The extension settles its row only when `DelegateCheck` observes the answer file or a dead pane.
+After a takeover nobody calls `DelegateCheck` again, so the extension's row stays `working`
+forever.
+
+## Evidence
+
+At 2026-09-06 08:35 the extension's file records as `working`:
+
+| extension task | plan file says | pane |
+|---|---|---|
+| `mot-dlg-1788625724912` (P0, claude kind) | P0·a1 `failed`, P0 `done` via a2 | w3:pH, gone since 16:31 the previous day |
+| `mot-dlg-1788637404283` (INV write phase) | INV·a2 `failed`, INV `done` via orchestrator a3 | w3:pN, gone |
+| `mot-dlg-1788639194281` (P1A) | P1A·a1 `failed`, P1A `done` via orchestrator a2 | w3:pP, gone |
+| `mot-dlg-1788683105871` (P1B) | P1B·a1 `working` | w3:pQ, live |
+
+Only the last is true. Also in the first `Delegate` result of the session: a "stale delegation
+record" note listing 11 tasks across five older `run-w1-*.json` files still recorded in flight on
+panes that no longer exist. `.dagr/` holds 15 such files. Context:
+`.agent/projects/021_herdr_delegation/MEASUREMENTS-2026-09-05-plan001-live-run.md` finding 4.
+
+## Location
+
+- `packages/motoko-ext-herdr/herdr.ail:559` `ensure_dagr_pane` — opens the view on
+  `run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms)`; the only suppression is the per-session
+  marker file. It does not know an operator pane is already open on a different run file.
+- `packages/motoko-ext-herdr/register.ail:122` — `dagr_pane` from `HERDR_DAGR_PANE`.
+- `packages/motoko-ext-herdr/herdr.ail:996`–`1065` — the only place a motoko delegate's row is
+  settled, and only when `DelegateCheck` is called.
+
+## Fix
+
+This needs the owner's decision first; the question is recorded in
+`DESIGN-dagr-as-delegation-view.md` §10 — **which did not exist until 2026-09-07.** Three documents
+pointed at it, including this one twice. It now states the question, the constraint that decides it
+(`dagr` is READ-ONLY, so every writer replaces the whole document), and **a third option the two
+below do not cover**: invert the ownership, so the operator supplies a plan INPUT the extension
+reads and never writes, and the extension keeps sole ownership of the state document. That preserves
+the one-writer rule §5 rests on, which option 1 gives up by construction. The two shapes as
+originally recorded:
+
+1. **The extension writes into the plan file.** `Delegate` takes an optional `dagr_task` naming a
+   task id in an operator-supplied run file; the extension opens the attempt there instead of in
+   its own file, and `DelegateCheck` settles it there. One file, one view, the plan's deps and
+   owners intact. Larger change, and the extension must respect the plan file's contract
+   (attempt numbering, `cause.followup`, `retry_of`).
+2. **The extension keeps its file but stops opening a view when an operator view exists.** Detect
+   an operator-owned dagr pane (the `.dagr/.pane` marker or `scripts/dagr-pane.sh`'s marker) and
+   skip `ensure_dagr_pane`. Smaller change; the two files still drift, but only one is on screen.
+
+Independent of that choice: **settle-on-exit** (already open as dagr design §8 item 4) would have
+closed three of the four stale rows here, and an orphan sweep that also marks rows `lost` when the
+pane is gone would close the older 11.
+
+## Non-goals
+
+- Do not have the orchestrating model edit the extension's run file. That is the model-as-producer
+  path the dagr design rejected.
+
+## Progress (2026-09-06)
+
+Status stays **open**. **Option B is implemented; the drift is not fixed** — the
+two run files still describe the same work and still disagree. What changed is
+that only one of them is on screen, which is the half the operator objected to.
+Option A (the extension writing attempts into an operator-supplied plan file) is
+still the answer to the drift and still needs the owner's decision in
+`DESIGN-dagr-as-delegation-view.md` §10. Settle-on-exit and the orphan sweep for
+the older 11 rows are likewise untouched.
+
+Commit `PLAN-001 live-run fix 4: yield the dagr view to the operator's` on
+`arniwesth/013-dst-architecture-adr`.
+
+## Progress (2026-09-07) — settle-on-exit is built
+
+Status stays **open**: settle-on-exit closes the rows this issue's Evidence table
+lists, and Option A (one file instead of two) is still undecided, so the two
+files still describe the same work from different observations.
+
+What is built: ABI 7.1's `PublishFile` verb plus the producer half. The producer
+writes a settled candidate beside the run file on every publish, and the host
+renames it over the live file at clean exit. Three of the four stale rows in the
+table above are exactly this case — a delegate the orchestrator took over and
+never checked again — and they would now settle `settled_unverified · heuristic`
+when the session ended, instead of reading `working` for ever.
+
+Two things it does NOT do, both named in this issue:
+
+- **The older 11 rows across five previous run files are untouched by settle-on-exit.**
+  Those sessions are gone; nothing renames their candidates now. **Built separately
+  the same day — see the next section.**
+- **It requires two opt-ins** — `HERDR_DAGR_SETTLE_ON_EXIT=1` and the host's
+  `MOTOKO_EXIT_PUBLISH_ROOT` grant — and neither is set in `agent_confined`
+  today, so nothing changes for this repo's own container until the compose file
+  sets them (`.devcontainer` is read-only from inside the container).
+
+`herdr.ail:ensure_dagr_pane` now consults `operator_view_open` before it opens
+anything: if `.dagr/.pane` — the sentinel `scripts/dagr-pane.sh` writes when the
+operator opens a view by hand — names a pane, the id goes through `herdr pane
+get` and must still answer `"label":"dagr"`. If it does, the extension yields:
+nothing opened, nothing said, **and no marker written**.
+
+Three judgements the issue did not settle:
+
+- **The marker is probed, not trusted.** A present `.dagr/.pane` says a view was
+  opened once, not that it is still up, and pane ids are reused. A stale marker
+  taken at face value would suppress the extension's view for the rest of the run
+  with nothing on screen and nothing said — the more expensive failure of the
+  two. The probe is the same test that script's own `close_marked` makes.
+- **No marker is written on the yield branch**, so the decision is re-taken on the
+  next `Delegate`: close the operator's view and the extension opens its own.
+  This is the one path through `ensure_dagr_pane` where at-most-once does not
+  apply, because nothing was opened to be once about.
+- **It yields silently**, per the task spec — including dropping the
+  `scripts/dagr-pane.sh` fallback sentence, which would be strange advice to
+  someone already looking at a dagr view.
+
+Cost: one `herdr pane get` per `Delegate`, and only until this session opens its
+own view (after which the existing `pane_marker` short-circuit fires first) or the
+operator's view is found gone.
+
+Gate: `make verify_herdr_dagr_pane` grew case 6 — an operator view present, the
+extension yields, `plugin pane open` absent from the call log and `pane get
+w1:pOP` present in it. Asserting the probe and not merely the absence of the open
+is deliberate: the silent-stale-suppression failure is invisible to a case that
+only checks that no pane appeared.
+
+
+## Progress (2026-09-07) — the startup sweep now repairs, not only reports
+
+Status stays **open**, because Option A (one file instead of two) is still the
+answer to the drift and still undecided. What changed is the second half of this
+issue's Fix section: *"an orphan sweep that also marks rows `lost` when the pane
+is gone would close the older 11."* It does now, under `HERDR_SWEEP_SETTLE=1`.
+
+The sweep already computed exactly the right population — `abandoned_tasks`,
+tasks whose latest attempt is in flight on a pane absent from `pane list`. It
+reported them in a sentence that finding 4 recorded as *"correct and nobody will
+ever act on it from a tool result."* It now settles each one `lost · heuristic`
+in the foreign file, adds a note naming this session as the settler, and
+republishes through the same tmp-then-rename transaction the producer uses.
+
+**`lost` is the verdict `do_check` already writes for `agent_not_found`** — the
+same observation reached by a different route — so the sweep invents nothing.
+It is not `settled_unverified`; that is for an attempt nobody can observe, and
+this one WAS observed, just not by its own session.
+
+**Why this is not the "fabricated settlement" F-5 §5.5 forbids.** That sentence
+is about the pane that is STILL ALIVE with its orchestrator gone: there nothing
+has been measured and a note is the honest act. The pane's ABSENCE is positive
+proof, the same standard P2-6 sets for closing one. A foreign task on a live
+pane is left exactly as it was — asserted end to end by a third session's record
+in the gate fixture.
+
+**Opt-in, and deliberately so.** §5.5 as signed off says to record a note and
+"never a fabricated settlement", so going further is the operator's call, not an
+inherited default. The report stays the default behaviour. Flipping it is one
+line in `register.ail` if the owner wants it.
+
+Gate: `verify_herdr_owner_tag` grew a case, and c5b grew an assertion. Both
+falsifications were run: settling regardless of the knob, and dropping the
+liveness conjunct. The first initially passed — c5b only ever read the report
+sentence, so an unconditional settle would have left it claiming "Nothing was
+changed" about a file it had just rewritten — which is why c5b now asserts on the
+call log too.
+
+
+## Progress (2026-09-08) — option A2 is built
+
+The decision recorded in `DESIGN-dagr-as-delegation-view.md` §10 went to A2: **invert the
+ownership.** `HERDR_DAGR_PLAN` names a dagr document the producer READS and never writes. Its
+declared tasks — ids, titles, kinds, deps — are seeded into the producer's own run file, and
+`Delegate` gained `dagr_task` so an attempt lands on a planned task instead of a parallel one.
+
+Why not this issue's option 1 (the extension writes the operator's file): `dagr` cannot merge at the
+pinned release, so every writer replaces the whole document and the model's edit cycle spans turns.
+§10.3 also found it would disable settle-on-exit, whose precondition is the digest of what the
+render read.
+
+**What this closes:** the two documents become one, with the plan's deps attached to what actually
+happened, and still exactly one writer.
+
+**What it does not close, and why this issue stays open:** an operator already maintaining a plan
+file by hand has to stop editing the live document and start editing a plan input instead. Nothing
+migrates them, and nothing warns them if they keep editing the old file — it would simply be
+ignored. The eleven stale rows in older run files are also untouched by this; they need the startup
+sweep's measurement pass, which is built (2026-09-07) but opt-in.
+
+Gates: `verify_dagr_producer` cases 22, 22b, 23 — seeding with deps, the hand-done task settled by
+an `operator` attempt at `reported`, the attachment opening no second task, the plan file never
+written, and re-reading the plan not resetting an observed task. All three falsifications fail the
+build.

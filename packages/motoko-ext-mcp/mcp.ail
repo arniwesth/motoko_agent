@@ -1,0 +1,228 @@
+module sunholo/motoko_ext_mcp/mcp
+
+import std/fs (fileExists, readFile)
+import std/json (Json, decode, jo, getString, getInt, get, asArray, asString)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision, ToolResultEnvelope, ResponseInterceptDecision, FinalizeDecision,
+  ToolCallEnvelope, Msg, PreStepDecision, PassThrough
+)
+import pkg/sunholo/motoko_ext_mcp/types (McpToolMapping)
+import pkg/sunholo/motoko_ext_mcp/resolve (all_tool_names)
+
+export type McpServerDef = {
+  name: string,
+  command: string,
+  server_args: [string],
+  tool_mappings: [McpToolMapping],
+  timeout_ms: int,
+  max_output_chars: int,
+  transport: string
+}
+
+export type McpConfig = { servers: [McpServerDef] }
+
+pure func jstr(j: Json, key: string, fallback: string) -> string {
+  match getString(j, key) { Some(s) => s, None => fallback }
+}
+
+pure func jint(j: Json, key: string, fallback: int) -> int {
+  match getInt(j, key) { Some(n) => n, None => fallback }
+}
+
+pure func parse_string_list_json(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    j :: rest =>
+      match asString(j) {
+        Some(s) => s :: parse_string_list_json(rest),
+        None    => parse_string_list_json(rest)
+      }
+  }
+}
+
+pure func parse_json_string_list(j: Json, key: string) -> [string] {
+  match get(j, key) {
+    Some(arr) => match asArray(arr) { Some(xs) => parse_string_list_json(xs), None => [] },
+    None      => []
+  }
+}
+
+pure func parse_tool_mapping(j: Json) -> McpToolMapping {
+  {
+    canonical: jstr(j, "canonical", ""),
+    mcp_name:  jstr(j, "mcp_name",  ""),
+    aliases:   parse_json_string_list(j, "aliases")
+  }
+}
+
+pure func parse_tool_mappings_rec(xs: [Json]) -> [McpToolMapping] {
+  match xs {
+    [] => [],
+    j :: rest => parse_tool_mapping(j) :: parse_tool_mappings_rec(rest)
+  }
+}
+
+pure func parse_json_tool_mappings(j: Json, key: string) -> [McpToolMapping] {
+  match get(j, key) {
+    Some(arr) => match asArray(arr) { Some(xs) => parse_tool_mappings_rec(xs), None => [] },
+    None      => []
+  }
+}
+
+pure func parse_server(j: Json) -> McpServerDef {
+  {
+    name:             jstr(j, "name",      ""),
+    command:          jstr(j, "command",   ""),
+    server_args:      parse_json_string_list(j, "args"),
+    tool_mappings:    parse_json_tool_mappings(j, "tool_mappings"),
+    timeout_ms:       jint(j, "timeout_ms",       30000),
+    max_output_chars: jint(j, "max_output_chars",  8000),
+    transport:        jstr(j, "transport", "stdio")
+  }
+}
+
+pure func parse_servers_rec(xs: [Json]) -> [McpServerDef] {
+  match xs {
+    [] => [],
+    j :: rest => parse_server(j) :: parse_servers_rec(rest)
+  }
+}
+
+export pure func parse_mcp_config(root: Json) -> McpConfig {
+  match get(root, "servers") {
+    Some(arr) => match asArray(arr) {
+      Some(xs) => { servers: parse_servers_rec(xs) },
+      None     => { servers: [] }
+    },
+    None => { servers: [] }
+  }
+}
+
+export func read_mcp_config(profile_dir: string) -> McpConfig ! {FS} {
+  let path = "${profile_dir}/mcp.json";
+  if not fileExists(path) then { servers: [] }
+  else
+    match decode(readFile(path)) {
+      Ok(j)  => parse_mcp_config(j),
+      Err(_) => { servers: [] }
+    }
+}
+
+func collect_server_names_rec(servers: [McpServerDef]) -> [string] {
+  match servers {
+    [] => [],
+    s :: rest => all_tool_names(s.tool_mappings) ++ collect_server_names_rec(rest)
+  }
+}
+
+export func collect_all_tool_names(cfg: McpConfig) -> [string] {
+  collect_server_names_rec(cfg.servers)
+}
+
+func string_list_has(xs: [string], s: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == s then true else string_list_has(rest, s)
+  }
+}
+
+func server_owns_tool(s: McpServerDef, tool: string) -> bool {
+  string_list_has(all_tool_names(s.tool_mappings), tool)
+}
+
+func find_server_for_tool(servers: [McpServerDef], tool: string) -> Option[McpServerDef] {
+  match servers {
+    [] => None,
+    s :: rest =>
+      if server_owns_tool(s, tool) then Some(s)
+      else find_server_for_tool(rest, tool)
+  }
+}
+
+func mcp_error_envelope(call: ToolCallEnvelope, msg: string) -> ToolResultEnvelope {
+  { tool_call_id: call.id, tool: call.tool, stdout: "", stderr: msg, exit_code: 1, metadata: jo([]) }
+}
+
+export func make_hooks(cfg: McpConfig) -> [Capability] {
+  let tool_names = collect_all_tool_names(cfg);
+  let servers = cfg.servers;
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+    match find_server_for_tool(servers, call.tool) {
+      None    => Delegate,
+      Some(s) =>
+        if s.transport == "mcp-http" then
+          Handled(mcp_error_envelope(call, "mcp-http transport requires AILANG M-SERVE-API-LIVE-TOOL-REGISTRY (not yet available)"))
+        else
+          Delegate
+    }
+  }, next_state: ctx.world } };
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    ToolProvider(tool_names, handle)
+  ]
+}
+
+-- Pure tests
+
+pure func server_count(xs: [McpServerDef]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + server_count(rest) }
+}
+
+pure func empty_config_has_no_servers() -> bool
+  tests [((), true)]
+  {
+    server_count(parse_mcp_config(jo([])).servers) == 0
+  }
+
+pure func single_server_parsed_correctly() -> bool
+  tests [((), true)]
+  {
+    let raw = "{\"servers\":[{\"name\":\"my_server\",\"command\":\"npx\",\"args\":[\"@my/mcp\"],\"tool_mappings\":[{\"canonical\":\"MyTool\",\"mcp_name\":\"my_tool\",\"aliases\":[\"my_tool\"]}],\"timeout_ms\":5000,\"max_output_chars\":1000}]}";
+    match decode(raw) {
+      Err(_) => false,
+      Ok(j)  => {
+        let cfg = parse_mcp_config(j);
+        server_count(cfg.servers) == 1
+          && match cfg.servers {
+               [] => false,
+               s :: _ => s.name == "my_server" && s.command == "npx" && s.timeout_ms == 5000
+             }
+      }
+    }
+  }
+
+pure func parse_server_with_mcp_http_transport() -> bool
+  tests [((), true)]
+  {
+    let raw = "{\"servers\":[{\"name\":\"remote\",\"command\":\"\",\"transport\":\"mcp-http\",\"tool_mappings\":[{\"canonical\":\"RemoteTool\",\"mcp_name\":\"remote_tool\",\"aliases\":[]}]}]}";
+    match decode(raw) {
+      Err(_) => false,
+      Ok(j)  => {
+        let cfg = parse_mcp_config(j);
+        match cfg.servers {
+          [] => false,
+          s :: _ => s.transport == "mcp-http"
+        }
+      }
+    }
+  }
+
+pure func stdio_is_default_transport() -> bool
+  tests [((), true)]
+  {
+    let raw = "{\"servers\":[{\"name\":\"local\",\"command\":\"npx\",\"tool_mappings\":[]}]}";
+    match decode(raw) {
+      Err(_) => false,
+      Ok(j)  => {
+        let cfg = parse_mcp_config(j);
+        match cfg.servers {
+          [] => false,
+          s :: _ => s.transport == "stdio"
+        }
+      }
+    }
+  }

@@ -1,0 +1,17 @@
+module tools/ext_call_inventory/fixtures/control_resolved
+
+-- CONTROL. Not an unresolvable form: the receiver is a plain typed path,
+-- `ctx: ExtCtx` -> `ExtCtx.ports: ExtPorts`. It must be reported as ONE resolved
+-- call site and zero unresolved.
+--
+-- This fixture is what makes the other four falsifiable. A classifier that
+-- reported everything as unresolved would pass a suite of only-unresolvable
+-- fixtures while being useless, so the suite has to contain a case that must
+-- come back clean.
+
+import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, ExtCtx, Msg)
+
+export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
+  -> AiStepOutcome ! {AI, IO, Trace} {
+  ctx.ports.ai_step(ctx.world, model, msgs)
+}

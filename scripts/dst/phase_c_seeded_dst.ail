@@ -1,0 +1,585 @@
+-- Seeded Phase C Layer-1 DST gate.
+--
+-- Replay a failure with:
+-- DST_BASE_SEED=<failing seed> DST_SEEDS=1 make dst_seeded
+
+module scripts/dst/phase_c_seeded_dst
+
+import std/ai (Message, ToolCall)
+import std/env (getEnvOr)
+import std/io (println, exit)
+import std/json (jo)
+import std/list (length, foldl)
+import std/option (Some, None)
+import std/rand (rand_seed, rand_int)
+import std/result (Result, Ok, Err)
+import std/string (repeat, stringToInt)
+import src/core/compaction (
+  estimate_tokens_messages,
+  usage_percent_with_limit,
+  exhaustion_pct,
+  output_token_allowance
+)
+import src/core/phase_vocab (
+  CallModel,
+  CheckpointTaken,
+  CompactionStageRecord,
+  LedgerRecord,
+  SealExhausted,
+  SealSystemPromptEmpty,
+  StepPolicy,
+  StepState,
+  TakeCheckpoint,
+  TraceStageApplied,
+  TraceStagePassed,
+  TraceStageRejected,
+  apply_checkpoint,
+  history_digest,
+  history_from_seed,
+  history_len,
+  history_usage_percent,
+  history_valid_transcript,
+  payload_messages,
+  seal_compacted_payload,
+  segment_messages,
+  split_for_compaction,
+  system_prefix_chars,
+  validate_checkpoint_chain
+)
+import src/core/step_machine (decide)
+import src/core/hook_phase (stage_record)
+import src/core/ext/runtime (
+  PreStepStage,
+  StageApplied,
+  StagePassed,
+  StageRejected
+)
+import src/core/test/dst_gen (pick_int)
+import src/core/test/dst_harness (
+  ScenarioFailure,
+  failure,
+  report_failure
+)
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func system_msgs(n: int, content: string) -> [Message] {
+  if n <= 0 then []
+  else msg("system", content) :: system_msgs(n - 1, content)
+}
+
+func tail_msgs(n: int, index: int, content: string) -> [Message] {
+  if n <= 0 then []
+  else {
+    let role = if (index / 2) * 2 == index then "user" else "assistant";
+    msg(role, content) :: tail_msgs(n - 1, index + 1, content)
+  }
+}
+
+func generated_msgs(n_systems: int, n_tail: int, content_len: int) -> [Message] {
+  let content = repeat("x", content_len);
+  system_msgs(n_systems, content) ++ tail_msgs(n_tail, 0, content)
+}
+
+func no_system_in(msgs: [Message]) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest => m.role != "system" && no_system_in(rest)
+  }
+}
+
+func tool_calls_equal(left: [ToolCall], right: [ToolCall]) -> bool {
+  match left {
+    [] => match right { [] => true, _ => false },
+    a :: a_rest => match right {
+      [] => false,
+      b :: b_rest =>
+        a.id == b.id
+          && a.name == b.name
+          && a.arguments == b.arguments
+          && tool_calls_equal(a_rest, b_rest)
+    }
+  }
+}
+
+func messages_equal(left: [Message], right: [Message]) -> bool {
+  match left {
+    [] => match right { [] => true, _ => false },
+    a :: a_rest => match right {
+      [] => false,
+      b :: b_rest =>
+        a.role == b.role
+          && a.content == b.content
+          && a.tool_call_id == b.tool_call_id
+          && tool_calls_equal(a.tool_calls, b.tool_calls)
+          && messages_equal(a_rest, b_rest)
+    }
+  }
+}
+
+func policy(context_limit: int, checkpoint_pct: int, checkpoint_enabled: bool) -> StepPolicy {
+  {
+    step_budget: 8,
+    max_cost_millicents: 0,
+    cost_metered: true,
+    persist_retries: 0,
+    retry_stream_errors: true,
+    require_system_prompt: true,
+    model: "phase-c-model",
+    provider_base_url: "",
+    checkpoint_enabled: checkpoint_enabled,
+    checkpoint_pct: checkpoint_pct,
+    compaction: {
+      context_limit: context_limit,
+      elide_tier_pct: 70,
+      elide_hard_tier_pct: 85,
+      emergency_pct: 95
+    }
+  }
+}
+
+func state_from_msgs(msgs: [Message]) -> Result[StepState, string] {
+  match history_from_seed(msgs) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: 0,
+      history: h,
+      telemetry: {
+        last_input_tokens: 0,
+        last_output_tokens: 0,
+        last_estimated_input_tokens: 0
+      },
+      totals: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_millicents: 0,
+        cost_warned_pct: 0
+      },
+      nudges_used: 0,
+      ext_artifacts: jo([]),
+      pending_tool_calls: [],
+      last_finish_reason: "",
+      last_response_text: ""
+    })
+  }
+}
+
+func run_seal_boundary(seed: int) -> bool ! {IO, Rand} {
+  let _ = rand_seed(seed);
+  let n_systems = rand_int(0, 2);
+  let n_tail = rand_int(1, 8);
+  let content_len = rand_int(40, 400);
+  let require_system_prompt = rand_int(0, 1) == 1;
+  let exhausted = exhaustion_pct();
+  let pct = pick_int([exhausted - 5, exhausted - 1, exhausted, exhausted + 5]);
+  let msgs = generated_msgs(n_systems, n_tail, content_len);
+  let split = split_for_compaction(msgs);
+  let chain = segment_messages(split.segment);
+  let input_limit = (estimate_tokens_messages(msgs) * 100) / pct;
+  let raw_limit = output_token_allowance() + input_limit;
+  let payload = split.pinned ++ chain;
+  let usage = usage_percent_with_limit(payload, input_limit);
+  let prefix_chars = system_prefix_chars(split.pinned);
+  let trace = [
+    "param n_systems=${show(n_systems)} n_tail=${show(n_tail)} content_len=${show(content_len)} require_system_prompt=${show(require_system_prompt)} pct=${show(pct)} input_limit=${show(input_limit)} raw_limit=${show(raw_limit)} usage=${show(usage)} prefix_chars=${show(prefix_chars)}"
+  ];
+  let result = seal_compacted_payload(
+    split,
+    chain,
+    "phase-c-model",
+    raw_limit,
+    require_system_prompt
+  );
+  let checked =
+    if require_system_prompt && prefix_chars == 0 then
+      match result {
+        Err(SealSystemPromptEmpty(_)) => Ok(()),
+        Err(SealExhausted(_)) => Err(failure(
+          "empty system prompt precedes exhaustion",
+          trace ++ ["expected=SealSystemPromptEmpty actual=SealExhausted"]
+        )),
+        Ok(_) => Err(failure(
+          "empty system prompt precedes exhaustion",
+          trace ++ ["expected=SealSystemPromptEmpty actual=Ok"]
+        ))
+      }
+    else if usage >= exhaustion_pct() then
+      match result {
+        Err(SealExhausted(_)) => Ok(()),
+        Err(SealSystemPromptEmpty(_)) => Err(failure(
+          "exhausted payload is rejected",
+          trace ++ ["expected=SealExhausted actual=SealSystemPromptEmpty"]
+        )),
+        Ok(_) => Err(failure(
+          "exhausted payload is rejected",
+          trace ++ ["expected=SealExhausted actual=Ok"]
+        ))
+      }
+    else
+      match result {
+        Ok(p) =>
+          if messages_equal(payload_messages(p), payload) then Ok(())
+          else Err(failure(
+            "sealed payload is pinned prefix plus compacted chain",
+            trace
+          )),
+        Err(SealExhausted(_)) => Err(failure(
+          "payload below exhaustion seals",
+          trace ++ ["expected=Ok actual=SealExhausted"]
+        )),
+        Err(SealSystemPromptEmpty(_)) => Err(failure(
+          "payload below exhaustion seals",
+          trace ++ ["expected=Ok actual=SealSystemPromptEmpty"]
+        ))
+      };
+  match checked {
+    Ok(_) => {
+      let _ = println("scenario=phase_c.gen.seal_boundary seed=${show(seed)} ok");
+      true
+    },
+    Err(f) => {
+      let _ = report_failure("phase_c.gen.seal_boundary", show(seed), f);
+      false
+    }
+  }
+}
+
+func checkpoint_chain_ok(before: string, info: { reason: string, before_digest: string, after_digest: string }, after: string) -> bool {
+  match validate_checkpoint_chain(before, [info], after) {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+func check_checkpoint_decision(
+  state: StepState,
+  pol: StepPolicy,
+  trace: [string]
+) -> Result[(), ScenarioFailure] {
+  match decide(state, pol) {
+    TakeCheckpoint(plan) => {
+      let before = history_digest(state.history);
+      let applied = apply_checkpoint(state, plan);
+      match applied.event {
+        CheckpointTaken(info) => {
+          let after = history_digest(applied.state.history);
+          if not history_valid_transcript(applied.state.history) then
+            Err(failure("checkpoint output is a valid transcript", trace))
+          else if not checkpoint_chain_ok(before, info, after) then
+            Err(failure("checkpoint digest chain validates", trace))
+          else if history_len(applied.state.history) != 2 then
+            Err(failure(
+              "checkpoint retains one system message and one summary",
+              trace ++ ["history_len=${show(history_len(applied.state.history))}"]
+            ))
+          else match decide(applied.state, pol) {
+            CallModel(_) => Ok(()),
+            _ => Err(failure(
+              "checkpoint terminates with CallModel",
+              trace
+            ))
+          }
+        },
+        _ => Err(failure("checkpoint application emits CheckpointTaken", trace))
+      }
+    },
+    _ => Ok(())
+  }
+}
+
+func run_checkpoint_pressure(seed: int) -> bool ! {IO, Rand} {
+  let _ = rand_seed(seed);
+  let checkpoint_pct = rand_int(50, 99);
+  let n_tail = rand_int(2, 10);
+  let content_len = rand_int(40, 400);
+  let target_usage = pick_int([
+    checkpoint_pct - 10,
+    checkpoint_pct - 1,
+    checkpoint_pct + 1,
+    checkpoint_pct + 10
+  ]);
+  let msgs = generated_msgs(1, n_tail, content_len);
+  let context_limit = (estimate_tokens_messages(msgs) * 100) / target_usage;
+  let trace_base = [
+    "param checkpoint_pct=${show(checkpoint_pct)} n_tail=${show(n_tail)} content_len=${show(content_len)} target_usage=${show(target_usage)} context_limit=${show(context_limit)}"
+  ];
+  let checked = match state_from_msgs(msgs) {
+    Err(e) => Err(failure("generated history seed is accepted", trace_base ++ ["seed_err=${e}"])),
+    Ok(state) => {
+      let actual_usage = history_usage_percent(state.history, context_limit);
+      let trace = trace_base ++ ["actual_usage=${show(actual_usage)}"];
+      match decide(state, policy(context_limit, checkpoint_pct, false)) {
+        TakeCheckpoint(_) => Err(failure(
+          "checkpoint is never emitted when policy is off",
+          trace
+        )),
+        _ => {
+          let on_policy = policy(context_limit, checkpoint_pct, true);
+          let on_decision = decide(state, on_policy);
+          if actual_usage < checkpoint_pct then
+            match on_decision {
+              TakeCheckpoint(_) => Err(failure(
+                "usage below checkpoint threshold does not checkpoint",
+                trace
+              )),
+              _ => Ok(())
+            }
+          else check_checkpoint_decision(state, on_policy, trace)
+        }
+      }
+    }
+  };
+  match checked {
+    Ok(_) => {
+      let _ = println("scenario=phase_c.gen.checkpoint_pressure seed=${show(seed)} ok");
+      true
+    },
+    Err(f) => {
+      let _ = report_failure("phase_c.gen.checkpoint_pressure", show(seed), f);
+      false
+    }
+  }
+}
+
+func run_split_prefix(seed: int) -> bool ! {IO, Rand} {
+  let _ = rand_seed(seed);
+  let n_systems = rand_int(0, 4);
+  let n_tail = rand_int(0, 12);
+  let content_len = rand_int(10, 200);
+  let msgs = generated_msgs(n_systems, n_tail, content_len);
+  let split = split_for_compaction(msgs);
+  let segment = segment_messages(split.segment);
+  let trace = [
+    "param n_systems=${show(n_systems)} n_tail=${show(n_tail)} content_len=${show(content_len)}"
+  ];
+  let checked =
+    if length(split.pinned) != n_systems then
+      Err(failure("split pins exactly the system prefix", trace))
+    else if length(segment) != n_tail then
+      Err(failure("split segments exactly the non-system tail", trace))
+    else if not no_system_in(segment) then
+      Err(failure("compactable segment contains no system role", trace))
+    else match history_from_seed(msgs) {
+      Err(e) => Err(failure("generated history seed is accepted", trace ++ ["seed_err=${e}"])),
+      Ok(h) => {
+        let first_digest = history_digest(h);
+        let second_digest = history_digest(h);
+        if history_len(h) != n_systems + n_tail then
+          Err(failure("history length matches generated message count", trace))
+        else if not history_valid_transcript(h) then
+          Err(failure("generated history is a valid transcript", trace))
+        else if first_digest != second_digest then
+          Err(failure("history digest is deterministic", trace))
+        else Ok(())
+      }
+    };
+  match checked {
+    Ok(_) => {
+      let _ = println("scenario=phase_c.gen.split_prefix seed=${show(seed)} ok");
+      true
+    },
+    Err(f) => {
+      let _ = report_failure("phase_c.gen.split_prefix", show(seed), f);
+      false
+    }
+  }
+}
+
+func generated_stages(n: int, index: int) -> [PreStepStage] ! {Rand} {
+  if n <= 0 then []
+  else {
+    let choice = rand_int(0, 2);
+    let outcome =
+      if choice == 0 then StageApplied("gen")
+      else if choice == 1 then StageRejected("gen")
+      else StagePassed;
+    { ext_id: "gen_ext_${show(index)}", atom: 0, outcome: outcome }
+      :: generated_stages(n - 1, index + 1)
+  }
+}
+
+func records_for(step: int, stages: [PreStepStage]) -> [LedgerRecord] {
+  match stages {
+    [] => [],
+    stage :: rest => stage_record(step, stage) :: records_for(step, rest)
+  }
+}
+
+func stage_outcome_matches(stage: PreStepStage, record: LedgerRecord) -> bool {
+  match record {
+    CompactionStageRecord(x) =>
+      x.ext_id == stage.ext_id
+        && match stage.outcome {
+          StageApplied(note) => match x.outcome {
+            TraceStageApplied(recorded) => recorded == note,
+            _ => false
+          },
+          StageRejected(reason) => match x.outcome {
+            TraceStageRejected(recorded) => recorded == reason,
+            _ => false
+          },
+          StagePassed => match x.outcome {
+            TraceStagePassed => true,
+            _ => false
+          },
+          _ => false
+        },
+    _ => false
+  }
+}
+
+func records_match(step: int, stages: [PreStepStage], records: [LedgerRecord]) -> bool {
+  match stages {
+    [] => match records { [] => true, _ => false },
+    stage :: stage_rest => match records {
+      [] => false,
+      record :: record_rest =>
+        match record {
+          CompactionStageRecord(x) =>
+            x.step == step
+              && stage_outcome_matches(stage, record)
+              && records_match(step, stage_rest, record_rest),
+          _ => false
+        }
+    }
+  }
+}
+
+func stage_outcomes_trace(stages: [PreStepStage]) -> string {
+  match stages {
+    [] => "",
+    stage :: rest => {
+      let label = match stage.outcome {
+        StageApplied(_) => "applied",
+        StageRejected(_) => "rejected",
+        StagePassed => "passed",
+        _ => "unsupported"
+      };
+      let suffix = stage_outcomes_trace(rest);
+      if suffix == "" then "${stage.ext_id}:${label}"
+      else "${stage.ext_id}:${label},${suffix}"
+    }
+  }
+}
+
+func run_stage_records(seed: int) -> bool ! {IO, Rand} {
+  let _ = rand_seed(seed);
+  let n_stages = rand_int(1, 8);
+  let step = rand_int(0, 20);
+  let stages = generated_stages(n_stages, 0);
+  let records = records_for(step, stages);
+  let trace = [
+    "param n_stages=${show(n_stages)} step=${show(step)} outcomes=${stage_outcomes_trace(stages)}"
+  ];
+  let checked =
+    if length(records) != n_stages then
+      Err(failure("stage record count matches stage count", trace))
+    else if not records_match(step, stages, records) then
+      Err(failure(
+        "stage records preserve ext order outcomes and step",
+        trace
+      ))
+    else Ok(());
+  match checked {
+    Ok(_) => {
+      let _ = println("scenario=phase_c.gen.stage_records seed=${show(seed)} ok");
+      true
+    },
+    Err(f) => {
+      let _ = report_failure("phase_c.gen.stage_records", show(seed), f);
+      false
+    }
+  }
+}
+
+func run_seal_seeds(base: int, n: int) -> int ! {IO, Rand} {
+  if n <= 0 then 0
+  else {
+    let ok = run_seal_boundary(base);
+    (if ok then 0 else 1) + run_seal_seeds(base + 1, n - 1)
+  }
+}
+
+func run_checkpoint_seeds(base: int, n: int) -> int ! {IO, Rand} {
+  if n <= 0 then 0
+  else {
+    let ok = run_checkpoint_pressure(base);
+    (if ok then 0 else 1) + run_checkpoint_seeds(base + 1, n - 1)
+  }
+}
+
+func run_split_seeds(base: int, n: int) -> int ! {IO, Rand} {
+  if n <= 0 then 0
+  else {
+    let ok = run_split_prefix(base);
+    (if ok then 0 else 1) + run_split_seeds(base + 1, n - 1)
+  }
+}
+
+func run_stage_seeds(base: int, n: int) -> int ! {IO, Rand} {
+  if n <= 0 then 0
+  else {
+    let ok = run_stage_records(base);
+    (if ok then 0 else 1) + run_stage_seeds(base + 1, n - 1)
+  }
+}
+
+func run_config(base: int, seeds: int) -> () ! {IO, Rand} {
+  if seeds < 1 then {
+    let _ = println("phase_c_seeded_dst CONFIG ERROR DST_SEEDS must be at least 1");
+    exit(1)
+  } else {
+    let seal_failed = run_seal_seeds(base, seeds);
+    let _ =
+      if seal_failed == 0 then
+        println("family=phase_c.gen.seal_boundary seeds=${show(seeds)} ok")
+      else ();
+    let checkpoint_failed = run_checkpoint_seeds(base, seeds);
+    let _ =
+      if checkpoint_failed == 0 then
+        println("family=phase_c.gen.checkpoint_pressure seeds=${show(seeds)} ok")
+      else ();
+    let split_failed = run_split_seeds(base, seeds);
+    let _ =
+      if split_failed == 0 then
+        println("family=phase_c.gen.split_prefix seeds=${show(seeds)} ok")
+      else ();
+    let stage_failed = run_stage_seeds(base, seeds);
+    let _ =
+      if stage_failed == 0 then
+        println("family=phase_c.gen.stage_records seeds=${show(seeds)} ok")
+      else ();
+    -- Derive both the family count and the failure total from one list so a
+    -- dropped family moves families= (and a dangling reference fails to compile),
+    -- instead of a literal that can print families=4 having run three.
+    let family_failures = [seal_failed, checkpoint_failed, split_failed, stage_failed];
+    let families = length(family_failures);
+    let failed = foldl(\acc x. acc + x, 0, family_failures);
+    if failed == 0 then
+      println("phase_c_seeded_dst PASS families=${show(families)} base_seed=${show(base)} seeds=${show(seeds)}")
+    else {
+      let _ = println("phase_c_seeded_dst FAIL failed=${show(failed)}");
+      exit(1)
+    }
+  }
+}
+
+export func main() -> () ! {IO, Env, Rand} {
+  let seeds_raw = getEnvOr("DST_SEEDS", "5");
+  let base_raw = getEnvOr("DST_BASE_SEED", "1");
+  match stringToInt(seeds_raw) {
+    None => {
+      let _ = println("phase_c_seeded_dst CONFIG ERROR DST_SEEDS must be an integer: ${seeds_raw}");
+      exit(1)
+    },
+    Some(seeds) => match stringToInt(base_raw) {
+      None => {
+        let _ = println("phase_c_seeded_dst CONFIG ERROR DST_BASE_SEED must be an integer: ${base_raw}");
+        exit(1)
+      },
+      Some(base) => run_config(base, seeds)
+    }
+  }
+}

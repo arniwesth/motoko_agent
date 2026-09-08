@@ -1,0 +1,18 @@
+[package]
+name = "sunholo/motoko_ext_a2a"
+version = "0.2.2"
+edition = "1"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+
+[effects]
+max = ["Net", "FS", "Env", "Rand", "IO"]
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_a2a/register",
+  "sunholo/motoko_ext_a2a/a2a",
+  "sunholo/motoko_ext_a2a/config",
+  "sunholo/motoko_ext_a2a/types"
+]

@@ -1,0 +1,270 @@
+module scripts/dst/runtime_status_tool_dst
+
+import std/ai (Message, ToolCall, ToolSchema)
+import std/io (println, exit)
+import std/json (jo)
+import std/list (length)
+import std/option (None)
+import std/result (Result, Ok, Err)
+import std/string (contains)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/phase_vocab (DecisionRecord, LedgerRecord, LedgerTrace)
+import src/core/session (TracedSessionResult)
+import src/core/session as Session
+import src/core/test/stub_step (Scripted, prose_step, empty_rt)
+import src/core/ports (ScriptedStep)
+import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/types (Msg)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  ExtRuntime,
+  FinalizeDecision,
+  NoDecision,
+  PassThrough,
+  PreStepDecision,
+  PromptPatch,
+  ResponseInterceptDecision,
+  NoIntercept,
+  ToolHandleDecision,
+  Delegate,
+  ToolPolicyDecision,
+  NoOpinion,
+  Pending,
+  DenyAfterTimeout
+)
+import src/core/test/ext_fixture (fixture_hooks)
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func history() -> [Message] {
+  [msg("system", "runtime status system"), msg("user", "how many steps have run?")]
+}
+
+func budget() -> BudgetPlan {
+  { total: 10, solver: 6, verifier: 4 }
+}
+
+func zero_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(rt, "task", "", false, budget(), "runtime-status-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
+}
+
+func status_call(id: string) -> ToolCall {
+  { id: id, name: "MotokoRuntimeStatus", arguments: "{}" }
+}
+
+func bash_call(id: string) -> ToolCall {
+  { id: id, name: "BashExec", arguments: "{\"cmd\":\"true\"}" }
+}
+
+func status_step(id: string) -> ScriptedStep {
+  {
+    prose: "",
+    tool_calls: [status_call(id)],
+    input_tokens: 200,
+    output_tokens: 100,
+    finish_reason: "tool_calls",
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
+  }
+}
+
+func status_then_bash_step() -> ScriptedStep {
+  {
+    prose: "",
+    tool_calls: [status_call("status-1"), bash_call("bash-1")],
+    input_tokens: 200,
+    output_tokens: 100,
+    finish_reason: "tool_calls",
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
+  }
+}
+
+func no_describe() -> [ToolSchema] { [] }
+
+func no_prompt(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+  PassThrough
+}, next_state: ctx.world } }
+
+func no_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("approval required", DenyAfterTimeout)
+}
+
+func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+  Delegate
+}, next_state: ctx.world } }
+
+func no_intercept(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
+  NoIntercept
+}, next_state: ctx.world } }
+
+func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: {
+  NoDecision
+}, next_state: ctx.world } }
+
+func pending_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  {
+    registry: { entries: [fixture_hooks("runtime-status-pending", {
+      tools: [],
+      describe: no_describe,
+      prompt: no_prompt,
+      budget: no_budget,
+      compact: pass_pre_step,
+      policy: pending_policy,
+      provide: no_handle,
+      intercept: no_intercept,
+      judge: no_solver
+    })] },
+    strict_mode: false,
+    verification: v
+  }
+}
+
+func decision_names(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest => match r {
+      DecisionRecord(d) => d.decision :: decision_names(rest),
+      _ => decision_names(rest)
+    }
+  }
+}
+
+func join_names(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${join_names(rest)}"
+  }
+}
+
+func names_equal(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b {
+      [] => false,
+      y :: ys => x == y && names_equal(xs, ys)
+    }
+  }
+}
+
+func trace_decision_names(trace: LedgerTrace) -> [string] {
+  decision_names(trace.records)
+}
+
+func tool_contents(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "tool" then m.content :: tool_contents(rest) else tool_contents(rest)
+  }
+}
+
+func tool_ids(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "tool" then m.tool_call_id :: tool_ids(rest) else tool_ids(rest)
+  }
+}
+
+func first_tool_status_ok(msgs: [Message], expected_id: string) -> bool {
+  match tool_contents(msgs) {
+    first :: _ =>
+      contains(first, "\"tool\":\"MotokoRuntimeStatus\"")
+        && contains(first, "\"current_step\":0")
+        && contains(first, "\"provider_calls_started\":1")
+        && contains(first, "\"provider_calls_completed\":1")
+        && contains(first, "\"steps_executed_so_far\":1")
+        && contains(first, "\"step_budget\":8")
+        && contains(first, "\"digest\":\"sha256:")
+        && contains(first, "\"context_window\"")
+        && contains(first, "\"last_sent\"")
+        && contains(first, "\"uncompacted_pending\"")
+        && contains(first, "\"note\"")
+        && match tool_ids(msgs) { id :: _ => id == expected_id, _ => false },
+    _ => false
+  }
+}
+
+func mixed_tool_order_ok(msgs: [Message]) -> bool {
+  match tool_contents(msgs) {
+    first :: second :: _ =>
+      contains(first, "\"tool\":\"MotokoRuntimeStatus\"")
+        && contains(second, "timeout")
+        && match tool_ids(msgs) {
+          id1 :: id2 :: _ => id1 == "status-1" && id2 == "bash-1",
+          _ => false
+        },
+    _ => false
+  }
+}
+
+func scenario_runtime_status_basic() -> Result[(), ScenarioFailure] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let traced = run_scripted(empty_rt(), [status_step("status-basic"), prose_step("done")]);
+  match traced.result {
+    Ok(history_after) => {
+      let decisions_ok = names_equal(trace_decision_names(traced.trace), ["CallModel", "RunTools", "CallModel", "Finalize"]);
+      let status_ok = first_tool_status_ok(history_after, "status-basic");
+      ok_or_failure(decisions_ok && status_ok, "runtime status basic", [
+        "decisions=${join_names(trace_decision_names(traced.trace))}",
+        "status_ok=${show(status_ok)}"
+      ])
+    },
+    Err(e) => Err({ failed_invariant: "runtime status basic succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func scenario_runtime_status_mixed_pending() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let traced = run_scripted(pending_rt(), [status_then_bash_step(), prose_step("done")]);
+  match traced.result {
+    Ok(history_after) => {
+      let decisions_ok = names_equal(trace_decision_names(traced.trace), ["CallModel", "RunTools", "AwaitApproval", "CallModel", "Finalize"]);
+      let order_ok = mixed_tool_order_ok(history_after);
+      ok_or_failure(decisions_ok && order_ok, "runtime status mixed pending ordering", [
+        "decisions=${join_names(trace_decision_names(traced.trace))}",
+        "order_ok=${show(order_ok)}"
+      ])
+    },
+    Err(e) => Err({ failed_invariant: "runtime status mixed pending succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func runtime_status_basic_scenario() -> Scenario {
+  { id: "runtime_status.basic", seed: "fixed", run: scenario_runtime_status_basic }
+}
+
+func runtime_status_mixed_pending_scenario() -> Scenario {
+  { id: "runtime_status.mixed_pending", seed: "fixed", run: scenario_runtime_status_mixed_pending }
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let scenarios = [
+    runtime_status_basic_scenario(),
+    runtime_status_mixed_pending_scenario()
+  ];
+  let failed = run_all(scenarios, 0);
+  if failed == 0 then println("runtime_status_tool_dst PASS count=${show(length(scenarios))}")
+  else {
+    let _ = println("runtime_status_tool_dst FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}

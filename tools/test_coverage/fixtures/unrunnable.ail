@@ -1,0 +1,8 @@
+module tools/test_coverage/fixtures/unrunnable
+
+-- Fires R2 `unrunnable`. This file does not parse. A file `ailang test` cannot
+-- execute reports zero passing tests, and a check reading only `failed == 0`
+-- would call that clean -- so the absence of a runnable module is its own rule.
+
+export pure func broken(b: bool) -> bool {
+  not b

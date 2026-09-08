@@ -1,0 +1,11 @@
+module sunholo/motoko_ext_mcp/register
+
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (Capability)
+import pkg/sunholo/motoko_ext_mcp/mcp (read_mcp_config, make_hooks)
+
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let cfg        = read_mcp_config(profile_dir);
+  make_hooks(cfg)
+}

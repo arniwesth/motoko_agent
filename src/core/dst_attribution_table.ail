@@ -1,0 +1,791 @@
+-- src/core/dst_attribution_table.ail
+--
+-- WI-A5, under ADR-001 D4 clause 3: the site-to-hook attribution table and the
+-- validation a profile runs against it at load.
+--
+-- This module owns the TABLE and the RULES. It does not own the profile
+-- definition or the manifest — those are WI-A10's, and they consume this. A
+-- profile records the table's IDENTITY, the pair `(source revision, content
+-- hash)`, never a copy: one source of truth, no divergent embedded copies, and
+-- the stated consequence that correcting one row re-issues every profile that
+-- references the table.
+--
+-- ============================================================================
+-- What the table is for, in one paragraph
+-- ============================================================================
+--
+-- D4 defines "profile-reachable" by installation, not by reachability analysis:
+-- a site is reachable if it is (1) in the core driver, (2) in a module the
+-- profile installs, or (3) a core site ATTRIBUTED to an installed hook by this
+-- table. Clause 3 exists because some core sites only execute when a particular
+-- extension is installed, and without a way to say so they default to clause 1
+-- and every profile must route them — including profiles for which they are
+-- dead. The absence of `test_dummy` is exactly the fact that removes
+-- `src/core/ext/runtime.ail:199` from a profile's reachable set.
+--
+-- The mechanical rule, with the empty-intersection case answered:
+--
+--   a core effect site with a VALID row is profile-reachable exactly when that
+--   row's hook set intersects the profile's installed hooks; a site with NO
+--   valid row is an unconditional core site under clause 1.
+--
+-- An empty intersection means the site is genuinely unreachable in that
+-- profile. Only a MISSING or INVALID row falls back to clause 1.
+--
+-- ============================================================================
+-- Why this is an attribution table and not a semantic test
+-- ============================================================================
+--
+-- The rejected reading was "guarded solely by an installed hook's identity". A
+-- site guarded by hook identity AND something else fails "solely", falls
+-- through unclassified, and is then not required to be routed — fail-open, in
+-- the clause that exists to close exactly that hole. The ADR's worked example is
+-- row 2 below: a real mixed guard in the tool phase. Attribution is a claim
+-- about which hook can CAUSE the site to execute, not a claim that the hook is
+-- the only condition, so additional guards never remove a site from an
+-- attributed hook's scope.
+--
+-- ============================================================================
+-- The correctness condition, and the exception it forces
+-- ============================================================================
+--
+-- An attribution asserts that installation of at least one attributed hook is a
+-- NECESSARY condition of the site executing. Necessity is what makes removal
+-- from clause 1 safe; sufficiency is what mixed guards break.
+--
+-- Nothing in this module checks that. The validators below are schema,
+-- staleness, referential-integrity and completeness checks, and a well-formed
+-- but FALSE attribution passes every one of them. Necessity is manually
+-- reviewed and each row records a named reviewer. **This is a stated exception
+-- to the automated-gate promise**, not an oversight, and it stands until the
+-- interprocedural necessity validator exists — which D4 assigns as its own
+-- future obligation and this item deliberately does not build. One mechanical
+-- check was proposed and WITHDRAWN rather than patched (syntactic dominance,
+-- which fails on this table's own first row: the attributed site is inside
+-- `emit_dummy_hook`, which contains no guard at all — the five `is_test_dummy`
+-- guards dominate the five CALLS to it, and relating them follows a call edge).
+-- A check that fails its own worked example is worse than none.
+--
+-- ============================================================================
+-- Three things measured at HEAD that the ADR's own text no longer describes
+-- ============================================================================
+--
+-- 1. **Row 2's line moved.** D4 cites `src/core/tool_phase.ail:222` for the
+--    mixed-guard example. WI-A12 rewrote that file; the guard is now at `:317`
+--    and the effectful call it guards is `:318`. The ADR's prose anchor is
+--    stale, the example itself is intact. (This note said `:286`/`:287` from
+--    WI-A12 until WI-D20, which moved the pair twice over — the offsets are
+--    re-stated rather than re-dated because the claim is about HEAD, not about
+--    what a past item did; plan rule S15 governs the latter and not this.)
+--
+-- 2. **The core clock inventory is no longer "four driver sites".** D4's table
+--    says four; at HEAD there are SIX routed core sites and ONE ambient one.
+--    WI-A12 added `tool_phase.ail:344` (the fifth) and created two ambient
+--    sites that did not exist when D4's table was written. WI-C5 then widened
+--    `ExtPorts.clock_now` to thread the world token, which let
+--    `session.ext_ports_of` route its extension seam through `Ports.clock_now`
+--    like every other: that added `session.ail:881` as the SIXTH routed site
+--    and RETIRED the ambient `session.ail:878` entirely — the function that
+--    carried it (`ext_unrouted_clock`) no longer exists. The one ambient site
+--    left is `stub_step.ail:203`, the live adapter, which is ambient by design.
+--    See `unconditional_core_sites` for the measured set. This is why the
+--    completeness check below takes the discovered set as an ARGUMENT and does
+--    not transcribe a number from the ADR.
+--
+-- 3. **`stub_step.ail:203` is core, unattributed, and UNROUTED.** Falling it back
+--    to clause 1 makes it unconditional core, which is right — but a profile
+--    that then claims to route its whole unconditional set would be claiming
+--    something false. (`session.ail:878` was the OTHER member of this note
+--    until WI-C5 routed it; the rule is unchanged, the membership shrank.) So the declaration carries `routed` per site and an
+--    unrouted entry is a declared, visible gap (plan S2: prefer the un-routed
+--    option that fails loudly) rather than a silent one. Whether such a profile
+--    is conformant is D4's all-or-nothing rule to apply, and WI-A10's to apply
+--    it; this module's job is to make the fact impossible to miss.
+--
+-- ============================================================================
+-- The trap that would have made the intersection rule fail open
+-- ============================================================================
+--
+-- Rows name BASE hook ids (`test_dummy`, `scratchpad`). Installed hooks do not
+-- carry those ids: `parse_tokens` (`src/core/ext/registry_generated.ail:54-67`)
+-- stamps every instance as `"${name}#${idx}"`, so a runtime registry holds
+-- `scratchpad#5`. String equality between a row's `test_dummy` and an installed
+-- `test_dummy#0` finds NOTHING, the intersection comes back empty, and the
+-- empty-intersection rule then declares the site genuinely unreachable and
+-- drops it from the profile — the precise inversion of what the table is for,
+-- and silent. `hook_id_matches` (`:323` below) is one of FIVE prefix readers of
+-- that stamp, and it mirrors the other four: `hook_name` (`ext/runtime.ail:72-79`,
+-- slices at the first `#`), `is_test_dummy` (`ext/runtime.ail:207`),
+-- `is_compaction_ai_ext_id` (`session.ail:509`) and
+-- `scratchpad_extension_active_rec` (`tool_phase.ail:198`). The header once said
+-- "two predicates" and named stale lines; corrected at ADR-001 Phase A (A3)
+-- [RK C3]. `test_instance_suffixed_ids_intersect` is what holds the predicate
+-- there, and `test_atom_index_never_in_holder_stamp` is what holds the GRAMMAR:
+-- `"${name}#${idx}"` is the whole stamp and its `name` is the whole prefix. All
+-- five readers stop at the first `#`, so anything appended after the index — a
+-- 6.0 per-atom identity, say — would be read as part of the index by one reader
+-- and as part of the match by the others, silently. Atom identity goes in typed
+-- records, never in the stamp string [ADR-001 plan B6].
+
+module src/core/dst_attribution_table
+
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (startsWith, length, charAt)
+import std/crypto (sha256Hex)
+
+-- The version of the RULES in this module. Changing what attribution means
+-- changes it for every profile, so it is versioned on its own footing and
+-- WI-A10's manifest records it alongside the table identity.
+export pure func attribution_rules_version() -> string { "attribution-rules/1" }
+
+-- One source location. Line numbers are part of the binding: D4 says a source
+-- change that adds, moves, or re-guards a core effect site invalidates the
+-- table, and the source revision below is what enforces that.
+export type SiteRef = {
+  file: string,
+  line: int
+}
+
+export pure func site_key(s: SiteRef) -> string { "${s.file}:${show(s.line)}" }
+
+-- One attribution row. D4: the site, its effect, the KNOWN hook ids it is
+-- attributed to, and the named reviewer who accepted the attribution.
+export type AttributionRow = {
+  site: SiteRef,
+  effect: string,
+  hook_ids: [string],
+  reviewer: string,
+  note: string
+}
+
+-- A core effect site that is NOT attributed to any hook — clause 1,
+-- unconditional core. Declared explicitly rather than left to the fallback,
+-- because the completeness check below is exactly the question "did anything
+-- discovered end up in neither list", and a fallback cannot answer it.
+--
+-- `routed` records whether the site actually reaches the world protocol. See
+-- header note 3: an unrouted entry is a declared gap, not a passing one.
+export type CoreSite = {
+  site: SiteRef,
+  effect: string,
+  routed: bool,
+  note: string
+}
+
+-- ---------------------------------------------------------------------------
+-- The artifact
+-- ---------------------------------------------------------------------------
+
+-- The source revision this table is bound to. A profile referencing the table
+-- must be loaded against this revision or the binding is stale and validation
+-- fails closed. This is the commit A5 measured the rows against.
+export pure func table_source_revision() -> string {
+  "c0fbf10"
+}
+
+-- The two initial rows.
+--
+-- Row 1 is D4's own example of clause 3 earning its keep: `emit_dummy_hook`
+-- reads the clock ambiently and is reached only through the five
+-- `is_test_dummy` guards in `ext/runtime.ail`. No checked-in configuration
+-- installs `test_dummy`, so in every one of them this row's hook set intersects
+-- the installed set emptily and the site is correctly dropped. That is the
+-- whole point: before the table existed the site fell back to clause 1 and
+-- every profile owed it.
+--
+-- Row 2 is D4's worked example of why clause 3 is an attribution table rather
+-- than a semantic test. The guard is MIXED —
+-- `is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt)` —
+-- so it is not "solely" hook identity and a semantic test would drop it
+-- unclassified. Attribution states only that installing `scratchpad` is
+-- necessary for the call to execute, which is true and is all clause 3 needs.
+--
+-- **Row 2's necessity cannot be established mechanically here, and that is D4's
+-- known gap rather than a blocker.** The guard's second conjunct calls
+-- `scratchpad_extension_active(rt)`, which folds `rt.registry.hooks` in a
+-- separate function (`tool_phase.ail:168-177`); relating it to the hook id
+-- follows a call edge, which is the interprocedural reasoning clause 3 exists
+-- to avoid. The row is recorded with its named reviewer and the gap is stated.
+export pure func attribution_rows() -> [AttributionRow] {
+  [
+    {
+      site: { file: "src/core/ext/runtime.ail", line: 199 },
+      effect: "Clock",
+      hook_ids: ["test_dummy"],
+      reviewer: "arni.westh",
+      note: "ambient now() inside emit_dummy_hook (:187-195), reached only via the five is_test_dummy guards in this file; installing test_dummy is necessary for it to execute"
+    },
+    {
+      site: { file: "src/core/tool_phase.ail", line: 318 },
+      effect: "Process",
+      hook_ids: ["scratchpad"],
+      reviewer: "arni.westh",
+      note: "exec_scratchpad_cell_ws under the MIXED guard at :317; necessity rests on the named reviewer because the second conjunct is interprocedural (D4's stated gap)"
+    }
+  ]
+}
+
+-- The explicit unconditional-core set. Measured at HEAD, not transcribed: see
+-- header note 2 for why the ADR's "four driver sites" no longer describes it.
+--
+-- Scope is the CLOCK effect in core, which is the inventory D4 enumerates and
+-- the one A12's routing claim is made over. Sites in installed packages are
+-- clause 2 and are not this table's business; `packages/motoko-ext-compose`'s
+-- eight reads are reachable by installation, not by attribution.
+export pure func unconditional_core_sites() -> [CoreSite] {
+  [
+    { site: { file: "src/core/session.ail", line: 1164 }, effect: "Clock", routed: true,
+      note: "ext_ports_of's extension clock seam — the SIXTH routed core site, added by WI-C5. It replaced the ambient `session.ail:878` rather than joining it: widening ExtPorts.clock_now to take the world token removed the shape obstacle that plan rule S2 had accommodated, so the seam routes through Ports.clock_now like every other" },
+    { site: { file: "src/core/session.ail", line: 1423 }, effect: "Clock", routed: true,
+      note: "ports.clock_now — routed by WI-A12" },
+    { site: { file: "src/core/session.ail", line: 1529 }, effect: "Clock", routed: true,
+      note: "ports.clock_now — routed by WI-A12" },
+    { site: { file: "src/core/session.ail", line: 3016 }, effect: "Clock", routed: true,
+      note: "provider.ports.clock_now — routed by WI-A12" },
+    { site: { file: "src/core/session.ail", line: 3126 }, effect: "Clock", routed: true,
+      note: "provider.ports.clock_now — routed by WI-A12" },
+    { site: { file: "src/core/tool_phase.ail", line: 413 }, effect: "Clock", routed: true,
+      note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it. WI-D20 moved it 373 -> 413 and CHANGED ITS ARGUMENT: it read ports.clock_now(world) and now reads ports.clock_now(handle_world), because a DELEGATING on_tool_handle may have advanced the world before this native dispatch begins and starting from `world` would discard what it did. Same site, same effect, same routing, different starting world — recorded here because the other two tool_phase anchors this item moved are byte-identical drift and this one is not" },
+    { site: { file: "src/core/test/stub_step.ail", line: 203 }, effect: "Clock", routed: false,
+      note: "live_ports' clock adapter — the one place the driver reads a real clock, by design; a deterministic profile uses the scripted adapter and never reaches it" }
+  ]
+}
+
+-- ---------------------------------------------------------------------------
+-- Identity: (source revision, content hash)
+-- ---------------------------------------------------------------------------
+
+pure func join_ids(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}|${join_ids(rest)}"
+  }
+}
+
+pure func canonical_rows(rs: [AttributionRow]) -> string {
+  match rs {
+    [] => "",
+    r :: rest =>
+      "row|${site_key(r.site)}|${r.effect}|${join_ids(r.hook_ids)}|${r.reviewer}\n${canonical_rows(rest)}"
+  }
+}
+
+pure func routed_tag(b: bool) -> string { if b then "R" else "U" }
+
+pure func canonical_core(cs: [CoreSite]) -> string {
+  match cs {
+    [] => "",
+    c :: rest =>
+      "core|${site_key(c.site)}|${c.effect}|${routed_tag(c.routed)}\n${canonical_core(rest)}"
+  }
+}
+
+-- The content hash covers the rows, the unconditional-core declaration, and the
+-- rules version — everything a profile's conformance depends on. The `note`
+-- fields are deliberately EXCLUDED: they are prose for a reader, and including
+-- them would re-issue every referring profile over a typo fix. The reviewer IS
+-- included, because changing who accepted an attribution changes the only thing
+-- standing behind its necessity.
+export pure func table_content_hash() -> string {
+  let payload = "${attribution_rules_version()}\n${canonical_rows(attribution_rows())}${canonical_core(unconditional_core_sites())}";
+  "sha256:${sha256Hex(payload)}"
+}
+
+export type TableIdentity = {
+  source_revision: string,
+  content_hash: string
+}
+
+-- What a profile records. Not a copy of the table.
+export pure func table_identity() -> TableIdentity {
+  { source_revision: table_source_revision(), content_hash: table_content_hash() }
+}
+
+-- ---------------------------------------------------------------------------
+-- Known hook ids
+-- ---------------------------------------------------------------------------
+
+-- The extension names `resolve` accepts (`src/core/ext/registry_generated.ail:28-44`).
+-- D4: reject UNKNOWN hook ids; PERMIT known-but-uninstalled ones. An earlier
+-- revision rejected uninstalled ids, which defeats the table's whole purpose —
+-- under that rule row 1 could not exist in any checked-in configuration, the
+-- site defaulted to unconditional core, and the driver obligation was five.
+-- The install set of `src/core/ext/registry_generated.ail`, in registry order.
+-- Fifteen through WI-D8; agentcli and herdr added at ADR-001 Phase A (A2) when
+-- `declared_vs_performed` found the runner's hand list two behind the registry.
+-- This list is hand-kept too, so it can lag the same way; the runner's
+-- member-for-member row is the check that notices, and this is the second
+-- place to update when it does.
+export pure func known_hook_ids() -> [string] {
+  ["test_dummy", "omnigraph", "context_mode", "mcp", "exa_search", "ailang_docs",
+   "compose", "a2a", "decision_framework", "microrag", "compaction_ai",
+   "scratchpad", "compaction_structural", "empty_stop_guard", "progress_contract_guard",
+   "agentcli", "herdr"]
+}
+
+pure func contains_str(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == target then true else contains_str(rest, target)
+  }
+}
+
+-- An installed hook id matches a row's base id when it IS that id or is one of
+-- its `#idx` instances. See the header: plain equality here is a silent
+-- fail-open that empties every intersection.
+export pure func hook_id_matches(installed_id: string, base_id: string) -> bool {
+  installed_id == base_id || startsWith(installed_id, "${base_id}#")
+}
+
+-- ---------------------------------------------------------------------------
+-- Rejections
+-- ---------------------------------------------------------------------------
+
+-- Typed rather than stringly, so WI-A10 can render the load-time rejection
+-- without re-deriving the rule and a fixture can assert WHICH rule fired.
+export type AttributionRejection
+  = UnknownHookId(string, string)
+  | StaleSourceRevision(string, string)
+  | MalformedRow(string, string)
+  | DuplicateSite(string)
+  | SiteUnaccounted(string, string)
+
+export pure func rejection_rule(r: AttributionRejection) -> string {
+  match r {
+    UnknownHookId(_, _) => "unknown-hook-id",
+    StaleSourceRevision(_, _) => "stale-source-revision",
+    MalformedRow(_, _) => "malformed-row",
+    DuplicateSite(_) => "duplicate-site",
+    SiteUnaccounted(_, _) => "site-unaccounted"
+  }
+}
+
+export pure func rejection_message(r: AttributionRejection) -> string {
+  match r {
+    UnknownHookId(s, h) =>
+      "[unknown-hook-id] row for '${s}' names hook id '${h}', which no extension registers; known-but-uninstalled is permitted, unknown is not (D4 clause 3)",
+    StaleSourceRevision(want, got) =>
+      "[stale-source-revision] the attribution table is bound to source revision '${want}' but the profile is loading against '${got}'; a source change can add, move, or re-guard an attributed site (D4 clause 3)",
+    MalformedRow(s, why) =>
+      "[malformed-row] row for '${s}' is malformed: ${why} (D4 clause 3)",
+    DuplicateSite(s) =>
+      "[duplicate-site] site '${s}' is attributed more than once; one row per core effect site (D4 clause 3)",
+    SiteUnaccounted(s, e) =>
+      "[site-unaccounted] discovered core effect site '${s}' (${e}) appears in neither the attribution rows nor the unconditional-core set; the profile's routing claim does not cover it (D4 clause 3)"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Validation. Schema, staleness, referential integrity, completeness.
+-- None of these tests the correctness condition — see the header.
+-- ---------------------------------------------------------------------------
+
+pure func unknown_ids(site: string, ids: [string], known: [string]) -> [AttributionRejection] {
+  match ids {
+    [] => [],
+    h :: rest => {
+      let here = if contains_str(known, h) then [] else [UnknownHookId(site, h)];
+      here ++ unknown_ids(site, rest, known)
+    }
+  }
+}
+
+-- A row must name a file, a positive line, at least one hook, and a reviewer.
+-- The reviewer check is not bureaucracy: it is the ONLY thing standing behind
+-- necessity, so a row without one has no correctness claim at all.
+pure func row_shape(r: AttributionRow) -> [AttributionRejection] {
+  let s = site_key(r.site);
+  (if r.site.file == "" then [MalformedRow(s, "empty file")] else [])
+    ++ (if r.site.line <= 0 then [MalformedRow(s, "line must be positive")] else [])
+    ++ (if r.effect == "" then [MalformedRow(s, "empty effect")] else [])
+    ++ (if List.length(r.hook_ids) == 0 then
+          [MalformedRow(s, "no attributed hooks; a row attributing to nothing is an unconditional-core site, declare it there")]
+        else [])
+    ++ (if r.reviewer == "" then
+          [MalformedRow(s, "no named reviewer; necessity is manually reviewed and the reviewer is the only thing standing behind it")]
+        else [])
+}
+
+pure func seen_site(keys: [string], k: string) -> bool { contains_str(keys, k) }
+
+pure func validate_rows_rec(seen: [string], rs: [AttributionRow], known: [string]) -> [AttributionRejection] {
+  match rs {
+    [] => [],
+    r :: rest => {
+      let k = site_key(r.site);
+      let dup = if seen_site(seen, k) then [DuplicateSite(k)] else [];
+      dup ++ row_shape(r) ++ unknown_ids(k, r.hook_ids, known)
+        ++ validate_rows_rec(k :: seen, rest, known)
+    }
+  }
+}
+
+-- Every row-level check, over the whole table. Returns ALL violations rather
+-- than the first, so a fixture asserting one rule cannot pass because another
+-- fired ahead of it.
+export pure func validate_rows(rs: [AttributionRow], known: [string]) -> [AttributionRejection] {
+  validate_rows_rec([], rs, known)
+}
+
+-- The staleness check. A profile loading against a different revision than the
+-- table was bound to fails closed: D4 says a source change that adds, moves or
+-- re-guards a site invalidates the table, and nothing here can tell which kind
+-- of change a revision bump was.
+export pure func validate_binding(bound_to: string, loading_against: string) -> [AttributionRejection] {
+  if bound_to == loading_against then [] else [StaleSourceRevision(bound_to, loading_against)]
+}
+
+-- ---------------------------------------------------------------------------
+-- Producer-side completeness — the check that row shape cannot supply
+-- ---------------------------------------------------------------------------
+
+pure func row_covers(rs: [AttributionRow], k: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if site_key(r.site) == k then true else row_covers(rest, k)
+  }
+}
+
+pure func core_covers(cs: [CoreSite], k: string) -> bool {
+  match cs {
+    [] => false,
+    c :: rest => if site_key(c.site) == k then true else core_covers(rest, k)
+  }
+}
+
+-- Every site an inventory DISCOVERED must appear in the rows or in the
+-- unconditional-core set. A table that silently omits a discovered site is
+-- syntactically valid, passes every check above, and leaves the profile
+-- claiming routing completeness over a site nobody classified. That is the
+-- fail-open D4 clause 3 exists to close, and no row-shape check can see it —
+-- the defect is in what is ABSENT.
+--
+-- The discovered set is an ARGUMENT, never a constant in this module. It comes
+-- from an inventory run against the source, and hardcoding it here would make
+-- this check agree with itself by construction.
+export pure func validate_completeness(
+  discovered: [CoreSite],
+  rs: [AttributionRow],
+  core: [CoreSite]
+) -> [AttributionRejection] {
+  match discovered {
+    [] => [],
+    d :: rest => {
+      let k = site_key(d.site);
+      let here =
+        if row_covers(rs, k) || core_covers(core, k) then []
+        else [SiteUnaccounted(k, d.effect)];
+      here ++ validate_completeness(rest, rs, core)
+    }
+  }
+}
+
+-- The whole load-time gate: schema, staleness, referential integrity, and
+-- completeness, in one call. WI-A10 calls this.
+export pure func validate_at_load(
+  loading_against: string,
+  discovered: [CoreSite]
+) -> [AttributionRejection] {
+  validate_binding(table_source_revision(), loading_against)
+    ++ validate_rows(attribution_rows(), known_hook_ids())
+    ++ validate_completeness(discovered, attribution_rows(), unconditional_core_sites())
+}
+
+-- ---------------------------------------------------------------------------
+-- The reachable set: the empty-intersection rule
+-- ---------------------------------------------------------------------------
+
+pure func any_installed(installed: [string], base_ids: [string]) -> bool {
+  match base_ids {
+    [] => false,
+    b :: rest =>
+      if any_matches(installed, b) then true else any_installed(installed, rest)
+  }
+}
+
+pure func any_matches(installed: [string], base: string) -> bool {
+  match installed {
+    [] => false,
+    i :: rest => if hook_id_matches(i, base) then true else any_matches(rest, base)
+  }
+}
+
+-- Is an ATTRIBUTED site reachable in a profile installing these hooks?
+--
+-- Exactly when the row's hook set intersects the installed set. An empty
+-- intersection means the site is genuinely unreachable in that profile — which
+-- is the fact the table exists to express, NOT a fallback to clause 1. Only a
+-- missing or invalid row falls back.
+export pure func row_is_reachable(r: AttributionRow, installed: [string]) -> bool {
+  any_installed(installed, r.hook_ids)
+}
+
+-- The core effect sites a profile must route: every unconditional-core site,
+-- plus every attributed site whose hook set intersects what it installs.
+export pure func reachable_core_sites(installed: [string]) -> [CoreSite] {
+  unconditional_core_sites() ++ reachable_attributed(attribution_rows(), installed)
+}
+
+pure func reachable_attributed(rs: [AttributionRow], installed: [string]) -> [CoreSite] {
+  match rs {
+    [] => [],
+    r :: rest => {
+      let here =
+        if row_is_reachable(r, installed) then
+          [{ site: r.site, effect: r.effect, routed: false, note: "attributed to ${join_ids(r.hook_ids)}" }]
+        else [];
+      here ++ reachable_attributed(rest, installed)
+    }
+  }
+}
+
+-- A site with no valid row is unconditional core. Stated as a function because
+-- it is the clause-1 fallback and a fixture asserts it directly.
+export pure func classify_site(k: string, installed: [string]) -> string {
+  match find_row(attribution_rows(), k) {
+    None => "unconditional-core",
+    Some(r) => if row_is_reachable(r, installed) then "attributed-reachable" else "attributed-unreachable"
+  }
+}
+
+pure func find_row(rs: [AttributionRow], k: string) -> Option[AttributionRow] {
+  match rs {
+    [] => None,
+    r :: rest => if site_key(r.site) == k then Some(r) else find_row(rest, k)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Tests
+-- ---------------------------------------------------------------------------
+
+pure func has_rule(rs: [AttributionRejection], want: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if rejection_rule(r) == want then true else has_rule(rest, want)
+  }
+}
+
+pure func test_table_at_head_validates() -> bool
+  tests [((), true)]
+  {
+    List.length(validate_rows(attribution_rows(), known_hook_ids())) == 0
+      && List.length(validate_binding(table_source_revision(), table_source_revision())) == 0
+  }
+
+pure func test_unknown_hook_id_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let bad: [AttributionRow] = [{
+      site: { file: "src/core/rpc.ail", line: 200 },
+      effect: "SharedMem",
+      hook_ids: ["scratchpadd"],
+      reviewer: "arni.westh",
+      note: "typo"
+    }];
+    has_rule(validate_rows(bad, known_hook_ids()), "unknown-hook-id")
+  }
+
+-- The rule that an earlier ADR revision had backwards. `test_dummy` is in NO
+-- checked-in configuration, and the row naming it must still be legal — that
+-- absence is exactly what removes the site from those profiles.
+pure func test_known_but_uninstalled_is_permitted() -> bool
+  tests [((), true)]
+  {
+    List.length(validate_rows(attribution_rows(), known_hook_ids())) == 0
+      && classify_site("src/core/ext/runtime.ail:199", ["compaction_ai#0"]) == "attributed-unreachable"
+  }
+
+pure func test_stale_binding_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_binding("5ad3433", "deadbee"), "stale-source-revision")
+  }
+
+pure func test_malformed_rows_are_rejected() -> bool
+  tests [((), true)]
+  {
+    let no_reviewer: [AttributionRow] = [{
+      site: { file: "src/core/x.ail", line: 1 }, effect: "Clock",
+      hook_ids: ["scratchpad"], reviewer: "", note: ""
+    }];
+    let no_hooks: [AttributionRow] = [{
+      site: { file: "src/core/x.ail", line: 1 }, effect: "Clock",
+      hook_ids: [], reviewer: "arni.westh", note: ""
+    }];
+    let bad_line: [AttributionRow] = [{
+      site: { file: "src/core/x.ail", line: 0 }, effect: "Clock",
+      hook_ids: ["scratchpad"], reviewer: "arni.westh", note: ""
+    }];
+    has_rule(validate_rows(no_reviewer, known_hook_ids()), "malformed-row")
+      && has_rule(validate_rows(no_hooks, known_hook_ids()), "malformed-row")
+      && has_rule(validate_rows(bad_line, known_hook_ids()), "malformed-row")
+  }
+
+pure func test_duplicate_site_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let r: AttributionRow = {
+      site: { file: "src/core/x.ail", line: 9 }, effect: "Clock",
+      hook_ids: ["scratchpad"], reviewer: "arni.westh", note: ""
+    };
+    has_rule(validate_rows([r, r], known_hook_ids()), "duplicate-site")
+  }
+
+-- The empty-intersection rule, both directions. A profile installing
+-- `scratchpad` owes row 2's site; one installing only `compaction_ai` does not,
+-- and that is a REMOVAL from the reachable set rather than a fallback to
+-- unconditional core.
+pure func test_empty_intersection_removes_the_site() -> bool
+  tests [((), true)]
+  {
+    let with_sp = classify_site("src/core/tool_phase.ail:318", ["scratchpad#3"]);
+    let without = classify_site("src/core/tool_phase.ail:318", ["compaction_ai#0", "context_mode#1"]);
+    with_sp == "attributed-reachable" && without == "attributed-unreachable"
+  }
+
+-- The `#idx` trap. Without `hook_id_matches` every runtime intersection is
+-- empty and every attributed site silently vanishes from every profile.
+pure func test_instance_suffixed_ids_intersect() -> bool
+  tests [((), true)]
+  {
+    hook_id_matches("scratchpad#5", "scratchpad")
+      && hook_id_matches("scratchpad", "scratchpad")
+      && not hook_id_matches("scratchpad_extra", "scratchpad")
+      && not hook_id_matches("compose#0", "scratchpad")
+  }
+
+-- THE HOLDER-STAMP GRAMMAR, locked before anyone designs a per-atom registry
+-- (ADR-001 Phase A, A3; plan invariant 3). Semantic ownership of a stamp is
+-- decided by its `name` prefix and NOTHING else: every known base id is
+-- `#`-free, every stamp built from one carries exactly one `#`, and a stamp with
+-- a second `#` after the index is precisely the shape the five prefix readers
+-- cannot tell apart from the base — `hook_id_matches` accepts it (prefix), and
+-- that acceptance is the reason atom identity must never enter the string.
+pure func test_atom_index_never_in_holder_stamp() -> bool
+  tests [((), true)]
+  {
+    all_hash_free(known_hook_ids())
+      && all_stamps_single_hash(known_hook_ids(), 0)
+      && all_stamps_match_base(known_hook_ids(), 7)
+      -- the negative: a second `#` is invisible to a prefix reader. If this
+      -- line ever goes red, a reader has started parsing past the index and
+      -- the grammar has grown a second field without this module's consent.
+      && hook_id_matches("scratchpad#5#2", "scratchpad")
+      && count_char(stamp("scratchpad", 5), "#") == 1
+  }
+
+pure func stamp(name: string, idx: int) -> string { "${name}#${show(idx)}" }
+
+pure func count_char(s: string, ch: string) -> int { count_char_rec(s, ch, 0, 0) }
+
+pure func count_char_rec(s: string, ch: string, i: int, acc: int) -> int {
+  if i >= length(s) then acc
+  else count_char_rec(s, ch, i + 1, if charAt(s, i) == ch then acc + 1 else acc)
+}
+
+pure func all_hash_free(ids: [string]) -> bool {
+  match ids {
+    [] => true,
+    x :: rest => count_char(x, "#") == 0 && all_hash_free(rest)
+  }
+}
+
+pure func all_stamps_single_hash(ids: [string], idx: int) -> bool {
+  match ids {
+    [] => true,
+    x :: rest => count_char(stamp(x, idx), "#") == 1 && all_stamps_single_hash(rest, idx + 1)
+  }
+}
+
+-- every stamp resolves to its own base and to NO other known base
+pure func all_stamps_match_base(ids: [string], idx: int) -> bool {
+  match ids {
+    [] => true,
+    x :: rest => hook_id_matches(stamp(x, idx), x)
+      && matches_exactly_one(stamp(x, idx), known_hook_ids(), 0)
+      && all_stamps_match_base(rest, idx + 1)
+  }
+}
+
+pure func matches_exactly_one(s: string, bases: [string], n: int) -> bool {
+  match bases {
+    [] => n == 1,
+    b :: rest => matches_exactly_one(s, rest, if hook_id_matches(s, b) then n + 1 else n)
+  }
+}
+
+-- A site with no row is unconditional core (clause 1's fallback).
+pure func test_unattributed_site_is_unconditional_core() -> bool
+  tests [((), true)]
+  {
+    classify_site("src/core/session.ail:1048", ["scratchpad#0"]) == "unconditional-core"
+  }
+
+-- THE completeness test. The discovered site is real, well-formed, and in
+-- neither list — every other check in this module passes on it.
+pure func test_discovered_site_in_neither_list_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let discovered: [CoreSite] = [
+      { site: { file: "src/core/session.ail", line: 1529 }, effect: "Clock", routed: true, note: "" },
+      { site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock", routed: false, note: "" },
+      { site: { file: "src/core/omitted.ail", line: 42 }, effect: "Clock", routed: false, note: "" }
+    ];
+    let rs = validate_completeness(discovered, attribution_rows(), unconditional_core_sites());
+    -- the row-level checks see nothing wrong: the defect is in what is ABSENT
+    List.length(validate_rows(attribution_rows(), known_hook_ids())) == 0
+      && List.length(rs) == 1
+      && has_rule(rs, "site-unaccounted")
+  }
+
+-- The measured HEAD inventory is fully accounted for. The falsifiable half of
+-- the test above: if completeness only ever fired, it would be useless.
+pure func test_head_inventory_is_complete() -> bool
+  tests [((), true)]
+  {
+    let discovered = unconditional_core_sites()
+      ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock", routed: false, note: "" },
+          { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process", routed: false, note: "" }];
+    List.length(validate_completeness(discovered, attribution_rows(), unconditional_core_sites())) == 0
+  }
+
+pure func test_identity_is_revision_and_hash() -> bool
+  tests [((), true)]
+  {
+    let id = table_identity();
+    id.source_revision == table_source_revision()
+      && startsWith(id.content_hash, "sha256:")
+      && id.content_hash != "sha256:"
+  }
+
+-- An unrouted unconditional-core site is DECLARED, not hidden. Header note 3:
+-- `stub_step.ail:203` is core, unattributed and ambient by design, and a
+-- profile claiming to route its whole unconditional set would be claiming
+-- something false. This test is what keeps that fact visible.
+--
+-- WENT FROM 2 TO 1 AT WI-C5, and the literal is deliberately a literal: a row
+-- asserting the count equals itself is green after any edit. It went red when
+-- `session.ail:878` was routed, which is exactly what it is for.
+pure func test_unrouted_core_sites_are_declared() -> bool
+  tests [((), true)]
+  {
+    count_unrouted(unconditional_core_sites()) == 1
+  }
+
+pure func count_unrouted(cs: [CoreSite]) -> int {
+  match cs {
+    [] => 0,
+    c :: rest => (if c.routed then 0 else 1) + count_unrouted(rest)
+  }
+}
+
+pure func test_rejection_message_names_the_rule() -> bool
+  tests [((), true)]
+  {
+    let r = SiteUnaccounted("src/core/x.ail:1", "Clock");
+    rejection_message(r) != "" && rejection_rule(r) == "site-unaccounted"
+  }

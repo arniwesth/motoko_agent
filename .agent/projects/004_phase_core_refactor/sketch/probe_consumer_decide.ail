@@ -1,0 +1,20 @@
+-- The consumer: a separate "step_machine" module. Imports ONLY exported
+-- wrapper types + ops. Defines decide over them, pattern-matches the
+-- exported variant, binds sealed payloads without naming their types.
+module probe_consumer_decide
+
+import std/io (println)
+import vocab_probe (StateP, DecisionP, CallModelP, FailP, mk_state, advance, hist_size, mk_payload, payload_val)
+
+func decide(s: StateP) -> DecisionP {
+  if s.step > 2 then FailP("budget")
+  else CallModelP(mk_payload(s.step * 10))
+}
+
+export func main() -> () ! {IO} {
+  let s = advance(advance(mk_state(0)));
+  match decide(s) {
+    CallModelP(p) => println("decide=CallModelP payload=${show(payload_val(p))} hist=${show(hist_size(s))}"),
+    FailP(r) => println("decide=FailP ${r}")
+  }
+}

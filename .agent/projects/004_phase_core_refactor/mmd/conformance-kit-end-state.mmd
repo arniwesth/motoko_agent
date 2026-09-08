@@ -1,0 +1,78 @@
+flowchart TD
+  %% Plan 1 · conformance kit — END STATE expected after PLAN-conformance-kit.md is implemented.
+  %% Grounded at HEAD 44a4c6e. Edges = imports (consumer -> dependency). motoko-ext-abi is the single
+  %% leaf: every arrow flows down to it and the package never imports src/core, so the module graph
+  %% stays acyclic (§4.0). Colours: green = built by this plan · purple = core file edited ·
+  %% gray = frozen by Plan 2 · blue = existing/gate · cyan = the ABI leaf.
+
+  subgraph GATES["make conformance — registry/conformance gate class (hydration; caps IO,Env,FS)"]
+    gself["SELF-TEST GATE<br/>reject_* FAIL by invariant name<br/>0.3.0 + structural PASS all 4 + live"]
+    gprobe["REGISTRY GATE<br/>run_conformance over every registry package<br/>non-compactors pass vacuously"]
+  end
+
+  subgraph SCRIPTS["Root scripts (new) — resolve against root ailang.toml"]
+    self["scripts/conformance_selftest.ail<br/>main · fail-then-pass"]
+    probe["scripts/conformance_registry_probe.ail<br/>parse_core_ext_order then fold run_conformance"]
+  end
+
+  subgraph COREEDIT["Core — edited by Decision A (build now depends on the kit)"]
+    runtime["src/core/ext/runtime.ail<br/>imports validate_compactor_output<br/>gate call at :170 unchanged"]
+    phasevocab["src/core/phase_vocab.ail<br/>law REMOVED<br/>checkpoint / ledger vocab stays"]
+    roottoml["ailang.toml (root)<br/>+ path dep motoko_ext_conformance<br/>NOT in [extensions]"]
+    registrygen["src/core/ext/registry_generated.ail<br/>register imports (unchanged)"]
+  end
+
+  subgraph KIT["packages/motoko_ext_conformance — ABI-ONLY package (new; not a registered extension)"]
+    harn["harness.ail — LIBRARY, no main<br/>run_conformance · run_scenario · 4 scenarios<br/>ctx builder · canned + poison fake ports"]
+    inv["invariants.ail — pure, zero-cap<br/>no_system_in_output · pairing_preserved · ids_preserved<br/>validate_compactor_output · conformance_abi_version()"]
+    fix["fixtures/reject_fixtures.ail (exported)<br/>reject_prefix · reject_pair · reject_nocache"]
+  end
+
+  subgraph FROZEN["Frozen by Plan 2 — packages/ (certified, not modified)"]
+    aireg["compaction_ai @ 0.3.0 · register<br/>ACCEPT fixture"]
+    streg["compaction_structural @ 1.1.0 · register<br/>ACCEPT fixture"]
+  end
+
+  abi[["motoko-ext-abi @ 3.0 — THE ABI-ONLY LEAF<br/>Msg · ExtCtx{ports,artifacts,telemetry}<br/>Compacted(msgs,note,artifacts) · ExtensionHooks<br/>every arrow flows here -> acyclic"]]
+
+  %% gate outcomes
+  self --> gself
+  probe --> gprobe
+
+  %% root-script imports
+  self --> harn
+  self --> fix
+  self --> aireg
+  self --> streg
+  probe --> harn
+  probe --> registrygen
+
+  %% core imports the law back (the one notable core->kit edge; kit never imports core)
+  runtime -->|"imports law back"| inv
+  runtime --> registrygen
+  roottoml -.->|"path dep"| KIT
+  phasevocab -.->|"law extracted to"| inv
+  registrygen --> aireg
+  registrygen --> streg
+
+  %% package + frozen registers all bottom out at the ABI leaf
+  harn --> inv
+  harn --> abi
+  inv --> abi
+  fix --> abi
+  aireg --> abi
+  streg --> abi
+
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef edited fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef file fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef leaf fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2.5px;
+
+  class self,probe,harn,inv,fix new;
+  class runtime,phasevocab,roottoml edited;
+  class registrygen file;
+  class aireg,streg frozen;
+  class gself,gprobe gate;
+  class abi leaf;

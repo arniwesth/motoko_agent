@@ -1,0 +1,29 @@
+-- Smoke: is std/cognition's mailbox message fabric (Msg effect) usable under the
+-- Motoko CLI runtime, or does it panic without a configured handler?
+--
+-- Uses the *Result* variants (never panic) so we can observe the outcome:
+--   - Ok round-trip  => mailbox messaging works in CLI (stub or real handler)
+--   - Err(code,...)  => handler present but mailbox empty / rejected
+--   - hard panic     => no Msg handler configured in CLI context
+--
+-- Run with:
+--   ailang run --caps Msg,IO smoke_cognition_msg.ail
+module smoke_cognition_msg
+
+import std/cognition (sendMsgResult, recvMsgResult)
+import std/io (println)
+import std/result (Result)
+
+export func main() -> () ! {Msg, IO} {
+  println("COG: sending to mailbox 'test-mbox'");
+  match sendMsgResult("test-mbox", "hello-from-cli") {
+    Ok(r)  => println("COG_SENT ok: msg_id=${r.msg_id} clock=${r.clock} budget=${r.budget_remaining}"),
+    Err(e) => println("COG_SEND_ERR: ${e.code} / ${e.message}")
+  };
+  println("COG: receiving from 'test-mbox'");
+  match recvMsgResult("test-mbox") {
+    Ok(m)  => println("COG_RECV ok: from=${m.from} payload=${m.payload} clock=${m.clock}"),
+    Err(e) => println("COG_RECV_ERR: ${e.code} / ${e.message}")
+  };
+  println("COG: done")
+}

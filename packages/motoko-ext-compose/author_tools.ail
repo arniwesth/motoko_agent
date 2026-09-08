@@ -1,0 +1,571 @@
+module sunholo/motoko_ext_compose/author_tools
+
+import std/crypto (sha256Hex)
+-- `std/bytes (toString)` WENT WITH `std/process`, and it is the same repair for
+-- the same reason WI-D20 gave when it removed five dead imports from
+-- `compose.ail`: classifier 3 (`tools/ext_ambient_inventory/derive.py`) reads
+-- IMPORT LINES, not call sites, so a symbol left on an import after its last
+-- caller goes counts as an ambient source for an effect the extension can no
+-- longer perform. Its one call was `toString(out.stdout)` in `grep_impl` —
+-- ambient `exec` handed back BYTES and the seam hands back a decoded string.
+-- WI-D20 REMOVED `std/fs` AND `std/clock`; WI-D26 REMOVED `std/process`, and
+-- with it the asymmetry the paragraph here used to report. Kept two-part per
+-- S15. Through WI-D25 this note read: "`std/process` REMAINS, and the asymmetry
+-- is the finding rather than an unfinished edit… The one effect that stayed
+-- ambient is `grep_impl`'s `exec("rg", …)`, for the reason given at that
+-- function: `ExtPorts.tool_handle` fronts a dispatcher over MOTOKO'S OWN tool
+-- names and `rg` is not one of them, exactly as `ailang` is not."
+--
+-- The reason was correct and it was about the TOOL NAME, not about the seam:
+-- `tool_handle(w, "BashExec", …)` runs any program at all, `rg` included. This
+-- module now performs NO ambient effect — every read leaves through `ExtPorts`
+-- (`path_stat` for the three kind guards, `file_read` for content, `dir_list`
+-- for entries, `clock_now` for the ledger stamp) and the one subprocess leaves
+-- through `tool_handle`.
+import std/json (Json, decode, get, asString, asNumber, encode, jo, kv, js, jb, jnum)
+import std/result (Ok, Err)
+import std/option (Option, Some, None)
+import std/string (trim, split, contains, startsWith, substring, find)
+
+import pkg/sunholo/motoko_ext_compose/ledger (LedgerEntry)
+-- WI-D26. The routed subprocess request and the streams that come back. See
+-- `proc.ail`'s header for why the argv stays an argv and why `decode_bash_result`
+-- deliberately refuses to hand back an exit code.
+import pkg/sunholo/motoko_ext_compose/proc (bash_exec_tool, bash_exec_args, decode_bash_result)
+-- `ExtPathKind`'s three constructors are imported by name because every guard
+-- below matches them EXHAUSTIVELY rather than defaulting — `session.ext_ports_of`'s
+-- reason at the other end of the same seam: a fourth constructor must be a
+-- compile error here, not an arm that silently absorbs it.
+import pkg/sunholo/motoko_ext_abi/types (ExtPorts, ExtWorld, ExtPathFile, ExtPathDir, ExtPathMissing)
+
+export type AuthorToolResult = {
+  ok: bool,
+  tool: string,
+  path: string,
+  bytes: int,
+  truncated: bool,
+  excerpt: string,
+  payload_json: string,
+  error: string,
+  ledger_entry: Option[LedgerEntry],
+  -- WI-D20. The successor rides on the RESULT rather than on a wrapper record,
+  -- because every one of the five `*_impl` functions has an error path built by
+  -- `mk_err` and a success path built by `mk_ok`, and a wrapper would let one of
+  -- those ten returns forget the world while the other nine carried it. Here the
+  -- constructor cannot be called without supplying one.
+  next_state: ExtWorld
+}
+
+func cap_text(s: string, max_bytes: int) -> { text: string, truncated: bool } {
+  if max_bytes <= 0 then { text: "", truncated: _str_len(s) > 0 }
+  else if _str_len(s) <= max_bytes then { text: s, truncated: false }
+  else { text: "${substring(s, 0, max_bytes)}\n...[truncated]", truncated: true }
+}
+
+func default_deny_globs() -> [string] {
+  [".env", ".env.*", "*.pem", "*.key", "*_rsa", "*_rsa.pub", "id_ed25519*", ".git/**", ".ssh/**"]
+}
+
+func configured_deny_globs(globs: [string]) -> [string] {
+  match globs {
+    [] => default_deny_globs(),
+    _ => globs
+  }
+}
+
+func split_path(path: string) -> [string] {
+  split(path, "/")
+}
+
+func has_parent_escape(parts: [string]) -> bool {
+  match parts {
+    [] => false,
+    x :: rest => if trim(x) == ".." then true else has_parent_escape(rest)
+  }
+}
+
+func char_at(s: string, i: int) -> string {
+  substring(s, i, i + 1)
+}
+
+func glob_match(pattern: string, text: string) -> bool {
+  glob_match_rec(pattern, text, 0, 0)
+}
+
+func glob_match_rec(pattern: string, text: string, pi: int, ti: int) -> bool {
+  if pi >= _str_len(pattern) then ti >= _str_len(text)
+  else {
+    let pc = char_at(pattern, pi);
+    if pc == "*" then glob_star(pattern, text, pi + 1, ti)
+    else if pc == "?" then if ti >= _str_len(text) then false else glob_match_rec(pattern, text, pi + 1, ti + 1)
+    else if ti >= _str_len(text) then false
+    else if pc == char_at(text, ti) then glob_match_rec(pattern, text, pi + 1, ti + 1)
+    else false
+  }
+}
+
+func glob_star(pattern: string, text: string, next_pi: int, ti: int) -> bool {
+  if glob_match_rec(pattern, text, next_pi, ti) then true
+  else if ti >= _str_len(text) then false
+  else glob_star(pattern, text, next_pi, ti + 1)
+}
+
+func first_matching_deny(path: string, globs: [string]) -> string {
+  match globs {
+    [] => "",
+    g :: rest => if trim(g) != "" && glob_match(trim(g), path) then trim(g) else first_matching_deny(path, rest)
+  }
+}
+
+-- `w` rather than nothing: an error path still has to return the world it was
+-- handed. Several of these are reached AFTER a `path_stat` has already run, so
+-- the world at the error is not the world at entry.
+func mk_err(w: ExtWorld, tool: string, path: string, err: string) -> AuthorToolResult {
+  let payload = encode(jo([kv("tool", js(tool)), kv("ok", jb(false)), kv("error", js(err))]));
+  { ok: false, tool: tool, path: path, bytes: 0, truncated: false, excerpt: "", payload_json: payload, error: err, ledger_entry: None, next_state: w }
+}
+
+func mk_ok(p: ExtPorts, w: ExtWorld, tool: string, path: string, raw_content: string, payload: Json, max_bytes: int) -> AuthorToolResult ! {Clock} {
+  let capped = cap_text(raw_content, max_bytes);
+  let payload_json = encode(payload);
+  let reading = p.clock_now(w);
+  let entry: LedgerEntry = {
+    tool: tool,
+    path: path,
+    args_hash: sha256Hex("${tool}|${path}"),
+    content_excerpt: capped.text,
+    ts: reading.now_ms,
+    truncated: capped.truncated,
+    bytes: _str_len(raw_content)
+  };
+  { ok: true, tool: tool, path: path, bytes: _str_len(raw_content), truncated: capped.truncated, excerpt: capped.text, payload_json: payload_json, error: "", ledger_entry: Some(entry), next_state: reading.next_state }
+}
+
+func path_guard(path: string, globs: [string]) -> string {
+  let p = trim(path);
+  if p == "" then "invalid_path_empty"
+  else if contains(p, "\x00") then "invalid_path_nul"
+  else if has_parent_escape(split_path(p)) then "path_escape_denied"
+  else {
+    let denied = first_matching_deny(p, globs);
+    if denied != "" then "path_denied_by_glob:${denied}" else ""
+  }
+}
+
+func json_string_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(v) => match asString(v) {
+      Some(s) => s,
+      None => fallback
+    }
+  }
+}
+
+func json_int_field(obj: Json, key: string, fallback: int) -> int {
+  match get(obj, key) {
+    None => fallback,
+    Some(v) => match asNumber(v) {
+      Some(n) => _float_to_int(n),
+      None => fallback
+    }
+  }
+}
+
+-- WI-D20. TWO AMBIENT CALLS COLLAPSE TO ONE `path_stat`, and the labels are
+-- unchanged: this read `isDir(path) ? "dir" : isFile(path) ? "file" : "missing"`,
+-- which is `ports.ambient_path_stat`'s body and `path_kind_label`'s vocabulary
+-- arrived at independently. The seam already answers exactly this question.
+--
+-- IT IS ALSO A REPAIR, not only a mediation. Two syscalls can disagree — a path
+-- that is a directory at `isDir` and gone by `isFile` reports "missing" — where
+-- one `path_stat` is a single observation. The world has no races, so this is
+-- invisible in a deterministic run and real on a live filesystem.
+func normalize_type(p: ExtPorts, w: ExtWorld, path: string) -> { kind: string, next_state: ExtWorld } ! {FS} {
+  let stat = p.path_stat(w, path);
+  let k = match stat.kind {
+    ExtPathDir     => "dir",
+    ExtPathFile    => "file",
+    ExtPathMissing => "missing"
+  };
+  { kind: k, next_state: stat.next_state }
+}
+
+func list_dir_payload(path: string, entries: [string]) -> Json {
+  jo([
+    kv("tool", js("list_dir")),
+    kv("ok", jb(true)),
+    kv("result", jo([
+      kv("path", js(path)),
+      kv("entries", js(show(entries)))
+    ]))
+  ])
+}
+
+-- WI-D20. `path_stat` FOR THE GUARD, `file_read` FOR THE CONTENT, and the split
+-- is forced by what this function distinguishes. It answers "not_found" and
+-- "not_a_file" DIFFERENTLY, which is three-valued, and `ExtFileRead.present` is
+-- two-valued — routing the guard through `file_read` alone would collapse a
+-- directory onto "not_found" and make the second arm dead code. That is
+-- WI-D19 §4's argument reaching a site that already branches three ways, so it
+-- is measured here rather than assumed: `fileExists` is TRUE for a directory
+-- (verified against std/fs), so today's "not_a_file" arm is live and the routed
+-- version keeps it live.
+func read_file_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+  let path = json_string_field(args, "path", "");
+  let guard_err = path_guard(path, globs);
+  if guard_err != "" then mk_err(w, "read_file", path, guard_err)
+  else {
+    let stat = p.path_stat(w, path);
+    match stat.kind {
+      ExtPathMissing => mk_err(stat.next_state, "read_file", path, "not_found"),
+      ExtPathDir     => mk_err(stat.next_state, "read_file", path, "not_a_file"),
+      ExtPathFile    => {
+    let read = p.file_read(stat.next_state, path);
+    let content = read.content;
+    let capped = cap_text(content, max_bytes);
+    mk_ok(
+      p,
+      read.next_state,
+      "read_file",
+      path,
+      content,
+      jo([
+        kv("tool", js("read_file")),
+        kv("ok", jb(true)),
+        kv("result", jo([
+          kv("path", js(path)),
+          kv("bytes", jnum(_int_to_float(_str_len(content)))),
+          kv("truncated", jb(capped.truncated)),
+          kv("content", js(capped.text))
+        ]))
+      ]),
+      max_bytes
+    )
+      }
+    }
+  }
+}
+
+-- `path_stat` guards, `dir_list` lists — the same two-seam split `read_file_impl`
+-- needs, and for the same three-valued reason: "not_found" and "not_a_directory"
+-- are different answers and `ExtDirListing.present` is one bit.
+--
+-- `listing.entries` IS TAKEN FROM THE SEAM AND NOT RE-DERIVED. `present` is
+-- forwarded by `ext_ports_of` rather than computed from the entry count, for the
+-- reason stated there — an EXISTING EMPTY directory and an ABSENT one both list
+-- nothing — and this is the caller that would have made the difference visible.
+func list_dir_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+  let path0 = json_string_field(args, "path", ".");
+  let path = if trim(path0) == "" then "." else path0;
+  let guard_err = path_guard(path, globs);
+  if guard_err != "" then mk_err(w, "list_dir", path, guard_err)
+  else {
+    let stat = p.path_stat(w, path);
+    match stat.kind {
+      ExtPathMissing => mk_err(stat.next_state, "list_dir", path, "not_found"),
+      ExtPathFile    => mk_err(stat.next_state, "list_dir", path, "not_a_directory"),
+      ExtPathDir     => {
+        let listing = p.dir_list(stat.next_state, path);
+        let text = show(listing.entries);
+        mk_ok(p, listing.next_state, "list_dir", path, text, list_dir_payload(path, listing.entries), max_bytes)
+      }
+    }
+  }
+}
+
+-- WI-D20. `fileExists` AND `normalize_type` WERE TWO SEPARATE OBSERVATIONS AND
+-- ARE NOW ONE, and the equivalence is MEASURED rather than assumed because this
+-- is the site where getting it wrong is silent. `found` was `fileExists(path)`;
+-- it is now `kind != "missing"`. Those agree only if `fileExists` is true for a
+-- DIRECTORY, which was checked against std/fs directly:
+--
+--   dir : exists=true  isDir=true  isFile=false
+--   file: exists=true  isDir=false isFile=true
+--   gone: exists=false isDir=false isFile=false
+--
+-- so `exists` is exactly `not missing` on all three inputs and the payload this
+-- tool emits is byte-identical. Had `fileExists` been false for a directory the
+-- old code would have reported `exists=false type=dir` — self-contradictory, and
+-- the collapse would have been a behaviour change wearing a refactor's clothes.
+func file_exists_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+  let path = json_string_field(args, "path", "");
+  let guard_err = path_guard(path, globs);
+  if guard_err != "" then mk_err(w, "file_exists", path, guard_err)
+  else {
+    let typed = normalize_type(p, w, path);
+    let kind = typed.kind;
+    let found = kind != "missing";
+    mk_ok(
+      p,
+      typed.next_state,
+      "file_exists",
+      path,
+      "exists=${show(found)} type=${kind}",
+      jo([
+        kv("tool", js("file_exists")),
+        kv("ok", jb(true)),
+        kv("result", jo([
+          kv("path", js(path)),
+          kv("exists", jb(found)),
+          kv("type", js(kind))
+        ]))
+      ]),
+      max_bytes
+    )
+  }
+}
+
+-- The size read is CONDITIONAL on the kind and stays that way. `p.file_read`
+-- lifted out of the `if` would type-check and would issue a read against every
+-- directory and every missing path this tool is asked about — an interaction the
+-- recorder would log for a site that previously performed nothing.
+func stat_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+  let path = json_string_field(args, "path", "");
+  let guard_err = path_guard(path, globs);
+  if guard_err != "" then mk_err(w, "stat", path, guard_err)
+  else {
+    let typed = normalize_type(p, w, path);
+    let kind = typed.kind;
+    let sized =
+      if kind == "file" then {
+        let read = p.file_read(typed.next_state, path);
+        { size: _str_len(read.content), next_state: read.next_state }
+      } else { size: 0, next_state: typed.next_state };
+    let size = sized.size;
+    mk_ok(
+      p,
+      sized.next_state,
+      "stat",
+      path,
+      "size=${show(size)} type=${kind}",
+      jo([
+        kv("tool", js("stat")),
+        kv("ok", jb(true)),
+        kv("result", jo([
+          kv("path", js(path)),
+          kv("size", jnum(_int_to_float(size))),
+          kv("type", js(kind)),
+          kv("mtime", jnum(0.0))
+        ]))
+      ]),
+      max_bytes
+    )
+  }
+}
+
+-- The guard was `not fileExists(path) || not isFile(path)`, which is exactly
+-- "is this a file" written twice; one `path_stat` answers it once. The two
+-- non-file arms return `[]` AND the stat's successor — returning `w` there
+-- type-checks and silently discards the observation.
+func grep_fallback_scan(p: ExtPorts, w: ExtWorld, path: string, pattern: string, max_matches: int) -> { lines: [string], next_state: ExtWorld } ! {FS} {
+  let stat = p.path_stat(w, path);
+  match stat.kind {
+    ExtPathMissing => { lines: [], next_state: stat.next_state },
+    ExtPathDir     => { lines: [], next_state: stat.next_state },
+    ExtPathFile    => {
+      let read = p.file_read(stat.next_state, path);
+      let lines = split(read.content, "\n");
+      { lines: grep_scan_lines(path, pattern, lines, 1, max_matches), next_state: read.next_state }
+    }
+  }
+}
+
+func grep_scan_lines(path: string, pattern: string, lines: [string], line_no: int, remaining: int) -> [string] {
+  if remaining <= 0 then []
+  else match lines {
+    [] => [],
+    x :: rest => {
+      if contains(x, pattern) then ("${path}:${show(line_no)}:${x}") :: grep_scan_lines(path, pattern, rest, line_no + 1, remaining - 1)
+      else grep_scan_lines(path, pattern, rest, line_no + 1, remaining)
+    }
+  }
+}
+
+func join_lines(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}\n${join_lines(rest)}"
+  }
+}
+
+-- WI-D26 ROUTED THIS SITE, AND THE ONE THING THAT MUST NOT CHANGE HERE IS THE
+-- BRANCH. Kept two-part per S15; the history is below, and it matters because
+-- three consecutive items recorded a different obstacle and each one was real
+-- when written.
+--
+-- ---------------------------------------------------------------------------
+-- THE RULE AT THIS SITE: RIPGREP EXITS 1 WHEN IT MATCHES NOTHING
+-- ---------------------------------------------------------------------------
+--
+-- That is a NORMAL ANSWER, not a failure, and it is the answer this function has
+-- to tell from a failure in order to decide whether `grep_fallback_scan` runs.
+-- The pre-routing code branched on `text == ""` and never looked at a status;
+-- the routed code branches on `text == ""` and never looks at `out.exit_code`.
+-- The typed code is AVAILABLE here since WI-D23 and it is deliberately NOT
+-- LOAD-BEARING — the one place in this package where that sentence is true.
+--
+-- A routed form that adopted `exit_code == 0` gating would be green on every
+-- realistic fixture, because the proxy and the truth agree on every search that
+-- FINDS something (S33's mechanism, stated as the mechanism rather than as bad
+-- luck). The divergent input is a QUIET SEARCH: matches nothing, exits 1, stdout
+-- empty. Under exit-code gating the fallback scan stops running and every
+-- no-hit search silently loses its second chance. `discovery_dst`'s
+-- `compose_grep_quiet_scenario` is that input, built for this comment, and
+-- WI-D26's mutant 2 is this branch rewritten to gate on the code.
+--
+-- ---------------------------------------------------------------------------
+-- THE TWO ARMS BECAME ONE, AND NO SEMANTICS MOVED
+-- ---------------------------------------------------------------------------
+--
+-- Ambient `exec` returned `Result`, and this function had an `Err` arm that ran
+-- the fallback scan unconditionally — the arm this checkout actually took, since
+-- `rg` is not installed here and `exec("rg", …)` answered `Err(NotFound)` at
+-- every call. The seam has no `Err`: `run_process_result` catches
+-- `ProcessError` itself and renders it as a `BashExecResult` with empty stdout,
+-- the reason on stderr and exit_code 1 (measured — see `proc.ail`'s header).
+-- So a spawn failure now arrives with `text == ""` and takes the SAME branch the
+-- `Err` arm took. Two arms, one behaviour, and the merge is a consequence of the
+-- seam's shape rather than a decision made here.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT THE OBSTACLE WAS, EACH TIME, AND WHY IT IS GONE
+-- ---------------------------------------------------------------------------
+--
+-- WI-D20 wrote: "`ExtPorts.tool_handle` fronts `Ports.tool_exec`, whose live
+-- adapter is `tool_runtime.run_native_call` — an if-chain over `ReadFile`,
+-- `Search`, `WriteFile`, `EditFile`, `BashExec`, `RunTests` and a final `else`
+-- that returns '<tool> requires extension capability'. `rg` is not in that list,
+-- so `tool_handle(w, "rg", …)` would not run ripgrep." True then and true now, and
+-- it is a fact about the TOOL NAME. WI-D21 supplied the correction the routing
+-- rests on: `tool_handle(w, "BashExec", …)` does not hit that `else` — it runs a
+-- real subprocess and returns `BashExecResult { stdout, stderr, exit_code, meta }`
+-- encoded as JSON in `output`.
+--
+-- WI-D20 also wrote: "this site needs `out.stdout` as BYTES and branches on
+-- `Ok`/`Err`… where `ExtProcOutcome` carries one rendered `output` string and no
+-- status. An `Err` and an empty result would become the same value, and the
+-- fallback would fire on a successful search that matched nothing." The second
+-- sentence is the one that expired most usefully: an `Err` and an empty result
+-- DO become the same value, and that turns out to be exactly right, because the
+-- old code ran the fallback scan on both. `toString(out.stdout)` is replaced by
+-- `decode_bash_result(out.output).stdout` — the bytes were always going to
+-- become a string on the next line.
+--
+-- WI-D23 landed the typed `exit_code`, WI-D24 the identity, and through WI-D25
+-- this block ended: "ONE obstacle remains and it is this site's own shape:
+-- `out.stdout` is read as bytes and the seam renders JSON. This site stays
+-- ambient for that one measured reason." The shape obstacle was the cost of one
+-- decode in a module that already imports `std/json` and decodes the tool call
+-- that reaches this function.
+--
+-- WHAT ROUTED EARLIER, unchanged: both `grep_fallback_scan` calls, which are the
+-- FS half of this function, and `mk_ok`'s clock. With the subprocess routed the
+-- world now records all three, and this function performs no ambient effect.
+--
+-- THE `pattern` ARGUMENT IS MODEL-AUTHORED FREE TEXT and crosses as one argv
+-- element, which is the whole of what needs to be said about it — see
+-- `proc.ail`'s header for why there is no shell on this path and what would have
+-- to change for that to stop being true.
+func grep_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {IO, FS, Process, Clock} {
+  let pattern = json_string_field(args, "pattern", "");
+  let path_glob0 = json_string_field(args, "path_glob", ".");
+  let path_glob = if trim(path_glob0) == "" then "." else path_glob0;
+  let max_matches = json_int_field(args, "max_matches", 100);
+  if trim(pattern) == "" then mk_err(w, "grep", path_glob, "missing_pattern")
+  else {
+    let guard_err = path_guard(path_glob, globs);
+    if guard_err != "" then mk_err(w, "grep", path_glob, guard_err)
+    else {
+      let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args("rg", ["-n", "--no-heading", "-F", pattern, path_glob]));
+      -- `out.exit_code` IS NOT READ, ON PURPOSE. See the block above this
+      -- function: 1 is ripgrep's answer for "no matches", and this branch has to
+      -- treat that identically to a match-free success.
+      let text = decode_bash_result(out.output).stdout;
+      -- The scan runs ONLY when ripgrep returned nothing, and the world it
+      -- returns is carried either way — `out.next_state` on the non-scanning
+      -- branch is the world the SUBPROCESS left, which is the one correction the
+      -- routing makes to this expression: before WI-D26 the non-scanning branch
+      -- carried `w`, and that was true because nothing had been observed. Now
+      -- something has, and the successor has to come from the call.
+      let scanned =
+        if text == "" then grep_fallback_scan(p, out.next_state, path_glob, pattern, max_matches)
+        else { lines: [], next_state: out.next_state };
+      let raw = if text == "" then join_lines(scanned.lines) else text;
+      -- ---------------------------------------------------------------------
+      -- THE ONE FIELD THE MERGE FORCED A CHOICE ON, and it is `matches`
+      -- ---------------------------------------------------------------------
+      --
+      -- The two `mk_ok` constructions that stood here — one per `exec` arm —
+      -- agreed on every field but this one, and they were reached by inputs the
+      -- seam no longer distinguishes, so the merge cannot preserve both:
+      --
+      --   old `Ok` arm, ripgrep ran and matched nothing:
+      --     matches = cap_text(text)     -- "" — the SEARCH's empty output
+      --     excerpt = raw                -- the fallback scan's lines
+      --   old `Err` arm, ripgrep failed to spawn:
+      --     matches = cap_text(fallback) -- the fallback scan's lines
+      --     excerpt = raw                -- the same lines
+      --
+      -- Both now arrive as `text == ""` — a no-match search and a spawn failure
+      -- are the same value at this seam, which is precisely what the block above
+      -- says is CORRECT for the branch and is what makes it a choice here.
+      -- Reading `out.exit_code` would not recover the distinction either: ripgrep
+      -- answers 1 for "no matches" and `run_process_result` writes 1 for a spawn
+      -- failure, so the two are equal on the typed field as well.
+      --
+      -- `raw` WINS, for two measured reasons rather than by taste. It is the
+      -- `Err` arm's answer, and the `Err` arm is the one this checkout actually
+      -- took at every call (`rg` is not installed here). And it is the arm that
+      -- does not lie: the old `Ok`-empty answer reported `matches: ""` beside an
+      -- `excerpt` full of fallback hits, so a consumer reading the structured
+      -- field saw "no results" for a search that had them. That is the
+      -- silent-wrong shape this project exists to remove, and it was one field
+      -- away from a correct answer already present in the same record.
+      --
+      -- STATED AS A BEHAVIOUR CHANGE rather than folded in silently, per WI-D19's
+      -- rule at the dispatcher — routing preserves what the code did, and where
+      -- two things were done it has to say which one it kept.
+      let limited = cap_text(raw, max_bytes);
+      mk_ok(
+        p,
+        scanned.next_state,
+        "grep",
+        path_glob,
+        raw,
+        jo([
+          kv("tool", js("grep")),
+          kv("ok", jb(true)),
+          kv("result", jo([
+            kv("path_glob", js(path_glob)),
+            kv("matches", js(limited.text)),
+            kv("truncated", jb(limited.truncated))
+          ]))
+        ]),
+        max_bytes
+      )
+    }
+  }
+}
+
+export func dispatch_author_tool_with_globs(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, max_bytes: int, deny_globs: [string]) -> AuthorToolResult ! {IO, FS, Process, Clock} {
+  let globs = configured_deny_globs(deny_globs);
+  match decode(raw_tool_call_json) {
+    Err(_) => mk_err(w, "", "", "malformed_tool_call"),
+    Ok(obj) => {
+      let tool = json_string_field(obj, "tool", "");
+      let args = match get(obj, "args") { Some(v) => v, None => jo([]) };
+      if tool == "read_file" then read_file_impl(p, w, args, max_bytes, globs)
+      else if tool == "grep" then grep_impl(p, w, args, max_bytes, globs)
+      else if tool == "list_dir" then list_dir_impl(p, w, args, max_bytes, globs)
+      else if tool == "file_exists" then file_exists_impl(p, w, args, max_bytes, globs)
+      else if tool == "stat" then stat_impl(p, w, args, max_bytes, globs)
+      else mk_err(w, tool, "", "unsupported_tool")
+    }
+  }
+}
+
+export func dispatch_author_tool(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, max_bytes: int) -> AuthorToolResult ! {IO, FS, Process, Clock} {
+  dispatch_author_tool_with_globs(p, w, raw_tool_call_json, max_bytes, [])
+}

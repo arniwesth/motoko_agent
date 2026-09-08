@@ -1,0 +1,21 @@
+module sunholo/motoko_ext_exa_search/register
+
+import std/env (getEnvOr)
+import std/string (stringToInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (Capability)
+import pkg/sunholo/motoko_ext_exa_search/exa_search (make_hooks)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None    => fallback
+  }
+}
+
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS, Process, Rand} {
+  let workdir         = getEnvOr("MOTOKO_WORKDIR", ".");
+  let timeout_ms      = parse_int_or(getEnvOr("EXA_TIMEOUT_MS", "30000"), 30000);
+  let max_output_chars = parse_int_or(getEnvOr("EXA_MAX_OUTPUT_CHARS", "8000"), 8000);
+  make_hooks(workdir, timeout_ms, max_output_chars)
+}

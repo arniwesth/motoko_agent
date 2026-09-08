@@ -53,7 +53,8 @@ pure func msgs_to_messages(msgs: [Msg]) -> [Message] {
       role: m.role,
       content: m.content,
       tool_calls: m.tool_calls,
-      tool_call_id: m.tool_call_id
+      tool_call_id: m.tool_call_id,
+      images: []
     } :: msgs_to_messages(rest))
   }
 }
@@ -65,10 +66,10 @@ pure func msgs_to_messages(msgs: [Msg]) -> [Message] {
 pure func realistic_post_dispatch_messages() -> [Message] {
   let tc: ToolCall = { id: "call_abc123", name: "ReadFile", arguments: "{\"path\":\"src/foo.ail\"}" };
   [
-    { role: "system",    content: "You are a coding agent.", tool_calls: [], tool_call_id: "" },
-    { role: "user",      content: "Read src/foo.ail",         tool_calls: [], tool_call_id: "" },
-    { role: "assistant", content: "",                          tool_calls: [tc], tool_call_id: "" },
-    { role: "tool",      content: "module foo\n...",           tool_calls: [], tool_call_id: "call_abc123" }
+    { role: "system",    content: "You are a coding agent.", tool_calls: [], tool_call_id: "", images: [] },
+    { role: "user",      content: "Read src/foo.ail",         tool_calls: [], tool_call_id: "", images: [] },
+    { role: "assistant", content: "",                          tool_calls: [tc], tool_call_id: "", images: [] },
+    { role: "tool",      content: "module foo\n...",           tool_calls: [], tool_call_id: "call_abc123", images: [] }
   ]
 }
 

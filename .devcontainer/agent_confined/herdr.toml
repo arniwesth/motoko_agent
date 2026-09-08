@@ -1,0 +1,45 @@
+# herdr configuration for the confined agent container — baked in as ~/.config/herdr/config.toml.
+#
+# herdr is the session layer here, in the place the source profile used tmux: a background server holding the
+# panes, and terminal clients that attach and detach. `agent.sh attach` is a client; the panes outlive it.
+#
+# Every key below is from herdr's canonical config reference (v0.8.2, 167 keys) rather than guessed:
+#   curl -fsSL https://raw.githubusercontent.com/herdrdev/herdr/v0.8.2/docs/next/website/src/data/config-reference.json \
+#     | jq --arg k 'update.version_check' '.sections[].keys[] | select(.key == $k)'
+#
+# Deliberately short. The agent's session is a detachable process holder, not a configured workspace:
+# keybindings, themes and status styling are left at their defaults so there is nothing here to keep in step
+# with what herdr ships.
+
+[update]
+# THE AGENT MUST NOT UPGRADE ITS OWN HARNESS. Both of these are background calls to herdr.dev that end in
+# "a new version is available" — and `herdr update` installs into ~/.local/bin, which the agent CAN write and
+# which is EARLIER on PATH than the /usr/local/bin copy the operator installed. So this is a speed bump in
+# the same class as GH_PROMPT_DISABLED, not a control: it removes the prompt, not the capability. The upgrade
+# path is `agent.sh build`, which resolves the current release on the host and rebuilds the image.
+version_check = false
+# Agent-detection manifests are fetched from herdr.dev at runtime by default. Off for the same reason plus
+# one more: what herdr believes about an agent's state would otherwise change under a running container with
+# no record of when. `herdr server update-agent-manifests` fetches them on demand if you want that.
+manifest_check = false
+
+[advanced]
+# A coding-agent transcript is long, and the pane's scrollback is where it lives — herdr's default 10 MB per
+# pane is roughly an hour of a chatty agent. 64 MB per pane, for a container that may hold several.
+scrollback_limit_bytes = 67108864
+
+[terminal]
+default_shell = "/bin/bash"
+shell_mode = "non_login"
+
+# NOT SET HERE, on purpose:
+#
+#   * worktrees.directory. herdr's `worktree create` puts checkouts under ~/.herdr/worktrees by default, and
+#     NOTHING MOUNTS /home/motoko — so a delegate worktree created there is discarded by `agent.sh stop` or
+#     `agent.sh build`, along with any uncommitted work in it. That is left at the default because
+#     "one worktree per delegate" is an open question (RESEARCH §7 F-5), not a decision this file should make
+#     quietly. If you adopt it, point this at a path on the shared tree and gitignore that path.
+#   * ui.mouse_capture and the scroll keys. herdr's own defaults already give the wheel to the pane
+#     scrollback, which is the exact defect the source profile's tmux.conf spent forty lines fixing. Nothing
+#     to do here — but verify it against motoko's TUI before assuming, since that TUI grabs mouse tracking
+#     (RESEARCH §8 item 2, still unmeasured).

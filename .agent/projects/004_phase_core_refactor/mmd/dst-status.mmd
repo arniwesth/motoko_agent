@@ -1,0 +1,84 @@
+flowchart TB
+  %% DST capabilities as a STATUS MAP. Colour = implementation status, not role.
+  %% Verified 2026-07-06 against src/core + scripts/phase_c_l1_scenarios.ail.
+
+  subgraph INJECT["1 · Injected nondeterminism — swap ports, keep the code"]
+    live["Live adapters<br/>live_ports · LiveAI"]:::landed
+    fake["Scripted &amp; fake ports (pure)<br/>fake_ports · scripted_ports_from_steps<br/>ScriptedPortsState: model · approvals · clock"]:::landed
+  end
+
+  subgraph CORE["2 · Production transition code — identical in prod &amp; DST"]
+    decide["step_machine.decide<br/>StepState &rarr; StepDecision · pure L0 · Z3"]:::landed
+    phases["model / tool / hook phases<br/>ports only &rarr; PhaseResult + StateDelta"]:::landed
+    driver["session · c2_loop<br/>executes decisions · sole emitter"]:::landed
+    l3["run_v2_with_scripted_ports<br/>L3 probe: real driver + fake ports"]:::landed
+  end
+
+  subgraph LEDGER["3 · Ledger = trace"]
+    events["typed LedgerEvent + LedgerTrace<br/>(phase_vocab)"]:::landed
+    consume["scenarios assert over<br/><b>typed in-memory ledger</b> directly"]:::partial
+  end
+
+  subgraph CHECK["4a · Invariants — pure predicates · L0 · Z3"]
+    inv1["history_valid_transcript"]:::landed
+    inv2["validate_compactor_output"]:::landed
+    inv3["validate_checkpoint_chain"]:::landed
+  end
+
+  subgraph SCEN["4b · L1 scenarios — --caps IO · no net/registry"]
+    s1["empty_system_prompt_rejected"]:::landed
+    s2["oversized_payload_rejected"]:::landed
+    s3["compactor_chain_order_is_registry_order"]:::landed
+    s4["invalid_stage_skipped_chain_continues"]:::landed
+    s5["checkpoint_output_is_valid_transcript"]:::landed
+    s6["summary_cache_replay_stable"]:::landed
+    s7["history_rewrite_requires_checkpoint_event"]:::landed
+  end
+
+  report[["5 · Failure report<br/>to_schema_v1 &rarr; schema-v1 JSONL<br/>scenario id · first failed invariant · trace"]]:::landed
+
+  subgraph FUTURE["Designed — not yet landed"]
+    ckpt["TakeCheckpoint emitted by decide<br/>(v1 never emits — by scenario)"]:::designed
+    conf["motoko_ext_conformance kit<br/>cross-ext caps-as-conformance + registry probe"]:::designed
+    abi["ABI v3 · ExtCtx.telemetry / ExtPorts<br/>compactor-policy telemetry"]:::designed
+  end
+
+  caps["caps-as-conformance<br/>fake ports + --caps IO &rArr; raw effect fails at perform time"]:::landed
+
+  live -->|"production"| driver
+  fake -->|"DST"| driver
+  fake --> l3
+  driver --> decide
+  decide --> phases
+  phases --> driver
+  driver ==>|"single emission authority"| events
+  events --> consume
+  events --> inv1
+  events --> inv2
+  events --> inv3
+  events --> s1
+  events --> s2
+  events --> s3
+  events --> s4
+  events --> s5
+  events --> s6
+  events --> s7
+  inv1 --> report
+  inv2 --> report
+  inv3 --> report
+  s5 -.->|reuses| inv1
+  s7 -.->|guards| ckpt
+  inv3 -.->|law for| ckpt
+  fake -.-> caps
+  caps -.->|extends to| conf
+  conf -.-> abi
+
+  subgraph LEGEND["Legend"]
+    lg1["landed &mdash; verified in code"]:::landed
+    lg2["partial &mdash; harness uses pure fns + string trace today"]:::partial
+    lg3["designed &mdash; not built yet"]:::designed
+  end
+
+  classDef landed fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef partial fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef designed fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;

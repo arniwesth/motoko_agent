@@ -29,7 +29,21 @@ pure func isSome(opt: Option[string]) -> bool
     }
   }
 
-func has_shell_tokens(s: string) -> bool {
+-- Recall: every token in the list below must be caught. One-directional on
+-- purpose -- adding a ninth token still verifies, removing one does not (the
+-- solver returns the counterexample, e.g. s = ";"). The converse is omitted
+-- deliberately: for a pure enumeration it is the body restated, which
+-- constrains nothing a co-edit would not also change (ADR-001 §1).
+pure func has_shell_tokens(s: string) -> bool
+  ensures { (not contains(s, "|")  || result)
+         && (not contains(s, ">")  || result)
+         && (not contains(s, "<")  || result)
+         && (not contains(s, "&&") || result)
+         && (not contains(s, "||") || result)
+         && (not contains(s, ";")  || result)
+         && (not contains(s, "$(") || result)
+         && (not contains(s, "`")  || result) }
+  {
   contains(s, "|")
     || contains(s, ">")
     || contains(s, "<")
@@ -40,17 +54,71 @@ func has_shell_tokens(s: string) -> bool {
     || contains(s, "`")
 }
 
-func any_shell_tokens(xs: [string]) -> bool {
+-- contracts: BLOCKED — RECURSIVE, and the fragment cannot even state the property
+-- that matters ("some element has a shell token") because it quantifies over the
+-- list. Deliberately carries no contract: with a trivial one the verifier does not
+-- SKIP it, it errors -- "unrolling recursive function: ... unsupported pattern type
+-- *core.ListPattern in SMT encoding" -- which verify_core reports as a FAILED file.
+-- The per-element guarantee is has_shell_tokens's contract above.
+pure func any_shell_tokens(xs: [string]) -> bool {
   match xs {
     [] => false,
     x :: rest => if has_shell_tokens(x) then true else any_shell_tokens(rest)
   }
 }
 
-func shell_tokens_in_process(req: ProcessExecReq) -> bool {
-  if req.cmd == "bash" || req.cmd == "sh" || req.cmd == "zsh" then true
-  else if contains(req.cmd, " ") then true
-  else has_shell_tokens(req.cmd) || any_shell_tokens(req.args)
+-- The verifier cannot encode the recursive args half of the ProcessExecReq
+-- decision, so keep the scalar half in a primitive-argument helper that both Z3
+-- and the property generator can execute. The recall contract is deliberately
+-- weaker than the body: adding another shell token still verifies, while
+-- removing any named case does not.
+pure func shell_command_needs_wrap(cmd: string) -> bool
+  ensures { (not (cmd == "bash") || result)
+         && (not (cmd == "sh")   || result)
+         && (not (cmd == "zsh")  || result)
+         && (not contains(cmd, " ")  || result)
+         && (not contains(cmd, "|")  || result)
+         && (not contains(cmd, ">")  || result)
+         && (not contains(cmd, "<")  || result)
+         && (not contains(cmd, "&&") || result)
+         && (not contains(cmd, "||") || result)
+         && (not contains(cmd, ";")  || result)
+         && (not contains(cmd, "$(") || result)
+         && (not contains(cmd, "`")  || result) }
+  {
+  cmd == "bash"
+    || cmd == "sh"
+    || cmd == "zsh"
+    || contains(cmd, " ")
+    || contains(cmd, "|")
+    || contains(cmd, ">")
+    || contains(cmd, "<")
+    || contains(cmd, "&&")
+    || contains(cmd, "||")
+    || contains(cmd, ";")
+    || contains(cmd, "$(")
+    || contains(cmd, "`")
+}
+
+-- contracts: BLOCKED — RECURSIVE any_shell_tokens. The scalar obligation lives
+-- on shell_command_needs_wrap above; explicit examples below exercise the record
+-- boundary and the recursive args path that neither Z3 nor generated properties
+-- can cover on this toolchain.
+pure func shell_tokens_in_process(req: ProcessExecReq) -> bool {
+  shell_command_needs_wrap(req.cmd) || any_shell_tokens(req.args)
+}
+
+func shell_tokens_in_process_examples() -> bool
+  tests [((), true)]
+  {
+    shell_tokens_in_process({ cmd: "bash", args: [], cwd: None,
+      streaming: false, needs_stderr_live: false, needs_hard_cancel: false })
+      && shell_tokens_in_process({ cmd: "git status", args: [], cwd: None,
+        streaming: false, needs_stderr_live: false, needs_hard_cancel: false })
+      && shell_tokens_in_process({ cmd: "printf", args: ["hello;date"], cwd: None,
+        streaming: false, needs_stderr_live: false, needs_hard_cancel: false })
+      && not shell_tokens_in_process({ cmd: "git", args: ["status"], cwd: None,
+        streaming: false, needs_stderr_live: false, needs_hard_cancel: false })
 }
 
 func arg_json(args: Json, key: string) -> Json {
@@ -273,8 +341,16 @@ func has_parent_traversal_segment_rec(parts: [string]) -> bool {
   }
 }
 
+-- Recall: every "/"-prefixed path must be rejected by the write guard -- this is
+-- the half that fences the sandbox, and it still catches a body edited to test a
+-- different prefix (counterexample path = "/"). Precision: a path with no "/" at
+-- all may not be flagged. The pair does not restate the body: `contains(path, "/")`
+-- satisfies both and is a different function, so the contract admits answers the
+-- body would not give (ADR-001 §1). It replaces the verbatim restatement that was
+-- here, which classified as spec-equals-body and counted for nothing.
 pure func is_absolute_path(path: string) -> bool
-  ensures { result == startsWith(path, "/") }
+  ensures { (not startsWith(path, "/") || result)
+         && (not result || contains(path, "/")) }
   {
     startsWith(path, "/")
   }
@@ -284,7 +360,23 @@ pure func is_absolute_path(path: string) -> bool
 -- This catches the cross-workdir case that the wd_bare check misses: when
 -- the agent is running in a clone but the model emits the original project's
 -- absolute path without the leading slash.
-pure func starts_with_root_dir(path: string) -> bool {
+-- Recall: every prefix in the list below must be caught (removing one yields a
+-- counterexample; adding a tenth still verifies). Precision: nothing without a
+-- "/" may be flagged, which is what keeps "Users" or "README.md" out. The pair
+-- is strictly weaker than the body -- an always-true body fails precision, and a
+-- body matching only "Users/" fails recall -- so neither half restates it.
+pure func starts_with_root_dir(path: string) -> bool
+  ensures { (not startsWith(path, "Users/")   || result)
+         && (not startsWith(path, "home/")    || result)
+         && (not startsWith(path, "tmp/")     || result)
+         && (not startsWith(path, "private/") || result)
+         && (not startsWith(path, "var/")     || result)
+         && (not startsWith(path, "etc/")     || result)
+         && (not startsWith(path, "usr/")     || result)
+         && (not startsWith(path, "opt/")     || result)
+         && (not startsWith(path, "root/")    || result)
+         && (not result || contains(path, "/")) }
+  {
   startsWith(path, "Users/")   ||
   startsWith(path, "home/")    ||
   startsWith(path, "tmp/")     ||

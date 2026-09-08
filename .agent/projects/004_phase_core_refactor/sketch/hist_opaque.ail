@@ -1,0 +1,45 @@
+-- Opacity probe, module under test: exports the History TYPE and its ops,
+-- but NOT the MkHistory constructor. Consumers should be able to hold,
+-- thread, and query History values yet be unable to construct or
+-- deconstruct them. This is the substrate assumption behind D7's
+-- self-auditing checkpoint (RESEARCH-phase-core-dst-design.md §7.4).
+module hist_opaque
+
+import std/list (length)
+
+export type History = MkHistory([int])
+
+-- Also probe: a record type + op, to test whether record types are
+-- structurally forgeable by consumers (expected: yes — records are
+-- structural — which is WHY History must be a variant).
+export type RecBox = { n: int }
+
+export func use_recbox(r: RecBox) -> int { r.n }
+
+export func empty_history() -> History { MkHistory([]) }
+
+export func append(h: History, x: int) -> History {
+  match h { MkHistory(xs) => MkHistory(xs ++ [x]) }
+}
+
+export func size(h: History) -> int {
+  match h { MkHistory(xs) => length(xs) }
+}
+
+-- The D7 shape: the only op producing a REBUILT history, returning it
+-- together with its audit event.
+export func checkpoint(h: History) -> { history: History, event: string } {
+  match h {
+    MkHistory(xs) => {
+      history: MkHistory([length(xs)]),
+      event: "checkpoint: ${show(length(xs))} entries collapsed"
+    }
+  }
+}
+
+-- Second probe: type NOT exported at all, ops exported. Can consumers
+-- thread values of an unexported type? Can they import its constructor?
+type Sealed = MkSealed(int)
+
+export func mk_sealed(n: int) -> Sealed { MkSealed(n) }
+export func unseal(s: Sealed) -> int { match s { MkSealed(n) => n } }

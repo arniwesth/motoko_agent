@@ -10,6 +10,11 @@
 -- contract; the actual run_v2 → loop_v2 path is covered by M3-M7
 -- smokes plus the typed integration runs.
 --
+-- Call site updated for the post-WI-C13c entry-point signature: the
+-- loop gained max_cost_millicents, cost_rates, provider and session_id.
+-- Cost budgeting uses 0/0 rates (fail-open, same as the DP7 smoke's
+-- no_rates) and a LiveAI provider so piped stdin still drives the loop.
+--
 -- Setup (the key trick is feeding piped input to test EOF termination):
 --   echo '{"type":"abort"}' | ailang run --caps IO,Env,Clock,FS,Process,AI,Net,SharedMem,Stream,Trace --entry main scripts/smoke_v2_conversation.ail
 --
@@ -20,12 +25,15 @@ module scripts/smoke_v2_conversation
 
 import std/io (println)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/config (CostRates)
 import src/core/ext/runtime (init_runtime)
 import src/core/agent_loop_v2 (conversation_loop_v2)
+import src/core/test/stub_step (LiveAI)
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let rt = init_runtime();
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  let rates: CostRates = { input_per_1m_millicents: 0, output_per_1m_millicents: 0 };
 
   let _ = println("--- M8 conversation smoke START ---");
   let _ = println("Calling conversation_loop_v2 with empty history; expects clean exit on abort/exit/EOF.");
@@ -41,7 +49,11 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     [],          -- empty Message history
     "/tmp",      -- workdir
     4,           -- step_budget
-    false        -- ohmy_pi
+    false,       -- ohmy_pi
+    0,           -- max_cost_millicents: 0 = fail-open under 0/0 rates
+    rates,
+    LiveAI,      -- live provider: stdin EOF/abort terminates the loop
+    "session_0"  -- session_id
   );
 
   println("--- M8 conversation smoke PASS: loop returned cleanly ---")

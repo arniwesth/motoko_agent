@@ -1,0 +1,116 @@
+flowchart TB
+  %% Plan · Layer-2 harness-boundary DST — PLANNED implementation.
+  %% Grounded at HEAD 09751cd against PLAN-harness-boundary-dst.md (2026-07-09).
+  %% Legend: amber-dashed = plan decision / blocking gate; gray = frozen source constraint (reuse, do not redesign);
+  %% green = net-new test artifact to BUILD; purple = production-code extraction (behavior-preserving);
+  %% teal = scenario / contract assertion; blue = precondition / gate / acceptance.
+
+  subgraph DEC["Plan-level decisions (D-P1 … D-P5)"]
+    d1["D-P1 · one file, @jest/globals imports<br/>runs green under bun test &lt;path&gt;<br/>not bun:test (survives jest glob)"]:::decision
+    d2["D-P2 · extract, do NOT inline<br/>crit 2 needs the REAL fn to regress<br/>inline copy = no #76 law"]:::decision
+    d3["D-P3 · keep FS side-effects out of buildChildEnv<br/>mirror* stay in constructor<br/>invariants hold under the cut"]:::decision
+    d4["D-P4 · thick on contract, thin on mechanism<br/>byte-eq / inside-sandbox / empty / by-ref = thick<br/>SYSTEM_MD repoint · argv · filename = thin"]:::decision
+    d5["D-P5 · precondition = the SLICE, not the repo<br/>family green (14/14) though repo is red"]:::decision
+  end
+
+  subgraph FROZEN["Frozen source constraints @ HEAD 09751cd — reuse, do not redesign"]
+    hostfn["index.ts host fns<br/>systemPromptForWorkspace :409<br/>materializeSystemPromptArg :430<br/>UNEXPORTED · main() self-execs :1007"]:::frozen
+    childenv["runtime-process.ts childEnv literal :342-411<br/>SYSTEM_MD absent · AILANG_FS_SANDBOX :351<br/>constructor spawns child :512"]:::frozen
+    argv["--system-prompt supervisor argv :507-508<br/>path by reference, not by value<br/>guarded by systemPrompt.trim() != ''"]:::frozen
+    mirror["mirror* FS side-effects :478 / :484<br/>+ MOTOKO_PROFILE_DIR rewrite :488-495<br/>must stay in the constructor"]:::frozen
+    contractlaw["ADR-003 reporting contract<br/>each test NAME is the scenario id<br/>mkdtemp workdir · save/restore env+argv"]:::frozen
+  end
+
+  subgraph PROD["Production-code extractions to BUILD — behavior-preserving (the only prod changes)"]
+    wi1a["WI-1a · new src/tui/src/system-prompt.ts<br/>move both host fns verbatim + export<br/>index.ts imports them"]:::core
+    wi1b["WI-1b · buildChildEnv + buildSupervisorArgs<br/>pure helpers in runtime-process.ts<br/>constructor calls them"]:::core
+    g3block["G3 DECISION GATE<br/>WI-1a exceeds sanctioned scope<br/>owner must approve → blocks scen 1-3"]:::decision
+  end
+
+  subgraph BUILD["Net-new test file — src/tui/src/harness-dst.test.ts"]
+    testfile["single bun-test file<br/>4 describe blocks named by scenario id<br/>no AILANG · no spawn · no network"]:::new
+  end
+
+  subgraph SCN["WI-2 … WI-5 — four standing scenario ids"]
+    s1["harness.external_system_md_materialized<br/>out-of-workspace source content copied<br/>into &lt;workdir&gt;/.motoko-system-prompt.md"]:::scn
+    s2["harness.workspace_system_md_not_rewritten<br/>in-workspace SYSTEM_MD → rel path unchanged<br/>no managed file written · '.' root edge"]:::scn
+    s3["harness.out_of_sandbox_or_missing_system_md_yields_empty<br/>'' on missing :414 / escape :419<br/>null+log on unreadable source :438"]:::scn
+    s4["harness.child_env_sandbox_and_prompt_by_reference<br/>AILANG_FS_SANDBOX==workdir · SYSTEM_MD absent<br/>--system-prompt &lt;relpath&gt; pair in args"]:::scn
+  end
+
+  subgraph CONTRACT["Contract assertions — must bite (thick); port to launcher.ail"]
+    c1["dest content BYTE-EQUALS source"]:::scn
+    c2["dest resolves INSIDE workdir"]:::scn
+    c3["'' on missing / sandbox-escape"]:::scn
+    c4["prompt carried BY REFERENCE (relpath)"]:::scn
+    c5["SYSTEM_MD never rides child env<br/>(sentinel set in parent, still absent)"]:::scn
+  end
+
+  subgraph GATE["Preconditions · gate · acceptance"]
+    wi0["WI-0 · slice green (bun-native)<br/>runtime-process.*.test.ts → 14 pass<br/>do NOT gate on bun run test (repo red)"]:::gate
+    wi6["WI-6 · final gate<br/>4 scenarios green · no spawn/network grep<br/>no .ail touched"]:::gate
+    accept["ADR-003 acceptance · 6 criteria<br/>scen 4 + crits 5-6 land independently<br/>crits 1/2/4 contingent on G3"]:::gate
+  end
+
+  subgraph GAPS["ADR gaps found (reported, not guessed around)"]
+    gp1["G1 · runner identity<br/>family is jest, not bare bun test"]:::decision
+    gp2["G2 · 'src/tui green' false at HEAD<br/>bun run test broken repo-wide"]:::decision
+    gp3["G3 · scen 1-3 not directly testable<br/>forces WI-1a beyond sanctioned scope"]:::decision
+    gp4["G4 · line drift :417 → :418 (trivial)"]:::decision
+  end
+
+  %% decisions drive planned work
+  d1 --> testfile
+  d2 --> wi1a
+  d3 --> wi1b
+  d4 --> testfile
+  d5 --> wi0
+
+  %% frozen constraints force the extractions
+  hostfn -. "unexported + self-exec ⇒ must extract" .-> wi1a
+  childenv -. "constructor-local ⇒ must extract" .-> wi1b
+  argv --> wi1b
+  mirror --> wi1b
+  contractlaw --> testfile
+
+  %% G3 gates scenarios 1-3
+  g3block == "blocks until approved" ==> wi1a
+  gp3 -. "same finding" .-> g3block
+
+  %% extractions expose functions to the test file
+  wi1a --> testfile
+  wi1b --> testfile
+
+  %% test file hosts the four scenarios
+  testfile --> s1
+  testfile --> s2
+  testfile --> s3
+  testfile --> s4
+
+  %% scenarios assert the contract
+  s1 --> c1
+  s1 --> c2
+  s2 --> c4
+  s3 --> c3
+  s4 --> c4
+  s4 --> c5
+
+  %% precondition then scenarios then gate then acceptance
+  wi0 --> testfile
+  s1 --> wi6
+  s2 --> wi6
+  s3 --> wi6
+  s4 --> wi6
+  c1 --> wi6
+  c5 --> wi6
+  wi6 --> accept
+
+  %% gap G3 flows into the acceptance contingency
+  g3block -. "crits 1/2/4 contingent" .-> accept
+
+  classDef decision fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef core fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef scn fill:#12323a,stroke:#39c5cf,color:#c5f6fb;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;

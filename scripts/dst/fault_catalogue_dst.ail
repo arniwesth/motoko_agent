@@ -1,0 +1,235 @@
+-- scripts/dst/fault_catalogue_dst.ail
+--
+-- WI-A7 acceptance, under ADR-001 D3.
+--
+-- The inline tests in src/core/dst_fault_catalogue.ail check the validator
+-- against synthetic rows. This script checks the two things a synthetic row
+-- cannot: that the SHIPPED catalogue is complete against D3's table, and that
+-- the reconciliation of the three pre-existing `fault_class` literals actually
+-- held — i.e. that the strings the driver puts on the wire are still the
+-- catalogue's class ids, observed by driving `tool_outcome_message` rather than
+-- by reading the source.
+--
+-- That last check is the one that matters. Adopting the wire names as class ids
+-- is only worth anything if the two cannot drift apart afterwards, and "they
+-- reference the same constant" is a claim about the source, not about the
+-- output. Asserting the emitted `fault_class` field closes it.
+--
+-- The script also REPORTS the recorded coverage gaps. They are part of the
+-- artifact, not a footnote: D3 requires a named recovery branch per class, and
+-- a class with nowhere to point is a coverage gap worth more than a
+-- placeholder. Printing them every run is what stops one being forgotten
+-- between here and WI-A14's counters.
+
+module scripts/dst/fault_catalogue_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/json (decode, get, asString)
+import std/result (Result, Ok, Err)
+import std/ai (ToolCall, Message)
+import src/core/dst_fault_catalogue (
+  FaultClass,
+  CoverageGap,
+  CatalogueRejection,
+  RecoveryBranch, Branch, NoReachableBranch,
+  Applicability, AlwaysApplicable, ConditionalOn,
+  fault_catalogue,
+  fault_catalogue_version,
+  required_class_ids,
+  validate_catalogue,
+  catalogue_ok,
+  catalogue_message,
+  find_class,
+  branch_id,
+  boundary_id,
+  conditional_class_ids,
+  waiving_condition,
+  catalogue_coverage_gaps,
+  physical_fault_reopen_triggers,
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded
+)
+import src/core/ports (
+  ToolOutcome, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded
+)
+import src/core/tool_phase (tool_outcome_message)
+
+pure func mk_call() -> ToolCall {
+  { id: "call-1", name: "ReadFile", arguments: "{}" }
+}
+
+-- Pull the `fault_class` field back out of the tool-role message the driver
+-- would hand the model. This is the observation, not an inspection of source.
+pure func emitted_fault_class(o: ToolOutcome) -> string {
+  let m = tool_outcome_message(mk_call(), o);
+  match decode(m.content) {
+    Err(_) => "<undecodable>",
+    Ok(j) => match get(j, "fault_class") {
+      None => "<absent>",
+      Some(v) => match asString(v) { None => "<not-a-string>", Some(s) => s }
+    }
+  }
+}
+
+func report_each(rs: [CatalogueRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${catalogue_message(r)}");
+      report_each(rest)
+    }
+  }
+}
+
+-- Every required id must resolve to a row that names a boundary and either a
+-- branch or an explicit reason for having none. `find_class` returning None
+-- here means the completeness check and the lookup disagree, which would make
+-- WI-A14's counters read from an id nothing can resolve.
+func all_required_resolve(ids: [string]) -> bool ! {IO} {
+  match ids {
+    [] => true,
+    id :: rest => {
+      let here = match find_class(fault_catalogue(), id) {
+        None => { let _ = println("      '${id}' does not resolve to a row"); false },
+        Some(r) => {
+          let branch_ok = match r.recovery_branch {
+            Branch(b) => b != "",
+            NoReachableBranch(why) => why != ""
+          };
+          let ok = boundary_id(r.boundary) != "" && branch_ok && r.logical_transition != "";
+          let _ = if ok then () else println("      '${id}' resolves but is incomplete");
+          ok
+        }
+      };
+      let tail = all_required_resolve(rest);
+      here && tail
+    }
+  }
+}
+
+func print_conditions(ids: [string]) -> () ! {IO} {
+  match ids {
+    [] => (),
+    id :: rest => {
+      let _ = match waiving_condition(fault_catalogue(), id) {
+        None => println("      ${id}: NO CONDITION — a profile cannot name its waiver"),
+        Some(c) => println("      ${id}: ${c}")
+      };
+      print_conditions(rest)
+    }
+  }
+}
+
+func print_gaps(gs: [CoverageGap]) -> () ! {IO} {
+  match gs {
+    [] => (),
+    g :: rest => {
+      let _ = println("      ${g.class_id} — ${g.form}");
+      print_gaps(rest)
+    }
+  }
+}
+
+func print_branches(rows: [FaultClass]) -> () ! {IO} {
+  match rows {
+    [] => (),
+    r :: rest => {
+      let _ = match r.recovery_branch {
+        Branch(b) => println("      ${boundary_id(r.boundary)}/${r.class_id} -> ${b}"),
+        NoReachableBranch(_) => println("      ${boundary_id(r.boundary)}/${r.class_id} -> NO REACHABLE BRANCH (recorded as a gap)")
+      };
+      print_branches(rest)
+    }
+  }
+}
+
+-- One sample of each of the three tool fault outcomes. Hoisted out of the
+-- interpolations below because a nested string literal cannot appear inside
+-- `${...}` on the pin.
+pure func sample_failed() -> ToolOutcome {
+  ToolFailed({ tool_call_id: "call-1", code: "E", message: "m" })
+}
+
+pure func sample_mismatch() -> ToolOutcome {
+  ToolCorrelationMismatch({ expected_id: "call-1", got_id: "call-9" })
+}
+
+pure func sample_deadline() -> ToolOutcome {
+  ToolDeadlineExceeded({ tool_call_id: "call-1", elapsed_ms: 90, timeout_ms: 10 })
+}
+
+pure func wire_names_match() -> bool {
+  emitted_fault_class(sample_failed()) == fault_class_tool_failed()
+    && emitted_fault_class(sample_mismatch()) == fault_class_tool_correlation_mismatch()
+    && emitted_fault_class(sample_deadline()) == fault_class_tool_deadline_exceeded()
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("=== fault_catalogue_dst (D3, ${fault_catalogue_version()}) ===");
+  let rows = fault_catalogue();
+
+  -- 1. The shipped artifact is complete and well-formed.
+  let rs = validate_catalogue(rows);
+  let c1 = List.length(rs) == 0;
+  let _ = if c1 then
+            println("  ✓ shipped catalogue validates: ${show(List.length(rows))} classes, all ${show(List.length(required_class_ids()))} required ids present")
+          else {
+            let _ = println("  ✗ shipped catalogue REJECTED:");
+            report_each(rs)
+          };
+
+  -- 2. Every required id resolves to a usable row.
+  let c2 = all_required_resolve(required_class_ids());
+  let _ = if c2 then println("  ✓ every required class resolves, names a boundary and states a transition")
+          else println("  ✗ a required class does not resolve to a usable row");
+
+  -- 3. THE RECONCILIATION, observed on the wire rather than in the source.
+  let c3 = wire_names_match();
+  let _ = if c3 then println("  ✓ emitted fault_class equals the catalogue class id for all three tool classes")
+          else {
+            let _ = println("  ✗ emitted fault_class does NOT match the catalogue — two vocabularies again:");
+            let _ = println("      ToolFailed -> ${emitted_fault_class(sample_failed())}");
+            let _ = println("      ToolCorrelationMismatch -> ${emitted_fault_class(sample_mismatch())}");
+            println("      ToolDeadlineExceeded -> ${emitted_fault_class(sample_deadline())}")
+          };
+
+  -- 4. The two conditional classes, with the conditions a profile must name
+  --    when it waives them. An unstated waiver is a coverage claim D3 does not
+  --    grant, so the conditions are printed rather than merely counted.
+  let conds = conditional_class_ids(rows);
+  let c4 = List.length(conds) == 2;
+  let _ = if c4 then println("  ✓ two conditional classes, each carrying its waiving condition:")
+          else println("  ✗ expected 2 conditional classes, found ${show(List.length(conds))}:");
+  let _ = print_conditions(conds);
+
+  -- 5. The class-to-branch map, printed in full. D3 requires the map to be
+  --    machine-readable and read by the gate; printing it is what makes a
+  --    class that quietly lost its branch visible in CI output.
+  let _ = println("  i class -> recovery branch:");
+  let _ = print_branches(rows);
+
+  -- 6. Recorded coverage gaps. Findings, not failures.
+  let gaps = catalogue_coverage_gaps();
+  let _ = println("  i ${show(List.length(gaps))} recorded coverage gap(s):");
+  let _ = print_gaps(gaps);
+
+  -- 7. 007 D1.3's reopen triggers, carried verbatim.
+  let c7 = List.length(physical_fault_reopen_triggers()) == 5;
+  let _ = if c7 then println("  ✓ physical-fault exclusion carries all five 007 D1.3 reopen triggers")
+          else println("  ✗ the 007 D1.3 reopen trigger list is not intact");
+
+  -- 8. Negative control. The validator must be capable of rejecting, or every
+  --    green check above is vacuous.
+  let c8 = not catalogue_ok([]);
+  let _ = if c8 then println("  ✓ control: an empty catalogue is rejected")
+          else println("  ✗ control: an empty catalogue validates — every check above is vacuous");
+
+  if c1 && c2 && c3 && c4 && c7 && c8 then println("fault_catalogue_dst PASS")
+  else {
+    let _ = println("fault_catalogue_dst FAIL");
+    exit(1)
+  }
+}

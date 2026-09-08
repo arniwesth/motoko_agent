@@ -1,0 +1,144 @@
+flowchart TD
+  %% Plan 3 checkpoint trigger — IMPLEMENTED end state after commit c611a78.
+  %% Grounding refreshed 2026-07-08 with tools/code-graph/extract.sh:
+  %%   core profile: 34 modules, 601 funcs, 810 invokes, 0 failures, stale=false.
+  %%   all profile: 166 modules, 1691 funcs, 2170 invokes; source_stale=false.
+  %%   all-profile iface has unrelated package/example failures, so scenario/package
+  %%   nodes below are source-index grounded; core control-flow nodes use the clean core graph.
+  %% Edges are a control-flow / obligation view, not a raw import graph.
+
+  subgraph GRAPH["Refreshed code-graph grounding"]
+    coreMeta["core graph clean<br/>34 modules · 601 funcs · 810 invokes<br/>stale=false · incomplete=false"]
+    allMeta["all source index fresh<br/>166 modules · 1691 funcs<br/>scenario/package rows available<br/>unrelated iface failures outside this path"]
+  end
+
+  subgraph POLICY["Policy surface — src/core/phase_vocab.ail:274"]
+    stepPolicy["StepPolicy"]
+    enabled["checkpoint_enabled : bool<br/>default false in session + tests"]
+    pct["checkpoint_pct : int<br/>default 90"]
+    usage["history_usage_percent(h, limit)<br/>phase_vocab.ail:348"]
+    relieve["checkpoint_would_relieve(h, plan, limit, pct)<br/>phase_vocab.ail:352<br/>projects checkpoint(history) and requires usage &lt; pct"]
+    messages["history_messages(h)<br/>phase_vocab.ail:58<br/>read-only accessor for live handler"]
+  end
+
+  subgraph STEP["Pure decision path — src/core/step_machine.ail"]
+    decide["decide(s, pol)<br/>:103<br/>five model-call branches fan in"]
+    cmof{"call_model_or_fail(s, pol)<br/>:90<br/>budget/cost checks first"}
+    should{"should_checkpoint(s, pol)<br/>:82"}
+    plan["mk_checkpoint_plan(s)<br/>:75<br/>reason + structural summary"]
+    summary["checkpoint_summary(s)<br/>:71<br/>pure structural summary"]
+    take["TakeCheckpoint(plan)<br/>emitted at :96"]
+    call["CallModel(model)<br/>fallthrough at :99"]
+    fail["Fail<br/>step budget / BudgetExceeded"]
+  end
+
+  subgraph LIVE["Live loop handler — src/core/session.ail"]
+    handler["TakeCheckpoint branch<br/>:1352"]
+    apply["apply_checkpoint(step_state, plan)<br/>phase_vocab.ail:329"]
+    event["ledger_emit(cp.event)<br/>CheckpointTaken"]
+    thread["next_state.msgs = history_messages(cp.state.history)<br/>session.ail:1356<br/>actual checkpointed history is threaded"]
+    reenter["c2_loop re-enters with rewritten history"]
+  end
+
+  subgraph MECH["Frozen checkpoint mechanics — src/core/phase_vocab.ail"]
+    checkpoint["checkpoint(h, plan)<br/>:239<br/>history = pinned system prefix ++ [summary]"]
+    rebuilt["rebuilt History<br/>system prefix preserved<br/>tail folded to assistant summary"]
+  end
+
+  subgraph VALIDATION["Validation obligations"]
+    split["split_for_compaction + segment_messages<br/>phase_vocab.ail:130/:134"]
+    law["validate_compactor_output(input, output)<br/>packages/motoko_ext_conformance/invariants.ail:133<br/>shared law on non-system segment"]
+    full["history_valid_transcript(cp.history)<br/>phase_vocab.ail:70<br/>full-history transcript obligation"]
+    outputScenario["checkpoint_output_is_valid_transcript<br/>scripts/phase_c_l1_scenarios.ail:190<br/>segment law at :206 · full law at :210"]
+  end
+
+  subgraph TESTS["Regression locks"]
+    off["checkpoint_never_emitted_when_policy_off<br/>scripts/phase_c_l1_scenarios.ail:351<br/>pressured fixture with flag off"]
+    on["checkpoint_emitted_under_pressure<br/>scripts/phase_c_l1_scenarios.ail:364"]
+    nospin["checkpoint_terminates_not_spins<br/>scripts/phase_c_l1_scenarios.ail:376<br/>after checkpoint -> CallModel<br/>prefix-heavy -> CallModel"]
+    modneg["test_default_policy_never_returns_take_checkpoint<br/>step_machine.ail:386"]
+    modpos["test_enabled_policy_checkpoints_under_pressure<br/>step_machine.ail:401"]
+    repro["scratchpad/verify_guard.ail<br/>prints TakeCheckpoint -> CallModel<br/>and degenerate CallModel"]
+  end
+
+  subgraph GATES["Observed gates"]
+    check["ailang check step_machine + phase_vocab<br/>No errors found"]
+    scenarios["phase_c_l1_scenarios<br/>PASS count=15"]
+    core["make check_core<br/>src/core type-check: 34 passed, 0 failed"]
+    adr["ADR-001 D7 amended<br/>checkpoint_enabled + never emits by default"]
+  end
+
+  coreMeta -.-> decide
+  allMeta -.-> off
+  allMeta -.-> law
+
+  stepPolicy --> enabled
+  stepPolicy --> pct
+  enabled --> should
+  pct --> should
+  usage --> should
+  relieve --> should
+
+  decide --> cmof
+  cmof -->|"budget/cost exhausted"| fail
+  cmof -.->|"evaluates"| should
+  should -->|"true"| take
+  should -->|"false: off / below pct / cannot relieve"| call
+  summary --> plan
+  plan --> should
+  plan --> take
+
+  take --> handler
+  handler --> apply
+  apply --> checkpoint
+  checkpoint --> rebuilt
+  apply --> event
+  apply --> thread
+  messages --> thread
+  thread --> reenter
+  reenter -->|"usage below pct after relieving checkpoint"| decide
+
+  relieve -.->|"projects through"| checkpoint
+  rebuilt --> split
+  split --> law
+  rebuilt --> full
+  law --> outputScenario
+  full --> outputScenario
+
+  off --> should
+  on --> take
+  nospin --> should
+  modneg --> should
+  modpos --> take
+  repro --> take
+  repro --> call
+
+  check --> core
+  scenarios --> core
+  outputScenario --> scenarios
+  off --> scenarios
+  on --> scenarios
+  nospin --> scenarios
+  adr --> core
+
+  classDef graph fill:#17202a,stroke:#7aa2f7,color:#dbe7ff,stroke-width:2px;
+  classDef policy fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef core fill:#2f2145,stroke:#bb9af7,color:#eadcff,stroke-width:2px;
+  classDef live fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2px;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef law fill:#102b3a,stroke:#38bdf8,color:#d9f6ff,stroke-width:2px;
+  classDef test fill:#1e2a4a,stroke:#7aa2f7,color:#d8e2ff;
+  classDef gate fill:#142b1c,stroke:#9ece6a,color:#e2f5ca,stroke-width:2px;
+  classDef terminal fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+
+  class coreMeta,allMeta graph;
+  class stepPolicy,enabled,pct,usage,relieve,messages policy;
+  class cmof,should decision;
+  class decide,plan,summary,take,call core;
+  class handler,apply,event,thread,reenter live;
+  class checkpoint,rebuilt frozen;
+  class split,law,full,outputScenario law;
+  class off,on,nospin,modneg,modpos,repro test;
+  class check,scenarios,core,adr gate;
+  class fail terminal;

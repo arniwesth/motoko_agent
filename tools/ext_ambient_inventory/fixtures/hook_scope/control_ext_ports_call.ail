@@ -1,0 +1,21 @@
+-- PROPERTY 1's POSITIVE HALF.  `ctx.ports.ai_step(...)` is what criterion 2
+-- ADMITS.  A classifier that rejected it could never clear the one extension in
+-- the tree that actually mediates, which would make the whole instrument
+-- vacuous in the direction that matters.  Must resolve CLEAN.
+-- B8: the port call sits in the `Compactor` atom of an eight-atom list.
+module fixture/control_ext_ports_call
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(\_ctx. { prepend: [], append: [] }),
+    BudgetShaper(\_ctx _plan. { requested_total: None, requested_solver: None, requested_verifier: None }),
+    Compactor(func(ctx: ExtCtx, msgs) -> PreStepOutcome ! {AI, IO, Trace} { ctx.ports.ai_step(ctx.world, msgs) }),
+    ToolPolicy(\_ctx _call. NoOpinion),
+    ToolProvider([], func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } }),
+    ResponseInterceptor(func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } }),
+    SolverJudge(func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } })
+  ]
+}

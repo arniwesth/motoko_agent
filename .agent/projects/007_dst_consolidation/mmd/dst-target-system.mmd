@@ -1,0 +1,91 @@
+flowchart TB
+  %% The agreed DST system: what 007 decided the target IS, realized by 009's architecture.
+  %% Colour = role, not status (contrast dst-conformance-gate, where colour = status at HEAD).
+  %% 007 defines scope and boundary (D1, D4) and owns no implementation; 009 owns the mechanism.
+  %% Grounded 2026-07-26: 007 ADR-001 after RR1-RR10, 009 ADR-001 at 7b9b4a4c266b229be85de5c09342f2b654c89fe7.
+  %% Nothing here exists at HEAD. This is the target, not the as-built - see dst-as-built.
+  %% Spine reads top to bottom; side nodes are constraints on the spine stage they attach to.
+  %% This is the OVERVIEW. Two detail views expand it without repeating it:
+  %%   dst-world-boundary   - the seam in SPACE: what crosses, in what shape, what stays outside.
+  %%   dst-discovery-replay - the system in TIME: seed to program to replay, and the repro contract.
+
+  subgraph MODES["Three modes · one driver"]
+    direction LR
+    mdisc["<b>DISCOVERY</b><br/>seed · initial_world<br/>generator id/version<br/>the generator runs"]:::mode
+    mrep["<b>REPLAY</b><br/>an exact ExecutionProgram<br/>the generator is<br/>never invoked"]:::mode
+    mlive["<b>PRODUCTION</b><br/>LiveWorld over the real<br/>provider, tools,<br/>approval, clock"]:::mode
+  end
+
+  gen["<b>seeded generator</b> — discovery only<br/>choice = f(generator id/version, seed, generator state,<br/>bounded request projection, world state) · no ambient RNG<br/>declares hard bounds on interactions, chunks, payload, time"]:::gen
+
+  seam["<b>009 D1 · the authoritative world boundary — one semantic seam</b><br/><br/>handle · world_state + world_request →<br/>ordered intermediate emissions · response · next_world_state · observations<br/>or a typed HarnessError<br/><br/>every request returns its successor state explicitly, including on error"]:::seam
+
+  rules["state is threaded <b>visibly by the real driver</b> — never a SharedMem<br/>cursor, process global, ambient RNG, or mutable test singleton:<br/>those make replay depend on ambient call order and parallel<br/>test processes unsafe<br/><br/><b>LiveWorld ⟷ DeterministicWorld</b> is adapter dispatch only —<br/>production state-machine and policy code never branches on test mode"]:::rule
+
+  surface["<b>007 D4 · the surface the environment relocated to — logical, not physical</b><br/><br/><b>provider</b>, tagged by origin · result carries a lossless <b>ordered emission log</b> beside the final StepResult / AIError<br/><b>typed tool execution</b> · ToolCallEnvelope + deadline + typed result, replacing the stringly tool_exec seam<br/><b>approval</b> · a typed ApprovalResolution<br/><b>environment / config reads</b> performed during the established run<br/><b>runtime randomness</b>, if any<br/><b>monotonic time</b> and time-bearing completion / deadline decisions<br/><b>conformant extension effects</b> — only for hooks inside the named profile"]:::req
+
+  faults["<b>009 D3 · logical faults are modeled outcomes</b><br/>provider: retryable · non-retryable · protocol-inconsistent<br/>partial stream then error · empty terminal response<br/>tool: typed error · wrong call id · past-deadline completion<br/>approval: denial · no response before a declared deadline<br/>every class maps to a named production recovery branch<br/><i>physical faults excluded by 007 D1.3</i>"]:::fault
+
+  clock["<b>009 D4 · one monotonic virtual clock</b><br/>timed outcomes advance it by a checked non-negative delta<br/>reads never advance it · AdvanceClock models time between requests<br/>timeout is <i>derived</i> from generated completion time versus a real<br/>production deadline — never a freely chosen error label"]:::clock
+
+  stream["<b>streaming · the live case of intermediate emissions</b><br/>live: project each chunk at arrival, then append the identical log<br/>in arrival order before the final response transition<br/>deterministic: supply timed emissions, project at virtual offsets<br/>both paths: same ordering and content, no double projection<br/><i>blocked on the upstream recorded-stream API</i>"]:::blocked
+
+  driver["<b>009 D5 · the real traced driver, under a named profile</b><br/>run_v2_session_traced or a successor · threads world state ·<br/>returns a complete trace. The message-only entrypoint is not the oracle.<br/><br/><b>profile</b> (versioned, semantic): included hooks and their classification,<br/>adapter/parser boundaries, resource models, forbidden ambient effects<br/><b>manifest</b> (per run): revision · toolchain · package and ABI versions"]:::driver
+
+  fence["a reached-but-unclassified hook, or any direct AI / Process / Net /<br/>FS / SharedMem / Clock / env / random effect → <b>fail closed</b><br/>no coverage credit merely because a seed did not reach it"]:::rule
+
+  subgraph RESULT["009 D6 · terminal result"]
+    direction LR
+    sysrun["<b>SystemRun</b><br/>outcome · ledger_trace<br/>interaction_log · replay_metadata<br/>exactly one canonical RunSummary,<br/>the final record for the run"]:::out
+    hfail["<b>HarnessFailure</b><br/>kind · interaction_position<br/>actual_request_projection · partial_ledger_trace<br/><i>never a synthetic production summary</i>"]:::out
+  end
+
+  oracle["<b>009 D7 · invariants over the whole execution</b><br/>one final RunSummary · emission↔trace parity · legal phase transitions<br/>tool-call/result pairing including denial and failure paths · budget monotonicity<br/>bounded retry and progress · outcome↔summary agreement<br/>strict-replay request equality and complete interaction consumption<br/>valid logical-world transitions · monotonic virtual time<br/>zero forbidden effects, matcher mismatches, and ambient RNG reads"]:::oracle
+
+  subgraph REPRO["009 D8 · D11 · repro + search"]
+    direction LR
+    artifact[("<b>ExecutionProgram</b> is the durable replay unit<br/>a seed alone is not a reproduction key: schema +<br/>generator id/version + the exact serialized program +<br/>profile + manifest + first failed invariant<br/>shrinking operates on <i>programs</i>, preserving causality<br/>and revalidating after every reduction")]:::artifact
+    corpora["<b>two corpora</b><br/>blocking PR: fixed seeds + promoted regressions<br/>rotating scheduled: a deterministic seed window<br/>each declares a minimum count the gate asserts<br/>a scheduled failure is promoted before or with its fix"]:::artifact
+  end
+
+  naming{"<b>007 D2 · is the complete bar met?</b><br/>judged on behaviour, not on the<br/>presence of types or constructors"}:::decision
+  earned["<b>'single-actor, logical-fault DST'</b> unlocks — under the named<br/>profile and recorded manifest, not for every installable extension"]:::mode
+  interim["until then: <b>deterministic trajectory testing</b><br/>the word 'simulation' stays unused for the seeded axis"]:::rule
+
+  mdisc ~~~ mrep
+  mrep ~~~ mlive
+  mdisc --> gen
+  gen --> seam
+  mrep --> seam
+  mlive --> seam
+  seam -.-> rules
+  seam --> surface
+  surface -.-> faults
+  surface -.-> clock
+  surface -.-> stream
+  surface --> driver
+  driver -.-> fence
+  driver --> sysrun
+  driver --> hfail
+  sysrun --> oracle
+  hfail --> oracle
+  oracle --> artifact
+  oracle --> corpora
+  artifact -. "exact program, generator never invoked" .-> mrep
+  corpora --> naming
+  naming -->|yes| earned
+  naming -->|not yet| interim
+
+  classDef mode fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef gen fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef seam fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef rule fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef req fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef fault fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+  classDef clock fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef blocked fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef driver fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef out fill:#24262f,stroke:#6e7681,color:#d6dbe2;
+  classDef oracle fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef artifact fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;

@@ -1,0 +1,67 @@
+execution-program/1
+digest	a0372e9c68be29295d4690e9fdc52d59b84ab2bccae1c0784d7fe07f4f342049
+generator_id	gen.specimen
+generator_version	gv-2
+seed	23
+world.messages_and_policy	role=user\tmsg=hello\nrole=system\tmsg=be brief
+world.clock_epoch	17
+world.extension_profile	profile.specimen
+world.env	MOTOKO_SESSION_ID	dst-session-0001
+world.env	OPENAI_BASE_URL	https://api.example.com/v1
+world.env	MOTOKO_HEADLESS	headless-on
+world.env	PATH_WITH_BACKSLASH	C:\\tmp\\dir
+bounds	18	19	4096	21	22
+manifest.source_revision	rev-aa11
+manifest.toolchain	ailang 0.26.0 (pinned)
+manifest.abi_version	abi-7
+manifest.profile_id	profile-eight
+manifest.profile_version	pv-9
+manifest.event_vocabulary_version	vocab-10
+manifest.normalized_configuration	{"cfg":11}
+manifest.scan_root_commit	commit-12
+manifest.profile_rules_version	prv-13
+manifest.coverage_rules_version	crv-14
+manifest.attribution_rules_version	arv-15
+manifest.fault_catalogue_version	fcv-16
+manifest.package	pkg.alpha	1.2.3
+manifest.package	pkg.beta	4.5.6
+manifest.classifier_2	cls.one
+manifest.classifier_2	cls.two
+manifest.classifier_2	cls.three
+manifest.unrouted_field	unrouted.alpha
+manifest.scan_root	root/a
+manifest.scan_root	root/b
+i	0	expect_provider	origin.alpha	0	model.one
+o	-1	31	ok	
+r	rq.provider.zero
+p	payload.provider.zero
+c	0	first 
+c	5	second
+i	1	expect_tool	origin.beta	call.alpha	tool.name
+o	5000	32	ok	
+r	rq.tool.one
+p	payload.tool.one
+i	2	expect_approval	origin.gamma	call.beta	approval.name
+o	6000	0	missing	
+r	rq.approval.two
+p	
+i	3	expect_extension_effect	ext.delta	ToolFailed	
+o	7000	33	fault	ToolFailed
+r	rq.extension.three
+p	payload.extension.three
+i	4	environment_read	PATH_WITH_BACKSLASH		
+o	-1	0	missing	
+r	rq.env.four
+p	
+i	5	runtime_random_draw	draw in 0..3		
+o	-1	34	ok	
+r	rq.random.five
+p	payload.random.five
+i	6	advance_clock			
+o	-1	35	ok	
+r	rq.clock.six
+p	
+i	7	expect_provider	origin.alpha	1	model.two
+o	-1	36	ok	
+r	rq.provider.seven\twith a tab
+p	line one\nline two\\end

@@ -2,32 +2,61 @@
 --
 -- Property tests and named tests for core/prompts.ail.
 -- These complement the inline tests in prompts.ail with algebraic laws.
+--
+-- WHY THESE ARE `tests [...]` BLOCKS ON LOCAL WRAPPERS RATHER THAN `test "..."`
+-- BLOCKS, which is the form they were written in and the form they read best in:
+--
+-- AILANG v0.26.0 parsed `test "name" { ... }` and then skipped every one, while
+-- the runner printed "All tests passed!" and exited 0 — so all six assertions
+-- below were dead for as long as they have existed, and `skip_reasons.json`
+-- carried an `expected: always` record saying so.
+--
+-- v0.33.0 implements the form, and the implementation lifts each test body into
+-- a synthetic module (`_namedtest_body_<hash>`) that does not inherit the
+-- enclosing file's imports. All six then failed with
+--   LDR001: module not found: src/core/prompts
+-- because `import src/core/prompts` above does not reach the lifted body. That
+-- is an upstream defect, filed against the pin, not a fact about these
+-- assertions — they are the same assertions, in the form that runs today.
+--
+-- The wrapper-plus-`tests` idiom is the one src/core/parse_test.ail already uses
+-- to assert on imported functions, so this file now tests the way its neighbour
+-- does. tools/test_coverage/fixtures/named_only.ail keeps the `test "..."` form
+-- alive as a fixture, so nothing here hides the form from the inventory.
 
 module src/core/prompts_test
 
 import src/core/prompts  (with_cache_hint, fmt_msgs, fmt_obs)
 import src/core/types    (Msg, ExecResult)
-import std/string   (contains, startsWith)
+import std/string   (startsWith)
 
 -- empty hint returns system unchanged
-test "with_cache_hint empty hint identity" {
-  with_cache_hint("system text", "") == "system text"
-}
+func wch(system: string, hint: string) -> string
+  tests [
+    (("system text", ""), "system text")
+  ]
+  { with_cache_hint(system, hint) }
 
 -- non-empty hint extends system (startsWith)
-test "with_cache_hint non-empty hint extends system" {
-  startsWith(with_cache_hint("base", "hint text"), "base")
-}
+func wch_extends(system: string, hint: string) -> bool
+  tests [
+    (("base", "hint text"), true)
+  ]
+  { startsWith(with_cache_hint(system, hint), system) }
 
 -- fmt_msgs: empty, single, two messages (role ordering preserved)
-test "fmt_msgs empty" { fmt_msgs([]) == "" }
-test "fmt_msgs single" { fmt_msgs([{role: "user", content: "hello"}]) == "[user]\nhello\n\n" }
-test "fmt_msgs two" {
-  fmt_msgs([{role: "user", content: "hi"}, {role: "assistant", content: "hello"}]) ==
-  "[user]\nhi\n\n[assistant]\nhello\n\n"
-}
+func fm(msgs: [Msg]) -> string
+  tests [
+    ([], ""),
+    ([{role: "user", content: "hello"}], "[user]\nhello\n\n"),
+    ([{role: "user", content: "hi"}, {role: "assistant", content: "hello"}],
+     "[user]\nhi\n\n[assistant]\nhello\n\n")
+  ]
+  { fmt_msgs(msgs) }
 
 -- fmt_obs always starts with "$ "
-test "fmt_obs has dollar prefix" {
-  startsWith(fmt_obs("ls", {stdout: "", stderr: "", exit_code: 0}), "$ ")
-}
+func fo_dollar_prefix(cmd: string, result: ExecResult) -> bool
+  tests [
+    (("ls", {stdout: "", stderr: "", exit_code: 0}), true)
+  ]
+  { startsWith(fmt_obs(cmd, result), "$ ") }

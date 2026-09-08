@@ -1,0 +1,1167 @@
+-- scripts/dst/invariants_dst.ail
+--
+-- WI-A14 piece 1 acceptance, under ADR-001 D7.
+--
+-- ============================================================================
+-- The shape of this suite, and why it is that shape
+-- ============================================================================
+--
+-- ONE FIXTURE THAT MUST SURVIVE, and everything else is a single-field mutation
+-- of it. S7 is the reason and it is the rule mutation testing structurally
+-- cannot supply: C5's mutants prove a guard CAN fire; they cannot see a guard
+-- that fires TOO MUCH, because every mutant still produces its own rule. Only a
+-- fixture that must PASS can, and this project has lost two items to guards
+-- that over-rejected while every mutant row was green.
+--
+-- S7's two halves are both EXECUTABLE here rather than described:
+--
+--   * `scenario_fixture_carries_every_protected_shape` — every one of D2's
+--     seven interaction classes, all three outcome statuses, chunks present and
+--     absent, a deadline-bearing class and a deadline-free one, all three tool
+--     fault classes, a denial and an end-of-input on the approval channel, and
+--     a returned trace carrying all three LedgerRecord constructors.
+--   * `scenario_no_two_fixture_quantities_are_equal` — over the quantities the
+--     CHECKS read, listed by name. Prose cannot do either: a fixture's coverage
+--     drifts silently as the driver changes and the author is the last person
+--     who will notice.
+--
+-- WHICH QUANTITIES ARE IN THE DISTINCTNESS SET, and why the others are not.
+-- S7 asks for two different things — that every protected SHAPE be PRESENT, and
+-- that no two QUANTITIES be equal — and conflating them produces a fixture
+-- bloated with sixteen environment reads for no reason. The distinctness set is
+-- the counts that AT LEAST TWO checks read and could therefore confuse:
+-- compaction stages, provider interactions, faulted interactions, tool
+-- interactions, checkpoints, approvals, decisions, chunks, wire records, total
+-- interactions, total records. The four singleton classes (env read, clock
+-- advance, random draw, extension effect) appear once each purely for SHAPE
+-- coverage, and no check compares their counts to anything — so they are
+-- asserted PRESENT and deliberately left out of the distinctness set. Stated
+-- rather than left to be inferred from the numbers.
+--
+-- EVERY MUTATION ROW ASSERTS ITS OWN RULE, never a non-empty finding list.
+-- Cluster 12 measured what that buys: thirteen decode rows survived a
+-- corruption that would have made eleven of them report a DIFFERENT rule, and
+-- because each asserted its own, those eleven would have gone loudly red rather
+-- than passing on the wrong evidence.
+--
+-- ============================================================================
+-- The fixture is CONSTRUCTED, not swept, and that is cluster 12's limit
+-- ============================================================================
+--
+-- A13 stage 4's technique — sweep the generator and filter on the obligations —
+-- cannot supply this fixture. The generator provably cannot reach every shape
+-- the invariant set protects: it produces no provider fault and no provider
+-- latency (cluster 10's correction 2), `approval_deadline_exceeded` is
+-- structurally unreachable, and no run of any kind produces a non-empty stream
+-- emission log until Milestone B. A swept fixture would carry exactly the
+-- shapes today's generator happens to produce, and the branches for the rest
+-- would not be pinned — they would be ABSENT, which reads identically to
+-- unchanged. Sweep-and-filter selects among things that exist; it cannot cover
+-- a space the producer does not reach.
+
+module scripts/dst/invariants_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+
+import src/core/phase_vocab (
+  LedgerTrace, LedgerRecord, WireRecord, CompactionStageRecord, DecisionRecord,
+  LedgerEvent,
+  ProviderCallPrepared, RunSummary, CostExhausted, CompactionExhausted,
+  DoneEvent, CheckpointTaken, TotalsUpdated, StreamDelta, StreamErrorRetry,
+  InMemoryStageOutcome, TraceStageApplied,
+  CheckpointInfo
+)
+
+import src/core/dst_result (
+  DstResult, RunCompleted, RunFailed,
+  ReplayMetadata, unknown_replay_metadata,
+  empty_interaction_log,
+  SetupFailure, InteractionsExhausted
+)
+
+import src/core/dst_interaction (
+  Interaction, CausalIdentity, IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  TimedOutcome, OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  StreamChunkRecord,
+  all_interaction_kinds, interaction_kind, total_advance_ms
+)
+
+import src/core/ports (
+  WorldState, empty_world_state, ScriptedStep,
+  ToolOutcome, ToolCompleted, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded,
+  encode_tool_outcome, encode_provider_outcome
+)
+
+import src/core/dst_fault_catalogue (
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded
+)
+
+import src/core/dst_event_vocabulary (
+  event_vocabulary, event_variant_id, logical_variants_not_in_trace,
+  display_only_variants, is_logical
+)
+
+import src/core/dst_invariants (
+  ExecutionUnderTest,
+  ReplayObligation, NoReplay, StrictAgainst, RegressionAgainst,
+  InvariantFamily,
+  TerminalSummary, EmissionParity, PhaseTransitions, ToolPairing,
+  BudgetAccounting, BoundedProgress, CheckpointHistory, OutcomeAgreement,
+  ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene,
+  Violation,
+  all_families, family_id, family_obligation,
+  violation_rule, violation_message, violation_family,
+  evaluate, invariants_ok, first_failed_invariant,
+  has_rule, rules_of, first_message, violations_in,
+  parity_register_findings, stream_parity_findings,
+  d64_gap_register, display_only_baseline, parity_gap_reasons,
+  family_evidence, FamilyEvidence,
+  discovery_contract_findings, discovery_contract_ok,
+  has_determinism_rule, determinism_message, DeterminismFinding,
+  invariant_set_version, join_str
+)
+
+-- ---------------------------------------------------------------------------
+-- Fixture parts
+-- ---------------------------------------------------------------------------
+
+pure func ok_out(advance: int, payload: string) -> TimedOutcome {
+  { advance_ms: advance, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" }
+}
+
+pure func fault_out(advance: int, payload: string, class_id: string) -> TimedOutcome {
+  { advance_ms: advance, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: class_id }
+}
+
+pure func missing_out() -> TimedOutcome {
+  { advance_ms: 0, chunks: [], payload: "", status: OutcomeMissing, fault_class_id: "" }
+}
+
+pure func mk(ord: int, body: IdentityBody, proj: string, deadline: int, out: TimedOutcome) -> Interaction {
+  { identity: { ordinal: ord, body: body },
+    request_projection: proj, deadline_ms: deadline, outcome: out }
+}
+
+-- Eight chunk records, all stamped at the same clock. Equal offsets are what a
+-- world that models no inter-chunk latency truthfully records, and D2 requires
+-- NON-DECREASING rather than increasing precisely so that this is legal —
+-- manufacturing spread would record a timing the run did not have.
+pure func fixture_chunks() -> [StreamChunkRecord] {
+  [{ offset_ms: 7, text: "c1" }, { offset_ms: 7, text: "c2" },
+   { offset_ms: 7, text: "c3" }, { offset_ms: 7, text: "c4" },
+   { offset_ms: 7, text: "c5" }, { offset_ms: 7, text: "c6" },
+   { offset_ms: 7, text: "c7" }, { offset_ms: 7, text: "c8" }]
+}
+
+pure func step_with_calls() -> ScriptedStep {
+  { prose: "p0", tool_calls: [{ id: "call-1", name: "BashExec", arguments: "{}" }],
+    input_tokens: 11, output_tokens: 12, finish_reason: "tool_calls", chunks: [], error_code: "", error_message: "", advance_ms: 0 }
+}
+
+pure func step_terminal() -> ScriptedStep {
+  { prose: "p1", tool_calls: [], input_tokens: 13, output_tokens: 14,
+    finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 }
+}
+
+-- The provider interaction that carries chunks. Chunks live on the timed
+-- outcome and NOT in the payload; `world_state_of` reads them from there, so
+-- duplicating them would be a second representation of one fact.
+pure func provider_0() -> Interaction {
+  let base = ok_out(0, encode_provider_outcome(step_with_calls()));
+  mk(0, ProviderIdentity("loop_v2", 0, "m"),
+     "model_step model=m msg_count=2", -1,
+     { base | chunks: fixture_chunks() })
+}
+
+-- THE FIXTURE'S INTERACTION LOG.
+--
+-- Sixteen interactions: 2 provider, 4 tool, 6 approval, and one each of the
+-- four singleton classes. Ordinals are dense and ascending because
+-- `record_interaction` assigns them from the log's own length and nothing else
+-- may.
+--
+-- The approval channel carries a denial (call-9) and an end-of-input (call-8),
+-- and NEITHER call id is dispatched afterwards. That is the denial path
+-- asserted rather than described: D3's approval_denied transition is "no tool
+-- executes", and a fixture whose every approval is an approval cannot tell a
+-- denial check that works from one that is vacuous.
+pure func fixture_log() -> [Interaction] {
+  [provider_0(),
+   mk(1, EnvironmentReadIdentity("MOTOKO_TOOL_TIMEOUT_MS"),
+      "env_get key=MOTOKO_TOOL_TIMEOUT_MS fallback=0", -1, ok_out(0, "1000")),
+   mk(2, ApprovalIdentity("loop_v2", "call-1", "BashExec"),
+      "approval_read call_id=call-1 tool=BashExec", 0, ok_out(0, "approve")),
+   mk(3, ToolIdentity("loop_v2", "call-1", "BashExec"),
+      "tool_exec call_id=call-1 tool=BashExec timeout_ms=1000", 1000,
+      ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "OUT", exit_code: -1 })))),
+   mk(4, ClockAdvanceIdentity, "clock_now at=47", -1, ok_out(1, "47")),
+   mk(5, ApprovalIdentity("loop_v2", "call-2", "Read"),
+      "approval_read call_id=call-2 tool=Read", 0, ok_out(0, "approve")),
+   -- Tool fault 1 of 3: a typed execution failure.
+   mk(6, ToolIdentity("loop_v2", "call-2", "Read"),
+      "tool_exec call_id=call-2 tool=Read timeout_ms=1000", 1000,
+      fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E42", message: "boom" })),
+                fault_class_tool_failed())),
+   mk(7, ApprovalIdentity("loop_v2", "call-3", "Read"),
+      "approval_read call_id=call-3 tool=Read", 0, ok_out(0, "approve")),
+   -- Tool fault 2 of 3: the world answered an id nobody asked for. The decoded
+   -- `tool_call_id` is non-blank on exactly this branch, which is what the
+   -- correlation check reads and why the check exempts a FAULT status: a
+   -- non-blank id on an OK status is the silent substitution, and this row is
+   -- the control that stops the check reddening the legitimate case.
+   mk(8, ToolIdentity("loop_v2", "call-3", "Read"),
+      "tool_exec call_id=call-3 tool=Read timeout_ms=1000", 1000,
+      fault_out(6, encode_tool_outcome(ToolCorrelationMismatch({ expected_id: "call-3", got_id: "call-X" })),
+                fault_class_tool_correlation_mismatch())),
+   mk(9, RandomDrawIdentity("0..3"), "random_draw bounds=0..3", -1, ok_out(0, "2")),
+   mk(10, ApprovalIdentity("loop_v2", "call-4", "BashExec"),
+      "approval_read call_id=call-4 tool=BashExec", 0, ok_out(0, "approve")),
+   -- Tool fault 3 of 3: completion after the declared deadline. 3000 > 1000 is
+   -- the comparison `world_tool` makes, and the advance IS the elapsed time.
+   mk(11, ToolIdentity("loop_v2", "call-4", "BashExec"),
+      "tool_exec call_id=call-4 tool=BashExec timeout_ms=1000", 1000,
+      fault_out(3000, encode_tool_outcome(ToolDeadlineExceeded({ tool_call_id: "call-4", elapsed_ms: 3000, timeout_ms: 1000 })),
+                fault_class_tool_deadline_exceeded())),
+   -- The DENIAL: approved nothing, dispatched nothing.
+   mk(12, ApprovalIdentity("loop_v2", "call-9", "BashExec"),
+      "approval_read call_id=call-9 tool=BashExec", 0, ok_out(0, "deny")),
+   -- The END OF INPUT: the queue ran dry. Recorded, because a recorder that
+   -- logged only served reads would under-record exactly the runs a replay most
+   -- needs to reproduce.
+   mk(13, ApprovalIdentity("loop_v2", "call-8", "Read"),
+      "approval_read call_id=call-8 tool=Read", 0, missing_out()),
+   mk(14, ExtensionEffectIdentity("compose", "extension_effect_fault", "call-7"),
+      "ext_effect ext=compose", 500, ok_out(0, "served")),
+   mk(15, ProviderIdentity("loop_v2", 1, "m"),
+      "model_step model=m msg_count=6", -1, ok_out(0, encode_provider_outcome(step_terminal()))),
+   -- WI-D17's two filesystem mutators, in compose's own order: a write, the
+   -- remove that undoes it on the rejection arm, and a second write at a
+   -- different path.
+   --
+   -- THEY ARE APPENDED AFTER THE PROVIDER RATHER THAN INSERTED BEFORE IT, and
+   -- that is not cosmetic. Three checks in `scenario_fixture_carries_every_protected_shape`
+   -- name an interaction BY ORDINAL — `at_ord(log, 15)` is the non-streaming
+   -- provider, `at_ord(log, 0/2/3)` are the deadline sentinels. Inserting these
+   -- two above the provider pushed it to 17 and the chunk check went on PASSING,
+   -- because it then read a file_write, which also has no chunks. A green row
+   -- reading the wrong interaction is worse than a red one; appending keeps
+   -- every ordinal literal in this file pointing at what it was written for.
+   --
+   -- The remove is `ok_out`, not `missing_out`: it removes the path written one
+   -- row above, so it succeeds. `missing_out` here would ALSO have been wrong in
+   -- a way that showed — `count_status(log, "missing") == 1` is the approval
+   -- end-of-input row's assertion, and a second missing breaks it.
+   --
+   -- Both carry `deadline_ms: -1`: a filesystem mutation has no timeout at the
+   -- seam, which `class_has_deadline` states and `mk` reads.
+   --
+   -- TWO writes so that a checker collapsing the class is visible — the same
+   -- reason `ext_world`'s codec fixture carries two file entries.
+   mk(16, FileWriteIdentity("/w/tmp/snippet.ail"),
+      "file_write path=/w/tmp/snippet.ail bytes=42", -1, ok_out(0, "")),
+   mk(17, FileRemoveIdentity("/w/tmp/snippet.ail"),
+      "file_remove path=/w/tmp/snippet.ail", -1, ok_out(0, "")),
+   mk(18, FileWriteIdentity("/w/tmp/module.ail"),
+      "file_write path=/w/tmp/module.ail bytes=137", -1, ok_out(0, "")),
+   -- WI-D18's directory create. APPENDED, again, and for the reason written
+   -- three rows up: this file addresses interactions by ordinal literal, and
+   -- WI-D17 lost a row to an insertion that stayed green while reading a
+   -- different interaction. Appending is the rule, not the tidy choice.
+   --
+   -- It sits AFTER the write it logically precedes, which is worth saying out
+   -- loud: the fixture is a completeness specimen, not a trace of a plausible
+   -- run, and reordering it to read more naturally is precisely the edit that
+   -- silently repoints every ordinal literal above.
+   --
+   -- `ok_out`, because `mkdirAll` is idempotent and has no missing state, and
+   -- because `count_status(log, "missing") == 1` is the approval end-of-input
+   -- row's assertion. `deadline_ms: -1`, because a directory create has no
+   -- timeout at the seam — `class_has_deadline` says so and `mk` reads it.
+   mk(19, DirMakeIdentity("/w/tmp"),
+      "dir_make path=/w/tmp", -1, ok_out(0, ""))]
+}
+
+pure func fixture_advance() -> int { total_advance_ms(fixture_log()) }
+
+pure func fixture_world() -> WorldState {
+  let base = empty_world_state();
+  { base | clock_ms: 7 + fixture_advance(), log: fixture_log() }
+}
+
+-- Five checkpoints, chained. The chain is what `validate_checkpoint_chain`
+-- walks: each record's `before_digest` must equal the previous record's
+-- `after_digest`, and this is the framework's own function rather than a second
+-- copy of the rule.
+pure func fixture_checkpoints() -> [LedgerRecord] {
+  [WireRecord(CheckpointTaken({ reason: "cp1", before_digest: "d0", after_digest: "d1" })),
+   WireRecord(CheckpointTaken({ reason: "cp2", before_digest: "d1", after_digest: "d2" })),
+   WireRecord(CheckpointTaken({ reason: "cp3", before_digest: "d2", after_digest: "d3" })),
+   WireRecord(CheckpointTaken({ reason: "cp4", before_digest: "d3", after_digest: "d4" })),
+   WireRecord(CheckpointTaken({ reason: "cp5", before_digest: "d4", after_digest: "d5" }))]
+}
+
+pure func decision(step: int, what: string) -> LedgerRecord {
+  DecisionRecord({ step: step, decision: what })
+}
+
+pure func fixture_summary(err: string, millicents: int) -> LedgerEvent {
+  RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2,
+    input_tokens: 24, output_tokens: 26, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, total_cost_usd: 0.9, total_cost_millicents: millicents,
+    duration_ms: 3052, error: err })
+}
+
+-- THE RETURNED TRACE. Eighteen records: ten wire, seven decision, one
+-- compaction stage — all three `LedgerRecord` constructors, which is the third
+-- shape the specification protects and which a trace of wire records alone
+-- would leave untested.
+--
+-- `CostExhausted` is CONSTRUCTED rather than observed and that is deliberate:
+-- without it the monotone budget family has exactly one cost point and is
+-- trivially green. A family that is vacuous on every real trace and vacuous on
+-- its fixture is not a family. See the run report's coverage note.
+--
+--   HALF OF THIS NOTE'S ORIGINAL REASON EXPIRED AT WI-D2 and is restated rather
+--   than deleted. It said the construction was necessary because `CostExhausted`
+--   was on `d64_gap_register()` and "the driver does not append it today". WI-D2
+--   appends it — `session.c2_fail` puts it in the trace before `c2_finalize`,
+--   and `make ledger_parity` witnesses it on a capped run — so a real trace
+--   carrying one is now obtainable. The construction stays because the reason
+--   that never depended on the register still holds: this fixture must carry TWO
+--   cost points to make the monotone family non-vacuous, and no single real run
+--   produces two `CostExhausted` records — the second one would be a record
+--   after the terminal summary.
+--
+-- `CompactionExhausted` follows the compaction STAGE record, never precedes it:
+-- it is a terminal cause, and a stage applied after it is the transition
+-- `compaction-after-exhausted` forbids.
+pure func fixture_trace() -> LedgerTrace {
+  { records:
+    [decision(0, "continue"),
+     WireRecord(ProviderCallPrepared({ step: 0, msg_count: 2, estimated_input_tokens: 20,
+       system_prefix_count: 1, system_prefix_chars: 30, system_prefix_digest: "sha256:s",
+       payload_digest: "sha256:p", model: "m" })),
+     decision(1, "dispatch_tools")]
+    ++ fixture_checkpoints()
+    ++ [decision(2, "continue"),
+        CompactionStageRecord({ step: 3, ext_id: "compaction_ai", outcome: TraceStageApplied("folded 4 turns") }),
+        decision(3, "continue"),
+        WireRecord(CostExhausted({ step: 4, total_cost_millicents: 800,
+          total_cost_usd: 0.8, cap_millicents: 1000 })),
+        decision(4, "continue"),
+        WireRecord(CompactionExhausted({ step: 5, model: "m", reason: "no stage advanced" })),
+        decision(5, "finalize"),
+        WireRecord(DoneEvent({ step: 6, output: "done", source: "empty_stop" })),
+        decision(6, "finalize"),
+        WireRecord(fixture_summary("", 900))] }
+}
+
+pure func fixture_result() -> DstResult {
+  RunCompleted({
+    outcome: Ok([]),
+    ledger_trace: fixture_trace(),
+    interaction_log: empty_interaction_log(),
+    replay_metadata: unknown_replay_metadata()
+  })
+}
+
+-- THE SURVIVING FIXTURE.
+--
+-- `StrictAgainst(fixture_log())` rather than `NoReplay`, because NoReplay makes
+-- family 9 return [] unconditionally — a family that is green because it was
+-- never asked is S8's complement arriving inside the fixture itself. Replaying
+-- the log against itself drives the whole walk.
+pure func fixture() -> ExecutionUnderTest {
+  { result: fixture_result(),
+    world: fixture_world(),
+    initial_clock_ms: 7,
+    emissions: [],
+    replay: StrictAgainst(fixture_log()),
+    decision_budget: 12,
+    retry_budget: 3,
+    ambient_rng_reads: 0,
+    forbidden_effect_sites: [] }
+}
+
+-- ---------------------------------------------------------------------------
+-- Mutation helpers. Each returns the fixture with ONE thing changed.
+-- ---------------------------------------------------------------------------
+
+pure func with_trace(x: ExecutionUnderTest, t: LedgerTrace) -> ExecutionUnderTest {
+  let r = RunCompleted({ outcome: Ok([]), ledger_trace: t,
+                         interaction_log: empty_interaction_log(),
+                         replay_metadata: unknown_replay_metadata() });
+  { x | result: r }
+}
+
+pure func with_records(x: ExecutionUnderTest, rs: [LedgerRecord]) -> ExecutionUnderTest {
+  with_trace(x, { records: rs })
+}
+
+pure func with_log(x: ExecutionUnderTest, log: [Interaction]) -> ExecutionUnderTest {
+  let base = x.world;
+  let w = { base | log: log };
+  { x | world: w }
+}
+
+-- Replace the interaction at one ordinal. The rest of the log is untouched, so
+-- a mutation row cannot accidentally change two things — which is the whole
+-- reason mutants are single-field.
+pure func replace_at(xs: [Interaction], ord: int, replacement: Interaction) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      if i.identity.ordinal == ord then replacement :: rest
+      else i :: replace_at(rest, ord, replacement)
+  }
+}
+
+pure func at_ord(xs: [Interaction], ord: int) -> Interaction {
+  match xs {
+    [] => mk(-1, ClockAdvanceIdentity, "<absent>", -1, missing_out()),
+    i :: rest => if i.identity.ordinal == ord then i else at_ord(rest, ord)
+  }
+}
+
+pure func mutate_outcome(x: ExecutionUnderTest, ord: int, out: TimedOutcome) -> ExecutionUnderTest {
+  let original = at_ord(fixture_log(), ord);
+  let replaced = { original | outcome: out };
+  with_log(x, replace_at(fixture_log(), ord, replaced))
+}
+
+pure func mutate_deadline(x: ExecutionUnderTest, ord: int, deadline: int) -> ExecutionUnderTest {
+  let original = at_ord(fixture_log(), ord);
+  let replaced = { original | deadline_ms: deadline };
+  with_log(x, replace_at(fixture_log(), ord, replaced))
+}
+
+-- ---------------------------------------------------------------------------
+-- Reporting
+-- ---------------------------------------------------------------------------
+
+pure func rule_list(vs: [Violation]) -> string { join_str(rules_of(vs)) }
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}")
+          else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+-- A mutation row: the mutant must produce THE NAMED RULE. Not "some finding" —
+-- cluster 12's whole lesson is that a non-empty finding list is green on the
+-- wrong evidence.
+func mutant(label: string, x: ExecutionUnderTest, rule: string) -> bool ! {IO} {
+  let vs = evaluate(x);
+  let hit = has_rule(vs, rule);
+  report("mutant: ${label} → ${rule}", hit,
+         if List.length(vs) == 0 then "the mutant produced NO violation at all — the rule cannot fire"
+         else "expected '${rule}', the mutant produced: ${rule_list(vs)}")
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+pure func kinds_present(log: [Interaction]) -> [string] {
+  match log {
+    [] => [],
+    i :: rest => interaction_kind(i) :: kinds_present(rest)
+  }
+}
+
+pure func all_kinds_present(want: [string], have: [string]) -> bool {
+  match want {
+    [] => true,
+    k :: rest => if contains_str(have, k) then all_kinds_present(rest, have) else false
+  }
+}
+
+pure func missing_kinds(want: [string], have: [string]) -> [string] {
+  match want {
+    [] => [],
+    k :: rest =>
+      if contains_str(have, k) then missing_kinds(rest, have) else k :: missing_kinds(rest, have)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Counting, for the S7 distinctness set
+-- ---------------------------------------------------------------------------
+
+pure func count_kind_in(log: [Interaction], kind: string) -> int {
+  match log {
+    [] => 0,
+    i :: rest => (if interaction_kind(i) == kind then 1 else 0) + count_kind_in(rest, kind)
+  }
+}
+
+pure func count_faulted(log: [Interaction]) -> int {
+  match log {
+    [] => 0,
+    i :: rest =>
+      (match i.outcome.status { OutcomeFault => 1, _ => 0 }) + count_faulted(rest)
+  }
+}
+
+pure func count_decisions_in(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest => (match r { DecisionRecord(_) => 1, _ => 0 }) + count_decisions_in(rest)
+  }
+}
+
+pure func count_stages_in(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest => (match r { CompactionStageRecord(_) => 1, _ => 0 }) + count_stages_in(rest)
+  }
+}
+
+pure func count_wire_in(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest => (match r { WireRecord(_) => 1, _ => 0 }) + count_wire_in(rest)
+  }
+}
+
+pure func count_variant_in(rs: [LedgerRecord], v: string) -> int {
+  match rs {
+    [] => 0,
+    r :: rest =>
+      (match r { WireRecord(e) => if event_variant_id(e) == v then 1 else 0, _ => 0 })
+        + count_variant_in(rest, v)
+  }
+}
+
+pure func total_chunks(log: [Interaction]) -> int {
+  match log {
+    [] => 0,
+    i :: rest => List.length(i.outcome.chunks) + total_chunks(rest)
+  }
+}
+
+export type NamedCount = { name: string, n: int }
+
+-- The distinctness set, BY NAME. Naming them is what makes the assertion
+-- readable when it goes red — "two quantities are equal" is useless; "provider
+-- interactions and faulted interactions are both 3" is a fixture repair.
+pure func fixture_quantities() -> [NamedCount] {
+  let log = fixture_log();
+  let rs = fixture_trace().records;
+  [{ name: "compaction stage records", n: count_stages_in(rs) },
+   { name: "provider interactions", n: count_kind_in(log, "expect_provider") },
+   { name: "faulted interactions", n: count_faulted(log) },
+   { name: "tool interactions", n: count_kind_in(log, "expect_tool") },
+   { name: "checkpoint records", n: count_variant_in(rs, "CheckpointTaken") },
+   { name: "approval interactions", n: count_kind_in(log, "expect_approval") },
+   { name: "decision records", n: count_decisions_in(rs) },
+   { name: "stream chunk records", n: total_chunks(log) },
+   { name: "wire records", n: count_wire_in(rs) },
+   { name: "total interactions", n: List.length(log) },
+   { name: "total trace records", n: List.length(rs) }]
+}
+
+pure func first_duplicate_pair(qs: [NamedCount], seen: [NamedCount]) -> string {
+  match qs {
+    [] => "",
+    q :: rest =>
+      match matching(seen, q.n) {
+        Some(other) => "'${q.name}' and '${other}' are both ${q.n}",
+        None => first_duplicate_pair(rest, q :: seen)
+      }
+  }
+}
+
+pure func matching(seen: [NamedCount], n: int) -> Option[string] {
+  match seen {
+    [] => None,
+    s :: rest => if s.n == n then Some(s.name) else matching(rest, n)
+  }
+}
+
+pure func quantity_lines(qs: [NamedCount]) -> string {
+  match qs {
+    [] => "",
+    q :: [] => "${q.name}=${q.n}",
+    q :: rest => "${q.name}=${q.n}, ${quantity_lines(rest)}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenarios
+-- ---------------------------------------------------------------------------
+
+-- THE ONE THAT MUST PASS. Every other row in this file is a mutation of it, so
+-- if this is red nothing below means anything.
+func scenario_the_fixture_survives() -> bool ! {IO} {
+  let _ = println("\n-- the surviving fixture --");
+  let vs = evaluate(fixture());
+  let a = report("the fixture satisfies all twelve families", List.length(vs) == 0,
+                 "violations: ${rule_list(vs)}\n      first: ${first_message(vs)}");
+  let b = report("invariants_ok agrees", invariants_ok(fixture()), "invariants_ok disagreed with evaluate");
+  let c = match first_failed_invariant(fixture()) {
+    None => report("first_failed_invariant is None on a clean run", true, ""),
+    Some(f) => report("first_failed_invariant is None on a clean run", false, "reported ${f}")
+  };
+  a && b && c
+}
+
+func scenario_fixture_carries_every_protected_shape() -> bool ! {IO} {
+  let _ = println("\n-- S7: the surviving fixture carries every shape the specification protects --");
+  let log = fixture_log();
+  let have = kinds_present(log);
+  let want = all_interaction_kinds();
+  let a = report("all ${List.length(want)} D2 interaction classes appear", all_kinds_present(want, have),
+                 "missing: ${join_str(missing_kinds(want, have))}");
+
+  -- All three outcome statuses. A fixture of successes cannot tell a fault
+  -- check that works from one that never runs.
+  let oks = count_status(log, "ok");
+  let faults = count_status(log, "fault");
+  let missing = count_status(log, "missing");
+  let b = report("all three outcome statuses appear (ok=${oks} fault=${faults} missing=${missing})",
+                 oks > 0 && faults > 0 && missing > 0, "one status is absent");
+
+  -- All three tool fault classes. They travel one codec, so a fixture carrying
+  -- only ToolFailed pins the codec and none of the discrimination.
+  let c = report("all three tool fault classes appear",
+                 has_class(log, fault_class_tool_failed())
+                   && has_class(log, fault_class_tool_correlation_mismatch())
+                   && has_class(log, fault_class_tool_deadline_exceeded()),
+                 "a tool fault class is absent");
+
+  -- Chunks present AND absent, on the class that may stream.
+  let d = report("chunks appear on one provider interaction and not the other",
+                 total_chunks(log) == 8 && List.length(at_ord(log, 15).outcome.chunks) == 0,
+                 "the streaming/non-streaming pair is not both present");
+
+  -- A deadline-bearing class and a deadline-free one, so the two sentinels are
+  -- both exercised: -1 means "this class has no deadline", 0 means "it has one
+  -- and none was declared".
+  let e = report("both deadline sentinels appear (-1 on a deadline-free class, 0 and a positive on deadline-bearing ones)",
+                 at_ord(log, 0).deadline_ms == -1
+                   && at_ord(log, 2).deadline_ms == 0
+                   && at_ord(log, 3).deadline_ms == 1000,
+                 "a deadline sentinel is absent");
+
+  -- The denial path and the end-of-input path, neither followed by a dispatch.
+  let f = report("the approval channel carries a denial and an end-of-input, and neither call is dispatched",
+                 count_status(log, "missing") == 1 && not dispatched(log, "call-9") && not dispatched(log, "call-8"),
+                 "the denial path is not exercised");
+
+  -- All three LedgerRecord constructors in the returned trace.
+  let rs = fixture_trace().records;
+  let g = report("the returned trace carries all three LedgerRecord constructors",
+                 count_wire_in(rs) > 0 && count_decisions_in(rs) > 0 && count_stages_in(rs) > 0,
+                 "a LedgerRecord constructor is absent from the trace");
+  a && b && c && d && e && f && g
+}
+
+pure func count_status(log: [Interaction], want: string) -> int {
+  match log {
+    [] => 0,
+    i :: rest =>
+      (match i.outcome.status {
+         OutcomeOk => if want == "ok" then 1 else 0,
+         OutcomeFault => if want == "fault" then 1 else 0,
+         OutcomeMissing => if want == "missing" then 1 else 0
+       }) + count_status(rest, want)
+  }
+}
+
+pure func has_class(log: [Interaction], class_id: string) -> bool {
+  match log {
+    [] => false,
+    i :: rest => if i.outcome.fault_class_id == class_id then true else has_class(rest, class_id)
+  }
+}
+
+pure func dispatched(log: [Interaction], call_id: string) -> bool {
+  match log {
+    [] => false,
+    i :: rest =>
+      match i.identity.body {
+        ToolIdentity(_, c, _) => if c == call_id then true else dispatched(rest, call_id),
+        _ => dispatched(rest, call_id)
+      }
+  }
+}
+
+func scenario_no_two_fixture_quantities_are_equal() -> bool ! {IO} {
+  let _ = println("\n-- S7: no two of the surviving fixture's quantities are equal --");
+  let qs = fixture_quantities();
+  let dup = first_duplicate_pair(qs, []);
+  report("${List.length(qs)} named quantities, pairwise distinct", dup == "",
+         "${dup}\n      all: ${quantity_lines(qs)}")
+}
+
+-- THE PARITY FAMILY'S ARTIFACT HALF, which is where the one-line wrong answer
+-- lives.
+func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
+  let _ = println("\n-- D6.4: the parity register, and the reclassification it forbids --");
+  let vs = parity_register_findings();
+  let a = report("the register agrees with the vocabulary in both directions", List.length(vs) == 0,
+                 "${rule_list(vs)}\n      ${first_message(vs)}");
+  let gap = logical_variants_not_in_trace(event_vocabulary());
+  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3, eleven more by WI-D2)",
+                 List.length(gap) == 2
+                   && not contains_str(gap, "DoneEvent")
+                   && not contains_str(gap, "StreamDelta"),
+                 "the gap is ${List.length(gap)}: ${join_str(gap)}");
+  let c = report("every registered gap carries a reason",
+                 List.length(parity_gap_reasons()) == List.length(d64_gap_register()),
+                 "${List.length(parity_gap_reasons())} reasons for ${List.length(d64_gap_register())} registered gaps");
+  let d = report("the display-only set is the pinned six",
+                 List.length(display_only_variants(event_vocabulary())) == 6
+                   && List.length(display_only_baseline()) == 6,
+                 "the display-only set moved");
+  -- Carried here rather than as an inline test: as a `tests` row this exact
+  -- call fails non-deterministically under `ailang test`'s cluster harness
+  -- (six runs in ten, `record has no field: site`, naming a field of a module
+  -- in the closure that the call never touches), and is stable under
+  -- `ailang run`. See dst_invariants' note and .agent/issues/.
+  --
+  -- It is the half that stops the ONE-LINE WRONG ANSWER: "DoneEvent is out of
+  -- the gap" is also true if it was reclassified DisplayOnly, and only this
+  -- says the gap was CLOSED rather than dissolved.
+  let e = report("DoneEvent left the gap by being APPENDED, not by being reclassified",
+                 is_logical(event_vocabulary(), "DoneEvent"),
+                 "DoneEvent is no longer classified Logical — the gap was dissolved, not closed");
+  -- WI-C3's closure gets the SAME guard, and it needs it more than DoneEvent
+  -- did: StreamDelta is D6.4's named exception, so "it is out of the gap" is
+  -- also true if somebody classified the exception as DisplayOnly, and that
+  -- reading is one field flip away and turns the parity obligation vacuous.
+  let f = report("StreamDelta left the gap by being APPENDED, not by being reclassified",
+                 is_logical(event_vocabulary(), "StreamDelta"),
+                 "StreamDelta is no longer classified Logical — D6.4's named exception was dissolved, not closed");
+  -- WI-D2's eleven get the same guard, and one row rather than eleven for a
+  -- reason: `display_only_baseline()` is pinned at six by row `d` above, so a
+  -- reclassification would have to move the baseline too. What this row adds is
+  -- the DIRECT statement for the variants WI-D2 closed — a reader checking why
+  -- the register is 2 should not have to derive "and none of the eleven was
+  -- reclassified" from two other rows.
+  let g = report("WI-D2's eleven left the gap by being APPENDED, not by being reclassified",
+                 is_logical(event_vocabulary(), "CostExhausted")
+                   && is_logical(event_vocabulary(), "Dp7VerifierRejected")
+                   && is_logical(event_vocabulary(), "ThinkingStreamEnd")
+                   && is_logical(event_vocabulary(), "NativeToolDenied")
+                   && is_logical(event_vocabulary(), "ToolPending")
+                   && is_logical(event_vocabulary(), "DelegatedToolDeferred")
+                   && is_logical(event_vocabulary(), "V2ToolDispatchStart")
+                   && is_logical(event_vocabulary(), "V2ToolDispatchComplete")
+                   && is_logical(event_vocabulary(), "NativeToolCalls")
+                   && is_logical(event_vocabulary(), "NativeToolResults")
+                   && is_logical(event_vocabulary(), "ExtToolHandled"),
+                 "one of WI-D2's eleven is no longer classified Logical — a gap was dissolved, not closed");
+  a && b && c && d && e && f && g
+}
+
+-- D6.4's NAMED EXCEPTION, reached by CONSTRUCTION. A count-only check is green
+-- on the reordering case, which is why order is a separate rule.
+--
+-- WHY THESE ROWS SURVIVE WI-C3, since the sentence they used to carry ("no run
+-- produces a non-empty emission log today") stopped being true: a run now does,
+-- and `scripts/dst/stream_parity_dst.ail` drives the same three mutants against
+-- a witness a real run produced. These stay because they test the CHECKER over
+-- shapes a scripted run does not reach — a `seq` that differs, a trace holding
+-- exactly one of two deltas — and because a constructed row cannot be made
+-- vacuous by a driver change. The two are complements, and per S14 the real-run
+-- pair is the one that certifies the adoption.
+func scenario_stream_parity_branches_are_entered() -> bool ! {IO} {
+  let _ = println("\n-- D6.4's named exception: stream parity, constructed --");
+  let d1 = StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "text", text: "a" });
+  let d2 = StreamDelta({ step: 1, stream_id: "s", seq: 1, kind: "text", text: "b" });
+  let both: LedgerTrace = { records: [WireRecord(d1), WireRecord(d2)] };
+  let one: LedgerTrace = { records: [WireRecord(d1)] };
+  let swapped: LedgerTrace = { records: [WireRecord(d2), WireRecord(d1)] };
+
+  let a = report("matching projection and trace produce no finding",
+                 List.length(stream_parity_findings([d1, d2], both)) == 0,
+                 "a matching pair reported: ${rule_list(stream_parity_findings([d1, d2], both))}");
+  let b = report("an OMISSION is stream-parity-count",
+                 has_rule(stream_parity_findings([d1, d2], one), "stream-parity-count"),
+                 "an omission did not report stream-parity-count");
+  let c = report("a DUPLICATE is stream-parity-count",
+                 has_rule(stream_parity_findings([d1], both), "stream-parity-count"),
+                 "a duplicate did not report stream-parity-count");
+  -- The row that a count check cannot produce: same count, wrong order.
+  let d = report("a REORDERING is stream-parity-order and NOT stream-parity-count",
+                 has_rule(stream_parity_findings([d1, d2], swapped), "stream-parity-order")
+                   && not has_rule(stream_parity_findings([d1, d2], swapped), "stream-parity-count"),
+                 "a reordering reported: ${rule_list(stream_parity_findings([d1, d2], swapped))}");
+  a && b && c && d
+}
+
+-- ---------------------------------------------------------------------------
+-- The mutation rows. One per rule, each single-field, each asserting its own.
+-- ---------------------------------------------------------------------------
+
+func scenario_mutants_family_1_to_4() -> bool ! {IO} {
+  let _ = println("\n-- mutants: families 1-4 --");
+  let f = fixture();
+  let rs = fixture_trace().records;
+
+  -- F1. Two summaries; the second is still last, so a count-blind "is the last
+  -- record a summary" check stays green and only the count sees it.
+  let m1 = mutant("a second RunSummary", with_records(f, rs ++ [WireRecord(fixture_summary("", 900))]),
+                  "summary-not-final");
+  -- F1. Exactly one summary, NOT last. The count is right and the position is
+  -- wrong, which is the mirror mutant: a position-blind check stays green.
+  let m2 = mutant("a record after the RunSummary",
+                  with_records(f, rs ++ [decision(7, "trailing")]), "record-after-terminal");
+  -- F1. The disjointness rule: a harness failure whose partial trace was given
+  -- a summary.
+  let m3 = mutant("a RunSummary on a harness failure",
+                  { f | result: RunFailed({ kind: InteractionsExhausted, interaction_position: 4,
+                          actual_request_projection: "p", partial_ledger_trace: fixture_trace(),
+                          replay_metadata: unknown_replay_metadata() }) },
+                  "summary-on-harness-failure");
+
+  -- F2. A display-only variant appended to the returned trace.
+  let m4 = mutant("a DisplayOnly event in the returned trace",
+                  with_records(f, [WireRecord(TotalsUpdated({ step: 1, text: "", finish_reason: "",
+                    tool_calls: 0, input_tokens: 1, output_tokens: 2, cost_usd: 0.0,
+                    cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }))] ++ rs),
+                  "display-only-in-trace");
+
+  -- F3. The decision channel goes backwards.
+  let m5 = mutant("a decision step that goes backwards",
+                  with_records(f, [decision(5, "a"), decision(2, "b")] ++ rs), "step-regression");
+
+  -- F4. A dispatched tool with no answer at all.
+  let m6 = mutant("a tool interaction recording OutcomeMissing",
+                  mutate_outcome(f, 3, missing_out()), "tool-call-unpaired");
+  -- F4. The world answers an id nobody asked for and the record calls it a
+  -- SUCCESS. The fixture's legitimate case (ordinal 8) has the same non-blank
+  -- id under a FAULT status and must stay green — which is what makes this
+  -- mutant a test of the discrimination rather than of the decoder.
+  let m7 = mutant("an uncorrelated answer recorded as a success",
+                  mutate_outcome(f, 3, ok_out(40,
+                    encode_tool_outcome(ToolCorrelationMismatch({ expected_id: "call-1", got_id: "call-Z" })))),
+                  "tool-result-uncorrelated");
+  -- F4. The denial path fails open: call-9 was denied and is dispatched.
+  let m8 = mutant("a denied call dispatched anyway",
+                  with_log(f, fixture_log() ++ [mk(16, ToolIdentity("loop_v2", "call-9", "BashExec"),
+                    "tool_exec call_id=call-9", 1000,
+                    ok_out(0, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-9", content: "X", exit_code: -1 }))))]),
+                  "denied-call-dispatched");
+  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8
+}
+
+func scenario_mutants_family_5_to_8() -> bool ! {IO} {
+  let _ = println("\n-- mutants: families 5-8 --");
+  let f = fixture();
+  let rs = fixture_trace().records;
+
+  -- F5. Cost goes down between CostExhausted (800) and the summary.
+  let m1 = mutant("total cost decreasing", with_records(f, replace_summary(rs, fixture_summary("", 700))),
+                  "cost-regression");
+  -- F5. A negative cost. Distinct from a regression: the FIRST record cannot
+  -- regress, so a monotonicity check alone never sees it.
+  let m2 = mutant("a negative cost", with_records(f, replace_summary(rs, fixture_summary("", -5))),
+                  "negative-cost");
+  -- F5. Token totals going down.
+  let m3 = mutant("token totals decreasing",
+                  with_records(f, [WireRecord(TotalsUpdated({ step: 0, text: "", finish_reason: "",
+                    tool_calls: 0, input_tokens: 999, output_tokens: 999, cost_usd: 0.0,
+                    cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }))] ++ rs),
+                  "token-regression");
+
+  -- F6. Seven decisions against a budget of six.
+  let m4 = mutant("more decisions than the declared budget", { f | decision_budget: 6 },
+                  "decision-budget-exceeded");
+  -- F6. A retry budget of zero against one retry record.
+  -- Inserted BEFORE the summary, not appended after it. Appended, the mutant
+  -- tripped `record-after-terminal` instead and the row was green on the wrong
+  -- rule — which is only visible because the row names the rule it expects.
+  let m5 = mutant("more retries than the declared bound",
+                  with_records({ f | retry_budget: 0 },
+                    insert_before_summary(rs, WireRecord(retry_event()))),
+                  "retry-bound-exceeded");
+  -- F6. THE FROZEN CURSOR. Provider step 0 served twice: the run terminates,
+  -- every count balances, both determinism axes are green, and the only visible
+  -- trace is the repeated ordinal. Cluster 1 lost an item to this.
+  let m6 = mutant("a repeated provider step (the frozen cursor)",
+                  with_log(f, replace_at(fixture_log(), 15,
+                    { at_ord(fixture_log(), 15) | identity: { ordinal: 15, body: ProviderIdentity("loop_v2", 0, "m") } })),
+                  "provider-step-repeated");
+
+  -- F7. The digest chain broken in the middle.
+  let m7 = mutant("a broken checkpoint chain",
+                  with_records(f, break_chain(rs)), "checkpoint-chain-broken");
+  -- F7. A compaction stage applied after the terminal exhaustion.
+  let m8 = mutant("a compaction stage after CompactionExhausted",
+                  with_records(f, insert_before_summary(rs,
+                    CompactionStageRecord({ step: 6, ext_id: "compaction_ai",
+                                            outcome: TraceStageApplied("late") }))),
+                  "compaction-after-exhausted");
+
+  -- F8. Ok outcome, summary carrying an error.
+  let m9 = mutant("an Ok outcome against a summary reporting an error",
+                  with_records(f, replace_summary(rs, fixture_summary("boom", 900))),
+                  "outcome-summary-disagree");
+  -- F8. No summary at all to agree with.
+  let m10 = mutant("no terminal summary to agree with",
+                   with_records(f, [decision(0, "continue")]), "summary-absent-for-outcome");
+  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10
+}
+
+-- The variant `bounded_progress_findings` counts, by name. The counter reads
+-- `event_variant_id(e) == "StreamErrorRetry"`, so this row and the counter
+-- agree through the vocabulary's own projection rather than through a literal
+-- written twice.
+pure func retry_event() -> LedgerEvent {
+  StreamErrorRetry({ step: 5, error: "stream closed" })
+}
+
+pure func replace_summary(rs: [LedgerRecord], e: LedgerEvent) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match rest {
+        [] => [WireRecord(e)],
+        _ => r :: replace_summary(rest, e)
+      }
+  }
+}
+
+pure func insert_before_summary(rs: [LedgerRecord], extra: LedgerRecord) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match rest {
+        [] => [extra, r],
+        _ => r :: insert_before_summary(rest, extra)
+      }
+  }
+}
+
+pure func break_chain(rs: [LedgerRecord]) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) =>
+          if event_variant_id(e) == "CheckpointTaken"
+          then WireRecord(CheckpointTaken({ reason: "cp1", before_digest: "d0", after_digest: "WRONG" }))
+                 :: rest
+          else r :: break_chain(rest),
+        _ => r :: break_chain(rest)
+      }
+  }
+}
+
+func scenario_mutants_family_9_to_12() -> bool ! {IO} {
+  let _ = println("\n-- mutants: families 9-12 --");
+  let f = fixture();
+  let log = fixture_log();
+
+  -- F9. The program holds more than the run consumed.
+  let m1 = mutant("a program the run did not consume",
+                  { f | replay: StrictAgainst(log ++ [mk(16, ClockAdvanceIdentity, "clock_now at=99", -1, ok_out(0, "99"))]) },
+                  "interactions-unconsumed");
+  -- F9. The run served a different outcome at one position. Strict replay
+  -- reports its own rule and this family lifts it WITH that rule attached, so
+  -- the mutation row can still name what broke.
+  let m2 = mutant("a replayed outcome that differs",
+                  { f | replay: StrictAgainst(replace_at(log, 3,
+                    { at_ord(log, 3) | outcome: ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "DIFFERENT", exit_code: -1 }))) })) },
+                  "replay-rule-violated");
+
+  -- F10. A fault with a blank class id: uncountable by D11's class counter.
+  let m3 = mutant("a fault carrying no class id",
+                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m" })), "")),
+                  "fault-without-class");
+  -- F10. A fault class the catalogue does not declare.
+  let m4 = mutant("a fault class the catalogue does not declare",
+                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m" })), "MadeUpClass")),
+                  "fault-class-unknown");
+  -- F10. A fault whose payload nonetheless carries a completed result: the
+  -- world both faulted and committed, which is the ambiguity D3 forbids.
+  let m5 = mutant("a completed payload under a fault status",
+                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-2", content: "COMMITTED", exit_code: -1 })), fault_class_tool_failed())),
+                  "commit-under-fault");
+
+  -- F11. Time running backwards.
+  let m6 = mutant("a negative clock advance",
+                  mutate_outcome(f, 4, ok_out(-1, "47")), "negative-advance");
+  -- F11. A chunk stamped before its predecessor.
+  let m7 = mutant("a chunk offset going backwards",
+                  with_log(f, replace_at(log, 0, regressing_chunks())), "chunk-offset-regression");
+  -- F11. The two deadline sentinels swapped: an approval saying its class has
+  -- no deadline at all, which contradicts D2.
+  let m8 = mutant("a deadline-bearing class recording -1", mutate_deadline(f, 2, -1),
+                  "deadline-derivation");
+  -- F11. The world spent time the log cannot account for.
+  let m9 = mutant("a world clock the log cannot account for",
+                  { f | initial_clock_ms: 0 }, "clock-balance");
+
+  -- F12. A harness failure is an invariant violation, not merely a result.
+  let m10 = mutant("a harness failure",
+                   { f | result: RunFailed({ kind: SetupFailure, interaction_position: -1,
+                           actual_request_projection: "profile load failed",
+                           partial_ledger_trace: { records: [] },
+                           replay_metadata: unknown_replay_metadata() }) },
+                   "harness-failure-observed");
+  let m11 = mutant("an ambient RNG read", { f | ambient_rng_reads: 1 }, "ambient-rng-read");
+  let m12 = mutant("a forbidden effect site reached",
+                   { f | forbidden_effect_sites: ["compose.on_response_intercept"] },
+                   "forbidden-effect-site");
+  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10 && m11 && m12
+}
+
+pure func regressing_chunks() -> Interaction {
+  let original = at_ord(fixture_log(), 0);
+  let out = original.outcome;
+  { original | outcome: { out | chunks: [{ offset_ms: 9, text: "a" }, { offset_ms: 4, text: "b" }] } }
+}
+
+-- Every family must be reached by at least one mutant. A family with an
+-- obligation and no mutant is an obligation with no instrument, and it reads
+-- exactly like one that is satisfied.
+func scenario_every_family_is_reached_by_a_mutant() -> bool ! {IO} {
+  let _ = println("\n-- coverage: every D7 family is reached by a mutant --");
+  let f = fixture();
+  let all = all_mutant_violations(f);
+  let missing = families_without(all_families(), all);
+  report("all ${List.length(all_families())} families reached", List.length(missing) == 0,
+         "families with no mutant: ${join_str(missing)}")
+}
+
+-- The union of every mutant's violations, so family coverage is READ off the
+-- mutants rather than asserted beside them.
+pure func all_mutant_violations(f: ExecutionUnderTest) -> [Violation] {
+  let rs = fixture_trace().records;
+  let log = fixture_log();
+  evaluate(with_records(f, rs ++ [WireRecord(fixture_summary("", 900))]))
+    ++ evaluate(with_records(f, [WireRecord(TotalsUpdated({ step: 1, text: "", finish_reason: "",
+         tool_calls: 0, input_tokens: 1, output_tokens: 2, cost_usd: 0.0,
+         cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }))] ++ rs))
+    ++ evaluate(with_records(f, [decision(5, "a"), decision(2, "b")] ++ rs))
+    ++ evaluate(mutate_outcome(f, 3, missing_out()))
+    ++ evaluate(with_records(f, replace_summary(rs, fixture_summary("boom", 700))))
+    ++ evaluate({ f | decision_budget: 6 })
+    ++ evaluate(with_records(f, break_chain(rs)))
+    ++ evaluate({ f | replay: StrictAgainst(log ++ [mk(16, ClockAdvanceIdentity, "c", -1, ok_out(0, "9"))]) })
+    ++ evaluate(mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m" })), "")))
+    ++ evaluate(mutate_outcome(f, 4, ok_out(-1, "47")))
+    ++ evaluate({ f | ambient_rng_reads: 1 })
+}
+
+pure func families_without(fs: [InvariantFamily], vs: [Violation]) -> [string] {
+  match fs {
+    [] => [],
+    f :: rest =>
+      if List.length(violations_in(vs, f)) == 0
+      then family_id(f) :: families_without(rest, vs)
+      else families_without(rest, vs)
+  }
+}
+
+-- D7's thirteenth statement, and it is deliberately NOT a family: it needs two
+-- executions, and a family that passed whenever it had one would be a vacuous
+-- green of exactly the kind S8's complement describes.
+func scenario_discovery_contract() -> bool ! {IO} {
+  let _ = println("\n-- D7's discovery contract: an invariant over a PAIR of runs --");
+  let a = fixture();
+  let same = fixture();
+  let c1 = report("the same execution twice is deterministic", discovery_contract_ok(a, same),
+                  "two identical executions disagreed");
+  -- Same length, same identities, DIFFERENT served outcome. An identity-only
+  -- comparison key is green here, which is why the key carries the outcome.
+  let served_differently = with_log(a, replace_at(fixture_log(), 3,
+    { at_ord(fixture_log(), 3) | outcome: ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "OTHER", exit_code: -1 }))) }));
+  let fs = discovery_contract_findings(a, served_differently);
+  let c2 = report("a different SERVED outcome at one position is caught",
+                  has_determinism_rule(fs, "determinism-log-position"),
+                  "a differing outcome was not caught: ${List.length(fs)} finding(s)");
+  let shorter = with_log(a, [at_ord(fixture_log(), 0)]);
+  let c3 = report("a shorter log is caught",
+                  has_determinism_rule(discovery_contract_findings(a, shorter), "determinism-log-length"),
+                  "a shorter log was not caught");
+  let c4 = report("a differing returned trace is caught",
+                  has_determinism_rule(discovery_contract_findings(a, with_records(a, [decision(0, "x")])),
+                                       "determinism-trace-length"),
+                  "a differing trace was not caught");
+  c1 && c2 && c3 && c4
+}
+
+-- Which families this execution actually EXERCISED. Reported rather than
+-- asserted green, because "evaluated" and "exercised" are different facts and
+-- D11's reporting must not merge them.
+func scenario_family_evidence() -> bool ! {IO} {
+  let _ = println("\n-- family evidence: evaluated is not the same as exercised --");
+  let ev = family_evidence(fixture());
+  let _ = print_evidence(ev);
+  report("every family reports evidence", List.length(ev) == List.length(all_families()),
+         "${List.length(ev)} evidence rows for ${List.length(all_families())} families")
+}
+
+func print_evidence(es: [FamilyEvidence]) -> () ! {IO} {
+  match es {
+    [] => (),
+    e :: rest => {
+      let _ = println("      ${if e.evaluated then "eval" else "VACUOUS"}  ${e.family} (inputs: ${e.inputs})");
+      print_evidence(rest)
+    }
+  }
+}
+
+func print_obligations(fs: [InvariantFamily]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => {
+      let _ = println("      ${family_id(f)}: ${family_obligation(f)}");
+      print_obligations(rest)
+    }
+  }
+}
+
+func print_gap(gs: [string]) -> () ! {IO} {
+  match gs {
+    [] => (),
+    g :: rest => {
+      let _ = println("      - ${g}");
+      print_gap(rest)
+    }
+  }
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("=== invariants_dst (D7, ${invariant_set_version()}) ===");
+  let _ = println("  i D7's twelve families:");
+  let _ = print_obligations(all_families());
+
+  let c1 = scenario_the_fixture_survives();
+  let c2 = scenario_fixture_carries_every_protected_shape();
+  let c3 = scenario_no_two_fixture_quantities_are_equal();
+  let c4 = scenario_parity_register_is_the_whole_gap();
+  let c5 = scenario_stream_parity_branches_are_entered();
+  let c6 = scenario_mutants_family_1_to_4();
+  let c7 = scenario_mutants_family_5_to_8();
+  let c8 = scenario_mutants_family_9_to_12();
+  let c9 = scenario_every_family_is_reached_by_a_mutant();
+  let c10 = scenario_discovery_contract();
+  let c11 = scenario_family_evidence();
+
+  let _ = println("\n  i D6.4's remaining gap, ${List.length(d64_gap_register())} variant(s), each with a reason in dst_invariants.parity_gap_reasons():");
+  let _ = print_gap(d64_gap_register());
+
+  if c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11 then
+    println("\ninvariants_dst PASS")
+  else {
+    let _ = println("\ninvariants_dst FAIL");
+    exit(1)
+  }
+}

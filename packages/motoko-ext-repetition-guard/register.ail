@@ -1,0 +1,48 @@
+module sunholo/motoko_ext_repetition_guard/register
+
+-- TWO ATOMS, and both are needed to cover one bug. See `repetition_guard`'s
+-- header: `SolverJudge` never fires on a step that carried a tool call, which is
+-- every step of the loop this guard exists for, and `ToolPolicy` never sees the
+-- answer the model is repeating.
+--
+-- THE BUDGETS ARE READ AT REGISTRATION, not per call. `ToolPolicy` is a PURE
+-- row -- `(ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision`, no `Env` -- so an
+-- operator override has to be captured into the closure here or not at all.
+-- Setting either to 0 or below disables that half; the guard is then inert
+-- rather than absent, which is what an operator wanting to reproduce a loop
+-- needs.
+
+import std/env (getEnvOr)
+import std/option (Some, None)
+import std/string (stringToInt)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, ToolPolicy, SolverJudge,
+  ExtCtx, ToolCallEnvelope, ToolPolicyDecision,
+  FinalizeOutcome
+)
+import pkg/sunholo/motoko_ext_repetition_guard/repetition_guard (
+  call_budget, answer_budget, decide_call_with_budget, decide_answer_with_budget
+)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None => fallback
+  }
+}
+
+export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS} {
+  let calls = parse_int_or(getEnvOr("MOTOKO_REPEAT_CALL_BUDGET", ""), call_budget());
+  let answers = parse_int_or(getEnvOr("MOTOKO_REPEAT_ANSWER_BUDGET", ""), answer_budget());
+  let policy = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+    decide_call_with_budget(ctx, call, calls)
+  };
+  let finalize = func(ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process} {
+    { decision: decide_answer_with_budget(ctx, candidate, answers), next_state: ctx.world }
+  };
+  [
+    ToolPolicy(policy),
+    SolverJudge(finalize)
+  ]
+}

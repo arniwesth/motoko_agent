@@ -1,11 +1,18 @@
 services:
   clickstack:
     image: clickhouse/clickstack-all-in-one:2.21.0
+    # Bind address is a variable that DEFAULTS TO LOOPBACK, so this stack is not reachable off-box unless
+    # someone opts in. Port 8123 is an UNAUTHENTICATED ClickHouse (default user, empty password); with a
+    # bare "18123:8123" it published on 0.0.0.0 — every host interface, a VPN or mesh/overlay one
+    # included — where any peer could run arbitrary SQL. This is a *deploy* stack, so remote reach can be the point:
+    # to expose it deliberately, set CLICKSTACK_BIND=0.0.0.0 (or a specific interface IP) in the
+    # environment — and when you do, give ClickHouse a real password, because 0.0.0.0 + empty password is
+    # the exact combination this default exists to prevent.
     ports:
-      - "8081:8080"
-      - "18123:8123"
-      - "4317:4317"
-      - "4318:4318"
+      - "${CLICKSTACK_BIND:-127.0.0.1}:8081:8080"
+      - "${CLICKSTACK_BIND:-127.0.0.1}:18123:8123"
+      - "${CLICKSTACK_BIND:-127.0.0.1}:4317:4317"
+      - "${CLICKSTACK_BIND:-127.0.0.1}:4318:4318"
     volumes:
       - clickstack-db:/data/db
       - clickstack-ch:/var/lib/clickhouse

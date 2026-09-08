@@ -1,0 +1,28 @@
+[package]
+name = "sunholo/motoko_ext_test_dummy"
+version = "0.2.2"
+edition = "1"
+ailang = ">=0.17.0"
+description = "Minimal no-op motoko_agent extension for testing the generate-extension-registry pipeline"
+license = "Apache-2.0"
+
+[exports]
+modules = ["sunholo/motoko_ext_test_dummy/register"]
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+
+[effects]
+max = ["Env"]
+
+[metadata]
+tags = ["motoko", "extension", "test", "dummy"]
+ai_summary = "Minimal echo extension for motoko_agent. Passes through all hooks with NoOpinion/Delegate/NoIntercept/NoDecision defaults. Used to validate the generate-extension-registry pipeline."
+repository = "https://github.com/sunholo-data/ailang-packages/tree/main/packages/motoko-ext-test-dummy"
+license_url = "https://github.com/sunholo-data/ailang-packages/blob/main/LICENSE"
+
+[cascade]
+max_cost_usd = 0.25
+
+[stability]
+level = "experimental"

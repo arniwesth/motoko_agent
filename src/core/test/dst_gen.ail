@@ -1,0 +1,15 @@
+-- Seeded DST generator helpers.
+
+module src/core/test/dst_gen
+
+import std/list (length, nth)
+import std/option (Some, None)
+import std/rand (rand_int)
+
+-- The caller guarantees xs is non-empty.
+export func pick_int(xs: [int]) -> int ! {Rand} {
+  match nth(xs, rand_int(0, length(xs) - 1)) {
+    Some(value) => value,
+    None => 0
+  }
+}

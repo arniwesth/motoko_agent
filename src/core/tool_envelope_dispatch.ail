@@ -33,7 +33,7 @@ func native_result(call: ToolCallEnvelope, payload: Json) -> ToolResultEnvelope 
   }
 }
 
-export func dispatch_tool_envelope(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolResultEnvelope ! {IO, Clock, FS, Process, AI, Env, Net, SharedMem, Stream} {
+export func dispatch_tool_envelope(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolResultEnvelope ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand} {
   if call.tool == "scratchpad" || call.tool == "Scratchpad" then
     error_result(call, "recursive scratchpad loopback is disabled")
   else {
@@ -41,7 +41,7 @@ export func dispatch_tool_envelope(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEn
       Deny(reason) => error_result(call, "denied by policy: ${reason}"),
       Pending(reason, _) => error_result(call, "pending approval is not available inside scratchpad loopback: ${reason}"),
       _ => {
-        match dispatch_tool_handle(rt, ctx, call) {
+        match dispatch_tool_handle(rt, ctx, call).decision {
           Handled(result) => result,
           Delegate => {
             match run_native_batch([call], ctx.workdir) {

@@ -1,0 +1,12 @@
+-- TWO-SIDED CONTROL, import side.
+-- Without this the suite is passed by a classifier that resolves nothing: every
+-- rejection fixture would still be reported correctly and no fixture would ever
+-- be found AMBIENT.  `std/env.getEnvOr` performs {Env} through an ambient
+-- import, not through an ExtPorts field.
+module fixtures/control_ambient_import
+
+import std/env (getEnvOr)
+
+export func emit(k: string) -> string ! {Env} {
+  getEnvOr(k, "")
+}

@@ -1,0 +1,25 @@
+-- TWO CONSTRUCTORS IN ONE ELEMENT.  `A(f) ++ B(g)` sits INSIDE the literal
+-- list, so the depth-0 comma split sees a single element and the element
+-- pattern `Kind\s*\((.*)\)` accepts it whole -- its greedy `.*` swallows
+-- `policy) ++ PromptShaper(shape`.  One atom would be emitted for two
+-- capabilities, and a comma count agrees with that reading.  The depth-0
+-- constructor-head count is what disagrees.  Fail closed.
+--
+-- Distinct from `reject_capability_list_computed`, where the `++` is OUTSIDE
+-- the brackets and the literal-list check rejects it before the elements are
+-- read at all.
+module fixture/reject_capability_list_juxtaposed
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ToolPolicyDecision, PromptPatch)
+
+func policy(ctx: ExtCtx, _call: string) -> ToolPolicyDecision ! {Process} {
+  { decision: { NoOpinion }, next_state: ctx.world }
+}
+
+func shape(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  [ToolPolicy(policy) ++ PromptShaper(shape)]
+}

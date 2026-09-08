@@ -6,7 +6,7 @@ import std/option (Option, Some, None)
 import std/sem (make_frame_at, store_frame, load_frame)
 import std/string (toLower, trim, contains, startsWith)
 
-import pkg/sunholo/motoko_ext_abi/types (ToolCallEnvelope, ExtCtx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
+import pkg/sunholo/motoko_ext_abi/types (ToolHandleOutcome, ToolCallEnvelope, ExtCtx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
 import pkg/sunholo/motoko_ext_context_mode/types (CtxConfig)
 import pkg/sunholo/motoko_ext_context_mode/exec (run_context_mode, run_context_mode_fire_and_forget)
 import pkg/sunholo/motoko_ext_context_mode/prompts (build_prompt_patch)
@@ -160,7 +160,7 @@ export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> Promp
   build_prompt_patch(cached_prompt, "")
 }
 
-export func on_tool_handle(cfg: CtxConfig, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, SharedMem} {
+export func on_tool_handle(cfg: CtxConfig, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process, SharedMem}  { { decision: {
   let canonical = canonical_tool_name(call.tool);
   if canonical == "" then Delegate
   else {
@@ -174,9 +174,9 @@ export func on_tool_handle(cfg: CtxConfig, ctx: ExtCtx, call: ToolCallEnvelope) 
       }
     }
   }
-}
+}, next_state: ctx.world } }
 
-export func finalize_with_index(cfg: CtxConfig, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {Process} {
+export func finalize_with_index(cfg: CtxConfig, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {Process}  {
   let idx_args = jo([
     kv("content", js(candidate)),
     kv("source", js("motoko:final_output")),

@@ -1,0 +1,1109 @@
+-- WI-B2b. The world token's codec: `WorldState` across the extension seam.
+--
+-- WHY THIS MODULE EXISTS, in one sentence: `packages/motoko-ext-abi` cannot
+-- name `src/core/ports.WorldState`, because `motoko_core` depends on the ABI and
+-- the dependency cannot invert — so the successor crosses the seam as an OPAQUE
+-- Json token (`ExtWorld`) and this module is the only place that opens it.
+--
+-- The alternatives, and why the ABI's own inlining idiom does not extend here,
+-- are argued at `ExtWorld`'s declaration in the ABI. The short version: AILANG
+-- unifies records STRUCTURALLY, which is why `Msg` and `ToolCallEnvelope` can be
+-- inlined there and passed core values, but it unifies sums NOMINALLY — and
+-- `WorldState` transitively contains `IdentityBody`, `OutcomeStatus` and the
+-- generator's sums. A mirrored world would not type-check at the seam.
+--
+-- THE ONE FAILURE MODE, and it is the reason `ext_world_test.ail` exists: a
+-- field the encoder writes and the decoder ignores. Both halves type-check, the
+-- world silently loses a cursor, and every count still balances — plan S7's
+-- record-level rule, which the round-trip suite asserts field by field with no
+-- two values equal.
+--
+-- D1 is not weakened by the round trip. The world has exactly ONE home; this is
+-- a transport, and `token_to_world` is total — a token that does not decode
+-- yields `empty_world_state()` rather than a partially-filled world, because a
+-- half-decoded cursor is F6 with extra steps.
+
+module src/core/ext_world
+
+import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray, asObject)
+-- NOT decoration. `std/json`'s accessors return `Option`, and without this
+-- import `None` and `Some(j)` in a match arm are FRESH VARIABLE BINDINGS rather
+-- than constructor patterns: the first arm matches everything, the second is
+-- unreachable, every field reads back as its fallback, and the module
+-- type-checks clean with no warning. `src/core/ports.ail` carries the same note
+-- because that is exactly what happened while its codecs were being written.
+import std/option (Option, Some, None)
+import std/list as List (length)
+import std/result (Ok, Err)
+import std/ai (ToolCall)
+-- WI-D18: `FsNode` is the kinded `WorldState.files` entry — see that field for
+-- the representation argument. The token has to carry the kind explicitly.
+import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
+-- WI-D22 moved `FsNode` out of `ports` into a std-only module so that
+-- `dst_program` could name it without importing the port layer, and exported the
+-- KIND VOCABULARY with it. This codec and `dst_persistence`'s are deliberately
+-- separate — different formats, different lifetimes, opposite and both-correct
+-- answers on an entry they cannot read — and they now share exactly the two
+-- functions that decide what "file" and "dir" are called on a wire.
+import src/core/fs_node (FsNode, FsFile, FsDir, fs_kind_id, fs_content_of, fs_node_of_kind)
+import src/core/dst_interaction (
+  Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  -- WI-D17. The identity round trip is asserted with the sum's OWN equality
+  -- rather than by re-matching each variant at the assertion site, because a
+  -- comparison written here is a second notion of "same identity" that can
+  -- disagree with strict replay's — the drift `dst_interaction`'s header rejects.
+  identity_body_eq, identity_kind, all_interaction_kinds
+)
+import src/core/dst_generator (GeneratorState, GeneratorBounds, BoundFailure)
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld)
+
+-- ---------------------------------------------------------------------------
+-- accessors. Deliberate copies of `ports.ail`'s private ones rather than an
+-- export widening: these are three-line total readers, and exporting them from
+-- `ports` would put four new names on a module 34 exports wide to save nine
+-- lines here.
+-- ---------------------------------------------------------------------------
+
+pure func str_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(v) => v }
+  }
+}
+
+pure func int_field(obj: Json, key: string, fallback: int) -> int {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asNumber(j) { None => fallback, Some(v) => _float_to_int(v) }
+  }
+}
+
+pure func bool_field(obj: Json, key: string, fallback: bool) -> bool {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asBool(j) { None => fallback, Some(v) => v }
+  }
+}
+
+pure func json_array(obj: Json, key: string) -> [Json] {
+  match get(obj, key) {
+    None => [],
+    Some(j) => match asArray(j) { None => [], Some(xs) => xs }
+  }
+}
+
+pure func obj_field(obj: Json, key: string) -> Json {
+  match get(obj, key) { None => jo([]), Some(j) => j }
+}
+
+pure func jint(n: int) -> Json { jnum(_int_to_float(n)) }
+
+-- ---------------------------------------------------------------------------
+-- strings <-> [string]
+-- ---------------------------------------------------------------------------
+
+pure func strings_json(xs: [string]) -> [Json] {
+  match xs { [] => [], x :: rest => js(x) :: strings_json(rest) }
+}
+
+pure func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (match asString(x) { None => "", Some(v) => v }) :: strings_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- ToolCall
+-- ---------------------------------------------------------------------------
+
+pure func tool_call_json(c: ToolCall) -> Json {
+  jo([kv("id", js(c.id)), kv("name", js(c.name)), kv("arguments", js(c.arguments))])
+}
+
+pure func tool_calls_json(cs: [ToolCall]) -> [Json] {
+  match cs { [] => [], c :: rest => tool_call_json(c) :: tool_calls_json(rest) }
+}
+
+pure func tool_calls_of(xs: [Json]) -> [ToolCall] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ id: str_field(x, "id", ""),
+         name: str_field(x, "name", ""),
+         arguments: str_field(x, "arguments", "") }) :: tool_calls_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- ScriptedStep / ScriptedTool
+-- ---------------------------------------------------------------------------
+
+pure func scripted_step_json(s: ScriptedStep) -> Json {
+  jo([
+    kv("prose", js(s.prose)),
+    kv("tool_calls", ja(tool_calls_json(s.tool_calls))),
+    kv("input_tokens", jint(s.input_tokens)),
+    kv("output_tokens", jint(s.output_tokens)),
+    kv("finish_reason", js(s.finish_reason)),
+    kv("chunks", ja(strings_json(s.chunks))),
+    -- WI-B2b's two ScriptedStep widenings, and they are separate changes: the
+    -- FAULT is an error case, the LATENCY is a duration. Both are carried here
+    -- because this token is a transport for the whole world, not a wire format
+    -- — contrast `encode_provider_outcome`, where `advance_ms` deliberately
+    -- travels beside the payload rather than inside it.
+    kv("error_code", js(s.error_code)),
+    kv("error_message", js(s.error_message)),
+    kv("advance_ms", jint(s.advance_ms))
+  ])
+}
+
+pure func scripted_steps_json(xs: [ScriptedStep]) -> [Json] {
+  match xs { [] => [], x :: rest => scripted_step_json(x) :: scripted_steps_json(rest) }
+}
+
+pure func scripted_steps_of(xs: [Json]) -> [ScriptedStep] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ prose: str_field(x, "prose", ""),
+         tool_calls: tool_calls_of(json_array(x, "tool_calls")),
+         input_tokens: int_field(x, "input_tokens", 0),
+         output_tokens: int_field(x, "output_tokens", 0),
+         finish_reason: str_field(x, "finish_reason", ""),
+         chunks: strings_of(json_array(x, "chunks")),
+         error_code: str_field(x, "error_code", ""),
+         error_message: str_field(x, "error_message", ""),
+         advance_ms: int_field(x, "advance_ms", 0) }) :: scripted_steps_of(rest)
+  }
+}
+
+pure func scripted_tool_json(t: ScriptedTool) -> Json {
+  jo([
+    kv("tool_call_id", js(t.tool_call_id)),
+    kv("duration_ms", jint(t.duration_ms)),
+    kv("code", js(t.code)),
+    kv("message", js(t.message)),
+    kv("content", js(t.content)),
+    -- WI-D22. The world token must carry it or every hook that adopts the world
+    -- back silently zeroes the exit codes of the whole tool queue — the failure
+    -- this codec's own header describes for `files`, one field over. Its
+    -- decoder's fallback is `-1` ("nothing said"), not 0, for
+    -- `ScriptedTool.exit_code`'s stated reason: 0 is a claim of success.
+    kv("exit_code", jint(t.exit_code))
+  ])
+}
+
+pure func scripted_tools_json(xs: [ScriptedTool]) -> [Json] {
+  match xs { [] => [], x :: rest => scripted_tool_json(x) :: scripted_tools_json(rest) }
+}
+
+pure func scripted_tools_of(xs: [Json]) -> [ScriptedTool] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ tool_call_id: str_field(x, "tool_call_id", ""),
+         duration_ms: int_field(x, "duration_ms", 0),
+         code: str_field(x, "code", ""),
+         message: str_field(x, "message", ""),
+         content: str_field(x, "content", ""),
+         exit_code: int_field(x, "exit_code", -1) }) :: scripted_tools_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- env pairs
+-- ---------------------------------------------------------------------------
+
+pure func env_json(xs: [{ key: string, value: string }]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => jo([kv("key", js(x.key)), kv("value", js(x.value))]) :: env_json(rest)
+  }
+}
+
+pure func env_of(xs: [Json]) -> [{ key: string, value: string }] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ key: str_field(x, "key", ""), value: str_field(x, "value", "") }) :: env_of(rest)
+  }
+}
+
+-- WI-D3's file table across the token. It has to cross: the driver ADOPTS the
+-- world an extension hook returns (`token_to_world` at five sites in
+-- session.ail), so a field the encoder omits is a field every hook silently
+-- empties mid-run. The decoder would still type-check — `world_of_json` builds a
+-- full record and AILANG demands every label — but the ENCODER omitting a key is
+-- the half nothing forces, and `codec_fixture_world` carries a distinct `files`
+-- entry so the round trip fails rather than the run.
+--
+-- WI-D18 MADE THE ENTRY KINDED and the codec carries the kind EXPLICITLY, in its
+-- own key, rather than inferring it. Inference was available and is exactly the
+-- defect this codec's own header warns about: "a directory is an entry with no
+-- content" would read every present-but-EMPTY FILE back as a directory, and the
+-- present-but-empty file is the case the fixture below already exists to pin.
+-- One key, two states, no derivation.
+--
+-- The decoder's fallback is `FsFile` rather than `FsDir`, and the choice matters
+-- because `str_field` is total: a token written by an older build carries no
+-- `kind` key at all, and every entry such a build could have written WAS a file.
+-- Falling back to `FsDir` would silently turn an old world's whole file table
+-- into directories.
+--
+-- WI-D22 REPLACED THE LITERALS `"file"` AND `"dir"` HERE WITH `fs_kind_id`, and
+-- the reason is that `dst_persistence` now writes the same two tokens into a
+-- FROZEN ARTIFACT. Two encodings of one structure is the two-homes shape WI-D16
+-- and WI-D17 both argued from, and this time both homes are in this tree. The
+-- codecs stay separate on purpose — see `src/core/fs_node`'s header for the
+-- three ways they legitimately differ, of which the fallback below is one — but
+-- the token vocabulary is now written in exactly one place and read in two,
+-- rather than spelled out in two and compared by nobody.
+pure func file_entry_json(x: { path: string, node: FsNode }) -> Json {
+  jo([kv("path", js(x.path)),
+      kv("kind", js(fs_kind_id(x.node))),
+      kv("content", js(fs_content_of(x.node)))])
+}
+
+-- The fallback stated above, unchanged and now explicit about which case it is
+-- catching: an OLD TOKEN with no `kind` key at all, whose every entry was a
+-- file. `fs_node_of_kind` returns `None` for the empty string, so the default
+-- and the unknown-kind case land on the same arm here — which is correct for a
+-- token and is exactly what `dst_persistence` refuses to do for an artifact.
+pure func fs_node_of(j: Json) -> FsNode {
+  match fs_node_of_kind(str_field(j, "kind", ""), str_field(j, "content", "")) {
+    Some(n) => n,
+    None => FsFile(str_field(j, "content", ""))
+  }
+}
+
+pure func files_json(xs: [{ path: string, node: FsNode }]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => file_entry_json(x) :: files_json(rest)
+  }
+}
+
+pure func files_of(xs: [Json]) -> [{ path: string, node: FsNode }] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ path: str_field(x, "path", ""), node: fs_node_of(x) }) :: files_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- IdentityBody. A SUM, and the discriminator is written explicitly rather than
+-- derived from `identity_kind`: that function's strings are an artifact surface
+-- with a schema version, and reusing them here would couple this transport to
+-- a versioned wire format for no gain. An unrecognised tag decodes to
+-- `ClockAdvanceIdentity`, which is the nullary variant — see `token_to_world`
+-- on why a total decoder is the right shape.
+-- ---------------------------------------------------------------------------
+
+pure func identity_body_json(b: IdentityBody) -> Json {
+  match b {
+    ProviderIdentity(origin, step, model) =>
+      jo([kv("t", js("provider")), kv("a", js(origin)), kv("b", jint(step)), kv("c", js(model))]),
+    ToolIdentity(origin, call_id, name) =>
+      jo([kv("t", js("tool")), kv("a", js(origin)), kv("b", js(call_id)), kv("c", js(name))]),
+    ApprovalIdentity(origin, call_id, name) =>
+      jo([kv("t", js("approval")), kv("a", js(origin)), kv("b", js(call_id)), kv("c", js(name))]),
+    ExtensionEffectIdentity(ext_id, class_id, call_id) =>
+      jo([kv("t", js("extension_effect")), kv("a", js(ext_id)), kv("b", js(class_id)), kv("c", js(call_id))]),
+    EnvironmentReadIdentity(key) =>
+      jo([kv("t", js("environment_read")), kv("a", js(key))]),
+    RandomDrawIdentity(label) =>
+      jo([kv("t", js("random_draw")), kv("a", js(label))]),
+    ClockAdvanceIdentity =>
+      jo([kv("t", js("clock_advance"))]),
+    FileWriteIdentity(path) =>
+      jo([kv("t", js("file_write")), kv("a", js(path))]),
+    FileRemoveIdentity(path) =>
+      jo([kv("t", js("file_remove")), kv("a", js(path))]),
+    DirMakeIdentity(path) =>
+      jo([kv("t", js("dir_make")), kv("a", js(path))])
+  }
+}
+
+pure func identity_body_of(j: Json) -> IdentityBody {
+  let t = str_field(j, "t", "");
+  if t == "provider" then
+    ProviderIdentity(str_field(j, "a", ""), int_field(j, "b", 0), str_field(j, "c", ""))
+  else if t == "tool" then
+    ToolIdentity(str_field(j, "a", ""), str_field(j, "b", ""), str_field(j, "c", ""))
+  else if t == "approval" then
+    ApprovalIdentity(str_field(j, "a", ""), str_field(j, "b", ""), str_field(j, "c", ""))
+  else if t == "extension_effect" then
+    ExtensionEffectIdentity(str_field(j, "a", ""), str_field(j, "b", ""), str_field(j, "c", ""))
+  else if t == "environment_read" then
+    EnvironmentReadIdentity(str_field(j, "a", ""))
+  else if t == "random_draw" then
+    RandomDrawIdentity(str_field(j, "a", ""))
+  else if t == "file_write" then
+    FileWriteIdentity(str_field(j, "a", ""))
+  else if t == "file_remove" then
+    FileRemoveIdentity(str_field(j, "a", ""))
+  else if t == "dir_make" then
+    DirMakeIdentity(str_field(j, "a", ""))
+  else
+    ClockAdvanceIdentity
+}
+
+-- ---------------------------------------------------------------------------
+-- OutcomeStatus / StreamChunkRecord / TimedOutcome / Interaction
+-- ---------------------------------------------------------------------------
+
+pure func outcome_status_json(s: OutcomeStatus) -> Json {
+  match s {
+    OutcomeOk => js("ok"),
+    OutcomeFault => js("fault"),
+    OutcomeMissing => js("missing")
+  }
+}
+
+pure func outcome_status_of(j: Json, key: string) -> OutcomeStatus {
+  let s = str_field(j, key, "");
+  if s == "fault" then OutcomeFault
+  else if s == "missing" then OutcomeMissing
+  else OutcomeOk
+}
+
+pure func chunk_records_json(xs: [StreamChunkRecord]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      jo([kv("offset_ms", jint(x.offset_ms)), kv("text", js(x.text))]) :: chunk_records_json(rest)
+  }
+}
+
+pure func chunk_records_of(xs: [Json]) -> [StreamChunkRecord] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ offset_ms: int_field(x, "offset_ms", 0),
+         text: str_field(x, "text", "") }) :: chunk_records_of(rest)
+  }
+}
+
+pure func timed_outcome_json(o: TimedOutcome) -> Json {
+  jo([
+    kv("advance_ms", jint(o.advance_ms)),
+    kv("chunks", ja(chunk_records_json(o.chunks))),
+    kv("payload", js(o.payload)),
+    kv("status", outcome_status_json(o.status)),
+    kv("fault_class_id", js(o.fault_class_id))
+  ])
+}
+
+pure func timed_outcome_of(j: Json) -> TimedOutcome {
+  { advance_ms: int_field(j, "advance_ms", 0),
+    chunks: chunk_records_of(json_array(j, "chunks")),
+    payload: str_field(j, "payload", ""),
+    status: outcome_status_of(j, "status"),
+    fault_class_id: str_field(j, "fault_class_id", "") }
+}
+
+pure func interaction_json(i: Interaction) -> Json {
+  jo([
+    kv("ordinal", jint(i.identity.ordinal)),
+    kv("body", identity_body_json(i.identity.body)),
+    kv("request_projection", js(i.request_projection)),
+    kv("deadline_ms", jint(i.deadline_ms)),
+    kv("outcome", timed_outcome_json(i.outcome))
+  ])
+}
+
+pure func interactions_json(xs: [Interaction]) -> [Json] {
+  match xs { [] => [], x :: rest => interaction_json(x) :: interactions_json(rest) }
+}
+
+pure func interactions_of(xs: [Json]) -> [Interaction] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ identity: { ordinal: int_field(x, "ordinal", 0),
+                     body: identity_body_of(obj_field(x, "body")) },
+         request_projection: str_field(x, "request_projection", ""),
+         deadline_ms: int_field(x, "deadline_ms", 0),
+         outcome: timed_outcome_of(obj_field(x, "outcome")) }) :: interactions_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- GeneratorState
+-- ---------------------------------------------------------------------------
+
+pure func bound_failures_json(xs: [BoundFailure]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      jo([kv("bound", js(x.bound)), kv("limit", jint(x.limit)),
+          kv("requested", jint(x.requested))]) :: bound_failures_json(rest)
+  }
+}
+
+pure func bound_failures_of(xs: [Json]) -> [BoundFailure] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ bound: str_field(x, "bound", ""),
+         limit: int_field(x, "limit", 0),
+         requested: int_field(x, "requested", 0) }) :: bound_failures_of(rest)
+  }
+}
+
+pure func bounds_json(b: GeneratorBounds) -> Json {
+  jo([
+    kv("max_interactions", jint(b.max_interactions)),
+    kv("max_chunks_per_interaction", jint(b.max_chunks_per_interaction)),
+    kv("max_payload_bytes", jint(b.max_payload_bytes)),
+    kv("max_resource_size", jint(b.max_resource_size)),
+    kv("max_clock_advance_ms", jint(b.max_clock_advance_ms)),
+    kv("chunk_draw_hi", jint(b.chunk_draw_hi))
+  ])
+}
+
+pure func bounds_of(j: Json) -> GeneratorBounds {
+  { max_interactions: int_field(j, "max_interactions", 0),
+    max_chunks_per_interaction: int_field(j, "max_chunks_per_interaction", 0),
+    max_payload_bytes: int_field(j, "max_payload_bytes", 0),
+    max_resource_size: int_field(j, "max_resource_size", 0),
+    max_clock_advance_ms: int_field(j, "max_clock_advance_ms", 0),
+    -- THREE, and it is the only default in this record that is not zero. A token
+    -- written by a build that predates the field carries no `chunk_draw_hi`, and
+    -- what that build MEANT is 3 — the literal its `choose_provider` drew from.
+    -- Zero would be a generator that draws no chunks, which is a different world
+    -- handed to an extension. Same decision as `dst_persistence.chunk_draw_hi_of`,
+    -- made on the same grounds; the fields above it are limits, where zero is the
+    -- tightest value and an absent limit legitimately reads as no headroom.
+    chunk_draw_hi: int_field(j, "chunk_draw_hi", 3) }
+}
+
+pure func generator_json(g: GeneratorState) -> Json {
+  jo([
+    kv("id", js(g.id)),
+    kv("version", js(g.version)),
+    kv("seed", jint(g.seed)),
+    kv("rng", jint(g.rng)),
+    kv("draws", jint(g.draws)),
+    kv("approvals_closed", jb(g.approvals_closed)),
+    kv("bounds", bounds_json(g.bounds)),
+    kv("failures", ja(bound_failures_json(g.failures)))
+  ])
+}
+
+pure func generator_of(j: Json) -> GeneratorState {
+  { id: str_field(j, "id", ""),
+    version: str_field(j, "version", ""),
+    seed: int_field(j, "seed", 0),
+    rng: int_field(j, "rng", 0),
+    draws: int_field(j, "draws", 0),
+    approvals_closed: bool_field(j, "approvals_closed", false),
+    bounds: bounds_of(obj_field(j, "bounds")),
+    failures: bound_failures_of(json_array(j, "failures")) }
+}
+
+-- ---------------------------------------------------------------------------
+-- The seam itself
+-- ---------------------------------------------------------------------------
+
+export pure func world_json(w: WorldState) -> Json {
+  jo([
+    kv("script", ja(scripted_steps_json(w.script))),
+    kv("clock_ms", jint(w.clock_ms)),
+    kv("approvals", ja(strings_json(w.approvals))),
+    kv("env", ja(env_json(w.env))),
+    kv("files", ja(files_json(w.files))),
+    kv("tools", ja(scripted_tools_json(w.tools))),
+    -- WI-D24's two fields, and both HAVE to cross or the seam they exist for
+    -- does not work. `ext_effects` is the queue an extension's dispatch is
+    -- served from, and this transport is the only path between the driver's
+    -- world and the bridge that consumes it — a token that dropped it would hand
+    -- every extension an empty queue, which the adapter answers by performing a
+    -- REAL subprocess. `holder_ext_id` is the id the eighth recording adapter
+    -- writes into the interaction's identity; a token that dropped it would
+    -- record every extension effect as belonging to nobody, which
+    -- `validate_identity` rejects.
+    --
+    -- The first failure is silent and the second is loud, which is exactly the
+    -- asymmetry this module's header warns about — so both are asserted field by
+    -- field in the round trip below, with values distinct from every other.
+    kv("ext_effects", ja(scripted_tools_json(w.ext_effects))),
+    kv("holder_ext_id", js(w.holder_ext_id)),
+    kv("log", ja(interactions_json(w.log))),
+    kv("gen", generator_json(w.gen))
+  ])
+}
+
+export pure func world_of_json(j: Json) -> WorldState {
+  { script: scripted_steps_of(json_array(j, "script")),
+    clock_ms: int_field(j, "clock_ms", 0),
+    approvals: strings_of(json_array(j, "approvals")),
+    env: env_of(json_array(j, "env")),
+    files: files_of(json_array(j, "files")),
+    tools: scripted_tools_of(json_array(j, "tools")),
+    ext_effects: scripted_tools_of(json_array(j, "ext_effects")),
+    holder_ext_id: str_field(j, "holder_ext_id", ""),
+    log: interactions_of(json_array(j, "log")),
+    gen: generator_of(obj_field(j, "gen")) }
+}
+
+-- The extension-facing pair. `world_to_token` is total; `token_to_world` is
+-- total by construction because every accessor above carries a fallback.
+--
+-- The token is `Json` and not an encoded STRING deliberately: `ExtWorld.token`
+-- is never parsed by extension code, so a string would buy nothing and would add
+-- an `encode`/`decode` pair that can fail, on a path that currently cannot.
+export pure func world_to_token(w: WorldState) -> ExtWorld {
+  { token: world_json(w) }
+}
+
+export pure func token_to_world(t: ExtWorld) -> WorldState {
+  world_of_json(t.token)
+}
+
+-- WI-D24. THE HOLDER STAMP, and this module is its home for the reason the
+-- header gives: it is the only place the opaque token is opened, and a second
+-- opener is a second decoder that can disagree with this one.
+--
+-- `ext/runtime`'s fold calls `stamp_holder` at the moment it has chosen which
+-- hook to run — the ONE place in the tree that knows which extension is about to
+-- perform an effect — and the four world-threading dispatchers call
+-- `clear_holder` on the way out so the driver never holds a stale holder. The
+-- pair is deliberately not one function with a flag: the two calls are made by
+-- different code for different reasons, and reading `stamp_holder(w, "")` at a
+-- dispatcher's return would say the driver is an extension named "".
+--
+-- IT COSTS A DECODE AND AN ENCODE per hook, which is the price of the token
+-- being Json rather than a record: `std/json` offers no way to add a key to an
+-- object without rebuilding it, so going through `WorldState` is both the
+-- cheapest correct implementation and the one that cannot drift from
+-- `world_json`'s field list.
+export pure func stamp_holder(t: ExtWorld, ext_id: string) -> ExtWorld {
+  { token: put_key(t.token, "holder_ext_id", js(ext_id)) }
+}
+
+export pure func clear_holder(t: ExtWorld) -> ExtWorld {
+  { token: put_key(t.token, "holder_ext_id", js("")) }
+}
+
+-- THE STAMP IS A KEY-SET AND NOT A WORLD ROUND TRIP, AND THAT IS A CORRECTION
+-- MADE ON CONTACT RATHER THAN A PREFERENCE. The first implementation was
+-- `world_to_token({ token_to_world(t) | holder_ext_id: id })`, which is shorter
+-- and is WRONG for a reason the type cannot show: `token_to_world` is TOTAL, so
+-- a token this module did not write decodes to `empty_world_state()` and the
+-- re-encode replaces it. `declared_vs_performed`'s trace ports hand the fold
+-- exactly such a token — `{ token: jo([kv("trace", …)]) }`, a deliberate
+-- fabrication whose whole job is to record which seams a hook called — and the
+-- round-trip form silently erased it, taking two reachability rows with it.
+--
+-- The rule the correction establishes, and it is wider than this field: THE HOST
+-- MUST NOT REWRITE A TOKEN IT DID NOT BUILD. `ExtWorld` is documented as opaque
+-- to extensions; opacity has to run both ways or "opaque" means "the host may
+-- reinterpret it". `put_key` therefore edits the object's own key set and is the
+-- IDENTITY on anything that is not a Json object.
+pure func put_key(obj: Json, key: string, v: Json) -> Json {
+  match asObject(obj) {
+    Some(fields) => jo(drop_key(fields, key) ++ [kv(key, v)]),
+    -- Not an object: nothing to set, and nothing may be destroyed to say so.
+    None => obj
+  }
+}
+
+pure func drop_key(fields: [{ key: string, value: Json }], key: string) -> [{ key: string, value: Json }] {
+  match fields {
+    [] => [],
+    f :: rest => if f.key == key then drop_key(rest, key) else f :: drop_key(rest, key)
+  }
+}
+
+-- The identity a hook that performs no world-threading effect returns. Named so
+-- that a reader of an extension sees "I did not touch the world" rather than a
+-- bare field copy, and so the grep for world-passing sites finds it.
+export pure func unchanged_world(t: ExtWorld) -> ExtWorld { t }
+
+-- ---------------------------------------------------------------------------
+-- The round trip. Plan S7's record-level rule: a codec's failure mode is a
+-- field the encoder writes and the decoder ignores, or the reverse. Both halves
+-- type-check and the loss is silent until a replay serves a different response
+-- while every count still balances.
+--
+-- EVERY quantity below is DISTINCT. That is the whole mechanism — a fixture
+-- whose values repeat cannot distinguish which field a check is reading, so a
+-- decoder that reads `output_tokens` into `input_tokens` would pass. The two
+-- `advance_ms` values (449 on the script entry, 617 in the log) are deliberately
+-- different from each other for the same reason: they are the two places a
+-- duration lives, and confusing them is the defect this catches.
+--
+-- The world here also carries every SHAPE the token must survive: a script
+-- entry WITH a fault and WITHOUT one, a non-empty approvals queue, an env pair,
+-- a scripted tool, an interaction whose identity is a payload-carrying variant,
+-- and a generator with a recorded bound failure. A field that no fixture
+-- populates is a field the round trip cannot check.
+-- ---------------------------------------------------------------------------
+
+pure func codec_fixture_world() -> WorldState {
+  { script: [
+      { prose: "s0 prose", tool_calls: [{ id: "c-11", name: "Read", arguments: "{\"p\":1}" }],
+        input_tokens: 101, output_tokens: 103, finish_reason: "tool_calls",
+        chunks: ["ch-a", "ch-b"], error_code: "", error_message: "", advance_ms: 449 },
+      -- The faulted entry: WI-B2b widening 1 must survive the transport, and it
+      -- is a SECOND entry so that a decoder collapsing the list is visible.
+      { prose: "s1 prose", tool_calls: [], input_tokens: 107, output_tokens: 109,
+        finish_reason: "stop", chunks: [], error_code: "provider_error_retryable",
+        error_message: "upstream 503", advance_ms: 457 }
+    ],
+    clock_ms: 1213,
+    approvals: ["yes", "no", ""],
+    env: [{ key: "MOTOKO_MODE", value: "dst" }],
+    -- WI-D3's file table. TWO entries so a decoder that collapses the list is
+    -- visible, and the second holds "" content at a path that EXISTS — the one
+    -- state `FileRead.exists` carries that content alone cannot express.
+    -- WI-D18 kinded the entries and added a THIRD: an explicit EMPTY DIRECTORY.
+    -- It is the entry whose whole purpose is to be indistinguishable from an
+    -- absent path under a codec that drops the kind — the transport analogue of
+    -- the representation argument at `WorldState.files`. Note that it and the
+    -- present-but-empty FILE serialise to the same `content: ""`, so `kind` is
+    -- the only thing keeping them apart on the wire.
+    files: [{ path: "/w/catalog.json", node: FsFile("{\"context_limits\":{\"m\":71}}") },
+            { path: "/w/present-but-empty.json", node: FsFile("") },
+            { path: "/w/empty-dir", node: FsDir }],
+    -- WI-D22: `exit_code: 211`, distinct from every other quantity in this
+    -- fixture (199, 1213, 107, 109, 457, 5, 7, 311, 617, 23, 29, 31, 37), per
+    -- S7 — a fixture holding -1 or 0 here could not distinguish a field that
+    -- round-tripped from one the decoder defaulted.
+    tools: [{ tool_call_id: "t-17", duration_ms: 199, code: "E_TOOL",
+              message: "tool said no", content: "the content", exit_code: 211 }],
+    -- WI-D24's extension-effect cursor. TWO entries against the tool queue's
+    -- one, and every quantity distinct from every other in this fixture (S7):
+    -- the failure this catches is a decoder reading `ext_effects` out of
+    -- `tools`, which a same-length pair of queues could not distinguish. The
+    -- blank `tool_call_id` is this class's real shape, so the fixture holds it.
+    ext_effects: [{ tool_call_id: "", duration_ms: 223, code: "",
+                    message: "", content: "ext content", exit_code: 227 },
+                  { tool_call_id: "", duration_ms: 229, code: "E_EXT",
+                    message: "ext said no", content: "", exit_code: 233 }],
+    -- The holder. A value no other field in this fixture holds, because the
+    -- decoder's failure mode here is reading it out of some other string.
+    holder_ext_id: "ext-holder-239",
+    log: [
+      { identity: { ordinal: 5, body: ProviderIdentity("origin-a", 7, "model-z") },
+        request_projection: "proj-1",
+        deadline_ms: 311,
+        outcome: { advance_ms: 617, chunks: [{ offset_ms: 23, text: "chunk text" }],
+                   payload: "the payload", status: OutcomeFault,
+                   fault_class_id: "provider_error_retryable" } }
+    ],
+    gen: { id: "gen-id", version: "gen-version", seed: 29, rng: 31, draws: 37,
+           approvals_closed: true,
+           bounds: { max_interactions: 41, max_chunks_per_interaction: 43,
+                     max_payload_bytes: 47, max_resource_size: 53,
+                     max_clock_advance_ms: 59, chunk_draw_hi: 71 },
+           failures: [{ bound: "max_payload_bytes", limit: 61, requested: 67 }] } }
+}
+
+pure func eq_scripted_step(a: ScriptedStep, b: ScriptedStep) -> bool {
+  a.prose == b.prose && a.input_tokens == b.input_tokens
+    && a.output_tokens == b.output_tokens && a.finish_reason == b.finish_reason
+    && a.error_code == b.error_code && a.error_message == b.error_message
+    && a.advance_ms == b.advance_ms
+}
+
+pure func test_the_world_token_round_trips_every_scalar_field() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    back.clock_ms == w.clock_ms
+      && List.length(back.script) == List.length(w.script)
+      && List.length(back.approvals) == List.length(w.approvals)
+      && List.length(back.env) == List.length(w.env)
+      && List.length(back.files) == List.length(w.files)
+      && List.length(back.tools) == List.length(w.tools)
+      && List.length(back.log) == List.length(w.log)
+      -- WI-D24's two fields. The queue length AND the holder scalar, because the
+      -- two fail differently: a dropped `ext_effects` makes a replay perform a
+      -- real subprocess and a dropped holder makes the recorder attribute the
+      -- effect to nobody.
+      && List.length(back.ext_effects) == List.length(w.ext_effects)
+      && back.holder_ext_id == w.holder_ext_id
+  }
+
+-- WI-D24. The stamp's own row, and it exists because the first implementation
+-- passed every other row in this module while destroying a token.
+--
+-- Two clauses, and the SECOND is the one that failed: setting the holder on a
+-- real world must round-trip it, and setting the holder on a token the host did
+-- not build must leave every other key intact. `declared_vs_performed`'s trace
+-- ports are the production instance of clause two — they hand the fold a
+-- fabricated `{trace: …}` token — and they went red under the round-trip form,
+-- which is how it was caught. This row is the in-module version so the next
+-- reader does not have to run a different target to learn the rule.
+pure func test_the_holder_stamp_preserves_a_token_the_host_did_not_build() -> bool
+  tests [((), true)]
+  {
+    let real = stamp_holder(world_to_token(codec_fixture_world()), "ext-stamped");
+    let foreign = stamp_holder({ token: jo([kv("trace", js("dir_make(x);"))]) }, "ext-stamped");
+    let cleared = clear_holder(foreign);
+    -- clause 1: a real world keeps every field AND takes the holder.
+    token_to_world(real).holder_ext_id == "ext-stamped"
+      && List.length(token_to_world(real).ext_effects) == 2
+      && List.length(token_to_world(real).log) == 1
+      -- clause 2: the foreign key survives both the stamp and the clear, and the
+      -- holder is really set on it rather than being silently dropped.
+      && (match get(foreign.token, "trace") { Some(v) => match asString(v) { Some(t) => t == "dir_make(x);", None => false }, None => false })
+      && (match get(foreign.token, "holder_ext_id") { Some(v) => match asString(v) { Some(h) => h == "ext-stamped", None => false }, None => false })
+      && (match get(cleared.token, "trace") { Some(v) => match asString(v) { Some(t) => t == "dir_make(x);", None => false }, None => false })
+      && (match get(cleared.token, "holder_ext_id") { Some(v) => match asString(v) { Some(h) => h == "", None => false }, None => false })
+  }
+
+-- WI-D24. The extension-effect cursor, asserted ENTRY BY ENTRY rather than by
+-- length, for the reason the script cursor is: this queue is what an extension's
+-- dispatch is served from, and a codec that carried two entries with the wrong
+-- contents would replay a run in which every extension effect succeeded. The
+-- second entry is the faulted one, so both `ScriptedTool` shapes cross.
+--
+-- IT ALSO PINS THAT THE TWO QUEUES DO NOT SHARE A HOME: the tool queue's single
+-- entry has a NON-BLANK call id and a different exit code, so a decoder reading
+-- either list into the other fails this row rather than passing on a length.
+pure func test_the_world_token_round_trips_the_extension_effect_cursor() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    match back.ext_effects {
+      a :: b :: [] =>
+        a.tool_call_id == "" && a.duration_ms == 223 && a.code == ""
+          && a.content == "ext content" && a.exit_code == 227
+          && b.duration_ms == 229 && b.code == "E_EXT"
+          && b.message == "ext said no" && b.exit_code == 233
+          && (match back.tools {
+                t :: [] => t.tool_call_id == "t-17" && t.exit_code == 211,
+                _ => false
+              }),
+      _ => false
+    }
+  }
+
+-- The script cursor is what `ai_step` actually consumes, so its round trip is
+-- the one that decides whether the extension seam threads a real world or a
+-- plausible-looking empty one. Asserted entry by entry, both the clean and the
+-- faulted step.
+pure func test_the_world_token_round_trips_the_script_cursor() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    match back.script {
+      [] => false,
+      b0 :: b_rest => match w.script {
+        [] => false,
+        w0 :: w_rest => match b_rest {
+          [] => false,
+          b1 :: _ => match w_rest {
+            [] => false,
+            w1 :: _ =>
+              eq_scripted_step(b0, w0) && eq_scripted_step(b1, w1)
+                && b0.error_code == "" && b1.error_code == "provider_error_retryable"
+                && b0.advance_ms == 449 && b1.advance_ms == 457
+          }
+        }
+      }
+    }
+  }
+
+-- The interaction log and the generator are the two nested structures, and they
+-- are where a dropped field is least visible: nothing in a run reads them until
+-- a replay does. Asserted through to the leaves, including the identity
+-- variant's payload and the recorded bound failure.
+pure func test_the_world_token_round_trips_the_log_and_the_generator() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    let log_ok = match back.log {
+      [] => false,
+      i :: _ =>
+        i.identity.ordinal == 5
+          && i.request_projection == "proj-1"
+          && i.deadline_ms == 311
+          && i.outcome.advance_ms == 617
+          && i.outcome.payload == "the payload"
+          && i.outcome.fault_class_id == "provider_error_retryable"
+          && (match i.outcome.status { OutcomeFault => true, OutcomeOk => false, OutcomeMissing => false })
+          && (match i.identity.body {
+                ProviderIdentity(origin, step, model) =>
+                  origin == "origin-a" && step == 7 && model == "model-z",
+                _ => false
+              })
+          && (match i.outcome.chunks {
+                [] => false,
+                c :: _ => c.offset_ms == 23 && c.text == "chunk text"
+              })
+    };
+    let g = back.gen;
+    let gen_ok =
+      g.id == "gen-id" && g.version == "gen-version" && g.seed == 29
+        && g.rng == 31 && g.draws == 37 && g.approvals_closed
+        && g.bounds.max_interactions == 41
+        && g.bounds.max_chunks_per_interaction == 43
+        && g.bounds.max_payload_bytes == 47
+        && g.bounds.max_resource_size == 53
+        && g.bounds.max_clock_advance_ms == 59
+        -- 71, a value no other field in this fixture holds: the round trip must
+        -- distinguish the draw RANGE from the five limits beside it, and a codec
+        -- that wrote one and read the other would round-trip perfectly if any two
+        -- were equal.
+        && g.bounds.chunk_draw_hi == 71
+        && (match g.failures {
+              [] => false,
+              f :: _ => f.bound == "max_payload_bytes" && f.limit == 61 && f.requested == 67
+            });
+    log_ok && gen_ok
+  }
+
+-- The remaining scalars, asserted by value rather than by count: the approvals
+-- queue's ORDER (a cursor consumed head-first, so a reversed list replays
+-- different answers), the env pair, and the scripted tool's five fields.
+pure func node_is_file(n: FsNode, content: string) -> bool {
+  match n { FsFile(c) => c == content, FsDir => false }
+}
+
+pure func node_is_dir(n: FsNode) -> bool {
+  match n { FsDir => true, FsFile(_) => false }
+}
+
+pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
+  tests [((), true)]
+  {
+    let back = token_to_world(world_to_token(codec_fixture_world()));
+    let approvals_ok = match back.approvals {
+      a :: b :: c :: [] => a == "yes" && b == "no" && c == "",
+      _ => false
+    };
+    let env_ok = match back.env {
+      e :: [] => e.key == "MOTOKO_MODE" && e.value == "dst",
+      _ => false
+    };
+    let tools_ok = match back.tools {
+      t :: [] => t.tool_call_id == "t-17" && t.duration_ms == 199 && t.code == "E_TOOL"
+                   && t.message == "tool said no" && t.content == "the content"
+                   -- WI-D22. An encoder that omitted this key leaves the
+                   -- decoder's -1 behind, and every hook that adopts the world
+                   -- back would erase the tool queue's exit codes mid-run.
+                   && t.exit_code == 211,
+      _ => false
+    };
+    -- WI-D3. Asserted by VALUE and in order, for the reason the approvals queue
+    -- is: an encoder that drops the key leaves the decoder's fallback behind, and
+    -- an empty table reads exactly like a world whose files were never seeded.
+    -- The second entry pins the present-but-empty path, which is the case a
+    -- decoder inferring existence from content gets wrong.
+    --
+    -- WI-D18 added the third entry and the KIND assertions. The pair that
+    -- matters is `g` against `h`: a present-but-empty FILE and an empty
+    -- DIRECTORY encode to the same `content` and differ only in `kind`, so an
+    -- encoder that dropped the kind key would round-trip the directory back as
+    -- an empty file and every length, path and content check here would still
+    -- pass.
+    let files_ok = match back.files {
+      f :: g :: h :: [] =>
+        f.path == "/w/catalog.json" && node_is_file(f.node, "{\"context_limits\":{\"m\":71}}")
+          && g.path == "/w/present-but-empty.json" && node_is_file(g.node, "")
+          && h.path == "/w/empty-dir" && node_is_dir(h.node),
+      _ => false
+    };
+    approvals_ok && env_ok && tools_ok && files_ok
+  }
+
+-- WI-D17. EVERY identity variant, through the transport and back, compared with
+-- `identity_body_eq`.
+--
+-- This exists because `identity_body_of` is a TOTAL decoder whose default arm is
+-- `ClockAdvanceIdentity` — its own header says so and gives the reason. That
+-- makes a forgotten encoder arm fail SILENTLY and in the most legible-looking
+-- way available: the interaction decodes, the log has the right length, the
+-- ordinals stay dense, and one entry has quietly become a clock advance. Nothing
+-- else in this module could see it, because every other round-trip assertion
+-- reads a variant it named itself.
+--
+-- The list is checked against `all_interaction_kinds()` for length, so a tenth
+-- constructor that is added to the sum and forgotten HERE fails on the count
+-- rather than passing on the nine it does cover. That is the same discipline
+-- `all_interaction_kinds` itself exists for, applied one level up.
+pure func every_identity_body() -> [IdentityBody] {
+  [ProviderIdentity("origin-a", 7, "model-z"),
+   ToolIdentity("loop_v2", "c-11", "BashExec"),
+   ApprovalIdentity("loop_v2", "c-11", "BashExec"),
+   ExtensionEffectIdentity("ext-a", "class-b", "c-11"),
+   EnvironmentReadIdentity("MOTOKO_MODE"),
+   RandomDrawIdentity("int[0,100)"),
+   ClockAdvanceIdentity,
+   FileWriteIdentity("/w/tmp/snippet.ail"),
+   FileRemoveIdentity("/w/tmp/snippet.ail"),
+   DirMakeIdentity("/w/tmp")]
+}
+
+pure func log_of_bodies(bs: [IdentityBody], ord: int) -> [Interaction] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      ({ identity: { ordinal: ord, body: b },
+         request_projection: "p${ord}",
+         deadline_ms: -1,
+         outcome: { advance_ms: 0, chunks: [], payload: "",
+                    status: OutcomeOk, fault_class_id: "" } })
+        :: log_of_bodies(rest, ord + 1)
+  }
+}
+
+pure func bodies_match(expected: [IdentityBody], got: [Interaction]) -> bool {
+  match expected {
+    [] => match got { [] => true, _ => false },
+    e :: erest =>
+      match got {
+        [] => false,
+        g :: grest => identity_body_eq(e, g.identity.body) && bodies_match(erest, grest)
+      }
+  }
+}
+
+pure func test_every_identity_variant_round_trips_through_the_token() -> bool
+  tests [((), true)]
+  {
+    let bodies = every_identity_body();
+    let w = { empty_world_state() | log: log_of_bodies(bodies, 0) };
+    let back = token_to_world(world_to_token(w));
+    List.length(bodies) == List.length(all_interaction_kinds())
+      && bodies_match(bodies, back.log)
+  }
+
+-- The negative control for the test above, and it is not redundant: the default
+-- arm makes "decoded as something else" the DEFAULT outcome, so an assertion
+-- that only ever compares matching pairs cannot show that the comparison
+-- discriminates at all. A `file_write` body compared against the tag the default
+-- arm would have produced must be unequal.
+pure func test_the_identity_round_trip_comparison_discriminates() -> bool
+  tests [((), true)]
+  {
+    not identity_body_eq(FileWriteIdentity("/w/p"), ClockAdvanceIdentity)
+      && not identity_body_eq(FileWriteIdentity("/w/p"), FileRemoveIdentity("/w/p"))
+      && identity_kind(FileWriteIdentity("/w/p")) == "file_write"
+      && identity_kind(FileRemoveIdentity("/w/p")) == "file_remove"
+      -- WI-D18. The tenth constructor, and it earned this row: the length check
+      -- in the test above went red the moment `DirMakeIdentity` was added and
+      -- `every_identity_body()` was not, which is what that check was written
+      -- for one item earlier.
+      && not identity_body_eq(DirMakeIdentity("/w/p"), ClockAdvanceIdentity)
+      && not identity_body_eq(DirMakeIdentity("/w/p"), FileWriteIdentity("/w/p"))
+      && identity_kind(DirMakeIdentity("/w/p")) == "dir_make"
+  }
+
+-- ---------------------------------------------------------------------------
+-- S12's instrument: did a hook that PERFORMED a call return the world it was
+-- given?
+-- ---------------------------------------------------------------------------
+--
+-- WI-B2b found this defect twice, in the one hook in the tree that actually
+-- calls `ai_step`: a re-wrap that discarded the world the summarizer advanced,
+-- and failure branches returning the ENTERED world after attempts had been made
+-- and script entries consumed. `next_state: ctx.world` type-checks everywhere
+-- and passes every test in the tree. B2b shipped a comment-level mitigation and
+-- said, correctly, that a comment is weaker than a check.
+--
+-- It also said the real instrument "needs a counter the `ExtWorld` does not
+-- carry". THAT PART IS WRONG, and it is why this check exists rather than
+-- another paragraph. The counter is already in the token: `WorldState.log` is
+-- D2's ordered record of every request the driver made, `record_interaction`
+-- appends to it on every recorded seam call, and `world_json`/`world_of_json`
+-- round-trip it in full — asserted field by field by the tests above. A hook
+-- that performed a recorded call therefore returns a world with a LONGER log
+-- than the one it entered with, and a hook that returned `ctx.world` returns one
+-- of exactly the same length. The two are distinguishable, mechanically, from
+-- the token alone.
+--
+-- The check is deliberately one-directional. `advanced == false` proves nothing
+-- on its own: a hook that legitimately did nothing also returns an unchanged
+-- world, and that is the CORRECT identity transition S12 names. What the pair
+-- says is: IF the hook performed a call, THEN the world must have advanced —
+-- so the caller supplies "did it perform one" and this supplies the rest.
+
+-- How many interactions the world behind this token has recorded.
+export pure func world_interaction_count(t: ExtWorld) -> int {
+  List.length(token_to_world(t).log)
+}
+
+-- Did the world advance between entering a hook and leaving it? Log growth is
+-- the signal rather than inequality of the whole world, because a world can
+-- differ in ways that are not evidence of a performed call (a clock tick from
+-- an unrelated adapter), and because `Json` has no structural comparison on this
+-- pin that would make whole-world inequality cheap or total.
+export pure func world_advanced(before: ExtWorld, after: ExtWorld) -> bool {
+  world_interaction_count(after) > world_interaction_count(before)
+}
+
+-- THE S12 PREDICATE. True exactly when a hook performed a recorded call and
+-- handed back the world it was given — the silent defect. A caller asserts
+-- `not dropped_successor(...)`.
+export pure func dropped_successor(before: ExtWorld, after: ExtWorld, performed_a_call: bool) -> bool {
+  performed_a_call && not world_advanced(before, after)
+}
+
+-- A world carrying `n` recorded interactions, for the tests below. Built from
+-- the codec fixture so the count is the only thing that varies.
+pure func world_with_log_of(n: int) -> ExtWorld {
+  let base = codec_fixture_world();
+  world_to_token({ base | log: take_interactions(base.log ++ base.log ++ base.log, n) })
+}
+
+pure func take_interactions(xs: [Interaction], n: int) -> [Interaction] {
+  if n <= 0 then []
+  else match xs {
+    [] => [],
+    x :: rest => x :: take_interactions(rest, n - 1)
+  }
+}
+
+-- The instrument fires on the defect it was built for: a hook that performed a
+-- call and returned the world it was given.
+pure func test_dropped_successor_is_detected() -> bool
+  tests [((), true)]
+  {
+    let entered = world_with_log_of(1);
+    dropped_successor(entered, entered, true)
+  }
+
+-- And it does NOT fire on the case S12 says is CORRECT: a hook that performed
+-- nothing and therefore returned the world unchanged. Without this row the
+-- check could be `performed_a_call` alone and every row above would still pass.
+pure func test_identity_transition_is_not_a_defect() -> bool
+  tests [((), true)]
+  {
+    let entered = world_with_log_of(1);
+    not dropped_successor(entered, entered, false)
+  }
+
+-- The other direction: a hook that performed a call AND advanced the world is
+-- clean. This is the control that must survive — without it, a predicate that
+-- returned `performed_a_call` unconditionally would pass both rows above.
+pure func test_advanced_world_is_not_a_defect() -> bool
+  tests [((), true)]
+  {
+    not dropped_successor(world_with_log_of(1), world_with_log_of(2), true)
+      && world_advanced(world_with_log_of(1), world_with_log_of(2))
+  }
+
+-- And the counter itself survives the token, which is the fact the whole
+-- instrument rests on and which WI-B2b believed was absent.
+pure func test_the_interaction_counter_survives_the_token() -> bool
+  tests [((), true)]
+  {
+    world_interaction_count(world_with_log_of(0)) == 0
+      && world_interaction_count(world_with_log_of(1)) == 1
+      && world_interaction_count(world_with_log_of(3)) == 3
+  }

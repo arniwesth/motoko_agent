@@ -1,0 +1,582 @@
+module sunholo/motoko_ext_progress_contract_guard/progress_contract_guard
+
+import std/string (trim, contains, toLower)
+import std/json (Json, jo)
+import std/result (Result, Err)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
+
+export pure func guard_marker() -> string {
+  "[motoko-progress-contract-guard]"
+}
+
+export pure func guard_message() -> string {
+  "You stopped while your own response indicates the task is still in progress. Continue the existing task now. If a progress target or runtime status requirement is present, check it and keep working until the target or stop condition is actually met. ${guard_marker()}"
+}
+
+export pure func budget() -> int {
+  2
+}
+
+-- Count the guard's own injected feedback messages already present in history.
+-- Mirrors the empty-stop guard: only user-role messages carrying the marker count,
+-- so the assistant candidate itself can never inflate the budget.
+export pure func count_markers(history: [Msg]) -> int {
+  match history {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "user" && contains(m.content, guard_marker()) then 1 else 0;
+      here + count_markers(rest)
+    }
+  }
+}
+
+-- Strong, explicit progress-contract indicators. Conservative substring checks on
+-- normalized-lowercase text; no numeric parsing in v1. `at least 200` (not a bare
+-- `at least`) keeps this from firing on arbitrary tasks.
+pure func text_has_contract(s: string) -> bool {
+  let t = toLower(s);
+  contains(t, "do not stop early")
+  || contains(t, "continue until")
+  || contains(t, "at least 200")
+  || contains(t, "/200")
+  || contains(t, "200 phases")
+  || contains(t, "200 model turns")
+  || contains(t, "200 steps")
+  || contains(t, "motokoruntimestatus")
+  || contains(t, "current_step")
+  || contains(t, "step_budget")
+  || contains(t, "below the target")
+}
+
+-- Scan history for a contract, excluding the trailing assistant message when it is
+-- the current candidate. `ctx.history_slice` is `st.msgs ++ [assistant]`, so the
+-- candidate must never be the sole source of its own progress contract (trap #1).
+func history_has_contract(msgs: [Msg], candidate: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => {
+      let is_current_candidate = m.role == "assistant" && m.content == candidate;
+      let counts = not is_current_candidate && text_has_contract(m.content);
+      counts || history_has_contract(rest, candidate)
+    }
+  }
+}
+
+export pure func has_progress_contract(ctx: ExtCtx, candidate: string) -> bool {
+  text_has_contract(ctx.task) || history_has_contract(ctx.history_slice, candidate)
+}
+
+-- Narrow "I am still going" self-report. The triggering candidate contains both
+-- `Continuing Phase 52` and `Step 53/200`, so both branches catch it.
+export pure func candidate_self_reports_incomplete(candidate: string) -> bool {
+  let t = toLower(candidate);
+  contains(t, "continuing")
+  || contains(t, "continue with")
+  || contains(t, "continue to")
+  || contains(t, "next phase")
+  || contains(t, "context is growing")
+  || contains(t, "remaining")
+  || contains(t, "not complete")
+  || contains(t, "not done")
+  || contains(t, "below target")
+  || (contains(t, "step ") && contains(t, "/"))
+}
+
+-- Override: explicit completion or allowed-stop language. `final summary` is only
+-- treated as an override when paired with a stronger marker, because a model can
+-- mention it while saying it is not yet final (trap #3). The live Qwen task allows
+-- stopping after runtime compaction (trap #2), so those phrasings pass through.
+export pure func candidate_claims_complete_or_allowed_stop(candidate: string) -> bool {
+  let t = toLower(candidate);
+  contains(t, "task complete")
+  || contains(t, "complete. final")
+  || contains(t, "final answer")
+  || contains(t, "reached 200/200")
+  || contains(t, "step 200/200")
+  || contains(t, "target met")
+  || contains(t, "runtime compacted")
+  || contains(t, "runtime compaction occurred")
+  || contains(t, "compaction occurred")
+  || contains(t, "compaction has occurred")
+  || (contains(t, "final summary") && (
+        contains(t, "reached")
+        || contains(t, "200/200")
+        || contains(t, "task complete")
+        || contains(t, "runtime compacted")
+        || contains(t, "compaction occurred")
+     ))
+}
+
+-- ---------------------------------------------------------------------------
+-- Waiting on a delegate is an ALLOWED STOP (PLAN-001 live run, 2026-09-05)
+--
+-- The second occurrence of this module's defect, in the other direction. The
+-- orchestrator delegated a task, ended its answer with "I'll settle it when the
+-- answer lands", and stopped -- which is correct: the work is in another pane
+-- and nothing the orchestrator can do advances it. The guard read the sentence
+-- as an incomplete task and nudged, and the only thing the model could do in
+-- response was poll: 193 steps in one turn, 55 `DelegateCheck` calls each
+-- truthfully reporting "has not written its answer yet", then a takeover.
+-- (`.agent/issues/progress-guard-prose-heuristics-permit-premature-stop.md`,
+-- "Second occurrence".)
+--
+-- THE SIGNAL IS THE TOOL RESULT, NOT THE PROSE, and that distinction is the
+-- whole point of this section. `ExtCtx` carries no in-flight delegate count --
+-- the herdr extension knows one and the ABI has no slot for it -- so the
+-- cheapest TRUTHFUL signal available here is the text the herdr extension
+-- itself wrote into a tool-role message. Those sentences are produced by
+-- deterministic code in `packages/motoko-ext-herdr/herdr.ail`, not by the
+-- model, so unlike every other predicate in this file the guard is reading a
+-- fact rather than a claim. The phrases below are quoted from that file's
+-- `Delegate` and `DelegateCheck` result strings; if they are re-worded there
+-- and not here, this degrades to the pre-fix behaviour (a nudge) rather than
+-- to a wrong allowance, which is the safe direction.
+--
+-- ASSISTANT MESSAGES ARE EXCLUDED for `history_has_contract`'s reason (trap
+-- #1): a candidate that quotes the tool result back would otherwise write its
+-- own permission to stop.
+
+-- The delegate is running and nobody has collected it. Both `Delegate` launch
+-- shapes and both "not settled yet" `DelegateCheck` shapes.
+pure func text_reports_delegate_open(s: string) -> bool {
+  contains(s, "this call did not wait for it")
+  || contains(s, "is running motoko in pane")
+  || contains(s, "has not written its answer yet")
+  || contains(s, "no answer yet")
+}
+
+-- The delegate is collected, dead, or finished without producing anything.
+-- `DelegateCheck`'s terminal shapes.
+pure func text_reports_delegate_settled(s: string) -> bool {
+  contains(s, "` finished.")
+  || contains(s, "` is gone:")
+  || contains(s, "never wrote its answer file")
+  -- BLOCKED is deliberately NOT open. A delegate waiting for someone to answer
+  -- a prompt on its screen will not progress on its own, so stopping on it is
+  -- not "waiting for work that is happening" -- it is a thing to report. The
+  -- guard keeps nudging.
+  || contains(s, "waiting for someone to answer a prompt on its screen")
+}
+
+-- 0 = no delegate mentioned, 1 = open, 2 = settled. The LAST signal in the
+-- slice wins: a delegate launched at message 3 and collected at message 40 is
+-- settled, and a second one launched at 41 is open again.
+pure func last_delegate_signal(msgs: [Msg], seen: int) -> int {
+  match msgs {
+    [] => seen,
+    m :: rest => {
+      let t = toLower(m.content);
+      let here =
+        if m.role == "assistant" then seen
+        else if text_reports_delegate_settled(t) then 2
+        else if text_reports_delegate_open(t) then 1
+        else seen;
+      last_delegate_signal(rest, here)
+    }
+  }
+}
+
+-- STRUCTURAL SINCE ABI 7.3, AND NO LONGER PROSE. This read the sentences
+-- `herdr.ail` wrote into tool-role messages, because until 7.3 there was no
+-- channel between two extensions at all. It now reads what every extension
+-- DECLARED, aggregated by the host, and it is no longer delegate-specific:
+-- a compose job or any other extension's outstanding work answers it too.
+--
+-- The prose reader below is KEPT, and it is not dead code — see
+-- `has_open_delegate`. The transcript is the only source that survives
+-- compaction dropping the run file's session, and an extension that is not
+-- registered declares nothing.
+export pure func declared_work_in_flight(ctx: ExtCtx) -> bool {
+  match ctx.work_in_flight { [] => false, _ => true }
+}
+
+-- EITHER SOURCE IS ENOUGH, and the asymmetry is deliberate. A false "something
+-- is in flight" costs one missed nudge; a false "nothing is" hands the model
+-- permission to stop while its delegate is still working, which is the failure
+-- this guard exists to prevent. So the two are OR-ed rather than the structural
+-- one replacing the textual one outright: 7.3 makes the answer reliable when it
+-- is available, and the transcript still answers when it is not.
+export pure func has_open_delegate(ctx: ExtCtx) -> bool {
+  declared_work_in_flight(ctx) || last_delegate_signal(ctx.history_slice, 0) == 1
+}
+
+export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
+  if trim(candidate) != ""
+     && has_progress_contract(ctx, candidate)
+     && candidate_self_reports_incomplete(candidate)
+     && not candidate_claims_complete_or_allowed_stop(candidate)
+     && not has_open_delegate(ctx)
+     && count_markers(ctx.history_slice) < max_feedback
+  then ContinueWithFeedback(guard_message())
+  else NoDecision
+}
+
+-- The point of 7.3, as a differential: same candidate, same EMPTY history — so
+-- the prose reader has nothing to go on — and one declared work item is the
+-- whole difference between a nudge and silence.
+pure func test_declared_work_suppresses_the_nudge() -> bool
+  tests [((), true)]
+  {
+    -- The fixture `test_continues_under_budget` uses, so the ONLY variable is
+    -- the declaration. Its history carries no delegate sentence at all, which
+    -- is what makes this a test of the capability and not of the prose reader.
+    let hist = [user("x ${guard_marker()}")];
+    let nudged = match decide_with_budget(test_ctx(contract_task(), hist), failure_candidate(), 2) {
+      ContinueWithFeedback(_) => true,
+      _ => false
+    };
+    let quiet = match decide_with_budget(
+        test_ctx_work(contract_task(), hist,
+                      [{ label: "delegate", detail: "delegates still in flight: mot-dlg-1" }]),
+        failure_candidate(), 2) {
+      NoDecision => true,
+      _ => false
+    };
+    nudged && quiet
+  }
+
+-- The OR, not a replacement: an extension that declares nothing must not turn
+-- the transcript signal off.
+pure func test_prose_still_answers_when_nothing_is_declared() -> bool
+  tests [((), true)]
+  {
+    declared_work_in_flight(test_ctx("t", [])) == false
+      && declared_work_in_flight(test_ctx_work("t", [], [{ label: "x", detail: "y" }]))
+  }
+
+export pure func decide(ctx: ExtCtx, candidate: string) -> FinalizeDecision {
+  decide_with_budget(ctx, candidate, budget())
+}
+
+-- ---------------------------------------------------------------------------
+-- Test scaffolding + unit tests (mirrors empty_stop_guard.ail)
+-- ---------------------------------------------------------------------------
+
+func user(content: string) -> Msg {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func assistant(content: string) -> Msg {
+  { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+-- Tool-role message, the shape `phase_vocab.envelope_to_tool_message` builds
+-- for an extension-handled call. The delegate signals are read only off these.
+func tool(content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: "tc" }
+}
+
+func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
+  Err("ext ai_step port unavailable")
+}, next_state: world } }
+
+-- WI-D16 widened `ExtPorts.tool_handle` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION and is the correct answer for
+-- exactly `noop_clock_now`'s reason below: this port executes nothing, so there
+-- is no cursor to advance. It would be a silent defect in a binding that DID
+-- something, and no type tells the two apart.
+--
+-- WI-D21 RENAMED THE PARAMETERS. They read `_cmd, _cwd` here, and the seam
+-- takes a MOTOKO TOOL NAME and that tool's JSON ARGUMENTS -- see the ABI row.
+-- Both are `string`, so the wrong reading compiled; this binding ignores them
+-- and was harmless, but it is a template, and a real implementation written
+-- from a `(cmd, cwd)` signature would shell out the tool name in a directory
+-- named by a JSON blob. That is why the rename reached bindings that use
+-- neither argument.
+--
+-- `exit_code: -1` (WI-D23), NOT 0: a no-op executes nothing, and -1 is
+-- exactly the "no subprocess ran" value the ABI row's domain names. Writing
+-- 0 here would assert a success no process produced.
+func noop_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  { output: "", exit_code: -1, next_state: world }
+}
+
+-- WI-D16's file read seam. `present: false` is the honest answer for a port
+-- with no filesystem behind it, and it is NOT the same claim as `content: ""` —
+-- see `ExtFileRead`'s comment. A no-op that reported `present: true` with empty
+-- contents would tell a caller an empty file exists, which is the branch this
+-- seam was shaped to keep distinguishable.
+func noop_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: false, content: "", next_state: world }
+}
+
+-- WI-D17's filesystem MUTATOR seams. `ok: false` is the honest answer for a port
+-- with no filesystem behind it, and it is the same judgement `noop_file_read`
+-- makes with `present: false`: reporting success for a write that did not happen
+-- tells the caller a fact about the world that is not true. The world token is
+-- returned unchanged, which is S12's identity transition and correct here —
+-- nothing was written, so there is no successor to thread.
+func noop_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+func noop_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+-- WI-D18's DIRECTORY seams. `ExtPathMissing` and `present: false` for
+-- `noop_file_read`'s reason: this port has no filesystem behind it, and a no-op
+-- claiming a path is a file would state something about the world that is not
+-- true.
+func noop_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} {
+  { kind: ExtPathMissing, next_state: world }
+}
+
+func noop_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} {
+  { present: false, entries: [], next_state: world }
+}
+
+func noop_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+-- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION, and here it is the correct
+-- answer rather than a silent defect: this clock reads nothing, so there is no
+-- cursor to advance. The distinction matters because the same expression is a
+-- real defect in a port that DID something — S12 exists because no type tells
+-- the two apart.
+func noop_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 0, next_state: world }
+}
+
+func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
+  fallback
+}
+
+func noop_ext_ports() -> ExtPorts {
+  {
+    ai_step: noop_ai_step,
+    tool_handle: noop_tool_handle,
+    file_read: noop_file_read,
+    file_write: noop_file_write,
+    file_remove: noop_file_remove,
+    path_stat: noop_path_stat,
+    dir_list: noop_dir_list,
+    dir_make: noop_dir_make,
+    clock_now: noop_clock_now,
+    env_get: noop_env_get
+  }
+}
+
+pure func empty_ext_artifacts() -> Json {
+  jo([])
+}
+
+pure func zero_token_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}
+
+func test_ctx(task: string, history: [Msg]) -> ExtCtx { test_ctx_work(task, history, []) }
+
+func test_ctx_work(task: string, history: [Msg], work: [WorkItem]) -> ExtCtx {
+  {
+    task: task,
+    step: 0,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1, solver: 1, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: history,
+    state_key: "k",
+    finish_reason: "",
+    work_in_flight: work,
+    context_limit: 0,
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
+  }
+}
+
+func contract_task() -> string {
+  "Do not stop early. Complete at least 200 phases. Check MotokoRuntimeStatus current_step and step_budget."
+}
+
+func failure_candidate() -> string {
+  "**Phase 51 complete.** Step 53/200. Context is growing. Continuing Phase 52."
+}
+
+pure func test_marker_count_counts_only_user_messages() -> bool
+  tests [((), true)]
+  {
+    count_markers([
+      user("a ${guard_marker()}"),
+      assistant("b ${guard_marker()}"),
+      user("c")
+    ]) == 1
+  }
+
+pure func test_contract_from_task() -> bool
+  tests [((), true)]
+  {
+    has_progress_contract(test_ctx(contract_task(), []), failure_candidate())
+  }
+
+pure func test_contract_from_user_history() -> bool
+  tests [((), true)]
+  {
+    has_progress_contract(
+      test_ctx("plain task", [user("Do not stop early. Continue until 200 phases.")]),
+      "step 5/200 continuing"
+    )
+  }
+
+pure func test_contract_not_from_candidate_alone() -> bool
+  tests [((), true)]
+  {
+    let cand = "step 5/200 continuing";
+    not has_progress_contract(test_ctx("plain task", [assistant(cand)]), cand)
+  }
+
+pure func test_incomplete_detection() -> bool
+  tests [((), true)]
+  {
+    candidate_self_reports_incomplete(failure_candidate())
+      && not candidate_self_reports_incomplete("All phases done. Final answer: 42.")
+  }
+
+pure func test_allowed_stop_override() -> bool
+  tests [((), true)]
+  {
+    candidate_claims_complete_or_allowed_stop("Runtime compaction occurred. Final summary: state saved.")
+      && candidate_claims_complete_or_allowed_stop("Reached 200/200. Final summary: complete.")
+      && not candidate_claims_complete_or_allowed_stop(failure_candidate())
+  }
+
+pure func test_fires_on_failure_shape() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), []), failure_candidate(), 2) {
+      ContinueWithFeedback(m) => contains(m, guard_marker()),
+      _ => false
+    }
+  }
+
+pure func test_passes_completion() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), []), "Reached 200/200. Final summary: all phases done.", 2) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_passes_allowed_compaction_override() -> bool
+  tests [((), true)]
+  {
+    -- self-reports incomplete ("Continuing is unnecessary") but the allowed-stop
+    -- override must win because runtime compaction is an allowed stop.
+    match decide_with_budget(
+      test_ctx("Continue until done or until the runtime compacts. At least 200 phases.", []),
+      "Runtime compaction occurred. Continuing is unnecessary. Final summary: state saved.",
+      2
+    ) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_passes_no_contract() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx("Write a haiku.", []), "Continuing to refine. Step 1/3.", 2) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_ignores_blank() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), []), "   ", 2) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_continues_under_budget() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), [user("x ${guard_marker()}")]), failure_candidate(), 2) {
+      ContinueWithFeedback(_) => true,
+      _ => false
+    }
+  }
+
+pure func test_budget_exhaustion() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(
+      test_ctx(contract_task(), [user("x ${guard_marker()}"), user("y ${guard_marker()}")]),
+      failure_candidate(),
+      2
+    ) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+-- ---------------------------------------------------------------------------
+-- The delegate-waiting allowed stop. The candidate is the live-run shape: a
+-- sentence that self-reports incomplete ("remaining") and ends by saying the
+-- model will settle the task when the delegate answers. The ONLY difference
+-- between the two cases is whether a herdr tool result in the slice reports an
+-- uncollected delegate, which is what makes this a runtime-state decision
+-- rather than another prose rule.
+-- ---------------------------------------------------------------------------
+
+func waiting_candidate() -> string {
+  "INV is delegated to pane w3:pN and the remaining work is blocked on it. I'll settle it when the answer lands."
+}
+
+func delegate_launched_msg() -> Msg {
+  tool("Delegate `mot-dlg-1788637404283` is running motoko in pane w3:pN. Starting it took 0.0s. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `mot-dlg-1788637404283`.")
+}
+
+pure func test_open_delegate_makes_waiting_an_allowed_stop() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(
+      test_ctx(contract_task(), [delegate_launched_msg()]),
+      waiting_candidate(),
+      2
+    ) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_no_open_delegate_still_nudges() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), []), waiting_candidate(), 2) {
+      ContinueWithFeedback(m) => contains(m, guard_marker()),
+      _ => false
+    }
+  }
+
+-- The collected delegate is not an open one: after `DelegateCheck` returns the
+-- answer, the same sentence is a stop with nothing behind it.
+pure func test_settled_delegate_is_not_open() -> bool
+  tests [((), true)]
+  {
+    let history = [
+      delegate_launched_msg(),
+      tool("Delegate `mot-dlg-1788637404283` finished. Took 41.2s.\n\nthe answer")
+    ];
+    not has_open_delegate(test_ctx(contract_task(), history))
+      && has_open_delegate(test_ctx(contract_task(), [delegate_launched_msg()]))
+  }
+
+-- Trap #1, one slot over: the candidate quoting the tool result back must not
+-- write its own permission to stop.
+pure func test_assistant_prose_cannot_open_a_delegate() -> bool
+  tests [((), true)]
+  {
+    not has_open_delegate(test_ctx(contract_task(),
+      [assistant("It has the task and is working now; this call did not wait for it.")]))
+  }

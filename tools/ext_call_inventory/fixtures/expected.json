@@ -1,0 +1,161 @@
+{
+  "_comment": [
+    "Expectations for `make ext_call_inventory_selftest`.",
+    "",
+    "Each `form_*.ail` uses one of the four indirection forms ADR-001 D5 names as",
+    "outside classifier 2's matcher boundary. Every one MUST be reported unresolved.",
+    "A fixture that comes back clean is not a pass -- it is the fail-open defect the",
+    "classifier exists to prevent, and the suite treats silence as failure.",
+    "",
+    "`control_resolved.ail` must come back with one RESOLVED site and nothing",
+    "unresolved. Without it a classifier that flagged everything would pass.",
+    "",
+    "`membership` records the set derived from D5's criterion at this revision. It",
+    "is a regression guard, NOT the classifier's input: the tool re-derives",
+    "membership from ExtPorts, Ports and the bridge on every run and never reads",
+    "this file. Widening the ABI in Milestone B is expected to change these values,",
+    "and the self-test going red is how that change gets noticed rather than",
+    "absorbed.",
+    "",
+    "WI-B4 added `seam` beside `state`, and it is the BRIDGE's positive control.",
+    "`control_resolved.ail` proves the call-site matcher still works; nothing",
+    "proved that `bridge_map` still follows `ext_ports_of` down to a core `Ports`",
+    "field. That half fails OPEN -- a parsing slip returns `unrouted` for",
+    "everything, which reads like a clean result while meaning the field has left",
+    "the gated set entirely. WI-B2b hit it twice in one item. Pinning the state",
+    "alone would also miss a slip that resolved a field to the WRONG seam, so the",
+    "seam is pinned too. `\"seam\": null` is correct ONLY for a genuinely unrouted",
+    "field, and AT HEAD THERE IS NO SUCH FIELD. `clock_now` was the one example",
+    "until WI-C5 widened ExtPorts.clock_now to (ExtWorld) -> ExtClockReading and",
+    "routed it through Ports.clock_now, so it derives `returns-it` like ai_step.",
+    "The `null` seam is kept described here because the next un-widened seam",
+    "re-introduces it, and because a pin whose only legal value is unreachable is",
+    "worth naming as such rather than deleting.",
+    "",
+    "WI-D16 MOVED THIS BLOCK DELIBERATELY, and the move is the item's point rather",
+    "than a cost of it. `tool_handle` was widened from `(string, string) -> string` to",
+    "`(ExtWorld, string, string) -> ExtProcOutcome`, so it can now return the",
+    "successor `Ports.tool_exec` threads. D5's classifier 2 selects a field",
+    "BECAUSE it cannot return successor state; the field can, so the criterion no",
+    "longer selects it and the set went {env_get, tool_handle} -> {env_get}. It moved",
+    "member -> returns-it, which is the same transition WI-B2b made for `ai_step`",
+    "and WI-C5 for `clock_now`, and the seam was then unchanged at Ports.tool_exec.",
+    "",
+    "WI-D24 MOVED THE SEAM, AND THIS PIN IS WHY THE MOVE IS RECORDED RATHER THAN",
+    "NOTICED. `tool_handle` now derives Ports.ext_effect_exec, not Ports.tool_exec.",
+    "The state is unchanged at `returns-it`; what changed is WHICH core seam the",
+    "bridge closure forwards to, because an extension-initiated dispatch is a",
+    "different D2 identity class from a driver tool call, is served from a",
+    "different cursor (WorldState.ext_effects) and is recorded by a different",
+    "adapter (ports.recording_ext_effect, the eighth). This is exactly the slip",
+    "the seam half of this pin was added to catch -- the state pin alone would",
+    "have stayed green through a re-route -- so it fired as designed and is",
+    "re-recorded here with the reason rather than relaxed.",
+    "",
+    "`env_get` is the SOLE remaining member and was left un-widened on purpose --",
+    "see its row in packages/motoko-ext-abi/types.ail. Its problematic callers are",
+    "in `register_with_config`, which runs before a world exists and has no",
+    "`ExtCtx`, so a wider seam would route nothing.",
+    "",
+    "`file_read` is NEW at WI-D16 and derives `returns-it` off Ports.file_read. It",
+    "has ZERO call sites: the item shipped the seam and routed no extension.",
+    "",
+    "`file_write` and `file_remove` are NEW at WI-D17 and derive `returns-it` off",
+    "Ports.file_write and Ports.file_remove. Zero call sites, same as file_read --",
+    "part 2 is what routes compose. The ORDER matters and is the reason WI-D16 did",
+    "not add them: a field fronting no core seam derives `unrouted`, which is",
+    "derive.py's fail-open answer and looks like a cleaner result than it is. The",
+    "core world class landed first, so these two derive `returns-it` instead.",
+    "",
+    "AND THE SUITE COULD NOT HAVE CAUGHT THE ADDITION. The membership loop iterates",
+    "THIS BLOCK, so a field added to ExtPorts and not added here was simply never",
+    "asked about -- four green pinned rows and total silence on the fifth. WI-D16",
+    "added a REACHABILITY assertion in derive.py that compares the derived field set",
+    "against this block in both directions, on plan rule S24: reachability is a",
+    "separate question from any verdict and has to be asserted separately.",
+    "",
+    "THAT ASSERTION EARNED ITSELF AT WI-D17, ON THE FIRST ADDITION AFTER IT LANDED.",
+    "Adding file_write and file_remove produced, before this block was edited:",
+    "  FAIL REACHABILITY: ExtPorts.file_remove derives 'returns-it' but is not",
+    "  pinned in expected.json. A new ABI row is not covered by a pin that does",
+    "  not name it.",
+    "-- two named failures where the pre-D16 suite would have printed five green",
+    "membership rows and said nothing at all about the two new fields.",
+    "",
+    "AND IT EARNED ITSELF AGAIN AT WI-D18, WHICH IS THE POINT WORTH RECORDING.",
+    "The directory class added path_stat, dir_list and dir_make; all three derived",
+    "`returns-it` off their new core seams and all three failed by name before this",
+    "block was edited. Three items in a row, three additions, three named failures",
+    "-- the assertion is now the only thing in this tool that notices an ABI row",
+    "arriving, and the membership loop below still cannot."
+  ],
+  "fixtures": {
+    "control_resolved.ail": {
+      "form": "control: typed path, must resolve",
+      "unresolved": 0,
+      "resolved": 1
+    },
+    "form_alias.ail": {
+      "form": "local alias (unannotated binding)",
+      "unresolved": 1,
+      "resolved": 0
+    },
+    "form_reexport.ail": {
+      "form": "re-export (receiver is an accessor result)",
+      "unresolved": 1,
+      "resolved": 0
+    },
+    "form_wrapper.ail": {
+      "form": "wrapper (field escapes as a value, call site elsewhere)",
+      "unresolved": 1,
+      "resolved": 0
+    },
+    "form_computed.ail": {
+      "form": "computed receiver (shares form 2's detector on this pin)",
+      "unresolved": 1,
+      "resolved": 0
+    }
+  },
+  "membership": {
+    "ai_step": {
+      "state": "returns-it",
+      "seam": "model_step"
+    },
+    "tool_handle": {
+      "state": "returns-it",
+      "seam": "ext_effect_exec"
+    },
+    "file_read": {
+      "state": "returns-it",
+      "seam": "file_read"
+    },
+    "file_write": {
+      "state": "returns-it",
+      "seam": "file_write"
+    },
+    "file_remove": {
+      "state": "returns-it",
+      "seam": "file_remove"
+    },
+    "path_stat": {
+      "state": "returns-it",
+      "seam": "path_stat"
+    },
+    "dir_list": {
+      "state": "returns-it",
+      "seam": "dir_list"
+    },
+    "dir_make": {
+      "state": "returns-it",
+      "seam": "dir_make"
+    },
+    "env_get": {
+      "state": "member",
+      "seam": "env_get"
+    },
+    "clock_now": {
+      "state": "returns-it",
+      "seam": "clock_now"
+    }
+  }
+}

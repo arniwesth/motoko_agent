@@ -1,0 +1,18 @@
+-- B2's load-bearing control: a NAMED function declared with a WIDER row than
+-- the payload, bound as a constructor argument.  B1 measured that the payload
+-- row bounds nothing here, so the binding must be SCANNED, not trusted -- and
+-- its body reaches `std/env.getEnvOr`.  Must resolve HOOK-AMBIENT, one atom.
+-- A reader that trusted the declared row would report it clean.
+module fixture/control_capability_list_named_wide
+
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, FinalizeOutcome)
+
+func judge(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Env, Process} {
+  let _ = getEnvOr("PATH", "");
+  { decision: { NoDecision }, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  [SolverJudge(judge)]
+}

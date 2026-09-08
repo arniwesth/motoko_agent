@@ -6,11 +6,13 @@
   "runServices": ["app"],
   "remoteUser": "motoko",
   "forwardPorts": [8080],
-  "postCreateCommand": "cd src/tui && bun install && bun run build && cd ../.. && echo 'Motoko ready. Run: make run'",
+  "postCreateCommand": "cd src/tui && bun install && bun run build && cd ../.. && (bun tools/rmsend/rmsend.ts install || echo 'reMarkable tooling skipped (offline?) — run make remarkable_install later') && echo 'Motoko ready. Run: make run'",
   "customizations": {
     "vscode": {
       "extensions": [
-        "golang.go"
+        "golang.go",
+        "sunholo.ailang",
+        "mhutchie.git-graph"
       ],
       "settings": {
         "go.lintTool": "golangci-lint",

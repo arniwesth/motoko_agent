@@ -27,11 +27,13 @@ import std/io (println)
 import std/env (getEnv)
 import std/result (Result, Ok, Err)
 import src/core/agent_loop_v2 (run_v2)
+import src/core/config (CostRates)
 import src/core/ext/runtime (init_runtime)
+import src/core/test/stub_step (LiveAI)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
 import src/core/types (Msg)
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let rt = init_runtime();
 
   let budget: BudgetPlan = {
@@ -40,13 +42,20 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     verifier: 0
   };
 
+  -- 0/0 rates = cost budget fail-open (same policy as the DP7 smoke's
+  -- no_rates helper); max_cost_millicents 0 therefore never trips.
+  let rates: CostRates = {
+    input_per_1m_millicents: 0,
+    output_per_1m_millicents: 0
+  };
+
   -- Prompt likely to make a model try a tool. With empty extension
   -- registry, dispatch_tool_policy returns NoOpinion → call proceeds via
   -- dispatch_one. We verify the policy gate fires (no crash), the call
   -- runs through, and the loop terminates.
   let initial_msgs: [Msg] = [
-    { role: "system", content: "You are a helpful assistant. Answer concisely." },
-    { role: "user", content: "What does 1+1 equal? One number, no tool calls." }
+    { role: "system", content: "You are a helpful assistant. Answer concisely.", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "What does 1+1 equal? One number, no tool calls.", tool_calls: [], tool_call_id: "" }
   ];
 
   -- Model is read from AILANG_SMOKE_MODEL so the matrix runner can drive
@@ -67,7 +76,10 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     initial_msgs,
     "/tmp",
     4,
-    false  -- ohmy_pi (M6: native dispatch only for this smoke)
+    false,       -- ohmy_pi (M6: native dispatch only for this smoke)
+    0,           -- max_cost_millicents: 0 = fail-open under 0/0 rates
+    rates,
+    LiveAI       -- live provider (M6: native dispatch only for this smoke)
   );
 
   match result {

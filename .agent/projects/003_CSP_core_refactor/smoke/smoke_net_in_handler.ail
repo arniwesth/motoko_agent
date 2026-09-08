@@ -1,0 +1,53 @@
+-- Smoke test: can a `Net`-effect call (httpGet) run INSIDE an `onEvent` handler
+-- during a live `runEventLoop`, and transmit its result back on the same socket?
+--
+-- This is the Phase-3 gate from 02-design-b-prime-reentrant-websocket.md:
+--   "transmit (Stream) in-handler is proven; an AI/Net/Process tool call inside
+--    the handler mid-runEventLoop is NOT (Phase 3 gate)."
+-- AILANG's AI effect is Net-backed (callStream -> ssePost), so proving Net-in-handler
+-- is the load-bearing proof; AI rides on the same capability.
+--
+-- The server sends a URL over the socket; the handler httpGet()s it (Net) and
+-- transmits the fetched body back. The server records it. If the recorded value is
+-- the server's distinctive token, in-handler effectful dispatch works.
+--
+-- Run with:
+--   RESULT_FILE=/tmp/ws_net_result.txt PORT=8790 bun run ws_net_server.ts   # terminal 1
+--   ailang run --caps IO,Net,Stream --net-allow-http --net-allow-localhost \
+--     --stream-allow-http --stream-allow-localhost smoke_net_in_handler.ail  # terminal 2
+--   # expect: server prints "SERVER_RECEIVED: net-in-handler-OK-7f3a"
+
+module smoke_net_in_handler
+
+import std/stream (connect, transmit, onEvent, runEventLoop, StreamConn, StreamEvent)
+import std/net (httpGet)
+import std/io (println)
+import std/result (Result)
+
+export func main() -> () ! {Stream, Net, IO} {
+  println("CLIENT: connecting");
+  match connect("ws://127.0.0.1:8790", {headers: []}) {
+    Err(_) => println("CLIENT: connect failed"),
+    Ok(conn) => {
+      onEvent(conn, \event. match event {
+        Message(url) => {
+          println("CLIENT_GOT_URL: ${url}");
+          -- THE TEST: perform a Net effect (httpGet) from inside the handler.
+          let body = httpGet(url);
+          println("CLIENT_FETCHED: ${body}");
+          -- ...and transmit the effect's result back on the same live socket.
+          match transmit(conn, body) {
+            Ok(_)  => println("CLIENT: net-then-transmit-in-handler Ok"),
+            Err(_) => println("CLIENT: net-then-transmit-in-handler Err")
+          };
+          false
+        },
+        Opened(_) => { println("CLIENT: opened"); true },
+        Closed(_, _) => { println("CLIENT: closed"); false },
+        _ => true
+      });
+      runEventLoop(conn);
+      println("CLIENT: event loop done")
+    }
+  }
+}

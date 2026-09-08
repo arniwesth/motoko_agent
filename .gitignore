@@ -16,6 +16,10 @@ src/tui/dist/
 /ailang/
 # Environment
 .env
+
+# reMarkable Cloud device token (scripts/rm-send.sh). Kept in the workspace
+# rather than ~/.config so it survives a devcontainer rebuild — never commit it.
+.remarkable/
 .venv-litellm/
 
 # OS
@@ -55,5 +59,54 @@ code-graph/
 tools/code-graph/.out/
 tools/code-graph/**/__pycache__/
 tools/code-graph/.pytest_cache/
+# The two un-ignores above re-include EVERYTHING under tools/code-graph/, which swept
+# AILANG compile caches into git twice (B2a's 7bca61c, WI-B4's 072bb05 — 34 files each).
+# A tracked compile cache is the worst file class in this repo: a stale .ailang cache
+# produces phantom type errors, and a fresh checkout would start with one it never built.
+# Nothing reads them — test_precision_recall.py and test_source_index.py read the
+# fixtures' .ail sources, not the cache.
+tools/code-graph/**/.ailang/
 .venv-marimo/
 __marimo__
+deepseek-harness/
+.pnpm-store/
+
+# GitHub PR ops cache (.agent/github/): raw API JSON, immutable and regenerable
+# by `make pr_sync`. Deleting it must lose nothing, and committing it would
+# break the invariant that separates it from the git-versioned state records
+# next door — see ADR-001 D3 in .agent/projects/016_github_ops/.
+.agent/github/cache/
+
+# Generated review renderings and in-flight posting buffers from `pr-loop`.
+# Both are derived from the cache plus the authored response artifact, so they
+# are regenerable and must not be committed alongside the versioned records.
+.agent/github/prs/*/review-*.md
+.agent/github/prs/*/.response-*.posting.md
+.motoko/herdr-delegates/
+
+# Operator-local notes and findings. These MUST NOT enter this
+# open-source repo. Kept in the workspace so they survive a devcontainer
+# rebuild, like .remarkable/ above — never commit anything under here.
+.agent/local/
+
+# Live dagr run state (the herdr-dagr pane's view of a delegation run). Rewritten
+# in full on every delegate state change and meaningless outside the session that
+# produced it, so it is ephemeral by construction and never a shared record — see
+# DESIGN-dagr-as-delegation-view.md §5 in .agent/projects/021_herdr_delegation/.
+.dagr/
+
+# The exit-action manifest (ABI 7.0). The AILANG runtime republishes it in full
+# at every turn end and the TUI reads it once, at exit; it is keyed by a session
+# clock that means nothing to any other run, so it is ephemeral by construction
+# in exactly the way `.dagr/` above is. Named by `buildChildEnv` via
+# MOTOKO_EXIT_MANIFEST — see src/tui/src/exit-actions.ts.
+.motoko/exit/
+
+# Scratch state planted by `make verify_exit_intent`'s decoy case. The gate
+# removes the file it writes and asserts that it did, so this covers only the
+# directory it leaves behind and the case where the gate failed before cleanup.
+.tmp-verify-exit-intent/
+
+# Generated Z3 classification probes (tools/verify_classify/classify.py).
+# The register they produce IS tracked; the probe modules are rebuilt each run.
+tools/verify_classify/generated/

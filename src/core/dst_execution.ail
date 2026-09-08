@@ -1,0 +1,139 @@
+-- src/core/dst_execution.ail
+--
+-- WI-C3: THE BRIDGE. A real run, turned into the `ExecutionUnderTest` the D7
+-- invariant families check.
+--
+-- ============================================================================
+-- Why this module exists, measured rather than argued
+-- ============================================================================
+--
+-- At WI-C1's HEAD there was exactly ONE construction site of
+-- `ExecutionUnderTest` in the whole tree: a hand-authored `fixture()` in
+-- `scripts/dst/invariants_dst.ail`, carrying `emissions: []`. Every one of the
+-- sixteen families ran against that fixture and its single-field mutants. That
+-- is a legitimate way to test the CHECKER — `dst_invariants`' own header says so
+-- — and it is not a way to check a RUN. Until a bridge existed, populating
+-- `ProviderExchange.emissions` read identically to not populating it, which is
+-- this project's recurring failure mode arriving one level up.
+--
+-- So the item that gives the emission log a reader has to give the invariant
+-- suite a run, and this is it.
+--
+-- ============================================================================
+-- What the driver had to gain for this to be buildable
+-- ============================================================================
+--
+-- `session.c2_finalize` is the sole place a result/trace/world triple is
+-- assembled, and the triple was `{ result, trace, world }`. `ExecutionUnderTest`
+-- needs D6.4's emission witness as well, and the only value available for it was
+-- `[]` — which on a real run is indistinguishable from a run that streamed
+-- nothing. That is a D6-level gap in what the driver returns, not a detail to
+-- absorb at the bridge, so `TracedSessionResult` gained an `emissions` field and
+-- the driver threads it. This module reads it; it does not derive it.
+--
+-- ============================================================================
+-- The five bindings this bridge cannot read off the run, and why they are
+-- PARAMETERS rather than defaults
+-- ============================================================================
+--
+-- A default here would be a claim about a run this module did not observe, and
+-- four of the five would be silently wrong in the safe direction — the direction
+-- that makes a family green:
+--
+--   `initial_clock_ms`   the clock the world STARTED at. Defaulting it to zero
+--                        makes a world seeded at a non-zero epoch read as having
+--                        spent time it did not.
+--   `replay`            `NoReplay` makes family 9 return [] unconditionally,
+--                        which is S8's complement inside the bridge itself.
+--   `decision_budget`   \  D7's liveness bounds are DECLARED per run. A bound
+--   `retry_budget`      /  chosen here is a bound no profile agreed to, and one
+--                        chosen generously is a branch the check never enters.
+--   `meta`               the replay metadata the runner has and the driver does
+--                        not.
+--
+-- D5's two audit results (`ambient_rng_reads`, `forbidden_effect_sites`) are
+-- likewise REPORTED in rather than derived: the derivation is the routing
+-- audit's, and a bridge that recomputed them would be a second opinion about
+-- somebody else's artifact.
+
+module src/core/dst_execution
+
+import std/list as List (length)
+
+import src/core/session (TracedSessionResult)
+import src/core/ports (WorldState)
+import src/core/dst_interaction (Interaction, interaction_kind)
+import src/core/dst_result (
+  DstResult, completed_run,
+  InteractionLog, InteractionEntry,
+  ReplayMetadata
+)
+import src/core/dst_invariants (ExecutionUnderTest, ReplayObligation)
+
+-- D2's ordered request record, projected into the reporting shape `SystemRun`
+-- carries. The AUTHORITATIVE log stays `world.log` and rides on
+-- `ExecutionUnderTest.world`; this is the projection, and `ExecutionUnderTest`'s
+-- own field comment says why the distinction matters — reasoning over a
+-- projection is how a recorder and a checker drift into two notions of one
+-- quantity. Nothing in the invariant set reads this projection; it exists
+-- because `SystemRun` declares it.
+pure func log_entries(log: [Interaction]) -> [InteractionEntry] {
+  match log {
+    [] => [],
+    i :: rest =>
+      ({ position: i.identity.ordinal,
+         kind: interaction_kind(i),
+         projection: i.request_projection }) :: log_entries(rest)
+  }
+}
+
+export pure func interaction_log_of(world: WorldState) -> InteractionLog {
+  { entries: log_entries(world.log) }
+}
+
+-- The bridge. Note what is NOT here: no branch on whether the witness is empty,
+-- and no branch on whether the trace holds any StreamDelta. Both of those are
+-- the fail-open repair `stream_parity_findings` exists to catch — an execution
+-- whose witness the bridge suppressed is green and tests nothing — so a run that
+-- streamed and lost its log arrives at the check with `StreamParityCount(0, N)`
+-- and says so loudly (S2).
+export pure func execution_of(
+  run: TracedSessionResult,
+  initial_clock_ms: int,
+  replay: ReplayObligation,
+  decision_budget: int,
+  retry_budget: int,
+  ambient_rng_reads: int,
+  forbidden_effect_sites: [string],
+  meta: ReplayMetadata
+) -> ExecutionUnderTest {
+  { result: result_of(run, meta),
+    world: run.world,
+    initial_clock_ms: initial_clock_ms,
+    emissions: run.emissions,
+    replay: replay,
+    decision_budget: decision_budget,
+    retry_budget: retry_budget,
+    ambient_rng_reads: ambient_rng_reads,
+    forbidden_effect_sites: forbidden_effect_sites }
+}
+
+-- Always `RunCompleted`. D6.6/D6.7's `RunFailed` is the HARNESS's class — a
+-- world that could not serve a request, a program that could not be interpreted
+-- — and none of those are observable from a `TracedSessionResult`, which is what
+-- the driver returns after it has run. A provider error is a run OUTCOME and
+-- rides in `outcome`, not a harness failure; mapping it to `RunFailed` here would
+-- make `satisfies_terminal_trace_contract` vacuously true for every failed run,
+-- because a HarnessFailure carries no RunSummary obligation.
+pure func result_of(run: TracedSessionResult, meta: ReplayMetadata) -> DstResult {
+  completed_run(run.result, run.trace, interaction_log_of(run.world), meta)
+}
+
+-- How many stream emissions the witness carries. Exported because the anti-
+-- vacuity assertion belongs to the caller: a bridge that asserted its own output
+-- was non-empty would fail on the runs where empty is correct (a run with no
+-- provider call at all), and a caller that does not assert it at all gets a green
+-- parity row over two empty lists.
+export pure func emission_count(x: ExecutionUnderTest) -> int {
+  List.length(x.emissions)
+}

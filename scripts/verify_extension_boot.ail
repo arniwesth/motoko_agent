@@ -43,7 +43,7 @@ import std/list as L (length)
 import src/core/config (load_config_from_cli)
 import std/option (Option, Some, None)
 
-export func main() -> () ! {Env, FS, IO} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   let args = getArgs();
   match args {
     [name] => {
@@ -58,7 +58,7 @@ export func main() -> () ! {Env, FS, IO} {
       -- exercises just this one extension. If the registration panics,
       -- the AILANG runtime crashes; exit code surfaces to the wrapper.
       let registry = parse_core_ext_order(name, cfg);
-      if L.length(registry.hooks) > 0 then {
+      if L.length(registry.entries) > 0 then {
         println("OK: ${name} register_with_config returned without panic");
         ()
       } else {

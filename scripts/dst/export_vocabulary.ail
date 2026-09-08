@@ -1,0 +1,97 @@
+-- scripts/dst/export_vocabulary.ail
+--
+-- Project 010, plan task 3.2. Exports the event vocabulary as JSON so the P3
+-- Python validators can check attribution coverage machine-readably.
+--
+-- WHY THIS SCRIPT EXISTS AT ALL. The overlay needs to assert "every LOGICAL
+-- variant that reaches the trace today has a subject rule". Deriving that by
+-- grepping `dst_event_vocabulary.ail` is wrong and was already caught being
+-- wrong during planning: a vocabulary-SHAPED test fixture at :807 (inside
+-- `test_duplicate_row_is_rejected`) makes a naive `grep -c` overcount
+-- `reaches_trace_today: false` by one. Reading the artifact through its own
+-- exported API cannot make that mistake.
+--
+-- POSTURE. Identical to D9's: this project is a READ-ONLY CONSUMER of the
+-- 009/D6-governed compatibility surface. This script imports the exported pure
+-- `event_vocabulary()` and nothing else; it changes no core module, versions
+-- nothing, and adds no obligation to 009. If a row changes upstream, this
+-- export changes with it — which is the point.
+--
+-- Run (from the repo root):
+--   ailang run --caps IO,FS --entry main scripts/dst/export_vocabulary.ail
+--
+-- Output: tools/code-graph/.out/vocabulary.json  (generated, not committed — D1)
+
+module scripts/dst/export_vocabulary
+
+import std/io (println)
+import std/fs (writeFileResult, mkdirAllResult)
+import std/json (Json, encode, jo, ja, kv, js, jb, jint)
+import std/result (Result, Ok, Err)
+import std/list (map, length, filter)
+import src/core/dst_event_vocabulary (
+  EventRow, PayloadField,
+  event_vocabulary, event_vocabulary_version, classification_id
+)
+
+-- The overlay owns this export's shape and version, exactly as it owns the D9
+-- trace format. Bump when a consumer-visible field changes.
+pure func export_version() -> int { 1 }
+
+pure func out_dir() -> string { "tools/code-graph/.out" }
+pure func out_path() -> string { "tools/code-graph/.out/vocabulary.json" }
+
+pure func payload_json(p: PayloadField) -> Json {
+  jo([kv("key", js(p.key)), kv("required", jb(p.required))])
+}
+
+pure func row_json(r: EventRow) -> Json {
+  jo([
+    kv("variant", js(r.variant)),
+    -- A list, not a string: `StreamDelta` legitimately has two wire names
+    -- (`reasoning_delta` / `thinking_delta`). Consumers key on the VARIANT,
+    -- never on a wire name — this field exists so a human can read the export
+    -- without executing anything, not as a join key.
+    kv("wire_names", ja(map(js, r.wire_names))),
+    kv("payload", ja(map(payload_json, r.payload))),
+    kv("classification", js(classification_id(r.classification))),
+    -- Kept strictly apart from the classification, as the artifact keeps them:
+    -- a LOGICAL row with `false` here is a D6.4 gap, not a misclassification.
+    kv("reaches_trace_today", jb(r.reaches_trace_today))
+  ])
+}
+
+pure func is_logical(r: EventRow) -> bool { classification_id(r.classification) == "logical" }
+pure func not_in_trace(r: EventRow) -> bool { if r.reaches_trace_today then false else true }
+
+pure func document(rows: [EventRow]) -> Json {
+  jo([
+    kv("vocabulary_version", js(event_vocabulary_version())),
+    kv("export_version", jint(export_version())),
+    kv("row_count", jint(length(rows))),
+    -- Counts computed HERE, over the same rows, so a consumer can cross-check
+    -- its own aggregation against the producer's without re-deriving them.
+    kv("logical_count", jint(length(filter(is_logical, rows)))),
+    kv("not_reaching_trace_count", jint(length(filter(not_in_trace, rows)))),
+    kv("rows", ja(map(row_json, rows)))
+  ])
+}
+
+export func main() -> () ! {IO, FS} {
+  let rows = event_vocabulary();
+  let text = encode(document(rows));
+
+  let made = mkdirAllResult(out_dir());
+  let _ = match made {
+    Ok(_)    => (),
+    Err(msg) => println("export_vocabulary: mkdir ${out_dir()} failed: ${msg}")
+  };
+
+  let written = writeFileResult(out_path(), text);
+  match written {
+    Ok(_) =>
+      println("export_vocabulary: wrote ${out_path()} — ${show(length(rows))} rows, ${show(length(filter(is_logical, rows)))} logical, ${show(length(filter(not_in_trace, rows)))} not reaching the trace today"),
+    Err(msg) =>
+      println("export_vocabulary: FAILED writing ${out_path()}: ${msg}")
+  }
+}

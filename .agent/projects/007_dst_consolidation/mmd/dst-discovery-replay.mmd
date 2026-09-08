@@ -1,0 +1,68 @@
+flowchart TB
+  %% Detail view 2 of 2 (with dst-world-boundary). Overview: dst-target-system.
+  %% The system in TIME: how a seed becomes an execution program, and how that program replays.
+  %% 009 ADR-001 D2 (discovery/replay), D6 (outcomes), D7 (invariants), D8 (repro), D11 (search).
+  %% Grounded 2026-07-26: 007 after RR1-RR10, 009 at 7b9b4a4c266b229be85de5c09342f2b654c89fe7.
+  %% Nothing here exists at HEAD - this is the target, not the as-built.
+
+  cfg["<b>DiscoveryConfig</b><br/>schema_version · generator_id · generator_version · seed<br/><b>initial_world</b>: messages and policy · synthetic environment ·<br/>clock epoch · extension profile"]:::mode
+
+  subgraph DISCOVERY["Discovery · reactive, seed-driven — the generator runs"]
+    direction TB
+    ddrv["<b>the real production driver</b> issues an external request<br/>discovery never invents a tool, approval, or extension request<br/>disconnected from production control flow"]:::driver
+    dgen["<b>the seeded generator</b> chooses a compatible response,<br/>fault, and latency from that request plus explicit generator state<br/>choice = f(generator id/version, seed, generator state, bounded<br/>request projection, world state) · no ambient RNG participates"]:::gen
+    dnote["the choice changes production state, and therefore <b>which request<br/>arrives next</b> — a generated provider outcome may contain a tool call<br/>and thereby cause a later production tool request<br/><i>the seed controls the trajectory without a test copy of the state machine</i>"]:::rule
+  end
+
+  prog[("<b>ExecutionProgram</b> — the resolved, ordered protocol<br/>schema_version · generator_id · generator_version · seed ·<br/>initial_world · ordered interactions<br/><br/>concrete outcomes plus the bounded actual request projections<br/>needed to diagnose a mismatch")]:::artifact
+
+  vocab["<b>the interaction vocabulary</b><br/>ExpectProvider · origin, request matcher, timed outcome<br/>ExpectTool · origin, matcher, deadline, timed outcome<br/>ExpectApproval · matcher, deadline, timed outcome<br/>EnvironmentRead · key, value or missing<br/>RuntimeRandomDraw · bounds, value<br/>AdvanceClock · delta<br/><br/>a provider timed outcome may carry ordered stream chunks at<br/>non-decreasing virtual offsets, then a final result or error"]:::req
+
+  identity["<b>each interaction carries two things, not one</b><br/>a stable <b>causal identity</b>, deciding whether the outcome may be<br/>delivered · and a <b>bounded request projection or digest</b>, used for<br/>strict reproduction and invariants<br/><br/>every identity includes a global <b>encounter ordinal</b>, so repeated<br/>production call ids stay representable and an invariant can reject<br/>them as system behaviour rather than the decoder rejecting the artifact<br/>provider identity adds kind, origin, step, model<br/>tool and approval identity add kind, origin, call id, name"]:::req
+
+  validate["<b>decode, then a pure structural validator — before replay begins</b><br/>rejects malformed schemas · negative time · duplicate interaction<br/>identities · impossible static references · absent required initial values"]:::rule
+
+  subgraph REPLAY["Replay · consumes the exact program, never calls the generator"]
+    direction LR
+    strict["<b>strict replay</b> — the reproduction contract<br/>causal identity <i>and</i> recorded projections must match,<br/>under the recorded execution manifest and profile"]:::mode
+    regress["<b>regression replay</b> — a newer revision<br/>requires compatible causal identity, records projection<br/>differences, and may continue, so the same environment<br/>outcomes exercise changed production logic<br/>never weakens tool-call correlation or delivers an<br/>outcome to a different logical request"]:::mode
+  end
+
+  hfail["<b>a wrong kind or origin, an unsafe identity mismatch, an exhausted<br/>program, or an unused interaction is a HarnessFailure</b><br/>— not a simulated system fault, and never a production RunSummary<br/>if it occurs after execution begins it carries the partial trace and the<br/>actual request projection needed to diagnose it"]:::fault
+
+  outcomes["<b>009 D6 · one complete terminal result</b><br/><b>SystemRun</b>: outcome · ledger_trace · interaction_log · replay_metadata<br/>exactly one canonical RunSummary, the final record for the run<br/><b>HarnessFailure</b>: kind · interaction position · actual request projection ·<br/>partial ledger trace"]:::out
+
+  invariants["<b>009 D7 · invariants over the whole execution</b><br/>including the two this lifecycle owns:<br/><b>strict-replay request equality</b> and <b>complete interaction consumption</b><br/><br/><b>the discovery contract is itself an invariant</b> — under the same manifest<br/>and profile, the same schema_version, generator_id, generator_version,<br/>seed, and initial_world run twice must produce the same resolved program,<br/>interaction log, outcome, and normalized trace"]:::oracle
+
+  promise["<b>009 D8 · the reproducibility promise, stated precisely</b><br/>repeating discovery under the recorded manifest and seed reproduces<br/>the same resolved program<br/>the exact program reproduces the same interaction log, outcome, and trace<br/>under a newer revision the program is the same regression input, but a<br/>changed outcome may be the intended evidence a bug was fixed —<br/><i>replay does not promise identical output across code changes</i><br/>a schema migration preserves old-program decoding or pins a runner;<br/>silently reinterpreting an old program is forbidden"]:::artifact
+
+  version["<b>a seed alone is not a reproduction key</b><br/>any change to the PRNG, draw order, generator ranges, boundary strategy,<br/>or default initial world that can remap a seed requires a <b>generator-version<br/>change</b>, and a pinned canary per stable generator id must fail if such a<br/>remap happens without the bump<br/><br/>shrinking operates on <b>programs</b>, preserving request causality and schema<br/>validity, revalidating the failure after every reduction"]:::rule
+
+  corpora["<b>009 D11 · search is a gate, not a bag of seeds</b><br/>blocking PR corpus: fixed seeds plus exact promoted regression programs<br/>rotating scheduled corpus: a deterministically changing seed window<br/>each job declares an operator-accepted minimum count the gate asserts —<br/>a zero, silently truncated, or below-minimum window fails<br/>the fixed bank must collectively reach every required fault class"]:::req
+
+  cfg --> DISCOVERY
+  ddrv --> dgen
+  dgen --> ddrv
+  dgen -.-> dnote
+  DISCOVERY --> prog
+  prog -.-> vocab
+  prog -.-> identity
+  prog --> validate
+  validate --> REPLAY
+  REPLAY -.-> hfail
+  REPLAY --> outcomes
+  outcomes --> invariants
+  invariants --> promise
+  promise -.-> version
+  promise --> corpora
+  corpora -. "a scheduled failure is promoted to the fixed corpus, with or before its fix" .-> prog
+
+  classDef mode fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef gen fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef driver fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef rule fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef req fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef fault fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+  classDef out fill:#24262f,stroke:#6e7681,color:#d6dbe2;
+  classDef oracle fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef artifact fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;

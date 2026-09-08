@@ -6,9 +6,55 @@ services:
     volumes:
       - ..:/workspaces/motoko_agent:cached
     command: sleep infinity
-    environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      EXA_API_KEY: ${EXA_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # The repository-root .env, delivered whole.
+    #
+    # WHY THIS REPLACED A CURATED `environment:` LIST (2026-08-22). That list named seven keys as
+    # `${KEY:-}` and delivered NONE of them: Compose reads a `.env` for interpolation from the
+    # PROJECT directory — the directory holding this file, i.e. `.devcontainer/` — and
+    # `.devcontainer/.env` does not exist. The repository-root `.env` was never consulted, so every
+    # entry resolved to the empty string. Measured in the running container on 2026-08-22:
+    # OPENAI_API_KEY, EXA_API_KEY, OPENROUTER_API_KEY, OBSIDIAN_MCP_TOKEN and MOTOKO_BOT_GH_TOKEN
+    # were all empty, though all five had been in `.env` since long before that container was built.
+    #
+    # It went unnoticed for so long because every consumer parsed `.env` for itself and fell back to
+    # it: Motoko does (`src/tui/src/index.ts`), and so does the PR tooling (`tools/pr/lib.ts:54-60`,
+    # environment first, then the file). The first consumer that CANNOT is Claude Code, which
+    # interpolates `${…}` in `.mcp.json` from its process environment only — so the Linear MCP server
+    # was the thing that finally required this to work.
+    #
+    # `env_file` rather than `--env-file`: this must hold for however the stack is started, and Dev
+    # Containers owns that invocation. `required: false` so a fresh checkout with no `.env` still
+    # builds. This is the same three lines `docker-compose.observability.yml` has always carried for
+    # this service — that profile was getting the keys while this one was not.
+    env_file:
+      - path: ../.env
+        required: false
+
+    # NOTHING IS RE-DECLARED UNDER `environment:` HERE, and that is load-bearing rather than tidy:
+    # `environment:` WINS over `env_file:`, and `KEY: ${KEY:-}` sets the key to an empty string
+    # rather than leaving it unset — so re-listing any of these would silently shadow the value the
+    # file just supplied. Add a key to `.env`; do not add it back here.
+    #
+    # WHAT CHANGED IN POSTURE, stated rather than slipped in: the container now receives every
+    # variable in `.env`, not the seven that were named. In practice that is a small delta — `.env`
+    # is on the bind mount at /workspaces/motoko_agent/.env and readable by anything in here anyway,
+    # which is why Motoko could read it directly all along. The real narrowing of an agent's env
+    # surface is `.devcontainer/agent_confined/`, which keeps a curated list AND makes it work by
+    # passing `--env-file <repo>/.env` on the command line.
+    #
+    # TWO NAMING FACTS THAT SURVIVE THE LIST, because they are about `.env`'s contents rather than
+    # about this file:
+    #
+    #   * MOTOKO_BOT_GH_TOKEN is deliberately NOT named GH_TOKEN or GITHUB_TOKEN. `gh` prefers those
+    #     over the credentials stored by `gh auth login` and says nothing about it, so under either
+    #     of those names the operator's own `make pr` would run as the bot and silently invert
+    #     016 ADR-001 D1 (identity follows mechanism). Under this name it is inert for ordinary `gh`
+    #     use; the pipeline maps it into GH_TOKEN inside the subprocess that wants it, and nowhere
+    #     else. Do not rename it, and do not add a GH_TOKEN alias.
+    #   * LINEAR_API_KEY is consumed by `.mcp.json`'s `linear` server as a bearer token — by Claude
+    #     Code, not by Motoko. Motoko has no Linear access at all; see
+    #     `.agent/projects/022_linear_integration/`, whose F-1 (whose account Motoko would act as) is
+    #     open and should be answered before that changes.

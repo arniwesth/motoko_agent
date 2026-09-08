@@ -1,0 +1,64 @@
+flowchart TB
+  %% ADR-001 (017) — the 6.0 RE-SHAPE: capability registration (research §3.3) plus the bundled
+  %% proc_exec → tool_handle rename, and the Q2 multiplicity policy enforced at registration.
+  %% Colour = role: purple the new ABI shape · amber the host boundary · green admitted N>1 ·
+  %% red-dashed rejected N>1 · blue what transfers unchanged · gray still open (ADR §5).
+  %% Grounded 2026-08-26 at 366193c (2026-08-24). The Capability sum is the research §3.3 sketch as
+  %% type-checked by delegate mot-dlg-1787599903186; it does NOT exist in types.ail at HEAD.
+  %% Rename pricing: types.ail:342-349 (WI-D21/D22 block, 324-406). Vote merges: runtime.ail:357, :509.
+
+  subgraph SHAPE["6.0 · register_with_config(cfg) -> [Capability] — extensions CONSTRUCT variants, only the dispatcher matches"]
+    direction TB
+    sum["type Capability — ABI-owned NOMINAL sum<br/>one variant per hook kind; adding a variant<br/>breaks zero packages (§2 asymmetry)"]:::shape
+    subgraph VARIANTS["one variant per hook kind — payload carries the hook function"]
+      direction TB
+      v1["DescribeTools<br/>() -> [ToolSchema]"]:::ok
+      v2["PromptShaper<br/>(ExtCtx) -> PromptPatch"]:::ok
+      v3["BudgetShaper<br/>(ExtCtx, BudgetPlan) -> BudgetPatch"]:::ok
+      v4["Compactor<br/>(ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}"]:::ok
+      v5["ResponseInterceptor<br/>(ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}"]:::ok
+      v6["ToolProvider([string], describe, handle)<br/>provided_tools + on_tool_handle COLLAPSED into one variant —<br/>the two fields that had to be kept mutually consistent"]:::ok
+      v7["ToolPolicy<br/>(ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision"]:::vote
+      v8["SolverJudge<br/>(ExtCtx, string) -> FinalizeOutcome ! {Process}"]:::vote
+    end
+    sum --> VARIANTS
+  end
+
+  subgraph RENAME["Bundled: the priced 6.0 rename — one break, spent once"]
+    direction TB
+    rn["ExtPorts.proc_exec → tool_handle<br/>it dispatches a MOTOKO TOOL, not a subprocess (types.ail:329-333)<br/>a renamed label invalidates every ExtPorts literal → forces the major (types.ail:364-391)"]:::shape
+  end
+  SHAPE --- RENAME
+
+  subgraph BOUNDARY["Q2 · multiplicity validated at the ONE host-owned boundary that builds ExtRegistry<br/>(today the parse_core_ext_order path, registry_generated.ail:71) — never in the dispatchers"]
+    direction TB
+    val{"per extension, per kind:<br/>how many atoms?"}:::boundary
+    okN["<b>N>1 admitted</b> (composable kinds)<br/>DescribeTools concatenation · PromptShaper patch fold (list order = sub-order)<br/>BudgetShaper last-Some-wins (list order = precedence)<br/>Compactor explicit chain · ResponseInterceptor first-match (list order)"]:::ok
+    okT["<b>ToolProvider N>1 admitted IF advertised names are disjoint</b><br/>registry builds a per-extension tool-name set;<br/>duplicates rejected even inside one variant —<br/>overlap recreates the provided_tools/handler inconsistency"]:::ok
+    no["<b>REJECTED at registration</b> — the vote kinds<br/>ToolPolicy: N>1 = several votes from one extension under Deny > Pending > Allow > NoOpinion<br/>SolverJudge: N>1 = one extension disagreeing with itself under ContinueWithFeedback > Accept > NoDecision<br/>failure names id, variant, duplicate index; never silently discards"]:::vote
+    val -->|"composable"| okN
+    val -->|"tool names disjoint"| okT
+    val -->|"vote kind, N>1"| no
+  end
+  VARIANTS --> val
+
+  subgraph KEEP["What transfers from 5.0 unchanged"]
+    direction TB
+    k1["dispatch stays deterministic registry-order folds<br/>with the same merge semantics —<br/>iterating capability lists instead of record fields"]:::keep
+    k2["world-token threading + holder stamp (WI-D24):<br/>the dispatcher still knows which extension it invokes"]:::keep
+  end
+  okN --> KEEP
+  okT --> KEEP
+
+  gap["<b>What does NOT transfer</b> (Q3, measured): the payload row on a variant<br/>is documentation, not enforcement — see ext-abi-enforcement-plane"]:::vote
+  VARIANTS -.-> gap
+
+  open[["Still open (ADR §5): does ExtRegistry keep a per-extension record { id, caps } around the list?<br/>the holder stamp needs an id somewhere · N>1 same-kind atoms must ALL be dispatched or the<br/>declared_vs_performed fold measures fail-open — not yet exercised on real packages"]]:::openq
+  BOUNDARY -.-> open
+
+  classDef shape fill:#2f2145,stroke:#bb9af7,color:#e5d5fb,stroke-width:2px;
+  classDef boundary fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef ok fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef vote fill:#3a1620,stroke:#f7768e,color:#f7c6cf,stroke-dasharray:5 5;
+  classDef keep fill:#16294d,stroke:#7aa2f7,color:#cdd9f5;
+  classDef openq fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;

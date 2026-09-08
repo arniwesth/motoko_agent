@@ -1,0 +1,99 @@
+flowchart TD
+  %% Layer-2 harness-boundary DST — END STATE expected after implementation.
+  %% Grounded at HEAD 09751cd. This is a RUNTIME/DATAFLOW view: the real system-prompt
+  %% delivery path from an out-of-sandbox source, where the Layer-2 DST taps it (no spawn),
+  %% and the frozen sandboxed-core downstream it protects.
+  %% Colours: green = built by this plan (test file) · purple = production-code extraction (behavior-preserving)
+  %% gray = frozen production code reused · cyan = contract oracle (must bite) · blue = fast gate / acceptance
+  %% amber-dashed = context only, NOT built here (headless in-core gap · future launcher.ail).
+
+  subgraph INPUT["External prompt input — outside the sandbox"]
+    ext["--system-prompt &lt;path&gt; flag OR SYSTEM_MD env<br/>source path may be ABSOLUTE / out-of-workspace<br/>unreadable under AILANG_FS_SANDBOX=workdir"]:::frozen
+  end
+
+  subgraph OUTER["Outer-tier launcher (unsandboxed) — host materialization + spawn prep"]
+    materialize["materializeSystemPromptArg(flag, workdir)<br/>readFileSync out-of-sandbox source<br/>write &lt;workdir&gt;/.motoko-system-prompt.md<br/>null + log if unreadable"]:::core
+    repoint["process.env.SYSTEM_MD repointed<br/>at the in-sandbox managed file<br/>(TS mechanism · thin)"]:::frozen
+    resolve["systemPromptForWorkspace(root, workdir)<br/>→ workdir-relative path<br/>'' if missing/escape · '.' at root"]:::core
+    childenv["buildChildEnv(workdir, profile, …)<br/>AILANG_FS_SANDBOX = workdir<br/>SYSTEM_MD ABSENT · MOTOKO_HEADLESS"]:::core
+    supargs["buildSupervisorArgs(…)<br/>--system-prompt &lt;relpath&gt; pair<br/>prompt carried BY REFERENCE"]:::core
+    spawn["constructor: mirror* FS side-effects<br/>then spawn ailang child (env = childEnv)"]:::frozen
+  end
+
+  subgraph CORE["Sandboxed core (AILANG_FS_SANDBOX = workdir) — frozen downstream"]
+    coreread["supervisor.ail reads prompt<br/>via workdir-relative path (rpc.ail:205)<br/>materialized content is in-sandbox → readable"]:::frozen
+    seal["in-core seal gate<br/>require_system_prompt: NOT headless<br/>OFF in headless → no in-core guard"]:::calib
+  end
+
+  subgraph TEST["Layer-2 DST tap — calls the pure fns directly, NO spawn"]
+    testfile["harness-dst.test.ts<br/>per-test mkdtemp workdir<br/>save/restore SYSTEM_MD + argv<br/>no AILANG · no spawn · no network"]:::new
+  end
+
+  subgraph ORACLE["Contract oracle — must bite (thick); ports to launcher.ail"]
+    o1["scen1 · dest content BYTE-EQUALS source<br/>dest resolves INSIDE workdir"]:::oracle
+    o2["scen2 · workdir-rel path UNCHANGED<br/>no .motoko-system-prompt.md written"]:::oracle
+    o3["scen3 · '' on missing/escape<br/>null on unreadable source"]:::oracle
+    o4["scen4 · AILANG_FS_SANDBOX == workdir<br/>SYSTEM_MD absent despite parent sentinel<br/>--system-prompt &lt;relpath&gt; pair present"]:::oracle
+  end
+
+  subgraph GATE["Fast gate — bun test"]
+    scn1["harness.external_system_md_materialized"]:::gate
+    scn2["harness.workspace_system_md_not_rewritten"]:::gate
+    scn3["harness.out_of_sandbox_or_missing_system_md_yields_empty"]:::gate
+    scn4["harness.child_env_sandbox_and_prompt_by_reference"]:::gate
+    make["bun test src/tui/src/harness-dst.test.ts<br/>4 scenarios green · runtime-process family green<br/>ADR-003 acceptance · 6 criteria"]:::gate
+  end
+
+  subgraph FUTURE["Long-term migration — context only, not built here"]
+    launcher["launcher.ail (outer AILANG tier)<br/>same contract → AILANG scenario<br/>bun runner retired"]:::calib
+  end
+
+  %% production delivery dataflow (real launch path)
+  ext --> materialize
+  materialize --> repoint
+  repoint --> resolve
+  resolve --> supargs
+  resolve --> childenv
+  childenv --> spawn
+  supargs --> spawn
+  spawn --> coreread
+  coreread --> seal
+
+  %% headless gap: in-core guard is off exactly where #76 bit
+  seal -. "headless: guard OFF ⇒ Layer-2 is the sole guard" .-> testfile
+
+  %% the DST taps the outer-tier pure functions directly (no spawn)
+  testfile -. "call, assert" .-> materialize
+  testfile -. "call, assert" .-> resolve
+  testfile -. "call, assert" .-> childenv
+  testfile -. "call, assert" .-> supargs
+
+  %% observed outputs feed the contract oracle
+  materialize --> o1
+  resolve --> o2
+  resolve --> o3
+  materialize --> o3
+  childenv --> o4
+  supargs --> o4
+
+  %% oracle → scenario ids → gate
+  o1 --> scn1
+  o2 --> scn2
+  o3 --> scn3
+  o4 --> scn4
+  scn1 --> make
+  scn2 --> make
+  scn3 --> make
+  scn4 --> make
+
+  %% contract is written to survive the migration
+  o1 -. "language-neutral contract" .-> launcher
+  o4 -. "language-neutral contract" .-> launcher
+
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef edited fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef core fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef oracle fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2.5px;
+  classDef calib fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px,stroke-dasharray:6 4;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;

@@ -1,0 +1,30 @@
+-- Expected-negative direct substrate probe against the real
+-- std/ai.stepWithStream signature.
+--
+-- This determines whether a callback that returns unit but performs
+-- {IO, SharedMem} can be passed to the current API. If this file checks,
+-- the request-scoped recorder can be wired without changing the callback
+-- effect contract. If it fails, an upstream signature/API change is required.
+
+module probe_sharedmem_callback_rejected
+
+import std/ai (
+  stepWithStream,
+  Message,
+  StepResult,
+  AIError,
+  StreamChunk
+)
+import std/bytes (fromString)
+import std/io (println)
+import std/result (Result)
+import std/sharedmem (put)
+
+func capture(chunk: StreamChunk) -> () ! {IO, SharedMem} {
+  let _ = put("motoko-dst-stream-capture/direct-signature-probe", fromString(show(chunk)));
+  println("captured")
+}
+
+export func probe(messages: [Message]) -> Result[StepResult, AIError] ! {AI, IO, SharedMem} {
+  stepWithStream("", messages, [], [], capture)
+}

@@ -1,0 +1,95 @@
+module sunholo/motoko_ext_ailang_docs/prompts
+
+import std/string (length, toLower, contains)
+import pkg/sunholo/motoko_ext_abi/types (PromptPatch)
+
+-- AILANG context block — updated descendant of motoko_ext_ailang_hints'
+-- hint text. Two changes from the v0.1.2 hint:
+--   1. Points at the new ailang-docs tools (stdlib_search, docs_search,
+--      example_for_concept) instead of legacy microrag_search references.
+--   2. Specifically calls out tools as "lookup-on-demand" rather than
+--      "preloaded knowledge" — preventing the model from treating the
+--      hint as exhaustive and skipping lookups.
+pure func ailang_context_text() -> string {
+  "## AILANG context (this task involves AILANG code)
+
+- **Unit type is `()`, not `void`.** Effectful entry points: `export func main() -> () ! {IO} { ... }`.
+- **No `return` statements.** The value of the last expression IS the result. Use `if cond then a else b` for branching, not early-return.
+- **Iteration via recursion + lambdas.** Prefer `letrec loop = \\n. if n > 100 then () else { println(show(n)); loop(n + 1) }; loop(1)` over a top-level recursive `func`.
+- **No method syntax.** AILANG has no `xs.drop(1)` / `xs.map(f)`. Use `std/list` helpers (foldl, map, filter, head, tail) or pattern-match recursion.
+- **`show` before formatting.** `println(show(value))` for any printable type. Prefer over `intToStr` / `floatToStr`.
+- **Effect rows in signatures.** Effectful functions declare effects after `->`. Pure functions omit the effect row entirely.
+
+### When unsure, look it up — don't guess
+
+You have live tools that query the AILANG docs server. **Use them before inventing symbol names.** Hallucinated names cost iterations.
+
+- `stdlib_search(query, forVersion)` — find functions/types in stdlib by keyword. THE highest-value tool. Use any time you're about to write `stringify`, `from_int`, `.method()`, or any name you didn't just see in this codebase.
+- `stdlib_module(name, forVersion)` — get full contents of a specific stdlib module (e.g. `std/json`, `std/list`).
+- `docs_search(query, forVersion)` — search general AILANG docs.
+- `example_for_concept(concept, forVersion)` — canonical example for a concept (effects, contracts, ADTs, etc).
+- `effects_catalog(forVersion)` — full effect list for the target version.
+- `design_doc(slug)` — read a design doc by slug if you need rationale for a feature.
+
+If you don't know the AILANG version, call `ailang_versions` once — most current is fine.
+
+### Verification
+
+`ailang check <file>` for type+effect; `ailang run --caps IO --entry main <file>` to actually run. Use `requires { ... } / ensures { ... }` on `pure func` for Z3-verifiable contracts."
+}
+
+-- Same predicate as motoko_ext_ailang_hints — superseded by this package
+-- but the gating logic is the right scope (task-level signals). Bias
+-- toward false negatives: prompt overhead is ~400 tokens per step when
+-- it fires, so we'd rather miss a tangentially-AILANG task than bloat
+-- every Python/JS task.
+pure func task_signals_ailang(task: string) -> bool {
+  let t = toLower(task);
+  contains(t, "ailang")
+    || contains(t, ".ail")
+    || contains(t, "ailang.toml")
+    || contains(t, "pure func")
+    || contains(t, "export func")
+    || contains(t, "requires {")
+    || contains(t, "ensures {")
+    || contains(t, "effect row")
+    || contains(t, "std/io")
+    || contains(t, "std/json")
+    || contains(t, "std/result")
+    || contains(t, "std/option")
+    || contains(t, "std/list")
+    || contains(t, "std/ai")
+    || contains(t, "make check_core")
+    || contains(t, "make verify_core")
+    || contains(t, "z3 contract")
+    || contains(t, "hindley-milner")
+}
+
+pure func ailang_context_text_is_well_formed() -> bool
+  tests [((), true)]
+  {
+    let t = ailang_context_text();
+    length(t) > 400 && length(t) < 4000
+      && contains(t, "AILANG")
+      && contains(t, "stdlib_search")
+      && contains(t, "ailang check")
+  }
+
+pure func task_signals_ailang_fires_correctly() -> bool
+  tests [((), true)]
+  {
+    task_signals_ailang("Refactor src/core/foo.ail")
+      && task_signals_ailang("Write a pure func returning Result")
+      && task_signals_ailang("AILANG type error in compaction")
+      && task_signals_ailang("Look up std/json encode signature")
+      && not task_signals_ailang("Write a Python fizzbuzz")
+      && not task_signals_ailang("Refactor TypeScript auth middleware")
+      && not task_signals_ailang("")
+  }
+
+export func build_prompt_patch(task: string) -> PromptPatch {
+  if task_signals_ailang(task) then
+    { prepend: [], append: [ailang_context_text()] }
+  else
+    { prepend: [], append: [] }
+}

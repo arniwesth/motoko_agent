@@ -109,7 +109,7 @@ Port the PoC plan's Phases 1–2 verbatim. Detailed in `Omnigraph_PoC_Plan.md`; 
     - Filter bindings prefer `$d: Decision { status: $status }` over `$d.status == $status` in the match block.
     - `delete` syntax is bare `delete TypeName where field = $val` — no `match` binding.
 - **1.4** Write `omnigraph.yaml` with a single `local` graph pointing at `./repo.omni`. All CLI commands run with `cwd=omnigraph/`; URI resolves from this config, never from a positional arg.
-- **1.5** Write `seed/data.jsonl` with real Zeus-style decisions from `.agent/plans/` and `.agent/research/`. Target: ≥4 decisions, ≥8 components, ≥4 Governs edges, ≥6 DependsOn edges (match PoC footprint).
+- **1.5** Write `seed/data.jsonl` with real project-style decisions from `.agent/plans/` and `.agent/research/`. Target: ≥4 decisions, ≥8 components, ≥4 Governs edges, ≥6 DependsOn edges (match PoC footprint).
 - **1.6** Write `AGENT_PROMPT.md` (schema summary + query/mutation catalog + usage rules — branch discipline, verification after mutation, param passing, branch-naming convention, enum values, slug immutability).
 - **1.7** Write `validate.sh` end-to-end script (init, load, read, branch, mutate, merge, delete-branch). Idempotent — guards against leftover test branches.
 

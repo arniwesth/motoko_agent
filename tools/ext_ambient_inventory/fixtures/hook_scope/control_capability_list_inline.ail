@@ -1,0 +1,17 @@
+-- ADR-001 Phase B, B2: the 6.0 registration shape.  A LITERAL LIST of
+-- capability-constructor applications, every function-typed argument an inline
+-- lambda -- including one whose parameter list holds a comma, so the per-atom
+-- argument split is exercised.  Must resolve CLEAN with exactly THREE atoms.
+module fixture/control_capability_list_inline
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, FinalizeOutcome, ToolCallEnvelope, ToolPolicyDecision)
+
+export func register_with_config(_cfg: a) -> [Capability] {
+  [
+    PromptShaper(\_ctx. { prepend: ["fixture"], append: [] }),
+    ToolPolicy(func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }),
+    SolverJudge(func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+      { decision: { NoDecision }, next_state: ctx.world }
+    })
+  ]
+}

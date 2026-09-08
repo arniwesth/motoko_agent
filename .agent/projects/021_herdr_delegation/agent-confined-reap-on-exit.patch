@@ -1,0 +1,30 @@
+diff --git a/.devcontainer/agent_confined/docker-compose.yml b/.devcontainer/agent_confined/docker-compose.yml
+--- a/.devcontainer/agent_confined/docker-compose.yml
++++ b/.devcontainer/agent_confined/docker-compose.yml
+@@ -198,7 +198,26 @@
+       #
+       # checks/r9-container.sh leg 4 asserts this rather than its opposite: in the OPERATOR's container
+       # GH_TOKEN must be unset, here it must be set AND resolve to motoko-agent.
+       GH_TOKEN: ${MOTOKO_BOT_GH_TOKEN:-}
++      # REAP DELEGATE PANES ON A CLEAN EXIT — this profile only, and by decision (F-5 D2,
++      # .agent/projects/021_herdr_delegation/DESIGN-f5-orphan-ownership.md §6).
++      #
++      # A herdr pane does not die with its caller: a delegate whose Motoko exited keeps working,
++      # keeps burning subscription quota, and keeps unsandboxed write access to the tree. The
++      # default everywhere else is to LEAVE IT RUNNING and say so, because reaping destroys
++      # in-flight work on every clean exit — including the case the answer-file gate exists to
++      # honour, where the delegate finishes after Motoko quits and the next session collects the
++      # answer off disk.
++      #
++      # That trade-off inverts here and only here. This container is disposable, nothing but the
++      # agent runs in it, no operator work lives in a pane, and the quota an unattended delegate
++      # burns is the dominant cost. So the safe default for a throwaway container is set for the
++      # container rather than hard-coded for everyone.
++      #
++      # The reaper closes panes carrying THIS session's `mot-owner` token, by explicit pane id,
++      # never by name or agent kind (P2-6). src/tui/src/herdr-reap.ts.
++      HERDR_REAP_ON_EXIT: "1"
++
+ 
+       # EGRESS PROXY wiring. With the agent on the internal-only network above, its ONLY path off-box is
+       # this proxy. Every proxy-aware client (git, gh, npm, bun, node, curl, and the codex/claude

@@ -1,0 +1,5 @@
+module sunholo/motoko_ext_compose/retry
+
+export func append_error(prior: [string], err: string, hint: string) -> [string] {
+  prior ++ ["${err}\n${hint}"]
+}

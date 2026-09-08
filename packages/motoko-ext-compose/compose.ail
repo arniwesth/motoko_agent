@@ -1,0 +1,1114 @@
+module sunholo/motoko_ext_compose/compose
+
+import pkg/sunholo/motoko_ext_ai_compat/ai_compat (callStreamResult)
+import std/datetime (formatRFC3339)
+import std/crypto (sha256Hex)
+-- WI-D20 REMOVED `std/clock (now)` AND `std/fs (writeFile, fileExists,
+-- removeFile, mkdirAll)` FROM THIS MODULE, and it is a MEASUREMENT repair rather
+-- than tidying — which is why it happens here and not in part 3.
+--
+-- Classifier 3 (`tools/ext_ambient_inventory/derive.py`) reads IMPORT LINES, not
+-- call sites: every symbol on an ambient import counts as an ambient source
+-- whether or not anything calls it. WI-D19 could leave compose's imports alone
+-- because `one_attempt` still used all five; this item routed `one_attempt`, so
+-- all five went dead in the same edit. Left in place they would have kept SIX
+-- ambient sources on compose's inventory for effects the extension can no longer
+-- perform — the instrument reporting a state that ceased to exist, which is the
+-- silent-wrong shape one level up from the code.
+--
+-- `std/process` WENT AT WI-D26, and with it the asymmetry. Kept two-part per
+-- S15; the sentence here read: "`std/process` STAYS and is still used, by
+-- `check_snippet` and `run_snippet`. That asymmetry is the honest residue of the
+-- tool_handle finding below." The finding was about the TOOL NAME compose passed,
+-- not about the seam — see the block at `on_response_intercept` for the three
+-- items it took to establish that and the one line that closed it.
+--
+-- `std/bytes (toString)` WENT WITH IT for WI-D20's classifier-3 reason: its only
+-- calls were on `ProcessOutput`'s byte streams, and the seam hands back a
+-- decoded string. `std/io (println)` STAYS, and its four call sites are compose's
+-- ambient remainder along with registration's three and the ambient AI — all
+-- three disclosed classes by decision, none of them this item's.
+import std/io (println)
+import std/json (encode, Json, jo, kv, js, jb, jnum, get)
+import std/result (Ok, Err)
+import std/string (trim, split, startsWith, contains, toLower)
+import std/option (None)
+
+import pkg/sunholo/motoko_ext_compose/types (ToolResultMeta, ComposeHostConfig)
+-- WI-D26. The routed subprocess request and the streams that come back. Its
+-- header carries the item's central measurement: `BashExec` reaches
+-- `exec(cmd, args)` directly and `bash -lc` is only the fallback for a request
+-- that needs a shell, so nothing on this path is quoted and nothing needs to be.
+import pkg/sunholo/motoko_ext_compose/proc (bash_exec_tool, bash_exec_args, decode_bash_result, message_of)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  ToolCallEnvelope, ToolResultEnvelope,
+  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
+  -- WI-D19: the routed half of `on_response_intercept`. `ExtPathKind`'s three
+  -- constructors are imported by name because `remove_if_file` matches on them
+  -- exhaustively rather than defaulting — see that function.
+  ExtPorts, ExtWorld, ExtFileMutation, ExtPathFile, ExtPathDir, ExtPathMissing,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  Msg, PreStepDecision, PassThrough
+)
+
+import pkg/sunholo/motoko_ext_compose/prompts (build_author_prompt, build_summary_prompt, normalize_intent_kind, derive_intent_kind)
+import pkg/sunholo/motoko_ext_compose/guard (compose_snippet_guard, targeted_hint, parse_declared_effects)
+import pkg/sunholo/motoko_ext_compose/validator (validate_expected_output_with_context)
+import pkg/sunholo/motoko_ext_compose/store (store_stdout_and_elide, store_snippet_with_meta)
+import pkg/sunholo/motoko_ext_compose/claimcheck (run_claimcheck, normalized_observed_output)
+import pkg/sunholo/motoko_ext_compose/author_loop (run_author_loop)
+import pkg/sunholo/motoko_ext_compose/ledger (PremiseLedger, init_ledger, with_budget_cap, claimcheck_ledger_summary, prior_reads_summary)
+import std/json (asArray, asString)
+
+func string_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    Some(v) => match asString(v) { Some(s) => s, None => fallback },
+    None => fallback
+  }
+}
+
+func string_list_rec(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    j :: rest => match asString(j) {
+      Some(s) => s :: string_list_rec(rest),
+      None    => string_list_rec(rest)
+    }
+  }
+}
+
+func string_list(value: Json) -> [string] {
+  match asArray(value) { Some(xs) => string_list_rec(xs), None => [] }
+}
+
+export func provided_tools() -> [string] {
+  ["Compose", "compose"]
+}
+
+func compose_subagent_prompt_card() -> string {
+  "You are the AILANG composition subagent.\nReturn exactly one ```ailang fenced block and nothing else.\n"
+}
+
+func compose_main_prompt_card() -> string {
+  "- Prefer Compose for multi-step repo reasoning (3+ operations), especially architecture, tracing, and analysis tasks.\n- Compose call shape: {\"tool\":\"Compose\",\"intent\":\"...\",\"intent_kind\":\"analyze\",\"expected_output\":\"...\"}\n"
+}
+
+export func on_build_system_prompt(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [compose_main_prompt_card()] }
+}
+
+func current_composition_mode(ctx: ExtCtx, raw: string) -> string {
+  let mode =
+    if raw == "inline" then "inline"
+    else if raw == "off" then "off"
+    else if raw == "subagent" then "subagent"
+    else "subagent";
+  if not ctx.hybrid_tools && mode == "subagent" then "inline" else mode
+}
+
+func is_compose_tool_name(name: string) -> bool {
+  name == "Compose" || name == "compose"
+}
+
+func on_tool_policy_with_mode(raw_mode: string, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  if not is_compose_tool_name(call.tool) then NoOpinion
+  else {
+    let mode = current_composition_mode(ctx, raw_mode);
+    if mode == "off" then Deny("Compose is disabled in this session. Use non-Compose tools.")
+    else if mode == "inline" then Deny("Compose is disabled in inline composition mode. Emit an inline ```ailang snippet or use non-Compose tools.")
+    else Allow
+  }
+}
+
+export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {Env} {
+  on_tool_policy_with_mode("subagent", ctx, call)
+}
+
+func json_escape(s: string) -> string {
+  encode(js(s))
+}
+
+func emit_event(event_type: string, step: int, compose_id: string, kvs: [string]) -> () ! {IO} {
+  let base = "{\"type\":\"${event_type}\",\"step\":${show(step)},\"compose_id\":\"${compose_id}\"";
+  emit_event_tail(base, kvs)
+}
+
+func emit_event_tail(base: string, kvs: [string]) -> () ! {IO} {
+  match kvs {
+    [] => {
+      let _ = println("${base}}");
+      ()
+    },
+    x :: rest => emit_event_tail("${base},${x}", rest)
+  }
+}
+
+func meta_from(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta {
+  {
+    truncated: truncated,
+    stdout_bytes: _str_len(stdout),
+    stdout_total_bytes: _str_len(stdout),
+    stderr_bytes: _str_len(stderr),
+    stderr_total_bytes: _str_len(stderr),
+    stdout_sha256: sha256Hex(stdout),
+    stderr_sha256: sha256Hex(stderr)
+  }
+}
+
+func compose_result_stdout(attempts: int, exit_code: int, summary: string, stdout: string, telemetry: string) -> string {
+  let telemetry_block = if telemetry == "" then "" else "\nTelemetry: ${telemetry}";
+  let stdout_block = if stdout == "" then "" else "\n[stdout]\n${stdout}";
+  "Compose attempts=${show(attempts)} exit=${show(exit_code)}\nSummary: ${summary}${telemetry_block}${stdout_block}"
+}
+
+func compose_metadata(intent: string, attempts: int, summary: string, telemetry: string, meta: ToolResultMeta) -> Json {
+  jo([
+    kv("intent", js(intent)),
+    kv("attempts", jnum(_int_to_float(attempts))),
+    kv("summary", js(summary)),
+    kv("telemetry_json", js(telemetry)),
+    kv("truncated", jb(meta.truncated)),
+    kv("stdout_bytes", jnum(_int_to_float(meta.stdout_bytes))),
+    kv("stdout_total_bytes", jnum(_int_to_float(meta.stdout_total_bytes))),
+    kv("stderr_bytes", jnum(_int_to_float(meta.stderr_bytes))),
+    kv("stderr_total_bytes", jnum(_int_to_float(meta.stderr_total_bytes))),
+    kv("stdout_sha256", js(meta.stdout_sha256)),
+    kv("stderr_sha256", js(meta.stderr_sha256))
+  ])
+}
+
+func join_lines(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}\n${join_lines(rest)}"
+  }
+}
+
+func non_module_lines(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => if startsWith(trim(x), "module ") then non_module_lines(rest) else x :: non_module_lines(rest)
+  }
+}
+
+export func compose_file_body(snippet: string) -> string {
+  join_lines(non_module_lines(split(snippet, "\n")))
+}
+
+func compose_module_header(snippet_name: string) -> string {
+  "module tmp/${snippet_name}"
+}
+
+func extract_ailang_fence(text: string) -> string {
+  let mark = "```ailang";
+  let i = _str_find(text, mark);
+  if i < 0 then ""
+  else {
+    let after = _str_slice(text, i + _str_len(mark), _str_len(text));
+    let j = _str_find(after, "```");
+    if j < 0 then "" else trim(_str_slice(after, 0, j))
+  }
+}
+
+func is_noise_error_line(line: string) -> bool {
+  let t = trim(line);
+  startsWith(t, "Suggestion:") ||
+  startsWith(t, "Hint:") ||
+  startsWith(t, "Suggested workaround:")
+}
+
+func compact_error_lines(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => {
+      let t = trim(x);
+      if t == "" || is_noise_error_line(t) then compact_error_lines(rest)
+      else t :: compact_error_lines(rest)
+    }
+  }
+}
+
+func take_lines(lines: [string], n: int) -> [string] {
+  if n <= 0 then []
+  else match lines {
+    [] => [],
+    x :: rest => x :: take_lines(rest, n - 1)
+  }
+}
+
+func compact_error_message(err: string) -> string {
+  let filtered = compact_error_lines(split(err, "\n"));
+  let kept = take_lines(filtered, 8);
+  if _list_length(kept) == 0 then trim(err) else join_lines(kept)
+}
+
+func reverse_strings(xs: [string]) -> [string] {
+  reverse_strings_into(xs, [])
+}
+
+func reverse_strings_into(xs: [string], acc: [string]) -> [string] {
+  match xs {
+    [] => acc,
+    x :: rest => reverse_strings_into(rest, x :: acc)
+  }
+}
+
+func retry_error_signature(err: string) -> string {
+  let e = toLower(err);
+  if contains(e, "expected next token to be else, got ; instead") then "parse:semicolon_else"
+  else if contains(e, "par_unexpected_token") || contains(e, "parse errors") then "parse:generic"
+  else if (contains(e, "failed to unify effect rows") || contains(e, "effect rows:")) && contains(e, "[io]") && contains(e, "[fs]") then "type:effect_row_io_fs"
+  else if contains(e, "failed to unify effect rows") || contains(e, "effect rows:") then "type:effect_row"
+  else if contains(e, "type error") || contains(e, "undefined variable") || contains(e, "unification failed") then "type"
+  else if contains(e, "execution failed") || contains(e, "runtime failed") then "runtime"
+  else "other"
+}
+
+func count_prefix_sig(xs: [string], sig: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => if retry_error_signature(x) == sig then 1 + count_prefix_sig(rest, sig) else 0
+  }
+}
+
+func same_sig_tail_streak(prior_errors: [string], sig: string) -> int {
+  count_prefix_sig(reverse_strings(prior_errors), sig)
+}
+
+func cap_text(s: string, max_chars: int) -> string {
+  let n = _str_len(s);
+  if n <= max_chars then s
+  else "${_str_slice(s, 0, max_chars)}\n...[truncated]"
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D26. THE TWO ROUTED SUBPROCESS HELPERS
+-- ---------------------------------------------------------------------------
+--
+-- Both took `(path, …)` and returned a value; both now take `(p, w, path, …)`
+-- and return a `next_state` beside it. The widening is the whole shape of the
+-- change and it is the same widening WI-D19 and WI-D20 made to this module's FS
+-- helpers, one seam later.
+--
+-- `process_error_to_string` WENT WITH `ProcessError`. It existed to render
+-- `exec`'s `Err` arm, and there is no `Err` arm at the seam: `run_process_result`
+-- catches `ProcessError` itself and renders it as a `BashExecResult` with the
+-- reason on STDERR and exit_code 1. Measured against a command that does not
+-- exist rather than inferred — see `proc.ail`'s header — because WI-D26's own
+-- handoff predicted the `ToolErrorResult` shape here and predicted it wrong.
+-- `errors: stderr-else-stdout-else-message` is therefore the same answer the
+-- `Err` arm gave, arriving by a different road.
+--
+-- `exit_code == -1` LANDS IN THE FAILURE BRANCH, and it is stated once here for
+-- both helpers. -1 is `ExtProcOutcome`'s "no subprocess ran, or the producer
+-- cannot state one" — the ABI's three fault variants, and every in-tree noop
+-- port. Against `ok: exit_code == 0` that is a failure, which is the
+-- fail-closed direction and the only honest reading: a check that cannot be
+-- said to have passed has not passed. Note the consequence for `run_snippet`'s
+-- caller, which is sharper: `one_attempt` reads `ran.exit_code != 0` as
+-- "snippet runtime failed", so a -1 becomes a RETRY rather than a false success.
+
+func check_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string) -> { ok: bool, errors: string, exit_code: int, next_state: ExtWorld } ! {IO, Process, FS} {
+  let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args("ailang", ["check", snippet_path]));
+  -- THE BRANCH IS THE TYPED FIELD. `out.exitCode` became `out.exit_code` — a
+  -- field read where the ambient form had a field read. Nothing here decodes
+  -- anything to decide `ok`; `message_of` decodes only to recover the TEXT,
+  -- which is the one thing the ABI renders rather than types. That division is
+  -- what WI-D22's schema bump and WI-D23's plumbing bought, and reversing it —
+  -- deciding success from the text — is WI-D26's mutant 1.
+  { ok: out.exit_code == 0,
+    errors: if out.exit_code == 0 then "" else trim(message_of(out.output)),
+    exit_code: out.exit_code,
+    next_state: out.next_state }
+}
+
+func run_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string, caps: string) -> { stdout: string, stderr: string, exit_code: int, truncated: bool, raw_stdout: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  -- `caps` IS ONE ARGV ELEMENT, exactly as it was under ambient `exec`. It is a
+  -- comma-joined capability list out of config (`--caps IO,FS,Net`), so it is
+  -- one token to `ailang` and one token here; there is no shell to split it and
+  -- nothing to quote against.
+  let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args("ailang", ["run", "--caps", caps, "--entry", "main", snippet_path]));
+  let streams = decode_bash_result(out.output);
+  let raw_out = streams.stdout;
+  let raw_err = streams.stderr;
+  let stdout_len = if _str_len(raw_out) > 8000 then 8000 else _str_len(raw_out);
+  let stderr_len = if _str_len(raw_err) > 2000 then 2000 else _str_len(raw_err);
+  {
+    stdout: _str_slice(raw_out, 0, stdout_len),
+    stderr: _str_slice(raw_err, 0, stderr_len),
+    exit_code: out.exit_code,
+    -- BOTH TRUNCATIONS ARE OR-ed, WHICH IS WHAT THE AMBIENT FORM ALREADY DID and
+    -- is worth saying because there are now two truncators in the chain rather
+    -- than one. `streams.truncated` is the SEAM's flag — `mk_meta`'s, set by
+    -- `run_process_result` when the subprocess output exceeded ITS limit — and
+    -- the two `_str_len` comparisons are compose's own 8000/2000 caps. Dropping
+    -- the seam's half would put `truncated: false` on an answer that had already
+    -- lost bytes before this function saw it: a silent lie in a field whose only
+    -- job is to say bytes were lost. The ambient form OR-ed `out.truncated` the
+    -- same way; only the source of the flag moved.
+    truncated: streams.truncated || _str_len(raw_out) > stdout_len || _str_len(raw_err) > stderr_len,
+    raw_stdout: raw_out,
+    next_state: out.next_state
+  }
+}
+
+func contains_id(xs: [string], name: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == name then true else contains_id(rest, name)
+  }
+}
+
+func caps_minus_avoid(base_caps: string, avoid: [string]) -> string {
+  let parts = split(base_caps, ",");
+  join_caps(parts, avoid)
+}
+
+func join_caps(parts: [string], avoid: [string]) -> string {
+  match parts {
+    [] => "",
+    p :: rest => {
+      let t = trim(p);
+      let tail = join_caps(rest, avoid);
+      if t == "" || contains_id(avoid, t) then tail
+      else if tail == "" then t else "${t},${tail}"
+    }
+  }
+}
+
+func clamp_positive(n: int, fallback: int) -> int {
+  if n <= 0 then fallback else n
+}
+
+func telemetry_json(compose_id: string, intent_kind: string, max_attempts: int, attempts: int, final_exit_code: int, duration_ms: int, validation_unsatisfied: bool, validation_inconclusive: bool, premise_binding_ledger_bound: int, premise_binding_snippet_bound: int, premise_binding_unbound: int, sf2_witness_source: string) -> string {
+  encode(jo([
+    kv("compose_id", js(compose_id)),
+    kv("max_attempts", jnum(_int_to_float(max_attempts))),
+    kv("attempts_started", jnum(_int_to_float(attempts))),
+    kv("attempts_completed", jnum(_int_to_float(attempts))),
+    kv("author_failures", jnum(0.0)),
+    kv("missing_fence_or_empty", jnum(0.0)),
+    kv("check_failures", jnum(if final_exit_code == 3 then 1.0 else 0.0)),
+    kv("run_failures", jnum(if final_exit_code == 0 then 0.0 else 1.0)),
+    kv("validator_unsatisfied", jnum(if validation_unsatisfied then 1.0 else 0.0)),
+    kv("validator_inconclusive", jnum(if validation_inconclusive then 1.0 else 0.0)),
+    kv("succeeded", jb(final_exit_code == 0 || final_exit_code == 2)),
+    kv("exhausted", jb(final_exit_code == 3)),
+    kv("final_exit_code", jnum(_int_to_float(final_exit_code))),
+    kv("duration_ms", jnum(_int_to_float(duration_ms))),
+    kv("intent_kind", js(intent_kind)),
+    kv("premise_binding", jo([
+      kv("ledger_bound", jnum(_int_to_float(premise_binding_ledger_bound))),
+      kv("snippet_bound", jnum(_int_to_float(premise_binding_snippet_bound))),
+      kv("unbound", jnum(_int_to_float(premise_binding_unbound)))
+    ])),
+    kv("sf2_witness_source", js(sf2_witness_source)),
+    kv("sf5", jo([kv("invocations", jnum(0.0)), kv("budget_exhausted", jb(false)), kv("budget_exhausted_emitted", jb(false))]))
+  ]))
+}
+
+func snippet_meta_json(
+  p: ExtPorts,
+  w: ExtWorld,
+  compose_id: string,
+  attempt: int,
+  step: int,
+  task: string,
+  prompt: string,
+  intent: string,
+  intent_kind: string,
+  model: string,
+  caps: string,
+  outcome: string,
+  check_errors: string,
+  exit_code: int
+) -> { json: string, next_state: ExtWorld } ! {Clock} {
+  let reading = p.clock_now(w);
+  let ts = reading.now_ms;
+  { next_state: reading.next_state, json: "{\n  \"timestamp\": ${encode(js(formatRFC3339(ts)))},\n  \"model\": ${encode(js(model))},\n  \"task\": ${encode(js(task))},\n  \"prompt\": ${encode(js(prompt))},\n  \"caps\": ${encode(js(caps))},\n  \"outcome\": ${encode(js(outcome))},\n  \"check_errors\": ${encode(js(check_errors))},\n  \"exit_code\": ${show(exit_code)},\n  \"compose_id\": ${encode(js(compose_id))},\n  \"attempt\": ${show(attempt)},\n  \"step\": ${show(step)},\n  \"intent\": ${encode(js(intent))},\n  \"intent_kind\": ${encode(js(intent_kind))},\n  \"saved_at_unix_ms\": ${show(ts)}\n}" }
+}
+
+func mk_result(req_id: string, intent: string, attempts: int, stdout: string, stderr: string, exit_code: int, summary: string, truncated: bool, telemetry: string) -> ToolResultEnvelope {
+  let meta = meta_from(stdout, stderr, truncated);
+  {
+    tool_call_id: req_id,
+    tool: "Compose",
+    exit_code: exit_code,
+    stdout: compose_result_stdout(attempts, exit_code, summary, stdout, telemetry),
+    stderr: stderr,
+    metadata: compose_metadata(intent, attempts, summary, telemetry, meta)
+  }
+}
+
+func parse_hints(arguments: Json) -> { read: [string], write: [string], avoid: [string] } {
+  let hints = match get(arguments, "hints") { Some(j) => j, None => jo([]) };
+  {
+    read: string_list(match get(hints, "read") { Some(j) => j, None => jo([]) }),
+    write: string_list(match get(hints, "write") { Some(j) => j, None => jo([]) }),
+    avoid: string_list(match get(hints, "avoid") { Some(j) => j, None => jo([]) })
+  }
+}
+
+func compose_req_from_call(ctx: ExtCtx, call: ToolCallEnvelope) -> { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] } {
+  let hints = parse_hints(call.arguments);
+  {
+    id: call.id,
+    intent: string_field(call.arguments, "intent", ctx.task),
+    intent_kind: string_field(call.arguments, "intent_kind", ""),
+    expected_output: string_field(call.arguments, "expected_output", ""),
+    hints_read: hints.read,
+    hints_write: hints.write,
+    hints_avoid: hints.avoid
+  }
+}
+
+type AttemptOutcome
+  = NeedRetry({ reason: string, prior_error: string, ledger: PremiseLedger, last_snippet: string })
+  | FinalResult({ item: ToolResultEnvelope, ledger: PremiseLedger })
+
+func one_attempt(
+  ctx: ExtCtx,
+  w: ExtWorld,
+  req: { id: string, intent: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] },
+  archive_key: string,
+  repair_snippet: string,
+  author_tools_enabled: bool,
+  author_tools_budget: int,
+  author_tools_max_bytes: int,
+  author_tools_max_turns: int,
+  cert_template_enabled: bool,
+  structured_authoring_enabled: bool,
+  structured_authoring_budget: int,
+  structured_authoring_fallback_after: int,
+  claimcheck_ledger_in_informalizer: bool,
+  ledger_in: PremiseLedger,
+  intent_kind: string,
+  model: string,
+  caps: string,
+  guard_mode: string,
+  claimcheck_enabled: bool,
+  claimcheck_informalizer_model: string,
+  claimcheck_comparator_model: string,
+  claimcheck_timeout_ms: int,
+  claimcheck_max_invocations: int,
+  min_observed_chars: int,
+  max_stdout_bytes: int,
+  attempt: int,
+  max_attempts: int,
+  prior_errors: [string],
+  t0: int
+) -> { outcome: AttemptOutcome, next_state: ExtWorld } ! {IO, AI, Process, FS, Env, Clock} {
+  let p = ctx.ports;
+  let use_repair_mode = trim(repair_snippet) != "" && _list_length(prior_errors) > 0;
+  let base_ledger = with_budget_cap(ledger_in, author_tools_budget);
+  let prompt_for_meta = build_author_prompt(
+    compose_subagent_prompt_card(),
+    "",
+    req.intent,
+    intent_kind,
+    req.expected_output,
+    req.hints_read,
+    req.hints_write,
+    prior_errors,
+    repair_snippet,
+    use_repair_mode,
+    cert_template_enabled,
+    author_tools_enabled,
+    if author_tools_enabled then (if author_tools_budget - base_ledger.budget_used < 0 then 0 else author_tools_budget - base_ledger.budget_used) else 0,
+    author_tools_max_bytes,
+    if author_tools_enabled then prior_reads_summary(base_ledger) else ""
+  );
+  let author_result =
+    if author_tools_enabled then run_author_loop(
+      p,
+      w,
+      ctx.step,
+      req.id,
+      attempt,
+      model,
+      compose_subagent_prompt_card(),
+      req.intent,
+      intent_kind,
+      req.expected_output,
+      req.hints_read,
+      req.hints_write,
+      prior_errors,
+      repair_snippet,
+      use_repair_mode,
+      cert_template_enabled,
+      base_ledger,
+      author_tools_max_bytes,
+      clamp_positive(author_tools_max_turns, 24),
+      structured_authoring_enabled,
+      structured_authoring_budget,
+      structured_authoring_fallback_after
+    )
+    else {
+      let author_prompt = build_author_prompt(compose_subagent_prompt_card(), "", req.intent, intent_kind, req.expected_output, req.hints_read, req.hints_write, prior_errors, repair_snippet, use_repair_mode, cert_template_enabled, false, 0, 0, "");
+      let authored = callStreamResult(author_prompt, ctx.step, "compose-author-${req.id}-${show(attempt)}", model);
+      let raw_author = trim(authored.output);
+      let _ = emit_event("compose_author_delta", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"delta\":${json_escape(cap_text(raw_author, 3000))}"]);
+      let s = extract_ailang_fence(raw_author);
+      let _ = emit_event("compose_snippet", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"code\":${json_escape(cap_text(s, 3500))}"]);
+      -- `next_state: w`, and it is TRUE rather than a placeholder: this branch
+      -- runs the author with no tools, so it performs no world-threading effect
+      -- and the world it was handed IS its successor. The `callStreamResult`
+      -- above is ambient AI and is out of this item's scope either way.
+      { ok: s != "", snippet: s, ledger: base_ledger, error: if s == "" then "author_no_snippet" else "", turns: 1, next_state: w }
+    };
+  let snippet = author_result.snippet;
+  let author_ledger = author_result.ledger;
+  -- The author loop is the FIRST thing in this hook that can move the world, and
+  -- everything below starts from its successor rather than from `w`.
+  let w1 = author_result.next_state;
+
+  if snippet == "" then {
+    let reason = if author_tools_enabled && trim(author_result.error) != "" then author_result.error else "empty snippet returned by subagent (missing ```ailang fence or empty body)";
+    let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":false", "\"errors\":${json_escape(reason)}"]);
+    { outcome: NeedRetry({ reason: reason, prior_error: "${reason}\n${targeted_hint(reason)}", ledger: author_ledger, last_snippet: repair_snippet }), next_state: w1 }
+  } else {
+    let guard_err =
+      if author_tools_enabled && (intent_kind == "analyze" || intent_kind == "summarize")
+      then ""
+      else compose_snippet_guard(guard_mode, snippet, intent_kind);
+    if guard_err != "" then {
+      let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":false", "\"errors\":${json_escape(guard_err)}"]);
+      { outcome: NeedRetry({ reason: guard_err, prior_error: "${guard_err}\n${targeted_hint(guard_err)}", ledger: author_ledger, last_snippet: snippet }), next_state: w1 }
+    } else {
+      -- WI-D20 FIXES `one_attempt`'s PATH KEY, WHICH IS WI-D19 §5's DEFECT AT
+      -- THE SECOND OF ITS TWO SITES. This line read
+      -- `mkdirAll("${ctx.workdir}/tmp")` while the write two lines below is
+      -- `"tmp/${snippet_name}.ail"` — absolute create, relative write. WI-D18 §5's
+      -- rule at `WorldState.files` is that the world keys on RAW STRINGS and does
+      -- not normalise, so the caller supplies ONE spelling per path; two
+      -- spellings make `dir_list` on the created directory answer `entries: []`,
+      -- which is plausible rather than a crash.
+      --
+      -- THE WRITE'S SPELLING WINS, AND THE COMPILER PICKED IT RATHER THAN TASTE.
+      -- `compose_module_header(snippet_name)` emits `module tmp/${snippet_name}`
+      -- and AILANG resolves a module path against the file's own path, so the
+      -- write cannot become absolute without the header moving with it and the
+      -- `ailang check` below failing. The create is the free half, so the create
+      -- is what moves — the same direction, for the same reason, as WI-D19's.
+      --
+      -- It is also a repair on a real filesystem: when cwd is not `workdir` the
+      -- old pair created `workdir/tmp` and then wrote into a `./tmp` nothing had
+      -- created. The old code worked only when cwd == workdir, which is exactly
+      -- the condition under which the new code is byte-identical.
+      let made = p.dir_make(w1, "tmp");
+      let reading = p.clock_now(made.next_state);
+      let snippet_name = "snippet_${show(ctx.step)}_${show(reading.now_ms)}_${show(attempt)}";
+      let snippet_path = "tmp/${snippet_name}.ail";
+      let clean = compose_file_body(snippet);
+      let full_source = "${compose_module_header(snippet_name)}\n\n${clean}";
+      let written = p.file_write(reading.next_state, snippet_path, full_source);
+      let meta = snippet_meta_json(p, written.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "pending", "", 0);
+      let stored_pending = store_snippet_with_meta(p, meta.next_state, ctx.workdir, archive_key, attempt, full_source, meta.json);
+      -- WI-D26. The check is a world-threading call now, so `stored_pending` is
+      -- no longer the newest world below this line — `checked.next_state` is, and
+      -- both branches start from it. Every `stored_pending.next_state` that used
+      -- to appear under here would have discarded the subprocess.
+      let checked = check_snippet(p, stored_pending.next_state, snippet_path);
+      if not checked.ok then {
+        let compact = compact_error_message(checked.errors);
+        let fail_meta = snippet_meta_json(p, checked.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "check_failed", compact, checked.exit_code);
+        let stored_fail = store_snippet_with_meta(p, fail_meta.next_state, ctx.workdir, archive_key, attempt, full_source, fail_meta.json);
+        let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":false", "\"errors\":${json_escape(compact)}"]);
+        let cleaned = remove_if_file(p, stored_fail.next_state, snippet_path);
+        { outcome: NeedRetry({ reason: compact, prior_error: "${compact}\n${targeted_hint(compact)}", ledger: author_ledger, last_snippet: snippet }), next_state: cleaned.next_state }
+      } else {
+        let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":true", "\"errors\":\"\""]);
+        let ran = run_snippet(p, checked.next_state, snippet_path, caps);
+        let cleaned = remove_if_file(p, ran.next_state, snippet_path);
+        let _ = emit_event("compose_exec", ctx.step, req.id, ["\"stdout\":${json_escape(ran.stdout)}", "\"stderr\":${json_escape(ran.stderr)}", "\"exit_code\":${show(ran.exit_code)}"]);
+        if ran.exit_code != 0 then {
+          let reason = "snippet runtime failed (exit ${show(ran.exit_code)})";
+          let run_fail_meta = snippet_meta_json(p, cleaned.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "run_failed", "", ran.exit_code);
+          let stored_run_fail = store_snippet_with_meta(p, run_fail_meta.next_state, ctx.workdir, archive_key, attempt, full_source, run_fail_meta.json);
+          { outcome: NeedRetry({ reason: reason, prior_error: "${reason}\nstderr:\n${ran.stderr}\nstdout:\n${ran.stdout}", ledger: author_ledger, last_snippet: snippet }), next_state: stored_run_fail.next_state }
+        } else {
+          let observed = trim(normalized_observed_output(ran.raw_stdout));
+          let needs_substantive =
+            (intent_kind == "analyze" || intent_kind == "summarize") &&
+            trim(req.expected_output) != "" &&
+            _str_len(observed) < min_observed_chars;
+          if needs_substantive then {
+            let reason = "insufficient substantive output for ${intent_kind} intent (${show(_str_len(observed))} chars; need >= ${show(min_observed_chars)})";
+            let insufficient_meta = snippet_meta_json(p, cleaned.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "insufficient_output", reason, 2);
+            let stored_insufficient = store_snippet_with_meta(p, insufficient_meta.next_state, ctx.workdir, archive_key, attempt, full_source, insufficient_meta.json);
+            { next_state: stored_insufficient.next_state, outcome: NeedRetry({
+              reason: reason,
+              prior_error:
+                "${reason}\nOutput was too shallow/partial. Emit concrete findings (modules, paths, and interaction flow) and print concise evidence-backed conclusions, not just startup/progress lines.",
+              ledger: author_ledger,
+              last_snippet: snippet
+            }) }
+          } else {
+          let validated = validate_expected_output_with_context(req.expected_output, ran.stdout, snippet, author_ledger);
+          let validation = validated.validation;
+          let binding = validated.premise_binding;
+          let effects = parse_declared_effects(snippet);
+          let has_fs = contains_id(effects, "FS");
+          let has_proc = contains_id(effects, "Process");
+          let sf2_requires = intent_kind == "analyze" || intent_kind == "summarize";
+          let sf2_author_ok = binding.ledger_bound > 0;
+          let sf2_pass = if not sf2_requires then true else (has_fs || has_proc || sf2_author_ok);
+          let sf2_witness_source =
+            if has_fs || has_proc then (if sf2_author_ok then "both" else "declared_effects")
+            else if sf2_author_ok then "author_ledger"
+            else "none";
+          let final_exit_code =
+            if not sf2_pass then 2
+            else if validation.decided && validation.confidence == "high" && not validation.satisfied then 2
+            else 0;
+          let claim = run_claimcheck(
+            claimcheck_enabled,
+            intent_kind,
+            req.intent,
+            ran.stdout,
+            claimcheck_ledger_summary(author_ledger),
+            claimcheck_ledger_in_informalizer,
+            claimcheck_informalizer_model,
+            claimcheck_comparator_model,
+            claimcheck_timeout_ms,
+            claimcheck_max_invocations,
+            0,
+            ctx.step,
+            req.id,
+            attempt
+          );
+          if claim.should_retry then { outcome: NeedRetry({ reason: "claimcheck ${claim.verdict}: ${claim.reason}", prior_error: claim.corrective_hint, ledger: author_ledger, last_snippet: snippet }), next_state: cleaned.next_state }
+          else {
+            let stored = store_stdout_and_elide(p, cleaned.next_state, ctx.workdir, req.id, ran.raw_stdout, max_stdout_bytes);
+            let summary_prompt = build_summary_prompt(req.intent, req.intent, req.expected_output, ran.stdout, ran.stderr, final_exit_code, validation.decided, validation.satisfied, validation.confidence, validation.reason);
+            let summary_resp = callStreamResult(summary_prompt, ctx.step, "compose-summary-${req.id}-${show(attempt)}", model);
+            let summary_base = trim(summary_resp.output);
+            let summary =
+              if not sf2_pass then "${summary_base}\nValidator: unsatisfied (SF2 evidence witness missing: need declared FS/Process effect or ≥1 ledger-bound premise)"
+              else if validation.decided && validation.confidence == "high" then "${summary_base}\nValidator: ${if validation.satisfied then "satisfied" else "unsatisfied"} (${validation.reason})"
+              else if trim(req.expected_output) != "" then "${summary_base}\nValidator: inconclusive (${validation.reason})"
+              else summary_base;
+            let _ = emit_event("compose_summary_delta", ctx.step, req.id, ["\"delta\":${json_escape(summary)}"]);
+            let done = p.clock_now(stored.next_state);
+            let telemetry = telemetry_json(
+              req.id,
+              intent_kind,
+              max_attempts,
+              attempt,
+              final_exit_code,
+              -- The elapsed-time read routes too; `now()` here would be an
+              -- ambient clock inside an otherwise routed chain, which is exactly
+              -- WI-D19's mutant 4 written by hand.
+              done.now_ms - t0,
+              (not sf2_pass) || (validation.decided && validation.confidence == "high" && not validation.satisfied),
+              not validation.decided || validation.confidence != "high",
+              binding.ledger_bound,
+              binding.snippet_bound,
+              binding.unbound,
+              sf2_witness_source
+            );
+            let success_meta = snippet_meta_json(p, done.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "success", "", final_exit_code);
+            let stored_success = store_snippet_with_meta(p, success_meta.next_state, ctx.workdir, archive_key, attempt, full_source, success_meta.json);
+            { outcome: FinalResult({ item: mk_result(req.id, req.intent, attempt, stored.stdout, ran.stderr, final_exit_code, summary, stored.truncated || ran.truncated, telemetry), ledger: author_ledger }), next_state: stored_success.next_state }
+          }
+          }
+        }
+      }
+    }
+  }
+}
+
+func run_attempts(
+  ctx: ExtCtx,
+  w: ExtWorld,
+  req: { id: string, intent: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] },
+  archive_key: string,
+  repair_snippet: string,
+  author_tools_enabled: bool,
+  author_tools_budget: int,
+  author_tools_max_bytes: int,
+  author_tools_max_turns: int,
+  cert_template_enabled: bool,
+  structured_authoring_enabled: bool,
+  structured_authoring_budget: int,
+  structured_authoring_fallback_after: int,
+  claimcheck_ledger_in_informalizer: bool,
+  intent_kind: string,
+  model: string,
+  caps: string,
+  guard_mode: string,
+  claimcheck_enabled: bool,
+  claimcheck_informalizer_model: string,
+  claimcheck_comparator_model: string,
+  claimcheck_timeout_ms: int,
+  claimcheck_max_invocations: int,
+  min_observed_chars: int,
+  max_stdout_bytes: int,
+  attempt: int,
+  max_attempts: int,
+  prior_errors: [string],
+  ledger: PremiseLedger,
+  last_reason: string,
+  t0: int
+) -> { item: ToolResultEnvelope, next_state: ExtWorld } ! {IO, AI, Process, FS, Env, Clock} {
+  if attempt > max_attempts then {
+    let exhausted = ctx.ports.clock_now(w);
+    let reason = if last_reason == "" then "unknown error" else last_reason;
+    let summary = "subagent exhausted attempts; last error: ${reason}";
+    let telemetry = telemetry_json(req.id, intent_kind, max_attempts, max_attempts, 3, exhausted.now_ms - t0, false, true, 0, 0, 0, "none");
+    { item: mk_result(req.id, req.intent, max_attempts, "", reason, 3, summary, false, telemetry), next_state: exhausted.next_state }
+  } else {
+    -- Bound rather than matched inline, because the successor has to OUTLIVE the
+    -- match: both arms need it and the retry arm carries it into the next
+    -- attempt. Matching `one_attempt(...).outcome` directly type-checks and
+    -- restarts every retry from the world before the attempt that failed — which
+    -- would make an N-attempt compose record only its last attempt's writes.
+    let attempted = one_attempt(ctx, w, req, archive_key, repair_snippet, author_tools_enabled, author_tools_budget, author_tools_max_bytes, author_tools_max_turns, cert_template_enabled, structured_authoring_enabled, structured_authoring_budget, structured_authoring_fallback_after, claimcheck_ledger_in_informalizer, ledger, intent_kind, model, caps, guard_mode, claimcheck_enabled, claimcheck_informalizer_model, claimcheck_comparator_model, claimcheck_timeout_ms, claimcheck_max_invocations, min_observed_chars, max_stdout_bytes, attempt, max_attempts, prior_errors, t0);
+    let w2 = attempted.next_state;
+    match attempted.outcome {
+      FinalResult(r) => { item: r.item, next_state: w2 },
+      NeedRetry(r) => {
+        if attempt < max_attempts then {
+          let sig = retry_error_signature(r.prior_error);
+          let streak = same_sig_tail_streak(prior_errors, sig);
+          let parse_stuck = startsWith(sig, "parse") && streak >= 2;
+          let type_stuck = startsWith(sig, "type") && streak >= 2;
+          let reset_hint = "RESET MODE: repeated parse failure signature '${sig}'. Emit a minimal, syntax-safe snippet first (use the skeleton structure), then only small incremental changes.";
+          let type_reset_hint =
+            "RESET MODE: repeated type failure signature '${sig}'.\nFix effect-row mismatch with minimal edits:\n- Keep main effects consistent with effectful calls used in lambdas/iterators.\n- Do not place FS calls in lambdas expected to be pure.\n- Prefer let-bound sequencing in main over nesting effectful calls inside pure combinators.\n- If using forEachE, ensure callback effect row matches the combinator's expected row.";
+          let next_prior_errors = if parse_stuck then [reset_hint, r.prior_error] else if type_stuck then [type_reset_hint, r.prior_error] else prior_errors ++ [r.prior_error];
+          let next_snippet = if parse_stuck || type_stuck then "" else r.last_snippet;
+          let _ = if parse_stuck then emit_event("compose_retry_reset", ctx.step, req.id, ["\"attempt\":${show(attempt + 1)}", "\"signature\":${json_escape(sig)}", "\"streak\":${show(streak + 1)}"]) else ();
+          let _ = if type_stuck then emit_event("compose_retry_type_reset", ctx.step, req.id, ["\"attempt\":${show(attempt + 1)}", "\"signature\":${json_escape(sig)}", "\"streak\":${show(streak + 1)}"]) else ();
+          let _ = emit_event("compose_retry_mode", ctx.step, req.id, ["\"attempt\":${show(attempt + 1)}", "\"targeted_edit\":${if trim(next_snippet) == "" then "false" else "true"}"]);
+          let _ = emit_event("compose_retry", ctx.step, req.id, ["\"attempt\":${show(attempt + 1)}", "\"reason\":${json_escape(r.reason)}"]);
+          run_attempts(ctx, w2, req, archive_key, next_snippet, author_tools_enabled, author_tools_budget, author_tools_max_bytes, author_tools_max_turns, cert_template_enabled, structured_authoring_enabled, structured_authoring_budget, structured_authoring_fallback_after, claimcheck_ledger_in_informalizer, intent_kind, model, caps, guard_mode, claimcheck_enabled, claimcheck_informalizer_model, claimcheck_comparator_model, claimcheck_timeout_ms, claimcheck_max_invocations, min_observed_chars, max_stdout_bytes, attempt + 1, max_attempts, next_prior_errors, r.ledger, r.reason, t0)
+        } else {
+          run_attempts(ctx, w2, req, archive_key, r.last_snippet, author_tools_enabled, author_tools_budget, author_tools_max_bytes, author_tools_max_turns, cert_template_enabled, structured_authoring_enabled, structured_authoring_budget, structured_authoring_fallback_after, claimcheck_ledger_in_informalizer, intent_kind, model, caps, guard_mode, claimcheck_enabled, claimcheck_informalizer_model, claimcheck_comparator_model, claimcheck_timeout_ms, claimcheck_max_invocations, min_observed_chars, max_stdout_bytes, attempt + 1, max_attempts, prior_errors, r.ledger, r.reason, t0)
+        }
+      }
+    }
+  }
+}
+
+func handle_compose_tool(ctx: ExtCtx, w: ExtWorld, req: { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] }, runtime_cfg: ComposeHostConfig, snippet_caps: string) -> { item: ToolResultEnvelope, next_state: ExtWorld } ! {IO, AI, Process, FS, Env, Clock} {
+  let started = ctx.ports.clock_now(w);
+  let t0 = started.now_ms;
+  let explicit_kind = normalize_intent_kind(req.intent_kind);
+  let intent_kind = if explicit_kind == "" then derive_intent_kind(req.intent) else explicit_kind;
+  let compose_cfg = runtime_cfg.compose;
+  let model = if compose_cfg.subagent_model == "" then ctx.model else compose_cfg.subagent_model;
+  let max_attempts = clamp_positive(compose_cfg.max_attempts, 50);
+  let caps = caps_minus_avoid(snippet_caps, req.hints_avoid);
+  let guard_mode = trim(compose_cfg.effect_guard);
+  let claimcheck_enabled = compose_cfg.claimcheck.enabled;
+  let claimcheck_informalizer_model = if compose_cfg.claimcheck.informalizer_model == "" then model else compose_cfg.claimcheck.informalizer_model;
+  let claimcheck_comparator_model = if compose_cfg.claimcheck.comparator_model == "" then model else compose_cfg.claimcheck.comparator_model;
+  let claimcheck_timeout_ms = clamp_positive(compose_cfg.claimcheck.timeout_ms, 30000);
+  let claimcheck_max_invocations = clamp_positive(compose_cfg.claimcheck.max_invocations, 10);
+  let min_observed_chars = clamp_positive(compose_cfg.authoring.min_observed_chars, 180);
+  let max_stdout_bytes = clamp_positive(compose_cfg.authoring.stdout_max_bytes, 4000);
+  let structured_authoring_enabled = compose_cfg.authoring.structured;
+  let author_tools_enabled = compose_cfg.authoring.author_tools || structured_authoring_enabled;
+  let author_tools_budget = clamp_positive(compose_cfg.authoring.author_tools_budget, 25);
+  let author_tools_max_bytes = clamp_positive(compose_cfg.authoring.author_tools_max_bytes, 16384);
+  let author_tools_max_turns = clamp_positive(compose_cfg.authoring.author_tools_max_turns, 24);
+  let structured_authoring_budget = clamp_positive(compose_cfg.authoring.authoring_budget, 40);
+  let structured_authoring_fallback_after_raw = compose_cfg.authoring.fallback_after;
+  let structured_authoring_fallback_after = if structured_authoring_fallback_after_raw < 0 then 0 else structured_authoring_fallback_after_raw;
+  let claimcheck_ledger_in_informalizer = compose_cfg.claimcheck.ledger_in_informalizer;
+  let archive_key = "${req.id}_${show(t0)}";
+
+  let _ = emit_event(
+    "compose_start",
+    ctx.step,
+    req.id,
+    [
+      "\"intent\":${json_escape(req.intent)}",
+      "\"intent_kind\":${json_escape(intent_kind)}",
+      "\"claimcheck_enabled\":${if claimcheck_enabled && intent_kind == "analyze" then "true" else "false"}",
+      "\"author_tools_enabled\":${if author_tools_enabled then "true" else "false"}",
+      "\"structured_authoring_enabled\":${if structured_authoring_enabled then "true" else "false"}",
+      "\"model\":${json_escape(model)}",
+      "\"max_attempts\":${show(max_attempts)}"
+    ]
+  );
+
+  run_attempts(
+    ctx,
+    started.next_state,
+    { id: req.id, intent: req.intent, expected_output: req.expected_output, hints_read: req.hints_read, hints_write: req.hints_write, hints_avoid: req.hints_avoid },
+    archive_key,
+    "",
+    author_tools_enabled,
+    author_tools_budget,
+    author_tools_max_bytes,
+    author_tools_max_turns,
+    compose_cfg.certificate_template,
+    structured_authoring_enabled,
+    structured_authoring_budget,
+    structured_authoring_fallback_after,
+    claimcheck_ledger_in_informalizer,
+    intent_kind,
+    model,
+    caps,
+    guard_mode,
+    claimcheck_enabled,
+    claimcheck_informalizer_model,
+    claimcheck_comparator_model,
+    claimcheck_timeout_ms,
+    claimcheck_max_invocations,
+    min_observed_chars,
+    max_stdout_bytes,
+    1,
+    max_attempts,
+    [],
+    init_ledger(author_tools_budget),
+    "",
+    t0
+  )
+}
+
+-- WI-D20 — THE SECOND ROUTED HOOK, and seventeen times the first one's size.
+--
+-- `next_state` is no longer `ctx.world` on the handled arm, and that single
+-- expression is what the whole item is for: `Handled(handle_compose_tool(…))`
+-- discarded the successor of every effect the seventeen functions below perform,
+-- and the DELEGATE arm returns `ctx.world` because it is TRUE there — the tool
+-- was not compose's, nothing ran, and the world is unchanged.
+--
+-- THE DRIVER DROPPED THIS SUCCESSOR TOO, AND IN BOTH DIRECTIONS. `tool_phase.execute_allowed_tool_call`
+-- projected `.decision` off the dispatch and returned `next_state: world` on
+-- every arm, and it fed the hook a `ctx.world` that goes stale after the first
+-- tool call in a batch. Both are fixed there, and a routed hook whose successor
+-- the driver discards would have been a recorder writing into a world nobody
+-- keeps. See that function; WI-D19 §3 found the same shape at the intercept.
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: ComposeHostConfig, snippet_caps: string) -> ToolHandleOutcome ! {IO, AI, Process, FS, Env, Clock, Rand}  {
+  if not is_compose_tool_name(call.tool) then { decision: Delegate, next_state: ctx.world }
+  else {
+    let handled = handle_compose_tool(ctx, ctx.world, compose_req_from_call(ctx, call), runtime_cfg, snippet_caps);
+    { decision: Handled(handled.item), next_state: handled.next_state }
+  }
+}
+
+-- WI-D19. THE `fileExists` GUARD, ROUTED THROUGH `path_stat` AND NOT THROUGH
+-- `file_read.present`. Both seams can answer "is there something here", and the
+-- reason this one is chosen is what the call site is actually asking.
+--
+-- THE QUESTION IS "IS THERE A FILE TO REMOVE", NOT "DOES THIS PATH HOLD BYTES".
+-- The guard exists to protect a `removeFile`, and `removeFile` is defined over a
+-- file. `ExtPathFile` IS that predicate. `ExtFileRead.present` is not: it is
+-- two-valued, so it answers the same for a directory as for a file, and WI-D18
+-- §3.2 measured the two adapters DISAGREEING on exactly that input. Routing this
+-- guard through `file_read` would put an adapter disagreement between compose
+-- and a `removeFile` that the host refuses over a directory.
+--
+-- AND `file_read` RETURNS THE CONTENT, WHICH THIS SITE DOES NOT WANT. WI-D17 §3
+-- and WI-D18 §6 decide what the recorder does with each class; a read issued
+-- only for its boolean would hand the recorder a body nobody asked for and force
+-- that decision on bytes with no consumer. `path_stat` writes no interaction at
+-- all, which is the answer those sections already reached for a pure observation.
+--
+-- THE MATCH IS EXHAUSTIVE ON PURPOSE, for `session.ext_ports_of`'s reason at the
+-- other end of the same seam: a wildcard here would silently absorb a fourth
+-- `ExtPathKind` constructor, and the whole point of typing the kind rather than
+-- rendering it to a string was that a fourth value must not have a default arm.
+--
+-- `ok: true` on the two non-file arms is "there was nothing to remove", which is
+-- what the ambient `if fileExists(p) then removeFile(p) else ()` returned. It is
+-- NOT "the remove succeeded" — no remove was attempted.
+func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+  let stat = p.path_stat(w, path);
+  match stat.kind {
+    ExtPathFile    => p.file_remove(stat.next_state, path),
+    ExtPathDir     => { ok: true, error: "", next_state: stat.next_state },
+    ExtPathMissing => { ok: true, error: "", next_state: stat.next_state }
+  }
+}
+
+-- WI-D19 — THE FIRST ROUTED HOOK IN THIS TREE, and since WI-D26 it is a FULLY
+-- routed one: all nine of this hook's effect sites go through `ctx.ports` and
+-- thread the world out on `next_state`. Kept two-part per S15 — the sentence
+-- here read: "Seven of this hook's nine effect sites now go through `ctx.ports`
+-- and thread the world out on `next_state`; the two `exec` sites do NOT, and the
+-- reason is a finding rather than a shortfall." The finding was real and is
+-- recorded below; what closed it was one line, after three items of preparation.
+--
+-- WHAT ROUTED: `now()` -> `clock_now`; `mkdirAll` -> `dir_make`; `writeFile` ->
+-- `file_write`; both `fileExists` -> `path_stat`; both `removeFile` ->
+-- `file_remove`. Six of `ExtPorts`' seven world-threading seams get their first
+-- caller here — every one built at WI-C5, D16, D17 and D18 except `env_get`,
+-- which D16 declined to widen on the ground that its callers are in
+-- `register_with_config` and cannot reach a port at all.
+--
+-- WHAT DID NOT ROUTE, AND WHY IT IS NOT A BUDGET DECISION. `check_snippet` and
+-- `run_snippet` shell out with `exec("ailang", [...])`. The seam that looks like
+-- their home is `ExtPorts.tool_handle`, and it ANSWERS A DIFFERENT QUESTION — it
+-- fronts `Ports.tool_exec`, whose live adapter is `dispatch_one` ->
+-- `run_native_batch` -> `tool_runtime.run_native_call`, a dispatcher over
+-- MOTOKO'S OWN TOOL NAMES. `tool_handle(w, "ailang", …)` reaches that function's
+-- final `else` and returns
+--   "ailang requires extension capability and is not available in native runtime"
+-- so routing here would not run the compiler at all; it would return a
+-- tool-error blob that `check_snippet` has no way to tell from a check failure.
+--
+-- WI-D21 CORRECTS THE SECOND HALF OF THAT PARAGRAPH, and the correction changes
+-- what is owed here. What is above is accurate about `tool_handle(w, "ailang", …)`.
+-- What followed it — "there is no exit code to read" — was wrong, and it was
+-- wrong because it inferred the seam's capability from the ONE tool name compose
+-- tried instead of reading the dispatcher. `tool_handle(w, "BashExec", …)` DOES run
+-- a real subprocess and DOES produce a real exit code: `run_native_call`'s
+-- `BashExec` arm builds `BashExecResult { …, exit_code, … }` and `dispatch_one`
+-- encodes it to JSON, which arrives as `ExtProcOutcome.output`. The exit code is
+-- there. It is TEXT.
+--
+-- So the obstacle is not a missing effect and not a missing ABI row. It is that
+-- reading `out.exitCode` from here would mean decoding `output` and pulling a
+-- field — the string-parsing path, which would also put a tool-error blob and a
+-- genuine compiler failure on one code path, exactly the confusion the paragraph
+-- above objects to.
+--
+-- THE TYPED FIELD NOW EXISTS AND THESE SITES STILL DO NOT ROUTE, and the two
+-- halves of that sentence have different vintages — kept two-part per S15. The
+-- paragraph above used to continue: "Typing it instead requires the exit code
+-- on BOTH sides of `Ports.tool_exec`, and the deterministic side has none:
+-- `ScriptedTool` carries no exit code... the field is a program-schema version
+-- bump, scheduled as its own item." WI-D22 shipped the bump and WI-D23 the
+-- rest: `ExtProcOutcome.exit_code` is real, filled by the bridge from the
+-- typed outcome, so `out.exitCode`'s replacement is a typed read, not a parse.
+-- AND THE IDENTITY BLOCKER IS GONE TOO, AS OF WI-D24 — third part, same rule.
+-- What this paragraph said through WI-D23: "What still blocks routing is
+-- IDENTITY, not typing: `recording_tool` records every `tool_exec` invocation as
+-- `ToolIdentity("loop_v2", inv.call.id, ...)` and the bridge's call id is blank,
+-- so the first `tool_handle` call in a recorded run emits a program the validator
+-- rejects. Routing these sites waits on the eighth recording adapter and
+-- `ExtCtx.ext_id` — WI-D21 §5's plan."
+--
+-- WI-D24 built the adapter and did NOT need `ExtCtx.ext_id`: the bridge calls
+-- `Ports.ext_effect_exec`, `ports.recording_ext_effect` records
+-- `ExtensionEffectIdentity(holder, extension_effect_fault, "")` where the blank
+-- call id is legitimate, and the ext id rides in the world token that
+-- `ext/runtime`'s fold stamps per hook. A recorded extension effect now
+-- VALIDATES and REPLAYS — `discovery_dst`'s `effect_scenario` is the round trip.
+--
+-- WI-D26 SOLVED IT, AND WHAT IT COST IS THE PART WORTH RECORDING. Through
+-- WI-D25 this block ended: "SO WHAT REMAINS AT THESE SITES IS THE ORIGINAL
+-- PARAGRAPH'S POINT AND NOTHING ELSE: `tool_handle(w, "ailang", …)` reaches no
+-- compiler, and the honest route is `BashExec` with a command line, whose result
+-- arrives rendered as JSON where `check_snippet` needs a typed answer. That is a
+-- shape question about THIS site, not a world-model gap, and it is what the
+-- routing item has to solve."
+--
+-- The shape question had already been answered by WI-D23 and the paragraph did
+-- not notice: `ExtProcOutcome` carries `exit_code` TYPED beside the rendered
+-- `output`, so `check_snippet` does not need a typed answer out of the JSON — it
+-- needs the code, which is typed, and the TEXT, which is what JSON is for. The
+-- residual work was one `decode` for the streams. See `proc.ail`, which is where
+-- the request and the decode live, and whose header carries this item's one
+-- genuine correction: `BashExec` is NOT a shell door. `run_process_result`
+-- reaches `exec(cmd, args)` with the argv intact and falls back to `bash -lc`
+-- only for a request that needs a shell, so routing these two sites introduced
+-- no quoting boundary and needed no charset argument about the generated paths.
+--
+-- WHAT REMAINS IN THIS HOOK IS NOTHING. What remains in the MODULE is the four
+-- `println` sites and the ambient AI in the tool-handle chain, both disclosed
+-- classes by decision, and door 3's `show` residue, which is a classifier
+-- question and not an effect this hook performs.
+export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  if mode != "inline" then { decision: NoIntercept, next_state: ctx.world }
+  else {
+    let snippet = extract_ailang_fence(response_text);
+    if snippet == "" then { decision: NoIntercept, next_state: ctx.world }
+    else {
+      let p = ctx.ports;
+      let reading = p.clock_now(ctx.world);
+      let name = "inline_${show(reading.now_ms)}";
+      let path = "tmp/${name}.ail";
+      -- WI-D19 FIXES THE SPELLING AT THE CALL SITE, which is the rule WI-D18 §5
+      -- wrote at `WorldState.files`: the world keys on RAW STRINGS and does not
+      -- normalise, so the caller supplies ONE spelling per path.
+      --
+      -- This line read `mkdirAll("${ctx.workdir}/tmp")` while the write below is
+      -- `"tmp/${name}.ail"`. Absolute create, relative write. On disk they agree
+      -- only when the process runs in `workdir`; in the world they are two
+      -- different directories, and `dir_list` on the created one reports
+      -- `entries: []` — a PLAUSIBLE answer rather than a crash, which is why
+      -- `world_state_probe`'s `assert_directory_class` row 8 pins it.
+      --
+      -- THE WRITE'S SPELLING WINS, AND IT IS NOT A COIN FLIP: it is pinned by the
+      -- compiler. `compose_module_header` emits `module tmp/${name}` and AILANG
+      -- resolves a module path against the file's path, so `"tmp/${name}.ail"`
+      -- cannot become absolute without the header moving with it and the
+      -- `ailang check` below failing. The create is the free half, so the create
+      -- is what moves.
+      --
+      -- It is also a repair on a real filesystem. When cwd is not `workdir` the
+      -- old pair created `workdir/tmp` and then wrote into a `./tmp` that nothing
+      -- had created; now both name the same directory under cwd, which is the
+      -- directory `ailang check tmp/x.ail` resolves against.
+      --
+      -- SCOPED TO THIS HOOK. `one_attempt:501` has the same defect and is Route B
+      -- part 2b's, not this item's.
+      let made = p.dir_make(reading.next_state, "tmp");
+      let clean = compose_file_body(snippet);
+      let written = p.file_write(made.next_state, path, "${compose_module_header(name)}\n\n${clean}");
+      -- WI-D26. `written.next_state` was the newest world here until the check
+      -- started threading one; both branches below now descend from
+      -- `checked.next_state`.
+      let checked = check_snippet(p, written.next_state, path);
+      if not checked.ok then {
+        let cleaned = remove_if_file(p, checked.next_state, path);
+        { decision: InterceptHandled({
+            tool_call_id: "inline-${show(ctx.step)}",
+            tool: "ComposeInline",
+            exit_code: 1,
+            stdout: "",
+            stderr: checked.errors,
+            metadata: jo([])
+          }),
+          next_state: cleaned.next_state }
+      } else {
+        let ran = run_snippet(p, checked.next_state, path, snippet_caps);
+        let cleaned = remove_if_file(p, ran.next_state, path);
+        { decision: InterceptHandled(mk_result("inline-${show(ctx.step)}", "inline", 1, ran.stdout, ran.stderr, ran.exit_code, "inline snippet executed", ran.truncated, "{}")),
+          next_state: cleaned.next_state }
+      }
+    }
+  }
+}
+
+func no_budget_patch() -> BudgetPatch {
+  {
+    requested_total: None,
+    requested_solver: None,
+    requested_verifier: None
+  }
+}
+
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+  no_budget_patch()
+}
+
+func join_csv(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${join_csv(rest)}"
+  }
+}
+
+export func register_with_config(runtime_cfg: ComposeHostConfig) -> [Capability] ! {Env, FS, AI, Clock, IO, Process, Rand} {
+  let composition_mode = runtime_cfg.compose.mode;
+  let snippet_caps = join_csv(runtime_cfg.snippet_caps);
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call, runtime_cfg, snippet_caps) };
+  let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { on_response_intercept(ctx, response_text, composition_mode, snippet_caps) };
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  [
+    PromptShaper(on_build_system_prompt),
+    ToolPolicy(\ctx call. on_tool_policy_with_mode(composition_mode, ctx, call)),
+    ToolProvider(provided_tools(), handle),
+    ResponseInterceptor(intercept)
+  ]
+}

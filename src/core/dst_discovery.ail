@@ -1,0 +1,796 @@
+-- D2's discovery: what the real driver actually requested, and the two-sided
+-- check that the interaction log says so.
+--
+-- WI-A13, stage 2. This module is the ASSERTION, and it was written and proven
+-- red before the recorder existed (standing rule S1). What it contains is not
+-- the recorder; it is the thing that grades the recorder, and it is built to be
+-- gradeable from the other side too.
+--
+-- ---------------------------------------------------------------------------
+-- WHY THE CHECK IS TWO-SIDED
+-- ---------------------------------------------------------------------------
+--
+-- Cluster 7 found the fifteenth site in this project where two implementations
+-- type-check and the wrong one is silent, and it was caught by a NEGATIVE
+-- CONTROL — a fixture that had to survive — after passing all 18 mutation rows.
+-- The generalisation is that a one-sided assertion set cannot see failures in
+-- the other direction: determinism tests sameness, so it cannot see that
+-- nothing moved; mutation tests rejection, so it cannot see over-rejection.
+--
+-- A RECORDER has exactly that exposure, in both directions:
+--
+--   UNDER-RECORDING  the recorder drops a class, or drops one request of a
+--                    class. The log is consistent, reproducible, replayable,
+--                    and describes a shorter execution than the one that ran.
+--
+--   OVER-RECORDING   the recorder logs a request the driver never made — a
+--                    double append, a wrapper that records and then delegates
+--                    to an adapter that records again, a synthesised entry to
+--                    make a count come out right. The log is consistent,
+--                    reproducible, replayable, and describes a LONGER
+--                    execution than the one that ran. Strict replay of it then
+--                    fails on an "unused interaction" that names the recorder's
+--                    defect as if it were the system's.
+--
+-- Only one of those was named in the handoffs. Both are named here, and they
+-- are the SAME comparison run in both directions — `class_balance` emits
+-- `UnderRecorded` when the log is short and `OverRecorded` when it is long,
+-- from one arithmetic site, so neither direction can be dropped without
+-- dropping the other.
+--
+-- ---------------------------------------------------------------------------
+-- WHY THE WITNESSES ARE AN ORACLE AND NOT THE RECORDER GRADING ITSELF
+-- ---------------------------------------------------------------------------
+--
+-- Every field of `DiscoveryWitness` is produced by code that is NOT the
+-- recorder, and for the provider and tool classes by code in a different
+-- component entirely:
+--
+--   provider_calls    `ProviderCallPrepared` records in the ledger trace the
+--                     driver RETURNS. Written by production driver code
+--                     (session.ail:1997) and emitted separately from the
+--                     `dispatch_step` call at :2008, so it exists whether or
+--                     not the port ever recorded anything. Owned by D6.
+--   tool_dispatches   the tool-result messages the driver returned. Written by
+--                     `tool_phase.ail`'s `tool_outcome_message`, downstream of
+--                     the port but in a different module and a different
+--                     record. The wire's `v2_tool_dispatch_start`, emitted
+--                     BEFORE the port calls that follow it, is the stronger form
+--                     of the same witness and is compared in the `discovery`
+--                     make target — because the wire has a DIFFERENT AUTHOR from
+--                     the census it is compared against.
+--
+--                     TENSED AT WI-D2: this clause used to say "because it goes
+--                     to the wire and is never appended to the returned trace",
+--                     which stopped being true when WI-D2 closed
+--                     `V2ToolDispatchStart` in `d64_gap_register`. Independence
+--                     was always the operative reason and absence was never
+--                     more than the mechanism that guaranteed it.
+--   approval_reads    the tool-role messages the driver returned. Under a
+--                     policy that sends EVERY tool call to the approval channel
+--                     — which both discovery scenarios use — the driver makes
+--                     exactly one approval read per tool-role message it
+--                     eventually returns, whether that message is a result or a
+--                     denial. Written by `tool_phase.ail`, not by the recorder.
+--
+--                     THIS REPLACED THE CURSOR DELTA, and the replacement is a
+--                     defect this stage found in its own assertion. Cluster 7
+--                     rated the cursor witness "Medium" and this is exactly why:
+--                     `world.approvals` measures answers CONSUMED, not reads
+--                     PERFORMED, and the two diverge the moment the queue runs
+--                     dry. A run with three tool calls and one queued answer
+--                     makes three approval reads and moves the cursor by one, so
+--                     the cursor witness reported a CORRECT recorder as
+--                     over-recording. It is an over-rejection, and it was
+--                     invisible to both original scenarios because each queued
+--                     exactly as many answers as it needed — cluster 7's result
+--                     restated against this stage's own checker.
+--   approvals_consumed the cursor delta is KEPT, demoted to what it can
+--                     actually witness: how many answers were served. It is
+--                     checked exactly against the recorded approvals whose
+--                     outcome is not `missing`.
+--   clock_delta_ms    the world's own `clock_ms` delta. General across classes:
+--                     EVERY class may advance the clock, so this is one number
+--                     that no single class's recorder can satisfy alone.
+--   known_env_keys    SOURCE-DERIVED, and of a different kind — see below.
+--
+-- ---------------------------------------------------------------------------
+-- THE ENV CLASS'S EVIDENCE IS OF A DIFFERENT KIND, AND MUST BE REPORTED AS SUCH
+-- ---------------------------------------------------------------------------
+--
+-- `ports.env_get` is a keyed lookup, not a cursor (ports.ail:121-125: "reads do
+-- not consume it and the successor is the same world"), and no ledger event is
+-- emitted for one. There is therefore NO runtime witness that an env read
+-- happened: the only record would be the recorder's own log entry, which is the
+-- recorder-as-its-own-oracle shape this project has found fifteen silent
+-- defects behind.
+--
+-- So the env class is checked against a SOURCE-DERIVED key set instead. That is
+-- genuinely independent of the recorder — it comes from the driver's source —
+-- but it is STATIC where the other six are DYNAMIC, and the two must not be
+-- added into one completeness number. A13's report and D11's counters must
+-- carry six classes with runtime evidence and one with provenance evidence.
+--
+-- The set is checked against the source by the `discovery` make target, which
+-- greps the `ports.env_get(` call sites out of session.ail, tool_phase.ail and
+-- context_usage.ail and diffs the extracted keys against `driver_env_keys()`
+-- below. A literal nobody re-derives is a literal that goes stale; the gate is
+-- the derivation.
+--
+-- THE FILE LIST IS ITSELF SUCH A LITERAL, and WI-D3 found it stale within one
+-- edit of routing `context_usage`: the grep read two files, the driver's env
+-- surface had moved into a third, and the derived set came back four keys short
+-- of the declared one. It failed LOUDLY rather than silently, which is the
+-- property worth keeping — a derivation whose input set is wrong disagrees with
+-- the literal it checks instead of agreeing with it.
+--
+-- The two directions land differently for env, and that asymmetry is real:
+--
+--   over-recording   TOTAL. Every key in the log must be a key some driver call
+--                    site can read. A recorder that invents a read fails.
+--   under-recording  PER SCENARIO. Not every key is read on every run —
+--                    MOTOKO_CAPTURE_FAILED_PAYLOAD is on the non-retryable
+--                    provider-error path only — so the expected subset is a
+--                    property of the scenario's control flow, supplied by the
+--                    caller and justified at the assertion site.
+
+module src/core/dst_discovery
+
+import std/list as List (length)
+import src/core/dst_interaction (
+  Interaction,
+  CausalIdentity,
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  TimedOutcome,
+  ok_outcome,
+  identity_kind,
+  identity_projection,
+  interaction_kind,
+  all_interaction_kinds,
+  count_kind,
+  total_advance_ms,
+  approvals_served,
+  env_keys_read,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing
+)
+
+-- ---------------------------------------------------------------------------
+-- The source-derived env key set
+-- ---------------------------------------------------------------------------
+
+-- Every environment key the driver can read through `ports.env_get`, in call
+-- order. Provenance, verified at HEAD and re-derived by `make discovery`:
+--
+--   src/core/session.ail:940    MOTOKO_SESSION_ID           derive_session_id
+--   src/core/session.ail:1419   MOTOKO_PERSIST_RETRIES      session_policy_init
+--   src/core/session.ail:1420   MOTOKO_RETRY_STREAM_ERROR   session_policy_init
+--   src/core/session.ail:1421   OPENAI_BASE_URL             session_policy_init
+--   src/core/session.ail:1422   MOTOKO_HEADLESS             session_policy_init
+--   src/core/session.ail:2018   MOTOKO_CAPTURE_FAILED_PAYLOAD  provider error path
+--   src/core/tool_phase.ail:343 MOTOKO_TOOL_TIMEOUT_MS      native tool dispatch
+--
+-- session.ail:775 is deliberately NOT here. It is the extension bridge's
+-- `env_get` closure, whose key is supplied by an extension at call time and is
+-- therefore not statically known. `driver_only` installs no extensions, so it
+-- contributes nothing under this profile; a profile that installs one will need
+-- its keys declared by the profile rather than derived from the driver.
+-- WI-D3 ADDED FOUR, and they are the first entries here whose call site is not
+-- in `session.ail` or `tool_phase.ail`. `resolve_context_limit` reads them, and
+-- before WI-D3 they were read AMBIENTLY — which is why this list did not carry
+-- them and why `make world_state` deferred the env poison pair. They are routed
+-- now, so they are the driver's env surface like the other seven:
+--
+--   src/core/context_usage.ail  MOTOKO_PROFILE_DIR   profile_dir_path
+--   src/core/context_usage.ail  MOTOKO_CONFIG        profile_dir_path
+--   src/core/context_usage.ail  MOTOKO_REPO          profile_dir_path AND catalog_path
+--   src/core/context_usage.ail  MOTOKO_MODELS_FILE   catalog_path
+--
+-- MOTOKO_REPO is read TWICE per resolution, from two different functions, and it
+-- appears once here because this list is a set of KEYS. The multiplicity lives
+-- in `EnvExpectation`, which is where a per-key count belongs.
+--
+-- WI-D3 CALLED THESE COUNTS "the first in this list that scale with the RUN",
+-- because the driver resolved once in `session_policy_init` and again on every
+-- loop arm taken. WI-D4 REMOVED THE PER-ARM RESOLUTIONS — four `c2_loop` sites
+-- re-deriving a value `session_policy_init` had already stored in
+-- `policy.step.compaction.context_limit` — so the driver reaches
+-- `resolve_context_limit` exactly ONCE per run and these counts are back to
+-- being a fixed control-flow fact like the other seven.
+--
+-- The eight call sites WI-D3 counted are now FOUR: two in `rpc.ail`, which bind
+-- the ambient reader against an empty world, and two in `session.ail`
+-- (`session_policy_init` and `session_policy_with_model`), which STORE the value
+-- rather than recomputing it. Only the first of those two is on a DST run's path.
+--
+-- The witnesses still express the counts against a measured per-call cost rather
+-- than as a literal — see `env_reads_per_context_resolution`. That indirection is
+-- kept even though the multiplier is now 1: it is what makes the five scenarios
+-- state a quantity instead of restating a total, and it is what would go red
+-- rather than stale if anything re-resolved per arm again.
+export pure func driver_env_keys() -> [string] {
+  ["MOTOKO_SESSION_ID",
+   "MOTOKO_PERSIST_RETRIES",
+   "MOTOKO_RETRY_STREAM_ERROR",
+   "OPENAI_BASE_URL",
+   "MOTOKO_HEADLESS",
+   "MOTOKO_CAPTURE_FAILED_PAYLOAD",
+   "MOTOKO_TOOL_TIMEOUT_MS",
+   "MOTOKO_PROFILE_DIR",
+   "MOTOKO_CONFIG",
+   "MOTOKO_REPO",
+   "MOTOKO_MODELS_FILE"]
+}
+
+-- ---------------------------------------------------------------------------
+-- The witness
+-- ---------------------------------------------------------------------------
+
+-- One expected environment read, with its MULTIPLICITY.
+--
+-- The count is the load-bearing half and it was missing from the first version
+-- of this check. Presence alone is satisfied by a recorder that logs the first
+-- read of a key and drops every later one — and the driver reads
+-- MOTOKO_TOOL_TIMEOUT_MS once per native tool dispatch, so that recorder loses
+-- two of three reads in the `approve` scenario while looking complete. The env
+-- class has no runtime witness, so nothing else in this module would have seen
+-- it.
+--
+-- The counts are still PROVENANCE evidence, not capability evidence: they are
+-- derived from the driver's source and from the scenario's control flow, not
+-- observed. But `MOTOKO_TOOL_TIMEOUT_MS`'s count is expressed in terms of the
+-- independently-witnessed tool-dispatch count, so that one is anchored to a
+-- runtime witness even though the read itself is not.
+export type EnvExpectation = { key: string, count: int }
+
+export type DiscoveryWitness = {
+  provider_calls: int,
+  tool_dispatches: int,
+  -- How many approval READS the driver made. NOT the world's cursor delta —
+  -- see the header note on the approval witness for why that under-counts.
+  approval_reads: int,
+  -- The world's own `approvals` cursor delta. Checked EXACTLY against the
+  -- recorded approvals that were SERVED (status other than missing), which is a
+  -- second, independent statement about the same class.
+  approvals_consumed: int,
+  clock_delta_ms: int,
+  -- WI-D19's THREE FILESYSTEM MUTATION CLASSES, and they are witness fields now
+  -- because a routed extension exists. Through WI-D18 all three were PINNED AT
+  -- ZERO in `absent_classes` below, deliberately, so that "the census printed 0"
+  -- was a claim rather than silence and Route B's first routing would have to
+  -- answer for them by name. WI-D19 is that routing and this is the answer: the
+  -- classes are WITNESSED rather than moved out of the list, so the pin survives
+  -- for every run that routes nothing (all of them but one) and becomes a real
+  -- balance for the run that does.
+  --
+  -- THE COUNTS ARE NOT READ OFF THE LOG, which would make the balance vacuous —
+  -- the whole failure mode `class_balance` exists to catch is a recorder that
+  -- logs the wrong number, and a witness derived from the recorder agrees with it
+  -- by construction. They come from the SCENARIO's control flow: the routed hook
+  -- performs exactly one `dir_make`, one `file_write` and one `file_remove` per
+  -- dispatch, and the dispatch count is anchored to the independently-witnessed
+  -- provider-call count. That is `MOTOKO_TOOL_TIMEOUT_MS`'s discipline in
+  -- `expected_env_reads`, applied one class over.
+  --
+  -- The two READS stay absent and could not be witnessed here: `path_stat` and
+  -- `dir_list` write no interaction at all (WI-D18 §6), so there is no kind to
+  -- balance. That asymmetry is the recording decision showing through the census.
+  file_writes: int,
+  file_removes: int,
+  dir_makes: int,
+  -- WI-D24's EXTENSION-EFFECT class, and it is a witness field now for exactly
+  -- the reason the three above became witness fields at WI-D19: an adapter
+  -- records it. Through WI-D23 it was PINNED AT ZERO in `absent_classes` below,
+  -- and WI-D21 measured that the pin's published ground did not hold — see that
+  -- function's note for the correction and for why the re-wording waited for this
+  -- item rather than being taken when the error was found.
+  --
+  -- THE COUNT IS NOT READ OFF THE LOG, on the filesystem fields' argument: the
+  -- failure mode `class_balance` exists to catch is a recorder that logs the
+  -- wrong number, and a witness derived from the recorder agrees with it by
+  -- construction. It comes from the SCENARIO's control flow — the routed hook
+  -- performs a known number of `ctx.ports.tool_handle` calls per dispatch, and the
+  -- dispatch count is anchored to the independently-witnessed provider-call
+  -- count.
+  extension_effects: int,
+  expected_env_reads: [EnvExpectation]
+}
+
+-- ---------------------------------------------------------------------------
+-- Findings
+-- ---------------------------------------------------------------------------
+
+export type DiscoveryFinding
+  = UnderRecorded(string, int, int)     -- kind, witnessed, logged
+  | OverRecorded(string, int, int)      -- kind, witnessed, logged
+  | ClockUnaccounted(int, int)          -- world delta, sum of recorded advances
+  | EnvKeyNotInSource(string)           -- a logged key no driver call site can read
+  | EnvReadUnderRecorded(string, int, int)  -- key, expected, logged
+  | EnvReadOverRecorded(string, int, int)   -- key, expected, logged
+  | ApprovalCursorDisagrees(int, int)   -- cursor delta, recorded approvals served
+  | LogNotDense(int, int)               -- expected ordinal, found
+  | EmptyLog
+
+export pure func discovery_rule(f: DiscoveryFinding) -> string {
+  match f {
+    UnderRecorded(_, _, _) => "discovery-under-recorded",
+    OverRecorded(_, _, _) => "discovery-over-recorded",
+    ClockUnaccounted(_, _) => "discovery-clock-unaccounted",
+    EnvKeyNotInSource(_) => "discovery-env-key-not-in-source",
+    EnvReadUnderRecorded(_, _, _) => "discovery-env-read-under-recorded",
+    EnvReadOverRecorded(_, _, _) => "discovery-env-read-over-recorded",
+    ApprovalCursorDisagrees(_, _) => "discovery-approval-cursor-disagrees",
+    LogNotDense(_, _) => "discovery-log-not-dense",
+    EmptyLog => "discovery-empty-log"
+  }
+}
+
+export pure func discovery_message(f: DiscoveryFinding) -> string {
+  match f {
+    UnderRecorded(kind, w, l) =>
+      "[discovery-under-recorded] the driver made ${w} '${kind}' request(s) and the interaction log records ${l}; the log does not account for the execution that ran, and a replay of it would assert a shorter run than the one it claims to reproduce",
+    OverRecorded(kind, w, l) =>
+      "[discovery-over-recorded] the interaction log records ${l} '${kind}' request(s) and the driver made ${w}; the recorder logged a request the driver never issued, and strict replay would report the surplus as an unused interaction — a HarnessFailure naming the recorder's defect as if it were the system's",
+    ClockUnaccounted(delta, sum) =>
+      "[discovery-clock-unaccounted] the world clock advanced ${delta}ms and the recorded advances sum to ${sum}ms; D4 makes the explicit clock the only clock, so an unaccounted advance means some interaction moved time without recording that it did",
+    EnvKeyNotInSource(k) =>
+      "[discovery-env-key-not-in-source] the log records a read of '${k}', which no `ports.env_get` call site in the driver can produce; the env class has no runtime witness, so an invented key is the one over-recording failure its static evidence CAN see",
+    EnvReadUnderRecorded(k, e, l) =>
+      "[discovery-env-read-under-recorded] this scenario's control flow reaches ${e} read(s) of '${k}' and the log records ${l}; the env class has no runtime witness, so this count is derived from the driver's source and the scenario's control flow — provenance evidence, not capability evidence, and it must be reported as a different KIND from the other six classes rather than added into one completeness number",
+    EnvReadOverRecorded(k, e, l) =>
+      "[discovery-env-read-over-recorded] the log records ${l} read(s) of '${k}' and this scenario's control flow reaches ${e}; a surplus read is an interaction strict replay will never consume, and for the env class it is the only over-recording failure the static evidence CAN see besides an invented key",
+    ApprovalCursorDisagrees(consumed, served) =>
+      "[discovery-approval-cursor-disagrees] the world's approval cursor advanced by ${consumed} and the log records ${served} approval read(s) that were SERVED rather than end-of-input; the cursor witnesses which answers were consumed, not how many reads happened, and these two must agree exactly or the recorded outcome statuses do not describe the queue the run actually drained",
+    LogNotDense(expected, found) =>
+      "[discovery-log-not-dense] expected encounter ordinal ${expected} at this position but found ${found}; the ordinal is the global encounter order, so a gap means the recorder appended out of order or skipped a position",
+    EmptyLog =>
+      "[discovery-empty-log] the run recorded no interactions at all; a driver that requested nothing did not run, and every per-class balance below would be vacuously satisfied by a log that is simply absent"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The balance, in both directions, from one arithmetic site
+-- ---------------------------------------------------------------------------
+
+-- ONE comparison, TWO findings. Writing this as two separate predicates is the
+-- shape that lets one of them be deleted, forgotten, or never written — which
+-- is how a recorder ends up with a completeness check and no over-recording
+-- check. Here the two directions are the two arms of a single `if`, so a future
+-- edit cannot remove one without staring at the other.
+export pure func class_balance(kind: string, witnessed: int, logged: int) -> [DiscoveryFinding] {
+  if logged < witnessed then [UnderRecorded(kind, witnessed, logged)]
+  else if logged > witnessed then [OverRecorded(kind, witnessed, logged)]
+  else []
+}
+
+pure func contains_str(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == target then true else contains_str(rest, target)
+  }
+}
+
+-- Over-recording for env: every logged key must be one the source can produce.
+pure func env_keys_not_in_source(logged: [string], known: [string]) -> [DiscoveryFinding] {
+  match logged {
+    [] => [],
+    k :: rest =>
+      (if contains_str(known, k) then [] else [EnvKeyNotInSource(k)])
+        ++ env_keys_not_in_source(rest, known)
+  }
+}
+
+pure func count_str(xs: [string], target: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x == target then 1 else 0) + count_str(rest, target)
+  }
+}
+
+-- Both directions for env, from ONE comparison site, exactly as `class_balance`
+-- does for the witnessed classes. Presence would have been the easy check and
+-- the wrong one; see `EnvExpectation`.
+pure func env_balance(expected: [EnvExpectation], logged: [string]) -> [DiscoveryFinding] {
+  match expected {
+    [] => [],
+    e :: rest => {
+      let got = count_str(logged, e.key);
+      (if got < e.count then [EnvReadUnderRecorded(e.key, e.count, got)]
+       else if got > e.count then [EnvReadOverRecorded(e.key, e.count, got)]
+       else [])
+        ++ env_balance(rest, logged)
+    }
+  }
+}
+
+-- The recorder assigns ordinals; density is the check that it assigned them
+-- from one counter rather than per class. A per-class counter produces a log
+-- whose ordinals repeat across classes, which stage 1's `duplicate_ordinals`
+-- would also catch — this catches it at discovery time, with the recorder still
+-- in scope, rather than at validation time with only the artifact in hand.
+pure func dense(xs: [Interaction], expected: int) -> [DiscoveryFinding] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      if i.identity.ordinal == expected then dense(rest, expected + 1)
+      else [LogNotDense(expected, i.identity.ordinal)] ++ dense(rest, expected + 1)
+  }
+}
+
+-- Classes with no witness of their own under `driver_only`, checked at zero in
+-- BOTH directions. This is not filler: `driver_only` installs no extensions and
+-- the randomness guard asserts no `src/core` module reaches `std/rand`, so a
+-- non-zero count here is a recorder inventing a class that cannot have run.
+--
+-- WI-D17 ADDED THE TWO FILESYSTEM MUTATORS HERE, AND THAT IS THE POINT OF
+-- ADDING THEM. `census` iterates `all_interaction_kinds()`, so a new class
+-- appears in the report automatically — but NOTHING in this tree asserted that
+-- a census count was non-zero, and nothing asserted it was zero either. A class
+-- with a recording adapter and no call site would therefore have printed
+-- `file_write=0` forever and read exactly like a class that was being counted:
+-- absent reading identically to unchanged, in the instrument this time. Pinning
+-- it at zero converts that silence into a claim.
+--
+-- SO THIS WAS A TRIPWIRE FOR ROUTE B PART 2, DELIBERATELY, AND IT FIRED. Kept in
+-- the past tense per plan rule S15, because the prediction is the evidence that
+-- the mechanism worked rather than a note that has expired.
+--
+--   The prediction: "the moment a compose write is routed through
+--   `Ports.file_write` on a profile this gate grades, `check_discovery` goes red
+--   with `file_write over-recorded: expected 0, got n` — and the item that
+--   routes it must either give the class a real witness or move it out of this
+--   list, in both cases having stated which."
+--
+-- WI-D19 ROUTED IT AND CHOSE THE WITNESS, and the reason is that removal would
+-- have thrown away the pin for the fourteen graded runs that route nothing.
+-- Three of the five classes here now balance against `DiscoveryWitness`
+-- fields — see that type for where the counts come from and why they are not
+-- read off the log — and the two that remain pinned at literal zero
+-- (`ExtensionEffect`, `RandomDraw`) are the ones whose unreachability is
+-- STRUCTURAL rather than merely "nothing calls them yet", which is the
+-- distinction `test_an_unrouted_filesystem_mutation_is_over_recorded` below was
+-- already written to keep.
+--
+-- ONE THING DID NOT CHANGE AND IT IS WORTH SAYING: a caller that passes 0 gets
+-- exactly the assertion WI-D17 and WI-D18 wrote here. Every graded run in the
+-- tree except WI-D19's routed scenario passes 0, so the tripwire is still armed
+-- for part 2b — an `on_tool_handle` write that reaches a graded profile will
+-- reopen this conversation by name.
+pure func absent_classes(log: [Interaction], w: DiscoveryWitness) -> [DiscoveryFinding] {
+  -- WI-D24 TOOK THE PIN OFF `ExtensionEffect` AND PUT A WITNESS UNDER IT, which
+  -- is D19's choice made a second time and for the second time in preference to
+  -- removal: a witnessed class still pins at zero for every run that routes
+  -- nothing, and every graded run in this tree but one does.
+  --
+  -- AND THIS IS WHERE D19'S RECORDED GROUND IS FINALLY RE-WORDED, three items
+  -- after it was refuted. The paragraph above still says this class's
+  -- unreachability was STRUCTURAL rather than "nothing calls it yet"; WI-D21 §5.3
+  -- measured that and it did not survive — the catalogue row had existed since
+  -- WI-C5, the ext id existed at every dispatch site, and the real reason the
+  -- count was zero was that no adapter constructed the class. D21 reported the
+  -- error instead of re-wording it in place, deliberately, so that the refutation
+  -- stayed visible to the item that would act on it. WI-D24 is that item: the
+  -- eighth recording adapter exists, so the sentence is superseded here rather
+  -- than at the site that made it, and the history above is kept per S15.
+  --
+  -- `RandomDraw` STAYS PINNED AT LITERAL ZERO and its ground is unchanged: no
+  -- `record_interaction` site constructs it, and unlike this class it has no
+  -- consumer asking for one. That is still "nothing routes it yet" rather than
+  -- "structural", and saying so is the honest version of the distinction D19 drew.
+  class_balance(identity_kind(ExtensionEffectIdentity("", "", "")), w.extension_effects,
+                count_kind(log, identity_kind(ExtensionEffectIdentity("", "", ""))))
+    ++ class_balance(identity_kind(RandomDrawIdentity("")), 0,
+                     count_kind(log, identity_kind(RandomDrawIdentity(""))))
+    -- WI-D19 TOOK THE PIN OFF THESE THREE AND PUT A WITNESS UNDER IT. See
+    -- `DiscoveryWitness.file_writes` for why witnessing beat removal. The
+    -- function keeps its name and its place: every caller that routes nothing
+    -- passes 0 and gets exactly the assertion WI-D17 and WI-D18 wrote here, so
+    -- the classes are still pinned at zero for all but one run in the tree.
+    ++ class_balance(identity_kind(FileWriteIdentity("")), w.file_writes,
+                     count_kind(log, identity_kind(FileWriteIdentity(""))))
+    ++ class_balance(identity_kind(FileRemoveIdentity("")), w.file_removes,
+                     count_kind(log, identity_kind(FileRemoveIdentity(""))))
+    -- WI-D18's `dir_make` JOINS THEM, on WI-D17's reason and with WI-D17's
+    -- consequence. It is recorded and unrouted, which is the same state
+    -- `file_write` was left in, so the same choice is available and the same one
+    -- is taken: pinning it at zero converts "the census printed 0" from silence
+    -- into a claim, and Route B part 2 has to answer for it by name the moment a
+    -- compose `mkdirAll` is routed.
+    --
+    -- The READS are not here and could not be: `path_stat` and `dir_list` write
+    -- no interaction, so there is no kind to balance. That asymmetry is the
+    -- recording decision showing through the census, which is where it should be
+    -- visible.
+    ++ class_balance(identity_kind(DirMakeIdentity("")), w.dir_makes,
+                     count_kind(log, identity_kind(DirMakeIdentity(""))))
+}
+
+-- The whole discovery gate, in one call.
+--
+-- Note what is NOT here: nothing compares the log against itself, and nothing
+-- compares two runs. Determinism is a separate axis and it is asserted
+-- separately in the script — across six clusters it has caught none of the
+-- fifteen silent defects, precisely because a recorder that drops a class drops
+-- it identically twice.
+export pure func check_discovery(log: [Interaction], w: DiscoveryWitness) -> [DiscoveryFinding] {
+  (if List.length(log) == 0 then [EmptyLog] else [])
+    ++ dense(log, 0)
+    ++ class_balance(identity_kind(ProviderIdentity("", 0, "")), w.provider_calls,
+                     count_kind(log, identity_kind(ProviderIdentity("", 0, ""))))
+    ++ class_balance(identity_kind(ToolIdentity("", "", "")), w.tool_dispatches,
+                     count_kind(log, identity_kind(ToolIdentity("", "", ""))))
+    ++ class_balance(identity_kind(ApprovalIdentity("", "", "")), w.approval_reads,
+                     count_kind(log, identity_kind(ApprovalIdentity("", "", ""))))
+    ++ (if approvals_served(log) == w.approvals_consumed then []
+        else [ApprovalCursorDisagrees(w.approvals_consumed, approvals_served(log))])
+    ++ (if total_advance_ms(log) == w.clock_delta_ms then []
+        else [ClockUnaccounted(w.clock_delta_ms, total_advance_ms(log))])
+    ++ env_keys_not_in_source(env_keys_read(log), driver_env_keys())
+    ++ env_balance(w.expected_env_reads, env_keys_read(log))
+    ++ absent_classes(log, w)
+}
+
+export pure func discovery_ok(log: [Interaction], w: DiscoveryWitness) -> bool {
+  List.length(check_discovery(log, w)) == 0
+}
+
+export pure func has_discovery_rule(fs: [DiscoveryFinding], rule: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest => if discovery_rule(f) == rule then true else has_discovery_rule(rest, rule)
+  }
+}
+
+export pure func first_discovery_message(fs: [DiscoveryFinding]) -> string {
+  match fs {
+    [] => "(no findings)",
+    f :: _ => discovery_message(f)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Per-class census, for D11's counters and for a legible failure
+-- ---------------------------------------------------------------------------
+
+export type ClassCensus = { kind: string, logged: int }
+
+pure func census_of(kinds: [string], log: [Interaction]) -> [ClassCensus] {
+  match kinds {
+    [] => [],
+    -- Parenthesised: a match arm body starting with `{` parses as a BLOCK on
+    -- this pin, so a bare record literal here is a parse error at the `::`.
+    k :: rest => ({ kind: k, logged: count_kind(log, k) }) :: census_of(rest, log)
+  }
+}
+
+-- Iterates `all_interaction_kinds()` rather than a list written out here, so a
+-- class added to `IdentityBody` appears in the census automatically instead of
+-- being a class nobody counts.
+export pure func census(log: [Interaction]) -> [ClassCensus] {
+  census_of(all_interaction_kinds(), log)
+}
+
+export pure func census_line(cs: [ClassCensus]) -> string {
+  match cs {
+    [] => "",
+    c :: [] => "${c.kind}=${c.logged}",
+    c :: rest => "${c.kind}=${c.logged} ${census_line(rest)}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. These are the assertion's OWN negative controls: a checker that
+-- only ever reports findings is as useless as a validator that only ever
+-- rejects, and cluster 7 established that only a fixture which must SURVIVE can
+-- see that.
+-- ---------------------------------------------------------------------------
+
+pure func mk(b: IdentityBody, ord: int, advance: int) -> Interaction {
+  { identity: { ordinal: ord, body: b },
+    request_projection: "p",
+    deadline_ms: match b {
+      ToolIdentity(_, _, _) => 0,
+      ApprovalIdentity(_, _, _) => 0,
+      ExtensionEffectIdentity(_, _, _) => 0,
+      _ => -1
+    },
+    outcome: ok_outcome(advance, "") }
+}
+
+-- The negative control's fixture: a four-interaction log and the witness that
+-- exactly accounts for it. Provider, tool, approval and a clock advance — one
+-- of each class `driver_only` can reach — because a balanced fixture that omits
+-- a class cannot show that the balance for that class is satisfiable at all.
+pure func balanced_log() -> [Interaction] {
+  [mk(ProviderIdentity("loop_v2", 0, "m"), 0, 0),
+   mk(ToolIdentity("loop_v2", "c1", "T"), 1, 3),
+   mk(ApprovalIdentity("loop_v2", "c1", "T"), 2, 0),
+   mk(ClockAdvanceIdentity, 3, 1)]
+}
+
+pure func balanced_witness() -> DiscoveryWitness {
+  { provider_calls: 1,
+    tool_dispatches: 1,
+    approval_reads: 1,
+    approvals_consumed: 1,
+    clock_delta_ms: 4,
+    file_writes: 0,
+    file_removes: 0,
+    dir_makes: 0,
+    extension_effects: 0,
+    expected_env_reads: [] }
+}
+
+-- A balanced log and a matching witness must produce NO findings. This is the
+-- negative control, and without it every assertion below is satisfied by a
+-- checker that returns a finding unconditionally.
+pure func test_a_balanced_log_produces_no_findings() -> bool
+  tests [((), true)]
+  {
+    List.length(check_discovery(balanced_log(), balanced_witness())) == 0
+  }
+
+-- Under-recording: drop the tool interaction, keep the witness. This is the
+-- failure the handoffs named.
+pure func test_dropping_a_class_is_under_recorded() -> bool
+  tests [((), true)]
+  {
+    let dropped = [mk(ProviderIdentity("loop_v2", 0, "m"), 0, 0),
+                   mk(ClockAdvanceIdentity, 1, 1)];
+    let fs = check_discovery(dropped, { balanced_witness() | clock_delta_ms: 1 });
+    has_discovery_rule(fs, "discovery-under-recorded")
+  }
+
+-- Over-recording: log a tool interaction the witness does not account for. This
+-- is the failure NOTHING in the handoffs named, and it is the reason this
+-- module exists in this shape.
+pure func test_inventing_an_interaction_is_over_recorded() -> bool
+  tests [((), true)]
+  {
+    let invented = balanced_log() ++ [mk(ToolIdentity("loop_v2", "c2", "T"), 4, 0)];
+    has_discovery_rule(check_discovery(invented, balanced_witness()),
+                       "discovery-over-recorded")
+  }
+
+-- The clock cross-check is exact, and it is general: an interaction that moves
+-- time without recording the move is invisible to every per-class count.
+pure func test_an_unrecorded_advance_is_caught_by_the_clock() -> bool
+  tests [((), true)]
+  {
+    has_discovery_rule(check_discovery(balanced_log(), { balanced_witness() | clock_delta_ms: 99 }),
+                       "discovery-clock-unaccounted")
+  }
+
+-- Env, over-recording direction: a key no call site can produce.
+pure func test_an_invented_env_key_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let bad = balanced_log() ++ [mk(EnvironmentReadIdentity("MOTOKO_NOT_A_REAL_KEY"), 4, 0)];
+    has_discovery_rule(check_discovery(bad, balanced_witness()),
+                       "discovery-env-key-not-in-source")
+  }
+
+-- Env, under-recording direction: a key the scenario reaches and the log omits.
+pure func test_a_missing_expected_env_key_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_discovery_rule(check_discovery(balanced_log(),
+                         { balanced_witness() | expected_env_reads: [{ key: "OPENAI_BASE_URL", count: 1 }] }),
+                       "discovery-env-read-under-recorded")
+  }
+
+-- Env, the MULTIPLICITY case. Two reads of one key expected, one recorded: the
+-- log names the key, so a presence check passes and this must not. This is the
+-- row that exists because the first version of the env check was presence-only.
+pure func test_a_dropped_repeat_read_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let one_read = balanced_log() ++ [mk(EnvironmentReadIdentity("OPENAI_BASE_URL"), 4, 0)];
+    let fs = check_discovery(one_read,
+               { balanced_witness() | expected_env_reads: [{ key: "OPENAI_BASE_URL", count: 2 }] });
+    has_discovery_rule(fs, "discovery-env-read-under-recorded")
+  }
+
+-- Env, over-recording direction: a legitimate key read more often than the
+-- scenario's control flow can reach it.
+pure func test_a_surplus_env_read_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let two_reads = balanced_log()
+                      ++ [mk(EnvironmentReadIdentity("OPENAI_BASE_URL"), 4, 0),
+                          mk(EnvironmentReadIdentity("OPENAI_BASE_URL"), 5, 0)];
+    has_discovery_rule(check_discovery(two_reads,
+                         { balanced_witness() | expected_env_reads: [{ key: "OPENAI_BASE_URL", count: 1 }] }),
+                       "discovery-env-read-over-recorded")
+  }
+
+-- The ordinal is global. A recorder counting per class produces this.
+pure func test_per_class_ordinals_are_not_dense() -> bool
+  tests [((), true)]
+  {
+    let per_class = [mk(ProviderIdentity("loop_v2", 0, "m"), 0, 0),
+                     mk(ToolIdentity("loop_v2", "c1", "T"), 0, 0)];
+    has_discovery_rule(check_discovery(per_class, { balanced_witness() | clock_delta_ms: 0, approvals_consumed: 0 }),
+                       "discovery-log-not-dense")
+  }
+
+-- `driver_only` installs no extensions and no driver module reaches std/rand,
+-- so either class appearing at all is a recorder inventing a class.
+pure func test_a_class_that_cannot_have_run_is_over_recorded() -> bool
+  tests [((), true)]
+  {
+    let bad = balanced_log() ++ [mk(RandomDrawIdentity("0..10"), 4, 0)];
+    has_discovery_rule(check_discovery(bad, balanced_witness()),
+                       "discovery-over-recorded")
+  }
+
+-- WI-D17. The same rule for the two filesystem mutators, and it is worth its own
+-- row rather than folding into the one above.
+--
+-- The class above is unreachable because nothing in `src/core` can draw a random
+-- number. THESE two are unreachable for a different and weaker reason — nothing
+-- CALLS them yet — so this assertion is the one that changes meaning at Route B
+-- part 2, and it should fail there by name rather than by an argument about
+-- randomness that does not apply to it.
+pure func test_an_unrouted_filesystem_mutation_is_over_recorded() -> bool
+  tests [((), true)]
+  {
+    let wrote = balanced_log() ++ [mk(FileWriteIdentity("/w/tmp/x.ail"), 4, 0)];
+    let removed = balanced_log() ++ [mk(FileRemoveIdentity("/w/tmp/x.ail"), 4, 0)];
+    -- WI-D18's directory create, in the same row rather than a new one: it is
+    -- unreachable for the identical reason and it must fail by the identical
+    -- name.
+    let made = balanced_log() ++ [mk(DirMakeIdentity("/w/tmp"), 4, 0)];
+    has_discovery_rule(check_discovery(wrote, balanced_witness()),
+                       "discovery-over-recorded")
+      && has_discovery_rule(check_discovery(removed, balanced_witness()),
+                            "discovery-over-recorded")
+      && has_discovery_rule(check_discovery(made, balanced_witness()),
+                            "discovery-over-recorded")
+      -- And the negative control it needs: the balanced log, which contains
+      -- NEITHER, must still produce no findings. Without this the assertion
+      -- above is satisfied by a pin that fires on every log.
+      && List.length(check_discovery(balanced_log(), balanced_witness())) == 0
+  }
+
+-- WI-D19. THE OTHER DIRECTION, which did not exist while the three classes were
+-- pinned and which is the half a witness can get wrong.
+--
+-- `class_balance` emits both `UnderRecorded` and `OverRecorded` from one
+-- arithmetic site, so the row above already covers over-recording for all three.
+-- What it CANNOT cover, because the expectation was a literal 0, is a witness
+-- that says a mutation happened and a recorder that did not log it — which is
+-- exactly the shape WI-D17's mutant found on the adapter side ("a recorder that
+-- logs and does not act", and its twin). With the expectation now coming from a
+-- field, that failure is representable and must be asserted.
+--
+-- THREE ROWS AND NOT ONE, because a checker that read `file_writes` for all
+-- three classes passes a single-class test. Each is stated against a log that
+-- contains the OTHER two, so a balance wired to the wrong kind counts the wrong
+-- entries and comes out right for the wrong reason.
+pure func test_a_witnessed_filesystem_mutation_must_be_recorded() -> bool
+  tests [((), true)]
+  {
+    let all_three = balanced_log()
+      ++ [mk(DirMakeIdentity("/w/tmp"), 4, 0),
+          mk(FileWriteIdentity("/w/tmp/x.ail"), 5, 0),
+          mk(FileRemoveIdentity("/w/tmp/x.ail"), 6, 0)];
+    let w = { balanced_witness() | file_writes: 1, file_removes: 1, dir_makes: 1 };
+    -- The routed run's shape: one of each, witnessed and logged, no findings.
+    List.length(check_discovery(all_three, w)) == 0
+      -- A witness that expects a write the recorder dropped.
+      && has_discovery_rule(check_discovery(all_three, { w | file_writes: 2 }),
+                            "discovery-under-recorded")
+      && has_discovery_rule(check_discovery(all_three, { w | file_removes: 2 }),
+                            "discovery-under-recorded")
+      && has_discovery_rule(check_discovery(all_three, { w | dir_makes: 2 }),
+                            "discovery-under-recorded")
+      -- And the control that keeps the three rows above from being one row: the
+      -- classes must not share a counter. Zeroing ONE witness must produce
+      -- over-recording for THAT class while the other two stay balanced.
+      && List.length(check_discovery(all_three, { w | file_writes: 0 })) == 1
+      && List.length(check_discovery(all_three, { w | file_removes: 0 })) == 1
+      && List.length(check_discovery(all_three, { w | dir_makes: 0 })) == 1
+  }

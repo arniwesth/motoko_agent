@@ -1,0 +1,14 @@
+-- src/core/tool_stream_phase.ail
+
+module src/core/tool_stream_phase
+
+import std/ai (StreamChunk, ContentDelta, ThinkingDelta)
+import src/core/phase_vocab (LedgerEvent, StreamDelta)
+
+export pure func stream_delta_event(step: int, stream_id: string, chunk: StreamChunk) -> LedgerEvent {
+  match chunk {
+    ContentDelta(text) => StreamDelta({ step: step, stream_id: stream_id, seq: 0, kind: "thinking", text: text }),
+    ThinkingDelta(text) => StreamDelta({ step: step, stream_id: stream_id, seq: 0, kind: "reasoning", text: text }),
+    _ => StreamDelta({ step: step, stream_id: stream_id, seq: 0, kind: "thinking", text: "" })
+  }
+}

@@ -1,0 +1,2573 @@
+-- src/core/ports.ail
+--
+-- Phase C ports: function-valued seams for nondeterminism. The live driver
+-- consumes the model port through the StepProvider compatibility surface while
+-- keeping the historical public entrypoints stable.
+
+module src/core/ports
+
+import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
+-- WI-D18 added `sortBy`/`dedup`: a directory listing is a SET of names in a
+-- stable order, and both halves are asserted — see `scripted_dir_list`.
+import std/list as List (length, sortBy, dedup)
+import std/result (Result)
+import std/trace as Trace
+-- WI-A13 stage 3 needs `decode` and the accessors as well: the recorded
+-- provider and tool outcomes are structured projections, and the same module
+-- that writes them reads them back. See "the recorded outcome must be
+-- sufficient to re-serve the response" below.
+import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray)
+-- NOT decoration, and NOT optional. `std/json`'s accessors return `Option`, and
+-- without this import `None` and `Some(j)` in a match arm are not constructor
+-- patterns — they are FRESH VARIABLE BINDINGS. The first arm then matches
+-- everything, the second is unreachable, every field silently reads back as its
+-- fallback, and the module type-checks clean with no warning. That is what
+-- happened while these codecs were being written, and the round-trip tests
+-- below are what caught it; nothing else could have.
+import std/option (Option, Some, None)
+-- WI-D18 added `isDir`/`isFile`/`listDir`/`mkdirAllResult`: the ambient half of
+-- the directory class. `mkdirAllResult` and not `mkdirAll` for `FileMutation`'s
+-- stated reason — the unit-returning form is where the failure is thrown away,
+-- and this is the layer that must not throw it away.
+import std/fs (fileExists, readFile, writeFileResult, removeFileResult,
+  isDir, isFile, listDir, mkdirAllResult)
+import std/env (getEnvOr)
+-- WI-D17. `Str.length` is the write class's CONTENT WITNESS and the only thing
+-- the recorder learns about a written body — see `recording_file_write` for why
+-- the content itself must not enter the log.
+--
+-- WI-D18 added the three path-key primitives. `startsWith` is how a child is
+-- recognised, `split` is how the next segment is taken, and `compare` is what
+-- orders a listing — see `scripted_dir_list` for why the ordering is imposed at
+-- BOTH adapters rather than left to whichever filesystem answered.
+import std/string as Str (length, startsWith, split, compare, substring)
+import src/core/phase_vocab (ApprovalRequest)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/tool_dispatch_adapter (dispatch_one_typed)
+-- WI-D22. `FsNode` lived here through WI-D21 and moved down for the same reason
+-- `Interaction` did: a module ABOVE this one in the layering — `dst_program`, the
+-- pure program schema — has to name it, and it cannot import the port layer. See
+-- `src/core/fs_node`'s header for the decision and for the two codecs that now
+-- share its kind vocabulary.
+import src/core/fs_node (FsNode, FsFile, FsDir)
+-- WI-A13 stage 2. The interaction log rides in `WorldState`, so this module has
+-- to name D2's `Interaction`. `src/core/dst_interaction` was split out of
+-- `src/core/dst_program` for exactly this: it imports nothing but std, so the
+-- production port layer can name the recorded type WITHOUT the 1559-line
+-- `dst_profile` closure entering the driver's import graph. See that module's
+-- header for why a second, flatter "recorded request" record projected into
+-- `Interaction` was rejected.
+import src/core/dst_interaction (
+  Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
+  ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  -- WI-D24. The eighth recording adapter's class; see `recording_ext_effect`.
+  ExtensionEffectIdentity,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing, generator_authored_count
+)
+-- WI-A13 stage 4. The GENERATOR STATE rides in `WorldState` for exactly the
+-- reason the interaction log does: the ports are the only place that sees a
+-- request at the moment it is made, and D2 makes each discovery choice a
+-- function of the request. `src/core/dst_generator` imports nothing but std for
+-- the same reason `dst_interaction` does not — see either module's header.
+--
+-- Threaded, never captured. A generator state a closure holds is F6 with a
+-- different cursor: it serves the same choice forever, nothing crashes, and the
+-- programs are perfectly reproducible.
+import src/core/dst_generator (
+  GeneratorState, GeneratorBounds, ToolFaultChoice,
+  ToolChoiceOk, ToolChoiceFailed, ToolChoiceMismatch, ToolChoiceLate,
+  no_generator, generator_installed, choose_provider, choose_tool, choose_approval
+)
+-- A7's class ids are READ, not restated. A10 established the policy and S6
+-- measured why it matters: a read binding is free and cannot go stale, while a
+-- copied literal is where an item's risk lives. A fault recorded under a class
+-- id no catalogue defines is rejected outright by stage 1's validator, so a
+-- drifted literal here would surface as a valid run producing an invalid
+-- program — the least legible failure available.
+import src/core/dst_fault_catalogue (
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded,
+  -- WI-D24's extension-effect row, read for the same reason: the eighth
+  -- recording adapter names it in an IDENTITY rather than in an outcome, and
+  -- `validate_static_references` rejects an id no catalogue row defines — so a
+  -- copied literal here would surface as a valid run producing an invalid
+  -- program, which is this import's whole argument one class over.
+  fault_class_extension_effect,
+  -- WI-D1's provider half, read for the same reason and on the same line.
+  provider_error_is_retryable, provider_fault_class_id
+)
+
+export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
+
+-- A scripted LLM turn: what the "model" returns for one exchange.
+--
+-- WI-A2 relocated this here from `src/core/test/stub_step.ail`. It has to be
+-- declared at or below this module because `WorldState` carries it and both
+-- the module declaring the widened port and the driver holding the
+-- `C2LoopState` field must name that type. The obvious alternative,
+-- `ScriptedPortsState` (`src/core/test/scripted_ports.ail`), cannot be used:
+-- that module imports `ports`, `stub_step` AND `session`, so either consumer
+-- closes a module cycle, which AILANG rejects (LDR002). Parameterising `Ports`
+-- over its state type is not an escape either — the declaration is accepted but
+-- instantiation fails unification on the pin. `ScriptedPortsState` and
+-- `scripted_model_next` are therefore a design precedent, not reusable code.
+export type ScriptedStep = {
+  prose: string,
+  tool_calls: [ToolCall],
+  input_tokens: int,
+  output_tokens: int,
+  finish_reason: string,
+  chunks: [string],
+
+  -- WI-B2b, WIDENING 1 of 2: THE PROVIDER FAULT. An ERROR CASE, and it is a
+  -- different change from `advance_ms` below — earlier revisions of the plan
+  -- conflated the two with each other and with D4's latency pair.
+  --
+  -- Until now a scripted step could only ever serve `Ok`: `stub_step`'s world
+  -- provider wraps every entry in `Ok(scripted_to_step_result(s))`, so the
+  -- provider fault classes the catalogue declares
+  -- (`provider_error_retryable`, `provider_error_non_retryable`, …) had no
+  -- scripted delivery at all. A non-empty `error_code` makes the entry serve
+  -- `Err({code, message})` instead, which is what gives those classes a
+  -- deterministic instrument.
+  --
+  -- Flat `code`/`message` rather than a sum, mirroring `ScriptedTool` directly
+  -- above: the two are the provider-side and tool-side halves of the same
+  -- scripted-fault idea and a reader should not have to learn two shapes. Empty
+  -- `error_code` means "no fault", which keeps every existing entry's meaning.
+  error_code: string,
+  error_message: string,
+
+  -- WI-B2b, WIDENING 2 of 2: THE PROVIDER LATENCY. Not a fault — how long the
+  -- provider TOOK. `ScriptedTool.duration_ms` has always carried this for the
+  -- tool side, and `decode_tool_outcome(payload, advance_ms)` already restores
+  -- it on replay from `TimedOutcome.advance_ms`. The provider side had no such
+  -- field, so `decode_provider_outcome` took no `advance_ms` and a replayed
+  -- provider call always took zero virtual time.
+  --
+  -- Restored the SAME way and for the same reason: the elapsed time is what
+  -- actually happened to the clock, so it is read back from the recorded
+  -- outcome rather than from the payload. That is why this needs NO codec
+  -- change on the wire — `advance_ms` is not written into the provider payload,
+  -- it is passed in beside it. See `decode_provider_outcome`.
+  advance_ms: int
+}
+
+-- The driver's explicit world state, threaded through the ports in and out.
+--
+-- WI-A12, under ADR-001 D1. This is the type D1 calls `world_state`: the one
+-- home for every replay and generator cursor, owned and threaded by the real
+-- session driver. WI-A2 introduced it as `ProviderState` carrying the scripted
+-- cursor alone, under an explicitly interim name; A12 renames it to what D1
+-- always called it and subsumes the interim `C2LoopState.provider_state` field,
+-- which is deleted in this same change exactly as D1 requires.
+--
+-- It is a record and not a sum (plan decision P1): a reviewer's probe on the
+-- pin widened a state already used in a cross-module port signature and the
+-- port module came out byte-identical, the compiler flagging only the
+-- construction site. That is the additive-edit shape the remaining effect
+-- classes need — each one adds a field here rather than a new seam.
+--
+-- `script` is the provider cursor: the remaining script tail, the threading
+-- style `scripted_model_next` demonstrates. Live and caller-supplied adapters
+-- are stateless and return their input unchanged — D1's specified identity
+-- transition, not a per-construction-site decision.
+--
+-- The live/deterministic difference lives in the PORT CLOSURE, never in this
+-- record and never in the driver: `live_ports` performs the ambient read,
+-- `scripted_ports` serves from here. Production code calls the port and
+-- branches on nothing, which is what keeps D1's prohibition on production
+-- test-mode branching true as the later effect classes land.
+export type WorldState = {
+  script: [ScriptedStep],
+
+  -- The monotonic virtual clock — D4's "the explicit clock value in
+  -- `world_state` is the only clock". Read and advanced through `clock_now`,
+  -- never directly. The LIVE adapter ignores it entirely and reads ambient wall
+  -- time, which is D1's identity transition; the field being meaningless in a
+  -- live run is correct, not a bug.
+  --
+  -- D4 grants the clock no exemption: no runtime-clock mirror, no
+  -- `--virtual-time` dependency (it does nothing observable on the pin), and no
+  -- conformance assertion comparing an explicit value against a runtime one.
+  clock_ms: int,
+
+  -- The approval-input cursor: the remaining queue of raw operator responses,
+  -- consumed head-first exactly like `script`. Empty means end-of-input, which
+  -- the driver's `resolve_approval` policy turns into the configured default —
+  -- the same thing `readLine()` returning "" means today, so an empty queue is
+  -- behaviour-preserving.
+  --
+  -- It holds RAW input lines, not resolutions. What is nondeterministic is the
+  -- operator's input; `resolve_approval` is pure policy and stays in the driver
+  -- where it belongs. Routing the resolution instead would move production
+  -- policy into the adapter, and let the live and deterministic worlds disagree
+  -- about it.
+  approvals: [string],
+
+  -- The synthetic environment: the key/value map a deterministic run reads
+  -- instead of the process environment. A key that is absent falls back to the
+  -- caller-supplied default, which is exactly what `getEnvOr` does for an unset
+  -- variable, so an empty map is behaviour-preserving.
+  --
+  -- Unlike `script` and `approvals` this is a KEYED LOOKUP, not a cursor: reads
+  -- do not consume it and the successor is the same world. `EnvRead` still
+  -- carries a successor because D1 requires every request to return one, and
+  -- because A13's interaction log will want to record the read (encounter
+  -- ordinals) without changing this port's shape to do it.
+  env: [{ key: string, value: string }],
+
+  -- WI-D3's synthetic filesystem: the path/content map a deterministic run
+  -- reads instead of the process's filesystem. Acceptance row 10's host-env
+  -- clause, and the class `make world_state` deferred at WI-A12 because the
+  -- order that item was given did not contain one.
+  --
+  -- A POINT READ and not a filesystem, deliberately. The driver's whole call
+  -- graph asks two questions of a path — does it exist, and what does it hold —
+  -- so `FileRead` answers exactly those, and this table is a KEYED LOOKUP like
+  -- `env` rather than a cursor like `script`. There are no
+  -- listings here because nothing the driver observes needs them, and a world
+  -- that models more than the driver observes is a world whose extra shape no
+  -- gate can keep honest.
+  --
+  -- WI-D17 MADE IT WRITABLE, and that sentence used to also say "there are no
+  -- writes". It is the FIRST field in this record that an adapter ADDS to. Every
+  -- other state update in this module either consumes a cursor
+  -- (`scripted_approval`, `world_tool`), advances a scalar (`virtual_clock`) or
+  -- returns the world unchanged; the one other append site is
+  -- `record_interaction`, and it appends to `log`. So the invariant a reader
+  -- should carry away is that this table is now BOTH seeded input and produced
+  -- output, and the two are indistinguishable once written — see
+  -- `scripted_file_write`.
+  --
+  -- IT STAYS A MAP. `scripted_file_write` removes any existing entry for the
+  -- path before prepending the new one, so at most one entry per path exists and
+  -- `lookup_file`'s first match is the only match. Growing the list without that
+  -- removal would still READ correctly (first match wins on a prepend) while
+  -- making the table's length meaningless and making the correctness depend on
+  -- an ordering rather than on a key — which is the shape `env`'s comment above
+  -- calls a keyed lookup and is not.
+  --
+  -- AN ABSENT PATH READS AS ABSENT AND DOES NOT FALL BACK TO THE HOST. That is
+  -- the one place this class deliberately differs from `tools`, whose empty
+  -- queue delegates to the real dispatcher: a tool the world has no opinion
+  -- about must still run, while a FILE the world has no opinion about is the
+  -- ambient dependency this class exists to remove. `scripted_env` is the right
+  -- analogue — it serves the CALLER's fallback, never the host's value.
+  --
+  -- The consequence is not free and is stated rather than discovered later: a
+  -- scripted run whose table is empty resolves `resolve_context_limit` to 0
+  -- ("unknown"), where before WI-D3 it read whatever `.motoko/model-catalog.json`
+  -- the checkout happened to carry. That read was the defect; a fixture that
+  -- wants a context limit now declares one, and `long_qwen_compaction_dst`
+  -- always did.
+  --
+  -- =========================================================================
+  -- WI-D18: THE REPRESENTATION DECISION, AND IT IS THIS FIELD'S ELEMENT TYPE.
+  -- =========================================================================
+  --
+  -- The entry was `{ path, content }` until WI-D18 and is now `{ path, node }`,
+  -- where `node` is `FsFile(content)` or `FsDir`. ONE TABLE holds both files and
+  -- directories. Three candidate representations were on the table and the two
+  -- that lost are named here, because the loser's failure mode is the reason the
+  -- winner looks like extra machinery:
+  --
+  --   PREFIX-DERIVED (no new shape at all). `is_dir(p)` is true iff some entry's
+  --     path is under `p/`; `list_dir(p)` is the distinct next segments. It is
+  --     the cheapest answer and it has exactly one defect: AN EMPTY DIRECTORY IS
+  --     UNREPRESENTABLE, so it reads identically to an absent one. That is this
+  --     project's counted failure mode — absent reading identically to unchanged,
+  --     at C1, D6, D12, D13, D16, D17 — appearing IN THE WORLD MODEL rather than
+  --     in an adapter, and `list_dir_impl` (compose `author_tools.ail:190`) turns
+  --     the difference into two different tool results: `entries: []` for an
+  --     empty directory against `not_found` for an absent one. A session can
+  --     branch on it, so the world must be able to say it.
+  --
+  --   A SECOND TABLE (`dirs: [string]` beside `files`). It represents an empty
+  --     directory, and it buys that by making `files` and `dirs` two homes for
+  --     one fact: nothing structural stops `"a/b"` appearing in both, and then
+  --     `path_stat` has to pick. That is `ADR:340-341`'s "exactly one home,
+  --     visibly threaded" broken inside the world itself — the shape D16 and D17
+  --     each argued FROM. It is refused for the reason they were argued.
+  --
+  --   ONE KINDED TABLE — what is here. A path has at most one entry (the map
+  --     invariant `remove_path` already enforced), and an entry is a file or a
+  --     directory and cannot be both. So "this path is a file AND a directory"
+  --     is not representable, rather than representable and forbidden by a rule
+  --     somebody has to remember to write. Design note 1's rule — "a kind that
+  --     disagrees with its own payload cannot be written down" — applied to the
+  --     world's own table instead of to an identity.
+  --
+  -- AN EMPTY DIRECTORY IS THEREFORE DISTINGUISHABLE FROM AN ABSENT ONE, and that
+  -- is asserted rather than described: `dir_list` returns `present: true,
+  -- entries: []` for the first and `present: false, entries: []` for the second,
+  -- and `world_state_probe`'s `assert_directory_class` is the row that separates
+  -- them.
+  --
+  -- IMPLICIT PARENTS ARE STILL DERIVED, and that is not a leftover of the losing
+  -- design. A real filesystem has no way to hold `a/b/c.txt` without `a/b` being
+  -- a directory, so `is_dir` is "an explicit `FsDir` entry OR any entry under
+  -- `p/`". Requiring `mkdirAll` to have run first would make the deterministic
+  -- world disagree with the ambient one on a path a fixture seeded directly.
+  --
+  -- =========================================================================
+  -- WI-D18: THE PATH KEY. RAW STRINGS. THE WORLD DOES NOT NORMALISE.
+  -- =========================================================================
+  --
+  -- `lookup_file`, `remove_path` and every derivation below compare paths with
+  -- `==`. So `tmp/x.ail`, `./tmp/x.ail` and `/w/tmp/x.ail` are THREE keys here
+  -- and one file on a real disk. That is a decision and not an oversight, and
+  -- the alternative was measured rather than dismissed:
+  --
+  --   NORMALISING ON THE WAY IN would fix `./tmp/x` and `tmp//x` — those are
+  --   LEXICAL and need no cwd — and would NOT fix `/w/tmp/x` against `tmp/x`,
+  --   which is the spelling pair that actually occurs (below). Relating an
+  --   absolute path to a relative one requires a working directory, and
+  --   `WorldState` has none; giving it one is a world-shape change that reaches
+  --   replay. A key that normalises the harmless half while leaving the harmful
+  --   half alone is WORSE than one that normalises nothing, because it invites
+  --   the belief that the world canonicalises paths.
+  --
+  -- SO THE RULE IS: THE CALLER SUPPLIES ONE SPELLING PER PATH. It is written
+  -- here because Route B part 2 is the item that must obey it, and because the
+  -- symptom of disobeying it is a read returning `present: false` for a path
+  -- that was just written — indistinguishable from the write never having been
+  -- routed at all.
+  --
+  -- IT IS ALREADY REACHABLE IN COMPOSE AND THE SITE IS NAMED: `compose.ail:769`
+  -- creates `"${ctx.workdir}/tmp"` and `:771` writes `"tmp/${name}.ail"` —
+  -- absolute mkdir, relative write. On disk those agree whenever the process
+  -- runs in `workdir`. In a world keyed on strings they never agree.
+  --
+  -- AND THIS IS WHERE THE TWO DECISIONS MEET, WHICH IS THE FINDING WI-D18
+  -- ACTUALLY BOUGHT. Under the prefix-derived representation the aliased
+  -- directory would be INVISIBLE: `"/w/tmp"` has no children, so it would read as
+  -- absent — exactly as if the `mkdirAll` had never run. Under the kinded table
+  -- it reads as an EMPTY DIRECTORY, which is a state no correct sequence
+  -- produces and which `assert_directory_class`'s alias row pins. Representing
+  -- the empty directory is what makes the path-key defect observable instead of
+  -- silent.
+  files: [{ path: string, node: FsNode }],
+
+  -- The tool-execution cursor: the remaining queue of scripted tool outcomes,
+  -- consumed head-first like `script` and `approvals`.
+  --
+  -- An EMPTY queue means "the world has no opinion", and the adapter then
+  -- delegates to the real dispatcher. That fallback is not a convenience: the
+  -- gated smoke scripts `smoke_v2_pending_full_loop` and
+  -- `smoke_phase_a_tool_parity` execute tools for real through this path, so a
+  -- world-queue-only adapter would silently replace their tool results with
+  -- empty strings. Delegating when unseeded is what makes this class
+  -- behaviour-preserving, and it is also what makes the seeded case meaningful:
+  -- a fully-seeded run performs no process execution at all, which is exactly
+  -- what the Process poison pair measures.
+  tools: [ScriptedTool],
+
+  -- WI-D24's EXTENSION-EFFECT cursor: the queue an extension-initiated dispatch
+  -- is served from, consumed head-first exactly like `tools` and holding the
+  -- same element type.
+  --
+  -- IT IS A SECOND QUEUE AND NOT A SECOND READER OF `tools`, and the reason is a
+  -- correlation fact rather than a taste. `world_tool`'s guard fires only when
+  -- BOTH ids are non-blank (`t.tool_call_id != "" && t.tool_call_id != inv.call.id`),
+  -- and an extension effect's recorded call id is blank BY DECISION — D2 gives
+  -- `ExtensionEffectIdentity` no call id because the effect answers no model tool
+  -- call. So an extension-effect entry reconstituted into the shared queue is
+  -- consumable by a DRIVER tool dispatch with no mismatch reported: the world
+  -- serves the wrong answer to the wrong request and every count still balances.
+  -- That is the present-but-wrong shape (S26) inside the world's own supply, and
+  -- a separate cursor makes it unrepresentable rather than forbidden by a rule
+  -- somebody has to remember — `files`' "one kinded table" argument above, one
+  -- field over.
+  --
+  -- An EMPTY queue delegates to the real dispatcher for `tools`' stated reason,
+  -- and the consequence is sharper here: an extension effect that finds this
+  -- queue empty inside a REPLAY performs a real subprocess. The tripwire for
+  -- that is one level out and it is loud — the recorded interaction goes
+  -- unconsumed and `dst_replay.UnusedInteraction` grades it FATAL — but the
+  -- subprocess has already run by then, which is why recording this class and
+  -- serving it are one decision (S27) and were taken in one item.
+  ext_effects: [ScriptedTool],
+
+  -- WI-D24. WHICH EXTENSION CURRENTLY HOLDS THIS WORLD ACROSS THE EXTENSION
+  -- SEAM, blank in the driver's own hands.
+  --
+  -- IT IS TRANSPORT, NOT SUPPLY, and it is on the world because the world token
+  -- is the ONLY per-hook channel that exists. `ExtPorts.tool_handle`'s ABI
+  -- signature is `(ExtWorld, string, string)` and cannot gain an identity
+  -- parameter below `6.0`; `ext_ports_of` builds ONE `ExtPorts` per step from a
+  -- registry it cannot index; and `ext/runtime`'s fold — the one place that knows
+  -- WHICH extension is about to run — cannot call back into `session` to build a
+  -- per-extension port record without closing an import cycle (`session.ail:52`).
+  -- What the fold CAN do is what it already does for the world itself: re-seat
+  -- one `ExtCtx` field per hook. So the id rides in the world it re-seats, and
+  -- the eighth recording adapter reads it there.
+  --
+  -- WHAT MAKES IT SAFE RATHER THAN AMBIENT: nothing but `recording_ext_effect`
+  -- reads it, that adapter is reachable only from the bridge, and a blank value
+  -- is a REJECTED PROGRAM rather than a default — `validate_identity` refuses a
+  -- blank `ExtensionEffectIdentity` ext_id, so a hook that reaches the seam with
+  -- an unstamped world fails loudly at validation instead of recording an
+  -- effect attributed to nobody. The four world-threading dispatchers clear it
+  -- on the way out, so the driver never holds a stale holder.
+  --
+  -- It is NOT persisted: `InitialWorld` has no counterpart and needs none. The
+  -- holder is a property of a call in flight, not of the world a replay is
+  -- seeded from, and `world_state_of` therefore reconstitutes it blank.
+  holder_ext_id: string,
+
+  -- WI-A13's interaction log: D2's ordered record of every request the driver
+  -- actually made, with causal identities and global encounter ordinals.
+  --
+  -- It rides HERE, in the threaded world, and not in a separate accumulator,
+  -- because the ports are the only place that sees a request at the moment it
+  -- is made. A12 anticipated this at the env comment above — "A13's interaction
+  -- log will want to record the read (encounter ordinals) without changing this
+  -- port's shape to do it" — and that is what happened: not one signature in
+  -- `Ports` changed to carry the log.
+  --
+  -- The ordinal is `List.length(log)` at append time, so it is GLOBAL by
+  -- construction rather than by a counter that a per-class recorder could
+  -- shadow. `dst_discovery`'s density check is the executable statement of that
+  -- and it is not redundant: it is what fails if a future recorder introduces
+  -- its own counter.
+  --
+  -- Every adapter carries it forward through record update (`{ state | ... }`),
+  -- so the SEVEN deterministic seams below preserve it without naming it — four
+  -- from WI-A12, five after WI-D3 added `scripted_file`, seven after WI-D17
+  -- added `scripted_file_write` and `scripted_file_remove` — and the count is
+  -- stated rather than left to drift because record update is exactly what makes
+  -- a new seam cost nothing here. Only
+  -- the RECORDING adapters append, and they are separate closures — a live or
+  -- plain scripted run leaves this empty, which is why adding the field is
+  -- behaviour-preserving for every existing target.
+  log: [Interaction],
+
+  -- WI-A13 stage 4: D2's seeded generator, as EXPLICIT STATE.
+  --
+  -- D2 makes every discovery choice "a deterministic function of generator
+  -- id/version, seed, generator state, the bounded request projection, and
+  -- current world state. No ambient RNG participates." The first three of those
+  -- five are this field; the fourth arrives at the port as the request; the
+  -- fifth is the rest of this record.
+  --
+  -- It rides HERE and not in a closure for the reason A12 moved every other
+  -- cursor here, and the failure it avoids is the one this project has already
+  -- paid for once: a cursor a closure captures is pinned, serves the same value
+  -- for the whole run, and produces a result that nothing distinguishes from a
+  -- correct one (F6, cluster 1). A pinned GENERATOR is worse than a pinned
+  -- script, because its output is still a valid, replayable, perfectly
+  -- reproducible program — it is simply the same program for every seed.
+  --
+  -- `no_generator()` is the default and means "not installed". The seven
+  -- deterministic seams — four until WI-D3 added `scripted_file`, five until
+  -- WI-D17 added the two mutators — and the six recording ones never read it;
+  -- only the
+  -- GENERATING adapters do, which is what keeps adding this field
+  -- behaviour-preserving for every existing target.
+  gen: GeneratorState
+}
+
+-- One scripted tool outcome. The fields are ordered by the fault they express,
+-- and the adapter checks them in that order:
+--
+--   tool_call_id  a value different from the request's id is a CORRELATION
+--                 fault — the world answering a question nobody asked. Empty
+--                 means "answer whatever was asked", the ordinary case.
+--   duration_ms   advances the virtual clock. Greater than the invocation's
+--                 timeout is a DEADLINE fault. This is why the deadline is
+--                 testable at all: a virtual clock makes "slow" a scripted
+--                 property rather than a race.
+--   code          non-empty is a typed EXECUTION fault (D3's tool fault class).
+--   content       the tool's own output, on the success path.
+--   exit_code     WI-D22. What the SUBPROCESS behind the tool exited with, when
+--                 the tool ran one. See below.
+--
+-- WI-D22 ADDED `exit_code`, AND IT IS THE FIELD THIS WHOLE SCHEMA BUMP EXISTS
+-- FOR. WI-D21 measured the chain: `ExtPorts.tool_handle` dispatches a Motoko tool
+-- name, `BashExec` and `RunTests` reach `tool_runtime.run_process_result`, and
+-- that runs a REAL subprocess and builds a `BashExecResult` carrying a real
+-- `exit_code` — which then survives to the caller only as JSON text inside an
+-- opaque `content` string. The data was never lost; the TYPE was. Without this
+-- field the deterministic half of the world cannot state whether a subprocess
+-- succeeded, so a scripted `ailang check` that failed is indistinguishable from
+-- one that passed.
+--
+-- ITS DOMAIN IS THREE-PART AND `-1` IS NOT "SUCCESS":
+--
+--   >= 0   the process exited with this status. 0 is success and only 0 is.
+--   -1     THE PRODUCER OF THIS OUTCOME CANNOT STATE ONE. Either no subprocess
+--          ran (an ordinary in-process tool), or the seam that produced it has
+--          not been routed to carry the code yet.
+--   < -1   unused; reserved rather than defined, so a reader is not invited to
+--          invent a second absent value.
+--
+-- `-1` for "absent" is this tree's existing convention rather than a new one:
+-- `record_interaction`'s `deadline_ms` uses exactly it for "this class has no
+-- deadline", and `Interaction.deadline_ms >= 0` is how `any_deadline` reads it.
+--
+-- WHY A SENTINEL AND NOT `Option[int]`. The field crosses two codecs and a
+-- persisted artifact, and both of those flatten an option back to a pair of
+-- (present, value) on the wire — so the option would buy a compile-time
+-- reminder at the four in-tree construction sites and cost a representation
+-- decision at each of the two codecs. It is priced and declined, and the reason
+-- it is safe to decline is the row below: the persistence codec REFUSES an
+-- absent field rather than defaulting it, so absence never silently becomes -1
+-- either.
+--
+-- WHAT SETS IT — SUPERSEDED AT WI-D23, kept two-part per S15. WI-D22 wrote
+-- here: "nothing sets it today; this item ships the capability and routes no
+-- producer, and until the next item lands every outcome this tree produces
+-- carries -1 unless a test writes one." That was true for one item. WI-D23
+-- routed the producer: `world_tool`'s live arm binds `dispatch_one_typed`'s
+-- exit code, so a real `BashExec`/`RunTests` outcome now carries the code the
+-- subprocess actually exited with, and the scripted arm has carried
+-- `t.exit_code` since WI-D22. What still writes -1: the three non-completed
+-- decode arms, the generating adapter (which draws nothing, by WI-D22's
+-- decision 6), and every in-process noop — all producers that genuinely
+-- cannot state a code.
+export type ScriptedTool = {
+  tool_call_id: string,
+  duration_ms: int,
+  code: string,
+  message: string,
+  content: string,
+  exit_code: int
+}
+
+-- D1's typed tool request: parts 1 and 2 of the three the decision requires —
+-- a typed envelope, and the timeout/deadline information that a
+-- `(string, string)` signature had nowhere to put.
+--
+-- `timeout_ms` of 0 means no deadline, which is the default and preserves
+-- today's behaviour. `started_at_ms` is a world-clock reading taken by the
+-- driver at dispatch, so elapsed time is measured in the same clock the rest of
+-- the run uses rather than against wall time.
+export type ToolInvocation = {
+  call: ToolCallEnvelope,
+  workdir: string,
+  timeout_ms: int,
+  started_at_ms: int
+}
+
+-- D1's part 3: the typed result/error that replaces
+-- `tool_exec: (string, string) -> string`.
+--
+-- The plan is explicit that a request-only widening is not enough — it "would
+-- pass the listed probes while leaving the return an undifferentiated string,
+-- unable to carry D3's typed tool fault classes". The three fault variants are
+-- that carrying capacity. `ToolCompleted` keeps the tool's own output as a
+-- string because at this layer it genuinely is opaque: the typing that matters
+-- is the DISCRIMINATION between completed, failed, misaddressed and late, none
+-- of which a string return can express.
+--
+-- WI-D22 GAVE `ToolCompleted` AN `exit_code` AND GAVE THE OTHER THREE NONE, and
+-- the asymmetry is the point rather than an omission. "Completed" is the variant
+-- that today conflates a subprocess that exited 0 with one that exited 1: both
+-- are a dispatch that returned, and the discrimination between them is exactly
+-- what WI-D21 found this type could not express. The other three are already
+-- discriminated — a `ToolFailed` carries D3's fault CODE, a mismatch carries two
+-- ids, a deadline carries two times — and none of them is the answer to "what
+-- did the process exit with". Adding the field there would make one quantity
+-- representable in four places and readable in one, which is the two-homes shape
+-- this project keeps arguing against.
+--
+-- See `ScriptedTool.exit_code` for the domain; `-1` is "no subprocess, or a seam
+-- that cannot say", and it is NOT success.
+export type ToolOutcome
+  = ToolCompleted({ tool_call_id: string, content: string, exit_code: int })
+  | ToolFailed({ tool_call_id: string, code: string, message: string })
+  | ToolCorrelationMismatch({ expected_id: string, got_id: string })
+  | ToolDeadlineExceeded({ tool_call_id: string, elapsed_ms: int, timeout_ms: int })
+
+export type ToolExecution = {
+  outcome: ToolOutcome,
+  next_state: WorldState
+}
+
+-- One environment read and its successor world.
+export type EnvRead = {
+  value: string,
+  next_state: WorldState
+}
+
+-- One file read and its successor world. WI-D3.
+--
+-- `present` is carried EXPLICITLY rather than inferred from an empty `content`,
+-- for exactly `ApprovalInput.eof`'s reason: a file that exists and is empty is a
+-- different world from a file that is not there, and `context_usage` branches
+-- differently on the two — `fileExists(path)` guards a `readFile(path)` at every
+-- one of its sites. A reader that inferred absence from "" would turn an empty
+-- config into a missing one and silently take the other branch.
+export type FileRead = {
+  present: bool,
+  content: string,
+  next_state: WorldState
+}
+
+-- One filesystem MUTATION and its successor world. WI-D17.
+--
+-- ONE type for TWO seams — `file_write` and `file_remove` — because their
+-- answers have identical shape: the world either accepted the mutation or it
+-- did not, and there is nothing else to hand back. That is not the same
+-- judgement as `FileRead`'s, which carries `present` because two of its answers
+-- are observationally distinct; here `ok: false` is the only failure a caller
+-- can be told about, and a second field distinguishing kinds of failure would
+-- be modelling something no call site branches on.
+--
+-- `error` IS carried, and that is a deliberate widening rather than a copy of
+-- `FileRead`. std/fs offers `writeFileResult`/`removeFileResult` beside the
+-- unit-returning `writeFile`/`removeFile`, so the failure is available at the
+-- seam today. WI-A1's ordering rule applies exactly: widen the port BEFORE
+-- adopting whatever fills it, because the port is where the information is
+-- thrown away. compose's seven `writeFile` sites are all `let _ = writeFile(…)`
+-- — a discarded result on the live path — and routing them through a port that
+-- also discarded it would carry the drop across the boundary instead of closing
+-- it. The message is not currently branched on by anything; it is carried so
+-- that part 2 can route those sites without a second widening.
+export type FileMutation = {
+  ok: bool,
+  error: string,
+  next_state: WorldState
+}
+
+-- What `WorldState.files` holds at a path. WI-D18, and the reason it is a SUM
+-- and not a `kind` field beside `content` is design note 1's rule: a
+-- `{ path, kind: "dir", content: "hello" }` would be representable and would be
+-- a directory carrying a file body, so something would have to forbid what the
+-- type should never have allowed. Here the content lives inside the constructor
+-- that has one.
+--
+-- See `WorldState.files` for the full representation argument and for the two
+-- designs this beat.
+--
+-- WI-D22 MOVED THE DECLARATION to `src/core/fs_node`, which imports std and
+-- nothing else, and it is imported back here (line 47). The reason is the
+-- direction of the dependency and not tidiness: `execution-program/2` gives
+-- `dst_program.InitialWorld` a `files` field, and `dst_program` is the pure
+-- structural validator that must stay readable without a world in scope — so it
+-- cannot import this module. That module's header records the three
+-- arrangements and why the other two were declined.
+
+-- What a path IS. WI-D18, and it is THREE-VALUED because the thing it has to
+-- answer is: compose's `normalize_type` (`author_tools.ail:139-142`) returns
+-- `"dir"` / `"file"` / `"missing"`, and `list_dir_impl` guards `fileExists(path)`
+-- and then `isDir(path)` — so it asks an existence question ABOUT A DIRECTORY.
+--
+-- WHY THIS IS A NEW CLASS AND NOT A WIDENING OF `FileRead`. `FileRead.present`
+-- has two values, and routing a directory through it makes the two adapters give
+-- two DIFFERENT WRONG ANSWERS, one screen apart: `scripted_file` finds no flat
+-- entry for a directory and says `present: false`, while `ambient_file` finds
+-- `fileExists(dir)` true and proceeds to `readFile(dir)`. Neither is the answer
+-- `list_dir_impl` needs. Widening `FileRead` to three values was the other
+-- candidate and it was declined without being attempted: D3's class is settled,
+-- it has eight construction sites and a live consumer in `context_usage`, and
+-- the question "does this path hold bytes I can read" is a genuinely different
+-- question from "what kind of thing is at this path". Two narrow classes, on
+-- WI-D3's own "narrow by construction" ground.
+export type PathKind = PathMissing | PathFile | PathDir
+
+export type PathStat = {
+  kind: PathKind,
+  next_state: WorldState
+}
+
+-- One directory listing and its successor world. WI-D18.
+--
+-- `present` is carried EXPLICITLY and is the whole reason this type exists
+-- rather than a bare `[string]`. It is `FileRead.present`'s argument on a
+-- different pair of states: an empty directory and an absent one BOTH have no
+-- entries, and `list_dir_impl` turns the difference into `entries: []` against a
+-- `not_found` error — two different tool results a session can branch on. A
+-- caller that inferred absence from an empty list would collapse them.
+--
+-- `entries` are the immediate children's NAMES, not paths — `listDir`'s own
+-- shape, which is what compose renders. See `scripted_dir_list` for why they are
+-- sorted in both adapters.
+export type DirListing = {
+  present: bool,
+  entries: [string],
+  next_state: WorldState
+}
+
+-- One approval read and its successor world. `eof` is carried explicitly rather
+-- than inferred from `raw == ""`: a recorded world must be able to replay an
+-- empty line that the operator actually typed as distinct from a closed
+-- channel, and the driver's policy branches differently on the two.
+export type ApprovalInput = {
+  raw: string,
+  eof: bool,
+  next_state: WorldState
+}
+
+-- A clock read and its successor world. Every port that observes an effect
+-- returns its successor explicitly — D1's `next_world_state` — because a read
+-- that advances a cursor without handing the successor back is the exact
+-- arrangement that reproduced F6 on a second port in P2's reviewer probe.
+export type ClockReading = {
+  now_ms: int,
+  next_state: WorldState
+}
+
+-- `ported_provider` returns the initial world alongside the Ports — D1's "a
+-- pair, or a paired constructor". Splitting them at the loop boundary is what
+-- keeps the cursor in one explicit driver field instead of inside the Ports.
+export type PortedProvider = {
+  ports: Ports,
+  world: WorldState
+}
+
+-- The world a stateless provider carries, and the initial world for every
+-- non-scripted arm of `ported_provider`.
+export pure func empty_world_state() -> WorldState {
+  { script: [], clock_ms: 0, approvals: [], env: [], files: [], tools: [],
+    ext_effects: [], holder_ext_id: "", log: [], gen: no_generator() }
+}
+
+-- One provider exchange: the typed step outcome, plus the ordered log of the
+-- intermediate emissions that call produced.
+--
+-- WI-A1, under ADR-001 D1's loss-channel rule. `model_step` takes a multi-fire
+-- `(StreamChunk) -> () ! {IO}` callback whose values the returning closure
+-- discards, while returning only `Result[StepResult, AIError]` — a concrete,
+-- demonstrated loss, one layer above `std/ai`, which nothing downstream can
+-- recover from. The ordering rule is: widen the port before adopting whatever
+-- fills it, because the port is where the information is thrown away.
+--
+-- WI-A1 shipped this with `emissions: []` at every construction site, which
+-- made the widening behaviour-preserving; what it bought is that adopting a
+-- recorded-stream API later filled exactly one closure. WI-C1 spent that: as of
+-- AILANG v0.33.0's `stepWithStreamRecorded`, `live_ports` returns the ordered
+-- observed chunks, and the prediction that the adoption would be one closure
+-- held exactly — two lines and one import symbol.
+--
+-- WI-C3 GAVE IT A CONSUMER, which is the sentence three previous versions of
+-- this note could not write. `session.ail`'s model-step site converts the
+-- returned log once (`stream_chunk_events`), APPENDS the resulting events to
+-- the returned `LedgerTrace` — closing `StreamDelta` in D6.4's gap register —
+-- and threads the same events forward as the run's emission witness, out
+-- through `TracedSessionResult.emissions`. `make stream_parity` drives it.
+--
+-- The two scripted sites that call `play_chunks` are populated too. They used to
+-- play chunks through `on_chunk` and report none — this field's own loss channel
+-- one layer down, and the deterministic half of D1's parity claim. They now
+-- build the chunk list once and both play it and report it, so it cannot drift
+-- from itself. The other 16 scripted sites still return `[]` and that remains
+-- correct: an error path or a terminal step emits nothing.
+--
+-- WHAT IS STILL NOT TRUE, because a consumed log is not the whole obligation:
+-- both sides of the in-process parity check derive from THIS field, since the
+-- callback's projections go to `ledger_emit` and its row is closed `{IO}`. So a
+-- projection that disagrees with the returned log is invisible in-process and is
+-- caught only by the wire gate. Measured, not argued — see
+-- `scripts/dst/run_stream_parity_wire.sh`.
+--
+-- The rule is scoped to ports with a *demonstrated* loss channel, and today
+-- that is exactly this one field: `approval_read` is a synchronous resolution
+-- and `clock_now` is a point read, and neither has an intermediate channel
+-- through which a value could be silently dropped.
+--
+-- WI-A2 added `next_state`. That is a SECOND widening of `model_step`, on a
+-- second and separately stated ground — state threading, not a discarded
+-- emission channel — and unlike the first it is not behaviour-preserving,
+-- because it changes the port's input shape and every construction site's
+-- contract. A successor cursor is not an emission; WI-A1 did not enable this.
+export type ProviderExchange = {
+  emissions: [StreamChunk],
+  result: Result[StepResult, AIError],
+  next_state: WorldState
+}
+
+export type Ports = {
+  model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
+  -- WI-A12's approval class. State-threaded, and it returns the raw input
+  -- rather than a resolution — see `ApprovalInput`. The `ApprovalRequest` is
+  -- passed so a recorded world can correlate the read with the call it is
+  -- approving (D8 causal identities); the live adapter ignores it.
+  approval_read: (WorldState, ApprovalRequest) -> ApprovalInput ! {IO},
+  -- WI-A12's clock class. State-threaded in and out, like `model_step`. The
+  -- `{Clock}` effect stays in the row and that is expected: AILANG fails on a
+  -- capability only when a read is PERFORMED, so the deterministic adapter
+  -- never triggering it is precisely what the poison pair measures.
+  clock_now: (WorldState) -> ClockReading ! {Clock},
+  -- WI-A12's env class. State-threaded like the rest.
+  env_get: (WorldState, string, string) -> EnvRead ! {Env},
+  -- WI-D3's filesystem class. State-threaded like the rest, and NARROW by
+  -- construction: a path in, existence and contents out.
+  --
+  -- It is not `tool_exec` under another name. `tool_exec` declares `{FS}` and is
+  -- a process dispatch; this is the driver's own read of its own configuration,
+  -- and the two are separated because the poison pair for one must not be
+  -- satisfiable by the other. The `{FS}` row here is load-bearing in exactly one
+  -- binding — `ambient_file` — which is what makes the host-env pair's live half
+  -- die and its deterministic half mean something.
+  file_read: (WorldState, string) -> FileRead ! {FS},
+  -- WI-D17's filesystem WRITE class, on `file_read`'s shape: a path and a body
+  -- in, acceptance out, world threaded through.
+  --
+  -- WHY A WRITE IS IN THE WORLD AT ALL, since `ADR:303` scopes the boundary to
+  -- "external observations that can affect session control flow" and a write is
+  -- not an observation. It is in scope DERIVATIVELY. WI-D16 measured the shape
+  -- in compose (`compose.ail:502-521`): `writeFile(snippet_path, …)` is followed
+  -- by `check_snippet(snippet_path)`, which shells out to that path, and by
+  -- `if fileExists(snippet_path) then removeFile(…)`, and control flow branches
+  -- on the result twice. Leaving the write ambient while `tool_exec` and
+  -- `file_read` are mediated puts one fact in two homes that can disagree, which
+  -- is `ADR:340-341`'s "exactly one home, visibly threaded".
+  --
+  -- The consequence is stated where it can be checked rather than left implicit:
+  -- a deterministic run's write lands in `WorldState.files` and is therefore
+  -- visible to a subsequent `file_read` in the same run. Nothing reaches the
+  -- real filesystem. A live run performs it, because `ambient_file_write` is
+  -- bound there — the same data-not-a-code-path arrangement `world_tool` uses,
+  -- so no production code branches on test mode.
+  file_write: (WorldState, string, string) -> FileMutation ! {FS},
+  -- WI-D17's filesystem REMOVE class. A separate field and not a mode flag on
+  -- `file_write`, for the reason `ToolOutcome` is a sum: a boolean discriminator
+  -- in a request makes "remove with a body" representable and then something has
+  -- to forbid what the type should never have allowed.
+  --
+  -- IT IS HERE ON D16'S OWN ARGUMENT AND NOT ON A SEPARATE ONE, which is the
+  -- whole reason it could not be deferred. `removeFile` changes what
+  -- `fileExists` returns, and compose branches on exactly that at the
+  -- `if not checked.ok then if fileExists(p) then removeFile(p)` arm — the same
+  -- arm D16 cited to justify mediating the write. Mediating `writeFile` and
+  -- leaving `removeFile` ambient would leave the two-homes defect standing on
+  -- five of compose's eighteen write-side call sites, so it would be adopting an
+  -- argument and refusing its conclusion.
+  --
+  -- `mkdirAll` is NOT here, and that is a different answer on a different
+  -- ground: directory existence is observed only through `isDir` and `listDir`,
+  -- neither of which has a core seam (`Ports` has no directory class at all), so
+  -- a mediated `mkdirAll` would mutate a table nothing can read. It belongs with
+  -- the directory seam WI-D16 §6 priced, not here.
+  --
+  -- WI-D18 IS THAT SEAM AND IT EXPIRED THAT REASON, exactly the way WI-D17
+  -- expired D3's stated reason for leaving reads unrecorded. `dir_make` is three
+  -- fields below.
+  file_remove: (WorldState, string) -> FileMutation ! {FS},
+  -- WI-D18's PATH KIND class: three-valued, because the two questions compose
+  -- asks about a path have three answers between them. See `PathStat`.
+  --
+  -- THIS IS THE FIELD THAT CLOSES THE DIRECTORY-VS-FILE EXISTENCE GAP, and the
+  -- gap is a defect that exists today rather than a shape part 2 might want:
+  -- `list_dir_impl` guards `fileExists(path)` and then `isDir(path)`, so routing
+  -- that guard through `file_read` asks a two-valued read about a directory and
+  -- gets a different wrong answer from each adapter. Part 2 routes
+  -- `author_tools.ail:139-142`, `:189-190` and `:250` here instead, and gets one
+  -- answer that both adapters agree on.
+  path_stat: (WorldState, string) -> PathStat ! {FS},
+  -- WI-D18's DIRECTORY LISTING class. Separate from `path_stat` and not folded
+  -- into it: `normalize_type` needs the kind and no entries, and a combined seam
+  -- would make every kind question pay for a listing — and, on the ambient side,
+  -- would have to call `listDir` on paths that are not directories.
+  dir_list: (WorldState, string) -> DirListing ! {FS},
+  -- WI-D18's DIRECTORY CREATE class. MEDIATED, not declined, and the reason is
+  -- that WI-D17's ground for declining it was conditional on there being no
+  -- directory seam — which the two fields above now are.
+  --
+  -- The remaining argument for declining was an OBSERVABILITY MEASUREMENT, and
+  -- IT IS NOW HISTORY RATHER THAN A DESCRIPTION OF HEAD — kept in the past tense
+  -- rather than deleted, per plan rule S15, because it is the argument that
+  -- decided this field. WI-D19 routed one of the six sites and WI-D20 routed the
+  -- other five, so **compose has no ambient `mkdirAll` site left at all** and a
+  -- reader who went looking for the six would find none.
+  --
+  -- WHAT IT SAID, and it was correct when written at WI-D18: all six of compose's
+  -- `mkdirAll` sites (`store.ail:21,39,48`, `compose.ail:502,769`,
+  -- `authoring/dispatcher.ail:216`) were immediately followed by a `writeFile`
+  -- into that directory with no intervening read, so no compose session then
+  -- could observe a created-but-empty directory. That was true, and it was not a
+  -- reason to leave the effect ambient, for two reasons
+  -- that are both about what the measurement is conditional on:
+  --
+  --   1. It was a claim about compose's CURRENT text, falsifiable by any future
+  --      site that creates a directory and lists it before writing. Mediating the
+  --      effect costs one adapter; the alternative is a guard that has to keep
+  --      being true. **BOTH HALVES OF THIS WERE BORNE OUT.** `discovery_dst`'s
+  --      WI-D19 routed hook creates `probe_empty` and lists it without writing
+  --      into it, which is exactly the future site named here; and WI-D20's
+  --      `routing_tool_handle` lists a directory to DERIVE the name it then
+  --      writes, so the listing is load-bearing rather than incidental.
+  --   2. It was false the moment the path key bit, and it bit twice.
+  --      `compose.ail:769` created `"${ctx.workdir}/tmp"` while `:771` wrote
+  --      `"tmp/${name}.ail"`, and in a world keyed on raw strings those are two
+  --      different directories — so the created one IS observed empty, by the very
+  --      next `list_dir`. The measurement held on a real filesystem and failed in
+  --      the world, and the world is what this seam is for. WI-D19 fixed that
+  --      site and WI-D20 fixed the identical one at `one_attempt`; the create is
+  --      what moved, in both cases because `compose_module_header` pins the
+  --      write's spelling.
+  --
+  -- Leaving it ambient while `file_write` and `file_remove` are mediated would
+  -- also put one fact in two homes on all six sites: the directory the run
+  -- created would live on the host and the file written into it would live in
+  -- the world.
+  --
+  -- It returns `FileMutation`, shared with the two mutators above for that
+  -- type's own stated reason — the answers have identical shape.
+  dir_make: (WorldState, string) -> FileMutation ! {FS},
+  -- WI-A12's typed tool contract. State-threaded, typed request, typed result.
+  -- No `{Clock}` in the row: the adapter ADVANCES the virtual clock
+  -- arithmetically from the scripted duration, it never reads one. That keeps
+  -- this row identical to `ExtPorts.tool_handle`'s, which is what lets the
+  -- extension seam project onto it without widening the ABI.
+  tool_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS},
+  -- WI-D24's EXTENSION-EFFECT dispatch class. Identical in shape to `tool_exec`
+  -- and separate from it on purpose: the shape is the same request, the CLASS is
+  -- not. A driver tool call and an extension-initiated dispatch are two of D2's
+  -- identity classes, they are served from two cursors, and they are recorded by
+  -- two adapters — so they are two fields, and `ext_ports_of`'s bridge calls
+  -- this one.
+  --
+  -- WHY NOT AN `originator` FIELD ON `ToolInvocation` WITH ONE ADAPTER
+  -- BRANCHING ON IT, which is the cheaper design and was measured before this
+  -- one was taken: the branch makes `recording_tool` a producer of two identity
+  -- classes (S16), it leaves both classes sharing `WorldState.tools` where a
+  -- blank-id entry is consumable by a driver dispatch (see `ext_effects`), and
+  -- it is not even cheaper at the construction census — `ToolInvocation` is
+  -- built at three sites and one of them is `tool_phase.ail`, whose anchors turn
+  -- the six-file re-baseline into the nine-file one. A separate field costs one
+  -- line in `ports_shape_probe` and two record updates in `stub_step`.
+  --
+  -- THE EXT ID IS NOT A PARAMETER HERE and could not be: this seam is reached
+  -- from an ABI closure whose signature is fixed below `6.0`. It rides in the
+  -- world — see `WorldState.holder_ext_id`.
+  ext_effect_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS}
+}
+
+-- WI-D3. The two seams a context-limit resolution needs, and no others.
+--
+-- It is a PROJECTION of `Ports`, not a second port set, and `context_reader_of`
+-- is the only constructor the driver uses — so a seam bound here and the seam
+-- bound in `Ports` are the same closure value and cannot disagree. That is the
+-- difference between this and a parallel port record, which is a thing that
+-- drifts.
+--
+-- It exists because `resolve_context_limit` needs an env read and a file read
+-- and NOTHING else, while `Ports` also carries a provider, an approval channel
+-- and a tool dispatcher. Demanding the whole record would force every caller to
+-- have a `model_step` — including the three catalogue probes, which have no
+-- provider and no business acquiring one to ask what a file says.
+export type ContextReader = {
+  env_get: (WorldState, string, string) -> EnvRead ! {Env},
+  file_read: (WorldState, string) -> FileRead ! {FS}
+}
+
+-- The driver's reader: whatever the run's `Ports` bound. A deterministic run
+-- projects `scripted_env`/`scripted_file`; a live run projects the ambient pair.
+-- The driver never chooses — that is D1's prohibition on production test-mode
+-- branching, preserved here by making the projection total.
+export pure func context_reader_of(p: Ports) -> ContextReader {
+  { env_get: p.env_get, file_read: p.file_read }
+}
+
+-- The ambient reader, for callers that are DELIBERATELY reading the host: the
+-- three catalogue probes, whose subject IS the file on disk, and the host-env
+-- poison pair's live half. Both bindings perform their effect, which is what
+-- makes a run with the capability withheld die here.
+export func ambient_context_reader() -> ContextReader {
+  { env_get: ambient_env, file_read: ambient_file }
+}
+
+-- The deterministic approval channel: serve the queue head, advance past it.
+-- An empty queue reports end-of-input, which the driver resolves through its
+-- own default-allow policy. Exported for the same reason as `virtual_clock` —
+-- one implementation of the cursor shared by every non-live adapter.
+export func scripted_approval(state: WorldState, _req: ApprovalRequest) -> ApprovalInput ! {IO} {
+  match state.approvals {
+    [] => { raw: "", eof: true, next_state: state },
+    x :: rest => { raw: x, eof: false, next_state: { state | approvals: rest } }
+  }
+}
+
+-- The deterministic clock: serve the world's own value, advance it by one
+-- millisecond. Exported so every non-live adapter shares ONE implementation of
+-- the tick — three copies of "read the field, add one" is three chances for
+-- them to drift, and a clock that drifts between adapters is a determinism
+-- defect no single-adapter test can see.
+--
+-- The tick must be non-zero. A clock returning a constant is perfectly
+-- reproducible and therefore invisible to a determinism assertion — cluster 1's
+-- freeze hazard in the clock's clothing — so `world_state_probe` asserts
+-- advancement separately.
+-- It declares `! {Clock}` while performing no clock read at all. That is not a
+-- lie the type system is forced to swallow, it is the mechanism the poison pair
+-- rests on: AILANG demands a capability only when an effect is PERFORMED, so a
+-- deterministic run keeps `{Clock}` in its row and still completes with the
+-- capability withheld. The declaration is also required — a `pure` function
+-- will not unify into the effectful port slot ("incompatible closed rows"), so
+-- the row cannot simply be narrowed here.
+export func virtual_clock(state: WorldState) -> ClockReading ! {Clock} {
+  { now_ms: state.clock_ms, next_state: { state | clock_ms: state.clock_ms + 1 } }
+}
+
+-- The deterministic environment: serve the world's map, fall back to the
+-- caller's default when the key is absent.
+export func scripted_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  { value: lookup_env(state.env, key, fallback), next_state: state }
+}
+
+pure func lookup_env(entries: [{ key: string, value: string }], key: string, fallback: string) -> string {
+  match entries {
+    [] => fallback,
+    e :: rest => if e.key == key then e.value else lookup_env(rest, key, fallback)
+  }
+}
+
+-- The deterministic filesystem: serve the world's own table, and report a path
+-- the table does not carry as ABSENT rather than deferring to the host.
+--
+-- Like `virtual_clock` and `scripted_env` it declares an effect it never
+-- performs, and that is the mechanism rather than an oversight: AILANG demands a
+-- capability only when the effect is PERFORMED, so a deterministic run keeps
+-- `{FS}` in its row and still completes with the capability withheld. The
+-- declaration is also forced — a `pure` function will not unify into the
+-- effectful port slot ("incompatible closed rows").
+--
+-- MEASURED at WI-D3 rather than assumed, because the whole pair rests on it:
+-- `world_state_probe` dispatches seeded tools through `world_tool`, which
+-- DECLARES `! {IO, Process, FS}`, and completes with `FS` withheld.
+export func scripted_file(state: WorldState, path: string) -> FileRead ! {FS} {
+  match lookup_file(state.files, path) {
+    Some(content) => { present: true, content: content, next_state: state },
+    None => { present: false, content: "", next_state: state }
+  }
+}
+
+-- The world's answer to "does this path hold BYTES". WI-D18 made it kind-aware,
+-- and that is a behaviour change with a name: a path holding a DIRECTORY is not
+-- a readable file, so `scripted_file` reports it absent rather than serving "".
+--
+-- THE PAIR WAS REPAIRED HERE RATHER THAN EXTENDED, and this is the adapter
+-- disagreement WI-D18 went looking for first. Before this item `ambient_file`
+-- guarded on `fileExists(path)`, which is TRUE for a directory, and then called
+-- `readFile` on it; `scripted_file` had no directories to find and said absent.
+-- Two adapters, one screen apart, giving two different answers to the same
+-- question about the same input — the shape D1's stop condition forbids, and it
+-- was live before this item rather than introduced by it. Both now answer
+-- `present: false` for a directory, and a caller that needs to know WHICH of
+-- "absent" and "is a directory" it is asks `path_stat`, which is the class that
+-- exists to say so.
+pure func lookup_file(entries: [{ path: string, node: FsNode }], path: string) -> Option[string] {
+  match entries {
+    [] => None,
+    e :: rest =>
+      if e.path == path then
+        match e.node { FsFile(c) => Some(c), FsDir => None }
+      else lookup_file(rest, path)
+  }
+}
+
+-- Does the table hold ANY node at this exact key, of either kind? Distinct from
+-- `lookup_file`, which answers only for files, and needed by `remove_path`'s
+-- callers and by `scripted_dir_make`'s "already there" check.
+pure func lookup_node(entries: [{ path: string, node: FsNode }], path: string) -> Option[FsNode] {
+  match entries {
+    [] => None,
+    e :: rest => if e.path == path then Some(e.node) else lookup_node(rest, path)
+  }
+}
+
+-- The ambient filesystem: the real one. This is the ONLY binding in the Ports
+-- surface that performs a filesystem read, exactly as `live_ports`' clock
+-- closure is the only binding that reads a real clock, and for the same reason —
+-- one ambient reader is a thing a poison pair can point at.
+--
+-- `readFile` is called only under `fileExists`, which is the guard every call
+-- site in `context_usage` already carried; hoisting it here means a caller
+-- cannot forget it.
+-- WI-D18 CHANGED THE GUARD from `fileExists` to `isFile`, and it is a repair
+-- rather than a narrowing. `fileExists` is true for a DIRECTORY, so this adapter
+-- used to call `readFile` on one while `scripted_file` reported it absent — the
+-- two halves of the pair disagreeing on a reachable input, which is exactly what
+-- D1's stop condition forbids and what `lookup_file`'s note above describes. The
+-- callers this can affect all pass paths they believe are files
+-- (`context_usage`'s catalogue and config reads), so nothing in the tree changes
+-- behaviour; what changes is that a caller who is wrong about that now gets
+-- `present: false` instead of whatever `readFile` does to a directory.
+export func ambient_file(state: WorldState, path: string) -> FileRead ! {FS} {
+  let here = isFile(path);
+  let content = if here then readFile(path) else "";
+  { present: here, content: content, next_state: state }
+}
+
+-- The deterministic filesystem WRITE: put the entry in the world's own table
+-- and hand back the successor. WI-D17.
+--
+-- THIS IS THE FIRST ADAPTER IN THIS MODULE THAT ADDS TO A TABLE, and the whole
+-- difficulty of the class is one line long. Every other deterministic seam here
+-- consumes a cursor, advances a scalar, or returns `state` unchanged; the only
+-- other append in the file is `record_interaction`, which grows `log`. So the
+-- failure mode is specific and it is this project's counted one: an adapter that
+-- returned `next_state: state` here would type-check, satisfy every existing
+-- assertion, and make a subsequent `file_read` report `present: false` — which
+-- is BYTE-IDENTICAL to what that read returns if the write was never routed at
+-- all. Absent reads identically to unchanged, at C1, D6, D12, D13, D16 and here.
+-- `test_a_write_is_read_back_and_a_dropped_update_is_not_a_miss` is the fixture
+-- that separates them, and it asserts the CONTENT rather than the presence,
+-- because presence alone is satisfied by a world that was seeded and never
+-- written.
+--
+-- `remove_path` FIRST, then prepend. Two properties, both load-bearing:
+--
+--   * the removal keeps `files` a MAP — one entry per path — so its length
+--     stays a meaningful count and an overwrite cannot leave a shadowed stale
+--     entry behind for a later `remove` to uncover;
+--   * the PREPEND is what makes the read see the write even if the removal were
+--     ever dropped, because `lookup_file` is first-match. Appending would be a
+--     one-token difference with the opposite semantics — stale-read-wins — and
+--     it would be invisible to any fixture that writes each path once.
+--
+-- `ok` is unconditionally true because a table insertion cannot fail. That is
+-- the one place this adapter and `ambient_file_write` can disagree, and they
+-- disagree only where the host itself fails; the deterministic world has no
+-- permissions and no full disk to model, and modelling them would be inventing
+-- world shape that no gate keeps honest (`WorldState.files`' own rule).
+-- WI-D18 made the entry kinded, so the write now states `FsFile(content)`
+-- explicitly. That is what makes "write a file over a path the world holds as a
+-- DIRECTORY" a representable request with a decided answer, and the answer is
+-- `ok: false`: a real filesystem refuses it (`open …: is a directory`), and an
+-- adapter that silently replaced the directory with a file would let a
+-- deterministic run reach a state the live run cannot.
+export func scripted_file_write(state: WorldState, path: string, content: string) -> FileMutation ! {FS} {
+  match lookup_node(state.files, path) {
+    Some(FsDir) => { ok: false, error: "is a directory: ${path}", next_state: state },
+    _ =>
+      { ok: true,
+        error: "",
+        next_state: { state | files: ({ path: path, node: FsFile(content) }) :: remove_path(state.files, path) } }
+  }
+}
+
+-- The deterministic filesystem REMOVE. WI-D17.
+--
+-- `ok` REPORTS WHETHER THE PATH WAS THERE, and that is not decoration.
+--
+-- MEASURED, not assumed, because D1's stop condition rides on it — the
+-- deterministic and ambient adapters must agree without production code
+-- branching on test mode, and an adapter pair that disagrees on a reachable
+-- input falsifies D1 rather than merely being untidy. Probed on this pin:
+--
+--   removeFileResult("<a path that does not exist>")
+--     = Err 'cannot remove file: remove …: no such file or directory'
+--   writeFileResult("/proc/definitely/not/writable/x.txt", "x")
+--     = Err 'cannot write file: open …: no such file or directory'
+--
+-- So `ok: false` for an absent path is what the live half does, and the second
+-- line is why `FileMutation.error` is a real channel rather than a field that is
+-- always "": the host can and does fail a write.
+--
+-- compose guards its removes with `fileExists`, and a guard is only interesting
+-- because the unguarded case exists.
+-- WI-D18: it matches on `lookup_file` and NOT on `lookup_node`, so a
+-- `removeFile` aimed at a directory reports `ok: false` and leaves the world
+-- alone. That is what the host does — `removeFileResult` on a directory returns
+-- `Err` — and it keeps `file_remove` a FILE remove, which is what its name and
+-- its only caller shape (`if fileExists(p) then removeFile(p)`) say it is.
+export func scripted_file_remove(state: WorldState, path: string) -> FileMutation ! {FS} {
+  match lookup_file(state.files, path) {
+    Some(_) => { ok: true, error: "", next_state: { state | files: remove_path(state.files, path) } },
+    None => { ok: false, error: "no such file: ${path}", next_state: state }
+  }
+}
+
+-- Every entry for `path`, dropped. Shared by both mutators so that "what it
+-- means to no longer hold this path" has one definition — the same reason
+-- `virtual_clock` is shared rather than reimplemented per adapter.
+pure func remove_path(entries: [{ path: string, node: FsNode }], path: string) -> [{ path: string, node: FsNode }] {
+  match entries {
+    [] => [],
+    e :: rest => if e.path == path then remove_path(rest, path) else e :: remove_path(rest, path)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D18: the DIRECTORY class — the derivations, then the six adapters
+-- ---------------------------------------------------------------------------
+
+-- Is `child` strictly beneath `dir`? The whole path-key decision is in this one
+-- function: it is a STRING PREFIX TEST and nothing else. `dir` is a directory of
+-- `child` only when `child` begins with `dir ++ "/"`, so `"/w/tmp"` is not a
+-- parent of `"tmp/x.ail"` no matter what the process's working directory is.
+-- See `WorldState.files`' path-key block for why the world refuses to
+-- canonicalise that away.
+--
+-- The root is special-cased: `""` and `"."` are the spellings compose's
+-- `list_dir_impl` defaults to (`json_string_field(args, "path", ".")`), and
+-- every relative key is beneath them.
+pure func is_beneath(dir: string, child: string) -> bool {
+  if dir == "" || dir == "." then not Str.startsWith(child, "/")
+  else Str.startsWith(child, "${dir}/")
+}
+
+-- The first segment of `child` below `dir`. For `dir="a"` and
+-- `child="a/b/c.txt"` this is `"b"` — a NAME, not a path, because that is what
+-- `listDir` returns and what compose renders.
+pure func segment_below(dir: string, child: string) -> string {
+  let rest =
+    if dir == "" || dir == "." then child
+    else Str.substring(child, Str.length(dir) + 1, Str.length(child));
+  match Str.split(rest, "/") { [] => rest, s :: _ => s }
+}
+
+pure func names_below(entries: [{ path: string, node: FsNode }], dir: string) -> [string] {
+  match entries {
+    [] => [],
+    e :: rest =>
+      if is_beneath(dir, e.path) then segment_below(dir, e.path) :: names_below(rest, dir)
+      else names_below(rest, dir)
+  }
+}
+
+pure func has_children(entries: [{ path: string, node: FsNode }], dir: string) -> bool {
+  match entries {
+    [] => false,
+    e :: rest => if is_beneath(dir, e.path) then true else has_children(rest, dir)
+  }
+}
+
+-- What the world says is at `path`. AN EXPLICIT `FsDir` ENTRY **OR** ANY ENTRY
+-- BENEATH IT, and the disjunction is load-bearing in both directions:
+--
+--   * without the explicit half, an empty directory is unrepresentable and reads
+--     as absent — the losing design `WorldState.files` describes;
+--   * without the derived half, a fixture that seeds `a/b/c.txt` alone would
+--     report `a/b` MISSING, where the ambient adapter reports a directory. That
+--     is the adapter disagreement this class exists to remove, so it cannot be
+--     reintroduced by the class itself.
+--
+-- The root always exists, exactly as `/` and `.` always exist on a host.
+pure func world_path_kind(entries: [{ path: string, node: FsNode }], path: string) -> PathKind {
+  if path == "" || path == "." then PathDir
+  else match lookup_node(entries, path) {
+    Some(FsFile(_)) => PathFile,
+    Some(FsDir) => PathDir,
+    None => if has_children(entries, path) then PathDir else PathMissing
+  }
+}
+
+-- The stable wire/report spelling, and it is deliberately the three strings
+-- compose's own `normalize_type` returns (`author_tools.ail:139-142`). Part 2
+-- routes that function through this class, and a fourth spelling here would mean
+-- the routing item had to write a mapping — a second representation of one fact,
+-- which is what this module's header refuses.
+export pure func path_kind_label(k: PathKind) -> string {
+  match k { PathMissing => "missing", PathFile => "file", PathDir => "dir" }
+}
+
+pure func sort_names(xs: [string]) -> [string] {
+  List.sortBy(Str.compare, List.dedup(xs))
+}
+
+-- The deterministic path kind: ask the world's own table.
+export func scripted_path_stat(state: WorldState, path: string) -> PathStat ! {FS} {
+  { kind: world_path_kind(state.files, path), next_state: state }
+}
+
+-- The ambient path kind: ask the host. `isDir` FIRST, because `isFile` and
+-- `isDir` are the host's two independent questions and a path is at most one of
+-- them; ordering them the other way would be equally correct today and would
+-- read as though the order did not matter.
+--
+-- It matches `normalize_type`'s own order for exactly that reason — part 2
+-- replaces that function's body with a call to this seam, and an adapter that
+-- disagreed with the code it replaces would move a behaviour under cover of
+-- moving an effect.
+export func ambient_path_stat(state: WorldState, path: string) -> PathStat ! {FS} {
+  let k = if isDir(path) then PathDir else if isFile(path) then PathFile else PathMissing;
+  { kind: k, next_state: state }
+}
+
+-- The deterministic directory listing.
+--
+-- `present` IS THE KIND CHECK AND NOT AN EMPTINESS CHECK. `entries: []` with
+-- `present: true` is an EMPTY DIRECTORY and `entries: []` with `present: false`
+-- is an absent path or a file, and keeping those apart is the reason
+-- `WorldState.files` holds kinded nodes at all. An adapter that returned
+-- `present: List.length(entries) > 0` would type-check, pass any fixture that
+-- lists a populated directory, and collapse the distinction this whole item was
+-- built to preserve.
+--
+-- THE NAMES ARE DEDUPED AND SORTED, and both halves are needed:
+--
+--   * DEDUPE, because two files in one subdirectory (`a/b/x`, `a/b/y`) both
+--     yield the segment `b` when listing `a`, and a real directory holds `b`
+--     once;
+--   * SORT, because `scripted_file_write` PREPENDS, so insertion order here is
+--     reverse-chronological — a meaningless order to expose, and one that makes
+--     a listing depend on the sequence of writes rather than on the set of
+--     files. `ambient_dir_list` sorts too, which is what makes the two adapters
+--     agree on a listing rather than agree only on its membership.
+export func scripted_dir_list(state: WorldState, path: string) -> DirListing ! {FS} {
+  match world_path_kind(state.files, path) {
+    PathDir => { present: true,
+                 entries: sort_names(names_below(state.files, path)),
+                 next_state: state },
+    _ => { present: false, entries: [], next_state: state }
+  }
+}
+
+-- The ambient directory listing. `listDir` is called only under `isDir`, which
+-- is the guard `list_dir_impl` already carried; hoisting it here means a caller
+-- cannot forget it — `ambient_file`'s argument for its own guard, one class over.
+--
+-- THE SORT IS THE POINT OF THIS FUNCTION BEING MORE THAN ONE LINE. The host
+-- returns directory entries in whatever order it returns them, and the
+-- deterministic world returns them in write order; leaving both alone would give
+-- a pair that agrees on WHAT is in a directory and disagrees on the string
+-- compose actually renders (`show(entries)`). Sorting both is not a semantic
+-- change — no call site in this tree depends on host order — and it is the
+-- cheapest way to make the pair's answers equal rather than merely equivalent.
+export func ambient_dir_list(state: WorldState, path: string) -> DirListing ! {FS} {
+  let here = isDir(path);
+  let entries = if here then sort_names(listDir(path)) else [];
+  { present: here, entries: entries, next_state: state }
+}
+
+-- The deterministic directory create. WI-D18, and MEDIATED rather than declined
+-- — see `Ports.dir_make` for the argument and for what expired WI-D17's.
+--
+-- `mkdirAll` SEMANTICS, NOT `mkdir`: creating a path whose parents do not exist
+-- succeeds, and creating one that already exists as a directory succeeds. Both
+-- are what `std/fs.mkdirAll` does, and both matter to the six compose sites,
+-- every one of which calls it unconditionally on a path that usually already
+-- exists.
+--
+-- ONLY THE LEAF IS RECORDED, and that is a deliberate consequence of the
+-- representation rather than a shortcut: `world_path_kind` derives a directory
+-- from any entry beneath it, so writing `a/b/c` makes `a` and `a/b` directories
+-- without entries of their own. Materialising the ancestors would put the same
+-- fact in two places — an explicit entry and a derivation — which is the
+-- two-homes shape in miniature.
+--
+-- Creating a directory over an existing FILE fails, as the host fails it. That
+-- is the one input where a table insertion could have invented a state the live
+-- world cannot reach.
+export func scripted_dir_make(state: WorldState, path: string) -> FileMutation ! {FS} {
+  match world_path_kind(state.files, path) {
+    PathFile => { ok: false, error: "not a directory: ${path}", next_state: state },
+    -- Already a directory — explicitly or by derivation. Idempotent, and the
+    -- table is left ALONE rather than re-stamped, so `mkdirAll` over a populated
+    -- directory cannot change what a listing of its parent says.
+    PathDir => { ok: true, error: "", next_state: state },
+    PathMissing =>
+      { ok: true,
+        error: "",
+        next_state: { state | files: ({ path: path, node: FsDir }) :: state.files } }
+  }
+}
+
+-- The ambient directory create. `mkdirAllResult` and not `mkdirAll`, for
+-- `FileMutation`'s stated reason: the unit-returning form is where the failure
+-- is thrown away, and compose's six sites are all `let _ = mkdirAll(…)`, so a
+-- port that also discarded it would carry the drop across the boundary instead
+-- of closing it.
+--
+-- The world is returned UNCHANGED, which is right here and wrong in
+-- `scripted_dir_make` — `ambient_file_write`'s note says why, and it says it at
+-- the site because that is where a reader wonders.
+export func ambient_dir_make(state: WorldState, path: string) -> FileMutation ! {FS} {
+  match mkdirAllResult(path) {
+    Ok(_) => { ok: true, error: "", next_state: state },
+    Err(e) => { ok: false, error: e, next_state: state }
+  }
+}
+
+-- The ambient filesystem write: the real one. The world is returned UNCHANGED,
+-- and that is correct rather than the trap above: a live run's reads go through
+-- `ambient_file`, which consults the real filesystem and never looks at
+-- `state.files`, so growing the table here would be maintaining a second copy of
+-- a fact the live world already owns — two homes, in the direction this class
+-- exists to remove.
+--
+-- WHICH MEANS THE TWO ADAPTERS DIFFER IN A WAY THE TYPE CANNOT SEE. `next_state:
+-- state` is right here and wrong in `scripted_file_write`, so copying this
+-- function's body into that one produces the exact defect the fixture above
+-- exists to catch. Stated here because this is the site a reader arrives at
+-- when they wonder why one adapter threads and the other does not.
+export func ambient_file_write(state: WorldState, path: string, content: string) -> FileMutation ! {FS} {
+  match writeFileResult(path, content) {
+    Ok(_) => { ok: true, error: "", next_state: state },
+    Err(e) => { ok: false, error: e, next_state: state }
+  }
+}
+
+-- The ambient filesystem remove. `removeFileResult` rather than `removeFile`
+-- for `FileMutation`'s stated reason: the unit-returning form is where the
+-- failure is thrown away, and this is the layer that must not throw it away.
+export func ambient_file_remove(state: WorldState, path: string) -> FileMutation ! {FS} {
+  match removeFileResult(path) {
+    Ok(_) => { ok: true, error: "", next_state: state },
+    Err(e) => { ok: false, error: e, next_state: state }
+  }
+}
+
+-- The ambient environment: the process environment. Hoisted out of `live_ports`'
+-- inline closure at WI-D3 so that the live env read and the live file read are
+-- ONE named pair a probe can install together — see `ambient_context_reader`.
+-- `live_ports` binds this same function, so the seam a poison run exercises and
+-- the seam a live session exercises cannot drift.
+export func ambient_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  { value: getEnvOr(key, fallback), next_state: state }
+}
+
+-- The tool adapter. One implementation serves both worlds, which is why
+-- `live_ports` overrides the clock and the approval channel but NOT this: the
+-- only difference between a live and a deterministic tool call is whether the
+-- world has an answer queued, and that is data, not a code path.
+export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  match state.tools {
+    -- No world opinion: perform the real effect, exactly as before A12.
+    --
+    -- THE LIVE ARM CARRIES THE REAL CODE (WI-D23). Through WI-D22 this arm
+    -- wrote `exit_code: -1`, because `dispatch_one`'s `(workdir, ToolCall) ->
+    -- string` contract — which exists in that shape to satisfy upstream
+    -- `runTools` — buried the exit code a `BashExec` really produced inside
+    -- the string it returns, as JSON, and parsing it back out here would have
+    -- been the same string-parsing defect one layer down. That was WI-D21's
+    -- link 4. WI-D23 closed it the other way: `dispatch_one_typed` returns
+    -- the content and the code as one record from one dispatch, and this arm
+    -- binds BOTH of its fields, so the code a caller branches on and the JSON
+    -- a model reads cannot come from different runs.
+    --
+    -- Writing `0` here instead would be the S30 failure in its purest form —
+    -- the live arm asserting that every dispatched tool succeeded, in a field
+    -- whose whole purpose is to say when one did not. Writing `-1` again is
+    -- the mutant the live-arm witness row in `world_state_probe` exists to
+    -- kill: every in-process fixture stays green under it, because only a row
+    -- that drives a real subprocess to a chosen code can see this binding.
+    [] => { outcome: live_tool_outcome(inv), next_state: state },
+    t :: rest => {
+      let advanced = { state | tools: rest, clock_ms: state.clock_ms + t.duration_ms };
+      { outcome: scripted_tool_outcome(inv, t), next_state: advanced }
+    }
+  }
+}
+
+-- The LIVE arm's outcome, lifted out of `world_tool` at WI-D24 so the
+-- extension-effect adapter beside it dispatches through the same call rather
+-- than through a copy. Two adapters that both "delegate to the real dispatcher"
+-- and each own their own `dispatch_one_typed` call is the two-homes shape in the
+-- one place it would be least visible: both compile, both return a
+-- `ToolCompleted`, and the drift shows up only as one seam binding an exit code
+-- the other does not.
+pure func live_tool_outcome(inv: ToolInvocation) -> ToolOutcome ! {IO, Process, FS} {
+  let d = dispatch_one_typed(inv.workdir, envelope_to_call(inv.call));
+  ToolCompleted({ tool_call_id: inv.call.id, content: d.content, exit_code: d.exit_code })
+}
+
+-- The SCRIPTED arm's outcome, lifted out for `live_tool_outcome`'s reason and
+-- with a sharper one: the fault ORDER below (correlation, then deadline, then
+-- code, then completion) is a contract `ScriptedTool`'s own field ordering
+-- documents, and a second adapter re-deriving it is a second chance to get it
+-- wrong in a way no single-adapter fixture can see.
+--
+-- THE CORRELATION GUARD IS WHY `WorldState.ext_effects` IS A SEPARATE QUEUE.
+-- It fires only when both ids are non-blank, so a blank-id entry answers
+-- whatever was asked — correct for a class whose call id is legitimately blank,
+-- and exactly wrong if that entry is reachable by a driver dispatch. See the
+-- field's own note.
+pure func scripted_tool_outcome(inv: ToolInvocation, t: ScriptedTool) -> ToolOutcome {
+  if t.tool_call_id != "" && t.tool_call_id != inv.call.id then
+    ToolCorrelationMismatch({ expected_id: inv.call.id, got_id: t.tool_call_id })
+  else if inv.timeout_ms > 0 && t.duration_ms > inv.timeout_ms then
+    ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: inv.timeout_ms })
+  else if t.code != "" then
+    ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message })
+  else
+    -- The scripted arm is the one that CAN say. This is the whole of what
+    -- WI-D22 buys: a deterministic world whose script states an exit code
+    -- now produces an outcome that carries it, so a recorded run in which
+    -- a subprocess failed replays as a run in which it failed.
+    ToolCompleted({ tool_call_id: inv.call.id, content: t.content, exit_code: t.exit_code })
+}
+
+-- WI-D24. The extension-effect adapter: `world_tool`'s twin over the OTHER
+-- cursor. One implementation serves both worlds for `world_tool`'s stated
+-- reason, and both arms are the same two functions, so the deterministic and
+-- live answers to an extension's dispatch cannot drift from the driver's.
+--
+-- WHAT DIFFERS FROM `world_tool` IS THE QUEUE AND NOTHING ELSE. The identity
+-- class, the deadline and the origin are decided one layer up, by
+-- `recording_ext_effect`; this function is the SUPPLY half, and keeping the two
+-- halves apart is what lets `live_ports` serve an extension effect for real
+-- while `recording_ports` records it.
+export func world_ext_effect(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  match state.ext_effects {
+    [] => { outcome: live_tool_outcome(inv), next_state: state },
+    t :: rest => {
+      let advanced = { state | ext_effects: rest, clock_ms: state.clock_ms + t.duration_ms };
+      { outcome: scripted_tool_outcome(inv, t), next_state: advanced }
+    }
+  }
+}
+
+pure func envelope_to_call(e: ToolCallEnvelope) -> ToolCall {
+  { id: e.id, name: e.tool, arguments: encode(e.arguments) }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-A13 stage 2: the recording seams
+-- ---------------------------------------------------------------------------
+
+-- Append one interaction to the world's log, assigning it the next global
+-- encounter ordinal.
+--
+-- This is the ONLY place an ordinal is assigned and the ONLY place the log
+-- grows. Both properties are deliberate: an ordinal computed from the log's own
+-- length cannot disagree with the log's own order, and a single append site is
+-- what makes "the recorder logged something twice" a defect that has to be
+-- written on purpose rather than one that arises from two adapters both being
+-- polite.
+export pure func record_interaction(
+  state: WorldState,
+  body: IdentityBody,
+  request_projection: string,
+  deadline_ms: int,
+  outcome: TimedOutcome
+) -> WorldState {
+  let identity: CausalIdentity = { ordinal: List.length(state.log), body: body };
+  { state |
+    log: state.log ++ [{
+      identity: identity,
+      request_projection: request_projection,
+      deadline_ms: deadline_ms,
+      outcome: outcome
+    }]
+  }
+}
+
+-- The recording clock. It WRAPS `virtual_clock` rather than reimplementing the
+-- tick, for the reason `virtual_clock`'s own comment gives: three copies of
+-- "read the field, add one" is three chances to drift, and a clock that drifts
+-- between adapters is a determinism defect no single-adapter test can see. The
+-- recorded advance is read back from the successor rather than assumed to be 1,
+-- so a change to the tick cannot silently desynchronise the log from the world.
+export func recording_clock(state: WorldState) -> ClockReading ! {Clock} {
+  let reading = virtual_clock(state);
+  let advanced = reading.next_state.clock_ms - state.clock_ms;
+  {
+    now_ms: reading.now_ms,
+    next_state: record_interaction(
+      reading.next_state,
+      ClockAdvanceIdentity,
+      "clock_now at=${state.clock_ms}",
+      -1,
+      { advance_ms: advanced, chunks: [], payload: "${reading.now_ms}", status: OutcomeOk, fault_class_id: "" }
+    )
+  }
+}
+
+-- The recording environment read. `OutcomeMissing` is D2's `value_or_missing`:
+-- the key was absent and the caller's fallback was served. That distinction is
+-- recorded rather than inferred, because a replay that cannot tell "the world
+-- said empty string" from "the world had no opinion" cannot reproduce the
+-- driver's `getEnvOr` branch.
+export func recording_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  let read = scripted_env(state, key, fallback);
+  let present = env_has_key(state.env, key);
+  let outcome: TimedOutcome =
+    if present then
+      { advance_ms: 0, chunks: [], payload: read.value, status: OutcomeOk, fault_class_id: "" }
+    else
+      { advance_ms: 0, chunks: [], payload: "", status: OutcomeMissing, fault_class_id: "" };
+  {
+    value: read.value,
+    next_state: record_interaction(
+      read.next_state,
+      EnvironmentReadIdentity(key),
+      "env_get key=${key} fallback=${fallback}",
+      -1,
+      outcome
+    )
+  }
+}
+
+pure func env_has_key(entries: [{ key: string, value: string }], key: string) -> bool {
+  match entries {
+    [] => false,
+    e :: rest => if e.key == key then true else env_has_key(rest, key)
+  }
+}
+
+-- The recording filesystem write. WI-D17.
+--
+-- THE CONTENT DOES NOT ENTER THE LOG; ITS LENGTH DOES. Three reasons, in
+-- decreasing weight:
+--
+--   1. SECRETS. `dst_secrets.scan_interaction` scans the payload and the request
+--      projection, but a file body is the single most likely place in this whole
+--      surface for a credential to appear, and the right answer to "will the
+--      scanner catch it" is to not put it there. A length is a witness that
+--      cannot carry one.
+--   2. D2 asks for a BOUNDED full request projection. A file body is unbounded,
+--      and the precedent for bounding is already set one class over:
+--      `recording_tool` projects call id, tool, workdir and timeout and does NOT
+--      project the tool's arguments.
+--   3. Replay does not need it. `world_state_of` reconstitutes `files: []` and
+--      the REPLAYED DRIVER PERFORMS THE WRITE AGAIN through this same adapter,
+--      so the table is rebuilt by the run rather than restored from the artifact
+--      — which is why this class is recorded for grading and not for
+--      reconstitution. See the note on `recording_ports` for the full statement
+--      of why writes are recorded and reads are not.
+--
+-- What the length buys over recording nothing is that a replay writing DIFFERENT
+-- content to the same path differs in the projection, so `ProjectionDiffers`
+-- fires. Recording only the path would make that replay indistinguishable from a
+-- faithful one.
+--
+-- The status is `OutcomeFault` on a rejected write and carries no
+-- `fault_class_id`, because the fault catalogue declares no filesystem class.
+-- That is a DECLARED GAP in exactly `recording_approval`'s sense and not a
+-- solved problem: until a class id exists, D11's class-reached counter cannot
+-- see a failed write. It cannot arise in a deterministic run — `ok` is
+-- unconditionally true there — so the gap is reachable only on the live path,
+-- which no gate in this tree grades.
+export func recording_file_write(state: WorldState, path: string, content: string) -> FileMutation ! {FS} {
+  let done = scripted_file_write(state, path, content);
+  {
+    ok: done.ok,
+    error: done.error,
+    next_state: record_interaction(
+      done.next_state,
+      FileWriteIdentity(path),
+      "file_write path=${path} bytes=${Str.length(content)}",
+      -1,
+      { advance_ms: 0, chunks: [],
+        payload: "",
+        status: if done.ok then OutcomeOk else OutcomeFault,
+        fault_class_id: "" }
+    )
+  }
+}
+
+-- The recording filesystem remove. WI-D17.
+--
+-- A remove of an ABSENT path IS recorded, and with `OutcomeMissing` rather than
+-- `OutcomeFault`. That is `recording_env`'s distinction, not `recording_tool`'s:
+-- "the path was not there" is a normal answer to a normal request — compose
+-- issues exactly this call under a `fileExists` guard — and classifying it as a
+-- fault would manufacture a fault class the catalogue does not contain. It is
+-- the same reason `OutcomeMissing` exists at all.
+export func recording_file_remove(state: WorldState, path: string) -> FileMutation ! {FS} {
+  let done = scripted_file_remove(state, path);
+  {
+    ok: done.ok,
+    error: done.error,
+    next_state: record_interaction(
+      done.next_state,
+      FileRemoveIdentity(path),
+      "file_remove path=${path}",
+      -1,
+      { advance_ms: 0, chunks: [],
+        payload: "",
+        status: if done.ok then OutcomeOk else OutcomeMissing,
+        fault_class_id: "" }
+    )
+  }
+}
+
+-- The recording directory create. WI-D18.
+--
+-- IT IS RECORDED AND THE TWO READS ABOVE IT ARE NOT, and the line between them
+-- is the one WI-D17 §3 drew rather than a new judgement. `world_state_of`
+-- reconstitutes the world's SUPPLY from the log — script, approvals, tools —
+-- because a replay cannot compute those. A directory create is not supply, it is
+-- the driver's own act, and a replayed driver performs it again through this
+-- same adapter; a `path_stat` or a `dir_list` is a read of a table the program
+-- schema has nowhere to carry (`InitialWorld` has no `files` counterpart), so
+-- logging it would describe an observation the artifact still cannot rebuild.
+-- Recorded for GRADING, not for reconstitution — the third class in that
+-- category, after the two WI-D17 added.
+--
+-- `OutcomeOk` UNLESS THE HOST REFUSED. There is no `OutcomeMissing` arm here and
+-- that is the same asymmetry `dst_program.validate_outcome` pins for
+-- `file_write`: creating a directory has no "the world had nothing to give"
+-- state. A create over an existing directory SUCCEEDS — `mkdirAll` is idempotent
+-- — so "already there" is not a missing answer, it is an ordinary one.
+export func recording_dir_make(state: WorldState, path: string) -> FileMutation ! {FS} {
+  let done = scripted_dir_make(state, path);
+  {
+    ok: done.ok,
+    error: done.error,
+    next_state: record_interaction(
+      done.next_state,
+      DirMakeIdentity(path),
+      "dir_make path=${path}",
+      -1,
+      { advance_ms: 0, chunks: [],
+        payload: "",
+        status: if done.ok then OutcomeOk else OutcomeFault,
+        fault_class_id: "" }
+    )
+  }
+}
+
+-- The recording approval read. The request's call id and tool name are what
+-- make this correlatable with the tool interaction that provoked it (D8's
+-- causal identities), and they are available here precisely because A12 passed
+-- the `ApprovalRequest` through the port for this purpose.
+--
+-- An end-of-input read IS recorded. It is a request the driver made and a
+-- decision the world returned; a recorder that logged only non-empty reads
+-- would under-record exactly the runs where the queue ran dry, which is the
+-- case a replay most needs to reproduce.
+export func recording_approval(state: WorldState, req: ApprovalRequest) -> ApprovalInput ! {IO} {
+  let read = scripted_approval(state, req);
+  {
+    raw: read.raw,
+    eof: read.eof,
+    next_state: record_interaction(
+      read.next_state,
+      ApprovalIdentity("loop_v2", req.call.id, req.call.name),
+      "approval_read call_id=${req.call.id} tool=${req.call.name} default_allow=${req.default_allow} reason=${req.reason}",
+      -- D2 gives ExpectApproval a deadline and the driver's approval channel
+      -- carries no numeric one: `Ports.approval_read` takes the request and the
+      -- world, and the timeout policy is `DenyAfterTimeout`, a DECISION rather
+      -- than a duration. 0 is recorded, which `ToolInvocation.timeout_ms`
+      -- already establishes as "no declared deadline" for the tool class, so the
+      -- two classes agree on what 0 means. Recording -1 instead would say "this
+      -- class has no deadline at all", which contradicts D2 and which stage 1's
+      -- validator rejects for exactly that reason.
+      --
+      -- This is a DECLARED GAP, not a solved problem: until an approval
+      -- deadline is routed, D3's `approval_deadline_exceeded` class cannot be
+      -- reached by a discovered program, and D11's coverage counters must show
+      -- it unreached rather than waived. Reported as a stage 2 finding.
+      0,
+      { advance_ms: 0, chunks: [],
+        payload: if read.eof then "" else read.raw,
+        status: if read.eof then OutcomeMissing else OutcomeOk,
+        fault_class_id: "" }
+    )
+  }
+}
+
+-- The recording tool dispatch. The deadline recorded is the invocation's own
+-- `timeout_ms` — D2 gives ExpectTool a deadline and this is where it comes
+-- from — and the advance is read back from the world rather than from the
+-- script, so a queue-empty delegation to the real dispatcher (advance 0) and a
+-- scripted outcome (advance `duration_ms`) record what actually happened.
+export func recording_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  let execution = world_tool(state, inv);
+  let advanced = execution.next_state.clock_ms - state.clock_ms;
+  {
+    outcome: execution.outcome,
+    next_state: record_interaction(
+      execution.next_state,
+      ToolIdentity("loop_v2", inv.call.id, inv.call.tool),
+      "tool_exec call_id=${inv.call.id} tool=${inv.call.tool} workdir=${inv.workdir} timeout_ms=${inv.timeout_ms} started_at_ms=${inv.started_at_ms}",
+      inv.timeout_ms,
+      tool_outcome_record(execution.outcome, advanced)
+    )
+  }
+}
+
+-- WI-D24: THE EIGHTH RECORDING ADAPTER, and the first one that is not the
+-- driver's.
+--
+-- Every adapter above records something the DRIVER did. This one records what an
+-- EXTENSION did, and that is the whole reason it exists rather than being a
+-- branch in `recording_tool`: D2 gives the two acts different identity classes,
+-- and one producer emitting two classes is a producer that can emit the wrong
+-- one — the shape S16's C5 extension warns about, in a function whose only
+-- discriminator would be a string field.
+--
+-- THE THREE COMPONENTS, each from the transport rather than from a constant:
+--
+--   ext_id    `state.holder_ext_id`, stamped by `ext/runtime`'s fold at the
+--             moment it chose which hook to call. HARDCODING IT WOULD PASS
+--             EVERY FIXTURE BUILT AROUND COMPOSE (S33: the proxy and the truth
+--             agree on almost every input by construction), which is why the
+--             witness scenario drives an ext id that is not compose's and why
+--             the mutant that writes a literal here has a named row.
+--   class_id  `fault_class_extension_effect()`, READ from A7 and not restated
+--             (A10/S6). It names the catalogue ROW this effect belongs to, not
+--             a claim that it faulted: `validate_static_references` requires the
+--             id to be a real row and `validate_identity` refuses a blank one,
+--             so a successful effect carries it too. The fault, when there is
+--             one, is in the OUTCOME's `fault_class_id`, which is a different
+--             field answering a different question.
+--   call_id   "" — the effect answers no model tool call. This is the ONE class
+--             where D2 makes a blank component legitimate rather than missing,
+--             and it is the entire reason the class is right for this seam
+--             (WI-D21 §5.1).
+--
+-- THE DEADLINE IS `inv.timeout_ms` AND NOT -1. `class_has_deadline` is true for
+-- this class (`dst_interaction.ail:304`) and `dst_program` rejects a -1 on a
+-- class that has one, so copying a no-deadline class's sentinel here would be a
+-- loud rejection — which is the right failure and not one worth taking. The
+-- bridge's 0 is a VALID deadline meaning "none declared", exactly as
+-- `recording_approval` argues one field over.
+export func recording_ext_effect(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  let execution = world_ext_effect(state, inv);
+  let advanced = execution.next_state.clock_ms - state.clock_ms;
+  {
+    outcome: execution.outcome,
+    next_state: record_interaction(
+      execution.next_state,
+      ExtensionEffectIdentity(state.holder_ext_id, fault_class_extension_effect(), ""),
+      "ext_effect ext=${state.holder_ext_id} tool=${inv.call.tool} workdir=${inv.workdir} timeout_ms=${inv.timeout_ms}",
+      inv.timeout_ms,
+      tool_outcome_record(execution.outcome, advanced)
+    )
+  }
+}
+
+-- The typed tool outcome, projected onto D2's timed outcome. Each of A12's four
+-- discriminated results maps to its own recorded status, and the three faults
+-- carry A7 class ids: a fault recorded without one is uncountable by D11's
+-- class-reached counter, which stage 1's validator rejects outright.
+--
+-- WI-A13 stage 3 changed the PAYLOAD from a prose summary to the structured
+-- projection `encode_tool_outcome` writes. The status and the class id are
+-- unchanged, so nothing that grades the fault class moves; what changes is that
+-- the payload is now sufficient to re-serve the outcome. Stage 2's version was
+-- not: `ToolFailed`'s payload was its message alone, and a failure code that
+-- reaches no replay is a D3 fault class that no replayed program can exercise.
+pure func tool_outcome_record(o: ToolOutcome, advanced: int) -> TimedOutcome {
+  let payload = encode_tool_outcome(o);
+  match o {
+    ToolCompleted(_) =>
+      { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" },
+    ToolFailed(_) =>
+      { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: fault_class_tool_failed() },
+    ToolCorrelationMismatch(_) =>
+      { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: fault_class_tool_correlation_mismatch() },
+    ToolDeadlineExceeded(_) =>
+      { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: fault_class_tool_deadline_exceeded() }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D1: the PROVIDER fault, projected the two ways a fault has to be projected
+-- ---------------------------------------------------------------------------
+--
+-- These live here, beside `tool_outcome_record`, for the reason
+-- `generated_provider_entry` gives for the decision mappings: the class
+-- mappings belong one screen apart, so "which fields of a scripted fault reach
+-- the world, and under which class id" is answerable in one place. Putting them
+-- in `stub_step` would also have needed a NEW import statement there, and
+-- `stub_step.ail:203` is an A5 attribution anchor (S18). It was `:202` from
+-- WI-A5 until WI-D3, which added one import line above it.
+--
+-- 1. THE PRODUCTION VALUE. What `Ports.model_step` hands the driver in place of
+--    a `StepResult`, and `retryable` is the whole item: `session.c2_loop` reads
+--    it through `should_retry_stream_error` and takes the retry branch or the
+--    `TermProviderFailure` finalize. It is DERIVED from the code rather than
+--    carried beside it — see `provider_error_is_retryable`'s note in the
+--    catalogue for the binding and why the alternative was a codec change.
+export pure func scripted_step_ai_error(s: ScriptedStep) -> AIError {
+  { code: s.error_code,
+    message: if s.error_message == "" then s.error_code else s.error_message,
+    retryable: provider_error_is_retryable(s.error_code) }
+}
+
+export pure func scripted_step_faults(s: ScriptedStep) -> bool {
+  s.error_code != ""
+}
+
+-- 2. THE RECORDED VALUE. The same fault as a `TimedOutcome`, so that D11's
+--    class-reached counter can see it and a replay can re-serve it.
+--
+--    The payload is `encode_provider_outcome(s)` on BOTH the ok and the faulted
+--    path, unchanged and with no codec change: it already carries `error_code`
+--    and `error_message` (WI-B2b), and `decode_provider_outcome` already reads
+--    them back. That is what makes the derivation replayable — the code
+--    survives the round trip, so `retryable` re-derives to the same bool and a
+--    replayed run takes the same branch. A `retryable` FIELD would not have
+--    survived it without widening D8's persisted artifact surface.
+--
+--    The chunks are passed in rather than taken from `s.chunks` because the
+--    recorder must record what was PLAYED, and they are also what separates
+--    `provider_partial_stream_then_error` from the two plain error classes.
+--
+-- AND THE DEFECT THIS RECORD MADE VISIBLE, WRITTEN HERE BECAUSE THE SITE IT
+-- CORRECTS COULD NOT CARRY IT. `session.ail`'s unretried-provider-failure
+-- branch finalized from `st.world_state` — the world the STEP WAS ENTERED
+-- with — rather than from `exchange.next_state`. That is plan rule S12's exact
+-- shape, the one WI-B2b named and could not instrument: *the decision falls
+-- back; the world must not.* The provider call HAPPENED. This record was
+-- appended for it and the script cursor advanced past the entry it served, and
+-- the pre-step chain before it may have consumed entries of its own.
+-- Finalizing from the entered world discarded both, so a run ended having
+-- recorded one fewer request than it made — under-recording, on the one path
+-- where the run is over and nothing downstream can notice.
+--
+-- MEASURED, AND THAT IS WHY THE LINE CHANGED RATHER THAN AN ARGUMENT ABOUT IT.
+-- Over a 260-seed sweep the wire carried **75** provider-failure finalizes and
+-- the interaction logs carried **zero** `provider_error_non_retryable` records.
+-- The retry branch directly above it — same fault, same recorder, threading
+-- `exchange.next_state` — recorded its own class on 6 seeds of the same sweep.
+-- Two arms of one match, differing in this expression and in nothing else, is
+-- as close to a controlled experiment as the driver allows. The class was
+-- unreachable by search for this reason and no other, and no recorded reason
+-- named it.
+--
+-- The other two `st.world_state` finalize sites in that match
+-- (`SealSystemPromptEmpty`, `SealExhausted`) discard `chain.next_state` the
+-- same way, and WI-D1 did NOT change them: no profile in this tree reaches
+-- either branch, so the edit would be unexercised by every gate here. Reported
+-- rather than fixed blind.
+export pure func provider_outcome_record(s: ScriptedStep, chunks: [StreamChunkRecord]) -> TimedOutcome {
+  { advance_ms: 0,
+    chunks: chunks,
+    payload: encode_provider_outcome(s),
+    status: if scripted_step_faults(s) then OutcomeFault else OutcomeOk,
+    fault_class_id: provider_fault_class_id(s.error_code, List.length(chunks)) }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-A13 stage 4: the GENERATING seams
+-- ---------------------------------------------------------------------------
+--
+-- Each of these SUPPLIES the world's queue entry from the seeded generator and
+-- then delegates to its recording counterpart. That composition is the whole
+-- design, and it is chosen over a generating recorder for three reasons:
+--
+--   1. ONE RECORDER. A generating adapter that also recorded would be a second
+--      copy of "serve the head, advance past it, append an interaction", and a
+--      log that disagrees with the run it claims to record is the defect stage
+--      2 exists to detect. `recording_clock` wraps `virtual_clock` for the same
+--      reason and states it in the same words.
+--
+--   2. D2's "DISCOVERY CHOOSES ONLY AT REQUESTS THE REAL DRIVER ACTUALLY
+--      MAKES. It never invents a tool, approval, or extension-effect request
+--      disconnected from production control flow." A generator that pre-filled
+--      a queue would be choosing before any request existed — and worse, it
+--      could not consult the request, which D2 names as an input to every
+--      choice. Generating exactly one entry at the moment the port is called
+--      makes that structural instead of asserted.
+--
+--   3. THE GENERATED PROGRAM REPLAYS THROUGH THE UNCHANGED STAGE-3 PATH.
+--      Because the recorded interaction is written by the same recorder as
+--      before, `dst_replay.world_state_of` reconstitutes a plain world and the
+--      replay runs on `recording_ports` — no generator in scope. That is D2's
+--      "replay receives that resolved program and never calls the generator",
+--      and it is true here by construction rather than by discipline.
+--
+-- The salt each adapter builds is D2's "bounded request projection ... and
+-- current world state": the request's own fields, plus the log length and the
+-- clock. Both halves are needed. Without the request the choice cannot depend
+-- on what was asked; without the world position two identical requests at
+-- different points in one run would receive the same answer, which is a
+-- generator with a period of one per request shape.
+
+-- The generating tool dispatch.
+--
+-- `world_tool` DELEGATES TO THE REAL DISPATCHER on an empty queue, so a
+-- generating adapter that failed to supply an entry would silently execute a
+-- process — turning a seeded run into a live one and making the Process poison
+-- pair meaningless. Supplying the entry first is what keeps a fully-seeded run
+-- free of process execution, and `world_state_probe`'s poison pair is what
+-- would notice if it stopped.
+export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  if not generator_installed(state.gen) then recording_tool(state, inv)
+  else {
+    let salt = "tool call_id=${inv.call.id} tool=${inv.call.tool} timeout_ms=${inv.timeout_ms} at=${state.clock_ms} n=${generator_authored_count(state.log)}";
+    let choice = choose_tool(state.gen, salt, inv.timeout_ms, inv.call.id);
+    let d = choice.decision;
+    let entry: ScriptedTool = {
+      tool_call_id: d.answering_call_id,
+      duration_ms: d.duration_ms,
+      -- `world_tool` checks correlation, then the deadline, then the code, in
+      -- that order. The code is therefore blanked for the two fault choices
+      -- that must be reached through an EARLIER branch, or a mismatch decision
+      -- would replay as an ordinary execution failure and D3's correlation
+      -- class would be unreachable by a generated program.
+      code: match d.fault { ToolChoiceFailed => d.code, _ => "" },
+      message: match d.fault { ToolChoiceFailed => d.message, _ => "" },
+      content: d.content,
+      -- `-1` AND NOT A DRAW. The generator has no exit-code axis and giving it
+      -- one is not a widening: `dst_generator`'s stream is consumed in a fixed
+      -- order, so an extra draw here remaps every subsequent choice and moves
+      -- stage 4's pinned seeds 9, 13 and 94, each of which has an asserted
+      -- reason. Deriving one instead (`if d.code == "" then 0 else 1`) draws
+      -- nothing and is worse: it would manufacture the claim that every
+      -- generated tool ran a process, which is the fabrication the sentinel
+      -- exists to avoid. A generated program says it does not know.
+      exit_code: -1
+    };
+    recording_tool({ state | gen: choice.state, tools: [entry] }, inv)
+  }
+}
+
+-- The provider entry the generating provider serves.
+--
+-- The MAPPING lives here, beside the other two, rather than in
+-- `src/core/test/stub_step` where the generating provider closure is. Two
+-- reasons, and the second is the load-bearing one:
+--
+--   * all three class mappings are then one screen apart, so "which fields of
+--     a decision reach the world" is answerable in one place;
+--   * `stub_step.ail:203` — `:202` until WI-D3 — is an A5 attribution anchor.
+--     Its history is the point:
+--     `:161` until WI-B2b's threading moved it, re-derived to `:163` at WI-B4,
+--     moved to `:182` by WI-C1 and to `:202` by WI-C3. Putting the decision
+--     mapping HERE
+--     means `stub_step` widens ONE existing import line and adds no import
+--     statement, so this particular edit does not move the anchor. Cluster 8
+--     paid a five-artifact cascade including a mandatory `driver_only` re-issue
+--     for a line that shifted; cluster 9 avoided it with one `sed -n '163p'`
+--     check, and so does this — now `make anchors`, which reads every anchor in
+--     milliseconds.
+--
+--     **But the technique only covers imports.** WI-C1 moved the anchor with
+--     pure COMMENT above `live_ports`, which no amount of insert-below
+--     discipline avoids, and paid the full re-issue (v4 -> v5). The avoidable
+--     half of this cascade is genuinely avoidable; the rest is the case for a
+--     coordinate-independent anchor.
+--
+-- `terminate` is not returned separately: a terminating decision IS a step with
+-- no tool calls and a "stop" finish reason, which is the only thing the driver
+-- reads. Returning the flag as well would be a second representation of one
+-- fact, and the driver would still ignore it.
+export pure func generated_provider_entry(state: WorldState, salt: string) -> { step: ScriptedStep, gen: GeneratorState } {
+  let choice = choose_provider(state.gen, salt, generator_authored_count(state.log));
+  let d = choice.decision;
+  let calls: [ToolCall] =
+    if d.terminate then []
+    else [{ id: d.tool_call_id, name: d.tool_name, arguments: d.tool_args }];
+  {
+    step: { prose: d.prose,
+            tool_calls: calls,
+            input_tokens: d.input_tokens,
+            output_tokens: d.output_tokens,
+            finish_reason: d.finish_reason,
+            chunks: repeat_chunk(d.chunk_text, d.chunk_count),
+            -- WI-D1. Carried straight through: the generator chose the code and
+            -- this is the mechanical mapping the header above says the adapters
+            -- do and nothing else. The CLASS is not decided here — it is
+            -- `provider_fault_class_id(code, chunks)` at the moment the fault is
+            -- recorded, because it depends on the chunks as well as the code.
+            error_code: d.error_code, error_message: d.error_message,
+            -- Still 0, and deliberately: see `choose_provider`'s restated
+            -- latency note. A generated provider latency needs a recorder that
+            -- can see it, and `check_discovery`'s clock balance is right to
+            -- refuse one that cannot.
+            advance_ms: 0 },
+    gen: choice.state
+  }
+}
+
+pure func repeat_chunk(text: string, n: int) -> [string] {
+  if n <= 0 then [] else "${text}.${n}" :: repeat_chunk(text, n - 1)
+}
+
+-- The generating approval channel. `serve: false` supplies NOTHING, which is
+-- how `scripted_approval` reports end-of-input and how stage 2's
+-- `OutcomeMissing` on the approval class becomes reachable by a generated
+-- program at all.
+--
+-- The raw line is the operator's own wire format, built here rather than in the
+-- generator because it is the DRIVER's vocabulary: `resolve_approval` parses
+-- it, and a generator that knew the JSON shape would be encoding production
+-- policy in the choice layer.
+export func generating_approval(state: WorldState, req: ApprovalRequest) -> ApprovalInput ! {IO} {
+  if not generator_installed(state.gen) then recording_approval(state, req)
+  else {
+    let salt = "approval call_id=${req.call.id} tool=${req.call.name} default_allow=${req.default_allow} at=${state.clock_ms} n=${generator_authored_count(state.log)}";
+    let choice = choose_approval(state.gen, salt);
+    let d = choice.decision;
+    let queued =
+      if not d.serve then []
+      else if d.approve then ["{\"type\":\"approve\"}"]
+      else ["{\"type\":\"deny\",\"reason\":\"${d.reason}\"}"];
+    recording_approval({ state | gen: choice.state, approvals: queued }, req)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-A13 stage 3: the recorded outcome must be SUFFICIENT TO RE-SERVE THE
+-- RESPONSE
+-- ---------------------------------------------------------------------------
+--
+-- `dst_program`'s design note 3 refuses to put the provider script, the
+-- approval queue and the tool queue on the execution program, because "a
+-- program could serve a response that no interaction records, which is the
+-- exact shape of the completeness defect this item exists to prevent". They are
+-- PROJECTIONS of the interaction list, and `dst_replay.world_state_of` computes
+-- them.
+--
+-- That constraint has a consequence stage 2 did not have to face and stage 3
+-- does: a projection can only be lossless if the thing it projects from carries
+-- everything. Stage 2 recorded the provider outcome's payload as `s.prose`
+-- alone. That is a legible summary and an insufficient record: the step's TOOL
+-- CALLS are what cause the next production tool request, so a program
+-- discovered from a run with tool calls reconstituted a script that made none,
+-- and the replay terminated at step 0 while agreeing with the program at every
+-- position it reached.
+--
+-- The fix belongs HERE and not on the program. D2 says a provider timed outcome
+-- carries "a final StepResult or AIError", so recording only the prose was an
+-- under-recording of the outcome against D2's own text; widening
+-- `ExecutionProgram` with a script field would instead be the defect design
+-- note 3 exists to prevent. The payload becomes a structured projection, which
+-- is what D2 already calls it ("arguments and message/payload digests are
+-- recorded projections, not silently discarded").
+--
+-- ENCODER AND DECODER SIT TOGETHER, ON PURPOSE. This module's header argues
+-- that "two representations of one fact with a hand-written projection between
+-- them is the exact shape of the fifteen silent defects this project has now
+-- found". A codec is that hazard in miniature, so the two halves are adjacent
+-- and a round-trip test below is what holds them together.
+--
+-- The stream chunks are deliberately NOT in the payload: they are already in
+-- `TimedOutcome.chunks`, and duplicating them would create exactly the second
+-- representation the paragraph above rejects. `world_state_of` reads them from
+-- there, which is what makes that field load-bearing rather than decorative.
+
+pure func str_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(v) => v }
+  }
+}
+
+pure func int_field(obj: Json, key: string, fallback: int) -> int {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asNumber(j) { None => fallback, Some(v) => _float_to_int(v) }
+  }
+}
+
+-- `int_field` with the fallback removed. WI-D22 needs the DISTINCTION between a
+-- field that is absent and a field that holds a value, and a total reader with a
+-- default cannot express it: whatever default is passed comes back for both.
+-- Every other field in these codecs is legitimately total; `exit_code` is the
+-- one where absence has to be a refusal, so it is the one that needs this.
+pure func opt_int_field(obj: Json, key: string) -> Option[int] {
+  match get(obj, key) {
+    None => None,
+    Some(j) => match asNumber(j) { None => None, Some(v) => Some(_float_to_int(v)) }
+  }
+}
+
+pure func bool_field(obj: Json, key: string, fallback: bool) -> bool {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asBool(j) { None => fallback, Some(v) => v }
+  }
+}
+
+pure func json_array(obj: Json, key: string) -> [Json] {
+  match get(obj, key) {
+    None => [],
+    Some(j) => match asArray(j) { None => [], Some(xs) => xs }
+  }
+}
+
+pure func has_key(obj: Json, key: string) -> bool {
+  match get(obj, key) { None => false, Some(_) => true }
+}
+
+-- What a recorded provider outcome reads back as.
+--
+-- Three cases and not two: an exhausted script is a request the driver MADE and
+-- the world declined to serve from the script, so it is a recorded interaction
+-- with no script entry behind it — the same distinction an end-of-input
+-- approval read draws with `OutcomeMissing`. Collapsing it into "undecodable"
+-- would make a legitimate run unreplayable; collapsing it into "served" would
+-- manufacture a script entry the discovery run never had.
+export type ProviderOutcome
+  = ProviderServed(ScriptedStep)
+  | ProviderScriptExhausted
+  | ProviderUndecodable(string)
+
+pure func tool_call_json(c: ToolCall) -> Json {
+  jo([kv("id", js(c.id)), kv("name", js(c.name)), kv("arguments", js(c.arguments))])
+}
+
+pure func tool_calls_json(cs: [ToolCall]) -> [Json] {
+  match cs { [] => [], c :: rest => tool_call_json(c) :: tool_calls_json(rest) }
+}
+
+pure func tool_calls_of(xs: [Json]) -> [ToolCall] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ id: str_field(x, "id", ""),
+         name: str_field(x, "name", ""),
+         arguments: str_field(x, "arguments", "") }) :: tool_calls_of(rest)
+  }
+}
+
+-- `finish_reason` is recorded rather than derived. `scripted_to_step_result`
+-- WOULD derive it ("tool_calls if there are any, else stop"), and for every
+-- step `tool_step` builds that derivation is correct — which is precisely why
+-- it must not be relied on: `tool_step_finish` exists to produce a step whose
+-- finish reason disagrees with its tool calls, because real providers do that,
+-- and a derived value would replay that step as a different one while every
+-- count still balanced.
+export pure func encode_provider_outcome(s: ScriptedStep) -> string {
+  encode(jo([
+    kv("served", jb(true)),
+    kv("prose", js(s.prose)),
+    kv("finish_reason", js(s.finish_reason)),
+    kv("input_tokens", jnum(_int_to_float(s.input_tokens))),
+    kv("output_tokens", jnum(_int_to_float(s.output_tokens))),
+    kv("tool_calls", ja(tool_calls_json(s.tool_calls))),
+    -- WI-B2b widening 1: the FAULT travels in the payload, because it is what
+    -- the provider said. Contrast `advance_ms` below, which does not.
+    kv("error_code", js(s.error_code)),
+    kv("error_message", js(s.error_message))
+  ]))
+}
+
+export pure func encode_exhausted_provider_outcome() -> string {
+  encode(jo([kv("served", jb(false))]))
+}
+
+-- `advance_ms` comes from the recorded `TimedOutcome`, not from the payload —
+-- WI-B2b widening 2, and it is deliberately the SAME shape as
+-- `decode_tool_outcome(payload, advance_ms)` directly below, for the same
+-- reason: the elapsed time is what happened to the CLOCK, so recording it in
+-- the payload as well would be a second representation of one quantity, and the
+-- two could drift. Before this parameter existed a replayed provider call
+-- always advanced the virtual clock by zero, which made every recorded
+-- provider latency unreplayable while every count still balanced.
+export pure func decode_provider_outcome(payload: string, advance_ms: int) -> ProviderOutcome {
+  match decode(payload) {
+    Err(_) => ProviderUndecodable("the payload is not JSON"),
+    Ok(root) =>
+      if not has_key(root, "served") then
+        ProviderUndecodable("the payload carries no 'served' discriminator; a provider outcome recorded before WI-A13 stage 3 held the prose alone and cannot reconstitute the step's tool calls")
+      else if not bool_field(root, "served", false) then ProviderScriptExhausted
+      else ProviderServed({
+        prose: str_field(root, "prose", ""),
+        tool_calls: tool_calls_of(json_array(root, "tool_calls")),
+        input_tokens: int_field(root, "input_tokens", 0),
+        output_tokens: int_field(root, "output_tokens", 0),
+        finish_reason: str_field(root, "finish_reason", ""),
+        -- Read back from `TimedOutcome.chunks` by the caller; see above.
+        chunks: [],
+        error_code: str_field(root, "error_code", ""),
+        error_message: str_field(root, "error_message", ""),
+        advance_ms: advance_ms
+      })
+  }
+}
+
+-- What a recorded tool outcome reads back as: the `ScriptedTool` that reproduces
+-- it. One case per fault A12's typed contract discriminates, because the flat
+-- string payload stage 2 recorded lost the failure CODE entirely — a
+-- `ToolFailed` recorded as its message alone replays as a success, and D3
+-- requires the tool fault classes to be reachable.
+export type ToolOutcomeRecord
+  = ToolRecordDecoded(ScriptedTool)
+  | ToolRecordUndecodable(string)
+
+-- THE FIELD IS AUTHORITATIVE AND THE CONTENT IS AN OPAQUE RENDERING (WI-D23).
+-- A recorded `BashExec` interaction carries the exit code twice: typed in
+-- `exit_code`, and as text inside the JSON that `dispatch_one_typed` rendered
+-- into `content`. In every artifact this tree records the two agree by
+-- construction — both derive from one `ToolResultItem` in one dispatch — but a
+-- hand-written artifact can make them disagree, and nothing compares them. That
+-- is decided, not overlooked: the typed field is what replay, validation and
+-- every caller read, and `content` is what a MODEL reads, an opaque string this
+-- schema makes no claims about. Do NOT close the gap by parsing `content`'s
+-- JSON in a validator — recovering typed facts from that string is the defect
+-- class WI-D19 refused and WI-D21..D23 spent three items removing; a validator
+-- that reintroduces it guards the henhouse with the fox.
+export pure func encode_tool_outcome(o: ToolOutcome) -> string {
+  match o {
+    -- WI-D22: `exit_code` is written UNCONDITIONALLY, including when it is -1.
+    -- Writing it only when known was the other arrangement and it is the one
+    -- that cannot be decoded: an absent field would then mean either "this
+    -- artifact predates the field" or "this build knew nothing", and the
+    -- decoder below distinguishes exactly those two by presence. One meaning
+    -- per absence.
+    ToolCompleted(c) =>
+      encode(jo([kv("result", js("completed")), kv("content", js(c.content)),
+                 kv("exit_code", jnum(_int_to_float(c.exit_code)))])),
+    ToolFailed(f) =>
+      encode(jo([kv("result", js("failed")), kv("code", js(f.code)), kv("message", js(f.message))])),
+    -- `got_id` is the SCRIPT's id, which is what the world must be re-seeded
+    -- with for `world_tool` to take the correlation branch again. Recording the
+    -- expected id instead would replay as an ordinary success.
+    ToolCorrelationMismatch(m) =>
+      encode(jo([kv("result", js("correlation_mismatch")),
+                 kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))])),
+    -- No duration here: the elapsed time IS `TimedOutcome.advance_ms`, and
+    -- `world_tool` re-derives the deadline branch from that against the
+    -- invocation's own timeout. Recording it twice is a second representation.
+    ToolDeadlineExceeded(d) =>
+      encode(jo([kv("result", js("deadline_exceeded")), kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))]))
+  }
+}
+
+-- `advance_ms` comes from the recorded outcome rather than the payload, for the
+-- reason `recording_tool` reads it back from the world rather than from the
+-- script: it is what actually happened to the clock, and it is the single
+-- quantity that re-derives the deadline branch on replay.
+export pure func decode_tool_outcome(payload: string, advance_ms: int) -> ToolOutcomeRecord {
+  match decode(payload) {
+    Err(_) => ToolRecordUndecodable("the payload is not JSON"),
+    Ok(root) => {
+      let result = str_field(root, "result", "");
+      if result == "completed" then
+        -- WI-D22, AND THIS IS THE ROW `execution-program/2` WAS CUT FOR.
+        --
+        -- `exit_code` is read by PRESENCE and not with a default. Every other
+        -- field in this decoder uses `str_field(root, k, <default>)`, and doing
+        -- that here produces S30's failure at the exact site S30 was written
+        -- about: a payload recorded before this field existed carries no
+        -- `exit_code`, absence would decode to whatever default is chosen, and
+        -- every candidate default that is a valid exit status means SUCCESS. A
+        -- recorded run in which `ailang check` failed would replay as a run in
+        -- which it passed, and every count would still balance.
+        --
+        -- A pre-v2 payload is therefore UNDECODABLE, not defaulted. That is the
+        -- whole difference between a migration and a silent reinterpretation:
+        -- `program_schema_version()` moved in the same commit, so an artifact
+        -- carrying such a payload is at `execution-program/1` and this build
+        -- knows what it is looking at. `dst_replay.tools_of` turns this into a
+        -- named `ToolOutcomeUndecodable(ordinal, why)` refusal, which is a
+        -- replay that stops rather than a replay that lies.
+        --
+        -- The v1 half of that policy is NOT "v1 artifacts are unreadable":
+        -- `decodable_schema_versions()` still holds `execution-program/1` and
+        -- `scenario_the_frozen_v1_specimen_still_decodes` still passes. A v1
+        -- PROGRAM decodes; a v1 TOOL OUTCOME cannot reconstitute a world,
+        -- because the one thing the world needs from it is the thing it does
+        -- not contain.
+        match opt_int_field(root, "exit_code") {
+          None =>
+            ToolRecordUndecodable("the payload records a completed tool with no 'exit_code' field; it was written at execution-program/1, before WI-D22 gave ScriptedTool an exit code, and there is no default for it — every value that is a valid exit status asserts an outcome the recorder never observed, and 0 would replay a failed subprocess as a successful one. Replay this artifact with the pinned runner for schema 'execution-program/1'"),
+          Some(x) =>
+            ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
+                                message: "", content: str_field(root, "content", ""),
+                                exit_code: x })
+        }
+      -- The other three arms carry `-1` rather than reading a field, because
+      -- none of them is a process that exited: a typed tool fault has D3's
+      -- CODE, a mismatch has two ids, a deadline has two times. See
+      -- `ToolOutcome` for why only `ToolCompleted` carries the quantity.
+      else if result == "failed" then
+        ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms,
+                            code: str_field(root, "code", ""),
+                            message: str_field(root, "message", ""), content: "",
+                            exit_code: -1 })
+      else if result == "correlation_mismatch" then
+        ToolRecordDecoded({ tool_call_id: str_field(root, "got_id", ""), duration_ms: advance_ms,
+                            code: "", message: "", content: "", exit_code: -1 })
+      else if result == "deadline_exceeded" then
+        ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
+                            message: "", content: "", exit_code: -1 })
+      else
+        ToolRecordUndecodable("the payload carries no recognised 'result' discriminator (saw '${result}'); a tool outcome recorded before WI-A13 stage 3 held the content or the message alone and cannot reconstitute the failure code")
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Codec round trips. A codec's failure mode is a field that the encoder writes
+-- and the decoder ignores, or the reverse; both halves type-check and the loss
+-- is silent until a replay serves a different response and every count still
+-- balances. These assert the round trip is the IDENTITY on every field, which
+-- is the only statement that can see that.
+-- ---------------------------------------------------------------------------
+
+pure func eq_tool_calls(a: [ToolCall], b: [ToolCall]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b {
+      [] => false,
+      y :: ys => x.id == y.id && x.name == y.name && x.arguments == y.arguments && eq_tool_calls(xs, ys)
+    }
+  }
+}
+
+-- Every field of `ScriptedStep` given a DISTINCT value, so that a decoder which
+-- reads the right key into the wrong field is visible. Two fields holding the
+-- same value cannot distinguish which one a check is reading (S7).
+pure func codec_fixture_step() -> ScriptedStep {
+  { prose: "the prose",
+    tool_calls: [{ id: "call-1", name: "BashExec", arguments: "{\"cmd\":\"true\"}" },
+                 { id: "call-2", name: "Read", arguments: "{\"path\":\"x\"}" }],
+    input_tokens: 211,
+    output_tokens: 307,
+    -- Deliberately DISAGREES with the tool calls: a derived finish reason would
+    -- produce "tool_calls" here, so this row is what proves it is recorded.
+    finish_reason: "stop",
+    chunks: [],
+    -- WI-B2b widening 1. Distinct from every other string in this fixture, so a
+    -- decoder that reads `message` into `code` (or either into `prose`) is
+    -- visible rather than merely decodable.
+    error_code: "provider_error_retryable",
+    error_message: "upstream 503",
+    -- WI-B2b widening 2. 449 is distinct from 211, 307 and every other quantity
+    -- here, and it is deliberately NOT the value the round trip passes in — see
+    -- the test, which passes 983 and asserts the PASSED value wins, because
+    -- `advance_ms` travels beside the payload rather than inside it.
+    advance_ms: 449 }
+}
+
+pure func test_the_provider_outcome_round_trips_every_field() -> bool
+  tests [((), true)]
+  {
+    let s = codec_fixture_step();
+    -- 983, not `s.advance_ms` (449). WI-B2b widening 2 puts the elapsed time
+    -- BESIDE the payload rather than inside it, so the round trip must show the
+    -- passed value winning. Asserting `back.advance_ms == s.advance_ms` would
+    -- pass just as readily against an encoder that wrote the field into the
+    -- payload and a decoder that ignored the parameter — the exact silent loss
+    -- this suite exists to catch.
+    match decode_provider_outcome(encode_provider_outcome(s), 983) {
+      ProviderServed(back) =>
+        back.prose == s.prose
+          && back.finish_reason == s.finish_reason
+          && back.input_tokens == s.input_tokens
+          && back.output_tokens == s.output_tokens
+          && eq_tool_calls(back.tool_calls, s.tool_calls)
+          && back.error_code == s.error_code
+          && back.error_message == s.error_message
+          && back.advance_ms == 983,
+      ProviderScriptExhausted => false,
+      ProviderUndecodable(_) => false
+    }
+  }
+
+-- The three cases are DISTINGUISHED, not merely decodable. An exhausted script
+-- read back as a served empty step would silently lengthen the replay's script
+-- by one; a stage-2 payload (bare prose, not JSON) read back as anything other
+-- than undecodable would replay a step with no tool calls and terminate early.
+pure func test_the_three_provider_cases_are_distinguished() -> bool
+  tests [((), true)]
+  {
+    let exhausted = match decode_provider_outcome(encode_exhausted_provider_outcome(), 0) {
+      ProviderScriptExhausted => true, _ => false
+    };
+    let not_json = match decode_provider_outcome("stub: script exhausted", 0) {
+      ProviderUndecodable(_) => true, _ => false
+    };
+    let json_without_discriminator = match decode_provider_outcome("{\"prose\":\"s0\"}", 0) {
+      ProviderUndecodable(_) => true, _ => false
+    };
+    exhausted && not_json && json_without_discriminator
+  }
+
+-- Each of A12's four typed tool outcomes must round-trip to a `ScriptedTool`
+-- that `world_tool` maps back to the SAME outcome. The assertion is on the
+-- reconstituted world input, because that is what replay actually feeds back.
+pure func test_each_tool_outcome_round_trips_to_a_world_input_that_reproduces_it() -> bool
+  tests [((), true)]
+  {
+    -- 137 rather than 0 or 1: WI-D22's field must be shown to survive as a
+    -- VALUE, and a fixture holding 0 cannot distinguish "the code round-tripped"
+    -- from "the decoder supplied its default". 137 is also distinct from every
+    -- other quantity in this row (7, 11, 13, 900, 50), per S7.
+    let completed = decode_tool_outcome(encode_tool_outcome(ToolCompleted({ tool_call_id: "c1", content: "OUT", exit_code: 137 })), 7);
+    let failed = decode_tool_outcome(encode_tool_outcome(ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom" })), 11);
+    let mismatch = decode_tool_outcome(encode_tool_outcome(ToolCorrelationMismatch({ expected_id: "c1", got_id: "c9" })), 13);
+    let late = decode_tool_outcome(encode_tool_outcome(ToolDeadlineExceeded({ tool_call_id: "c1", elapsed_ms: 900, timeout_ms: 50 })), 900);
+    (match completed {
+       ToolRecordDecoded(t) => t.content == "OUT" && t.code == "" && t.tool_call_id == "" && t.duration_ms == 7
+                                 && t.exit_code == 137,
+       ToolRecordUndecodable(_) => false
+     })
+      && (match failed {
+            -- The CODE is the field stage 2's flat payload lost.
+            ToolRecordDecoded(t) => t.code == "E42" && t.message == "boom" && t.duration_ms == 11
+                                      && t.exit_code == -1,
+            ToolRecordUndecodable(_) => false
+          })
+      && (match mismatch {
+            -- `got_id`, not `expected_id`: re-seeding the world with the id the
+            -- driver asked for replays as an ordinary success.
+            ToolRecordDecoded(t) => t.tool_call_id == "c9" && t.duration_ms == 13 && t.exit_code == -1,
+            ToolRecordUndecodable(_) => false
+          })
+      && (match late {
+            -- Nothing but the duration, which is what re-derives the branch.
+            ToolRecordDecoded(t) => t.duration_ms == 900 && t.code == "" && t.tool_call_id == ""
+                                      && t.exit_code == -1,
+            ToolRecordUndecodable(_) => false
+          })
+  }
+
+-- WI-D22. THE ROW THE SCHEMA BUMP EXISTS TO MAKE TRUE, and it is stated as the
+-- failure it prevents rather than as a property.
+--
+-- The literal below is a completed tool outcome AS `execution-program/1` WROTE
+-- ONE — this is exactly what `encode_tool_outcome` emitted at HEAD~1, byte for
+-- byte. Under a decoder that read `exit_code` with a default, it would decode
+-- clean, `world_state_of` would reconstitute a tool queue from it, and a
+-- recorded run in which a subprocess exited non-zero would replay as one in
+-- which it exited 0 with every count balancing. That is S30's failure, and this
+-- is the place S30 was written about.
+--
+-- Both halves are asserted, because either alone is passed by a broken decoder:
+-- the v1 shape must REFUSE, and the v2 shape carrying an explicit `0` must
+-- DECODE TO 0. A decoder that refused everything would pass the first.
+pure func v1_completed_tool_payload() -> string {
+  "{\"result\":\"completed\",\"content\":\"OUT\"}"
+}
+
+pure func test_a_v1_tool_payload_refuses_rather_than_decoding_to_a_default_exit_code() -> bool
+  tests [((), true)]
+  {
+    let v1 = match decode_tool_outcome(v1_completed_tool_payload(), 7) {
+      ToolRecordUndecodable(_) => true,
+      ToolRecordDecoded(_) => false
+    };
+    -- The negative control: an explicit zero is a REAL exit code and must
+    -- survive, so the row above cannot be satisfied by a decoder that treats
+    -- every zero as absent.
+    let explicit_zero = match decode_tool_outcome("{\"result\":\"completed\",\"content\":\"OUT\",\"exit_code\":0}", 7) {
+      ToolRecordDecoded(t) => t.exit_code == 0,
+      ToolRecordUndecodable(_) => false
+    };
+    -- And the encoder's own output at this version always carries the field, so
+    -- nothing this build writes can trip the refusal above.
+    let current_build_writes_it =
+      Str.contains(encode_tool_outcome(ToolCompleted({ tool_call_id: "c", content: "OUT", exit_code: -1 })),
+                   "exit_code");
+    v1 && explicit_zero && current_build_writes_it
+  }
+
+pure func test_a_stage_two_tool_payload_is_undecodable_rather_than_a_silent_success() -> bool
+  tests [((), true)]
+  {
+    match decode_tool_outcome("boom", 3) { ToolRecordUndecodable(_) => true, _ => false }
+      && match decode_tool_outcome("{\"content\":\"OUT\"}", 3) { ToolRecordUndecodable(_) => true, _ => false }
+  }
+
+-- The sole `Ports` constructor. It keeps ONE function-typed parameter and
+-- defaults every other seam, including the deterministic `virtual_clock`;
+-- adapters that need a different seam override it by record update, as
+-- `live_ports` does for the clock.
+--
+-- That shape is forced, not preferred. Taking the clock as a second
+-- function-typed parameter is the obvious design and it does not compile on
+-- pinned v0.26.0: with two function-typed parameters carrying different effect
+-- rows, the checker unifies them against the wrong slots and reports the rows
+-- swapped ("record field 'clock_now': r1 has extra labels [AI IO Trace], r2 has
+-- extra labels [Clock]", and the mirror-image message for 'model_step'). Tested
+-- with both a top-level reference and an inline lambda for the second argument;
+-- both fail identically, so it is the arity and not the argument form. Record
+-- update over a one-parameter constructor avoids the inference path entirely.
+export func ports_shape_probe(
+  model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
+) -> Ports {
+  {
+    model_step: model_step,
+    approval_read: scripted_approval,
+    clock_now: virtual_clock,
+    env_get: scripted_env,
+    file_read: scripted_file,
+    file_write: scripted_file_write,
+    file_remove: scripted_file_remove,
+    path_stat: scripted_path_stat,
+    dir_list: scripted_dir_list,
+    dir_make: scripted_dir_make,
+    tool_exec: world_tool,
+    -- WI-D24. The DETERMINISTIC default, exactly as `tool_exec` takes
+    -- `world_tool`: a live run reaches it through `live_ports`, which overrides
+    -- neither, and a recording run overrides both in `stub_step`.
+    ext_effect_exec: world_ext_effect
+  }
+}

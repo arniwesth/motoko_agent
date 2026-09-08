@@ -1,0 +1,57 @@
+flowchart TB
+  %% ADR dependency and acceptance graph for the DST topic: 001 -> 007 -> 009.
+  %% Edge labels are the declared relationships; red-dashed = the acceptance cycle
+  %% found by re-review finding RR1, with its ruling shown as the resolution band.
+  %% Grounded 2026-07-25 against a7932c68b53ba0aa2ef42739e4dbe69296f37a8a
+  %% (007 header ADR:5-13 and residual list ADR:377-396; 009 header :10-11, D5 :490-499;
+  %% 009 NOTE-scope-and-sequence.md:31-33).
+
+  subgraph ADRS["Decision chain"]
+    direction TB
+    a001["<b>001_DST / ADR-001</b><br/>deterministic simulation testing architecture<br/>status: accepted · layered scenario + invariant system"]:::accepted
+    a007["<b>007 / ADR-001</b> — this ADR<br/>definition · taxonomy · scope · naming gate<br/>status: proposed, revised, re-reviewed<br/><i>decides no implementation</i>"]:::current
+    a009["<b>009 / ADR-001</b><br/>deterministic test-world architecture<br/>status: proposed · spike complete"]:::planned
+    a004["004 / ADR-001<br/>phase-oriented core"]:::existing
+    a005["005 / ADR-001<br/>harness policy boundary"]:::existing
+  end
+
+  a001 -->|"amended by: definition + naming threshold<br/>preserved: production code · explicit fakes<br/>normalized traces · structural invariants"| a007
+  a007 -->|"delegates: seam design (R1) · trace contract (R2)<br/>evidence detail (R8) · world design (D4)<br/>generator encoding · search economics · fault catalogue"| a009
+  a001 -->|"amended by: implementation architecture"| a009
+  a004 -->|"amended by: for the generated DST axis"| a009
+  a005 -.->|"relates to"| a009
+
+  subgraph BLOCK["Acceptance blockers as currently written"]
+    direction TB
+    b1["007 residual item 3<br/>preventive hermeticity rule<br/>filed as <b>blocking acceptance</b>, owned by 009"]:::defect
+    b2["009 cannot be accepted until an upstream<br/>AILANG recorded-stream API lands<br/>(third-party, unblocked by neither ADR)"]:::blocked
+  end
+
+  a007 -.->|"blocked on"| b1
+  b1 -.->|"owned by"| a009
+  a009 -.->|"blocked on"| b2
+  a009 ==>|"<b>depends on 007 after disposition AND acceptance</b>"| a007
+
+  cycle["<b>RR1 · the cycle</b><br/>007 waits on 009 · 009 waits on 007 · 009 waits on upstream<br/>taken literally, neither ADR can ever be accepted"]:::defect
+  b1 -.- cycle
+
+  subgraph FIX["RR1 ruling · re-partition, do not re-own"]
+    direction TB
+    f1["forward half — the D2 evidence-6 gate<br/><b>already decided</b> in 009 D5<br/>capability floor · routing audit · poison probes<br/>&rarr; not a 007 blocker"]:::resolved
+    f2["HEAD half — protect today's pillar-1 claim<br/>no new input-bearing IO/Env on dst_seeded entrypoints<br/>&rarr; <b>007-owned, tracked</b>, not blocking"]:::tracked
+    f3["blocking list becomes empty<br/>&rarr; accept 007 · 009 stays blocked only on upstream"]:::accepted
+  end
+
+  cycle ==> f1
+  cycle ==> f2
+  f1 --> f3
+  f2 --> f3
+
+  classDef accepted fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef current fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef planned fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef existing fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef defect fill:#3a1620,stroke:#f7768e,color:#f7c6cf,stroke-width:2.5px;
+  classDef blocked fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;
+  classDef resolved fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2px;
+  classDef tracked fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;

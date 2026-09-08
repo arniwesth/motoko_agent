@@ -1,0 +1,17 @@
+[package]
+name = "sunholo/motoko_ext_agentcli"
+version = "0.1.0"
+edition = "1"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+
+[effects]
+max = ["Process", "FS", "Env", "IO"]
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_agentcli/register",
+  "sunholo/motoko_ext_agentcli/agentcli",
+  "sunholo/motoko_ext_agentcli/providers"
+]

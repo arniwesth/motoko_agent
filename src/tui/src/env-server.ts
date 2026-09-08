@@ -1938,7 +1938,13 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     res.json({ status: "ok" });
   });
 
-  const server = app.listen(port);
+  // Bind loopback ONLY. This server exposes /exec, /exec-ailang and /compose, which run code, and it
+  // runs in containers that mount the repo and .env. `app.listen(port)` with no host defaults to
+  // 0.0.0.0 — every interface — so a published port (a `ports:` line added later to debug it) would turn
+  // this into remote code execution reachable from anything routed to the host.
+  // 127.0.0.1 keeps it inside the container's own loopback regardless of what compose publishes; the
+  // startup log claimed 127.0.0.1 long before the bind actually enforced it.
+  const server = app.listen(port, "127.0.0.1");
   const scratchpadWsServer = attachScratchpadCellWebSocketServer(server, {
     path: "/scratchpad-cell-ws",
     normalizeCells: normalizeScratchpadCells,

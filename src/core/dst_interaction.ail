@@ -1,0 +1,546 @@
+-- D2's interaction vocabulary: the causal identity, the timed outcome, and the
+-- single recorded interaction.
+--
+-- WI-A13, stage 2. These types were declared by stage 1 inside
+-- `src/core/dst_program.ail`. They are moved here unchanged, for one structural
+-- reason: stage 2 records interactions AT THE PORT SEAM, so `WorldState` in
+-- `src/core/ports.ail` has to carry a list of them, and `dst_program` cannot be
+-- imported from there — it names `ExecutionManifest`, which drags the whole
+-- 1559-line `dst_profile` closure into the production driver's import graph.
+--
+-- The alternative was a second, flatter "recorded request" record declared in
+-- `ports.ail` and projected into `Interaction` by the discovery module. That is
+-- rejected deliberately: two representations of one fact with a hand-written
+-- projection between them is the exact shape of the fifteen silent defects this
+-- project has now found, and the projection would be written by the same code
+-- whose completeness is under test. One representation, moved down.
+--
+-- This module therefore imports NOTHING but std. That is a load-bearing
+-- property, not an accident: it is what lets both the production port layer and
+-- the DST program layer name the same `Interaction`.
+--
+-- The three design decisions stage 1 recorded for these types are unchanged and
+-- restated here, because this is now where a reader finds them.
+--
+-- 1. CAUSAL IDENTITY IS A SUM, NOT A FLAT RECORD. D2 specifies different
+--    identity fields per class: provider adds step and model, tool and approval
+--    add call id and name, an extension effect adds the effect class id. A flat
+--    record holding all of them makes "a provider identity carrying a call id"
+--    representable, and then the validator has to forbid what the type should
+--    never have allowed. The `kind` string is DERIVED from the body
+--    (`identity_kind`), so a kind that disagrees with its own payload cannot be
+--    written down.
+--
+-- 2. THE ORDINAL IS WHAT "DUPLICATE IDENTITY" MEANS. D2 asks the validator to
+--    reject duplicate interaction identities, and in the same paragraph asks
+--    that repeated production call ids stay REPRESENTABLE — "so an invariant
+--    can reject them as system behavior rather than the program decoder
+--    rejecting the artifact". Those two only fit together one way: the decoder
+--    rejects a repeated ENCOUNTER ORDINAL, which is a malformed artifact, and
+--    says nothing about a repeated call id, which is a finding about the system
+--    under test.
+--
+-- 3. `deadline_ms` IS -1 FOR THE CLASSES D2 GIVES NO DEADLINE, rather than an
+--    Option, because the value is compared, ordered and encoded on every path.
+
+module src/core/dst_interaction
+
+import std/list as List (length)
+
+-- ---------------------------------------------------------------------------
+-- Causal identity (D2)
+-- ---------------------------------------------------------------------------
+
+-- The per-class identity payload. See design note 1 in the module header.
+--
+-- `ExtensionEffectIdentity`'s call id is "" where the effect has none, which is
+-- D2's "call id where the effect has one" — the only place a blank component is
+-- legitimate rather than a missing required value.
+export type IdentityBody
+  = ProviderIdentity(string, int, string)           -- origin, step, model
+  | ToolIdentity(string, string, string)            -- origin, call_id, name
+  | ApprovalIdentity(string, string, string)        -- origin, call_id, name
+  | ExtensionEffectIdentity(string, string, string) -- ext_id, class_id, call_id
+  | EnvironmentReadIdentity(string)                 -- key
+  | RandomDrawIdentity(string)                      -- bounds label
+  | ClockAdvanceIdentity
+  -- WI-D17's filesystem mutators. ONE component, the path, and NO origin — the
+  -- `EnvironmentReadIdentity` shape rather than the `ToolIdentity` shape,
+  -- because these are the DRIVER's own seams and D2 gives an origin only to the
+  -- three classes that answer a named producer's request.
+  --
+  -- WHAT THAT COSTS AND WHO PAYS IT, stated rather than discovered at part 2:
+  -- when compose's writes are routed, the producer becomes an EXTENSION and
+  -- "which extension wrote this path" stops being derivable from the log.
+  -- Adding the component later is a constructor arity change, which reaches
+  -- `identity_kind`, `identity_origin`, `identity_body_eq`,
+  -- `identity_body_projection`, `dst_program.validate_identity`,
+  -- `dst_secrets.scan_identity`, `dst_persistence.identity_slots`/`body_of` and
+  -- both directions of `ext_world`'s JSON — nine sites. It is NOT taken here
+  -- because a component that is blank at every construction site in the tree is
+  -- a field no fixture can distinguish from an absent one, and D2's own rule for
+  -- `ExtensionEffectIdentity` is that a blank component is legitimate only where
+  -- the class genuinely has none.
+  | FileWriteIdentity(string)                       -- path
+  | FileRemoveIdentity(string)                      -- path
+  -- WI-D18's directory create, on the same shape and for the same reason. The
+  -- two READS the directory class adds (`path_stat`, `dir_list`) get no
+  -- constructor at all, and that is WI-D17 §3's line rather than a new
+  -- judgement: the log records the driver's ACTS, and reconstitutes the world's
+  -- SUPPLY. A read of a table `InitialWorld` cannot carry is neither.
+  | DirMakeIdentity(string)                         -- path
+
+-- The stable kind id, DERIVED. These strings appear in the interaction log and
+-- in harness-failure projections, so they are part of the artifact surface and
+-- change only with a schema version.
+--
+-- WI-D17 ADDED TWO AND MOVED NO VERSION, and the reason is worth stating
+-- because "part of the artifact surface" reads as though it should have.
+-- Measured across the three versions that could plausibly have been the one:
+--
+--   `event_vocabulary_version` ("event-vocabulary/1") versions the 34
+--     `LedgerEvent` variants and their wire projection. It has nothing to do
+--     with this sum; naming it here would be versioning the wrong artifact.
+--   `program_schema_version` ("execution-program/1") versions the persisted
+--     program's SHAPE. Adding a constructor adds no field and removes none, and
+--     no existing program's bytes change meaning.
+--   The persistence codec's own tag vocabulary. `dst_persistence.body_of`
+--     REFUSES an unknown kind (`UnknownInteractionKind`), so an old build handed
+--     a new artifact rejects it loudly rather than reinterpreting it — which is
+--     precisely the behaviour D8's rule demands a version bump in order to
+--     guarantee, already guaranteed structurally.
+--
+-- ONE DECODER IS NOT LOUD, AND IT IS REPORTED RATHER THAN FIXED HERE:
+-- `ext_world.identity_body_of` falls through to `ClockAdvanceIdentity` for an
+-- unrecognised tag, by its own stated design ("a total decoder is the right
+-- shape"). An old build reading a new `file_write` interaction over that
+-- transport therefore reads a clock advance. That was already true for every
+-- constructor this sum has ever gained; it is named here because this item is
+-- the first to gain one since the note was written, and closing it is a change
+-- to a total decoder's contract, not to this list.
+export pure func identity_kind(b: IdentityBody) -> string {
+  match b {
+    ProviderIdentity(_, _, _) => "expect_provider",
+    ToolIdentity(_, _, _) => "expect_tool",
+    ApprovalIdentity(_, _, _) => "expect_approval",
+    ExtensionEffectIdentity(_, _, _) => "expect_extension_effect",
+    EnvironmentReadIdentity(_) => "environment_read",
+    RandomDrawIdentity(_) => "runtime_random_draw",
+    ClockAdvanceIdentity => "advance_clock",
+    FileWriteIdentity(_) => "file_write",
+    FileRemoveIdentity(_) => "file_remove",
+    DirMakeIdentity(_) => "dir_make"
+  }
+}
+
+-- Every kind id this vocabulary defines, in a fixed order. Stage 2's
+-- per-class completeness report iterates THIS rather than a list written out at
+-- the assertion site: a class added to `IdentityBody` and forgotten at the
+-- assertion is a class whose recording nobody checks.
+export pure func all_interaction_kinds() -> [string] {
+  [identity_kind(ProviderIdentity("", 0, "")),
+   identity_kind(ToolIdentity("", "", "")),
+   identity_kind(ApprovalIdentity("", "", "")),
+   identity_kind(ExtensionEffectIdentity("", "", "")),
+   identity_kind(EnvironmentReadIdentity("")),
+   identity_kind(RandomDrawIdentity("")),
+   identity_kind(ClockAdvanceIdentity),
+   identity_kind(FileWriteIdentity("")),
+   identity_kind(FileRemoveIdentity("")),
+   identity_kind(DirMakeIdentity(""))]
+}
+
+-- The origin, derived the same way. Blank for the three classes D2 gives no
+-- origin: an environment read, a random draw, and a clock advance are world
+-- events, not requests from a named producer.
+export pure func identity_origin(b: IdentityBody) -> string {
+  match b {
+    ProviderIdentity(o, _, _) => o,
+    ToolIdentity(o, _, _) => o,
+    ApprovalIdentity(o, _, _) => o,
+    ExtensionEffectIdentity(e, _, _) => e,
+    EnvironmentReadIdentity(_) => "",
+    RandomDrawIdentity(_) => "",
+    ClockAdvanceIdentity => "",
+    FileWriteIdentity(_) => "",
+    FileRemoveIdentity(_) => "",
+    DirMakeIdentity(_) => ""
+  }
+}
+
+-- Whether two identity bodies are the same logical request. Used by strict
+-- replay; defined here because it is a property of the identity, not of the
+-- replay mode.
+export pure func identity_body_eq(a: IdentityBody, b: IdentityBody) -> bool {
+  match a {
+    ProviderIdentity(o, s, m) =>
+      match b { ProviderIdentity(o2, s2, m2) => o == o2 && s == s2 && m == m2, _ => false },
+    ToolIdentity(o, c, n) =>
+      match b { ToolIdentity(o2, c2, n2) => o == o2 && c == c2 && n == n2, _ => false },
+    ApprovalIdentity(o, c, n) =>
+      match b { ApprovalIdentity(o2, c2, n2) => o == o2 && c == c2 && n == n2, _ => false },
+    ExtensionEffectIdentity(e, k, c) =>
+      match b { ExtensionEffectIdentity(e2, k2, c2) => e == e2 && k == k2 && c == c2, _ => false },
+    EnvironmentReadIdentity(k) =>
+      match b { EnvironmentReadIdentity(k2) => k == k2, _ => false },
+    RandomDrawIdentity(l) =>
+      match b { RandomDrawIdentity(l2) => l == l2, _ => false },
+    ClockAdvanceIdentity =>
+      match b { ClockAdvanceIdentity => true, _ => false },
+    FileWriteIdentity(p) =>
+      match b { FileWriteIdentity(p2) => p == p2, _ => false },
+    FileRemoveIdentity(p) =>
+      match b { FileRemoveIdentity(p2) => p == p2, _ => false },
+    DirMakeIdentity(p) =>
+      match b { DirMakeIdentity(p2) => p == p2, _ => false }
+  }
+}
+
+-- A human- and diff-readable projection of the body. This is what a
+-- HarnessFailure's `actual_request_projection` carries, so it must be total and
+-- must not lose a component.
+export pure func identity_body_projection(b: IdentityBody) -> string {
+  match b {
+    ProviderIdentity(o, s, m) => "provider origin=${o} step=${s} model=${m}",
+    ToolIdentity(o, c, n) => "tool origin=${o} call_id=${c} name=${n}",
+    ApprovalIdentity(o, c, n) => "approval origin=${o} call_id=${c} name=${n}",
+    ExtensionEffectIdentity(e, k, c) => "extension_effect ext=${e} class=${k} call_id=${c}",
+    EnvironmentReadIdentity(k) => "env_read key=${k}",
+    RandomDrawIdentity(l) => "random_draw bounds=${l}",
+    ClockAdvanceIdentity => "advance_clock",
+    FileWriteIdentity(p) => "file_write path=${p}",
+    FileRemoveIdentity(p) => "file_remove path=${p}",
+    DirMakeIdentity(p) => "dir_make path=${p}"
+  }
+}
+
+-- D2: "Every interaction identity includes a global encounter ordinal."
+export type CausalIdentity = {
+  ordinal: int,
+  body: IdentityBody
+}
+
+export pure func identity_projection(i: CausalIdentity) -> string {
+  "#${i.ordinal} ${identity_body_projection(i.body)}"
+}
+
+-- ---------------------------------------------------------------------------
+-- Outcomes (D2, D4)
+-- ---------------------------------------------------------------------------
+
+-- A recorded stream chunk at its virtual offset. D2: "ordered stream chunks
+-- with non-decreasing virtual offsets followed by a final StepResult or
+-- AIError".
+export type StreamChunkRecord = {
+  offset_ms: int,
+  text: string
+}
+
+-- `OutcomeMissing` is D2's `value_or_missing` for an environment read. It is a
+-- third status rather than an error because a key that is absent is a NORMAL
+-- read whose answer is "unset" — the driver's `getEnvOr` fallback path — and
+-- classifying it as a fault would manufacture a fault class that the catalogue
+-- does not contain.
+export type OutcomeStatus = OutcomeOk | OutcomeFault | OutcomeMissing
+
+export pure func outcome_status_id(s: OutcomeStatus) -> string {
+  match s {
+    OutcomeOk => "ok",
+    OutcomeFault => "fault",
+    OutcomeMissing => "missing"
+  }
+}
+
+-- D2's `timed_outcome`: "deterministic latency or completion time. Before
+-- delivery, the world advances its monotonic clock by the recorded non-negative
+-- amount."
+--
+-- `fault_class_id` is one of A7's stable class ids, and is blank exactly when
+-- the status is not `OutcomeFault`.
+export type TimedOutcome = {
+  advance_ms: int,
+  chunks: [StreamChunkRecord],
+  payload: string,
+  status: OutcomeStatus,
+  fault_class_id: string
+}
+
+export pure func ok_outcome(advance_ms: int, payload: string) -> TimedOutcome {
+  { advance_ms: advance_ms, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" }
+}
+
+export pure func fault_outcome(advance_ms: int, payload: string, class_id: string) -> TimedOutcome {
+  { advance_ms: advance_ms, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: class_id }
+}
+
+export pure func missing_outcome() -> TimedOutcome {
+  { advance_ms: 0, chunks: [], payload: "", status: OutcomeMissing, fault_class_id: "" }
+}
+
+-- ---------------------------------------------------------------------------
+-- Interactions
+-- ---------------------------------------------------------------------------
+
+-- D2: the resolved interactions are "an ordered expected protocol, not
+-- anonymous response queues", each recording a stable causal identity AND a
+-- bounded full request projection used for strict reproduction.
+export type Interaction = {
+  identity: CausalIdentity,
+  request_projection: string,
+  deadline_ms: int,
+  outcome: TimedOutcome
+}
+
+export pure func interaction_kind(i: Interaction) -> string {
+  identity_kind(i.identity.body)
+}
+
+-- Whether this class carries a deadline at all (D2's grammar: ExpectTool,
+-- ExpectApproval and ExpectExtensionEffect do; the rest do not).
+export pure func class_has_deadline(b: IdentityBody) -> bool {
+  match b {
+    ToolIdentity(_, _, _) => true,
+    ApprovalIdentity(_, _, _) => true,
+    ExtensionEffectIdentity(_, _, _) => true,
+    ProviderIdentity(_, _, _) => false,
+    EnvironmentReadIdentity(_) => false,
+    RandomDrawIdentity(_) => false,
+    ClockAdvanceIdentity => false,
+    -- A filesystem mutation is synchronous and has no timeout at the seam:
+    -- `Ports.file_write` takes no `timeout_ms` the way `ToolInvocation` does, so
+    -- recording a deadline here would be inventing one. `recording_file_write`
+    -- records -1, which is what this false means.
+    FileWriteIdentity(_) => false,
+    FileRemoveIdentity(_) => false,
+    DirMakeIdentity(_) => false
+  }
+}
+
+-- Only a provider outcome may carry stream chunks. D2 puts chunks on the
+-- provider timed outcome specifically, and D9 keeps chunk callbacks serial
+-- within the provider request rather than making them independent actors.
+export pure func class_may_stream(b: IdentityBody) -> bool {
+  match b {
+    ProviderIdentity(_, _, _) => true,
+    _ => false
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Log queries. Stage 2's assertions are counts and identity comparisons over a
+-- recorded log, and they are declared HERE rather than at the assertion site so
+-- that the recorder and the checker cannot drift into two notions of "how many
+-- of this class are in the log".
+-- ---------------------------------------------------------------------------
+
+export pure func count_kind(xs: [Interaction], kind: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if interaction_kind(i) == kind then 1 else 0) + count_kind(rest, kind)
+  }
+}
+
+export pure func of_kind(xs: [Interaction], kind: string) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      if interaction_kind(i) == kind then i :: of_kind(rest, kind) else of_kind(rest, kind)
+  }
+}
+
+-- WI-D4. How many interactions in this log the GENERATOR authored, as opposed
+-- to how many the log holds.
+--
+-- THE DIFFERENCE IS THE DEFECT WI-D4 EXISTS TO REMOVE. `max_interactions` is a
+-- bound on a generator schema (D2: "Each GENERATOR schema declares hard bounds
+-- for interactions"), and until this function existed both the bound's
+-- enforcement and the request salts read `List.length(state.log)` instead —
+-- the whole log, including every environment read the DRIVER made for its own
+-- configuration. Two consequences, and the second is the one that hid:
+--
+--   * the driver's reads SPENT the generator's budget, truncating trajectories;
+--   * the driver's reads entered the SALT, so they changed which branch every
+--     generated choice took. A generated trajectory was therefore a function of
+--     how many times the driver happened to read its config, and WI-D3 changing
+--     that count silently reshuffled every seed in the fixed bank — which is how
+--     `ToolCorrelationMismatch` stopped being reached by the two seeds pinned as
+--     its witnesses.
+--
+-- The three kinds counted are the three the GENERATING adapters serve: a
+-- provider exchange, a tool execution and an approval read are each a request
+-- the generator answers by CHOOSING. An environment read is answered from a map
+-- chosen up front, a clock advance is read back from the seam that caused it,
+-- and an extension effect comes from an installed hook — none of the three is a
+-- generator choice, and none of them may move one.
+--
+-- DERIVED from `identity_kind` rather than written as three string literals, for
+-- the reason the header of this section gives: a recorder and a checker with two
+-- notions of "how many of this class" is the drift this module exists to
+-- prevent.
+export pure func generator_authored_count(xs: [Interaction]) -> int {
+  count_kind(xs, identity_kind(ProviderIdentity("", 0, "")))
+    + count_kind(xs, identity_kind(ToolIdentity("", "", "")))
+    + count_kind(xs, identity_kind(ApprovalIdentity("", "", "")))
+}
+
+-- The sum of every recorded clock advance. This is the quantity the world's own
+-- `clock_ms` delta is compared against — the cross-check the handoff calls
+-- general across classes, because EVERY class may advance the clock.
+export pure func total_advance_ms(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => i.outcome.advance_ms + total_advance_ms(rest)
+  }
+}
+
+-- How many recorded approval reads actually CONSUMED an answer.
+--
+-- An approval read that finds the queue empty returns end-of-input and advances
+-- nothing (`scripted_approval`), so it is recorded with an `OutcomeMissing`
+-- status; one that is served consumes exactly one entry. The world's own
+-- `approvals` cursor delta must therefore equal this count EXACTLY — which
+-- turns the cursor from a proxy for "how many reads happened" into an exact
+-- statement about which ones were served.
+--
+-- The distinction is not academic. The cursor delta was used directly as the
+-- approval witness in stage 2's first version, and it UNDER-COUNTS the moment a
+-- queue runs dry: three reads against a one-entry queue move the cursor by one
+-- while the driver made three requests, so a CORRECT recorder was reported as
+-- over-recording. See `dst_discovery`'s witness comments.
+export pure func approvals_served(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (match i.identity.body {
+         ApprovalIdentity(_, _, _) =>
+           match i.outcome.status { OutcomeMissing => 0, _ => 1 },
+         _ => 0
+       }) + approvals_served(rest)
+  }
+}
+
+-- The env keys the log claims were read, in encounter order and with repeats
+-- preserved. Repeats matter: the driver reads `MOTOKO_TOOL_TIMEOUT_MS` once per
+-- native tool dispatch, so collapsing them would hide a recorder that logs the
+-- first read of a key and drops the rest.
+export pure func env_keys_read(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        EnvironmentReadIdentity(k) => k :: env_keys_read(rest),
+        _ => env_keys_read(rest)
+      }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests: the derivations on the identity itself, which have no fixture.
+-- ---------------------------------------------------------------------------
+
+pure func contains_str(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == target then true else contains_str(rest, target)
+  }
+}
+
+pure func all_distinct(xs: [string], seen: [string]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_str(seen, x) then false else all_distinct(rest, seen ++ [x])
+  }
+}
+
+-- The kind is derived from the body, so there is no representable program in
+-- which a kind disagrees with its own payload (design note 1). This asserts the
+-- derivation is TOTAL and INJECTIVE across the ten classes — if two classes
+-- ever derived the same kind string, the interaction log would conflate them
+-- and the completeness count per class would silently merge two classes.
+--
+-- WI-D17 took it from seven to nine, and the injectivity clause is what made the
+-- cheap design fail early: a single `FileMutationIdentity(op, path)` serving both
+-- mutators would have to derive its kind from `op`, which makes
+-- `FileMutationIdentity("bogus", p)` representable and reading as a write. Two
+-- constructors is what design note 1 asks for and this is the assertion that
+-- says so.
+--
+-- WI-D18 took it to ten with `DirMakeIdentity`, and the count is what says the
+-- directory class did NOT reuse a mutator's constructor. `FileWriteIdentity` for
+-- a `mkdirAll` would have type-checked at every one of the nine sites this sum
+-- reaches, produced a log whose every count still balanced, and recorded a
+-- directory create as a file write of zero bytes — a kind disagreeing with its
+-- own payload, which is what design note 1 forbids and what this row measures.
+pure func test_identity_kind_is_injective_across_the_ten_classes() -> bool
+  tests [((), true)]
+  {
+    let ks = all_interaction_kinds();
+    List.length(ks) == 10 && all_distinct(ks, [])
+  }
+
+-- Identity equality must discriminate on EVERY component D2 names, in both
+-- directions. A comparison that ignored, say, the provider's step would let
+-- strict replay deliver step 2's outcome to step 1's request and still call
+-- itself a reproduction.
+pure func test_identity_equality_discriminates_every_component() -> bool
+  tests [((), true)]
+  {
+    identity_body_eq(ProviderIdentity("o", 1, "m"), ProviderIdentity("o", 1, "m"))
+      && not identity_body_eq(ProviderIdentity("o", 1, "m"), ProviderIdentity("x", 1, "m"))
+      && not identity_body_eq(ProviderIdentity("o", 1, "m"), ProviderIdentity("o", 2, "m"))
+      && not identity_body_eq(ProviderIdentity("o", 1, "m"), ProviderIdentity("o", 1, "x"))
+      && not identity_body_eq(ToolIdentity("o", "c", "n"), ToolIdentity("o", "c", "x"))
+      && not identity_body_eq(ToolIdentity("o", "c", "n"), ToolIdentity("o", "x", "n"))
+      && not identity_body_eq(ExtensionEffectIdentity("e", "k", "c"), ExtensionEffectIdentity("e", "x", "c"))
+      && not identity_body_eq(EnvironmentReadIdentity("a"), EnvironmentReadIdentity("b"))
+      && not identity_body_eq(RandomDrawIdentity("a"), RandomDrawIdentity("b"))
+      -- WI-D17. The path discriminates, and — the half a one-constructor design
+      -- would have lost — a write and a remove of the SAME path are different
+      -- logical requests. Strict replay delivering one to the other would be a
+      -- reproduction that deleted what the run created.
+      && not identity_body_eq(FileWriteIdentity("a"), FileWriteIdentity("b"))
+      && not identity_body_eq(FileRemoveIdentity("a"), FileRemoveIdentity("b"))
+      && not identity_body_eq(FileWriteIdentity("a"), FileRemoveIdentity("a"))
+      && identity_body_eq(FileWriteIdentity("a"), FileWriteIdentity("a"))
+      -- WI-D18. A directory create and a file write AT THE SAME PATH are
+      -- different logical requests, and that pair is the one worth asserting:
+      -- they are the two acts a routed compose performs one line apart
+      -- (`mkdirAll` then `writeFile`), so a replay that delivered one to the
+      -- other would be a reproduction that created a directory where the run
+      -- wrote a file.
+      && not identity_body_eq(DirMakeIdentity("a"), DirMakeIdentity("b"))
+      && not identity_body_eq(DirMakeIdentity("a"), FileWriteIdentity("a"))
+      && not identity_body_eq(DirMakeIdentity("a"), FileRemoveIdentity("a"))
+      && identity_body_eq(DirMakeIdentity("a"), DirMakeIdentity("a"))
+  }
+
+-- A tool and an approval sharing origin, call id and name are DIFFERENT logical
+-- requests. They are structurally distinct constructors, so this cannot regress
+-- silently — but the driver genuinely issues both against one call id, so the
+-- claim is worth stating where a reader of the replay code will find it.
+pure func test_tool_and_approval_on_one_call_id_are_distinct() -> bool
+  tests [((), true)]
+  {
+    not identity_body_eq(ToolIdentity("loop_v2", "call_1", "BashExec"),
+                         ApprovalIdentity("loop_v2", "call_1", "BashExec"))
+  }
+
+-- `count_kind` must discriminate, not merely count. A recorder that logs every
+-- class under one kind string would satisfy a total count and fail this.
+pure func test_count_kind_discriminates_classes() -> bool
+  tests [((), true)]
+  {
+    let mk = func(b: IdentityBody, ord: int) -> Interaction {
+      { identity: { ordinal: ord, body: b },
+        request_projection: "p",
+        deadline_ms: if class_has_deadline(b) then 0 else -1,
+        outcome: ok_outcome(0, "") }
+    };
+    let xs = [mk(ProviderIdentity("d", 0, "m"), 0),
+              mk(ClockAdvanceIdentity, 1),
+              mk(ProviderIdentity("d", 1, "m"), 2)];
+    count_kind(xs, "expect_provider") == 2
+      && count_kind(xs, "advance_clock") == 1
+      && count_kind(xs, "expect_tool") == 0
+      && total_advance_ms(xs) == 0
+  }

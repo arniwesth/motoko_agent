@@ -1,0 +1,141 @@
+module sunholo/motoko_ext_conformance/fixtures/reject_fixtures
+
+import std/json (jo)
+import std/option (None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  FinalizeDecision,
+  FinalizeOutcome,
+  Msg,
+  NoDecision,
+  PassThrough,
+  PreStepDecision,
+  PreStepOutcome,
+  Compacted,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ResponseInterceptOutcome,
+  NoIntercept,
+  ToolCallEnvelope,
+  ToolHandleDecision,
+  ToolHandleOutcome,
+  Delegate,
+  ToolPolicyDecision,
+  Allow
+)
+
+func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Allow
+}
+
+-- S12: no port call, so the identity transition is the correct answer.
+func delegate_tool(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  { decision: Delegate, next_state: ctx.world }
+}
+
+-- S12: no port call, so the identity transition is the correct answer.
+func no_intercept(ctx: ExtCtx, _response: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  { decision: NoIntercept, next_state: ctx.world }
+}
+
+-- S12: no port call, so the identity transition is the correct answer.
+func no_solver_decision(ctx: ExtCtx, _candidate: string)
+  -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+func system_msg() -> Msg {
+  { role: "system", content: "bad injected system", tool_calls: [], tool_call_id: "" }
+}
+
+func assistant_summary(content: string) -> Msg {
+  { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func first_msg(msgs: [Msg]) -> Msg {
+  match msgs {
+    [] => assistant_summary("empty"),
+    m :: _ => m
+  }
+}
+
+func drop_first_tool_result(msgs: [Msg]) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" then rest
+      else m :: drop_first_tool_result(rest)
+  }
+}
+
+-- S12: this hook calls no port, so returning the world it was given is the
+-- CORRECT identity transition rather than a dropped successor.
+func prefix_pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: Compacted([system_msg()] ++ msgs, "reject fixture: system injection", jo([])),
+    next_state: ctx.world }
+}
+
+-- S12: as above — no port call, so the identity transition is correct.
+func pair_pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: Compacted(drop_first_tool_result(msgs), "reject fixture: severed tool pair", jo([])),
+    next_state: ctx.world }
+}
+
+-- One of the tree's only two extension callers of `ai_step` (the other is
+-- `compaction_ai.summarize_attempt`), which is why THIS row carries `Trace`.
+-- S12: it PERFORMS a provider call, so it must return `step.next_state` and
+-- never `ctx.world` — the latter type-checks identically and replays the
+-- consumed script entry.
+func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace} {
+  let step = ctx.ports.ai_step(ctx.world, ctx.model, msgs);
+  let summary = match step.result {
+    Ok(content) => content,
+    Err(e) => "ERR ${e}"
+  };
+  { decision: Compacted([assistant_summary(summary), first_msg(msgs)], "reject fixture: no cache", jo([])),
+    next_state: step.next_state }
+}
+
+-- The 6.0 host stamps the id, so `_id` is retained only to keep the three
+-- fixture names beside their builders.
+func hooks(_id: string, pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> [Capability] {
+  [
+    DescribeTools(\_ . []),
+    PromptShaper(empty_prompt_patch),
+    BudgetShaper(empty_budget_patch),
+    Compactor(pre_step),
+    ToolPolicy(allow_policy),
+    ToolProvider([], delegate_tool),
+    ResponseInterceptor(no_intercept),
+    SolverJudge(no_solver_decision)
+  ]
+}
+
+export func reject_prefix_hooks() -> [Capability] {
+  hooks("reject_prefix", prefix_pre_step)
+}
+
+export func reject_pair_hooks() -> [Capability] {
+  hooks("reject_pair", pair_pre_step)
+}
+
+export func reject_nocache_hooks() -> [Capability] {
+  hooks("reject_nocache", nocache_pre_step)
+}

@@ -1,0 +1,28 @@
+[package]
+name = "sunholo/motoko_ext_microrag"
+version = "0.4.2"
+edition = "1"
+ailang = ">=0.17.0"
+description = "Tier-1 motoko extension exposing AILANG microRAG (just-in-time knowledge retrieval) as a callable tool. Shells out to `ailang micro-rag` directly — no separate MCP server binary required."
+license = "Apache-2.0"
+
+[exports]
+modules = ["sunholo/motoko_ext_microrag/register"]
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+
+[effects]
+max = ["IO", "Process", "FS", "AI", "Env", "Net", "SharedMem", "Clock", "Stream"]
+
+[metadata]
+tags = ["motoko", "extension", "microrag", "retrieval", "ailang"]
+ai_summary = "Auto-injects AILANG knowledge retrieval into WriteFile tool results when the model writes a .ail file. The model doesn't call any tool — the ext intercepts WriteFile via on_tool_handle, performs the actual write, runs `ailang micro-rag context` on the content, and returns a combined result so the retrieval is in the model's next-turn history. Non-.ail writes are Delegated to motoko's default handler. Eliminates the weak-model failure mode where the model would have to remember to call a microrag_lookup tool."
+repository = "https://github.com/sunholo-data/ailang-packages/tree/main/packages/motoko-ext-microrag"
+license_url = "https://github.com/sunholo-data/ailang-packages/blob/main/LICENSE"
+
+[cascade]
+max_cost_usd = 0.25
+
+[stability]
+level = "experimental"

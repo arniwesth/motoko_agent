@@ -1,0 +1,94 @@
+flowchart TB
+  %% 013 ADR-003 v6.1 — SESSION JOURNAL AND RESUME: the mechanism, from the loss at HEAD to the
+  %% three processes that touch the journal (the traced run emits, the host writes, the resumer
+  %% folds) and what each decision makes true. Supersedes the v4.1 checkpoint drawing.
+  %% Colour = role: blue a loss measured at HEAD · amber the ADR · green decided now (D1–D6, D8,
+  %% PLAN-003 P1 and P3) · purple decided but unscheduled (D7, PLAN-003 P4) · teal a capability
+  %% with its proving gate in italics · gray-solid the file on disk · gray-dashed out of scope, and
+  %% what v5 retired from the checkpoint design.
+  %% Layout note: the renderer lays same-rank nodes in a row and ignores invisible links; the
+  %% three processes are subgraphs so the one-writer rule is visible (only the host touches the
+  %% journal), and the loop's re-entry into the run is stated in node text, not drawn, because
+  %% a cycle edge pulls the loop above the run it feeds.
+  %% Grounded 2026-09-07: ADR-003 v6.1 at HEAD 97827bf (committed at bbe28dd), branch
+  %% arniwesth/013-dst-architecture-adr, after six adversarial reviews
+  %% (REVIEW-adr003-*-verdicts-fable.md); the journal shape is oh-my-pi 18.1.11's session store,
+  %% host-written. PLAN-003 v3.1 carries the phases. NOTHING in the green, teal or purple nodes
+  %% exists at HEAD — this is the target.
+
+  subgraph LOSS["What is lost at HEAD — session.ail, verified at 97827bf"]
+    direction TB
+    l1["<b>the history dies at the Fail arm</b><br/>call_model_or_fail returns Fail(Internal) at the budget<br/>:2437 passes totals and step_idx to c2_fail — not st.msgs"]:::cap
+    l2["<b>the outer loops keep the pre-turn history</b><br/>TracedSessionResult is result · trace · world · emissions<br/>Err arms at :3421 and :3606 recurse with what they had before"]:::cap
+    l3["<b>the log is about the session, not of it</b><br/>provider calls logged as digests · compaction as a note<br/>tool results capped for display · 23 of 37 emits reach the trace"]:::cap
+    l4["<b>two ids, and nothing trusted back in</b><br/>every traced run derives its own session_id at :3137<br/>world_of_json is total — every field has a fallback"]:::cap
+  end
+
+  adr{"<b>ADR-003 v6.1</b><br/>a session is a journal the host writes from the wire,<br/>and resume is a strict fold of it"}:::decision
+  l1 --> adr
+  l2 --> adr
+  l3 --> adr
+  l4 --> adr
+
+  subgraph RUN["The traced run — c2_loop, one RunIdentity in, one result out, no file IO"]
+    direction TB
+    d2["<b>D2 · typed suspension, unchanged</b><br/>StepBudgetExhausted, its own code<br/>the Fail arm splits: c2_suspend builds the Continuation from st<br/>result stays Err · suspended: Some · final: FinalState"]:::now
+    d2e["<b>D2 · the journal-class events, appended AND emitted</b><br/>HistorySeeded once per run, at the traced entry, with the starting history<br/>HistoryAppended, one message each, at the nine sites — replaces_previous on the hybrid batch<br/>HistoryReplaced at the checkpoint, first_kept: None · StateDelta with cumulative<br/>digest_after: an incremental chain, one message's frame per append"]:::now
+    d4f["<b>D4 · the comparand</b><br/>final: history · cumulative · telemetry · ext_artifacts<br/>set at all seven terminal arms via a c2_finalize parameter<br/>carried by execution_of into ExecutionUnderTest"]:::now
+  end
+  adr --> d2
+  d2 --> d2e
+  d2e --> d4f
+
+  subgraph LOOP["The conversation loop — holds suspended · run_ordinal · task · profile · resume_count"]
+    direction TB
+    d5a["<b>D5 · identity</b><br/>session_id forwarded to the child — one id per log<br/>resume_count from the host's environment, read ambiently<br/>run_id = session.r&lt;resume_count&gt;.&lt;run_ordinal&gt;, no clock read, no reset"]:::now
+    d6a["<b>D6 · in-process resume</b><br/>a suspended run does not exit<br/>next user_message → c2_state_from_continuation<br/>step_idx 0 · totals zero · prior_counts = cumulative<br/>→ the next traced run, same session, back into c2_loop above"]:::now
+  end
+  d2 -->|"suspended"| d5a
+  d5a --> d6a
+
+  subgraph HOST["The host — TUI, the only writer"]
+    direction TB
+    d3["<b>D3 · SessionJournal, host-lifetime</b><br/>survives every child respawn · assigns id, parent_id = leaf, seq<br/>the seed: first run → N entries; after a profile switch → history_replaced; else digest-compare and drop<br/>journal-class payloads digested into the JSONL log, same commit as the events<br/>header completed on the first session_start · exit entry synchronous · the lease is the host's alone"]:::now
+  end
+  d2e -.->|"stdout — the wire the logger already receives"| d3
+
+  journal[("<b>.motoko/sessions/&lt;id&gt;/journal.jsonl</b><br/>append-only · { id, parent_id, seq, type, … } · a tree with a leaf<br/>header · history entries, one message each · state deltas · run boundaries<br/>settings · suspended · resumed · exit · (park · wake)<br/>0700 · grows with the session · never in the JSONL log")]:::artifact
+  d3 -->|"every entry as it arrives"| journal
+
+  subgraph RESUME["The resumer — --resume &lt;journal&gt;, a fresh child under the host's lease"]
+    direction TB
+    d4["<b>D4 · the fold, pure</b><br/>leaf → root by parent_id · strict decode per entry<br/>history from the seed through the latest history_replaced, honouring replaces_previous<br/>the chain digest recomputed at every entry · head prefix · transcript · the pairing check<br/>a trailing unpaired call stripped and recorded · counts from the last state_delta"]:::now
+    d6b["<b>D6 · cross-process resume</b><br/>runtime and prompt rebuilt from header.boot.task<br/>same profile: prompt digest must match, or --resume-force<br/>new profile: accepted, head prefix replaced, ext_artifacts reset, the seed journaled as history_replaced<br/>a crash resumes with every step the host flushed"]:::now
+    d5c["<b>D5 · refusals and the seam</b><br/>refused: schema · workdir · ext set · same-profile prompt · live lease<br/>accepted and recorded: profile switch · model change<br/>SessionResumed opens the frame at from_ordinal = the previous frame's final — no constant to pin"]:::now
+  end
+  journal -->|"read once, ambiently, outside the traced surface"| d4
+  d4 --> d6b
+  d6b --> d5c
+
+  inv["<b>the invariant: JournalFold</b><br/>fold the journal-class records of a run's own trace, as the host would id them,<br/>and compare with final, field by field — on every traced fixture the harness has<br/><i>gate: PLAN-003 P3 — red from P1's final until the emits land, then green on the whole sweep</i>"]:::unlocked
+  d4f --> inv
+  d4 --> inv
+
+  u1["<b>the first judging number</b><br/>after a budget stop, continue's first payload holds the exhausted history<br/>and the step count carries on<br/><i>gate: PLAN-003 P1 — DST fixture at budget 3 (8 messages), pure loop-rule tests, a live probe on rpc.main</i>"]:::unlocked
+  u2["<b>the second judging number</b><br/>a run that dies at step N resumes with N steps of history<br/>respawn · restart into another profile · kill -9 mid tool-phase<br/><i>gate: PLAN-003 P3 — journal_resume_dst.ail; three live resumes, one of them a crash</i>"]:::unlocked
+  d6a --> u1
+  d5c --> u2
+
+  d7["<b>D7 · durable park — unscheduled</b><br/>ParkEntered becomes a park entry with its open waits and request<br/>a resolved wake is a wake entry, a child of the park entry — no wake file, no generation<br/>the resumer seeds the wakes cursor from it; wake_read consumes it exactly once,<br/>because a run_started follows and the fold offers it no more<br/>gates: ADR-002 D2 activated · ADR-001's between-turn frame"]:::later
+  adr -.->|"what ADR-002 v3 D6 now points at"| d7
+  d7 -.-> journal
+
+  retired["<b>retired from v4.1 by v5</b><br/>the child-written Snapshot · file_replace and its FileReplace class · fs_atomic.ail<br/>the writer at the P2 seam · the outer-backstop skip · the child-written Restart update<br/>the written field · the generation counter · the wake file · the child's side of the lease"]:::capped
+  out["<b>out of scope — ADR-003 'Not decided'</b><br/>journal pruning · branching, rewind and fork (format-ready, unscheduled)<br/>cost and context exhaustion as suspensions · hostless durability<br/>--resume of a headless one-shot · artifacts inline versus by digest"]:::capped
+  adr -.-> retired
+  adr -.-> out
+
+  classDef cap fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef now fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef later fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef unlocked fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2px;
+  classDef artifact fill:#2a2f3a,stroke:#9aa4b2,color:#d5dbe5,stroke-width:2px;
+  classDef capped fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;

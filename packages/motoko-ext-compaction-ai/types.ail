@@ -1,0 +1,29 @@
+-- Configuration types for AI-powered compaction.
+
+module sunholo/motoko_ext_compaction_ai/types
+
+-- Configuration for AI-powered compaction
+export type CompactionAiConfig = {
+  model: string,         -- Model to use for summarization
+  threshold_pct: int,    -- Context usage % threshold to trigger compaction
+  keep_recent: int,      -- Number of recent turns to keep intact
+  keep_recent_tokens: int, -- Contiguous verbatim tail budget; 0 uses the legacy message count
+  min_relief_pct: int,   -- Minimum projected context relief worth an AI call
+  rate_limit_enabled: bool,
+  min_gap_steps: int,
+  hard_override_pct: int
+}
+
+-- Default configuration
+export func default_config() -> CompactionAiConfig {
+  {
+    model: "openrouter/meta-llama/llama-3.1-8b-instruct",
+    threshold_pct: 75,
+    keep_recent: 6,
+    keep_recent_tokens: 0,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  }
+}
