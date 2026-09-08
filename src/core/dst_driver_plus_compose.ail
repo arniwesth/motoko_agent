@@ -374,9 +374,21 @@ pure func package_of(id: string) -> InstalledPackage {
 -- Listing it does NOT widen coverage: `criterion_2_slot_ids` intersects this
 -- with the atoms compose actually REGISTERS, and compose registers no
 -- `ExitIntent`, so the covered set is unchanged.
+-- A FACT ABOUT THE ABI, and therefore something that goes stale when the ABI
+-- moves. `work_in_flight[0]` joined at 7.3 and this list did not, which took
+-- `make driver_plus_compose` red for five commits — the gate is not in
+-- `check_core`, so a sweep that ran `profile_coverage`, `profile_definition`
+-- and `driver_plus_no_ops` missed it. Restated rather than re-derived because
+-- the guard that caught it (`check_compose_profile.py`) exists precisely to
+-- compare this literal against `types.ail`, and its message says the thing
+-- worth keeping: "both readings type-check and the stale one is silent".
+--
+-- COMPOSE DOES NOT BIND `work_in_flight`, and that is not what this list says.
+-- It names the kinds the ABI gives a row to; `covered_rowed_slot_ids` below is
+-- what restricts the fact to the atoms this profile actually registers.
 export pure func rowed_slot_ids() -> [string] {
   ["compactor[0]", "tool_provider[0]", "response_interceptor[0]", "solver_judge[0]",
-   "exit_intent[0]"]
+   "exit_intent[0]", "work_in_flight[0]"]
 }
 
 -- The one slot this profile excludes. Separate from `rowed_slot_ids` because it
@@ -959,7 +971,14 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
 pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
   tests [((), true)]
   {
-    List.length(rowed_slot_ids()) == 5
+    -- SIX SINCE ABI 7.3, five before it. This is the third hand-pinned count in
+    -- the tree that has to move when a row-declaring kind is added — the
+    -- barrier count and `EXPECTED_CAPABILITY_KINDS` are the others — and it is
+    -- pinned rather than derived for their reason: a kind added to the ABI and
+    -- forgotten here must FAIL rather than be silently absorbed. Note the two
+    -- counts below did NOT move: compose registers neither `exit_intent` nor
+    -- `work_in_flight`, so what it covers is unchanged.
+    List.length(rowed_slot_ids()) == 6
       && List.length(excluded_slot_ids()) == 1
       && List.length(criterion_2_slot_ids()) == 1
       && not contains_str(criterion_2_slot_ids(), "tool_provider[0]")
