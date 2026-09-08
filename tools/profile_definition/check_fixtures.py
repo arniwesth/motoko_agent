@@ -824,6 +824,8 @@ def check_abi_version():
              "recorded abi_version cannot be checked against the package that declares it")
     live = m.group(1)
 
+    # ---- rule 1: PROSE, in profile records only ---------------------------
+    #
     # EVERY profile, not only `driver_only`. One fact deserves one guard, and a
     # second profile is exactly how the first one's transcription went unnoticed
     # for eleven items — nothing was comparing it to anything.
@@ -837,6 +839,17 @@ def check_abi_version():
     # derived rather than appended to: it is every `src/core/dst_driver*.ail`
     # and every `scripts/dst/driver_*_dst.ail`, and a profile that lands without
     # joining it is a profile this guard does not check.
+    #
+    # THIS GLOB IS DELIBERATELY NARROW AND MUST STAY SO, which is the opposite
+    # of what rule 2 below does, so the reason belongs here. In a profile record
+    # the words "ABI 7.3" are a PIN: the record describes the surface this tree
+    # has now. Everywhere else in the tree they are PROVENANCE — `herdr.ail`'s
+    # "ABI 7.1's publish verb", `session.ail`'s "ABI 7.2. The PROVIDER's reason",
+    # `verify_exit_intent.ail`'s "ABI 7.1: the publish verb" — and those are
+    # correct forever. A prose sweep widened past profile records would demand
+    # they all say 7.3 and would destroy the one thing they record, which is
+    # WHEN a thing landed. So prose is checked here, narrowly, and rule 2 checks
+    # the pins instead.
     subjects = sorted((REPO / "src/core").glob("dst_driver*.ail")) \
         + sorted((REPO / "scripts/dst").glob("driver_*_dst.ail"))
     if len(subjects) < 4:
@@ -855,16 +868,79 @@ def check_abi_version():
                 fail(f"{path.relative_to(REPO)} names 'ABI {stale}' and "
                      f"{ABI_TOML.relative_to(REPO)} declares {live}. A profile record or manifest "
                      "that pins the wrong ABI pins nothing.")
-        for arg in re.findall(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S):
-            seen += 1
-            if arg != live:
-                fail(f"{path.relative_to(REPO)} builds a manifest with abi_version '{arg}' and the "
-                     f"ABI package declares {live}")
     if seen == 0:
         fail("no profile record names an ABI version at all, so this guard re-derived nothing. "
              "An assertion with no subject cannot be told from one that does not run.")
-    print(f"  ✓ the ABI version every profile record names is the one the package declares: {live} "
-          f"({seen} site(s) across {len([p for p in subjects if p.exists()])} file(s))")
+    print(f"  ✓ the ABI version every profile record's prose names is the one the package "
+          f"declares: {live} ({seen} site(s) across "
+          f"{len([p for p in subjects if p.exists()])} file(s))")
+
+    # ---- rule 2: PINS, wherever they are ----------------------------------
+    #
+    # WHY THIS EXISTS SEPARATELY, 2026-09-08. Rule 1 was written for a manifest
+    # argument that said `4.0` while the ABI was `5.0`, and it scoped itself by
+    # the profile-record NAMING CONVENTION. The defect class is wider than the
+    # convention: EIGHT acceptance scripts outside the glob built a manifest
+    # through the same `driver_only_manifest(...)` call, in the same argument
+    # slot, with the same stale `"4.0"` — and `dst_profile.ail`'s own
+    # `fixture_manifest()` made nine. The guard written because one file pinned
+    # 4.0 sat next to nine more for as long as it existed.
+    #
+    # So this rule derives its subjects by CONTENT, not by name: every tracked
+    # `.ail` file in the tree. There is no naming convention to fall out of.
+    #
+    # WHAT COUNTS AS A PIN, and why prose does not:
+    #   * the `abi_version` argument of a `*_manifest(...)` constructor. It is
+    #     the first bare `"<major>.<minor>"` in the call by construction of
+    #     `driver_only_manifest`'s signature — `source_revision` ("HEAD") and
+    #     `toolchain` ("ailang 0.33.0") are never bare version literals.
+    #   * an `abi_version: "..."` record field.
+    # Both are claims about the ABI this tree HAS. Prose is a claim about when
+    # something landed, and rule 1 says why that must not be swept.
+    #
+    # THE DEEPER HOLE THIS DOES NOT CLOSE, stated because a gate that hides its
+    # own limit is worth less than one that names it: `validate_manifest` in
+    # `src/core/dst_profile.ail` gives `abi_version` a PRESENCE check and no
+    # equality check, while five sibling version fields get `version_matches`
+    # against their live value. That asymmetry is why these pins can drift at
+    # all, and it is visible in `fixture_manifest()` itself — every field under
+    # a `version_matches` rule is written as a live CALL, every field without
+    # one is written as a stale LITERAL. Closing it needs the ABI version
+    # exported from `packages/motoko-ext-abi` as a function, since it is
+    # declared only in that package's `ailang.toml` and no AILANG module can
+    # read it. Until then this Python sweep is the only equality check there is.
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "-z", "*.ail"], cwd=REPO).decode().split("\0")
+    pin_files = sorted(REPO / f for f in tracked if f)
+    if len(pin_files) < 50:
+        fail(f"`git ls-files '*.ail'` returned {len(pin_files)} file(s); this tree has far more, "
+             "so the pin sweep is scanning a fraction of what it claims to and would pass by "
+             "looking at almost nothing.")
+    pins = 0
+    drifted = []
+    for path in pin_files:
+        if not path.exists():
+            continue
+        text = path.read_text()
+        found = re.findall(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S) \
+            + re.findall(r'abi_version:\s*"([0-9]+\.[0-9]+)"', text)
+        for arg in found:
+            pins += 1
+            if arg != live:
+                drifted.append(f"{path.relative_to(REPO)}: pinned '{arg}'")
+    if pins == 0:
+        fail("the pin sweep found no manifest `abi_version` pin anywhere in the tree, so it "
+             "re-derived nothing. An assertion with no subject cannot be told from one that "
+             "does not run.")
+    if drifted:
+        fail(f"{ABI_TOML.relative_to(REPO)} declares ABI {live}, and these pin something else:\n  "
+             + "\n  ".join(drifted)
+             + f"\n\nA manifest whose whole job is exact reproducibility pins a contract this "
+               f"tree does not have. These are inert metadata strings — no assertion reads them "
+               f"and no digest covers them (`trajectory_key` digests interactions only) — so the "
+               f"repair is to set each to {live}.")
+    print(f"  ✓ every manifest ABI pin in the tree is the declared one: {live} "
+          f"({pins} pin(s) across {len(pin_files)} tracked .ail file(s))")
 
 
 if __name__ == "__main__":
