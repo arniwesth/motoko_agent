@@ -290,11 +290,34 @@ func run_herdr(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, argv: [string]) -> He
 -- The one place both error vocabularies meet. `code == -1` is the tool
 -- runtime's envelope failing to decode, which is neither a herdr error nor a
 -- ProcessError and must not be dressed up as either.
+-- THE DIAGNOSIS LEADS, AND THAT IS A DELIBERATE ORDERING (2026-09-08). The
+-- caller's `step` label carries a delegate handle — 24 characters before this
+-- sentence says anything — and `ui.ts:1250` hard-truncates a rendered stderr
+-- line to the pane width. Measured the same day: a narrow pane showed
+-- "Waiting on delegat…" once per check and nothing else, which is the whole
+-- message spent on the part a reader already knows.
+--
+-- `stderr N bytes` IS THE DATUM THIS EXISTS FOR. `wait_elapsed` decides
+-- "still working" from the stderr text alone, so a wait whose stderr arrives
+-- EMPTY is misclassified as a real failure — every check reported as a
+-- failure, and the graph and the model both told something untrue. Zero bytes
+-- there says "the classification never had anything to read"; a non-zero count
+-- next to an unrecognised code says the opposite, that the text arrived and
+-- the vocabulary is short. One number tells those apart, and nothing else in
+-- this message does.
 func explain_failure(step: string, argv: [string], run: HerdrRun) -> string {
   if run.code == -1 then
     "${step}: the tool runtime returned no readable result for `herdr ${show_argv(argv)}`. No subprocess outcome is available, so this is not a delegate failure."
   else
-    "${step} failed (herdr exit ${show(run.code)}, code `${failure_code(run.code, run.err)}`). ${failure_message(run.code, run.err)}"
+    "herdr exit ${show(run.code)}, code `${failure_code(run.code, run.err)}`, stderr ${show(length(run.err))} bytes — ${step} failed. ${failure_message(run.code, run.err)}${stderr_excerpt(run.err)}"
+}
+
+-- The first bytes of what the classifier actually saw, so an unrecognised code
+-- can be read rather than guessed at. Capped short: this rides on a tool result
+-- the model pays for, and the excerpt is evidence, not the error.
+func stderr_excerpt(err: string) -> string {
+  if err == "" then " Nothing was written to stderr, so no error shape could be classified."
+  else " stderr began: `${truncate(err, 120)}`."
 }
 
 -- The evidence line for a spawn this code watched fail, and deliberately NOT
