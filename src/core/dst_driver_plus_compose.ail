@@ -217,7 +217,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
 -- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
 -- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
-export pure func compose_profile_version() -> string { "8" }
+export pure func compose_profile_version() -> string { "9" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -225,6 +225,26 @@ export pure func compose_profile_version() -> string { "8" }
 -- without re-deriving.
 export pure func compose_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT THE 013/021 MERGE FOR v9, from
+    -- sha256:f60c93e70cecd653952a0fe501e8156df7a782a0e7c12e0c57ae8f5f8defe447.
+    -- FIVE anchors moved and NO SITE CHANGED: merging the 021 herdr lineage
+    -- into the PLAN-003 branch added 34 lines to `session.ail`, +1 above the
+    -- first three anchors and +28 above the last two
+    -- (`1205/1464/1576 -> 1206/1465/1577`, `3352/3466 -> 3380/3494`). This is
+    -- the SECOND re-issue in two hours and PLAN-003 §0.2 priced ONE, so the
+    -- cause is worth naming exactly: it is not the plan's drift but MERGE
+    -- ORDER. Part 4 re-baselined on the plan branch, and the 021 side was
+    -- merged afterwards; had the merge come first, its single re-baseline
+    -- would have covered both. The lesson is recorded rather than the bill
+    -- disputed — work continues on the merged branch, so there is no third.
+    --
+    -- THE D4 JUDGEMENT WAS MADE AND HAS THE SAME ANSWER, by the same test the
+    -- v27 entry used: `grep -o '"'"'clock_now.*'"'"' src/core/session.ail` over
+    -- `git show 06b07ca:` (the last re-baseline) and over the merged tree is
+    -- IDENTICAL — thirteen hits, same text, same order — so no clock site was
+    -- added, removed, re-argued or re-routed. All five anchored expressions
+    -- are byte-identical at their new offsets; the 021 lineage adds no clock
+    -- read to `session.ail` at all. Pure offset drift.
     -- RE-RECORDED AT PLAN-003 P1 PART 4 FOR v8, from
     -- sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4.
     -- THE ONE RE-ISSUE PLAN-003 §0.2 PRICED, and it disposes of ALL EIGHT stale
@@ -240,7 +260,7 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- THE tool_phase TRIO IS NOT THIS PLAN'S DRIFT AT ALL: `8980ba6` (PLAN-001
     -- live-run fix 1) moved it before P1 began and PLAN-003 §0.1 recorded it as
     -- red without an owner. It is disposed of here because a partial re-baseline
-    -- is what the ABI 7.0 note above already had to learn not to do.
+    -- is what the 7.0 ABI-bump note above already had to learn not to do.
     --
     -- THE D4 JUDGEMENT WAS MADE AND HAS THE SAME ANSWER IT HAD BEFORE.
     -- `grep -o 'clock_now.*' src/core/session.ail` over `git show 8c999f2:` (the
@@ -315,7 +335,7 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +14, pushed by a Z3 contract on
     -- `trace_sensitive_key`. An anchor re-measurement, not a table correction.
     -- See `driver_only_attribution_ref`.
-    content_hash: "sha256:f60c93e70cecd653952a0fe501e8156df7a782a0e7c12e0c57ae8f5f8defe447" }
+    content_hash: "sha256:c835675c447f5f1c56795a9cca5e1c0da50703f28add80d19ebcb3f746465b74" }
 }
 
 -- ---------------------------------------------------------------------------

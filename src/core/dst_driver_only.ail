@@ -509,13 +509,33 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "27" }
+export pure func driver_only_version() -> string { "28" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
 -- `driver_only_version` and re-recording both halves of this pair.
 export pure func driver_only_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT THE 013/021 MERGE FOR v28, from
+    -- sha256:f60c93e70cecd653952a0fe501e8156df7a782a0e7c12e0c57ae8f5f8defe447.
+    -- FIVE anchors moved and NO SITE CHANGED: merging the 021 herdr lineage
+    -- into the PLAN-003 branch added 34 lines to `session.ail`, +1 above the
+    -- first three anchors and +28 above the last two
+    -- (`1205/1464/1576 -> 1206/1465/1577`, `3352/3466 -> 3380/3494`). This is
+    -- the SECOND re-issue in two hours and PLAN-003 §0.2 priced ONE, so the
+    -- cause is worth naming exactly: it is not the plan's drift but MERGE
+    -- ORDER. Part 4 re-baselined on the plan branch, and the 021 side was
+    -- merged afterwards; had the merge come first, its single re-baseline
+    -- would have covered both. The lesson is recorded rather than the bill
+    -- disputed — work continues on the merged branch, so there is no third.
+    --
+    -- THE D4 JUDGEMENT WAS MADE AND HAS THE SAME ANSWER, by the same test the
+    -- v27 entry used: `grep -o '"'"'clock_now.*'"'"' src/core/session.ail` over
+    -- `git show 06b07ca:` (the last re-baseline) and over the merged tree is
+    -- IDENTICAL — thirteen hits, same text, same order — so no clock site was
+    -- added, removed, re-argued or re-routed. All five anchored expressions
+    -- are byte-identical at their new offsets; the 021 lineage adds no clock
+    -- read to `session.ail` at all. Pure offset drift.
     -- RE-RECORDED AT PLAN-003 P1 PART 4 FOR v27, from
     -- sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4.
     -- THE ONE RE-ISSUE PLAN-003 §0.2 PRICED, and it disposes of ALL EIGHT stale
@@ -531,7 +551,7 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- THE tool_phase TRIO IS NOT THIS PLAN'S DRIFT AT ALL: `8980ba6` (PLAN-001
     -- live-run fix 1) moved it before P1 began and PLAN-003 §0.1 recorded it as
     -- red without an owner. It is disposed of here because a partial re-baseline
-    -- is what the ABI 7.0 note above already had to learn not to do.
+    -- is what the 7.0 ABI-bump note above already had to learn not to do.
     --
     -- THE D4 JUDGEMENT WAS MADE AND HAS THE SAME ANSWER IT HAD BEFORE.
     -- `grep -o 'clock_now.*' src/core/session.ail` over `git show 8c999f2:` (the
@@ -770,7 +790,7 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- expressions are byte-identical at their new offsets, so no site was added,
     -- removed, re-argued or re-routed and the D4 judgement has the same answer
     -- it had before.
-    content_hash: "sha256:f60c93e70cecd653952a0fe501e8156df7a782a0e7c12e0c57ae8f5f8defe447" }
+    content_hash: "sha256:c835675c447f5f1c56795a9cca5e1c0da50703f28add80d19ebcb3f746465b74" }
 }
 
 -- ---------------------------------------------------------------------------

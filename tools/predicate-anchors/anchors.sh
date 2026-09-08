@@ -447,7 +447,7 @@ check src/core/tool_phase.ail 389 'exec_scratchpad_cell_ws' "the call attributed
 # compose v5 -> v6.
 
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1205 1464 1576 3352 3466; do
+for l in 1206 1465 1577 3380 3494; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
