@@ -198,12 +198,28 @@ export pure func sweep_tmp(path: string, own_pane: string, session_ms: string) -
 pure func plan_task_of(t: Json, now_ms: int) -> Json {
   let id = sfield(t, "id");
   let state = if sfield(t, "state") == "" then "queued" else sfield(t, "state");
-  let base = jo([
+  -- THE OPTIONAL FIELDS ARE NOT DECORATION; ONE OF THEM IS LOAD-BEARING FOR
+  -- VALIDITY. Measured 2026-09-08, the first time a real operator plan was
+  -- seeded: `dagr check --strict` — which `publish` runs, and whose exit 1
+  -- refuses the write (`types.ail:1482`) — reports W205 for a `blocked` task
+  -- naming no unblock owner. The plan named one; this function dropped it. Two
+  -- blocked tasks were therefore enough to refuse EVERY publish for the whole
+  -- session, so the producer wrote no run file at all and the operator's dagr
+  -- pane sat on "waiting for run file" with nothing said.
+  --
+  -- The others are carried because a seeded task that loses them is a worse
+  -- picture than no task: `owner` is what the queue renders as `unassigned`,
+  -- `criteria` is the whole content of a gate, and `note` is where a plan says
+  -- why a task exists. Copied ONLY when non-empty, so a plan that omits them
+  -- produces the same document it produced before.
+  let base0 = jo([
     kv("id", js(id)),
     kv("title", js(if sfield(t, "title") == "" then id else sfield(t, "title"))),
     kv("kind", js(if sfield(t, "kind") == "" then "task" else sfield(t, "kind"))),
     kv("state", js(state)),
     kv("deps", ja(arr_field(t, "deps")))]);
+  let base = carry_str(carry_str(carry_str(carry_str(carry_str(
+               base0, t, "unblock"), t, "owner"), t, "criteria"), t, "note"), t, "project");
   -- A TERMINAL STATE NEEDS AN ATTEMPT, and this is not a formality: `dagr check`
   -- rejects a `done` task with no attempts as E150, "nothing settled it".
   -- Measured against the v0.3.1 binary before this was written.
@@ -230,6 +246,13 @@ pure func plan_task_of(t: Json, now_ms: int) -> Json {
       kv("reason", js("declared `${state}` in the operator's plan; this producer did not observe it"))]))])]))
 }
 
+-- Copy an optional string field only when the plan actually sets it, so a plan
+-- without it seeds exactly what it seeded before this existed.
+pure func carry_str(o: Json, src: Json, key: string) -> Json {
+  let v = sfield(src, key);
+  if v == "" then o else obj_set(o, key, js(v))
+}
+
 pure func seed_tasks(doc: Json, plan: [Json], now_ms: int) -> Json {
   match plan {
     [] => doc,
@@ -250,7 +273,47 @@ export pure func seed_from_plan(doc: Json, present: bool, content: string, now_m
   if present == false || content == "" then doc
   else match decode(content) {
     Err(_) => doc,
-    Ok(p) => seed_tasks(doc, tasks_of(p), now_ms)
+    -- PROJECTS BEFORE TASKS, and they travel TOGETHER or not at all. A task
+    -- carrying `project` into a document with no matching entry in `projects`
+    -- is E107 ("task names unknown project") and refuses the publish, so
+    -- seeding one without the other would trade this function's old defect for
+    -- a louder one. Seeding neither was the state before 2026-09-08 and cost
+    -- the operator the grouping their plan was written around: 23 tasks under
+    -- five projects rendered as 23 rows under none.
+    Ok(p) => seed_tasks(seed_projects(doc, arr_field(p, "projects")), tasks_of(p), now_ms)
+  }
+}
+
+-- Idempotent like `seed_tasks`, and for the same reason: a project already in
+-- this document is the producer's, and the plan describes intent rather than
+-- what was observed.
+pure func seed_projects(doc: Json, plan: [Json]) -> Json {
+  match plan {
+    [] => doc,
+    pr :: rest => {
+      let id = sfield(pr, "id");
+      let next =
+        if id == "" || has_project(doc, id) then doc
+        else obj_set(doc, "projects", ja(projects_of(doc) ++ [
+          carry_str(carry_str(jo([
+            kv("id", js(id)),
+            kv("title", js(if sfield(pr, "title") == "" then id else sfield(pr, "title")))]),
+            pr, "parent"), pr, "owner")]));
+      seed_projects(next, rest)
+    }
+  }
+}
+
+pure func projects_of(doc: Json) -> [Json] { arr_field(doc, "projects") }
+
+pure func has_project(doc: Json, id: string) -> bool {
+  any_id(projects_of(doc), id)
+}
+
+pure func any_id(xs: [Json], id: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if sfield(x, "id") == id then true else any_id(rest, id)
   }
 }
 

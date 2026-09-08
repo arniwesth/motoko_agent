@@ -831,8 +831,37 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
                     && read_file(s29.world, "/tmp/.dagr/.plan-w1-p1-200") == "/tmp/plan-rel.json");
   emit(s29.world);
 
+  -- 30. THE FIELDS A PLAN TASK CANNOT LOSE. Measured 2026-09-08 on the first
+  --     real operator plan: it held two `blocked` tasks naming their unblock
+  --     owners, `plan_task_of` dropped the field, `dagr check --strict` — which
+  --     `publish` runs and whose exit 1 refuses the write — reported W205
+  --     twice, and the producer therefore wrote NO run file for the whole
+  --     session. The operator saw "waiting for run file" and nothing else.
+  --
+  --     Projects travel WITH the tasks that name them: a task carrying
+  --     `project` into a document with no matching entry is E107, so seeding
+  --     one without the other would trade one refusal for another. This case
+  --     pins both halves and the plain optional strings beside them.
+  let rich = put_file(s29.world, "/tmp/.dagr/plan-rich.json",
+    "{\"dagr\":3,\"projects\":[{\"id\":\"PX\",\"title\":\"a stream\",\"owner\":\"lead\"}],\"tasks\":[{\"id\":\"B1\",\"title\":\"waits on someone else\",\"kind\":\"impl\",\"state\":\"blocked\",\"deps\":[],\"project\":\"PX\",\"owner\":\"dev\",\"unblock\":\"the other team\",\"note\":\"why it exists\"},{\"id\":\"G9\",\"title\":\"the gate\",\"kind\":\"gate\",\"deps\":[\"B1\"],\"project\":\"PX\",\"criteria\":\"B1 is unblocked and green\"}]}");
+  let s30 = drive_cfg(mk_cfg(), rich,
+                      ports_at(30000, "working", false, true),
+                      delegate_declare_call("c30", "work the rich plan", "G9", "/tmp/.dagr/plan-rich.json"));
+  let d30 = read_file(s30.world, run_file_path());
+  let a36 = check("a blocked plan task keeps its unblock owner, so --strict does not refuse the publish",
+                  s30.code == 0
+                    && contains(d30, "\"id\":\"B1\"")
+                    && contains(d30, "\"unblock\":\"the other team\""));
+  let a37 = check("projects are seeded with the tasks that name them, and the plain fields survive",
+                  contains(d30, "\"id\":\"PX\"")
+                    && contains(d30, "\"project\":\"PX\"")
+                    && contains(d30, "\"criteria\":\"B1 is unblocked and green\"")
+                    && contains(d30, "\"owner\":\"dev\"")
+                    && contains(d30, "\"note\":\"why it exists\""));
+  emit(s30.world);
+
   if a1 && a1b && a2 && a3 && a4 && a5 && a5b && a6 && a7 && a7b && a8 && a9
      && a10 && a10b && a11 && a12 && a13 && a14 && a15 && a16 && a17 && a17b
      && a18 && a19 && a20 && a21 && a22 && a23 && a24 && a25 && a26 && a27 && a27b && a28 && a29
-     && a30 && a30b && a31 && a32 && a33 && a34 && a35 then () else exit(1)
+     && a30 && a30b && a31 && a32 && a33 && a34 && a35 && a36 && a37 then () else exit(1)
 }
