@@ -6,15 +6,18 @@
 -- design.
 --
 -- ONE CATALOGUE IS THE SINGLE SOURCE OF TRUTH. That is the whole point of D3
--- making this an artifact rather than prose, so this module also owns the two
--- string literals in the driver that were previously a second, unversioned
--- vocabulary for the same concepts:
+-- making this an artifact rather than prose, so this module also owns the three
+-- tool `fault_class` names emitted by `tool_phase.tool_fault_message`
+-- (`ToolFailed`, `ToolCorrelationMismatch`, `ToolDeadlineExceeded`), which were
+-- previously a second, unversioned vocabulary for the same concepts. They are
+-- exported from here and referenced at their call sites.
 --
---   * the three tool `fault_class` names emitted by `tool_phase.tool_fault_message`
---     (`ToolFailed`, `ToolCorrelationMismatch`, `ToolDeadlineExceeded`), and
---   * the max-steps discriminator message in `step_machine.call_model_or_fail`.
---
--- Both are now exported from here and referenced at their call sites.
+-- It also used to own `max_steps_discriminator_message()`, the literal that
+-- separated a max-steps run from an internal driver failure because both left
+-- `step_machine.call_model_or_fail` with the same `Internal` code. ADR-003 D2
+-- item 1 gave the step budget its own `StepBudgetExhausted` code, so there is
+-- no message to share: the constant, its test and the rationale for keeping the
+-- wire `code` unchanged are deleted with it.
 --
 -- ============================================================================
 -- Why three class ids are PascalCase and the other eight are not
@@ -31,39 +34,6 @@
 -- change; one vocabulary. The remaining eight classes have no pre-existing wire
 -- name and are named in the repo's ordinary snake_case.
 --
--- ============================================================================
--- THE MAX-STEPS DISCRIMINATION (the decision the plan assigned to this item)
--- ============================================================================
---
--- `decision_fail_reason` (src/core/session.ail) separates max-steps from
--- internal failure by matching the literal message "v2 loop: step budget
--- exhausted", because step_machine.ail emits the SAME `Internal` code for the
--- step-budget failure and the approval-without-pending-call failure. Behaviour
--- is exact today, but editing that string in one place silently reclassifies
--- every max-steps run.
---
--- DECIDED: the `Internal` code is NOT changed. WI-A9 declined this on the
--- ground that it would change a caller-visible `AIError` code. Grounding it for
--- this item found the consequence is strictly larger than A9 had: the driver's
--- `Fail` code does not stop at the returned `Result` — it is emitted as an
--- `error` LEDGER EVENT (`ErrorEvent { code: e.code }`, src/core/session.ail:2506
--- and :2576), which the TypeScript TUI consumes off the wire. Giving the
--- step-budget `Fail` its own code would therefore change the `code` field of a
--- wire event on every max-steps run, not merely an internal field. That is a
--- compatibility decision, and D3 is not the place to take one.
---
--- The fragility is removed WITHOUT the wire change instead. The literal now
--- exists exactly once, here, as `max_steps_discriminator_message()`; both
--- `step_machine.call_model_or_fail` (which emits it) and
--- `session.decision_fail_reason` (which matches it) reference that one
--- constant, so editing it is a single edit that cannot desynchronise the two.
--- `test_max_steps_discriminator_is_shared` pins the round trip.
---
--- What this does NOT fix, stated rather than implied: the discrimination still
--- rests on a message rather than a type, so a THIRD `Internal` failure whose
--- message happened to equal this one would be misclassified. Closing that needs
--- the code change above and therefore the compatibility decision above.
-
 module src/core/dst_fault_catalogue
 
 import std/list as List (length)
@@ -204,10 +174,6 @@ export pure func provider_fault_class_id(code: string, chunks_played: int) -> st
   else if provider_error_is_retryable(code) then fault_class_provider_error_retryable()
   else fault_class_provider_error_non_retryable()
 }
-
--- The one string that separates TermMaxSteps from TermInternalFailure. See the
--- header for why it is a shared constant rather than a new error code.
-export pure func max_steps_discriminator_message() -> string { "v2 loop: step budget exhausted" }
 
 -- ============================================================================
 -- The artifact's shape
@@ -820,12 +786,6 @@ pure func test_the_provider_fault_class_derivation() -> bool
       -- the fail-safe direction for a code no list names
       && not provider_error_is_retryable("E_NOT_A_DECLARED_CODE")
       && provider_fault_class_id("E_NOT_A_DECLARED_CODE", 0) == fault_class_provider_error_non_retryable()
-  }
-
-pure func test_max_steps_discriminator_is_shared() -> bool
-  tests [((), true)]
-  {
-    max_steps_discriminator_message() == "v2 loop: step budget exhausted"
   }
 
 pure func test_required_ids_are_distinct() -> bool

@@ -983,10 +983,10 @@ func scenario_step_budget_suspends_with_history() -> Result[(), ScenarioFailure]
     -- Today's behaviour. Green here, and each one still green after D2 lands:
     -- the suspension keeps the outcome, the reason and the summary it has.
     { name: "outcome is Err", ok: outcome_err, detail: "(result=${code})" },
-    -- P1 Part 2 REWRITES THIS LITERAL to "StepBudgetExhausted" when the code
-    -- stops being the message-discriminated `Internal`. Named here so the edit
-    -- is a decision someone makes, not a red row someone relaxes.
-    { name: "Err code is Internal (P1 Part 2 makes it StepBudgetExhausted)", ok: code == "Internal", detail: "(code=${code})" },
+    -- P1 Part 2 REWROTE THIS LITERAL from "Internal" (ADR-003 D2 item 1): the
+    -- code is the discriminator now, not the message. Named in Part 1 so the
+    -- edit was a decision someone makes, not a red row someone relaxes.
+    { name: "Err code is StepBudgetExhausted", ok: code == "StepBudgetExhausted", detail: "(code=${code})" },
     { name: "run_summary finish_reason is max_steps", ok: reason == "max_steps", detail: "(reason=${reason})" },
     { name: "the Err arm carries no history", ok: returned_history == -1, detail: "(returned=${show(returned_history)})" },
     { name: "run_summary.error is non-empty", ok: summary_err != "", detail: "(error='${summary_err}')" },

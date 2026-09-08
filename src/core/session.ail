@@ -42,7 +42,6 @@ import src/core/tool_contract (call_to_json)
 import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (tool_call_to_envelope)
 import src/core/types (Msg)
-import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
@@ -2142,29 +2141,21 @@ func any_writefile_attempt(msgs: [Message]) -> bool {
 }
 
 -- Map a Fail decision's AIError code onto the typed termination reason.
--- The three codes `decide` can produce are Internal, BudgetExceeded and
--- ContextExhausted (src/core/step_machine.ail:57,93,95,99).
+-- The four codes `decide` can produce are StepBudgetExhausted, BudgetExceeded,
+-- ContextExhausted and Internal (src/core/step_machine.ail:101,103,107,58).
 --
--- The MaxSteps discrimination matches on the message text because that is the
--- only thing distinguishing the two Internal failures step_machine emits: the
--- step-budget one and the approval-without-pending-call one share a code.
---
--- WI-A7 DECIDED this rather than leaving it as A9's noted fragility. The
--- message is no longer a literal on either side: both this matcher and the
--- `Fail` in step_machine reference `max_steps_discriminator_message()` from the
--- D3 fault catalogue, so an edit to it is a single edit that cannot
--- desynchronise the two. The `Internal` CODE is deliberately unchanged — A9
--- declined the code change because it is caller-visible, and grounding it for
--- A7 found the consequence is larger than that: the code is emitted as an
--- `error` wire event (`ErrorEvent { code: e.code }`, :2506 and :2576) that the
--- TUI consumes, so a new code would change a wire event on every max-steps run.
--- What remains open, stated rather than implied: the discrimination is still by
--- message rather than by type, so a THIRD Internal failure sharing this message
--- would be misclassified. Closing that needs the compatibility decision above.
-pure func decision_fail_reason(code: string, message: string) -> TerminationReason {
-  if code == "BudgetExceeded" then TermBudgetExhausted
+-- ADR-003 D2 item 1 made max steps a code. It used to be a MESSAGE match:
+-- step_machine emitted `Internal` for both the step budget and the
+-- approval-without-pending-call failure, so the only thing separating them
+-- downstream was the text, held once as a shared catalogue constant
+-- (`max_steps_discriminator_message()`, now deleted). That removed the
+-- desynchronisation risk but not the misclassification one — a third
+-- `Internal` failure carrying the same message read as max steps. The
+-- discrimination is by code now, and the message is not load-bearing.
+pure func decision_fail_reason(code: string) -> TerminationReason {
+  if code == "StepBudgetExhausted" then TermMaxSteps
+  else if code == "BudgetExceeded" then TermBudgetExhausted
   else if code == "ContextExhausted" then TermCompactionExhausted
-  else if code == "Internal" && message == max_steps_discriminator_message() then TermMaxSteps
   else TermInternalFailure
 }
 
@@ -2203,7 +2194,7 @@ func c2_fail(
     if code == "BudgetExceeded" then ledger_append(trace, WireRecord(cost_event))
     else trace;
   let result: Result[[Message], AIError] = Err({ code: code, message: message, retryable: retryable });
-  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace_with_cost, emissions, result)
+  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code), message, started_at_ms, trace_with_cost, emissions, result)
 }
 
 pure func c2_pending_context(st: C2LoopState) -> [Message] {
@@ -3702,13 +3693,16 @@ pure func test_finish_reason_wire_table() -> bool
   }
 
 -- The reachable Fail codes map to the reasons the integer helper produced.
+-- The last row is the one ADR-003 D2 bought: an `Internal` failure whose
+-- message happens to read like the budget one is an internal failure, because
+-- nothing reads the message any more.
 pure func test_decision_fail_reason_mapping() -> bool
   tests [((), true)]
   {
-    finish_reason_wire(decision_fail_reason("BudgetExceeded", "cap")) == "cost_exhausted"
-      && finish_reason_wire(decision_fail_reason("ContextExhausted", "r")) == "compaction_exhausted"
-      && finish_reason_wire(decision_fail_reason("Internal", "v2 loop: step budget exhausted")) == "max_steps"
-      && finish_reason_wire(decision_fail_reason("Internal", "something else")) == "error"
+    finish_reason_wire(decision_fail_reason("BudgetExceeded")) == "cost_exhausted"
+      && finish_reason_wire(decision_fail_reason("ContextExhausted")) == "compaction_exhausted"
+      && finish_reason_wire(decision_fail_reason("StepBudgetExhausted")) == "max_steps"
+      && finish_reason_wire(decision_fail_reason("Internal")) == "error"
   }
 
 pure func test_zero_totals_initializes_clean() -> bool

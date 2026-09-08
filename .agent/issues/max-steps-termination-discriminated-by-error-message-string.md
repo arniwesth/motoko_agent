@@ -1,10 +1,15 @@
 # Max-steps termination is discriminated by an error-message string, not a code
 
 ## Status
-open
+resolved — PLAN-003 P1 Part 2 / ADR-003 D2 item 1, the commit titled
+`ADR-003 D2: P1 Part 2 — StepBudgetExhausted code, delete the message discriminator`,
+the child of `cbf50f3` on `arniwesth/013-plan-003-implement-adr-003`. Its own hash is
+not written here because a commit cannot contain it; the hash is in that commit's
+report and in the PLAN-003 dagr receipt for P1P2.
 
 ## Branch
-arniwesth/mot-46-execute-wi-a16-and-wi-a9 (surfaced while executing WI-A9; behaviour preserved, not fixed)
+Surfaced on arniwesth/mot-46-execute-wi-a16-and-wi-a9 (while executing WI-A9;
+behaviour preserved, not fixed). Fixed on arniwesth/013-plan-003-implement-adr-003.
 
 ## Description
 
@@ -74,3 +79,39 @@ silent** — the measurement cluster 1 identified as the transferable finding an
 a higher rate (27%). See
 `.agent/projects/009_motoko_dst_execution/NOTE-cluster-4-execution-report-and-plan-corrections.md`
 (C4 and the judgement section).
+
+## Resolution
+
+Fixed as specified under "Fix" above, in PLAN-003 P1 Part 2 (the commit named in
+Status).
+ADR-003 v6.1 D2 item 1 took the compatibility decision this issue said needed an owner:
+the step-budget `Fail` gets its own code, and the `AIError` code on that path changes from
+`Internal` to `StepBudgetExhausted`.
+
+- `step_machine.ail:101` — `Fail({ code: "StepBudgetExhausted", message: "step budget
+  exhausted", retryable: false })`. The message is documentation now, not a discriminator,
+  so it also drops the `v2 loop: ` prefix that only ever existed to make it unique.
+- `session.ail` — `decision_fail_reason(code)` matches the code and no longer takes a
+  `message` parameter at all. The parameter is gone rather than ignored, so the coupling
+  cannot come back by accident.
+- `dst_fault_catalogue.ail` — `max_steps_discriminator_message()`, its test
+  `test_max_steps_discriminator_is_shared`, and the header rationale for keeping the wire
+  `code` unchanged are deleted. There is no shared literal left to keep in sync.
+- `session.ail` — `test_decision_fail_reason_mapping` now asserts the code table, and its
+  last row is what this issue was about: `decision_fail_reason("Internal")` is
+  `TermInternalFailure` no matter what message accompanies it.
+
+**Why the wire concern in "Fix" did not bite.** The `code` does reach the TUI as an `error`
+ledger event (`ErrorEvent { code: e.code }`), but the TUI's `error` record type has no
+`code` field at all (`src/tui/src/runtime-process.ts:96`), so nothing on the host reads it.
+The wire `finish_reason` is unchanged — `finish_reason_wire(TermMaxSteps) == "max_steps"`
+is still asserted (`session.ail`, `test_finish_reason_wire_table`) and the DST fixtures that
+pin a max-steps run still report `max_steps`. The one observable change is
+`run_summary.error`, which goes from `"v2 loop: step budget exhausted"` to `"step budget
+exhausted"`; no golden, fixture or host assertion matches that string.
+
+Both non-goals were honoured: the match was not loosened to a prefix or substring test, and
+no wire `finish_reason` string changed.
+
+The sibling issue `step-budget-exhaustion-starts-a-fresh-session.md` is NOT closed by this —
+that one is the resume behaviour, and it is what the rest of PLAN-003 P1 is for.
