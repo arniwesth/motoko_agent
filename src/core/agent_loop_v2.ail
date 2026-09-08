@@ -69,6 +69,9 @@ export func conversation_loop_v2(
   Session.conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
 }
 
+-- ADR-003 v6.1 D5: `profile` and `resume_count` pass straight through. This
+-- facade has ONE caller (`rpc.run_with_config`), so the two identity inputs
+-- travel the one level the plan describes rather than being re-derived here.
 export func run_v2_with_conversation(
   rt: ExtRuntime,
   task: string,
@@ -82,9 +85,11 @@ export func run_v2_with_conversation(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  provider: StepProvider
+  provider: StepProvider,
+  profile: string,
+  resume_count: int
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_with_conversation(rt, task, env_url, hybrid_tools, budget, model, initial_msgs, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
+  Session.run_v2_with_conversation(rt, task, env_url, hybrid_tools, budget, model, initial_msgs, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, profile, resume_count)
 }
 
 export func run_v2_with_stub(

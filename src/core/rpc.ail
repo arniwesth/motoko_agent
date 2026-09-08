@@ -195,6 +195,34 @@ func headless_mode() -> bool ! {Env} {
   }
 }
 
+-- ADR-003 v6.1 D5's `resume_count`: the host's counter, 0 for a fresh session
+-- and incremented on every `--resume` spawn (P3), forwarded as
+-- MOTOKO_RESUME_COUNT and reaching the conversation loop as the middle field
+-- of `run_id = <session_id>.r<resume_count>.<run_ordinal>`.
+--
+-- READ AMBIENTLY, on `headless_mode()`'s pattern immediately above, and
+-- PLAN-003 §0.8 is why rather than style: every `ports.env_get` is a helped
+-- `EnvRead` in the driver-leaf inventory (`derive.py:95`) and five DST fixtures
+-- pin the exact key set the policy init reads
+-- (`seeded_generator_dst`, `run_report_dst`, `strict_replay_dst`,
+-- `discovery_dst`, `driver_plus_compose_dst`). This read happens in `rpc.ail`,
+-- which is not in `SCAN_FILES` and sits above the traced surface, so it adds
+-- no leaf and re-pins no fixture. A part that finds itself adding a `Ports`
+-- field or a `ports.env_get` key here has left the ADR.
+--
+-- A missing, empty or unparseable value is 0, and so is a negative one: the
+-- count is an ordinal position in a resume chain, and there is no turn before
+-- the first.
+func resume_count_env() -> int ! {Env} {
+  match getEnv("MOTOKO_RESUME_COUNT") {
+    Ok(raw) => match _stringToInt(trim(raw)) {
+      Some(n) => if n > 0 then n else 0,
+      None    => 0
+    },
+    Err(_) => 0
+  }
+}
+
 -- A pre-warm spawn (the TUI boots one so the AILANG module load overlaps with
 -- the user typing) or a `/restart` respawn carries no task. Block here for the
 -- first command rather than handing the empty string to the builders below.
@@ -352,7 +380,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     kv("type", js("v2_mode")),
     kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete"))
   ])));
-  run_v2_with_conversation(ext_runtime, run_task, env_url, hybrid_enabled, budget, run_model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI)
+  run_v2_with_conversation(ext_runtime, run_task, env_url, hybrid_enabled, budget, run_model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, cfg.profile, resume_count_env())
   }
 }
 

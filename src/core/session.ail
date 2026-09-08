@@ -164,7 +164,7 @@ import src/core/journal (
   Continuation,
   FinalState,
   final_of_continuation,
-  continuation_history_ok
+  continuation_history_ok, continuation_task
 )
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
@@ -2272,6 +2272,123 @@ pure func c2_continuation(
   }
 }
 
+-- ============================================================================
+-- ADR-003 v6.1 D6, the in-process resume's CONSTRUCTOR half.
+-- ============================================================================
+
+-- The RESET half of D6's rule as ONE pure value, and the reason it is factored
+-- out rather than written inline in the constructor below: `C2LoopState` holds
+-- a `Ports` and a `WorldState`, so `c2_state_from_continuation` cannot be
+-- called from a `pure` test at all, and P1 Part 1 pinned its rule over a
+-- PROJECTION instead (`c2_state_from_continuation_shape`, at the tests below).
+-- A projection that re-states the reset values as its own literals pins
+-- nothing. Both the constructor and that projection read THIS record, so the
+-- two cannot drift apart.
+type C2ResumeReset = {
+  step_idx: int,
+  totals: RuntimeLoopTotals,
+  pending_tool_calls: [ToolCall],
+  pending_tool_context: [Message],
+  pending_tool_prefix: [Message],
+  pending_tool_batched: bool,
+  accumulated_tool_msgs: [Message],
+  pending_approval: Option[ApprovalRequest],
+  last_finish_reason: string,
+  last_response_text: string,
+  finalize_source: string,
+  trace: LedgerTrace,
+  emissions: [LedgerEvent]
+}
+
+pure func c2_resume_reset() -> C2ResumeReset {
+  {
+    step_idx: 0,
+    totals: zero_totals(),
+    pending_tool_calls: [],
+    pending_tool_context: [],
+    pending_tool_prefix: [],
+    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+    last_finish_reason: "",
+    last_response_text: "",
+    finalize_source: "",
+    trace: empty_ledger_trace(),
+    emissions: []
+  }
+}
+
+-- `ext_token_telemetry`'s inverse. The two records carry the same three fields
+-- and the conversion is written out rather than assumed, so a field added to
+-- `TokenTelemetry` fails to compile here instead of silently not crossing back
+-- into a resumed run.
+pure func loop_token_telemetry(t: TokenTelemetry) -> { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int } {
+  { last_input_tokens: t.last_input_tokens, last_output_tokens: t.last_output_tokens, last_estimated_input_tokens: t.last_estimated_input_tokens }
+}
+
+-- D6's constructor: the `C2LoopState` a suspended run's `Continuation` is
+-- rebuilt into, and the SECOND constructor of that type — the only one beside
+-- `c2_initial_state_with_counts`.
+--
+-- IT SITS BESIDE `c2_continuation`, ITS INVERSE, rather than beside the other
+-- constructor. These two are the pair that has to agree: everything
+-- `c2_continuation` carries OUT of a run is something this function has to put
+-- BACK, and a field dropped from one is only visible when they are read
+-- together.
+--
+-- THE RULE, and it splits in two.
+--
+--   CARRIED, because a resumed run is the same conversation: `history` — which
+--   is the whole of the repair, since today's path recurses with the PRE-TURN
+--   history and the exhausted turn's messages die on the floor; `cumulative`
+--   as the new run's `prior_counts`, so the judging number keeps counting
+--   across the boundary; `telemetry` and `ext_artifacts`; and `nudges_used`,
+--   which is NOT re-derived from the history the way
+--   `c2_initial_state_with_counts` re-derives it (`count_persist_nudges`): a
+--   nudge the previous run spent is spent, and re-deriving it from a history a
+--   compaction stage may have rewritten would silently refund it.
+--
+--   RESET, because a resumed run is its own run: `step_idx` (the step budget
+--   is per run — that is what the suspension was about), `totals`
+--   (`RuntimeLoopTotals` is per-run by construction, and carrying it would
+--   turn the per-turn cost cap into a cumulative one), every pending-tool
+--   field (a suspension happens at the TOP of a step, where they are all
+--   empty), `trace` and `emissions` (a resumed run's frame is its own; P3's
+--   journal is what makes the earlier one durable).
+--
+-- `world` IS A PARAMETER for exactly the reason `c2_initial_state_with_counts`
+-- takes one: the traced entry performs two clock reads BEFORE the loop begins
+-- and both successors must reach it, so taking `provider.world` here would
+-- type-check and silently start the resumed loop on an un-advanced clock.
+-- PLAN-003 writes this signature as `(c, provider)`; the third argument is the
+-- one its sibling already has, for the same reason, and it is reported as
+-- drift rather than left implicit.
+pure func c2_state_from_continuation(c: Continuation, provider: PortedProvider, world: WorldState) -> C2LoopState {
+  let reset = c2_resume_reset();
+  {
+    msgs: c.history,
+    step_idx: reset.step_idx,
+    totals: reset.totals,
+    ext_artifacts: c.ext_artifacts,
+    telemetry: loop_token_telemetry(c.telemetry),
+    provider: provider.ports,
+    world_state: world,
+    pending_tool_calls: reset.pending_tool_calls,
+    pending_tool_context: reset.pending_tool_context,
+    pending_tool_prefix: reset.pending_tool_prefix,
+    pending_tool_batched: reset.pending_tool_batched,
+    accumulated_tool_msgs: reset.accumulated_tool_msgs,
+    pending_approval: reset.pending_approval,
+    last_finish_reason: reset.last_finish_reason,
+    last_response_text: reset.last_response_text,
+    nudges_used: c.nudges_used,
+    finalize_source: reset.finalize_source,
+    prior_counts: c.cumulative,
+    trace: reset.trace,
+    emissions: reset.emissions
+  }
+}
+
 func c2_fail(
   ports: Ports,
   world: WorldState,
@@ -3340,20 +3457,112 @@ func run_v2_from_messages_traced_with_policy_and_counts(
   run_v2_from_messages_traced_with_identity(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts, None)
 }
 
+-- ADR-003 v6.1 D6: the two ways a traced run's loop state is seeded, as ONE
+-- argument rather than as two half-used parameter sets. A run starts either
+-- from a message list and a counts baseline (every path before P1 Part 5) or
+-- from a suspended run's `Continuation` (the in-process resume). The variants
+-- are exclusive, and a sum type is what says so — the alternative, an
+-- `Option[Continuation]` beside a `history` and a `prior_counts` that the
+-- resume path fills with copies of the continuation's own fields, is two
+-- sources of truth for the same two values.
+type C2MessageSeed = {
+  history: [Message],
+  prior_counts: RuntimeStatusCounts
+}
+
+type C2Seed = SeedMessages(C2MessageSeed) | SeedContinuation(Continuation)
+
+-- EVERYTHING AFTER THE CONSTRUCTOR, shared by both traced entries, and the
+-- sharing is not tidiness: the prelude below holds one of this file's routed
+-- core clock reads, and the `make anchors` D4 judgement is made by comparing
+-- that exact set of call sites commit over commit. A resume entry that COPIED
+-- the prelude instead of sharing it would add a site to that set and turn a
+-- threading change into an attribution change.
+--
+-- WI-A12's clock class. Two of the four driver clock sites are here, both
+-- BEFORE the loop starts, and both successors must reach the loop's world:
+-- `started.next_state` is what the seed's constructor receives, not
+-- `provider.world`. Taking the latter type-checks and silently discards both
+-- reads, leaving the loop on an un-advanced clock.
+func run_v2_traced_from_seed(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: PortedProvider,
+  requested_identity: Option[RunIdentity],
+  seed: C2Seed
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let derived = derive_session_id(provider.ports, provider.world);
+  let started = provider.ports.clock_now(derived.next_state);
+  let session_id = derived.id;
+  let started_at_ms = started.now_ms;
+  let identity = match requested_identity {
+    Some(i) => i,
+    None => default_run_identity(session_id)
+  };
+  let st = match seed {
+    SeedMessages(m) => c2_initial_state_with_counts(m.history, provider, started.next_state, m.prior_counts),
+    SeedContinuation(c) => c2_state_from_continuation(c, provider, started.next_state)
+  };
+  let session_span = "motoko.session.${session_id}";
+  Trace.spanStart(session_span);
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, st);
+  Trace.spanEnd(session_span);
+  result
+}
+
+-- ADR-003 v6.1 D6's resume, the ENTRY half: the sibling PLAN-003 P1 Part 5
+-- names, beside `run_v2_from_messages_traced_with_identity` and sharing
+-- everything after the constructor.
+--
+-- IT TAKES ITS RUN INPUTS FROM `c.boot` RATHER THAN FROM PARAMETERS, which is
+-- what D1's `BootInputs` exists for: the task, the env url, the hybrid flag,
+-- the ABI budget, `ohmy_pi`, the cost cap and the rates all crossed the
+-- suspension inside the continuation, and re-supplying them from the
+-- conversation loop would be a second source for values the journal will have
+-- to reproduce byte-for-byte in P3. `model` likewise comes from `c` — D6's
+-- `model_change` while suspended rewrites exactly that field.
+--
+-- WHAT IT DOES TAKE: `rt` (built per process, not a session value), `workdir`
+-- (session-scoped, D1 puts it on the header and not on the continuation),
+-- `provider` (a `Ports` is a bundle of closures; a resumed run opens its own),
+-- `policy` (derived from the boot inputs and kept current by the loop's
+-- `model_change` arm) and the `identity` D5 stamps the run with. The
+-- identity is always `Some` here: a resumed run that fell back to the default
+-- `r0.0` would be indistinguishable from the run it is resuming.
+func run_v2_from_continuation_traced(
+  rt: ExtRuntime,
+  policy: SessionPolicy,
+  workdir: string,
+  provider: PortedProvider,
+  identity: RunIdentity,
+  c: Continuation
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  run_v2_traced_from_seed(rt, continuation_task(c), c.boot.env_url, c.boot.hybrid_tools, c.boot.budget, policy, c.model, workdir, c.boot.ohmy_pi, c.boot.max_cost_millicents, c.boot.cost_rates, provider, Some(identity), SeedContinuation(c))
+}
+
 -- ADR-003 v6.1 D5's identity, arriving at the loop. THE SIBLING PLAN-003 §0.7
 -- NAMES, and the reason it takes an `Option` rather than a `RunIdentity`: the
 -- default identity is built from the run's OWN `session_id`, which
--- `derive_session_id` mints three lines below and no caller can see. `None`
--- therefore does not mean "no identity" — it means "the default one, from this
--- run's derived id", which is exactly §0.7's rule and what keeps the twenty DST
--- call sites of the three exported entries from moving.
+-- `derive_session_id` mints inside the shared worker above and no caller can
+-- see. `None` therefore does not mean "no identity" — it means "the default
+-- one, from this run's derived id", which is exactly §0.7's rule and what keeps
+-- the twenty DST call sites of the three exported entries from moving.
 --
--- P1 Part 5 is the first `Some` caller: the conversation loop passes
+-- P1 Part 5 IS the first `Some` caller: the conversation loop passes
 -- `RunIdentity { session_id, run_id: "<session_id>.r<resume_count>.<ordinal>",
--- profile }` so a resumed run is attributable to the turn that produced it.
--- `derive_session_id` STAYS on both paths: the DST fixtures pin the exact
--- env-read set the policy init performs, and removing the derivation would
--- change it.
+-- profile }` so every run of a session is attributable to the turn that
+-- produced it. `derive_session_id` STAYS on both paths: the DST fixtures pin
+-- the exact env-read set the policy init performs, and removing the derivation
+-- would change it.
 func run_v2_from_messages_traced_with_identity(
   rt: ExtRuntime,
   task: string,
@@ -3371,24 +3580,7 @@ func run_v2_from_messages_traced_with_identity(
   prior_counts: RuntimeStatusCounts,
   requested_identity: Option[RunIdentity]
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  -- WI-A12's clock class. Two of the four driver clock sites are here, both
-  -- BEFORE the loop starts, and both successors must reach the loop's world:
-  -- `started.next_state` is what `c2_initial_state_with_counts` receives, not
-  -- `provider.world`. Taking the latter type-checks and silently discards both
-  -- reads, leaving the loop on an un-advanced clock.
-  let derived = derive_session_id(provider.ports, provider.world);
-  let started = provider.ports.clock_now(derived.next_state);
-  let session_id = derived.id;
-  let started_at_ms = started.now_ms;
-  let identity = match requested_identity {
-    Some(i) => i,
-    None => default_run_identity(session_id)
-  };
-  let session_span = "motoko.session.${session_id}";
-  Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts));
-  Trace.spanEnd(session_span);
-  result
+  run_v2_traced_from_seed(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, requested_identity, SeedMessages({ history: history, prior_counts: prior_counts }))
 }
 
 export func run_v2_session_traced(
@@ -3577,6 +3769,50 @@ func msg_get_str(obj: Json, key: string) -> string {
 --
 -- EOF (readLine returns "") cleanly terminates the loop — the env-server
 -- closes stdin when the user exits the TUI.
+-- ADR-003 v6.1 D5's identity rule, both halves, and the ONLY definitions of
+-- them: the conversation loop below calls these and so do the two pure unit
+-- tests at the bottom of this file (P1 Part 1's `test_run_ordinal_rule`). One
+-- definition read from both sides is what makes the test a test of the loop
+-- rather than a restatement of an arithmetic fact.
+
+-- The ordinal advances by ONE per traced run in this process, in both the `Ok`
+-- and the `Err` arm of both outer loops. There is NO reset rule: v4.1's reset
+-- keyed on a snapshot write, and P1 writes nothing (ADR-003 v6.1 D5, "no
+-- write, no reset"). The `model_change`, `restart` and discard arms recurse
+-- with the ordinal unchanged, because no run happened.
+pure func next_run_ordinal(run_ordinal: int) -> int { run_ordinal + 1 }
+
+-- The run id the next traced run is stamped with. `session_id` is the loop's
+-- own derived id (`derive_session_id`) until P3 forwards the host-minted one;
+-- `resume_count` is read ambiently from MOTOKO_RESUME_COUNT in
+-- `rpc.run_with_config` (PLAN-003 §0.8 — NOT through `ports.env_get`, which
+-- would be a new helped `EnvRead` and re-pin five DST fixtures) and is 0 for
+-- every run before P3.
+pure func run_id_for(session_id: string, resume_count: int, run_ordinal: int) -> string {
+  "${session_id}.r${show(resume_count)}.${show(run_ordinal)}"
+}
+
+-- D5's identity, assembled where all three inputs are in scope: the loop.
+pure func loop_run_identity(session_id: string, profile: string, resume_count: int, run_ordinal: int) -> RunIdentity {
+  {
+    session_id: session_id,
+    run_id: run_id_for(session_id, resume_count, run_ordinal),
+    profile: profile
+  }
+}
+
+-- D6's `model_change` while suspended: the switch rewrites the HELD
+-- continuation's model, so the resume that follows runs under the model the
+-- operator chose rather than the one the exhausted run was using. When nothing
+-- is held this is the identity, which is why the loop's `model_change` arm has
+-- one shape and not two.
+pure func continuation_with_model(suspended: Option[Continuation], new_model: string) -> Option[Continuation] {
+  match suspended {
+    None => None,
+    Some(c) => Some({ c | model: new_model })
+  }
+}
+
 func conversation_loop_v2_with_policy(
   rt: ExtRuntime,
   env_url: string,
@@ -3592,7 +3828,27 @@ func conversation_loop_v2_with_policy(
   cost_rates: CostRates,
   provider: PortedProvider,
   session_id: string,
-  prior_counts: RuntimeStatusCounts
+  prior_counts: RuntimeStatusCounts,
+  -- ADR-003 v6.1 D6, the in-process half. `suspended` is the continuation the
+  -- last traced run carried out; while it is `Some` the loop is holding a live
+  -- run's state between turns and the operator is NOT locked out — the whole
+  -- point of D2's typed suspension.
+  suspended: Option[Continuation],
+  -- D5. The ordinal the NEXT traced run in this process will be stamped with.
+  run_ordinal: int,
+  -- The session's originating task. Threaded and not read in P1: it is D1's
+  -- `header.boot.task` and the journal header P3 writes is its consumer. It is
+  -- added HERE because Part 5 is the part that gives this loop its parameters,
+  -- and adding it later would re-touch every recursion site below for a
+  -- one-word change.
+  task: string,
+  -- The profile the session was invoked under (`cfg.profile`), D5's third
+  -- identity field. A resume may switch it; in P1 it is constant for the
+  -- process.
+  profile: string,
+  -- D5's `resume_count`, read ambiently in `rpc.run_with_config`. 0 for every
+  -- run before P3's `--resume` exists.
+  resume_count: int
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- Headless mode (M-MOTOKO-HEADLESS, 2026-05-08): skip the stdin-polling
   -- conversation loop entirely when MOTOKO_HEADLESS=1. The TS TUI layer
@@ -3617,7 +3873,7 @@ func conversation_loop_v2_with_policy(
   let raw = readLine();
   if raw == "" then ()
   else match decode(raw) {
-    Err(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts),
+    Err(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts, suspended, run_ordinal, task, profile, resume_count),
     Ok(obj) => {
       let cmd_type = msg_get_str(obj, "type");
       if cmd_type == "abort" || cmd_type == "exit" then ()
@@ -3636,10 +3892,17 @@ func conversation_loop_v2_with_policy(
         -- that would have to change, not a property of this line.
         let switched = session_policy_with_model(provider.ports, provider.world, policy, new_model);
         let next_policy = switched.policy;
-        conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, next_policy, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts)
+        -- ADR-003 D6: the HELD continuation's model is rewritten too, so a
+        -- `continue` after a `/model` runs under the model the operator just
+        -- chose. The run ordinal does NOT advance: no traced run happened.
+        conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, next_policy, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts, continuation_with_model(suspended, new_model), run_ordinal, task, profile, resume_count)
       }
       else if cmd_type == "restart" then {
-        -- Emit session_suspend event and exit cleanly; TUI will respawn
+        -- Emit session_suspend event and exit cleanly; TUI will respawn.
+        -- ADR-003 D6: `restart` while suspended returns exactly as it does
+        -- otherwise. The continuation dies with the process in P1 — carrying it
+        -- across a respawn is the JOURNAL's job (D6's cross-process half, P3),
+        -- and nothing in this process can hand it over.
         let target_profile = msg_get_str(obj, "profile");
         let _ = ledger_emit(session_id, SessionSuspend({
           session_id: session_id,
@@ -3656,15 +3919,31 @@ func conversation_loop_v2_with_policy(
           tool_call_id: "",
           images: []
         };
-        let next_history = history ++ [user_msg];
         let _ = ledger_emit(session_id, SessionStart({
           task: content,
           model: model,
           mode: "v2"
         }));
-        let traced = run_v2_from_messages_traced_with_policy_and_counts(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts);
+        let identity = loop_run_identity(session_id, profile, resume_count, run_ordinal);
+        -- ADR-003 v6.1 D6, THE RESUME. When a continuation is held, the
+        -- operator's message is appended to ITS history — the exhausted run's,
+        -- carried out of the suspension — and the run restarts from
+        -- `c2_state_from_continuation`. When none is held this is the
+        -- pre-ADR-003 path: append to the loop's `history` and start a fresh
+        -- run from a message seed.
+        --
+        -- THE TWO ARMS DIFFER IN THEIR SEED AND IN NOTHING ELSE. Both stamp the
+        -- run with D5's identity, both publish the turn's exit manifest, and
+        -- both fold the run's counts into the loop's running total.
+        let traced = match suspended {
+          Some(c) => run_v2_from_continuation_traced(rt, policy, workdir, provider, identity, { c | history: c.history ++ [user_msg] }),
+          None => run_v2_from_messages_traced_with_identity(rt, content, env_url, hybrid_tools, budget, policy, model, history ++ [user_msg], workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts, Some(identity))
+        };
         let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, traced.world);
         let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
+        -- D5's rule: one traced run happened on BOTH arms below, so the ordinal
+        -- advances on all three outcomes.
+        let next_ordinal = next_run_ordinal(run_ordinal);
         -- ADR-003 v6.1 D2: `suspended` is matched BEFORE `result`. A
         -- suspension is an `Err` — it has to be, or thirty match sites and
         -- `outcome_agreement_findings` would need a third outcome class — so a
@@ -3676,27 +3955,31 @@ func conversation_loop_v2_with_policy(
         -- loop returns immediately under `policy.headless` (the guard at its
         -- top), so a headless run never reaches this arm at all. A conditional
         -- would be a branch nothing can execute.
-        --
-        -- P1 Part 4 does not yet HOLD the continuation; Part 5 gives this loop
-        -- its `suspended` parameter and the `user_message` resume. Until then
-        -- the recursion is exactly today's, minus the error.
         match traced.suspended {
-          Some(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
+          -- The NEW continuation replaces the old one. `history` stays the
+          -- loop's: while a continuation is held it is the authority on what
+          -- the conversation contains, and copying its history back into the
+          -- loop's parameter would make two homes for one fact.
+          Some(next_c) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts, Some(next_c), next_ordinal, task, profile, resume_count),
           None =>
             match traced.result {
-              Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
+              -- The run completed, so the suspension is CONSUMED and the loop's
+              -- history becomes the finished run's — which, on the resume arm,
+              -- is the exhausted turn's messages plus everything the resumed
+              -- run added. That is the repair, observable.
+              Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts, None, next_ordinal, task, profile, resume_count),
               Err(e) => {
                 let _ = ledger_emit(session_id, ErrorEvent({
                   source: "agent_loop_v2",
                   code: e.code,
                   message: e.message
                 }));
-                conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts)
+                conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts, None, next_ordinal, task, profile, resume_count)
               }
             }
         }
       }
-      else conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts)
+      else conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts, suspended, run_ordinal, task, profile, resume_count)
     }
   }
   }
@@ -3820,7 +4103,13 @@ export func conversation_loop_v2(
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let live_provider = ported_provider(rt, provider);
   let init = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
-  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, { live_provider | world: init.next_state }, session_id, zero_runtime_status_counts())
+  -- This entry keeps its signature (it is re-exported by `agent_loop_v2` and
+  -- driven by `scripts/smoke_v2_conversation.ail`), so it seeds the ADR-003 D5
+  -- parameters with what a caller that knows nothing about a session means:
+  -- nothing held, ordinal 0, no task, no profile, resume count 0. The live
+  -- launcher does not come through here — `run_v2_with_conversation` below is
+  -- the one `rpc.run_with_config` calls, and it has all five.
+  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, { live_provider | world: init.next_state }, session_id, zero_runtime_status_counts(), None, 0, "", "", 0)
 }
 
 -- M8 combined entry point: runs the initial task via run_v2, then enters
@@ -3842,7 +4131,15 @@ export func run_v2_with_conversation(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  provider: StepProvider
+  provider: StepProvider,
+  -- ADR-003 v6.1 D5, arriving from `rpc.run_with_config` one level up: the
+  -- profile the session was invoked under (`cfg.profile`) and the host's
+  -- `resume_count`, read there AMBIENTLY from MOTOKO_RESUME_COUNT on the
+  -- `headless_mode()` pattern (PLAN-003 §0.8 — a `ports.env_get` here would be
+  -- a new helped `EnvRead` and re-pin the five fixtures that name the policy
+  -- init's exact key set). Both are 0/"" for every run before P3.
+  profile: string,
+  resume_count: int
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial_messages = msgs_to_messages(initial_msgs);
   let live_provider = ported_provider(rt, provider);
@@ -3855,6 +4152,11 @@ export func run_v2_with_conversation(
   -- the outer conversation loop, and each traced run below derives its own from
   -- its own world. That is pre-existing behaviour, not a cursor being dropped.
   let session_id = derive_session_id(started_provider.ports, started_provider.world).id;
+  -- ADR-003 v6.1 D5. The FIRST traced run of the process is ordinal 0 — the
+  -- path table's first row (`REVIEW-adr003-v4-verdicts-fable.md` §3, minus its
+  -- write-dependent rows) — and the loop below is entered with the ordinal the
+  -- NEXT run will take.
+  let initial_ordinal = 0;
   -- An empty task means there is no opening turn to run. Go straight to the
   -- conversation loop rather than letting the empty task reach the provider as
   -- a real model call on an empty user message -- which is what `/restart` did
@@ -3866,11 +4168,20 @@ export func run_v2_with_conversation(
   -- task-conditional and both built exactly once. This stays as the guard for
   -- direct callers (tests, harnesses) that hand an empty task straight in.
   if task == "" then
-    conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts())
+    conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, zero_runtime_status_counts(), None, initial_ordinal, task, profile, resume_count)
   else {
-  let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider);
+  -- THE FIRST `Some` CALLER (PLAN-003 §0.7). It goes through
+  -- `run_v2_from_messages_traced_with_identity` rather than
+  -- `..._with_policy` because the default identity that arm would build is
+  -- `<run's own derived id>.r0.0` with an empty profile — right for a DST
+  -- fixture driving an exported entry, wrong for a live session, where
+  -- `resume_count` may not be 0 and the id every event of this loop is stamped
+  -- with is the loop's own.
+  let initial_identity = loop_run_identity(session_id, profile, resume_count, initial_ordinal);
+  let initial_traced = run_v2_from_messages_traced_with_identity(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider, zero_runtime_status_counts(), Some(initial_identity));
   let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider.ports, initial_traced.world);
   let initial_counts = runtime_status_counts(initial_traced.trace);
+  let next_ordinal = next_run_ordinal(initial_ordinal);
   -- ADR-003 v6.1 D2, and this is the arm that DOES need the headless
   -- conditional. Under `MOTOKO_HEADLESS=1` the conversation loop below returns
   -- without reading anything, so there is no operator to unlock and the plain
@@ -3884,7 +4195,7 @@ export func run_v2_with_conversation(
   -- `run_summary`, `error` — the same shape as today's `run_summary`, `error`
   -- with one record inserted. P3 removes it when the loggers switch.
   match initial_traced.suspended {
-    Some(_) => {
+    Some(c) => {
       let _ = if policy.headless then
         ledger_emit(session_id, ErrorEvent({
           source: "agent_loop_v2",
@@ -3893,21 +4204,25 @@ export func run_v2_with_conversation(
         }))
       else ();
       -- `live_provider`, byte-for-byte what the `Err` arm below passes today.
-      -- This arm used to BE that arm; the only thing P1 Part 4 changes about it
+      -- This arm used to BE that arm; the only thing P1 Part 4 changed about it
       -- is the error emit, and swapping the provider here would be an unrelated
       -- fix hiding inside a decision's commit.
-      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts)
+      --
+      -- P1 Part 5: the loop now HOLDS `c`. The operator's next `user_message`
+      -- appends to the exhausted run's history and resumes from it, which is
+      -- the whole of ADR-003 D6's in-process half.
+      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts, Some(c), next_ordinal, task, profile, resume_count)
     },
     None =>
       match initial_traced.result {
-        Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts),
+        Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts, None, next_ordinal, task, profile, resume_count),
         Err(e) => {
           let _ = ledger_emit(session_id, ErrorEvent({
             source: "agent_loop_v2",
             code: e.code,
             message: e.message
           }));
-          conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts)
+          conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts, None, next_ordinal, task, profile, resume_count)
         }
       }
   }
@@ -4264,24 +4579,15 @@ pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool
 -- above each stub, and the assertion is the table it has to satisfy.
 -- ============================================================================
 
--- D5's identity rule, first half: ONE traced run per ordinal, both the `Ok` and
--- the `Err` arm of both outer loops, no reset (nothing is written in P1, so
--- there is nothing for a reset to key on).
+-- P1 PART 5 LANDED THE TWO STUBS THAT WERE HERE, and it landed them beside
+-- `conversation_loop_v2_with_policy` — the one caller of the rule they state —
+-- rather than filling their bodies in place. `next_run_ordinal` and
+-- `run_id_for` are the driver's, not the test's; what P1 Part 1 required is
+-- that ONE definition answer to both, and the assertion below now reads the
+-- same function the loop calls. A body filled in here, under the test that
+-- pins it, would have been the second definition the stub comment warned
+-- against.
 --
--- STUB — P1 Part 5 replaces the body with `run_ordinal + 1`.
-pure func next_run_ordinal(_run_ordinal: int) -> int { 0 }
-
--- D5's identity rule, second half: the run id the NEXT traced run is stamped
--- with. `session_id` is the run's derived id (`:1440–1447`) until P3 forwards
--- the session's; `resume_count` is read ambiently from MOTOKO_RESUME_COUNT in
--- `rpc.run_with_config` (§0.8 — NOT through `ports.env_get`, which would be a
--- new helped `EnvRead` and re-pin five fixtures) and is 0 for every run before
--- P3.
---
--- STUB — P1 Part 5 replaces the body with
---   "${session_id}.r${show(resume_count)}.${show(run_ordinal)}"
-pure func run_id_for(_session_id: string, _resume_count: int, _run_ordinal: int) -> string { "" }
-
 -- The rule as a table: the ordinal advances by one per traced run, and the id
 -- is the three fields joined in that order. The second row is the one the ADR
 -- is about — a second run in the same process is `.2`, not a fresh session.
@@ -4313,29 +4619,29 @@ type ResumeStateShape = {
   emissions_len: int
 }
 
--- STUB — P1 Part 5 replaces the body with the projection of the real
--- `c2_state_from_continuation(c, provider)`:
---   msgs = c.history, step_idx = 0, totals = zero_totals(),
---   prior_counts = c.cumulative, nudges_used = c.nudges_used,
---   every pending field empty, trace empty, emissions empty
--- (`ext_artifacts` and `telemetry` come from `c` too; they are not integers and
--- are pinned by `journal.ail`'s round-trip test in P1 Part 3 instead).
+-- P1 Part 5: THE PROJECTION, and every reset field below is read from the same
+-- `c2_resume_reset()` value the real `c2_state_from_continuation` constructs
+-- its state from — not re-stated as a literal here. That is what makes this a
+-- projection rather than a second opinion: change the constructor's reset half
+-- and this function changes with it, and the assertion below is what notices.
 --
--- The `-1`s are not a placeholder value chosen for convenience: they are what
--- says the constructor does not exist yet. `c2_initial_state_with_counts`
--- (`:709`) is the only constructor at this commit and it starts from a SEED —
--- it re-derives `nudges_used` from the message list (`:727`) and takes its
--- counts from an argument the resume path never supplies.
-pure func c2_state_from_continuation_shape(_history_len: int, _cumulative_calls_completed: int, _nudges_used: int) -> ResumeStateShape {
+-- The three arguments ARE the continuation's carried fields — `List.length(
+-- c.history)`, `c.cumulative.provider_calls_completed`, `c.nudges_used` —
+-- because a `C2LoopState` cannot be built in a `pure` test at all: it holds a
+-- `Ports` and a `WorldState` and every constructor of those is effectful.
+-- `ext_artifacts` and `telemetry` are carried too; they are not integers and
+-- `journal.ail`'s round-trip test pins them instead.
+pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_completed: int, nudges_used: int) -> ResumeStateShape {
+  let reset = c2_resume_reset();
   {
-    msgs_len: -1,
-    step_idx: -1,
-    totals_cost_millicents: -1,
-    prior_calls_completed: -1,
-    nudges_used: -1,
-    pending_tool_calls: -1,
-    trace_len: -1,
-    emissions_len: -1
+    msgs_len: history_len,
+    step_idx: reset.step_idx,
+    totals_cost_millicents: reset.totals.cost_millicents,
+    prior_calls_completed: cumulative_calls_completed,
+    nudges_used: nudges_used,
+    pending_tool_calls: List.length(reset.pending_tool_calls),
+    trace_len: List.length(reset.trace.records),
+    emissions_len: List.length(reset.emissions)
   }
 }
 
