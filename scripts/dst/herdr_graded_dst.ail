@@ -38,7 +38,46 @@ import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/test/stub_step (RecordingWorld, prose_step)
 import src/core/ports (ScriptedStep, WorldState, empty_world_state)
-import src/core/dst_interaction (Interaction)
+import src/core/dst_interaction (
+  Interaction,
+  ExtensionEffectIdentity,
+  identity_origin,
+  identity_kind,
+  count_kind
+)
+import src/core/dst_discovery (
+  DiscoveryWitness,
+  EnvExpectation,
+  DiscoveryFinding,
+  check_discovery,
+  discovery_message,
+  census,
+  census_line
+)
+import src/core/dst_program (
+  ExecutionProgram,
+  validate_program,
+  ProgramRejection,
+  program_message,
+  program_schema_version
+)
+import src/core/dst_replay (
+  ReplayMismatch,
+  ReconstitutionFinding,
+  world_state_of,
+  reconstitution_balance,
+  reconstitution_message,
+  strict_replay_findings,
+  replay_message,
+  refusal_message
+)
+import src/core/dst_fault_catalogue (required_class_ids, fault_catalogue_version)
+import src/core/dst_profile (
+  ExecutionManifest, PackageVersion, profile_rules_version
+)
+import src/core/dst_profile_coverage as Cov (coverage_rules_version)
+import src/core/dst_attribution_table as Attr (attribution_rules_version)
+import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtEntry, ExtRegistry, BudgetPlan
 )
@@ -184,6 +223,242 @@ pure func any_contains(xs: [string], needle: string) -> bool {
   match xs { [] => false, x :: rest => if contains(x, needle) then true else any_contains(rest, needle) }
 }
 
+
+-- ---------------------------------------------------------------------------
+-- The discovery chain: record -> grade -> validate -> reconstitute -> replay
+-- ---------------------------------------------------------------------------
+--
+-- WHY THIS EXISTS AND WHY IT IS NOT OPTIONAL. `dst_profile.recognised_producers`
+-- is a CLOSED set of five, and for herdr exactly one of them can carry a
+-- `WorldMediated` entry. classifier 3 reports herdr AMBIENT (one source,
+-- `register.ail:26 std/env.getEnvOr`), so it cannot clear criterion 2 whatever
+-- that source is; classifier 2's own note says "never on its own for
+-- WorldMediated"; `declared_row` is criterion 1 only and both of herdr's rowed
+-- slots declare non-empty rows; `disclosure` is admissible for exclusions.
+-- `discovery` is what is left, and it measures its clauses over a RECORDED,
+-- VALIDATED, STRICTLY REPLAYED run. This is that run. A profile record naming
+-- `discovery` without this chain would be a basis with nothing behind it.
+--
+-- AND THE PROFILE CANNOT DODGE IT: `work_in_flight[0]` is unconditionally
+-- dispatched with a non-empty declared row, and D5 forbids installing an
+-- extension with an unconditionally-dispatched hook excluded.
+
+func report_discovery(fs: [DiscoveryFinding]) -> () ! {IO} {
+  match fs { [] => (), f :: rest => { let _ = println("      ${discovery_message(f)}"); report_discovery(rest) } }
+}
+func report_program(rs: [ProgramRejection]) -> () ! {IO} {
+  match rs { [] => (), r :: rest => { let _ = println("      ${program_message(r)}"); report_program(rest) } }
+}
+func report_recon(fs: [ReconstitutionFinding]) -> () ! {IO} {
+  match fs { [] => (), f :: rest => { let _ = println("      ${reconstitution_message(f)}"); report_recon(rest) } }
+}
+func report_replay(ms: [ReplayMismatch]) -> () ! {IO} {
+  match ms { [] => (), m :: rest => { let _ = println("      ${replay_message(m)}"); report_replay(rest) } }
+}
+
+pure func effect_origins(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ExtensionEffectIdentity(_, _, _) => identity_origin(i.identity.body) :: effect_origins(rest),
+        _ => effect_origins(rest)
+      }
+  }
+}
+
+pure func all_equal(xs: [string], v: string) -> bool {
+  match xs { [] => true, x :: rest => x == v && all_equal(rest, v) }
+}
+
+pure func joins(xs: [string]) -> string {
+  match xs { [] => "", x :: rest => match rest { [] => x, _ => "${x}, ${joins(rest)}" } }
+}
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+-- THE WITNESS, DERIVED FROM herdr'S CONTROL FLOW AND NOT FROM THE LOG. A
+-- witness read off the recorder agrees with it by construction, which is the
+-- failure `class_balance` exists to catch. Every count below is read off
+-- `on_tool_handle`'s path for ONE `Delegate` with kind=claude, under this
+-- target's configuration (dagr_pane off, sweep_stale off, sweep_settle off,
+-- dagr_plan empty, reap_on_exit off):
+--
+--   sweep_once      dir_make(work_dir), file_write(sentinel), run_herdr(pane list)
+--   do_delegate     dir_make(work_dir), file_write(task file),
+--                   run_herdr x6: pane split, agent start, agent explain,
+--                                 agent get (the retry baseline), agent prompt,
+--                                 pane report-metadata
+--   dagr_open       dir_make(dagr_dir), file_write(tmp),
+--                   run_cmd(dagr check), run_cmd(mv),
+--                   file_write(settled candidate)
+--
+-- so extension_effects = 9, dir_makes = 3, file_writes = 4, file_removes = 0.
+--
+-- `ensure_dagr_pane` contributes NOTHING and that is a configuration fact this
+-- target pins: it early-outs on `cfg.dagr_pane == false` before any call.
+--
+-- tool_dispatches = 0. The model emits a native `Delegate`, but a ToolProvider
+-- handles it — the driver's own tool phase is never reached, so no
+-- `ToolIdentity` interaction is written. That zero is the shape of the thing
+-- this profile is about: the dispatch went to an extension.
+func graded_witness(clock_delta: int, resolutions: int) -> DiscoveryWitness {
+  { provider_calls: 2,
+    tool_dispatches: 0,
+    approval_reads: 0,
+    approvals_consumed: 0,
+    clock_delta_ms: clock_delta,
+    file_writes: 4,
+    file_removes: 0,
+    dir_makes: 3,
+    extension_effects: 9,
+    expected_env_reads: env_reads_always(resolutions) }
+}
+
+pure func env_reads_always(resolutions: int) -> [EnvExpectation] {
+  [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
+   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+   { key: "OPENAI_BASE_URL",           count: 1 },
+   { key: "MOTOKO_HEADLESS",           count: 1 },
+   { key: "MOTOKO_SESSION_ID",         count: 1 }]
+    ++ [{ key: "MOTOKO_PROFILE_DIR", count: resolutions },
+        { key: "MOTOKO_CONFIG",      count: resolutions },
+        { key: "MOTOKO_MODELS_FILE", count: resolutions },
+        { key: "MOTOKO_REPO",        count: resolutions * 2 }]
+}
+
+func herdr_manifest() -> ExecutionManifest {
+  { source_revision: "HEAD",
+    toolchain: "ailang 0.33.0",
+    extension_packages: [{ package_id: "sunholo/motoko_ext_herdr", version: "0.1.0" }],
+    abi_version: "7.3",
+    profile_id: "driver_plus_herdr",
+    profile_version: "1",
+    event_vocabulary_version: event_vocabulary_version(),
+    normalized_configuration: "{}",
+    classifier_2_set: ["env_get"],
+    unrouted_fields: [],
+    scan_roots: ["src/core", "packages/motoko-ext-herdr"],
+    scan_root_commit: "HEAD",
+    profile_rules_version: profile_rules_version(),
+    coverage_rules_version: Cov.coverage_rules_version(),
+    attribution_rules_version: Attr.attribution_rules_version(),
+    fault_catalogue_version: fault_catalogue_version() }
+}
+
+pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    generator_id: "hand_authored_herdr_demonstration",
+    generator_version: "1",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_plus_herdr\"}",
+      synthetic_environment: initial.env,
+      files: [],
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_plus_herdr/1"
+    },
+    bounds: {
+      max_interactions: 256,
+      max_chunks_per_interaction: 16,
+      max_payload_bytes: 4096,
+      max_resource_size: 4096,
+      max_clock_advance_ms: 60000,
+      chunk_draw_hi: 3
+    },
+    manifest: herdr_manifest(),
+    interactions: w.log
+  }
+}
+
+-- The chain. Returns (ok, resolutions_used) so `main` can print one line.
+func scenario_discovery(resolutions: int)
+  -> bool ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  let initial = graded_world();
+  let run = run_graded(initial);
+  let log = run.world.log;
+  let effects = count_kind(log, identity_kind(ExtensionEffectIdentity("", "", "")));
+  let origins = effect_origins(log);
+  let _ = println("      census: ${census_line(census(log))}");
+
+  let ok_ran = check("the graded session reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so every witness below is vacuous");
+
+  -- REACHABILITY BEFORE VERDICT (S24). A ToolProvider that never ran records
+  -- nothing and asserts nothing.
+  let ok_reached = check("herdr's routed seam RAN — nine scripted herdr calls reached the recorder",
+                         effects == 9,
+                         "extension effects=${show(effects)}, expected 9 — the call sequence changed, or a call escaped the ports");
+
+  -- THE ASSERTION THE PROFILE RESTS ON. Criterion 2's first two clauses as a
+  -- fact about the recorded program: an ExtensionEffect interaction exists (only
+  -- the ExtPorts recording adapter writes that class, so an ambient call would
+  -- leave none) and its origin is stamped by the fold in `ext/runtime.ail` —
+  -- not by the hook, not by the recorder, not by this file.
+  let ok_origin = check("NON-VACUITY: the program carries world-mediated effects ORIGIN-TAGGED to herdr",
+                        List.length(origins) >= 1 && all_equal(origins, "herdr"),
+                        "origins=[${joins(origins)}] — expected at least one, all \"herdr\"");
+
+  let findings = check_discovery(log, graded_witness(run.world.clock_ms - initial.clock_ms, resolutions));
+  let _ = if List.length(findings) > 0 then report_discovery(findings) else ();
+  let ok_discovery = check("the DISCOVERY instrument grades the run clean in both directions",
+                           List.length(findings) == 0,
+                           "${show(List.length(findings))} finding(s); `discovery` is the only producer that can carry herdr's criterion-2 entries, so a finding here unmakes the record");
+
+  let program = graded_program(run.world, initial);
+  let rejections = validate_program(program, required_class_ids());
+  let _ = if List.length(rejections) > 0 then report_program(rejections) else ();
+  let ok_valid = check("the recorded program VALIDATES",
+                       List.length(rejections) == 0,
+                       "${show(List.length(rejections))} rejection(s)");
+
+  match world_state_of(program, required_class_ids()) {
+    Err(r) => {
+      let _ = println("      ${refusal_message(r)}");
+      let ok_recon = check("the program reconstitutes a world", false, "refused");
+      ok_ran && ok_reached && ok_origin && ok_discovery && ok_valid && ok_recon
+    },
+    Ok(replay_world) => {
+      -- NOTHING UNCONSUMED, NOTHING MISSING. An `ext_effects` queue short by one
+      -- is not a quiet failure at this seam: the adapter DELEGATES, so a replay
+      -- would perform a REAL herdr call against the operator's live panes.
+      let recon = reconstitution_balance(program, replay_world);
+      let _ = if List.length(recon) > 0 then report_recon(recon) else ();
+      let ok_balance = check("the reconstituted world's queues balance against the log",
+                             List.length(recon) == 0,
+                             "${show(List.length(recon))} finding(s)");
+
+      let replay = run_graded(replay_world);
+      let ms = strict_replay_findings(program.interactions, replay.world.log);
+      let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+      let ok_replay = check("the graded session REPLAYS to an identical interaction log",
+                            List.length(ms) == 0,
+                            "${show(List.length(ms))} mismatch(es)");
+
+      -- The second half of the goal line's clause 1: "present in the recorded
+      -- program AND reproduced by its replay". An identical log already implies
+      -- it; asserting it by name means a future weakening of
+      -- `strict_replay_findings` cannot take the clause down silently.
+      let replay_origins = effect_origins(replay.world.log);
+      let ok_replay_effect =
+        check("NON-VACUITY, REPRODUCED: the replay records the same origin-tagged herdr effects",
+              List.length(replay_origins) == List.length(origins)
+                && all_equal(replay_origins, "herdr") && List.length(replay_origins) >= 1,
+              "replay origins=[${joins(replay_origins)}] against recorded [${joins(origins)}]");
+
+      let _ = println("CLAIM clause1 extension_effects=${show(effects)} origins=${show(List.length(origins))} replayed=${show(List.length(replay_origins))} mismatches=${show(List.length(ms))}");
+
+      ok_ran && ok_reached && ok_origin && ok_discovery && ok_valid && ok_balance
+        && ok_replay && ok_replay_effect
+    }
+  }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
   let r = run_graded(graded_world());
   let msgs = result_msgs(r);
@@ -206,8 +481,10 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trac
   let _ = println("HERDR-GRADED: a ToolProvider dispatch reached the extension:      ${show(dispatched)}");
   let _ = println("HERDR-GRADED: the delegation completed against the scripted herdr: ${show(succeeded)}");
   let _ = println("HERDR-GRADED: elapsed is the scripted durations, so nothing ran:   ${show(served)}");
-  if dispatched && succeeded && served then
-    println("HERDR-GRADED: PASS — register entry 19's open inference is answered: the ToolProvider path IS reachable under DST")
+  let _ = println("  ---- the discovery chain ----");
+  let disc = scenario_discovery(1);
+  if dispatched && succeeded && served && disc then
+    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, and the run is recorded, graded, validated and strictly replayed")
   else {
     let _ = println("HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world");
     let _ = show_each(tools);
