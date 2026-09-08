@@ -134,12 +134,40 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
     -- generous.
     start_timeout_ms: parse_int_or(getEnvOr("HERDR_START_TIMEOUT_MS", "20000"), 20000),
-    -- Same 30s wall, same reasoning, and measured with the same caveat: a
-    -- herdr `--timeout` is not a hard wall-clock bound (a 4000ms wait returned
-    -- at 4201ms; M3 saw a 25s bound overrun to 28.3s), so 20000 leaves ~10s of
-    -- margin rather than cutting it fine. One blocking call at this bound
-    -- replaces roughly twenty busy-polls at M6's median.
-    check_wait_ms: parse_int_or(getEnvOr("HERDR_CHECK_WAIT_MS", "20000"), 20000),
+    -- 45s, RAISED FROM 20s ON 2026-09-08 BECAUSE THE WALL IT WAS SIZED AGAINST
+    -- DOES NOT EXIST ON THIS PATH.
+    --
+    -- The old value read "same 30s wall as `start_timeout_ms`, so 20000 leaves
+    -- ~10s of margin". That premise is wrong, and it is wrong in the direction
+    -- that costs the operator money. `DelegateCheck`'s wait is a `BashExec`
+    -- reached through `ExtPorts.tool_handle`, whose `ToolInvocation` is built
+    -- with `timeout_ms: 0` hardcoded (`session.ail:1115`), and 0 means NO
+    -- DEADLINE (`ports.ail:544`). The deadline is a post-hoc comparison against
+    -- `duration_ms` anyway (`ports.ail:1476`), not a kill. Nothing on this path
+    -- stops a longer wait.
+    --
+    -- WHAT THE 20s ACTUALLY COST, measured 2026-09-08. A step is spent on the
+    -- provider call that ASKS to wait, not on the waiting — the tool phase does
+    -- not advance `step_idx` — so the budget buys 20 seconds of patience per
+    -- step. A session driving PLAN-003 by delegation spent 299 steps in 88
+    -- minutes and roughly 120 of them were heartbeats, then died mid-part with
+    -- the work uncommitted. At 45s the same session spends fewer than half the
+    -- checks for the same delegates.
+    --
+    -- THE COST OF THE TRADE, stated so it is chosen rather than discovered: a
+    -- delegate that finishes just after a check goes unnoticed for up to 45s
+    -- instead of 20s, ~22s of added latency per part on average — about 3% of a
+    -- 13-minute delegate for slightly more than half the steps. And the
+    -- orchestrator is unresponsive for the length of one wait, which is why
+    -- this is not raised further: past a minute an operator cannot tell a
+    -- blocking wait from a hang.
+    --
+    -- The overrun caveat still holds and is why this is not cut fine: a herdr
+    -- `--timeout` is not a hard wall-clock bound (a 4000ms wait returned at
+    -- 4201ms; M3 saw a 25s bound overrun to 28.3s), so expect ~50s at this
+    -- setting. `HERDR_CHECK_WAIT_MS` still overrides, and a deployment that
+    -- DOES set a positive `MOTOKO_TOOL_TIMEOUT_MS` must keep it above this.
+    check_wait_ms: parse_int_or(getEnvOr("HERDR_CHECK_WAIT_MS", "45000"), 45000),
     max_output_chars: parse_int_or(getEnvOr("HERDR_MAX_OUTPUT_CHARS", "16000"), 16000),
     -- F-5 D2, MOVED HERE FROM THE TUI AT ABI 7.0. The exit-time reap used to be
     -- host-side TypeScript that read this variable for itself
