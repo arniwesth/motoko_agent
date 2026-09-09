@@ -1,0 +1,26 @@
+--- a/.devcontainer/agent_confined/docker-compose.yml
++++ b/.devcontainer/agent_confined/docker-compose.yml
+@@ -99,8 +99,21 @@
+     # large machine, lower it on a 16 GB one. CPU exhaustion only slows the host, so cpus is a soft comfort
+     # limit, not a security control. NOT set here: shm_size — agent-browser's Chromium needs /dev/shm, so
+     # the default stands (noted as a known gap instead).
+-    mem_limit: ${AGENT_MEM_LIMIT:-8g}
+-    memswap_limit: ${AGENT_MEM_LIMIT:-8g}
++    #
++    # THE DEFAULT IS 24g AND THAT ASSUMES A ≥32 GB HOST (2026-09-09). It was 8g, and 8g was measured
++    # too small for this workload: on 2026-09-08 an orchestrating Motoko, its AILANG child and one
++    # delegate CLI drove the cgroup into `memory.events: max 2137700, oom_kill 1`, and the kernel
++    # killed the session mid tool-phase with nothing printed — see
++    # `.agent/issues/a-killed-motoko-process-exits-silently.md` for the evidence.
++    #
++    # A LIMIT LARGER THAN THE HOST IS NOT A LIMIT. If this file lands on a machine whose OrbStack VM
++    # is smaller than 24 GB, `mem_limit` can never bind, and the paragraph above stops being true:
++    # a leak takes the HOST down instead of OOM-killing itself inside the container, which is the
++    # exact gap these lines were added to close. Check `free -g` inside the container — it reports
++    # the VM, not the Mac — and set AGENT_MEM_LIMIT in the repo-root `.env` to about half of it.
++    # There is no way for compose to check this for you, which is why it is written down here.
++    mem_limit: ${AGENT_MEM_LIMIT:-24g}
++    memswap_limit: ${AGENT_MEM_LIMIT:-24g}
+     pids_limit: ${AGENT_PIDS_LIMIT:-4096}
+     cpus: ${AGENT_CPUS:-4}
+ 
