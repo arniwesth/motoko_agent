@@ -570,6 +570,11 @@ number.
   `error` consumer (the only `"error"` matches are a comment at `:420` and a child-process
   listener at `:1109`); the external AILANG adapter is **unverified** and the finding is
   recorded in §5 either way before the removal lands.
+- **As landed (2026-09-12):** QEVAL found the harness DOES key on `error`
+  (`benchmarks/motoko_rpc.py:213–216`), so by this part's own rule (Open question 7) **the
+  removal did not land**: the headless `error` stays as a compatibility surface, the loggers
+  exit non-zero on `run_suspended` beside it, and both render `session_resume_view` /
+  `session_resume_refused`. §5 has the finding and the live readings.
 
 **Done when.** The issue file is closed with the P3 hash; ADR-003's Consequences "unverified"
 line is replaced by the §5 finding; both judging numbers are green.
@@ -640,9 +645,9 @@ generation check: a consumed wake is followed by a `run_started` and the fold of
    the probe drives `rpc.main` directly and reads stdout (P1 Part 1 item 3).
 6. **`c2_finalize` — resolved.** A `final` parameter at all seven callers (P1 Part 4; ADR-003
    v6.1).
-7. **The external eval-harness adapter** (P3 Part 6). Answered before the `error` removal
-   lands; if it keys on `error`, the headless-only emission stays and ADR-003's Consequences
-   gains a line.
+7. **The external eval-harness adapter — resolved 2026-09-12 (QEVAL): it keys on `error`.**
+   The headless-only emission stays, ADR-003's Consequences carries the line, and P3 Part 6
+   switched the loggers without removing it (§5, "P3 Part 6: the eval-harness finding").
 8. **The canonical form for the incremental digest — resolved.** A per-message
    `canonical_message_frame(m)`: `canonical_messages_raw`'s frame (`phase_vocab.ail:237–243`)
    plus an `images` frame, since both existing forms omit images (`:233`, `:241`). The chain is
@@ -690,6 +695,69 @@ instruction and is green. The canary pin was not touched; on 2026-09-07 the owne
 `depth_canary` listed under `DST_KNOWN_RED` (`Makefile:493`) with the bisection above as its
 reason, pending the re-measure; the summary script's reverse check reports it the day it
 passes (Open question 9).
+
+### P3 Part 6, 2026-09-12: the eval-harness finding, and the loggers' exit
+
+**The finding (QEVAL, answered by code reading and re-read for this part): the external eval
+harness KEYS ON THE WIRE `error`.** `benchmarks/motoko_rpc.py:213–216` ends
+`MotokoRpc.run_and_collect`'s drain on `t == "error"` and sets `terminal_event = "error"`
+(the other terminal is `done`, `:207–212`); `benchmarks/tb_adapter/motoko_agent.py:217` maps that
+to `FailureMode.UNKNOWN_AGENT_ERROR`; `benchmarks/aider_polyglot.py:229`, `:274`, `:380` and
+`benchmarks/smoke.py:58` branch on `terminal_event == "error"`. The harness launches the TUI in
+non-TTY JSONL mode (`MOTOKO_JSONL_OUTPUT=1`, `node src/tui/dist/index.js`, `motoko_rpc.py:66–91`),
+which is exactly the headless path whose `error` Part 6 was to remove. Without it, a
+budget-exhausted benchmark run would emit `run_suspended`, `run_summary` and nothing the drain
+ends on, and would fall through to process exit with `terminal_event = ""`: neither done nor
+error, a silent misclassification. (`env-server.ts`, the in-tree consumer the plan checked, still
+has no wire `error` consumer. The finding is the external one.)
+
+**So by Open question 7's own rule the removal did not land.** The headless `error` after
+`run_suspended` (`session.ail`, the initial-run arm of the conversation entry) is kept as a
+compatibility surface, and its comment now says why. ADR-003's Consequences carries the line. What
+Part 6 did land:
+
+- `headless-outcome.ts` (`HeadlessOutcome`, tested): the plain and JSON loggers put
+  `run_suspended`'s reason on stderr and record a non-zero exit (1). They do NOT exit on the
+  record itself, because `run_summary` and the kept `error` follow it on the same stdout. The
+  `error` arm exits 1 as before, and `stop()`, called after the session log drains on runtime
+  exit, exits non-zero if the run suspended or was refused a resume with no `error` to exit on.
+- `session_resume_view` is rendered by the plain logger as D6's marker line.
+  `session_resume_refused` goes to stderr in both loggers, beside exit 3.
+- The non-TTY path no longer defers `run_suspended` behind `logger.flush()`. P1 Part 6 drained it
+  against a `process.exit` that no logger takes on that record, and the deferral let the
+  synchronous `run_summary` reach the JSON logger's stdout before it. The record now goes over
+  synchronously, and the runtime-exit callback calls `ui.stop()` after `logger.close()` resolves.
+
+**Live readings, through the harness's own entry point** (`node src/tui/dist/index.js`, non-TTY,
+`MOTOKO_JSONL_OUTPUT=1`, `openrouter/anthropic/claude-haiku-4.5`, a scratch profile):
+
+    budget (max_steps 3): exit=1  stdout order = run_suspended, run_summary, error
+      run_suspended(….r0.0, budget_exhausted, step 3)  run_summary(max_steps, 3)  error(StepBudgetExhausted)
+      stderr: [suspended] budget_exhausted at step 3 (run ….r0.0): headless has no operator to continue it, …
+    normal (max_steps 10): exit=0  stdout order = run_summary, done   error events = 0   stderr reason lines = 0
+    MotokoRpc.run_and_collect on the budget run: terminal_event='error' error_message='step budget exhausted'
+
+**The first judging number, re-read at this part: `scripts/probe_budget_continue.sh` 7/7**
+(exhausted payloads `[2, 4, 6, 8, 10]`, resumed `[13, 15, 17, 19]`, first resumed
+`msg_count` 13 == 12 + 1, one session id). Its first run at this tree read **3/6, and that was
+the judge, not the product**. P3 Part 5 made the conversation loop emit the first run's
+`SessionStart` with its `run_id` beside `rpc.ail`'s banner, which has none, and the judge split
+runs on every `session_start`. It therefore saw three runs, the first of them empty. The judge
+now splits only on a `session_start` that names a run, which is the host journal's rule. The same
+kept capture replays 3/6 through HEAD's judge and 7/7 through the fixed one. P3 Part 5 did not
+run the probe, so it did not see this.
+
+**The sweep before P3G, run to completion: `make dst DST_JOBS=4`, 725 s, exit 2, three reds.**
+P3 Part 5's sweep died before its summary, so this is the first full reading since Part 3.
+`depth_canary` is the known red (Open question 9). `herdr_graded` and `driver_plus_herdr`
+(one script, `herdr_graded_dst.ail`) are red for two reasons, and neither is Part 6's.
+(i) **Ambient:** run inside a herdr delegate pane, the unset `HERDR_DELEGATE_DEPTH` made the
+scripted Delegate refuse, so the run recorded 1 extension effect of 9. With every `HERDR_*`
+unset, the run's eight clauses are green. (ii) **A stale profile pin:** `driver_plus_herdr`
+records attribution table `(c0fbf10, sha256:eba3f47…)` against a live `sha256:2c86584…`, with
+`tool_phase.ail:318` unaccounted. A clean worktree at `845239c` reads the identical pair, so the
+pin predates this part. Its disposition is a D4 profile re-issue and is the owner's call; it is
+not taken here. Every other target passed.
 
 ### P3 Part 3, 2026-09-12: Open question 3's bytes-per-turn, and the `JournalFold` first green
 

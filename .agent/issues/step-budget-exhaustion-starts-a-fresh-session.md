@@ -2,7 +2,37 @@
 
 ## Status
 
-**Repaired in memory; on the journal at P3.**
+**Closed — resolved by PLAN-003 P3 (ADR-003 v6.1 D1–D6), 2026-09-12.**
+
+Closed by P3's last part, the commit titled `ADR-003 D8: P3 Part 6 — …` whose parent is
+`845239c` (P3 Part 5) on `arniwesth/013-plan003-and-herdr`. It is named by subject, parent and
+branch for the reason below: a commit cannot contain its own hash. The hash is in that commit's
+report and in the PLAN-003 dagr receipt for P3P6. The cross-process repair itself is P3 Parts
+3–5 (`a629dbc`, `51bfae0`, `845239c`).
+
+BOTH OF ADR-003'S JUDGING NUMBERS ARE GREEN:
+
+- **In process** (P1): after the budget, the operator's `continue` opens on the exhausted
+  history. `scripts/probe_budget_continue.sh` re-read 7/7 at P3 Part 6's tree: exhausted payloads
+  `[2, 4, 6, 8, 10]`, resumed `[13, 15, 17, 19]`, first resumed `msg_count` 13 == 12 + 1, one
+  session id across both runs (D5).
+- **Across a crash** (P3 Part 5, `845239c`): a child SIGKILLed mid tool-phase, then a new Motoko
+  on that session id. It resumed at startup with `stripped 1 dangling tool call(s)` and `3
+  messages, 1 provider call(s) carried`, continued to `provider_calls_completed` 1 -> 2, and its
+  15-entry journal folds ACCEPTED. "A run that dies at step N resumes with N steps of history."
+
+WHAT P1 LEFT OPEN BELOW, AND HOW IT CLOSED. `restart`, `abort`, `exit` and a crash now write
+host journal entries (D3), and `--resume` folds them (D4, D6). The two `session_id`s this issue's
+evidence shows are one: the host mints the id and forwards it, and a resume keeps it (D5).
+
+THE HEADLESS `error` IS KEPT, DELIBERATELY. The paragraph below expected P3 Part 6 to remove it.
+P3 Part 6 found that the external eval harness ends its drain on that event
+(`benchmarks/motoko_rpc.py:213–216`, PLAN-003 §5), so a headless budget-exhausted run still
+emits `run_suspended`, `run_summary`, `error`. The plain and JSON loggers now also exit non-zero
+on `run_suspended` with the reason on stderr. The interactive path has emitted no `error` for a
+suspension since P1.
+
+### P1's reading (2026-09-08), kept as history
 
 Repaired by PLAN-003 P1 (ADR-003 v6.1 D2/D5/D6) on branch `arniwesth/013-plan003-and-herdr`.
 The repairing commit is P1 Part 6, `ADR-003 D2: P1 Part 6 — the host's run_suspended case, and

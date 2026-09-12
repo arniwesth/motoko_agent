@@ -169,12 +169,16 @@ for line in open(path, encoding="utf-8", errors="replace"):
     except ValueError:
         continue
 
-# Split into runs on `session_start`: rpc emits one before the first task
-# (rpc.ail:250) and the conversation loop emits one per follow-up turn
-# (session.ail:3410). Anything before the first is boot noise.
+# Split into runs on a `session_start` THAT NAMES A RUN. rpc's startup banner is
+# also a `session_start`, emitted before a task exists and carrying no `run_id`;
+# since PLAN-003 P3 Part 5 the conversation loop emits one WITH the run's id for
+# the first run as well as for every follow-up turn, which is the host journal's
+# rule too (`session-journal.ts`, "only a session_start that names a run opens
+# one"). Splitting on the banner as well read the banner as an empty first run.
+# Anything before the first run's is boot noise.
 runs, cur = [], None
 for e in events:
-    if e.get("type") == "session_start":
+    if e.get("type") == "session_start" and str(e.get("run_id") or "") != "":
         cur = []
         runs.append(cur)
     elif cur is not None:

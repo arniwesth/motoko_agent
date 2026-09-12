@@ -230,8 +230,8 @@ type SessionPolicy = {
 --   `suspended`  D2's typed suspension: `Some(c)` exactly when the run stopped
 --                on its step budget with a resumable history. The two outer
 --                loops match THIS before they match `result`, and emit no
---                `ErrorEvent` when it is `Some` (except in headless, until the
---                loggers switch in P3).
+--                `ErrorEvent` when it is `Some` (except in headless, where the
+--                eval harness's `error` drain keeps it — PLAN-003 §5).
 --   `final`      D4's comparand: what a fold of this run's journal must
 --                reproduce. Set at all seven of `c2_finalize`'s callers through
 --                its `final` parameter, so a new terminal arm cannot forget it
@@ -4652,16 +4652,16 @@ export func run_v2_with_conversation(
   let next_ordinal = next_run_ordinal(initial_ordinal);
   -- ADR-003 v6.1 D2, and this is the arm that DOES need the headless
   -- conditional. Under `MOTOKO_HEADLESS=1` the conversation loop below returns
-  -- without reading anything, so there is no operator to unlock and the plain
-  -- and JSON loggers still key their non-zero exit off the `error` event
-  -- (`index.ts:517–519`, `:572–575`). Emitting nothing here would turn a
-  -- budget-exhausted headless run into an exit 0, which is a regression in the
-  -- one mode that has no human to notice.
+  -- without reading anything, so there is no operator to unlock. The plain and
+  -- JSON loggers exit non-zero on `run_suspended` itself since P3 Part 6, but
+  -- THIS EMIT STAYS: the eval harness (`benchmarks/motoko_rpc.py`) ends its
+  -- drain on `error` and nothing else, so dropping it would classify a
+  -- budget-exhausted benchmark run as neither done nor error (PLAN-003 §5).
   --
   -- The error is emitted AFTER `run_suspended` and after the RunSummary the
   -- traced run already wrote, so the headless wire order is `run_suspended`,
-  -- `run_summary`, `error` — the same shape as today's `run_summary`, `error`
-  -- with one record inserted. P3 removes it when the loggers switch.
+  -- `run_summary`, `error` — a compatibility surface now, not a stopgap: keep
+  -- it until every `terminal_event == "error"` consumer reads `run_suspended`.
   match initial_traced.suspended {
     Some(c) => {
       let _ = if policy.headless then

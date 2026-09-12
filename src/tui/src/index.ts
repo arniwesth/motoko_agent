@@ -25,6 +25,7 @@ import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
 import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
+import { HeadlessOutcome, formatResumeViewLine } from "./headless-outcome.js";
 import { SessionLogger } from "./session-logger.js";
 import { initHerdrReporter, reportSessionPath } from "./herdr-agent-state.js";
 import { initExitActions } from "./exit-actions.js";
@@ -424,6 +425,7 @@ class PlainLogger {
   onUserMessage?: (content: string) => void;
   private readonly streamSteps = new Set<number>();
   private readonly verboseStream: boolean;
+  private readonly outcome = new HeadlessOutcome();
 
   constructor() {
     const v = (process.env.MOTOKO_PLAIN_VERBOSE_STREAM ?? "").trim().toLowerCase();
@@ -521,6 +523,16 @@ class PlainLogger {
         process.stderr.write(`[error] ${event.message}\n`);
         process.exit(1);
         break;
+      // PLAN-003 P3 Part 6. The reason goes to stderr and the non-zero exit is RECORDED, not taken:
+      // headless still sends `run_summary` and the eval harness's `error` after a suspension, and
+      // the `error` arm above exits on them. `stop()` exits if the runtime ends without one.
+      case "run_suspended":
+      case "session_resume_refused":
+        process.stderr.write(this.outcome.observe(event) ?? "");
+        break;
+      case "session_resume_view":
+        process.stdout.write(formatResumeViewLine(event));
+        break;
       case "tool_calls":
         process.stdout.write(`[tools] ${event.request_id} queued (${event.tool_calls.length} call(s))\n`);
         for (const call of event.tool_calls) {
@@ -564,21 +576,32 @@ class PlainLogger {
     }
   }
 
-  stop(): void {}
+  // Called once the runtime has exited and the session log is drained. A run that suspended or
+  // was refused a resume, and was not already ended by an `error`, exits non-zero here.
+  stop(): void {
+    if (this.outcome.exitCode !== 0) process.exit(this.outcome.exitCode);
+  }
 }
 
 class JsonlLogger {
   onModelChange?: (model: string) => void;
   onAbort?: () => void;
   onUserMessage?: (content: string) => void;
+  private readonly outcome = new HeadlessOutcome();
 
   handleEvent(event: AgentEvent): void {
     process.stdout.write(JSON.stringify(event) + "\n");
+    // PLAN-003 P3 Part 6: stdout stays the unmodified wire; a suspension's or a refused resume's
+    // reason goes to stderr, and its non-zero exit is taken on the `error` or in `stop()`.
+    const reason = this.outcome.observe(event);
+    if (reason !== null) process.stderr.write(reason);
     if (event.type === "done") process.exit(0);
     if (event.type === "error") process.exit(1);
   }
 
-  stop(): void {}
+  stop(): void {
+    if (this.outcome.exitCode !== 0) process.exit(this.outcome.exitCode);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -959,24 +982,14 @@ async function main(): Promise<void> {
           });
           return;
         }
-        // ADR-003 v6.1 D2 / PLAN-003 P1 Part 6. `run_suspended` is drained here for the same
-        // reason as `done` and `error` — it is the last thing a suspended run says before the
-        // records that end it, and a `process.exit` racing the WriteStream loses them.
-        //
-        // IT DRAINS BUT DOES NOT CLOSE, and that difference is load-bearing rather than a
-        // shortcut. In P1 the headless wire is `run_suspended`, `run_summary`, `error`: the plain
-        // and JSON loggers are unchanged in this phase and still exit on the `error` (which is
-        // P3 Part 6's to remove), so records follow this one and `SessionLogger.log` returns
-        // early once `close()` has set `closed`. Closing here would therefore drop the
-        // `run_summary` — precisely the tail M-MOTOKO-EVAL-HARNESS-HARDENING gap #1 added this
-        // drain to protect. When P3 makes `run_suspended` terminal for headless, this becomes a
-        // `close()` beside the other two.
-        if (event.type === "run_suspended") {
-          void logger.flush().then(() => {
-            ui.handleEvent(event);
-          });
-          return;
-        }
+        // ADR-003 v6.1 D2 / PLAN-003 P3 Part 6. `run_suspended` is NOT terminal and is handed
+        // over synchronously, like any record that has more after it. P1 Part 6 drained it here
+        // (flush, then hand over) against a `process.exit` that no logger takes on it: since P3
+        // Part 6 the loggers only RECORD the suspension's non-zero exit, and the headless wire
+        // goes on `run_summary`, `error` — the `error` is kept for the eval harness (PLAN-003 §5)
+        // and is the record that closes and exits above. Deferring this one behind a flush would
+        // let the synchronous `run_summary` reach the JSON logger's stdout BEFORE it, breaking the
+        // `run_suspended`, `run_summary`, `error` order the harness and the probe read.
         ui.handleEvent(event);
       },
       () => {
@@ -984,9 +997,11 @@ async function main(): Promise<void> {
         // flushed, so the boundary is recorded here — `child_exit` is what D1 calls this reason,
         // and `pending_tool_calls` is the trailing-pair rule over the entries the host holds.
         journal.writeExit("child_exit");
-        void logger.close();
+        const closing = logger.close();
         sessionLogger = undefined;
-        ui.stop();
+        // After the drain: a logger whose run suspended without an `error` exits non-zero in
+        // `stop()` (PLAN-003 P3 Part 6), and an exit before the drain loses the log's tail.
+        void closing.then(() => ui.stop());
       },
     );
     return;
