@@ -1097,6 +1097,7 @@ async function main(): Promise<void> {
           interrupted = false;
           preWarmIdle = false;
           errorOccurred = false;
+          if (journal.canResume) ui.addHistoryText("Your next prompt resumes this session from its journal.", "cyan");
           ui.setAwaitingTask(true);
         } else if (errorOccurred) {
           // Process crashed after emitting an error (unexpected exit on the
@@ -1109,6 +1110,9 @@ async function main(): Promise<void> {
           // reason at exactly the moment it is most useful.
           errorOccurred = false;
           preWarmIdle = false;
+          // Say what the next prompt will do, since it is not what a fresh start does: a session
+          // with a history resumes from its journal (`onInitialTask`), crash included.
+          if (journal.canResume) ui.addHistoryText("Your next prompt resumes this session from its journal.", "cyan");
           ui.setAwaitingTask(true);
         } else if (preWarmIdle) {
           // A pre-warm runtime exited before any prompt was submitted, without
@@ -1200,12 +1204,26 @@ async function main(): Promise<void> {
   // Hand the first prompt to the runtime. Normally the pre-spawn below has one
   // up and warm already, so this is a stdin write and the user sees output
   // almost immediately. The spawn is the fallback for when that process is gone
-  // (startup failure, ESC interrupt, an error the runtime exited on).
+  // (startup failure, ESC interrupt, an error the runtime exited on, a kill).
   ui.onInitialTask = (task: string) => {
     preWarmIdle = false;
     if (runtimeProcess && !runtimeProcess.isDead) {
       sessionLogger?.logUserInput(task);
       runtimeProcess.sendUserMessage(task);
+      return;
+    }
+    // A DEAD RUNTIME WITH A HISTORY IS RESUMED, NOT REPLACED. Since the host reports an unexplained
+    // child death instead of exiting on it (the OOM kills of 2026-09-08/12), this TUI outlives its
+    // child and keeps the lease — so no second Motoko can resume the session, and this prompt is
+    // the only way on. A fresh spawn here would begin a history the journal never had: D1's third
+    // arm compares the seed with the last `digest_after`, finds they diverge, and marks the session
+    // unresumable — the step-budget issue's lost history, reached by typing. So the respawn is
+    // `/restart`'s: `--resume <journal>` folds the crash (dangling calls stripped, steps carried)
+    // and the child reads this prompt from stdin as the resumed conversation's next turn.
+    if (journal.canResume) {
+      respawnForRestart();
+      sessionLogger?.logUserInput(task);
+      runtimeProcess?.sendUserMessage(task);
       return;
     }
     spawnRuntimeProcess(task, true);
