@@ -18,6 +18,9 @@ import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, 
 import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
 import src/core/types (Msg)
 import pkg/sunholo/motoko_ext_abi/types (DiagnosticField)
+-- P1 (D1): the leaf. It imports nothing from this module, ports or
+-- context_usage, so the hub can name the sum without a cycle.
+import src/core/context_limit (ContextLimit, Bounded, Disabled, Unknown, Catalogue, ProfileKeyAbsent, ModelNotInCatalogue, raw_window_of, limit_arm_id, limit_origin_id, limit_profile_miss_id, limit_catalogue_miss_id, limit_missing_model)
 
 -- ============================================================================
 -- History: sealed. MkHistory is deliberately NOT exported.
@@ -225,8 +228,13 @@ export type TokenTelemetry = {
 -- named exports in src/core/compaction.ail: elide_tier_pct(),
 -- elide_hard_tier_pct(), emergency_pct(), elide_keep_last(),
 -- elide_hard_keep_last(), emergency_keep_last(), emergency_final_keep_last().
+--
+-- P1 (D1) step 7: `context_limit` is the resolved SUM, stored once by
+-- `session_policy_init` / `session_policy_with_model`. Every int reader goes
+-- through one of `context_limit`'s three named projections (rule 1); nothing
+-- under `packages/` names this record, so the sum does not reach ABI 7.x.
 export type CompactionPolicy = {
-  context_limit: int,
+  context_limit: ContextLimit,
   elide_tier_pct: int,
   elide_hard_tier_pct: int,
   emergency_pct: int
@@ -719,6 +727,10 @@ export type PersistNudgeInfo = { step: int, nudge_num: int, budget: int }
 -- no identity yet.
 export type SessionStartInfo = { task: string, model: string, mode: string, run_id: string }
 export type SessionSuspendInfo = { session_id: string, target_profile: string }
+-- P1 (D1) step 4. ONE per run, at the shared per-run entry: the limit the run's
+-- policy carries, with its arm and — for `Unknown` — both misses. Logical: the
+-- arm is the reason an int 0 is unmeasured rather than healthy.
+export type ContextLimitResolvedInfo = { run_id: string, limit: ContextLimit }
 
 -- ADR-003 v6.1 D2. The typed suspension's wire record: a run that reached its
 -- step budget stops being an `error` and becomes this. It is APPENDED to the
@@ -1026,6 +1038,7 @@ export type LedgerEvent
   | HistoryReplaced(HistoryReplacedInfo)     -- [NEW]  history_replaced
   | StateDelta(StateDeltaInfo)               -- [NEW]  state_delta
   | SessionResumed(SessionResumedInfo)       -- [NEW]  session_resumed
+  | ContextLimitResolved(ContextLimitResolvedInfo) -- [NEW] context_limit_resolved (PLAN-001 P1 step 4)
   | SessionStart(SessionStartInfo)           -- [prod] session_start
   | ErrorEvent(ErrorInfo)                    -- [prod] error
   | TotalsUpdated(ThinkingInfo)              -- [NEW]  loop_totals_updated
@@ -1140,6 +1153,20 @@ func state_delta_kvs(i: StateDeltaInfo) -> [{key: string, value: Json}] {
   }
 }
 
+-- P1 (D1) steps 3-4: ONE home for the reason's JSON shape, read by the
+-- `ContextLimitResolved` projection and by `session.runtime_status_json`'s
+-- `context_limit_source`. Fixed keys on every arm ("" where an arm carries no
+-- such part), so a poller never branches on which keys are present.
+export pure func context_limit_source_json(limit: ContextLimit) -> Json {
+  jo([
+    kv("arm", js(limit_arm_id(limit))),
+    kv("origin", js(limit_origin_id(limit))),
+    kv("profile_miss", js(limit_profile_miss_id(limit))),
+    kv("catalogue_miss", js(limit_catalogue_miss_id(limit))),
+    kv("model", js(limit_missing_model(limit)))
+  ])
+}
+
 export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
   match e {
     ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("system_prefix_count", jnum(_int_to_float(i.system_prefix_count))), kv("system_prefix_chars", jnum(_int_to_float(i.system_prefix_chars))), kv("system_prefix_digest", js(i.system_prefix_digest)), kv("payload_digest", js(i.payload_digest)), kv("model", js(i.model))],
@@ -1178,6 +1205,7 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     HistoryReplaced(i) => history_replaced_kvs(i),
     StateDelta(i) => state_delta_kvs(i),
     SessionResumed(i) => [kv("type", js("session_resumed")), kv("resume_count", jnum(_int_to_float(i.resume_count))), kv("from_id", js(i.from_id)), kv("from_ordinal", jnum(_int_to_float(i.from_ordinal))), kv("profile_from", js(i.profile_from)), kv("profile_to", js(i.profile_to)), kv("prompt_digest_from", js(i.prompt_digest_from)), kv("prompt_digest_to", js(i.prompt_digest_to)), kv("forced", jb(i.forced))],
+    ContextLimitResolved(i) => [kv("type", js("context_limit_resolved")), kv("run_id", js(i.run_id)), kv("context_limit", jnum(_int_to_float(raw_window_of(i.limit)))), kv("context_limit_source", context_limit_source_json(i.limit))],
     SessionStart(i) => [kv("type", js("session_start")), kv("task", js(i.task)), kv("model", js(i.model)), kv("mode", js(i.mode)), kv("run_id", js(i.run_id))],
     ErrorEvent(i) => [kv("type", js("error")), kv("source", js(i.source)), kv("code", js(i.code)), kv("message", js(i.message))],
     TotalsUpdated(i) => [kv("type", js("loop_totals_updated")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))],
@@ -1646,6 +1674,10 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(StateDelta({ run_id: "sid.r0.0", step: 2, cumulative: { provider_calls_started: 3, provider_calls_completed: 3, stage_applied_total: 1, stage_rejected_total: 0, compaction_ai_applied: 0 }, telemetry: { last_input_tokens: 100, last_output_tokens: 20, last_estimated_input_tokens: 400 }, ext_artifacts_digest: "sha256:e", ext_artifacts: None }), "{\"type\":\"state_delta\",\"run_id\":\"sid.r0.0\",\"step\":2,\"cumulative\":{\"provider_calls_started\":3,\"provider_calls_completed\":3,\"stage_applied_total\":1,\"stage_rejected_total\":0,\"compaction_ai_applied\":0},\"telemetry\":{\"last_input_tokens\":100,\"last_output_tokens\":20,\"last_estimated_input_tokens\":400},\"ext_artifacts_digest\":\"sha256:e\"}")
     && golden(StateDelta({ run_id: "sid.r0.0", step: 3, cumulative: zero_runtime_status_counts(), telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }, ext_artifacts_digest: "sha256:e2", ext_artifacts: Some(jo([kv("compose", js("v1"))])) }), "{\"type\":\"state_delta\",\"run_id\":\"sid.r0.0\",\"step\":3,\"cumulative\":{\"provider_calls_started\":0,\"provider_calls_completed\":0,\"stage_applied_total\":0,\"stage_rejected_total\":0,\"compaction_ai_applied\":0},\"telemetry\":{\"last_input_tokens\":0,\"last_output_tokens\":0,\"last_estimated_input_tokens\":0},\"ext_artifacts_digest\":\"sha256:e2\",\"ext_artifacts\":{\"compose\":\"v1\"}}")
     && golden(SessionResumed({ resume_count: 1, from_id: "0007", from_ordinal: 42, profile_from: "dogfood", profile_to: "probe-budget", prompt_digest_from: "sha256:p0", prompt_digest_to: "sha256:p1", forced: true }), "{\"type\":\"session_resumed\",\"resume_count\":1,\"from_id\":\"0007\",\"from_ordinal\":42,\"profile_from\":\"dogfood\",\"profile_to\":\"probe-budget\",\"prompt_digest_from\":\"sha256:p0\",\"prompt_digest_to\":\"sha256:p1\",\"forced\":true}")
+    -- PLAN-001 P1 step 4: all three arms pinned, so the bytes of each reason are.
+    && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Bounded({ raw_window: 71, source: Catalogue }) }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":71,\"context_limit_source\":{\"arm\":\"bounded\",\"origin\":\"catalogue\",\"profile_miss\":\"\",\"catalogue_miss\":\"\",\"model\":\"\"}}")
+    && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Disabled }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":0,\"context_limit_source\":{\"arm\":\"disabled\",\"origin\":\"\",\"profile_miss\":\"\",\"catalogue_miss\":\"\",\"model\":\"\"}}")
+    && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Unknown({ profile: ProfileKeyAbsent, catalogue: ModelNotInCatalogue("m") }) }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":0,\"context_limit_source\":{\"arm\":\"unknown\",\"origin\":\"\",\"profile_miss\":\"profile_key_absent\",\"catalogue_miss\":\"model_not_in_catalogue\",\"model\":\"m\"}}")
     -- RE-PINNED at PLAN-003 P3 Part 1: `run_id` joined SessionStartInfo.
     && golden(SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sid.r0.0" }), "{\"type\":\"session_start\",\"task\":\"t\",\"model\":\"m\",\"mode\":\"v2\",\"run_id\":\"sid.r0.0\"}")
     && golden(ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }), "{\"type\":\"error\",\"source\":\"agent_loop_v2\",\"code\":\"Internal\",\"message\":\"bad\"}")

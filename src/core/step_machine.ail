@@ -9,6 +9,7 @@ import std/ai (Message, ToolCall)
 import std/json (jo)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
+import src/core/context_limit (ContextLimit, Bounded, Unknown, Catalogue, ProfileKeyAbsent, CatalogueAbsent, raw_window_of)
 import src/core/phase_vocab (
   StepState,
   StepPolicy,
@@ -83,7 +84,10 @@ func mk_checkpoint_plan(s: StepState) -> CheckpointPlan {
 
 func should_checkpoint(s: StepState, pol: StepPolicy) -> bool {
   let plan = mk_checkpoint_plan(s);
-  let limit = pol.compaction.context_limit;
+  -- P1 (D1) rule 1/4: the RAW window, through the named projection. The
+  -- checkpoint denominator is raw, not net of the output allowance (cF7), so
+  -- checkpoint policy under `Bounded` is byte-for-byte what it was.
+  let limit = raw_window_of(pol.compaction.context_limit);
   pol.checkpoint_enabled
     && history_usage_percent_calibrated(s.history, limit, s.telemetry) >= pol.checkpoint_pct
     && checkpoint_would_relieve(s.history, plan, limit, pol.checkpoint_pct, s.telemetry)
@@ -140,7 +144,17 @@ func msg(role: string, content: string) -> Message {
   { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
-func mk_policy(context_limit: int) -> StepPolicy {
+-- Fixtures name their arm (ADR-001 D1 rule 5). `fixture_unmeasured` is the
+-- int-0 policy these tests always meant: no profile key, no catalogue.
+pure func fixture_unmeasured() -> ContextLimit {
+  Unknown({ profile: ProfileKeyAbsent, catalogue: CatalogueAbsent })
+}
+
+pure func fixture_bounded(n: int) -> ContextLimit {
+  Bounded({ raw_window: n, source: Catalogue })
+}
+
+func mk_policy(context_limit: ContextLimit) -> StepPolicy {
   {
     step_budget: 8,
     max_cost_millicents: 0,
@@ -245,8 +259,8 @@ pure func test_decide_step_budget() -> bool
   tests [((), true)]
   {
     match mk_state("", "", [], 8, 0, 0) {
-      Ok(s) => fail_message(decide(s, mk_policy(0))) == "step budget exhausted"
-        && is_fail(decide(s, mk_policy(0)), "StepBudgetExhausted"),
+      Ok(s) => fail_message(decide(s, mk_policy(fixture_unmeasured()))) == "step budget exhausted"
+        && is_fail(decide(s, mk_policy(fixture_unmeasured())), "StepBudgetExhausted"),
       Err(_) => false
     }
   }
@@ -256,7 +270,7 @@ pure func test_decide_cost_cap() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(0).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(fixture_unmeasured()).compaction };
         fail_message(decide(s, pol)) == "cost cap reached: 10 of 10 millicents used"
       },
       Err(_) => false
@@ -268,7 +282,7 @@ pure func test_decide_cost_cap_unmetered_does_not_exhaust() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(0).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(fixture_unmeasured()).compaction };
         not is_fail(decide(s, pol), "BudgetExceeded")
       },
       Err(_) => false
@@ -280,7 +294,7 @@ pure func test_decide_pending_tools() -> bool
   {
     let call: ToolCall = { id: "tc", name: "ReadFile", arguments: "{}" };
     match mk_state("tool_calls", "", [call], 0, 0, 0) {
-      Ok(s) => is_run_tools(decide(s, mk_policy(0)), 1),
+      Ok(s) => is_run_tools(decide(s, mk_policy(fixture_unmeasured())), 1),
       Err(_) => false
     }
   }
@@ -292,7 +306,7 @@ pure func test_decide_pending_approval() -> bool
     let c2: ToolCall = { id: "tc2", name: "ReadFile", arguments: "{}" };
     match mk_state("await_approval", "", [c1, c2], 3, 0, 0) {
       Ok(s) => {
-        let d = decide(s, mk_policy(0));
+        let d = decide(s, mk_policy(fixture_unmeasured()));
         is_await_approval(d, 1) && await_stream_id(d) == "step-3"
       },
       Err(_) => false
@@ -303,7 +317,7 @@ pure func test_decide_model_stop_finalize() -> bool
   tests [((), true)]
   {
     match mk_state("stop", "done", [], 0, 0, 0) {
-      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Ok(s) => is_finalize(decide(s, mk_policy(fixture_unmeasured())), "done"),
       Err(_) => false
     }
   }
@@ -312,7 +326,7 @@ pure func test_decide_dp7_reject_injects_user_message() -> bool
   tests [((), true)]
   {
     match mk_state("dp7_rejected", "bad", [], 0, 0, 0) {
-      Ok(s) => is_inject(decide(s, mk_policy(0))),
+      Ok(s) => is_inject(decide(s, mk_policy(fixture_unmeasured()))),
       Err(_) => false
     }
   }
@@ -322,7 +336,7 @@ pure func test_decide_solver_feedback_injects_user_message() -> bool
   {
     match mk_state("solver_feedback", "revise", [], 0, 0, 0) {
       Ok(s) =>
-        match decide(s, mk_policy(0)) {
+        match decide(s, mk_policy(fixture_unmeasured())) {
           InjectUserMessage(m) => m.role == "user" && m.content == "revise",
           _ => false
         },
@@ -334,7 +348,7 @@ pure func test_decide_stream_error_calls_model() -> bool
   tests [((), true)]
   {
     match mk_state("stream_error", "bad stream", [], 0, 0, 0) {
-      Ok(s) => is_call_model(decide(s, mk_policy(0))),
+      Ok(s) => is_call_model(decide(s, mk_policy(fixture_unmeasured()))),
       Err(_) => false
     }
   }
@@ -343,7 +357,7 @@ pure func test_decide_intercept_handled_calls_model() -> bool
   tests [((), true)]
   {
     match mk_state("intercept_handled", "handled", [], 0, 0, 0) {
-      Ok(s) => is_call_model(decide(s, mk_policy(0))),
+      Ok(s) => is_call_model(decide(s, mk_policy(fixture_unmeasured()))),
       Err(_) => false
     }
   }
@@ -352,7 +366,7 @@ pure func test_decide_dp7_approve_finalizes() -> bool
   tests [((), true)]
   {
     match mk_state("dp7_approved", "done", [], 0, 0, 0) {
-      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Ok(s) => is_finalize(decide(s, mk_policy(fixture_unmeasured())), "done"),
       Err(_) => false
     }
   }
@@ -361,7 +375,7 @@ pure func test_decide_dp7_fail_open_finalizes() -> bool
   tests [((), true)]
   {
     match mk_state("dp7_fail_open", "done", [], 0, 0, 0) {
-      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Ok(s) => is_finalize(decide(s, mk_policy(fixture_unmeasured())), "done"),
       Err(_) => false
     }
   }
@@ -370,7 +384,7 @@ pure func test_decide_persist_nudge() -> bool
   tests [((), true)]
   {
     match mk_state("persist_nudge", "", [], 0, 0, 0) {
-      Ok(s) => is_inject(decide(s, mk_policy(0))),
+      Ok(s) => is_inject(decide(s, mk_policy(fixture_unmeasured()))),
       Err(_) => false
     }
   }
@@ -379,7 +393,7 @@ pure func test_decide_actual_token_pressure_still_calls_model() -> bool
   tests [((), true)]
   {
     match mk_state("", "", [], 0, 0, 1) {
-      Ok(s) => is_call_model(decide(s, mk_policy(1))),
+      Ok(s) => is_call_model(decide(s, mk_policy(fixture_bounded(1)))),
       Err(_) => false
     }
   }
@@ -388,7 +402,7 @@ pure func test_decide_fresh_state_calls_model() -> bool
   tests [((), true)]
   {
     match mk_state("", "", [], 0, 0, 0) {
-      Ok(s) => is_call_model(decide(s, mk_policy(0))),
+      Ok(s) => is_call_model(decide(s, mk_policy(fixture_unmeasured()))),
       Err(_) => false
     }
   }
@@ -398,7 +412,7 @@ pure func test_default_policy_never_returns_take_checkpoint() -> bool
   {
     match mk_state_with_messages("", "", [], 0, 0, 20, pressured_msgs()) {
       Ok(s) =>
-        match decide(s, mk_policy(20)) {
+        match decide(s, mk_policy(fixture_bounded(20))) {
           TakeCheckpoint(_) => false,
           _ => true
         },
@@ -411,7 +425,7 @@ pure func test_enabled_policy_checkpoints_under_pressure() -> bool
   {
     match mk_state_with_messages("", "", [], 0, 0, 20, pressured_msgs()) {
       Ok(s) => {
-        let base = mk_policy(20);
+        let base = mk_policy(fixture_bounded(20));
         let pol = {
           step_budget: base.step_budget,
           max_cost_millicents: base.max_cost_millicents,

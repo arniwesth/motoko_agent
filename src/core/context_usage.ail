@@ -2,11 +2,17 @@ module src/core/context_usage
 
 import std/string (length, startsWith, substring)
 import std/list (foldl)
-import std/json (Json, decode, get, getInt)
+import std/json (Json, decode, get, getInt, asString)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import src/core/types (Msg)
 import src/core/ports (ContextReader, WorldState)
+import src/core/context_limit (
+  ContextLimit, Disabled, Unknown,
+  ProfileMiss, ProfileConfigAbsent, ProfileConfigUndecodable, ProfileKeyAbsent, ProfileKeyNonPositive,
+  CatalogueMiss, CatalogueAbsent, CatalogueUndecodable, ModelNotInCatalogue,
+  resolve_bounded_from_profile, resolve_bounded_from_catalogue, raw_window_of, disabled_profile_value
+)
 
 export pure func estimate_tokens(msgs: [Msg], system: string) -> int =
   let total = length(system) + foldl(\acc m. acc + length(m.content), 0, msgs) in
@@ -85,23 +91,39 @@ func lookup_context_limit(limits: Json, model: string) -> Option[int] {
 -- `readFile(path)` is two observations of a filesystem that can disagree between
 -- them; `FileRead` answers both questions from one request, which is the shape
 -- the world can serve and the shape a replay can reproduce.
-export func catalog_context_limit_for(r: ContextReader, w: WorldState, model: string) -> ContextLimitRead ! {Env, FS} {
+--
+-- P1 (D1) step 7: the read now keeps WHY it produced no window. The same two
+-- requests in the same order; only the value handed back is richer. A catalogue
+-- that decodes but has no `context_limits` object is `CatalogueUndecodable`: it
+-- is not a catalogue this reader can consult.
+type CatalogueOutcome = CatalogueWindow(int) | CatalogueMissed(CatalogueMiss)
+type CatalogueRead = { outcome: CatalogueOutcome, next_state: WorldState }
+
+func catalogue_read(r: ContextReader, w: WorldState, model: string) -> CatalogueRead ! {Env, FS} {
   let located = catalog_path(r, w);
   let read = r.file_read(located.next_state, located.path);
-  if not read.present then { value: 0, next_state: read.next_state }
+  if not read.present then { outcome: CatalogueMissed(CatalogueAbsent), next_state: read.next_state }
   else {
-    let value = match decode(read.content) {
-      Err(_) => 0,
+    let outcome = match decode(read.content) {
+      Err(_) => CatalogueMissed(CatalogueUndecodable),
       Ok(root) => match get(root, "context_limits") {
         Some(limits) => match lookup_context_limit(limits, model) {
-          Some(n) => n,
-          None => 0
+          Some(n) => CatalogueWindow(n),
+          None => CatalogueMissed(ModelNotInCatalogue(model))
         },
-        None => 0
+        None => CatalogueMissed(CatalogueUndecodable)
       }
     };
-    { value: value, next_state: read.next_state }
+    { outcome: outcome, next_state: read.next_state }
   }
+}
+
+-- The int form, kept for its three script callers (`compaction_catalog_dst`,
+-- `smoke_catalog_compaction`, `long_qwen_catalog_fixture_probe`): 0 on every miss.
+export func catalog_context_limit_for(r: ContextReader, w: WorldState, model: string) -> ContextLimitRead ! {Env, FS} {
+  let c = catalogue_read(r, w, model);
+  let value = match c.outcome { CatalogueWindow(n) => n, CatalogueMissed(_) => 0 };
+  { value: value, next_state: c.next_state }
 }
 
 -- Active profile directory, mirroring the launcher's convention: an explicit
@@ -125,29 +147,73 @@ func profile_dir_path(r: ContextReader, w: WorldState) -> PathRead ! {Env} {
 -- `agent.context_limit`. Context size is a property of the *endpoint* (a local
 -- server may serve 100K while the same model on a cloud provider serves 1M), so
 -- a profile can declare its serving context here instead of overloading the
--- model identifier in the shared catalog. Returns 0 (no override) when absent.
-func config_context_limit_override(r: ContextReader, w: WorldState) -> ContextLimitRead ! {Env, FS} {
+-- model identifier in the shared catalog.
+--
+-- P1 (D1) steps 6-7: the read names its outcome instead of returning 0. A
+-- positive int is a window; the string `context_limit.disabled_profile_value()`
+-- is the explicit `Disabled` declaration (rule 3: declared, never inferred);
+-- every other shape is a `ProfileMiss` and falls through to the catalogue as
+-- before. Same env and file requests in the same order.
+type ProfileOutcome = ProfileWindow(int) | ProfileDisabledDeclared | ProfileMissed(ProfileMiss)
+type ProfileRead = { outcome: ProfileOutcome, next_state: WorldState }
+
+pure func declares_disabled(agent: Json) -> bool {
+  match get(agent, "context_limit") {
+    Some(v) => match asString(v) {
+      Some(s) => s == disabled_profile_value(),
+      None => false
+    },
+    None => false
+  }
+}
+
+func config_context_limit_override(r: ContextReader, w: WorldState) -> ProfileRead ! {Env, FS} {
   let dir = profile_dir_path(r, w);
   let read = r.file_read(dir.next_state, "${dir.path}/config.json");
-  if not read.present then { value: 0, next_state: read.next_state }
+  if not read.present then { outcome: ProfileMissed(ProfileConfigAbsent), next_state: read.next_state }
   else {
-    let value = match decode(read.content) {
-      Err(_) => 0,
+    let outcome = match decode(read.content) {
+      Err(_) => ProfileMissed(ProfileConfigUndecodable),
       Ok(root) => match get(root, "agent") {
         Some(agent) => match getInt(agent, "context_limit") {
-          Some(n) => if n > 0 then n else 0,
-          None => 0
+          Some(n) => if n > 0 then ProfileWindow(n) else ProfileMissed(ProfileKeyNonPositive),
+          None => if declares_disabled(agent) then ProfileDisabledDeclared else ProfileMissed(ProfileKeyAbsent)
         },
-        None => 0
+        None => ProfileMissed(ProfileKeyAbsent)
       }
     };
-    { value: value, next_state: read.next_state }
+    { outcome: outcome, next_state: read.next_state }
+  }
+}
+
+-- The resolved limit as the sum, and its successor world.
+export type ContextLimitResolution = {
+  limit: ContextLimit,
+  next_state: WorldState
+}
+
+pure func resolution(limit: ContextLimit, w: WorldState) -> ContextLimitResolution {
+  { limit: limit, next_state: w }
+}
+
+-- The catalogue half, reached only when the profile produced neither a window
+-- nor a declaration. `Unknown` carries the profile's miss AND the catalogue's
+-- (cF8: never `ProfileConfigAbsent` alone when the catalogue then succeeded —
+-- a catalogue window is `Bounded` and names no miss at all).
+func resolve_from_catalogue(r: ContextReader, w: WorldState, model: string, profile_miss: ProfileMiss) -> ContextLimitResolution ! {Env, FS} {
+  let c = catalogue_read(r, w, model);
+  match c.outcome {
+    CatalogueWindow(n) => match resolve_bounded_from_catalogue(n) {
+      Some(limit) => resolution(limit, c.next_state),
+      None => resolution(Unknown({ profile: profile_miss, catalogue: ModelNotInCatalogue(model) }), c.next_state)
+    },
+    CatalogueMissed(miss) => resolution(Unknown({ profile: profile_miss, catalogue: miss }), c.next_state)
   }
 }
 
 -- Effective context limit for a model in the current deployment: the profile's
--- `agent.context_limit` override wins, else the per-model catalog value, else 0
--- ("unknown" — compaction extensions skip context-aware behaviour).
+-- `agent.context_limit` override wins, an explicit `"disabled"` there declares
+-- `Disabled`, else the per-model catalog value, else `Unknown` with both misses.
 --
 -- WI-D3 gave it a reader and a world. The driver passes `context_reader_of` its
 -- own `Ports`, so a deterministic run resolves this from `WorldState.files` and
@@ -160,9 +226,24 @@ func config_context_limit_override(r: ContextReader, w: WorldState) -> ContextLi
 -- MOTOKO_MODELS_FILE) and THREE file requests. The counts are data-dependent
 -- above that — an explicit MOTOKO_PROFILE_DIR short-circuits two of the env
 -- reads — which is why the discovery witness expresses them against the world a
--- scenario actually seeds rather than as a bare literal.
+-- scenario actually seeds rather than as a bare literal. P1B adds one more
+-- data-dependent short-circuit: a declared `Disabled` skips the catalogue half
+-- exactly as a positive override always has.
+export func resolve_context_limit_sum(r: ContextReader, w: WorldState, model: string) -> ContextLimitResolution ! {Env, FS} {
+  let profile = config_context_limit_override(r, w);
+  match profile.outcome {
+    ProfileWindow(n) => match resolve_bounded_from_profile(n) {
+      Some(limit) => resolution(limit, profile.next_state),
+      None => resolve_from_catalogue(r, profile.next_state, model, ProfileKeyNonPositive)
+    },
+    ProfileDisabledDeclared => resolution(Disabled, profile.next_state),
+    ProfileMissed(miss) => resolve_from_catalogue(r, profile.next_state, model, miss)
+  }
+}
+
+-- The int form, through the named projection (rule 1). `rpc.ail`'s three
+-- hook-context literals read `.value`; 0 is "no window", whichever arm.
 export func resolve_context_limit(r: ContextReader, w: WorldState, model: string) -> ContextLimitRead ! {Env, FS} {
-  let override = config_context_limit_override(r, w);
-  if override.value > 0 then override
-  else catalog_context_limit_for(r, override.next_state, model)
+  let resolved = resolve_context_limit_sum(r, w, model);
+  { value: raw_window_of(resolved.limit), next_state: resolved.next_state }
 }

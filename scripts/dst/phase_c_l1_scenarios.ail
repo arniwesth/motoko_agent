@@ -9,6 +9,8 @@ module scripts/dst/phase_c_l1_scenarios
 import std/io (println, exit)
 import std/list (length)
 import std/result (Result, Ok, Err)
+import std/option (Some, None)
+import src/core/context_limit (ContextLimit, Unknown, ProfileKeyAbsent, CatalogueAbsent, resolve_bounded_from_catalogue)
 import std/ai (Message, ToolCall)
 import std/json (jo, kv, js, encode)
 import src/core/phase_vocab (
@@ -74,6 +76,17 @@ func call(id: string) -> ToolCall {
   { id: id, name: "T", arguments: "{}" }
 }
 
+-- PLAN-001 P1 (ADR-001 D1 rules 1 and 5): the policy carries the resolved SUM.
+-- This fixture's ints are windows it chose or computed, so they are labelled
+-- `Bounded` through the catalogue resolver (the only constructor path); a
+-- non-positive one is the unmeasured arm, which is what an int 0 meant here.
+func fixture_limit(n: int) -> ContextLimit {
+  match resolve_bounded_from_catalogue(n) {
+    Some(l) => l,
+    None => Unknown({ profile: ProfileKeyAbsent, catalogue: CatalogueAbsent })
+  }
+}
+
 func policy(context_limit: int) -> StepPolicy {
   {
     step_budget: 8,
@@ -86,7 +99,7 @@ func policy(context_limit: int) -> StepPolicy {
     provider_base_url: "",
     checkpoint_enabled: false,
     checkpoint_pct: 90,
-    compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+    compaction: { context_limit: fixture_limit(context_limit), elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
   }
 }
 

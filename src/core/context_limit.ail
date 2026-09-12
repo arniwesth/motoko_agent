@@ -113,6 +113,76 @@ export pure func resolve_bounded_from_catalogue(n: int) -> Option[ContextLimit] 
   else None
 }
 
+-- P1 step 6: the Disabled declaration. FROZEN at P1B as the string value
+-- `"disabled"` under the profile's existing `agent.context_limit` key (Open
+-- question 3's default). No schema moves: `config.load_agent` never decodes
+-- that key, and `context_usage` read it with `getInt`, so a string there was
+-- already a `ProfileKeyAbsent` fall-through before this item. An int <= 0 is
+-- still `ProfileKeyNonPositive` and still falls through (rule 3).
+export pure func disabled_profile_value() -> string { "disabled" }
+
+-- P1 step 3/4: the arm and its reason as stable wire ids. The status field
+-- and the `ContextLimitResolved` projection both read these, so the two
+-- witnesses cannot name one arm two ways. Pure strings: this module stays a
+-- leaf (no std/json).
+export pure func is_bounded(limit: ContextLimit) -> bool {
+  match limit {
+    Bounded(_) => true,
+    Disabled => false,
+    Unknown(_) => false
+  }
+}
+
+export pure func limit_arm_id(limit: ContextLimit) -> string {
+  match limit {
+    Bounded(_) => "bounded",
+    Disabled => "disabled",
+    Unknown(_) => "unknown"
+  }
+}
+
+export pure func limit_origin_id(limit: ContextLimit) -> string {
+  match limit {
+    Bounded(r) => match r.source { ProfileOverride => "profile_override", Catalogue => "catalogue" },
+    Disabled => "",
+    Unknown(_) => ""
+  }
+}
+
+export pure func profile_miss_id(m: ProfileMiss) -> string {
+  match m {
+    ProfileConfigAbsent => "profile_config_absent",
+    ProfileConfigUndecodable => "profile_config_undecodable",
+    ProfileKeyAbsent => "profile_key_absent",
+    ProfileKeyNonPositive => "profile_key_non_positive"
+  }
+}
+
+export pure func catalogue_miss_id(m: CatalogueMiss) -> string {
+  match m {
+    CatalogueAbsent => "catalogue_absent",
+    CatalogueUndecodable => "catalogue_undecodable",
+    ModelNotInCatalogue(_) => "model_not_in_catalogue"
+  }
+}
+
+-- "" on every arm but Unknown; the miss ids are "" there too, so a reader
+-- never has to know which keys a given arm carries.
+export pure func limit_profile_miss_id(limit: ContextLimit) -> string {
+  match limit { Unknown(u) => profile_miss_id(u.profile), _ => "" }
+}
+
+export pure func limit_catalogue_miss_id(limit: ContextLimit) -> string {
+  match limit { Unknown(u) => catalogue_miss_id(u.catalogue), _ => "" }
+}
+
+export pure func limit_missing_model(limit: ContextLimit) -> string {
+  match limit {
+    Unknown(u) => match u.catalogue { ModelNotInCatalogue(m) => m, _ => "" },
+    _ => ""
+  }
+}
+
 pure func raw_window_of_bounded_is_window() -> bool
   tests [((), true)]
 {

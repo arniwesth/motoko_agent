@@ -2,7 +2,7 @@
 --
 -- WI-A8 acceptance, under ADR-001 D6.
 --
--- The artifact declares a wire name and a payload schema for each of the 41
+-- The artifact declares a wire name and a payload schema for each of the 42
 -- `LedgerEvent` variants. This script is what makes those declarations mean
 -- something: it builds ONE SAMPLE VALUE PER VARIANT and asserts, against the
 -- LIVE projection `phase_vocab.to_schema_v1`, that
@@ -43,11 +43,13 @@ import src/core/phase_vocab (
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
   NativeToolResults, SessionSuspend, RunSuspended,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
+  ContextLimitResolved,
   SessionStart, ErrorEvent, TotalsUpdated,
   CheckpointTaken, StreamDelta,
   RuntimeStatusCounts,
   to_schema_v1
 )
+import src/core/context_limit (Unknown, ProfileKeyAbsent, ModelNotInCatalogue)
 import src/core/dst_event_vocabulary (
   EventRow,
   PayloadField,
@@ -136,6 +138,9 @@ pure func samples() -> [LedgerEvent] {
     SessionResumed({ resume_count: 1, from_id: "0007", from_ordinal: 42,
       profile_from: "p", profile_to: "p", prompt_digest_from: "sha256:p0",
       prompt_digest_to: "sha256:p0", forced: false }),
+    -- PLAN-001 P1 step 4. The Unknown arm: the one that carries both misses, so
+    -- the richest payload is the one the round trip reads.
+    ContextLimitResolved({ run_id: "sid.r0.0", limit: Unknown({ profile: ProfileKeyAbsent, catalogue: ModelNotInCatalogue("m") }) }),
     SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sid.r0.0" }),
     ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }),
     TotalsUpdated({ step: 1, text: "", finish_reason: "", tool_calls: 0, input_tokens: 1,
@@ -326,7 +331,7 @@ export func main() -> () ! {IO} {
             report_rejections(rs)
           };
 
-  -- 2. THE ROUND TRIP. All 41 variants against the live projection.
+  -- 2. THE ROUND TRIP. All 42 variants against the live projection.
   let c2 = assert_all(ss);
   let _ = if c2 then println("  ✓ all ${show(List.length(ss))} variants round-trip: wire name and payload schema match the live projection")
           else println("  ✗ at least one variant does not round-trip");
@@ -353,7 +358,7 @@ export func main() -> () ! {IO} {
   -- 4. The classification, and the D6.4 gap it makes countable.
   let logical = logical_variants(rows);
   let display = display_only_variants(rows);
-  let c4 = List.length(logical) + List.length(display) == 41;
+  let c4 = List.length(logical) + List.length(display) == 42;
   let _ = if c4 then println("  ✓ every variant classified: ${show(List.length(logical))} logical, ${show(List.length(display))} display-only")
           else println("  ✗ the classification does not partition the vocabulary");
   let _ = print_list("display-only", display);

@@ -48,7 +48,8 @@ import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
 import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, effective_input_limit)
-import src/core/context_usage (resolve_context_limit)
+import src/core/context_usage (resolve_context_limit_sum)
+import src/core/context_limit (Bounded, Catalogue, is_bounded, raw_window_of, working_budget_for_ext) -- PLAN-001 P1: the sum's three int projections; nothing else erases the reason
 import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry)
 import src/core/ext/exit_manifest (publish_exit_manifest, manifest_path_var)
 import src/core/ext/runtime (
@@ -129,6 +130,7 @@ import src/core/phase_vocab (
   take_system_prefix,
   digest_messages,
   SessionStart, SessionResumed, SessionResumedInfo,
+  ContextLimitResolved, context_limit_source_json,
   ErrorEvent,
   StepState,
   StepPolicy,
@@ -671,13 +673,19 @@ pure func runtime_status_json(
   let context_msgs = c2_pending_context(st);
   let split = split_for_compaction(context_msgs);
   let pinned = split.pinned;
-  let limit = policy.step.compaction.context_limit;
+  -- PLAN-001 P1 step 3. The private `limit == 0` sentinel is gone: the ARM
+  -- decides whether a percentage is measured, and every unmeasured one renders
+  -- 0 beside a `context_limit_source` that says why. The raw int stays for
+  -- compatibility, through the named projection.
+  let limit_sum = policy.step.compaction.context_limit;
+  let measured = is_bounded(limit_sum);
+  let limit = raw_window_of(limit_sum);
   let actual_input_tokens = st.telemetry.last_input_tokens;
-  let actual_pct = if limit == 0 then 0 else (actual_input_tokens * 100) / limit;
+  let actual_pct = if measured then (actual_input_tokens * 100) / limit else 0;
   let estimated_input_tokens = estimate_tokens_messages(context_msgs);
-  let estimated_pct = usage_percent_with_limit(context_msgs, limit);
+  let estimated_pct = if measured then usage_percent_with_limit(context_msgs, limit) else 0;
   let calibrated_input_tokens = calibrated_tokens_messages(context_msgs, st.telemetry);
-  let calibrated_pct = calibrated_usage_percent(context_msgs, limit, st.telemetry);
+  let calibrated_pct = if measured then calibrated_usage_percent(context_msgs, limit, st.telemetry) else 0;
   jo([
     kv("tool", js("MotokoRuntimeStatus")),
     kv("current_step", jnum(_int_to_float(tool_step_idx))),
@@ -698,6 +706,7 @@ pure func runtime_status_json(
     ])),
     kv("context_window", jo([
       kv("context_limit", jnum(_int_to_float(limit))),
+      kv("context_limit_source", context_limit_source_json(limit_sum)),
       kv("last_sent", jo([
         kv("input_tokens", jnum(_int_to_float(actual_input_tokens))),
         kv("usage_pct", jnum(_int_to_float(actual_pct)))
@@ -2304,7 +2313,7 @@ func session_policy_init(ports: Ports, world: WorldState, model: string, step_bu
   -- from the fourth's successor exactly like the four env reads above and for
   -- the same reason A13 stage 2 gave: once a read appends to the world's log,
   -- discarding the successor drops every read it carried.
-  let r_limit = resolve_context_limit(context_reader_of(ports), r_headless.next_state, model);
+  let r_limit = resolve_context_limit_sum(context_reader_of(ports), r_headless.next_state, model);
   let persist_retries = parse_persist_retries_budget(r_persist.value);
   let retry_stream_errors = r_retry.value != "0";
   let provider_base_url = r_base.value;
@@ -2323,7 +2332,7 @@ func session_policy_init(ports: Ports, world: WorldState, model: string, step_bu
         checkpoint_enabled: false,
         checkpoint_pct: 90,
         compaction: {
-          context_limit: r_limit.value,
+          context_limit: r_limit.limit,
           elide_tier_pct: 70,
           elide_hard_tier_pct: 85,
           emergency_pct: exhaustion_pct()
@@ -2340,7 +2349,7 @@ func session_policy_init(ports: Ports, world: WorldState, model: string, step_bu
 -- performs requests through the ports rather than reading ambiently, and the
 -- successor it hands back is what its one caller is free to drop — see there.
 func session_policy_with_model(ports: Ports, world: WorldState, policy: SessionPolicy, model: string) -> SessionPolicyInit ! {Env, FS} {
-  let r_limit = resolve_context_limit(context_reader_of(ports), world, model);
+  let r_limit = resolve_context_limit_sum(context_reader_of(ports), world, model);
   {
     policy: {
     step: {
@@ -2355,7 +2364,7 @@ func session_policy_with_model(ports: Ports, world: WorldState, policy: SessionP
       checkpoint_enabled: policy.step.checkpoint_enabled,
       checkpoint_pct: policy.step.checkpoint_pct,
       compaction: {
-        context_limit: r_limit.value,
+        context_limit: r_limit.limit,
         elide_tier_pct: policy.step.compaction.elide_tier_pct,
         elide_hard_tier_pct: policy.step.compaction.elide_hard_tier_pct,
         emergency_pct: policy.step.compaction.emergency_pct
@@ -3043,7 +3052,7 @@ func c2_loop(
             step: done_step,
             input_tokens: st.telemetry.last_input_tokens,
             estimated_input_tokens: st.telemetry.last_estimated_input_tokens,
-            context_limit: policy.step.compaction.context_limit
+            context_limit: raw_window_of(policy.step.compaction.context_limit)
           });
           let trace_after_empty_floor =
             if trim(info.output) == "" then {
@@ -3197,7 +3206,7 @@ func c2_loop(
               -- comment above says this arm is prone to. The successor that
               -- disappears with the resolution is the resolution's own; the one
               -- that must survive is `input.next_state`, and it does, in `post`.
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), policy.step.compaction.context_limit, "", [], ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), raw_window_of(policy.step.compaction.context_limit), "", [], ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
               match resolution {
                 ApprovalDenied(reason) => {
                   let denied_event = NativeToolDenied({
@@ -3241,7 +3250,7 @@ func c2_loop(
           -- requests and nothing else. The dispatcher below therefore starts
           -- from the same world it would have started from, and `done.world` —
           -- the successor that IS load-bearing here — is untouched.
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, policy.step.compaction.context_limit, "", [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, raw_window_of(policy.step.compaction.context_limit), "", [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let calls_event = NativeToolCalls({
             request_id: request_id,
@@ -3360,11 +3369,11 @@ func c2_loop(
           -- the thread produced identical worlds. `world_state_probe`'s
           -- `consuming_pre_step_2`/`_3` are the first bindings that do not, and their
           -- two seal-terminal rows go red against the reverted argument.
-          let context_limit = policy.step.compaction.context_limit;
+          let context_limit = raw_window_of(policy.step.compaction.context_limit);
           let split = split_for_compaction(st.msgs);
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
-          let ext_context_limit = if effective_input_limit(context_limit) - pinned_tokens < 0 then 0 else effective_input_limit(context_limit) - pinned_tokens;
+          let ext_context_limit = working_budget_for_ext(policy.step.compaction.context_limit, pinned_tokens);
           let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, "", [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           -- ADR-003 D1's `state_delta`: the artifacts go inline ONLY when they
@@ -3921,7 +3930,16 @@ func run_v2_traced_from_seed(
     digest: seeded.history_digest.at, digests: chain_digests_json(chain_digests_over(chain_empty_base(), seeded.msgs))
   });
   let _ = ledger_emit(session_id, seed_event);
-  let st = { seeded | trace: ledger_append(seeded.trace, WireRecord(seed_event)) };
+  -- PLAN-001 P1 step 4: `ContextLimitResolved`, ONCE PER RUN, HERE — the shared
+  -- per-run entry every live turn, follow-up turn, resume and traced entry
+  -- reaches, so it is never a follow-up-only record (cF8). It reports the limit
+  -- the run's policy CARRIES (stored by `session_policy_init` /
+  -- `session_policy_with_model`); it performs no request, so no successor moves.
+  -- Emitted AND appended, AFTER `HistorySeeded`, so the seed stays the first
+  -- journal-class record and every existing record keeps its relative order.
+  let limit_event = ContextLimitResolved({ run_id: identity.run_id, limit: policy.step.compaction.context_limit });
+  let _ = ledger_emit(session_id, limit_event);
+  let st = { seeded | trace: ledger_append(ledger_append(seeded.trace, WireRecord(seed_event)), WireRecord(limit_event)) };
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
   let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, st);
@@ -4100,9 +4118,14 @@ func run_v2_from_messages_with_policy_and_counts(
   -- the whole `TracedSessionResult` but its `.result` — so it takes the default
   -- unconditionally rather than an Option nothing would ever fill.
   let identity = default_run_identity(session_id);
+  -- PLAN-001 P1 step 4, the one entry that does not reach
+  -- `run_v2_traced_from_seed` (the untraced `run_v2`): the same one record.
+  let limit_event = ContextLimitResolved({ run_id: identity.run_id, limit: policy.step.compaction.context_limit });
+  let _ = ledger_emit(session_id, limit_event);
+  let initial = c2_initial_state_with_counts(history, provider, started.next_state, prior_counts);
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_initial_state_with_counts(history, provider, started.next_state, prior_counts)).result;
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { initial | trace: ledger_append(initial.trace, WireRecord(limit_event)) }).result;
   Trace.spanEnd(session_span);
   result
 }
@@ -4525,6 +4548,8 @@ func publish_turn_exit_manifest(
     state_key: "core:ext:exit",
     finish_reason: "",
     work_in_flight: [],
+    -- PLAN-001 P1 step 5: NO WINDOW IS SUPPLIED TO THE EXIT CONTEXT. This 0 is a
+    -- literal, not a projection of the run's limit, and it is not `Disabled`.
     context_limit: 0,
     ports: ext_ports_of(ports, named.next_state, env_url),
     artifacts: empty_ext_artifacts(),
@@ -5027,7 +5052,7 @@ func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Tra
         checkpoint_enabled: false,
         checkpoint_pct: 90,
         compaction: {
-          context_limit: 1000,
+          context_limit: Bounded({ raw_window: 1000, source: Catalogue }),
           elide_tier_pct: 70,
           elide_hard_tier_pct: 85,
           emergency_pct: 95
@@ -5080,7 +5105,7 @@ func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
         checkpoint_enabled: false,
         checkpoint_pct: 90,
         compaction: {
-          context_limit: 1000,
+          context_limit: Bounded({ raw_window: 1000, source: Catalogue }),
           elide_tier_pct: 70,
           elide_hard_tier_pct: 85,
           emergency_pct: 95
