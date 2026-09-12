@@ -622,7 +622,19 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # bisection with the fix in place) and a pin bump with the reason recorded, or
 # moving the decode off the per-step frame. Drop this entry when the summary
 # reports it PASSED.
-DST_KNOWN_RED := depth_canary
+#
+# driver_plus_herdr, herdr_graded -- listed 2026-09-12 on the owner's ruling at
+# PLAN-003 P3G. One cause, two targets (they run the same script and read its two
+# halves): driver_plus_herdr/1 does not load clean, 2 rejections --
+# [attribution-identity-stale], recorded (c0fbf10, sha256:eba3f47…) against live
+# (c0fbf10, sha256:2c86584…), and [site-unaccounted] tool_phase.ail:318 (Process).
+# herdr_graded's run clauses are green; its "profile record loads clean" clause
+# is this. Bisected in clean worktrees with HERDR_* unset: green at b48e2f2, red at
+# d72fff1 (2026-09-08 17:13, the merge of the PLAN-003 P1 branch into 013/021) --
+# before any P3 part. Disposition pending the owner's D4 re-issue of the profile
+# against the corrected table. Drop both entries when the summary reports them
+# PASSED.
+DST_KNOWN_RED := depth_canary driver_plus_herdr herdr_graded
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
