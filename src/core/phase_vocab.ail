@@ -766,11 +766,21 @@ export type RunSuspendedInfo = { session_id: string, run_id: string, reason: str
 -- (`NativeToolCalls` / `NativeToolResults`) applied to a bigger value.
 -- ============================================================================
 
--- The history a traced run STARTS from, once per run, before the loop. `digest`
--- is `digest_messages(messages)` — the whole-seed digest, which is the base the
--- incremental chain of `HistoryAppended.digest_after` extends. The host has
--- three arms for it (D1): journal it as N appends for a session's first run,
--- as a `history_replaced` after a profile switch, or compare-and-drop.
+-- The history a traced run STARTS from, once per run, before the loop. The host
+-- has three arms for it (D1): journal it as N appends for a session's first
+-- run, as a `history_replaced` after a profile switch, or compare-and-drop.
+--
+-- `digest` IS THE CHAIN QUANTITY, `journal.chain_digest_over(chain_empty_base(),
+-- messages)`, and this sentence is CORRECTED from what P3 Part 1 wrote here —
+-- "`digest_messages(messages)`, the whole-seed digest". D1 does say
+-- `digest_messages`, and P3 Part 2 found that it cannot be: D1's third host arm
+-- compares this field with the last history entry's `digest_after`, and those
+-- would be two different functions over two different inputs, so the comparison
+-- could never succeed. The journal has no `history_seeded` ENTRY type either —
+-- the host expands a seed into N `history_appended` entries, whose digests the
+-- fold recomputes from `chain_empty_base()` — so a seed digest in any other form
+-- is one no reader of the journal can check. P3 Part 3 emits the chain quantity
+-- and `dst_invariants.journal_payload_findings` pins it against `messages`.
 export type HistorySeededInfo = { run_id: string, messages: Json, digest: string }
 
 -- ONE MESSAGE PER EVENT, never a batch: a batch of N tool results is N

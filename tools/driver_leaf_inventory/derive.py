@@ -117,7 +117,20 @@ HELPED = {
 # attribution anchors, and it is re-pinned here rather than deferred because
 # unlike `make anchors` this gate is GREEN at HEAD and a stale span reports
 # `p.model_step` as an unresolved driver leaf — a fail-closed error, not drift.
-BRIDGE_SPAN = ("src/core/session.ail", 829, 1218)
+#
+# RE-PINNED AGAIN AT PLAN-003 P3 PART 3, 829-1218 -> 1045-1434, ALL +216, and
+# the content is UNCHANGED: `diff` of `git show HEAD:src/core/session.ail | sed
+# -n '829,1218p'` against `sed -n '1045,1434p'` of the working tree is EMPTY.
+# The whole +216 is above the span — ADR-003 D1's chain-digest type, its four
+# helpers, the journal-class event builders and the `history_digest` field on
+# `C2LoopState`, which is declared where the record is declared, at the top of
+# the file. No leaf was added, removed or re-routed: the inventory is the same
+# 26 sites with the same classes, and the two UNRESOLVED-RECEIVER rows inside
+# the span (`p.file_read`, `p.clock_now`) are the same two the span exists to
+# exclude — with the span applied the inventory is 24 sites and 0 unresolved,
+# which is what P1 Part 4 measured. §0.8's frozen `HELPED`, `CALL_RE` and
+# `REQUEST_CLASS` are untouched.
+BRIDGE_SPAN = ("src/core/session.ail", 1045, 1434)
 
 AGGREGATE_HELPERS = [
     "resolve_context_limit",

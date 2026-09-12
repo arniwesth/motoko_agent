@@ -20,6 +20,8 @@ import src/core/phase_vocab (
   LedgerEvent,
   LedgerRecord,
   LedgerTrace,
+  HistoryAppended,
+  HistorySeeded,
   ProviderCallPrepared,
   RunSummary,
   TraceStageApplied,
@@ -35,6 +37,11 @@ import src/core/phase_vocab (
   to_schema_v1_kvs
 )
 import src/core/session (TracedSessionResult)
+-- ADR-003 v6.1 D1's chain, for the row that recomputes it over the suspended
+-- history. IMPORTED from the leaf the child and the fold both call, never
+-- restated here: a fixture with its own copy of the chain would be green on a
+-- driver that had the same bug.
+import src/core/journal (chain_digest_over, chain_empty_base)
 import src/core/session as Session
 import src/core/test/stub_step (Scripted, prose_step, chunked_prose_step, tool_step, tool_step_finish, continuing_token_step, empty_rt, deny_all_rt, scripted_ports, scripted_world_state)
 import src/core/ports (ScriptedStep)
@@ -901,6 +908,51 @@ func last_prepared_msg_count(records: [LedgerRecord], acc: int) -> int {
   }
 }
 
+-- ADR-003 v6.1 D1/D4, PLAN-003 P3 Part 3's named gate: the last `digest_after`
+-- the run journaled, read off the trace.
+func history_digest_after(r: LedgerRecord, fallback: string) -> string {
+  match r {
+    WireRecord(e) =>
+      match e {
+        HistoryAppended(i) => i.digest_after,
+        _ => fallback
+      },
+    _ => fallback
+  }
+}
+
+func last_history_digest(records: [LedgerRecord], acc: string) -> string {
+  match records {
+    [] => acc,
+    r :: rest => last_history_digest(rest, history_digest_after(r, acc))
+  }
+}
+
+func seed_digest_of(r: LedgerRecord, fallback: string) -> string {
+  match r {
+    WireRecord(e) =>
+      match e {
+        HistorySeeded(i) => i.digest,
+        _ => fallback
+      },
+    _ => fallback
+  }
+}
+
+func first_seed_digest(records: [LedgerRecord], acc: string) -> string {
+  match records {
+    [] => acc,
+    r :: rest => if acc != "" then acc else first_seed_digest(rest, seed_digest_of(r, acc))
+  }
+}
+
+func count_history_appended(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => (if record_wire_name(r) == "history_appended" then 1 else 0) + count_history_appended(rest)
+  }
+}
+
 func record_summary_error(r: LedgerRecord) -> Option[string] {
   match r {
     WireRecord(e) =>
@@ -985,6 +1037,32 @@ func scenario_step_budget_suspends_with_history() -> Result[(), ScenarioFailure]
     None => false
   };
 
+  -- ADR-003 v6.1 D1/D4, PLAN-003 P3 Part 3's NAMED GATE. Recompute the
+  -- incremental chain over the history the run carried out of the suspension
+  -- and confirm it equals the last `digest_after` the run journaled.
+  --
+  -- THE BASE IS `chain_empty_base()` AND THE PLAN SAYS "the seed's
+  -- `digest_messages` base", which is drift resolved toward P3 Part 2 rather
+  -- than toward the plan's sentence, and resolved HERE because this is the row
+  -- that would have to be written the other way. Part 2 settled the chain's base
+  -- as `chain_digest_base([])` — the journal has no `history_seeded` entry type,
+  -- the host expands a seed into N `history_appended` entries, and every digest
+  -- the fold reads must be recomputable from the entries alone. Based at
+  -- `digest_messages(seed)` instead, the very first entry the fold checks would
+  -- be refused. The seed's OWN `digest` is now that same chain quantity, which is
+  -- what closes the gap Part 2 recorded, and the third row below asserts it.
+  --
+  -- COMPARING WITH `digest_messages(suspended.history)` WOULD NEVER PASS and the
+  -- plan says so: that is a whole-list hash of a different canonical form
+  -- (`canonical_messages`), while the chain is a fold of
+  -- `canonical_message_frame` — a per-message frame that also covers `images`.
+  let suspended_history = match view { Some(s) => s.history, None => [] };
+  let recomputed_chain = chain_digest_over(chain_empty_base(), suspended_history);
+  let journaled_chain = last_history_digest(traced.trace.records, "");
+  let seed_chain = first_seed_digest(traced.trace.records, "");
+  let seed_recomputed = chain_digest_over(chain_empty_base(), history());
+  let appended_n = count_history_appended(traced.trace.records);
+
   failed_or_ok([
     -- Today's behaviour. Green here, and each one still green after D2 lands:
     -- the suspension keeps the outcome, the reason and the summary it has.
@@ -1008,7 +1086,13 @@ func scenario_step_budget_suspends_with_history() -> Result[(), ScenarioFailure]
     { name: "RED-UNTIL-P4 cumulative provider_calls_completed is 3", ok: calls_completed == 3, detail: "(completed=${show(calls_completed)})" },
     { name: "RED-UNTIL-P4 step_idx is 3", ok: step_idx == 3, detail: "(step_idx=${show(step_idx)})" },
     { name: "RED-UNTIL-P4 final.history equals suspended.history", ok: final_matches, detail: "(final=${show(length(final_history(traced)))} suspended=${show(hist_len)})" },
-    { name: "RED-UNTIL-P4 run_suspended immediately precedes run_summary", ok: before_summary == "run_suspended", detail: "(before_summary=${before_summary})" }
+    { name: "RED-UNTIL-P4 run_suspended immediately precedes run_summary", ok: before_summary == "run_suspended", detail: "(before_summary=${before_summary})" },
+    -- PLAN-003 P3 Part 3. Six appends for eight messages of history: the seed's
+    -- two are the `HistorySeeded` event's, and the three steps contribute an
+    -- assistant and a tool result each.
+    { name: "six history_appended records, one per message this run added", ok: appended_n == 6, detail: "(appended=${show(appended_n)} history=${show(hist_len)})" },
+    { name: "the seed's digest is the chain over the starting history", ok: seed_chain != "" && seed_chain == seed_recomputed, detail: "(seed=${seed_chain} recomputed=${seed_recomputed})" },
+    { name: "the chain recomputed over suspended.history is the run's last digest_after", ok: journaled_chain != "" && journaled_chain == recomputed_chain, detail: "(journaled=${journaled_chain} recomputed=${recomputed_chain})" }
   ])
 }
 

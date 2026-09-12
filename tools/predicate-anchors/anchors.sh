@@ -446,8 +446,91 @@ check src/core/tool_phase.ail 389 'exec_scratchpad_cell_ws' "the call attributed
 # not a fixture-carried anchor moved. driver_only v25 -> v26, no_ops v13 -> v14,
 # compose v5 -> v6.
 
+# PLAN-003 P3 PART 3 RE-BASELINED THE FIVE session.ail ANCHORS A NINTH TIME, and
+# it is the FIRST that disposes of two items' drift at once --
+# `1206/1465/1577 -> 1422/1681/1793` (+216, +216, +216) and
+# `3380/3494 -> 3884/4096` (+504, +602).
+#
+# THE LAST TWO WERE ALREADY STALE AT HEAD, and that is why their offsets are
+# neither each other's nor the first three's. P1 Part 5 (`253438b`, D5/D6's loop
+# identity and in-process resume) moved them to `3504`/`3686` and DID NOT
+# re-baseline: PLAN-003 §0.2 prices P3's single re-issue at Part 3, where the
+# emits and the `history_digest` field land, and Parts 1 and 2 of P3 each
+# recorded the two as red-at-HEAD rather than paying for a second re-issue. So
+# `3380 -> 3504` is P1 Part 5's and `3504 -> 3884` is this part's; the recorded
+# +504 is the sum, and it is stated as a sum rather than presented as one move.
+#
+# THE +216 ABOVE THE FIRST THREE is this part's journal-class machinery in
+# `session.ail`: the chain-digest type and its four helpers, the event builders
+# (`c2_journal`, `c2_history_appended`, `c2_state_delta_event` and their two
+# accumulators), the `history_digest` field on `C2LoopState`, and the comments
+# that carry ADR-003 D1's chain decisions at the sites that implement them. All
+# of it sits above `ext_ports_of`, because the loop state's type is declared at
+# the top of the file and a field cannot be declared below the record that has
+# it. THE PLACEMENT DODGE IS NOT AVAILABLE HERE at any price worth paying, which
+# is the one new thing this note has to say: WI-D19 bought line-count neutrality
+# by pairing edits onto existing lines and WI-D20 called that "a habit"; a
+# record FIELD plus a type declaration plus nine emit sites cannot be made
+# line-count-neutral by pairing, and P3 Part 1 already spent WI-D19's move once
+# (on `mk_run_summary`) and said at the site that this part is where the bill
+# comes due.
+#
+# THE D4 JUDGEMENT WAS MADE, and here is the evidence rather than the assertion:
+#
+#   1. `grep -o 'clock_now.*' src/core/session.ail` over `git show HEAD:` and
+#      over the working tree is IDENTICAL -- thirteen hits, same text, same
+#      order. No clock site was added, removed, re-argued or re-routed by this
+#      commit or by `253438b` before it.
+#   2. All five anchored expressions were compared line-for-line at their new
+#      offsets and are BYTE-IDENTICAL:
+#        `let reading = p.clock_now(w0);`
+#        `let reading = ports.clock_now(env_id.next_state);`
+#        `let reading = ports.clock_now(world);`
+#        `let started = provider.ports.clock_now(derived.next_state);`  (x2)
+#   3. The journal-class emits READ NO CLOCK. Every function this part adds is
+#      `pure` except `c2_journal`, whose row is `! {IO, Trace}` -- it emits and
+#      appends and does nothing else. `journal.chain_digest_after` and
+#      `phase_vocab.canonical_message_frame` are pure. The twin's `at_ms` is the
+#      seq precisely because a pure function has no clock.
+#   4. `tool_phase.ail`, `stub_step.ail` and `ext/runtime.ail` are UNTOUCHED by
+#      this commit, so their four anchors did not move and were re-derived
+#      anyway, on the rule the +2 re-baseline had to learn: a green anchor is not
+#      necessarily a right one.
+#
+# WIDTH: the SIX-file form, for the reason the WI-D27 note above records -- the
+# three profiles pin the TABLE (version + `content_hash`), so correcting a row
+# re-issues all three whether or not a fixture-carried anchor moved. The four
+# discovered-site fixtures carry only `ext/runtime.ail:199` and
+# `tool_phase.ail:318`, neither of which moved.
+#
+#   1. this file                                (the check itself)
+#   2. src/core/dst_attribution_table.ail       (5 rows + 1 test literal)
+#   3. scripts/dst/attribution_table_dst.ail    (1 literal, in `omitted_site`)
+#   4. src/core/dst_driver_only.ail             (version + content hash)
+#   5. src/core/dst_driver_plus_no_ops.ail      (version + content hash)
+#   6. src/core/dst_driver_plus_compose.ail     (version + content hash)
+#
+# `src/core/session.ail` itself is the CAUSE rather than a pin.
+#
+# THERE IS A FOURTH PROFILE PINNING THE TABLE AND THIS FOOTER HAS NEVER SAID SO,
+# which is drift found while paying this bill and recorded rather than quietly
+# fixed. `src/core/dst_driver_plus_herdr.ail:129` holds a `herdr_attribution_ref`
+# with `content_hash: sha256:eba3f47b...` — the value P1 Part 4 issued, TWO
+# revisions ago (`f60c93e7` at the 013/021 merge, `c835675c` after it), so the
+# profile has carried `the attribution table was corrected and this profile was
+# not re-issued (D4)` since before this commit and carries it after. It was NOT
+# re-issued here for the reason PLAN-003's standing rules give: `driver_plus_herdr`
+# and `herdr_graded` are red at HEAD on the `motoko-ext-herdr` package's own seam
+# (nine scripted calls reach the recorder, one arrives; three discovery findings;
+# two profile-record rejections), measured byte-identical in a throwaway worktree
+# at `d9a5694`, and re-issuing the ref would repair ONE of four red rows in a
+# profile this part does not own. The count in the shouting block below still
+# says THREE because three is what this commit re-issued; whoever repairs the
+# herdr profile owns the fourth, and the width for a re-baseline taken while it
+# is green is SEVEN files, not six.
+
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1206 1465 1577 3380 3494; do
+for l in 1422 1681 1793 3884 4096; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

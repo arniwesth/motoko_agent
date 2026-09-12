@@ -456,6 +456,18 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- AFTER it (WI-A14), so the two channels legitimately disagree on order at
   -- exactly one point and an equality would be red by design.
   --
+  -- RE-PINNED AT PLAN-003 P3 PART 3, and the new positions are the claim rather
+  -- than the cost. `HistorySeeded` is FIRST — ADR-003 D2 says it is the first
+  -- journal-class record of every run and the fold reads it as the chain's base,
+  -- so a run whose seed arrived late would fold to a history the chain cannot
+  -- verify. Each model step ends `HistoryAppended|StateDelta`: the assistant
+  -- enters the history, then the counts at the step boundary, and the delta is
+  -- LAST so the fold's "counts from the last `state_delta`" reads a value
+  -- computed over a trace that already holds this step's `ProviderResult`. The
+  -- tool batch's `HistoryAppended` follows `NativeToolResults` and carries ONE
+  -- event per result. `DoneEvent` and `RunSummary` still close the trace in that
+  -- order (D6.1), which this row is also the pin for.
+  --
   -- So the order claim is a pinned sequence over the returned trace. Two
   -- subjects rather than all eight: `native` states where the dispatch events
   -- sit, and `capped` states the terminal ordering D6.1 turns on.
@@ -463,10 +475,10 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let capped_order = pipe_join(trace_variants(capped.trace.records));
   let order_ok =
     report("order: the dispatch events land BETWEEN the batch announcement and its results",
-           native_order == "ThinkingStreamStart|ProviderCallPrepared|ThinkingStreamEnd|ProviderResult|NativeToolCalls|V2ToolDispatchStart|V2ToolDispatchComplete|NativeToolResults|ThinkingStreamStart|ProviderCallPrepared|ThinkingStreamEnd|ProviderResult|DoneEvent|RunSummary|",
+           native_order == "HistorySeeded|ThinkingStreamStart|ProviderCallPrepared|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|V2ToolDispatchStart|V2ToolDispatchComplete|NativeToolResults|HistoryAppended|ThinkingStreamStart|ProviderCallPrepared|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|DoneEvent|RunSummary|",
            "native order is ${native_order}")
     && report("order: CostExhausted is appended BEFORE the RunSummary, which stays final (D6.1)",
-           capped_order == "ThinkingStreamStart|ProviderCallPrepared|ThinkingStreamEnd|ProviderResult|NativeToolCalls|NativeToolDenied|NativeToolResults|CostExhausted|RunSummary|",
+           capped_order == "HistorySeeded|ThinkingStreamStart|ProviderCallPrepared|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|NativeToolDenied|NativeToolResults|HistoryAppended|CostExhausted|RunSummary|",
            "capped order is ${capped_order} — a CostExhausted after the summary is `record-after-terminal`");
 
   -- S7: the scenarios must DIFFER in what they witness, or one of them is

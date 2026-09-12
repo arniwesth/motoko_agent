@@ -51,12 +51,14 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Of the 35 Logical rows, **28 reach the returned trace now
--- and 7 do not**; the seven are `d64_gap_register`'s entries — two of long
--- standing, and ADR-003 D1's five journal-class variants, which PLAN-003 P3
--- Part 1 declares two parts BEFORE the commit that emits them, because the
--- vocabulary gate requires a variant, its row and its golden to land together
--- (§0.3) and P3 Part 2's fold cannot name a variant that does not exist.
+-- that is deliberate. Of the 35 Logical rows, **32 reach the returned trace now
+-- and 3 do not**; the three are `d64_gap_register`'s entries — two of long
+-- standing, and ADR-003 D1's `SessionResumed`, which only a `--resume` child
+-- emits (PLAN-003 P3 Part 5). The other four journal-class variants were
+-- declared at P3 Part 1 two parts BEFORE the commit that emits them, because
+-- the vocabulary gate requires a variant, its row and its golden to land
+-- together (§0.3) and P3 Part 2's fold cannot name a variant that does not
+-- exist; P3 Part 3 gave them their sites and the survey moved with the driver.
 --
 -- The survey has moved four times and the count is TENSED rather than re-dated,
 -- because a bare number here is the artifact S15 was written about: it was
@@ -440,26 +442,30 @@ export pure func event_vocabulary() -> [EventRow] {
       classification: Logical, reaches_trace_today: true },
 
     -- ============================================================================
-    -- ADR-003 v6.1 D1's JOURNAL CLASS (PLAN-003 P3 Part 1).
+    -- ADR-003 v6.1 D1's JOURNAL CLASS (declared at PLAN-003 P3 Part 1, FOUR OF
+    -- THE FIVE EMITTED AT P3 PART 3).
     --
-    -- Five Logical rows, all `reaches_trace_today: false`, and the false is the
-    -- honest survey rather than a placeholder: at this commit NOTHING in the
-    -- driver constructs these variants. §0.3's vocabulary gate is why they are
-    -- here before their emits — one row and one golden per variant, in the same
-    -- commit as the variant — and P3 Part 2's fold cannot name a variant that
-    -- does not exist.
+    -- The survey moved because the DRIVER moved, which is the only reason it is
+    -- allowed to move. At Part 1 all five read `reaches_trace_today: false` and
+    -- that false was the honest survey rather than a placeholder — nothing in
+    -- the driver constructed them, because §0.3's vocabulary gate lands a
+    -- variant, its row and its golden in one commit and P3 Part 2's fold cannot
+    -- name a variant that does not exist, so the declaration ran two parts ahead
+    -- of the emits by construction.
     --
-    -- SO THE D6.4 GAP GROWS, from two to seven, and that is a real cost paid
-    -- deliberately. `d64_gap_register` says the register "may only SHRINK";
-    -- that rule is about a variant LEAVING the gap without leaving the register
-    -- (or being reclassified to escape it), which is still enforced in both
-    -- directions. A variant that does not exist yet cannot shrink a list, and
-    -- the alternative — declaring `reaches_trace_today: true` for an event with
-    -- no emit site — would put a false claim in the survey to keep a number
-    -- flat. `scripts/dst/run_ledger_parity_wire.sh` reads the register and
-    -- demands projected==appended for every Logical variant NOT in it, so
-    -- registering these five is also what keeps that gate meaningful until the
-    -- emits land.
+    -- P3 Part 3 gives four of them their sites, each APPENDED to the returned
+    -- trace where it is emitted (`session.c2_journal` is the one way that file
+    -- states a journal-class event, and there is no bare `ledger_emit` of one),
+    -- so the four leave the vocabulary's gap and leave `d64_gap_register` in the
+    -- same commit — which is what the register's shrink-only rule demands and
+    -- what `parity_register_findings` pins in both directions.
+    --
+    -- `SessionResumed` STAYS FALSE, and it is the only one that can: it is
+    -- emitted by a child spawned with `--resume`, which is P3 Part 5's flag, so
+    -- no run in this tree constructs one. `scripts/dst/run_ledger_parity_wire.sh`
+    -- reads the register and demands projected==appended for every Logical
+    -- variant NOT in it, so the four flipped here are now under that gate and
+    -- the one left is still excused by name.
     -- ============================================================================
 
     { variant: "HistorySeeded", wire_names: ["history_seeded"],
@@ -467,7 +473,7 @@ export pure func event_vocabulary() -> [EventRow] {
       -- The history a run starts from, and the base of the chain digest every
       -- later history entry extends. The fold reads it first, so an invariant
       -- over the fold's output turns on its content directly.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "HistoryAppended", wire_names: ["history_appended"],
       payload: [req("run_id"), req("step"), req("message"),
@@ -475,7 +481,7 @@ export pure func event_vocabulary() -> [EventRow] {
       -- One message per event. Presence, ORDER and content all change the
       -- folded history, which is the strongest form of Logical this artifact
       -- has a word for.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "HistoryReplaced", wire_names: ["history_replaced"],
       payload: [req("run_id"), req("step"), req("reason"), opt("first_kept"),
@@ -483,7 +489,7 @@ export pure func event_vocabulary() -> [EventRow] {
       -- `first_kept` is an OPTIONAL payload key, joining `done`'s `source` and
       -- `thinking`'s two cache counters: absent means the replacement kept no
       -- tail, which is not a value the key could carry.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "StateDelta", wire_names: ["state_delta"],
       payload: [req("run_id"), req("step"), req("cumulative"), req("telemetry"),
@@ -491,7 +497,7 @@ export pure func event_vocabulary() -> [EventRow] {
       -- `ext_artifacts` is emitted only when its digest changed, so the digest
       -- is required and the artifacts are not. The counts are the judging
       -- number's carrier across a suspension.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "SessionResumed", wire_names: ["session_resumed"],
       payload: [req("resume_count"), req("from_id"), req("from_ordinal"),
@@ -967,25 +973,30 @@ pure func test_duplicate_row_is_rejected() -> bool
 -- stopped appending something it appends today.
 --
 -- SEVEN AT PLAN-003 P3 PART 1, AND IT IS THE FIRST TIME THIS NUMBER HAS GROWN.
--- Every earlier move was a closure. The five additions are ADR-003 D1's
--- journal-class variants, and they are gaps for a reason the other two are not:
--- they are not events the driver stopped appending, they are events the driver
--- does not construct yet. §0.3's vocabulary gate forces the variant, its row
--- and its golden into one commit, and P3 Part 2's fold family cannot compile
--- against a variant that does not exist — so the declaration precedes the emit
--- by two parts, and this register is where that interval is recorded rather
--- than hidden. All five are asserted POSITIVELY below, so P3 Part 3 closing one
--- without editing this test is red — the same protection the closures have
--- always had, pointed the other way. If P3 Part 3 does not land, this test is
--- the thing that says so.
+-- Every earlier move was a closure, and PLAN-003 P3 Part 1's five journal-class
+-- additions were the one move that was not: they were gaps for a reason the
+-- other two are not — not events the driver stopped appending, events the driver
+-- did not construct yet. §0.3's vocabulary gate forces the variant, its row and
+-- its golden into one commit, and P3 Part 2's fold family cannot compile against
+-- a variant that does not exist, so the declaration preceded the emit by two
+-- parts and this register is where that interval was recorded rather than
+-- hidden.
+--
+-- P3 PART 3 CLOSED FOUR OF THE FIVE, and the four are asserted NEGATIVELY here
+-- for the same reason they were asserted positively before: an emit that
+-- regressed into a projection-only site would put the variant back in the gap,
+-- and a bare count of three would not say which three. `SessionResumed` stays
+-- and is asserted positively — it is emitted only by a child spawned with
+-- `--resume`, which is P3 Part 5's flag, so no run in this tree can produce one.
+-- If P3 Part 5 does not land, this test is the thing that says so.
 pure func test_logical_gap_is_recorded() -> bool
   tests [((), true)]
   {
-    List.length(logical_variants_not_in_trace(event_vocabulary())) == 7
-      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistorySeeded")
-      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistoryAppended")
-      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistoryReplaced")
-      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "StateDelta")
+    List.length(logical_variants_not_in_trace(event_vocabulary())) == 3
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistorySeeded")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistoryAppended")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistoryReplaced")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "StateDelta")
       && contains_str(logical_variants_not_in_trace(event_vocabulary()), "SessionResumed")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "StreamDelta")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "DoneEvent")

@@ -509,13 +509,39 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "28" }
+export pure func driver_only_version() -> string { "29" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
 -- `driver_only_version` and re-recording both halves of this pair.
 export pure func driver_only_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT PLAN-003 P3 PART 3 FOR v29, from
+    -- sha256:c835675c447f5f1c56795a9cca5e1c0da50703f28add80d19ebcb3f746465b74.
+    -- THE ONE RE-ISSUE PLAN-003 §0.2 PRICED FOR P3, and like P1 Part 4's it
+    -- disposes of TWO items' drift rather than one commit's: `1206/1465/1577 ->
+    -- 1422/1681/1793` is this part's, and `3380/3494 -> 3884/4096` is this
+    -- part's PLUS P1 Part 5's, which moved them to `3504`/`3686` and deferred
+    -- on §0.2's "four re-issues or one". P3 Parts 1 and 2 each recorded the two
+    -- as red-at-HEAD and did not re-baseline, for the same reason.
+    --
+    -- THE CAUSE IS A RECORD FIELD, and it is the first in this file's history
+    -- that no placement can dodge. ADR-003 D1's chain digest is threaded through
+    -- `C2LoopState.history_digest`, and a field is declared inside the record,
+    -- which is declared at the top of `session.ail` above every anchor. WI-D19
+    -- bought neutrality by pairing edits onto existing lines and WI-D20 called
+    -- that a habit rather than a technique; a field plus its type plus the event
+    -- builders plus nine emit sites cannot be paired onto anything.
+    --
+    -- THE D4 JUDGEMENT WAS MADE AND HAS THE SAME ANSWER, by the same test the
+    -- v27 and v28 entries used: `grep -o 'clock_now.*' src/core/session.ail`
+    -- over `git show HEAD:` and over the working tree is IDENTICAL — thirteen
+    -- hits, same text, same order — so no clock site was added, removed,
+    -- re-argued or re-routed. All five anchored expressions are byte-identical
+    -- at their new offsets, and every function this part adds is `pure` except
+    -- the one that emits and appends, whose row is `! {IO, Trace}`: the journal
+    -- reads no clock, which is also why the fold's twin uses the seq for
+    -- `at_ms`. Pure offset drift.
     -- RE-RECORDED AT THE 013/021 MERGE FOR v28, from
     -- sha256:f60c93e70cecd653952a0fe501e8156df7a782a0e7c12e0c57ae8f5f8defe447.
     -- FIVE anchors moved and NO SITE CHANGED: merging the 021 herdr lineage
@@ -790,7 +816,7 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- expressions are byte-identical at their new offsets, so no site was added,
     -- removed, re-argued or re-routed and the D4 judgement has the same answer
     -- it had before.
-    content_hash: "sha256:c835675c447f5f1c56795a9cca5e1c0da50703f28add80d19ebcb3f746465b74" }
+    content_hash: "sha256:2c86584ba403ff0501c01c887a4a41089b978b496ced23135dc86b05f12fbdbd" }
 }
 
 -- ---------------------------------------------------------------------------

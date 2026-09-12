@@ -327,25 +327,27 @@ func check_execution(
   -- asserting the exact rule set is what turns a future regression red.
   let all = evaluate(x);
   let _ = println("STREAM_TRACE ${label} ${pipe_join(trace_stream_texts(trace.records))}");
-  -- PLAN-003 P3 Part 2's DELIBERATE RED, printed so the row below reads as a
-  -- plan step and not as a regression. `JournalFold` (ADR-003 v6.1 D4) folds the
-  -- journal-class records of this trace and compares the result with what the
-  -- run ended holding. NOTHING EMITS A JOURNAL-CLASS EVENT YET — P3 Part 3 does
-  -- — so the fold sees a header and no history and disagrees with `final` on
-  -- every field that has a value. This is the only place in the tree where a
-  -- REAL run is bridged into an `ExecutionUnderTest` (`dst_execution.execution_of`
-  -- has exactly one other caller, and it is in this file), so it is the only
-  -- place the red can be observed. P3 Part 3 turns it green by emitting the
-  -- events, and this comment and the line below go with it.
+  -- PLAN-003 P3 Part 2'S DELIBERATE RED IS CLOSED, and the row that announced
+  -- it is gone with the commit that closed it, exactly as Part 2 said it would
+  -- be. What replaces it is an ASSERTION, not a print: `JournalFold`
+  -- (ADR-003 v6.1 D4) folds the journal-class records of this trace and compares
+  -- the result with what the run ended holding, and this is the only place in
+  -- the tree where a REAL run is bridged into an `ExecutionUnderTest`
+  -- (`dst_execution.execution_of` has exactly one other caller, and it is in
+  -- this file), so it is the only place the fold meets a real run at all.
+  -- `expected_family_rules` below is untouched by P3 Part 3 — the red closed
+  -- itself — and this row says so in the one form that cannot be read as a
+  -- printed number nobody checks.
   let journal_red = violations_in(all, JournalFold);
-  let _ = if List.length(journal_red) == 0 then () else
-    println("  [${label}] EXPECTED RED (PLAN-003 P3 Part 2): the JournalFold family reports ${show(List.length(journal_red))} finding(s) because no journal-class event is emitted yet — P3 Part 3 closes it. First: ${first_message(journal_red)}");
+  let journal_ok = report("${label}: the JournalFold family is clean over the real run",
+                          List.length(journal_red) == 0,
+                          "the fold of this run's own journal-class records disagrees with `final`: ${first_message(journal_red)}");
   let _ = println("  [${label}] the whole invariant set over the real run: ${show(List.length(all))} finding(s)${if List.length(all) == 0 then "" else " — ${rule_list(all)}"}");
   let set_ok = report("${label}: the whole invariant set reports exactly its expected rules",
                       strings_equal(rules_of(all), expected_family_rules),
                       "expected [${join_str(expected_family_rules)}]; got [${rule_list(all)}]");
 
-  side_a && side_b && side_c && parity_ok && family_ok && m1 && m2 && m3 && m3b && logged_ok && set_ok
+  side_a && side_b && side_c && parity_ok && family_ok && m1 && m2 && m3 && m3b && logged_ok && journal_ok && set_ok
 }
 
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {

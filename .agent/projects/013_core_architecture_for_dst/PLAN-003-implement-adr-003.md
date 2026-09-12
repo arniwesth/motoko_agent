@@ -691,6 +691,44 @@ instruction and is green. The canary pin was not touched; on 2026-09-07 the owne
 reason, pending the re-measure; the summary script's reverse check reports it the day it
 passes (Open question 9).
 
+### P3 Part 3, 2026-09-12: Open question 3's bytes-per-turn, and the `JournalFold` first green
+
+**Open question 3 is decided "always carry" and the bill is measured, not estimated.**
+`HistorySeeded` carries the run's whole starting history on stdout, once per traced run. The
+probe (§0.6, `scripts/probe_budget_continue.sh`) is the plan's instrument for this and it was
+NOT RUN at this part — it needs a live provider key and this commit changes nothing the probe
+asserts — so the number below is measured from the DST wire instead, which is the same
+`ledger_emit` writing the same line to the same stdout, and the substitution is stated here
+rather than in a footnote.
+
+| fixture | traced runs | `history_seeded` bytes | mean/run | max/run | share of the run's whole wire |
+|---|---|---|---|---|---|
+| `ledger_parity_dst` (short histories, 2–6 messages) | 8 | 2 384 | 298 | 298 | 5.7 % |
+| `long_qwen_compaction_dst` (compaction fixture, long histories) | 11 | 2 301 545 | **209 231** | **1 050 218** | **87.3 %** |
+
+`history_appended` for comparison: 112 events, 99 978 bytes, **mean 892 bytes per message** on
+the same long fixture. So the steady-state cost of the journal is ~0.9 KB per message and the
+seed is ~200 KB per turn at that history length, because each turn re-sends the whole
+conversation. **That 87 % is the price of "always carry", and it is the number the env-gated
+digest-only variant has to be argued against** — the trace must always carry the messages or
+`JournalFold` has nothing to fold, so the variant can only ever drop them from *stdout*, and
+the host would then be unable to journal a session's first run at all without them. Not this
+part's, and now priced.
+
+Two consequences the host side inherits, recorded here because they are P3 Part 4's inputs:
+the JSONL log under `.motoko/logfile/` carries these payloads verbatim until Part 4 lands D3's
+digest-substitution rule (the logger writes unknown types verbatim,
+`runtime-process.unknown-events.test.ts`), so a live session's log grows by the same ~87 %
+in the interval; and the seed line itself is a single ~1 MB stdout write at the top end,
+which the host's line reader has never had to hold before.
+
+**`JournalFold` is green on every fixture `make dst` reaches it on**, which is P3 Part 2's red
+closed by the emits and nothing else — `expected_family_rules` in `stream_parity_dst.ail` is
+untouched. The caveat Part 2 recorded stands and is repeated rather than quietly dropped: the
+ADR says "every fixture in `make dst`", and `dst_execution.execution_of` has exactly ONE call
+site in the tree (`stream_parity_dst.ail`, reached twice), so "every fixture" is still two
+executions in one target. Nothing was widened to manufacture a bigger green.
+
 ### P1 Part 6, 2026-09-08: the first judging number, and the herdr `blocked` measurement
 
 **The first judging number is GREEN, twice over, in two independent drivers.**

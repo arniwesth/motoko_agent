@@ -36,6 +36,7 @@ import std/string as Str (length)
 import std/fs (writeFileResult)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
+import std/crypto (sha256Hex)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (call_to_json)
@@ -117,6 +118,16 @@ import src/core/phase_vocab (
   StreamDelta,
   SessionSuspend,
   RunSuspended,
+  -- ADR-003 v6.1 D1's journal class (PLAN-003 P3 Part 1 declared them, this
+  -- part is their first and only producer). `StateDelta` names BOTH the
+  -- record type at `phase_vocab` and this constructor; AILANG keeps the two
+  -- namespaces apart and `apply_state_delta`'s parameter still resolves.
+  HistorySeeded,
+  HistoryAppended,
+  HistoryReplaced,
+  StateDelta,
+  take_system_prefix,
+  digest_messages,
   SessionStart,
   ErrorEvent,
   StepState,
@@ -164,7 +175,19 @@ import src/core/journal (
   Continuation,
   FinalState,
   final_of_continuation,
-  continuation_history_ok, continuation_task
+  continuation_history_ok, continuation_task,
+  -- P3 Part 3. THE CHAIN, AND IT IS IMPORTED RATHER THAN RESTATED. ADR-003 D4
+  -- makes the fold recompute exactly what the child computed, so the child must
+  -- call the fold's own function: `chain_digest_after` is
+  -- `phase_vocab.canonical_message_frame`'s only caller and the chain digest has
+  -- exactly one definition (P3 Part 2's note at its declaration). `message_json`
+  -- / `messages_json` are the same argument for the message ENCODER — ADR-003 D1
+  -- refuses a second one, and the journal's payloads cross pre-encoded because
+  -- `phase_vocab` cannot name a codec that lives in a module importing it.
+  chain_digest_after,
+  chain_empty_base,
+  message_json,
+  messages_json
 )
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
@@ -429,6 +452,58 @@ type RuntimeLoopTotals = {
   cost_warned_pct: int
 }
 
+-- ============================================================================
+-- ADR-003 v6.1 D1's CHAIN DIGEST, threaded through the loop (PLAN-003 P3 Part 3).
+--
+-- A PAIR AND NOT A STRING, and exactly one site is the reason: the hybrid
+-- batch's first `HistoryAppended` carries `replaces_previous` and chains from
+-- the digest BEFORE the message it replaces (D1, D4's "what makes the `:2251`
+-- replacement unfakeable"). `journal.fold_append` carries `digest` and
+-- `digest_prev` for the same reason and reads the same two values; a child that
+-- carried only the running digest could not produce the entry the fold demands,
+-- and a child that recomputed the previous one from the history would be
+-- recomputing a chain the checkpoint has re-based.
+--
+-- IT IS ONE FIELD ON `C2LoopState`, which is what PLAN-003 P3 Part 3 prices:
+-- every full literal of that record sets `history_digest`, and a pair costs the
+-- same one line as a string at each of them.
+--
+-- THE BASE IS `chain_empty_base()` AND NOT THE SEED'S `digest_messages`, which
+-- is P3 Part 2's first chain decision followed rather than re-argued. The
+-- journal has no `history_seeded` ENTRY type — D1's host expands a seed into N
+-- `history_appended` entries — so the fold's chain is a fold of
+-- `chain_digest_after` over the journal's own history messages from the empty
+-- base, and a seed digest computed any other way is one the fold cannot
+-- recompute. Emitting the chain quantity as `HistorySeeded.digest` is what
+-- closes the gap Part 2 recorded and what makes D1's third host arm (compare
+-- the seed's `digest` with the last history entry's `digest_after`) a
+-- comparison that can succeed.
+-- ============================================================================
+
+type HistoryDigest = { at: string, prev: string }
+
+pure func c2_chain_step(acc: HistoryDigest, m: Message) -> HistoryDigest {
+  { at: chain_digest_after(acc.at, m), prev: acc.at }
+}
+
+pure func c2_chain_base() -> HistoryDigest {
+  { at: chain_empty_base(), prev: chain_empty_base() }
+}
+
+-- `List.foldl` and not recursion, for `messages_of_json`'s reason: a history is
+-- unbounded and AILANG v0.33 eliminates no tail call, so hand-written recursion
+-- here is one interpreter frame per message (motoko_agent#160, measured at
+-- `runtime_status_counts`).
+pure func c2_chain_over(base: HistoryDigest, ms: [Message]) -> HistoryDigest {
+  List.foldl(c2_chain_step, base, ms)
+}
+
+-- The chain a run STARTS from: the whole of its seed, from the empty base. Once
+-- per run at the traced entry, never per step.
+pure func c2_seed_digest(ms: [Message]) -> HistoryDigest {
+  c2_chain_over(c2_chain_base(), ms)
+}
+
 type C2LoopState = {
   msgs: [Message],
   step_idx: int,
@@ -474,7 +549,21 @@ type C2LoopState = {
   -- branch that carries one channel forward and drops the other goes red as
   -- StreamParityCount, which is S12's identity-transition class arriving on a
   -- pair of channels rather than on a world token.
-  emissions: [LedgerEvent]
+  emissions: [LedgerEvent],
+
+  -- ADR-003 v6.1 D1/D2, PLAN-003 P3 Part 3. The running chain digest of the
+  -- history this run has journaled: `at` after the last message, `prev` before
+  -- it. EVERY FULL LITERAL OF THIS RECORD SETS IT — the fifteen in the loop, the
+  -- two constructors and the two test literals — and that is the plan's price
+  -- for the field rather than an accident of placement: a branch that carried
+  -- `st.history_digest` forward while appending a message would emit an entry
+  -- whose `digest_after` the fold refuses at `Digest(seq)`, which is the same
+  -- shape `emissions` above is threaded to catch on the other channel.
+  --
+  -- IT IS NOT IN `FinalState` AND NOT IN `Continuation`, and the gap that leaves
+  -- is stated at the conversation loop's emit site rather than left to be found:
+  -- both are ADR-003 D1/D4 types and widening them is the owner's, not a part's.
+  history_digest: HistoryDigest
 }
 
 pure func zero_totals() -> RuntimeLoopTotals {
@@ -681,6 +770,129 @@ func c2_emit_events(session_id: string, events: [LedgerEvent]) -> () ! {IO, Trac
   }
 }
 
+-- ============================================================================
+-- ADR-003 v6.1 D2's JOURNAL CLASS, at the sites (PLAN-003 P3 Part 3).
+--
+-- APPENDED AND EMITTED, ALWAYS TOGETHER. That is D2's words and it is also the
+-- only shape `make ledger_parity`'s wire gate accepts once a variant leaves
+-- `d64_gap_register`: it compares the count the driver PROJECTED on stdout with
+-- the count it APPENDED to the returned trace, out of process, and a site that
+-- did one of the two is red there even though both in-process channels agree
+-- with each other. `c2_journal` is therefore the ONE way this file states a
+-- journal-class event; there is no bare `ledger_emit` of one.
+-- ============================================================================
+
+func c2_journal(session_id: string, trace: LedgerTrace, events: [LedgerEvent]) -> LedgerTrace ! {IO, Trace} {
+  let _ = c2_emit_events(session_id, events);
+  c2_trace_wire_events(trace, events)
+}
+
+type C2HistoryEmit = { events: [LedgerEvent], digest: HistoryDigest }
+
+type C2AppendAcc = {
+  rev: [LedgerEvent],
+  digest: HistoryDigest,
+  run_id: string,
+  step: int,
+  replaces_first: bool,
+  emitted: int
+}
+
+pure func c2_append_step(acc: C2AppendAcc, m: Message) -> C2AppendAcc {
+  -- `replaces_previous` IS THE FIRST ENTRY'S ALONE (D1). A batch of N tool
+  -- results on the hybrid path is one replacement followed by N plain appends,
+  -- and a flag repeated down the batch would tell the fold to drop N-1 messages
+  -- it should keep.
+  let replaces = acc.replaces_first && acc.emitted == 0;
+  let base = if replaces then acc.digest.prev else acc.digest.at;
+  let d = chain_digest_after(base, m);
+  {
+    acc | rev: HistoryAppended({
+            run_id: acc.run_id,
+            step: acc.step,
+            message: message_json(m),
+            replaces_previous: replaces,
+            digest_after: d
+          }) :: acc.rev,
+          digest: { at: d, prev: base },
+          emitted: acc.emitted + 1
+  }
+}
+
+pure func c2_cons_event(acc: [LedgerEvent], e: LedgerEvent) -> [LedgerEvent] { e :: acc }
+
+pure func c2_reverse_events(xs: [LedgerEvent]) -> [LedgerEvent] {
+  List.foldl(c2_cons_event, [], xs)
+}
+
+-- ONE MESSAGE PER EVENT (D1), which is what makes `HistoryReplaced.first_kept`
+-- an index the host can resolve by counting entries. The caller hands the
+-- messages that ENTER the history at this site — never `st.msgs` — and gets
+-- back the events and the chain digest to carry forward.
+pure func c2_history_appended(
+  run_id: string,
+  at_step: int,
+  base: HistoryDigest,
+  replaces_first: bool,
+  ms: [Message]
+) -> C2HistoryEmit {
+  let acc0: C2AppendAcc = {
+    rev: [], digest: base, run_id: run_id, step: at_step,
+    replaces_first: replaces_first, emitted: 0
+  };
+  let acc = List.foldl(c2_append_step, acc0, ms);
+  { events: c2_reverse_events(acc.rev), digest: acc.digest }
+}
+
+-- The artifacts digest D1 puts on `state_delta` beside the optional inline
+-- value. A digest of the ENCODING and not of a canonical form: `ext_artifacts`
+-- is an opaque `Json` the extensions own, there is no canonical order to impose
+-- on it, and the only question the host asks of this string is whether it
+-- changed since the last delta.
+pure func c2_ext_artifacts_digest(j: Json) -> string {
+  "sha256:${sha256Hex(encode(j))}"
+}
+
+-- D1's `state_delta`. `cumulative` is `runtime_status_counts_add(prior_counts,
+-- runtime_status_counts(trace))` — EXACTLY what `runtime_status_json` computes
+-- for the model's judging number and exactly what `c2_final_state` computes for
+-- D4's comparand, so the fold's "counts from the last `state_delta`" reproduces
+-- `final.cumulative` without a second derivation.
+--
+-- THE TRACE IT READS IS THE ONE THIS STEP BUILT, before this event is appended
+-- to it. `runtime_status_count_one` counts `ProviderCallPrepared`,
+-- `ProviderResult` and compaction stage records and nothing else, so the
+-- journal-class records this part adds do not move the number — which is what
+-- keeps the last delta's `cumulative` equal to the terminal arm's.
+--
+-- THE COST IS ONE O(|trace|) `foldl` PER STEP, and it is stated rather than
+-- hidden: motoko_agent#160 was this fold per TOOL BATCH plus a JSON encode, and
+-- the fix made the call site lazy as well as the fold frame-free. Once per step
+-- is the same order as `c2_final_state`'s once per run multiplied by the step
+-- count, and `foldl` costs no interpreter frame.
+pure func c2_state_delta_event(
+  run_id: string,
+  at_step: int,
+  prior_counts: RuntimeStatusCounts,
+  trace: LedgerTrace,
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
+  ext_artifacts: Json,
+  artifacts_changed: bool
+) -> LedgerEvent {
+  StateDelta({
+    run_id: run_id,
+    step: at_step,
+    cumulative: runtime_status_counts_add(prior_counts, runtime_status_counts(trace)),
+    telemetry: ext_token_telemetry(telemetry),
+    ext_artifacts_digest: c2_ext_artifacts_digest(ext_artifacts),
+    -- INLINE ONLY ON CHANGE (D1). Extension artifacts are the largest thing the
+    -- journal carries and a delta that re-stated them every step would turn a
+    -- session's journal into N copies of them; the digest is always present, so
+    -- a fold that never sees the value still knows whether it moved.
+    ext_artifacts: if artifacts_changed then Some(ext_artifacts) else None
+  })
+}
+
 pure func c2_tool_plan_calls(entries: [ToolPlanEntry]) -> [ToolCall] {
   match entries {
     [] => [],
@@ -748,7 +960,11 @@ func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, 
     finalize_source: "",
     prior_counts: prior_counts,
     trace: empty_ledger_trace(),
-    emissions: []
+    emissions: [],
+    -- The seed's chain, computed HERE and not at the traced entry, so the field
+    -- is coherent from the record's first existence and the entry that emits
+    -- `HistorySeeded` reads one derivation rather than repeating it.
+    history_digest: c2_seed_digest(history)
   }
 }
 
@@ -2385,7 +2601,15 @@ pure func c2_state_from_continuation(c: Continuation, provider: PortedProvider, 
     finalize_source: reset.finalize_source,
     prior_counts: c.cumulative,
     trace: reset.trace,
-    emissions: reset.emissions
+    emissions: reset.emissions,
+    -- CARRIED IN SPIRIT AND RE-DERIVED IN FACT, which is the one place this
+    -- constructor cannot be its inverse's mirror: `Continuation` has no chain
+    -- field (ADR-003 D1 gives it none) so the resumed run re-bases its chain on
+    -- the history it was handed. That is exact for every session whose journal
+    -- holds no `history_replaced`, and it is the same limitation the traced
+    -- entry's seed has; both are stated at the conversation loop's emit site,
+    -- with the shape of the fix and who owns it.
+    history_digest: c2_seed_digest(c.history)
   }
 }
 
@@ -2508,6 +2732,13 @@ pure func c2_pending_prefix(st: C2LoopState) -> [Message] {
   if List.length(st.pending_tool_prefix) > 0 then st.pending_tool_prefix else st.msgs
 }
 
+-- The last message of a list, as a list, so a caller can concatenate it without
+-- an `Option` unwrap. `foldl` and not recursion, per the file's rule; the
+-- history it is handed is unbounded.
+pure func c2_last_step(_acc: [Message], m: Message) -> [Message] { [m] }
+
+pure func last_msg(xs: [Message]) -> [Message] { List.foldl(c2_last_step, [], xs) }
+
 func c2_finish_tool_batch(
   rt: ExtRuntime,
   task: string,
@@ -2542,8 +2773,27 @@ func c2_finish_tool_batch(
   let trace_with_results =
     if st.pending_tool_batched then ledger_append(trace, WireRecord(results_event))
     else trace;
+  -- ADR-003 D2's `:2251`: ONE `HistoryAppended` PER TOOL RESULT, and on the
+  -- hybrid path one more in front of them. `c2_pending_prefix(st)` is `st.msgs`
+  -- on the batched path and `st.msgs ++ [augmented_assistant]` on the hybrid one
+  -- (set at the extraction site), so `entering` is the messages this site adds
+  -- to the history and nothing else — never `next_msgs`, which would re-journal
+  -- the whole conversation every batch.
+  --
+  -- `replaces_previous` IS EXACTLY `not st.pending_tool_batched`, which is the
+  -- same discriminator the results announcement above uses. On that path the
+  -- first entry's augmented assistant supersedes the plain one the extraction
+  -- step journaled, and it chains from the digest BEFORE it — D4's "what makes
+  -- the replacement unfakeable": a fold that appended instead breaks the chain
+  -- at that entry and nowhere else.
+  let prefix = c2_pending_prefix(st);
+  let next_msgs = prefix ++ tool_msgs;
+  let hybrid_replacement = not st.pending_tool_batched;
+  let entering = if hybrid_replacement then last_msg(prefix) ++ tool_msgs else tool_msgs;
+  let appended = c2_history_appended(identity.run_id, tool_step_idx, st.history_digest, hybrid_replacement, entering);
+  let trace_with_history = c2_journal(session_id, trace_with_results, appended.events);
   let next_state: C2LoopState = {
-    msgs: c2_pending_prefix(st) ++ tool_msgs,
+    msgs: next_msgs,
 	    step_idx: st.step_idx,
 	    totals: st.totals,
 	    ext_artifacts: st.ext_artifacts,
@@ -2561,8 +2811,9 @@ func c2_finish_tool_batch(
     nudges_used: st.nudges_used,
     finalize_source: "",
     prior_counts: st.prior_counts,
-    trace: trace_with_results,
-    emissions: st.emissions
+    trace: trace_with_history,
+    emissions: st.emissions,
+    history_digest: appended.digest
   };
   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
 }
@@ -2610,7 +2861,10 @@ func c2_continue_tool_batch(
         finalize_source: "",
         prior_counts: st.prior_counts,
         trace: trace,
-        emissions: st.emissions
+        emissions: st.emissions,
+        -- ADR-003 D2: this site carries `st.msgs` UNCHANGED and therefore emits
+        -- nothing. The digest is carried for the same reason the messages are.
+        history_digest: st.history_digest
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
     }
@@ -2641,14 +2895,27 @@ func c2_after_dp7(
   started_at_ms: int,
   trace: LedgerTrace,
   emissions: [LedgerEvent],
+  -- ADR-003 D2's `:2356`/`:2381`. This function takes `C2LoopState`'s fields one
+  -- by one rather than the record, so the two the journal needs arrive the same
+  -- way: the chain the assistant message extends, and whether the pre-step
+  -- chain's artifacts moved (computed once at the call site, where both the old
+  -- and the new value are in scope — here only the new one is).
+  history_digest: HistoryDigest,
+  artifacts_changed: bool,
   next_step_idx: int,
   done_step_idx: int,
   output: string,
   source: string
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  -- ONE EVENT FOR ONE MESSAGE: `msgs_with_assistant` is the whole history and
+  -- the assistant is the one message that entered it on this path.
+  let appended = c2_history_appended(identity.run_id, done_step_idx, history_digest, false, last_msg(msgs_with_assistant));
   match dp7_rejection_errors(rt, workdir, done_step_idx, session_id) {
     Some(rejection) => {
       let errors = rejection.errors;
+      let trace_with_history = c2_journal(session_id, ledger_append(trace, WireRecord(rejection.event)), appended.events);
+      let trace_with_delta = c2_journal(session_id, trace_with_history,
+        [c2_state_delta_event(identity.run_id, done_step_idx, prior_counts, trace_with_history, telemetry, ext_artifacts, artifacts_changed)]);
       let next_state: C2LoopState = {
         msgs: msgs_with_assistant,
 	        step_idx: next_step_idx,
@@ -2668,12 +2935,16 @@ func c2_after_dp7(
         nudges_used: count_persist_nudges(msgs_with_assistant),
         finalize_source: "",
         prior_counts: prior_counts,
-        trace: ledger_append(trace, WireRecord(rejection.event)),
-        emissions: emissions
+        trace: trace_with_delta,
+        emissions: emissions,
+        history_digest: appended.digest
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
     },
     None => {
+      let trace_with_history = c2_journal(session_id, trace, appended.events);
+      let trace_with_delta = c2_journal(session_id, trace_with_history,
+        [c2_state_delta_event(identity.run_id, done_step_idx, prior_counts, trace_with_history, telemetry, ext_artifacts, artifacts_changed)]);
       let next_state: C2LoopState = {
         msgs: msgs_with_assistant,
 	        step_idx: next_step_idx,
@@ -2693,8 +2964,9 @@ func c2_after_dp7(
         nudges_used: count_persist_nudges(msgs_with_assistant),
         finalize_source: source,
         prior_counts: prior_counts,
-        trace: trace,
-        emissions: emissions
+        trace: trace_with_delta,
+        emissions: emissions,
+        history_digest: appended.digest
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
     }
@@ -2798,6 +3070,12 @@ func c2_loop(
         InjectUserMessage(msg) => {
           let next_msgs = st.msgs ++ [msg];
           let next_nudges = if st.last_finish_reason == "persist_nudge" then st.nudges_used + 1 else st.nudges_used;
+          -- ADR-003 D2's `:2494`. The injected message is a `user` message the
+          -- OPERATOR never sent, and it is journaled exactly like one that was:
+          -- the provider sees it, so a resume that did not would send a
+          -- different conversation than the one this run held. NOT a step end —
+          -- `step_idx` does not move here — so no `StateDelta`.
+          let appended = c2_history_appended(identity.run_id, st.step_idx, st.history_digest, false, [msg]);
           let next_state: C2LoopState = {
             msgs: next_msgs,
 	            step_idx: st.step_idx,
@@ -2817,16 +3095,49 @@ func c2_loop(
             nudges_used: next_nudges,
             finalize_source: "",
             prior_counts: st.prior_counts,
-            trace: trace_with_decision,
-            emissions: st.emissions
+            trace: c2_journal(session_id, trace_with_decision, appended.events),
+            emissions: st.emissions,
+            history_digest: appended.digest
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
         },
         TakeCheckpoint(plan) => {
           let cp = apply_checkpoint(step_state, plan);
           let _ = ledger_emit(session_id, cp.event);
+          -- ADR-003 D2's `:2521`, and `first_kept: None` is a FACT about
+          -- `apply_checkpoint` rather than a placeholder: `checkpoint` rebuilds
+          -- the history as the pinned system prefix plus ONE summary message and
+          -- keeps no tail, so there is no pre-checkpoint index to report. The
+          -- field exists for a checkpoint that later keeps one, and the fold's
+          -- rule is written for both.
+          --
+          -- `messages` IS THE SUMMARY ALONE, not the rebuilt history: D4 says the
+          -- fold emits the head system prefix, then this entry's `messages`, then
+          -- the entries after it, so a `messages` that repeated the prefix would
+          -- fold to two copies of it. The summary is the last message of the
+          -- rebuilt list by construction.
+          --
+          -- `digest_after` RE-BASES THE CHAIN to `chain_digest_base(prefix ++
+          -- messages)` — P3 Part 2's second chain decision, and the fold
+          -- recomputes exactly this over the post-replacement history it holds.
+          -- It is `digest_messages`, a whole-list hash of the canonical form, and
+          -- NOT the incremental `chain_digest_after`: after a replacement there
+          -- is no previous entry to chain from.
+          let cp_msgs = history_messages(cp.state.history);
+          let replaced_event = HistoryReplaced({
+            run_id: identity.run_id,
+            step: st.step_idx,
+            reason: "checkpoint",
+            first_kept: None,
+            messages: messages_json(last_msg(cp_msgs)),
+            digest_after: digest_messages(cp_msgs)
+          });
+          let cp_artifacts_changed = encode(cp.state.ext_artifacts) != encode(st.ext_artifacts);
+          let trace_with_cp = c2_journal(session_id, ledger_append(trace_with_decision, WireRecord(cp.event)), [replaced_event]);
+          let trace_with_delta = c2_journal(session_id, trace_with_cp,
+            [c2_state_delta_event(identity.run_id, st.step_idx, st.prior_counts, trace_with_cp, cp.state.telemetry, cp.state.ext_artifacts, cp_artifacts_changed)]);
           let next_state: C2LoopState = {
-            msgs: history_messages(cp.state.history),
+            msgs: cp_msgs,
 	            step_idx: st.step_idx,
 	            totals: st.totals,
 	            ext_artifacts: cp.state.ext_artifacts,
@@ -2844,8 +3155,9 @@ func c2_loop(
             nudges_used: st.nudges_used,
             finalize_source: st.finalize_source,
             prior_counts: st.prior_counts,
-            trace: ledger_append(trace_with_decision, WireRecord(cp.event)),
-            emissions: st.emissions
+            trace: trace_with_delta,
+            emissions: st.emissions,
+            history_digest: { at: digest_messages(cp_msgs), prev: st.history_digest.at }
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
         },
@@ -3005,7 +3317,10 @@ func c2_loop(
                 -- this is easy to drop — the branch already had to remember
                 -- `pending.world` and `pending.accumulated` for the same reason.
                 trace: c2_trace_wire_events(trace_with_calls, pending.emitted),
-                emissions: st.emissions
+                emissions: st.emissions,
+                -- ADR-003 D2: `st.msgs` unchanged, so nothing is journaled and
+                -- the chain is carried.
+                history_digest: st.history_digest
               };
               c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
             }
@@ -3052,6 +3367,13 @@ func c2_loop(
           let ext_context_limit = if effective_input_limit(context_limit) - pinned_tokens < 0 then 0 else effective_input_limit(context_limit) - pinned_tokens;
           let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, "", [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
+          -- ADR-003 D1's `state_delta`: the artifacts go inline ONLY when they
+          -- moved. Computed ONCE here, where both the old value (`st`) and the
+          -- new one (`chain.artifacts`) are in scope — every step-end literal
+          -- below carries `chain.artifacts`, and `c2_after_dp7` receives only the
+          -- new one, so a per-site comparison would have to re-derive an old
+          -- value it does not hold.
+          let artifacts_changed = encode(chain.artifacts) != encode(st.ext_artifacts);
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
           match seal_compacted_payload(split, msgs_to_messages(chain.msgs), model, context_limit, policy.step.require_system_prompt) {
@@ -3153,6 +3475,9 @@ func c2_loop(
                   if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
                     let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
                     let _ = ledger_emit(session_id, retry_event);
+                    let trace_with_retry = ledger_append(trace_after_end, WireRecord(retry_event));
+                    let trace_with_delta = c2_journal(session_id, trace_with_retry,
+                      [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_retry, st.telemetry, chain.artifacts, artifacts_changed)]);
                     let next_state: C2LoopState = {
                       msgs: st.msgs,
 	                      step_idx: step_idx + 1,
@@ -3172,8 +3497,15 @@ func c2_loop(
                       nudges_used: st.nudges_used,
                       finalize_source: "",
                       prior_counts: st.prior_counts,
-                      trace: ledger_append(trace_after_end, WireRecord(retry_event)),
-                      emissions: emissions_after_call
+                      -- A STEP END WITH NO MESSAGE. `st.msgs` is unchanged — the
+                      -- provider never answered — so nothing is journaled as
+                      -- history; `step_idx` advances and the trace has gained
+                      -- this step's `ProviderCallPrepared`, which IS counted, so
+                      -- the delta is what keeps the fold's `cumulative` equal to
+                      -- a terminal arm's after a retried stream error.
+                      trace: trace_with_delta,
+                      emissions: emissions_after_call,
+                      history_digest: st.history_digest
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                   } else {
@@ -3228,6 +3560,16 @@ func c2_loop(
                       });
                       let _ = ledger_emit(session_id, event);
                       let tool_msg = envelope_to_tool_message(envelope);
+                      -- ADR-003 D2's `:2907`, THE ONE SITE THAT IS TWO EVENTS.
+                      -- The assistant and the tool message it was intercepted
+                      -- into both enter the history here, and D1 is one message
+                      -- per entry — a single event carrying both would make
+                      -- `first_kept` an index into a sequence that no longer has
+                      -- one entry per message.
+                      let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant) ++ [tool_msg]);
+                      let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(event)), appended.events);
+                      let trace_with_delta = c2_journal(session_id, trace_with_history,
+                        [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
                       let next_state: C2LoopState = {
                         msgs: msgs_with_assistant ++ [tool_msg],
 	                        step_idx: step_idx + 1,
@@ -3250,8 +3592,9 @@ func c2_loop(
                         nudges_used: applied.nudges_used,
                         finalize_source: "",
                         prior_counts: st.prior_counts,
-                        trace: ledger_append(trace_after_model, WireRecord(event)),
-                        emissions: emissions_after_call
+                        trace: trace_with_delta,
+                        emissions: emissions_after_call,
+                        history_digest: appended.digest
                       };
                       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                     },
@@ -3265,6 +3608,16 @@ func c2_loop(
                       -- a malformed [assistant(tool_calls) -> user] payload the
                       -- provider then rejects (400 invalid_request_error).
                       if result.finish_reason == "tool_calls" || n_calls > 0 then {
+                        -- ADR-003 D2's model-call assistant, the tool-calling
+                        -- branch. THE ASSISTANT IS JOURNALED BEFORE THE TOOL
+                        -- PHASE RUNS, which is what D4 rule 4's dangling-call
+                        -- rule is written for: a crash here leaves an entry whose
+                        -- `tool_calls` have no results, and the fold strips them
+                        -- rather than refusing.
+                        let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
+                        let trace_with_history = c2_journal(session_id, trace_after_model, appended.events);
+                        let trace_with_delta = c2_journal(session_id, trace_with_history,
+                          [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
                         let next_state: C2LoopState = {
                           msgs: msgs_with_assistant,
 	                          step_idx: step_idx + 1,
@@ -3284,8 +3637,9 @@ func c2_loop(
                           nudges_used: applied.nudges_used,
                           finalize_source: "",
                           prior_counts: st.prior_counts,
-                          trace: trace_after_model,
-                          emissions: emissions_after_call
+                          trace: trace_with_delta,
+                          emissions: emissions_after_call,
+                          history_digest: appended.digest
                         };
                         c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                       } else {
@@ -3310,6 +3664,21 @@ func c2_loop(
                               tool_call_id: "",
                               images: []
                             };
+                            -- THE PLAIN ASSISTANT IS JOURNALED HERE, and the
+                            -- augmented one is NOT: `msgs` carries the plain one
+                            -- and `pending_tool_prefix` carries the augmented
+                            -- one, and the batch finish replaces the first with
+                            -- the second under `replaces_previous`. Journaling
+                            -- the augmented message here instead would put a
+                            -- synthesized tool call into the journal for a step
+                            -- that may never reach the tool phase, and D4 rule
+                            -- 4's "on the hybrid path the journaled assistant
+                            -- carries no calls until `:2251` replaces it, so a
+                            -- crash there strips nothing" would stop being true.
+                            let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
+                            let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(event)), appended.events);
+                            let trace_with_delta = c2_journal(session_id, trace_with_history,
+                              [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
                             let next_state: C2LoopState = {
                               msgs: msgs_with_assistant,
 	                              step_idx: step_idx + 1,
@@ -3329,8 +3698,9 @@ func c2_loop(
                               nudges_used: applied.nudges_used,
                               finalize_source: "",
                               prior_counts: st.prior_counts,
-                              trace: ledger_append(trace_after_model, WireRecord(event)),
-                              emissions: emissions_after_call
+                              trace: trace_with_delta,
+                              emissions: emissions_after_call,
+                              history_digest: appended.digest
                             };
                             c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                           },
@@ -3342,10 +3712,14 @@ func c2_loop(
                             let finalized = dispatch_solver_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content); -- WI-D19
                             match finalized.decision {
                               Accept(output) =>
-	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, identity, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, output, "ext_solver_accept"),
+	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, identity, started_at_ms, trace_after_model, emissions_after_call, st.history_digest, artifacts_changed, step_idx + 1, step_idx, output, "ext_solver_accept"),
                               ContinueWithFeedback(feedback) => {
                                 let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
                                 let _ = ledger_emit(session_id, event);
+                                let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
+                                let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(event)), appended.events);
+                                let trace_with_delta = c2_journal(session_id, trace_with_history,
+                                  [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
                                 let next_state: C2LoopState = {
                                   msgs: msgs_with_assistant,
 	                                  step_idx: step_idx + 1,
@@ -3365,8 +3739,9 @@ func c2_loop(
                                   nudges_used: applied.nudges_used,
                                   finalize_source: "",
                                   prior_counts: st.prior_counts,
-                                  trace: ledger_append(trace_after_model, WireRecord(event)),
-                                  emissions: emissions_after_call
+                                  trace: trace_with_delta,
+                                  emissions: emissions_after_call,
+                                  history_digest: appended.digest
                                 };
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                               },
@@ -3378,6 +3753,10 @@ func c2_loop(
                                     budget: policy.step.persist_retries
                                   });
                                   let _ = ledger_emit(session_id, event);
+                                  let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
+                                  let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(event)), appended.events);
+                                  let trace_with_delta = c2_journal(session_id, trace_with_history,
+                                    [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
                                   let next_state: C2LoopState = {
                                     msgs: msgs_with_assistant,
 	                                    step_idx: step_idx + 1,
@@ -3397,12 +3776,13 @@ func c2_loop(
                                     nudges_used: st.nudges_used,
                                     finalize_source: "",
                                     prior_counts: st.prior_counts,
-                                    trace: ledger_append(trace_after_model, WireRecord(event)),
-                                    emissions: emissions_after_call
+                                    trace: trace_with_delta,
+                                    emissions: emissions_after_call,
+                                    history_digest: appended.digest
                                   };
                                   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                                 } else
-	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, identity, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, result.message.content, "") -- WI-D19
+	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, identity, started_at_ms, trace_after_model, emissions_after_call, st.history_digest, artifacts_changed, step_idx + 1, step_idx, result.message.content, "") -- WI-D19
                               }
                             }
                           }
@@ -3508,10 +3888,40 @@ func run_v2_traced_from_seed(
     Some(i) => i,
     None => default_run_identity(session_id)
   };
-  let st = match seed {
+  let seeded = match seed {
     SeedMessages(m) => c2_initial_state_with_counts(m.history, provider, started.next_state, m.prior_counts),
     SeedContinuation(c) => c2_state_from_continuation(c, provider, started.next_state)
   };
+  -- ADR-003 v6.1 D2: `HistorySeeded`, ONCE PER TRACED RUN, HERE — after the
+  -- constructor and before `c2_loop`, so it is the FIRST journal-class record of
+  -- every run's trace and the invariant that folds that trace has a seed to
+  -- start from. The three arms D1 names are the same value from three sources
+  -- and this line does not distinguish them: `[system, task]` for a fresh
+  -- session, the loop's history for a follow-up turn, the folded history for a
+  -- resumed run — all of them are `seeded.msgs`, and the host is where the three
+  -- become three different entries.
+  --
+  -- IT CARRIES THE WHOLE STARTING HISTORY (PLAN-003 open question 3, decided
+  -- "always carry"). The trace MUST hold the messages or the invariant has
+  -- nothing to fold; carrying them on stdout as well is new pipe traffic of the
+  -- same order the step's own provider payload already sends, and the host drops
+  -- the event after one digest comparison. The env-gated digest-only variant is
+  -- not this part's and is not needed by anything here.
+  --
+  -- `digest` IS THE CHAIN QUANTITY, not `digest_messages(history)`. P3 Part 2
+  -- recorded the gap this closes: D1's third host arm compares this field with
+  -- the last history entry's `digest_after`, and a whole-list hash of a
+  -- different canonical form is not comparable with an incremental chain. Both
+  -- sides are now `chain_digest_after` folded from `chain_empty_base()`, which
+  -- is exactly what `journal.journal_lines_of_records` recomputes when it
+  -- expands this seed into N `history_appended` entries.
+  let seed_event = HistorySeeded({
+    run_id: identity.run_id,
+    messages: messages_json(seeded.msgs),
+    digest: seeded.history_digest.at
+  });
+  let _ = ledger_emit(session_id, seed_event);
+  let st = { seeded | trace: ledger_append(seeded.trace, WireRecord(seed_event)) };
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
   let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, st);
@@ -3929,6 +4339,44 @@ func conversation_loop_v2_with_policy(
           model: model,
           mode: "v2",
           run_id: identity.run_id
+        }));
+        -- ADR-003 D2's `:3409`: THE OPERATOR'S MESSAGE, one `HistoryAppended`,
+        -- emitted by this loop. It is the one journal-class emit in this file
+        -- that is NOT also appended, and that is not an omission — this loop
+        -- holds no `LedgerTrace` at all. It sits above the traced driver surface,
+        -- a deterministic run never reaches it (the traced entry is driven
+        -- directly), and the wire gate that demands projected == appended reads
+        -- the traced entry's trace, not this one.
+        --
+        -- WHY IT IS HERE AT ALL, given that the run's own `HistorySeeded` below
+        -- carries this message inside its starting history: the two are D1's
+        -- design, not a duplication. The host journals THIS as one entry and
+        -- then meets the seed with arm 3 — compare the seed's `digest` with the
+        -- last history entry's `digest_after`, both child-computed, and drop —
+        -- which is a comparison that can only succeed because both are now the
+        -- same chain quantity.
+        --
+        -- THE CHAIN IS RECOMPUTED FROM THE TURN'S HISTORY, and the exact
+        -- condition under which that is right is stated rather than assumed: it
+        -- is the journal's chain for every session whose journal holds no
+        -- `history_replaced`. A checkpoint re-bases the chain to
+        -- `chain_digest_base(prefix ++ summary)` (D4, and `journal.fold_replace`
+        -- recomputes exactly that), and this loop cannot know that happened —
+        -- `Continuation` and `FinalState` carry no chain field, so the run's
+        -- `st.history_digest` dies with the run. The failure is CLOSED, not
+        -- silent: a fold of such a journal refuses at this entry with
+        -- `Digest(seq)` rather than resuming a history it cannot verify.
+        -- CLOSING IT is a field on ADR-003 D1's `Continuation` and D4's
+        -- `SessionState`/`FinalState`, which is an ADR-level widening and
+        -- therefore the owner's call, not a part's; P3 Part 4 is where the host's
+        -- writer meets it.
+        let turn_history = match suspended { Some(c) => c.history, None => history };
+        let _ = ledger_emit(session_id, HistoryAppended({
+          run_id: identity.run_id,
+          step: 0,
+          message: message_json(user_msg),
+          replaces_previous: false,
+          digest_after: chain_digest_after(c2_seed_digest(turn_history).at, user_msg)
         }));
         -- ADR-003 v6.1 D6, THE RESUME. When a continuation is held, the
         -- operator's message is appended to ITS history — the exhausted run's,
@@ -4444,7 +4892,8 @@ func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Tra
       finalize_source: "",
       prior_counts: prior,
       trace: trace,
-      emissions: []
+      emissions: [],
+      history_digest: c2_seed_digest([])
     };
     let policy: SessionPolicy = {
       step: {
@@ -4496,7 +4945,8 @@ func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
       finalize_source: "",
       prior_counts: zero_runtime_status_counts(),
       trace: { records: [] },
-      emissions: []
+      emissions: [],
+      history_digest: c2_seed_digest([])
     };
     let policy: SessionPolicy = {
       step: {
