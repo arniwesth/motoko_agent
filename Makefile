@@ -491,6 +491,13 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
 # CLI calls that the fixture would then have to serve. A gate whose call sequence
 # depends on the operator's environment is not a deterministic gate.
 #
+# EVERY OTHER HERDR_* THE EXTENSION READS IS UNSET (`env -u`, here and in
+# `driver_plus_herdr`), for the same reason and measured: run from a herdr
+# delegate pane, the inherited HERDR_DELEGATE_DEPTH=1 made the scripted Delegate
+# refuse ("not permitted at this depth"), so the sweep went red on where it ran.
+# The list is every `getEnvOr("HERDR_…")` in packages/motoko-ext-herdr/register.ail
+# that this recipe does not set; a new one there belongs here too.
+#
 # HERDR_BIN_PATH names the real binary and NOTHING RUNS IT: every call is served
 # from WorldState.ext_effects, and the fixture carries one entry of slack so an
 # off-by-one produces a wrong answer rather than falling through to a live exec
@@ -499,7 +506,11 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
 herdr_graded:
 	@set -eu; \
 	out=$$(mktemp); \
-	if ! env HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	if ! env -u HERDR_DELEGATE_DEPTH -u HERDR_MAX_DELEGATE_DEPTH -u HERDR_DELEGATE_KIND -u HERDR_ALLOWED_KINDS \
+	       -u HERDR_REAP_ON_EXIT -u HERDR_CHECK_WAIT_MS -u HERDR_START_TIMEOUT_MS -u HERDR_MAX_OUTPUT_CHARS \
+	       -u HERDR_MOTOKO_SCRIPT -u HERDR_DAGR_PLAN -u HERDR_DAGR_SETTLE_ON_EXIT -u HERDR_SWEEP_SETTLE \
+	       -u HERDR_SWEEP_STALE \
+	       HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
 	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
 	       HERDR_DELEGATE_DIR=./.tmp-herdr-graded/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-graded/dagr \
 	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
@@ -541,7 +552,11 @@ herdr_graded:
 driver_plus_herdr:
 	@set -eu; \
 	out=$$(mktemp); \
-	if ! env HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	if ! env -u HERDR_DELEGATE_DEPTH -u HERDR_MAX_DELEGATE_DEPTH -u HERDR_DELEGATE_KIND -u HERDR_ALLOWED_KINDS \
+	       -u HERDR_REAP_ON_EXIT -u HERDR_CHECK_WAIT_MS -u HERDR_START_TIMEOUT_MS -u HERDR_MAX_OUTPUT_CHARS \
+	       -u HERDR_MOTOKO_SCRIPT -u HERDR_DAGR_PLAN -u HERDR_DAGR_SETTLE_ON_EXIT -u HERDR_SWEEP_SETTLE \
+	       -u HERDR_SWEEP_STALE \
+	       HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
 	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
 	       HERDR_DELEGATE_DIR=./.tmp-herdr-profile/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-profile/dagr \
 	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
