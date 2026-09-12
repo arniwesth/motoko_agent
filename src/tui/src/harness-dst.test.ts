@@ -146,7 +146,11 @@ describe("resume.supervisor_args_and_workdir", () => {
     expect(fresh[fresh.length - 1]).toBe("do a task");
   });
 
-  it("forwards the header's workdir string as MOTOKO_WORKDIR", () => {
-    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_WORKDIR).toBe(workdir);
+  it("forwards the header's workdir string as MOTOKO_JOURNAL_WORKDIR, and leaves MOTOKO_WORKDIR alone", () => {
+    const env = buildChildEnv(workdir, "p", "", "");
+    expect(env.MOTOKO_JOURNAL_WORKDIR).toBe(workdir);
+    // Extensions read MOTOKO_WORKDIR with "." as the default and compare what they derive from
+    // it against the relative `--workdir`; setting it absolute refused every herdr Delegate.
+    expect(env.MOTOKO_WORKDIR).toBeUndefined();
   });
 });

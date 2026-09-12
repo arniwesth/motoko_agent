@@ -496,12 +496,16 @@ func build_system_msg(ext_runtime: ExtRuntime, raw_system: string, task: string,
 -- the host's own string (`WORKDIR` or its cwd), while `--workdir` reaches the
 -- child in `supervisorWorkdirArg`'s relative form ("." for the common case), so
 -- comparing the flag with the header would refuse every ordinary resume. The host
--- forwards the SAME string it wrote into the header as MOTOKO_WORKDIR, read here
--- AMBIENTLY on `resume_count_env`'s pattern (§0.8: `rpc.ail` is outside the traced
--- surface, and this is not a `ports.env_get`). Without it — a hand-run child — the
--- flag itself is the invocation's workdir, which is the honest fallback.
+-- forwards the SAME string it wrote into the header as MOTOKO_JOURNAL_WORKDIR, read
+-- here AMBIENTLY on `resume_count_env`'s pattern (§0.8: `rpc.ail` is outside the
+-- traced surface, and this is not a `ports.env_get`). Without it — a hand-run
+-- child — the flag itself is the invocation's workdir, which is the honest fallback.
+--
+-- NOT MOTOKO_WORKDIR: five extensions read that with "." as the default and check
+-- the directories they derive from it against the relative `--workdir`, so an
+-- absolute value there refused every herdr `Delegate` (845239c, fixed after).
 func invoked_workdir(cwd: string) -> string ! {Env} {
-  match getEnv("MOTOKO_WORKDIR") {
+  match getEnv("MOTOKO_JOURNAL_WORKDIR") {
     Ok(raw) => if trim(raw) != "" then trim(raw) else cwd,
     Err(_) => cwd
   }

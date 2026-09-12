@@ -437,7 +437,15 @@ export function buildChildEnv(
     // `supervisorWorkdirArg`'s relative form — "." for the common case — so a child comparing its
     // flag with the header would refuse every ordinary resume. Forwarding the same string makes
     // the row compare like with like; the child reads it ambiently (`rpc.invoked_workdir`).
-    MOTOKO_WORKDIR: workdir,
+    //
+    // NOT `MOTOKO_WORKDIR`, which is what this first shipped as (845239c) and what broke every
+    // `Delegate`. Five extensions already read MOTOKO_WORKDIR with "." as the default (herdr,
+    // omnigraph, exa-search, context-mode, ailang-docs); herdr derives its delegate and dagr
+    // directories from it and checks them with `path_within(ctx.workdir, …)`, where `ctx.workdir`
+    // is the relative `--workdir`. An absolute directory is never lexically under ".", so every
+    // delegation was refused as "outside Motoko's filesystem sandbox" (measured live 2026-09-12).
+    // A name of its own keeps D5's row and leaves the extensions where they were.
+    MOTOKO_JOURNAL_WORKDIR: workdir,
     // WHERE THIS TURN'S EXIT ACTIONS GET PUBLISHED (ABI 7.0).
     //
     // The host names the file and the runtime reads the name — never the other way round, and
