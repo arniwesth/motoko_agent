@@ -124,7 +124,7 @@ pure func samples() -> [LedgerEvent] {
     -- get wrong: an `opt(...)` field that the projection emits unconditionally
     -- would pass with the key present and is only caught when it is missing
     -- from the value and still appears in the bytes.
-    HistorySeeded({ run_id: "sid.r0.0", messages: ja([]), digest: "sha256:seed" }),
+    HistorySeeded({ run_id: "sid.r0.0", messages: ja([]), digest: "sha256:seed", digests: ja([]) }),
     HistoryAppended({ run_id: "sid.r0.0", step: 1, message: jo([]),
       replaces_previous: false, digest_after: "sha256:a" }),
     HistoryReplaced({ run_id: "sid.r0.0", step: 2, reason: "checkpoint",

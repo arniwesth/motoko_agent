@@ -4,7 +4,7 @@ import * as path from "path";
 import * as readline from "readline";
 import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
 import { dispatchOhMyPiTool } from "./ohMyPi/dispatcher.js";
-import { sessionStartMs } from "./session-identity.js";
+import { sessionStartMs, sessionIdentity, sessionResumeCount } from "./session-identity.js";
 import { exitManifestPath, rememberExitManifestPath } from "./exit-actions.js";
 
 export interface DelegatedExecReq {
@@ -100,6 +100,17 @@ export type AgentEvent =
   // session-logger.ts, herdr-agent-state.ts — are PLAN-003 P1 Part 6's; this
   // part lands the wire type so the event is not an unknown one.
   | { type: "run_suspended"; session_id: string; run_id: string; reason: string; step: number }
+  // ADR-003 v6.1 D1's JOURNAL-CLASS EVENTS, on the wire since P3 Part 3 (`phase_vocab.ail`'s
+  // `to_schema_v1_kvs`). They are typed HERE, in P3 Part 4, because this is the part that routes
+  // them: `SessionLogger.log` sends them to the journal and writes a digest to the JSONL log, and
+  // a router that read them through `as never` would be deciding the file format off untyped
+  // field names. `messages` / `message` are `unknown` on purpose — the [Message] codec is
+  // `journal.ail`'s and the host copies the payload through without a second definition of it.
+  | { type: "history_seeded"; run_id: string; messages: unknown[]; digest: string }
+  | { type: "history_appended"; run_id: string; step: number; message: unknown; replaces_previous: boolean; digest_after: string }
+  | { type: "history_replaced"; run_id: string; step: number; reason: string; first_kept?: number; messages: unknown[]; digest_after: string }
+  | { type: "state_delta"; run_id: string; step: number; cumulative: Record<string, number>; telemetry: Record<string, number>; ext_artifacts_digest: string; ext_artifacts?: unknown }
+  | { type: "session_resumed"; resume_count: number; from_id: string; from_ordinal: number; profile_from: string; profile_to: string; prompt_digest_from: string; prompt_digest_to: string; forced: boolean }
   | { type: "error"; message: string }
   | { type: "warning"; message: string }
   | { type: "tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
@@ -377,6 +388,23 @@ export function buildChildEnv(
     // extension's and has one definition (`packages/motoko-ext-herdr/types.ail`); this side
     // supplies only the clock. Reasoning: `session-identity.ts`.
     MOTOKO_SESSION_MS: String(sessionStartMs()),
+    // ONE SESSION ID, ADR-003 v6.1 D5, and the repair of the issue's two ids.
+    //
+    // `derive_session_id` (`session.ail:1677-1684`) returns this value when it is non-empty and
+    // otherwise mints its own from a clock read — so before this line the host named the JSONL log
+    // one thing and the child called the session another, and every wire event of a follow-up turn
+    // carried the child's. The journal cannot live with that: its directory, its header and its
+    // `run_id`s are all keyed by the session, and a resume looks the session up by name.
+    //
+    // `sessionIdentity()` honours an inherited MOTOKO_SESSION_ID, which is what the eval-harness
+    // adapter sets and what a `--resume` of an existing session needs.
+    MOTOKO_SESSION_ID: sessionIdentity(),
+    // THE RESUME COUNT, D5 again: `0` on a fresh spawn, incremented on every `--resume` spawn. The
+    // child reads it AMBIENTLY in `rpc.run_with_config` (`rpc.ail:217`) rather than through a
+    // `ports.env_get`, because five DST fixtures pin the exact key set the policy init reads and a
+    // sixth key would make all five red (PLAN-003 §0.8). It is the middle field of
+    // `run_id = <session_id>.r<resume_count>.<run_ordinal>`.
+    MOTOKO_RESUME_COUNT: String(sessionResumeCount()),
     // WHERE THIS TURN'S EXIT ACTIONS GET PUBLISHED (ABI 7.0).
     //
     // The host names the file and the runtime reads the name — never the other way round, and

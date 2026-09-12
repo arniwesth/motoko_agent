@@ -2,6 +2,7 @@ module src/core/ext/runtime
 
 import std/clock (now)
 import std/io (println)
+import std/crypto (sha256Hex)
 import std/json (Json, encode, jo, kv, js, jnum, get, asString)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -159,9 +160,8 @@ export pure func normalize_diagnostic(code: string, fields: [DiagnosticField]) -
   { code: normalized_code, fields: take_fields(16, sort_fields(normalize_fields_rec(fields, []))) }
 }
 
-export func loaded_extension_names(rt: ExtRuntime) -> [string] {
-  hook_names(rt.registry.entries)
-}
+-- One line, not three: `ext_set_digest` below pays for its `std/crypto` import here.
+export func loaded_extension_names(rt: ExtRuntime) -> [string] = hook_names(rt.registry.entries)
 
 func join_lines(xs: [string]) -> string {
   match xs {
@@ -1073,3 +1073,79 @@ func second_compactor_atom_is_index_one_test() -> bool ! {AI, Clock, Env, FS, IO
       _ => false
     }
   }
+
+-- ============================================================================
+-- PLACED BELOW THE ATTRIBUTED CLOCK READ, DELIBERATELY — and paid for above.
+--
+-- The `std/crypto` import this needs is a line ABOVE the anchor, so
+-- `loaded_extension_names` was collapsed to the one-line `=` form used elsewhere
+-- in the tree (`config.load_invocation_config`) to pay for it. Same expression,
+-- same export, net zero lines: nothing above the anchor moved at all.
+--
+-- `tools/predicate-anchors/anchors.sh` pins the `now()` above as the ambient
+-- clock read attributed to `test_dummy`, and SEVEN discovered-site fixtures
+-- carry its line number (`driver_only_dst`, `driver_plus_no_ops_dst`,
+-- `driver_plus_compose_dst`, `profile_definition_dst`, `herdr_graded_dst` and
+-- `attribution_table_dst` twice over). Adding fifty lines above it moves the
+-- anchor and turns a one-file change into the NINE-FILE re-baseline form the
+-- anchor script's own note calls "the price of moving any anchor those fixtures
+-- carry". This code reads no clock and has no reason to sit above one, so it
+-- sits below and the anchor does not move. PLAN-003 §0.2 priced ONE P3
+-- re-baseline and P3 Part 3 spent it.
+-- ============================================================================
+
+-- ADR-003 v6.1 D5's `ext_set_digest`, computed FROM THE REGISTRY.
+--
+-- D5 says it explicitly, and PLAN-003 P3 Part 4's "do not" list repeats it: this is not derived
+-- from the `loaded_extensions` names on `session_start`. Those names are `hook_name(e.id)` --
+-- `hook_names` slices the id at its `#`, so two different registrations of one extension collapse
+-- to one name, and the ORDER-SENSITIVE instance ids that decide which hook shapes the prompt first
+-- are gone. A digest over that would report "same extension set" for two registries that build
+-- different system prompts, which is the one thing a resume's compatibility row must not do.
+--
+-- So the digest covers the full instance id AND the KINDS of capability each entry registered, in
+-- registry order. The capabilities themselves are closures (`Capability`'s payloads are functions)
+-- and nothing can hash those; the kind is what is left, and it is what changes when an extension
+-- gains or loses a hook. What this digest therefore does NOT see is a change inside an extension's
+-- code that keeps its id and its hook set -- stated here rather than discovered at a resume that
+-- accepted a journal it should have refused.
+export pure func ext_set_digest(rt: ExtRuntime) -> string {
+  "sha256:${sha256Hex(ext_set_canonical(rt.registry.entries))}"
+}
+
+pure func ext_set_canonical(entries: [ExtEntry]) -> string {
+  match entries {
+    [] => "",
+    e :: rest => "${e.id}[${join_semis(capability_kinds(e.caps))}]\n${ext_set_canonical(rest)}"
+  }
+}
+
+pure func join_semis(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x};${join_semis(rest)}"
+  }
+}
+
+pure func capability_kinds(caps: [Capability]) -> [string] {
+  match caps {
+    [] => [],
+    c :: rest => capability_kind(c) :: capability_kinds(rest)
+  }
+}
+
+pure func capability_kind(c: Capability) -> string {
+  match c {
+    DescribeTools(_) => "describe_tools",
+    PromptShaper(_) => "prompt_shaper",
+    BudgetShaper(_) => "budget_shaper",
+    Compactor(_) => "compactor",
+    ToolPolicy(_) => "tool_policy",
+    ToolProvider(_, _) => "tool_provider",
+    ResponseInterceptor(_) => "response_interceptor",
+    SolverJudge(_) => "solver_judge",
+    ExitIntent(_, _, _) => "exit_intent",
+    WorkInFlight(_, _) => "work_in_flight"
+  }
+}

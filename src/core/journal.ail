@@ -262,6 +262,41 @@ export pure func chain_digest_over(base: string, ms: [Message]) -> string {
   List.foldl(chain_step, base, ms)
 }
 
+-- THE CHAIN'S INTERMEDIATE VALUES, one per message — the prefix chain, not just
+-- its last element. PLAN-003 P3 Part 4 is why this exists and the reason is a
+-- property of the HOST, not of the fold.
+--
+-- D1's first `history_seeded` arm has the host expand ONE event carrying ONE
+-- digest for N messages into N `history_appended` entries, and the fold checks
+-- `digest_after` at EVERY one of them. The AILANG twin can recompute those N
+-- digests because it is the same language calling the same `chain_digest_after`
+-- over the same `canonical_message_frame`. The host is TypeScript and CANNOT:
+-- reproducing the digests there means a second copy of the canonicalisation
+-- across a language boundary that neither compiler can see — the MOT-118 shape
+-- this project has already paid for twice — and a copy that drifted would write
+-- a journal that folds today and refuses after any change to the message form.
+--
+-- So the child, which computes the chain anyway, reports all of it, and the
+-- host copies values it never computes. That also finishes what P3 Part 2
+-- recorded as this design's one unsealed value: with the digests carried, EVERY
+-- digest in a journal is the child's and every one of them is recomputed and
+-- checked by the fold.
+pure func chain_prefix_step(acc: { last: string, out: [string] }, m: Message) -> { last: string, out: [string] } {
+  let d = chain_digest_after(acc.last, m);
+  { last: d, out: acc.out ++ [d] }
+}
+
+export pure func chain_digests_over(base: string, ms: [Message]) -> [string] {
+  List.foldl(chain_prefix_step, { last: base, out: [] }, ms).out
+}
+
+-- The same list as JSON, because every caller that reports it is building a wire
+-- payload. Here rather than at the call sites so the two of them (the child's
+-- emit and this module's own fixture) cannot encode it two ways.
+export pure func chain_digests_json(ds: [string]) -> Json {
+  ja(List.map(js, ds))
+}
+
 -- THE JOURNAL'S CHAIN STARTS FROM THE EMPTY HISTORY, and that is a decision
 -- this part makes rather than one it inherits, so it is written down.
 --
@@ -2220,7 +2255,13 @@ pure func t_seeded() -> LedgerRecord {
   WireRecord(HistorySeeded({
     run_id: t_run_id(),
     messages: messages_json(t_seed()),
-    digest: t_seed_digest()
+    digest: t_seed_digest(),
+    -- The prefix chain the child now reports (P3 Part 4). The twin does not read
+    -- it -- it recomputes the same values with `chain_digest_after`, in the same
+    -- language, which is exactly the recomputation the TypeScript host cannot do
+    -- and the reason the field exists. Set here from the one function so the
+    -- literal cannot claim a chain the fold would refuse.
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), t_seed()))
   }))
 }
 

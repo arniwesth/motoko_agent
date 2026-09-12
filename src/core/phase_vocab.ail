@@ -781,7 +781,20 @@ export type RunSuspendedInfo = { session_id: string, run_id: string, reason: str
 -- fold recomputes from `chain_empty_base()` — so a seed digest in any other form
 -- is one no reader of the journal can check. P3 Part 3 emits the chain quantity
 -- and `dst_invariants.journal_payload_findings` pins it against `messages`.
-export type HistorySeededInfo = { run_id: string, messages: Json, digest: string }
+-- `digests` IS THE PREFIX CHAIN, one per message, and it is here because of what
+-- the HOST has to do with this event (PLAN-003 P3 Part 4). D1's first arm has
+-- the host expand ONE seed into N `history_appended` entries and the fold checks
+-- `digest_after` at every one of them; the AILANG twin recomputes those N values
+-- with `chain_digest_after`, and the TypeScript host cannot without a second
+-- copy of `canonical_message_frame` across a language boundary neither compiler
+-- can see. The child computes the chain anyway, so it reports all of it.
+--
+-- `digest` STAYS, and is not redundant: it is the value D1's THIRD arm compares
+-- against the last history entry's `digest_after` when a later run re-states a
+-- history the journal already holds, and that comparison reads one string, not a
+-- list. `digest` is `digests`' last element by construction, which is what
+-- `journal_payload_findings` asserts.
+export type HistorySeededInfo = { run_id: string, messages: Json, digest: string, digests: Json }
 
 -- ONE MESSAGE PER EVENT, never a batch: a batch of N tool results is N
 -- consecutive events, because the host writes one entry per message and
@@ -1160,7 +1173,7 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     NativeToolResults(i) => [kv("type", js("native_tool_results")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("results", i.payload)],
     SessionSuspend(i) => [kv("type", js("session_suspend")), kv("session_id", js(i.session_id)), kv("target_profile", js(i.target_profile))],
     RunSuspended(i) => [kv("type", js("run_suspended")), kv("session_id", js(i.session_id)), kv("run_id", js(i.run_id)), kv("reason", js(i.reason)), kv("step", jnum(_int_to_float(i.step)))],
-    HistorySeeded(i) => [kv("type", js("history_seeded")), kv("run_id", js(i.run_id)), kv("messages", i.messages), kv("digest", js(i.digest))],
+    HistorySeeded(i) => [kv("type", js("history_seeded")), kv("run_id", js(i.run_id)), kv("messages", i.messages), kv("digest", js(i.digest)), kv("digests", i.digests)],
     HistoryAppended(i) => [kv("type", js("history_appended")), kv("run_id", js(i.run_id)), kv("step", jnum(_int_to_float(i.step))), kv("message", i.message), kv("replaces_previous", jb(i.replaces_previous)), kv("digest_after", js(i.digest_after))],
     HistoryReplaced(i) => history_replaced_kvs(i),
     StateDelta(i) => state_delta_kvs(i),
@@ -1625,7 +1638,7 @@ pure func test_ledger_projection_golden_bytes() -> bool
     -- codec produces is `journal.ail`'s round-tripped concern, and what THIS
     -- module owes is that the projection passes it through unmodified and puts
     -- it under the right key.
-    && golden(HistorySeeded({ run_id: "sid.r0.0", messages: ja([jo([kv("role", js("system")), kv("content", js("s"))])]), digest: "sha256:seed" }), "{\"type\":\"history_seeded\",\"run_id\":\"sid.r0.0\",\"messages\":[{\"role\":\"system\",\"content\":\"s\"}],\"digest\":\"sha256:seed\"}")
+    && golden(HistorySeeded({ run_id: "sid.r0.0", messages: ja([jo([kv("role", js("system")), kv("content", js("s"))])]), digest: "sha256:seed", digests: ja([js("sha256:seed")]) }), "{\"type\":\"history_seeded\",\"run_id\":\"sid.r0.0\",\"messages\":[{\"role\":\"system\",\"content\":\"s\"}],\"digest\":\"sha256:seed\",\"digests\":[\"sha256:seed\"]}")
     && golden(HistoryAppended({ run_id: "sid.r0.0", step: 3, message: jo([kv("role", js("tool")), kv("tool_call_id", js("tc"))]), replaces_previous: false, digest_after: "sha256:a" }), "{\"type\":\"history_appended\",\"run_id\":\"sid.r0.0\",\"step\":3,\"message\":{\"role\":\"tool\",\"tool_call_id\":\"tc\"},\"replaces_previous\":false,\"digest_after\":\"sha256:a\"}")
     && golden(HistoryAppended({ run_id: "sid.r0.0", step: 4, message: jo([kv("role", js("assistant"))]), replaces_previous: true, digest_after: "sha256:b" }), "{\"type\":\"history_appended\",\"run_id\":\"sid.r0.0\",\"step\":4,\"message\":{\"role\":\"assistant\"},\"replaces_previous\":true,\"digest_after\":\"sha256:b\"}")
     && golden(HistoryReplaced({ run_id: "sid.r0.0", step: 7, reason: "checkpoint", first_kept: None, messages: ja([]), digest_after: "sha256:r" }), "{\"type\":\"history_replaced\",\"run_id\":\"sid.r0.0\",\"step\":7,\"reason\":\"checkpoint\",\"messages\":[],\"digest_after\":\"sha256:r\"}")

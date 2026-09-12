@@ -529,6 +529,25 @@ check src/core/tool_phase.ail 389 'exec_scratchpad_cell_ws' "the call attributed
 # herdr profile owns the fourth, and the width for a re-baseline taken while it
 # is green is SEVEN files, not six.
 
+# PLAN-003 P3 PART 4 MOVED NO ANCHOR, AND THAT IS WORTH RECORDING BECAUSE THE
+# NOTE ABOVE SAYS THE DODGE WAS UNAVAILABLE TO PART 3. It was available here, and
+# the difference is the shape of the edit rather than anyone's diligence: Part 3
+# added a record FIELD, a type and nine emit sites, which cannot be made
+# line-count-neutral by pairing; Part 4 adds ONE payload field and two imports.
+# So `digests:` was paired onto the `digest:` line at the seed emit, the two
+# `chain_digests_*` names onto the existing `chain_digest_after,` import line, and
+# both rationales onto comment lines that were already there and already about the
+# chain. In `src/core/ext/runtime.ail` the same budget was met the other way: the
+# new `ext_set_digest` and its four helpers sit BELOW the attributed `now()` (they
+# read no clock and have no reason to be above one), and the `std/crypto` import
+# they need — the one line that had to go above it — was paid for by collapsing
+# `loaded_extension_names` to the one-line `=` form. Net zero above line 199.
+#
+# WHY IT WAS WORTH THE TROUBLE: `ext/runtime.ail:199` is carried by SEVEN
+# discovered-site fixtures, so moving it is the nine-file form, and PLAN-003 §0.2
+# priced ONE P3 re-baseline, which Part 3 spent. A second re-issue of three
+# profiles for a payload field would have been drift the plan never priced.
+
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
 for l in 1422 1681 1793 3884 4096; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"

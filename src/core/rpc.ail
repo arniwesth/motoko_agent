@@ -25,9 +25,10 @@ import std/env    (getEnv)
 import std/fs     (readFile, fileExists)
 import src/core/types  (Msg, version)
 import src/core/prompts (with_agents_context)
+import src/core/phase_vocab (msgs_to_messages, system_prefix_digest_for)
 import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config, CostRates)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime)
-import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, dispatch_build_system_prompt, dispatch_budget_plan)
+import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, ext_set_digest, dispatch_build_system_prompt, dispatch_budget_plan)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
 -- RunSettings carries the agent's runtime knobs from RuntimeConfig into
@@ -376,9 +377,51 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   let system_msg: Msg = { role: "system", content: system, tool_calls: [], tool_call_id: "" };
   let init: [Msg] = [system_msg, { role: "user", content: run_task, tool_calls: [], tool_call_id: "" }];
 
+  -- ADR-003 v6.1 D3: THE CHILD'S HALF OF THE HEADER, on the one line that is emitted after every
+  -- field of it exists.
+  --
+  -- The host writes the header before the first spawn from what it has -- the session id, the
+  -- workdir, the profile and the model -- and completes it in place from this report. What it
+  -- CANNOT have is here: the system-prefix digest (the system prompt is built from the task, three
+  -- lines above, so `session_start` at :282 is emitted before there is one to digest) and D1's
+  -- `boot` inputs, which are profile-config values the TUI never parses -- it reads the model, the
+  -- extensions and the ClickStack block out of `config.json` and nothing else.
+  --
+  -- PLAN-003 names only the two digests as the child's and says the header is completed on
+  -- `session_start`. The boot inputs are in exactly the same position and the plan does not say so;
+  -- resolved by putting all of them on ONE line the host already receives, at the point where all
+  -- of them are known. The host keys on the `header` OBJECT rather than on this event's name, so
+  -- moving them costs nothing later.
+  --
+  -- THE CHILD STILL WRITES NOTHING (PLAN-003 §0.8). This is an emit on the wire it already owns.
   let _ = emit(encode(jo([
     kv("type", js("v2_mode")),
-    kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete"))
+    kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete")),
+    kv("header", jo([
+      -- The digest of the PINNED SYSTEM PREFIX, `phase_vocab.system_prefix_digest_for`, which is
+      -- the same function D6 step 4's compatibility row compares against on a resume. Computed
+      -- over the one system message this run built, which is what that prefix is at this point.
+      kv("system_prefix_digest", js(system_prefix_digest_for(msgs_to_messages([system_msg])))),
+      -- FROM THE REGISTRY, never from `loaded_extensions` -- see `ext_set_digest`.
+      kv("ext_set_digest", js(ext_set_digest(ext_runtime))),
+      kv("boot", jo([
+        kv("task", js(run_task)),
+        kv("env_url", js(env_url)),
+        kv("hybrid_tools", jb(hybrid_enabled)),
+        kv("budget", jo([
+          kv("total", jnum(_int_to_float(budget.total))),
+          kv("solver", jnum(_int_to_float(budget.solver))),
+          kv("verifier", jnum(_int_to_float(budget.verifier)))
+        ])),
+        kv("step_budget", jnum(_int_to_float(budget.total))),
+        kv("ohmy_pi", jb(settings.ohmy_pi)),
+        kv("max_cost_millicents", jnum(_int_to_float(settings.max_cost_millicents))),
+        kv("cost_rates", jo([
+          kv("input_per_1m_millicents", jnum(_int_to_float(settings.cost_rates.input_per_1m_millicents))),
+          kv("output_per_1m_millicents", jnum(_int_to_float(settings.cost_rates.output_per_1m_millicents)))
+        ]))
+      ]))
+    ]))
   ])));
   run_v2_with_conversation(ext_runtime, run_task, env_url, hybrid_enabled, budget, run_model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, cfg.profile, resume_count_env())
   }

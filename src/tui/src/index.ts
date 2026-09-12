@@ -28,6 +28,9 @@ import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
 import { initHerdrReporter, reportSessionPath } from "./herdr-agent-state.js";
 import { initExitActions } from "./exit-actions.js";
+import { sessionIdentity } from "./session-identity.js";
+import { SessionJournal } from "./session-journal.js";
+import { acquireLease, registerLeaseHooks } from "./session-lease.js";
 import { activeProfile } from "./config.js";
 import { resolveRuntimeModel } from "./models.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
@@ -824,6 +827,74 @@ async function main(): Promise<void> {
   // when no runtime ever started or no extension declared an intent; see exit-actions.ts.
   initExitActions();
 
+  // ADR-003 v6.1 D3: the session's JOURNAL and its LEASE, both host-lifetime, both created here —
+  // after the exit-actions dispatcher and BEFORE the herdr reporter, which is the registration
+  // order the release depends on. Node runs listeners in registration order, and the herdr
+  // reporter's signal handler re-raises: anything registered after it never runs on a SIGINT.
+  //
+  // The lease is what makes D3's "one writer" checkable. A second Motoko on one session id would
+  // append to the same `journal.jsonl` with its own `seq` and leaf, and the result is not a corrupt
+  // file but a plausible one that folds to a history neither process ever had.
+  //
+  // A REFUSED LEASE ENDS THE SESSION, and nothing else can: the alternative is starting a Motoko
+  // that silently writes into another one's journal. A STALE lease — the shape `kill -9` leaves —
+  // is taken over, because resuming a crashed session is the second judging number.
+  const sessionId = sessionIdentity();
+  const journal = new SessionJournal(projectRoot, sessionId);
+  const leaseOutcome = acquireLease(journal.dir, sessionId);
+  if (leaseOutcome.kind === "refused") {
+    process.stderr.write(
+      `Session ${sessionId} is already held by pid ${leaseOutcome.heldBy.owner_pid} ` +
+        `(lease ${path.join(journal.dir, "lease")}).\n` +
+        `Motoko keeps one writer per session journal: two would interleave entries into one ` +
+        `chain and fold to a history neither process had. Wait for that process to exit — a ` +
+        `lease whose owner is gone is taken over automatically, including after a kill -9.\n`,
+    );
+    process.exit(3);
+  }
+  const lease = leaseOutcome.kind === "acquired" ? leaseOutcome.lease : null;
+
+  // D1's `header`, written BEFORE the first spawn from the values the host has. The two digests and
+  // the `boot` inputs are the child's and arrive on its first `v2_mode`; see `completeHeaderFrom`.
+  journal.writeHeader({ sessionId, workdir, profile, model });
+
+  // The lease's OWN listeners, which do not re-raise — see `session-lease.ts`. The journal's `exit`
+  // entry rides with them, so it is written while the session is still this process's, and it is a
+  // synchronous append because an async write started in an `exit` listener never runs.
+  if (lease) registerLeaseHooks(process, lease, (reason) => journal.writeExit(reason));
+
+  /**
+   * Complete D1's header from the child's report — the design's ONE in-place rewrite.
+   *
+   * KEYED ON THE FIELDS, NOT ON THE EVENT NAME, and that is this part's one deliberate drift from
+   * PLAN-003, which says the header is completed "on the first `session_start`". It cannot be.
+   * `session_start` is emitted at `rpc.ail:282`, before the task is read and therefore before the
+   * system prompt exists, so it cannot carry a system-prefix digest; and the header's `boot` — the
+   * budget, the step budget, `ohmy_pi`, the cost rates — are profile-config values the HOST never
+   * parses (`resolveProfileAgentConfig` reads the model, the extensions and the ClickStack block,
+   * and nothing else). The plan names only the two digests as the child's; the boot inputs are in
+   * the same position and the plan does not say so.
+   *
+   * So the child reports all of them together on `v2_mode` (`rpc.ail:379`), which is emitted once
+   * per spawn at the exact point where every one of them is known, and this reads them off
+   * whatever line carries a `header` object. When a later part moves them onto `session_start`
+   * proper, nothing here changes.
+   */
+  const completeHeaderFrom = (event: AgentEvent): void => {
+    if (journal.isHeaderCompleted) return;
+    const rec = event as unknown as Record<string, unknown>;
+    const h = rec.header;
+    if (!h || typeof h !== "object" || Array.isArray(h)) return;
+    const fields = h as Record<string, unknown>;
+    const boot = fields.boot;
+    if (!boot || typeof boot !== "object" || Array.isArray(boot)) return;
+    journal.completeHeader({
+      system_prefix_digest: typeof fields.system_prefix_digest === "string" ? fields.system_prefix_digest : "",
+      ext_set_digest: typeof fields.ext_set_digest === "string" ? fields.ext_set_digest : "",
+      boot: boot as Record<string, unknown>,
+    });
+  };
+
   initHerdrReporter();
 
   if (!isTTY) {
@@ -844,12 +915,19 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     const ui = jsonlOutput ? new JsonlLogger() : new PlainLogger();
-    const logger = new SessionLogger(projectRoot, pkgVersion);
+    const logger = new SessionLogger(projectRoot, pkgVersion, journal);
     sessionLogger = logger;
     reportSessionPath(logger.filePath);
     logger.logUserInput(task);
     ui.onModelChange = (newModel) => {
       process.env.MODEL = newModel;
+      // D1 names `model_change` a journal-class event and D3 lists it among the events `log()`
+      // routes — but it is a HOST-TO-CHILD COMMAND (`runtime-process.ts`'s `setModel`), not
+      // something the child ever says, so it never reaches a logger. The host is the only side
+      // that knows, so the host writes the `settings` entry, through the same router: it is the
+      // entry the fold reads `model` from (D4 rule 5), and a resume that missed it would rebuild
+      // the session on the model the header was written with.
+      journal.record({ type: "model_change", model: newModel });
       runtimeProcess!.setModel(newModel);
     };
     ui.onAbort = () => runtimeProcess!.abort();
@@ -868,6 +946,7 @@ async function main(): Promise<void> {
       openaiBaseUrl,
       aiOptionsJson,
       (event) => {
+        completeHeaderFrom(event);
         logger.log(event);
         // For terminal events, drain the JSONL stream BEFORE letting the UI
         // handler call process.exit. Otherwise process.exit drops the
@@ -901,6 +980,10 @@ async function main(): Promise<void> {
         ui.handleEvent(event);
       },
       () => {
+        // D1's `exit` entry: the child is gone and the journal's last entry is whatever it had
+        // flushed, so the boundary is recorded here — `child_exit` is what D1 calls this reason,
+        // and `pending_tool_calls` is the trailing-pair rule over the entries the host holds.
+        journal.writeExit("child_exit");
         void logger.close();
         sessionLogger = undefined;
         ui.stop();
@@ -918,7 +1001,7 @@ async function main(): Promise<void> {
 
   function spawnRuntimeProcess(task: string, logPrompt: boolean): void {
     errorOccurred = false;
-    const logger = new SessionLogger(projectRoot, pkgVersion);
+    const logger = new SessionLogger(projectRoot, pkgVersion, journal);
     sessionLogger = logger;
     reportSessionPath(logger.filePath);
     if (logPrompt) logger.logUserInput(task);
@@ -942,6 +1025,7 @@ async function main(): Promise<void> {
         // process that never took it, and would then fire on whatever unrelated exit came later.
         // The `=== "error"` test below is what keeps that true; a future `||` here would break it.
         if (event.type === "error") errorOccurred = true;
+        completeHeaderFrom(event);
         logger.log(event);
         ui.handleEvent(event);
       },
@@ -952,6 +1036,13 @@ async function main(): Promise<void> {
         sessionLogger = undefined;
         ui.runtimeProcess = undefined;
         const pendingRestart = runtimeProcess?.restartPending;
+        // D1's `exit`, with the reason this exit actually had. `abort` and `restart` are the SAME
+        // entry with their reason — that is what replaced v4.1's two metadata rewrites — and the
+        // three are distinguishable HERE and nowhere later: by the time the process hook runs, a
+        // restart and a quit look identical. A restart respawns into the same session and the same
+        // journal, so its boundary is followed by more entries, which is why more than one `exit`
+        // per session is correct and only a CONSECUTIVE second one is suppressed.
+        journal.writeExit(pendingRestart ? "restart" : interrupted ? "abort" : "child_exit");
         if (pendingRestart) {
           // Restart requested — respawn with optional new profile
           if (typeof pendingRestart === "string") {
@@ -1016,6 +1107,9 @@ async function main(): Promise<void> {
 
   ui.onModelChange = (newModel) => {
     process.env.MODEL = newModel;
+    // See the non-TTY arm above: `model_change` is a command the host sends, so the host is what
+    // journals it.
+    journal.record({ type: "model_change", model: newModel });
     runtimeProcess?.setModel(newModel);
   };
   ui.onUserMessage = (content) => {

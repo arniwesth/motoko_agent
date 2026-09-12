@@ -2,7 +2,14 @@ import { describe, it, expect, afterEach } from "@jest/globals";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { sessionStartMs, __setSessionMsForTests } from "./session-identity.js";
+import {
+  sessionStartMs,
+  sessionIdentity,
+  sessionResumeCount,
+  bumpSessionResumeCount,
+  __setSessionMsForTests,
+  __setSessionIdentityForTests,
+} from "./session-identity.js";
 import { buildChildEnv } from "./runtime-process.js";
 import { exitManifestPath, currentExitManifestPath, __setSessionNonceForTests } from "./exit-actions.js";
 
@@ -21,6 +28,7 @@ import { exitManifestPath, currentExitManifestPath, __setSessionNonceForTests } 
 afterEach(() => {
   __setSessionMsForTests(null);
   __setSessionNonceForTests(null);
+  __setSessionIdentityForTests(null);
 });
 
 describe("the session clock is minted once per TUI process", () => {
@@ -84,6 +92,86 @@ describe("the session clock is minted once per TUI process", () => {
       // publish or every turn's manifest silently fails to be written.
       expect(fs.existsSync(path.dirname(expected))).toBe(true);
     } finally {
+      fs.rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ADR-003 v6.1 D5 — ONE SESSION ID, and the repair of the issue's two ids.
+//
+// Before this, the host named the JSONL log after MOTOKO_SESSION_ID when the eval-harness adapter
+// happened to set one and after an ISO timestamp otherwise, while the child minted its own from a
+// clock read it could not share (`session.ail`'s `derive_session_id`). Interactively those two
+// never matched. The journal cannot live with that: its directory, its header and every `run_id`
+// in it are keyed by the session, and a resume looks the session up by name.
+describe("the session id is minted once and reaches the child", () => {
+  it("returns the same value across calls", () => {
+    __setSessionIdentityForTests(null);
+    delete process.env.MOTOKO_SESSION_ID;
+    const first = sessionIdentity();
+    expect(sessionIdentity()).toBe(first);
+    expect(first).toMatch(/^session_\d+-[0-9a-f]{16}$/);
+  });
+
+  // An id supplied from outside WINS: it is the whole point of the variable, and minting over it
+  // would orphan the journal the caller named. That is the adapter's case and, from P3 Part 5, a
+  // `--resume` of an existing session.
+  it("honours an inherited MOTOKO_SESSION_ID", () => {
+    __setSessionIdentityForTests(null);
+    process.env.MOTOKO_SESSION_ID = "session_from_the_adapter";
+    try {
+      expect(sessionIdentity()).toBe("session_from_the_adapter");
+    } finally {
+      delete process.env.MOTOKO_SESSION_ID;
+    }
+  });
+
+  // `derive_session_id` returns the environment value when it is non-empty, so this line is what
+  // makes both sides read one string.
+  it("reaches the AILANG runtime as MOTOKO_SESSION_ID", () => {
+    __setSessionIdentityForTests("session_pinned-0123456789abcdef");
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "motoko-session-identity-"));
+    try {
+      expect(buildChildEnv(workdir, "p", "", "").MOTOKO_SESSION_ID).toBe("session_pinned-0123456789abcdef");
+    } finally {
+      fs.rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  // D5's `resume_count`: the host's counter, 0 on a fresh spawn and incremented on every `--resume`
+  // spawn. The child reads it AMBIENTLY (`rpc.ail`'s `resume_count_env`) rather than through a
+  // `ports.env_get`, because five DST fixtures pin the exact key set the policy init reads and a
+  // sixth key would make all five red (PLAN-003 §0.8). It is the middle field of
+  // `run_id = <session_id>.r<resume_count>.<run_ordinal>`.
+  it("forwards a resume count that starts at zero and the host increments", () => {
+    __setSessionIdentityForTests("session_pinned-0123456789abcdef", null);
+    delete process.env.MOTOKO_RESUME_COUNT;
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "motoko-session-identity-"));
+    try {
+      expect(sessionResumeCount()).toBe(0);
+      expect(buildChildEnv(workdir, "p", "", "").MOTOKO_RESUME_COUNT).toBe("0");
+      expect(bumpSessionResumeCount()).toBe(1);
+      expect(buildChildEnv(workdir, "p", "", "").MOTOKO_RESUME_COUNT).toBe("1");
+    } finally {
+      __setSessionIdentityForTests(null);
+      fs.rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  // An inherited count is a resume that a supervising process already counted. Nonsense is 0 rather
+  // than a throw: a bad environment must not be able to stop a session from starting.
+  it("reads an inherited resume count and refuses nonsense", () => {
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "motoko-session-identity-"));
+    try {
+      __setSessionIdentityForTests("s", null);
+      process.env.MOTOKO_RESUME_COUNT = "4";
+      expect(sessionResumeCount()).toBe(4);
+      __setSessionIdentityForTests("s", null);
+      process.env.MOTOKO_RESUME_COUNT = "not a number";
+      expect(sessionResumeCount()).toBe(0);
+    } finally {
+      delete process.env.MOTOKO_RESUME_COUNT;
+      __setSessionIdentityForTests(null);
       fs.rmSync(workdir, { recursive: true, force: true });
     }
   });

@@ -469,10 +469,21 @@ export pure func event_vocabulary() -> [EventRow] {
     -- ============================================================================
 
     { variant: "HistorySeeded", wire_names: ["history_seeded"],
-      payload: [req("run_id"), req("messages"), req("digest")],
+      payload: [req("run_id"), req("messages"), req("digest"), req("digests")],
       -- The history a run starts from, and the base of the chain digest every
       -- later history entry extends. The fold reads it first, so an invariant
       -- over the fold's output turns on its content directly.
+      --
+      -- `digests` IS THE PREFIX CHAIN, one per message, and it is REQUIRED rather
+      -- than optional because the host cannot expand the seed without it
+      -- (PLAN-003 P3 Part 4). D1's first arm turns this one event into N
+      -- `history_appended` entries and the fold checks `digest_after` at every
+      -- one of them; the AILANG twin recomputes those N values with
+      -- `chain_digest_after`, and the TypeScript host would need a second copy of
+      -- `canonical_message_frame` across a language boundary neither compiler can
+      -- see. An optional field here would be a seed the host silently refuses to
+      -- expand — so it is required, and a missing one is a round-trip failure at
+      -- this gate rather than an empty journal at a live resume.
       classification: Logical, reaches_trace_today: true },
 
     { variant: "HistoryAppended", wire_names: ["history_appended"],

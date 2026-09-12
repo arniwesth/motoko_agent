@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { AgentEvent } from "./runtime-process.js";
+import { SessionJournal, isJournalClass, substituteJournalPayload } from "./session-journal.js";
+import { sessionIdentity } from "./session-identity.js";
 
 // ADR-003 v6.1 D2 adds `suspended` — a run stopped on its step budget, holding the turn's history
 // for the operator's next line. It is a state and not just a line so `ensureThinkingLine` treats
@@ -221,7 +223,20 @@ export class SessionLogger {
   readonly filePath: string;
   readonly markdownPath: string;
 
-  constructor(projectRoot: string, tuiVersion: string) {
+  /**
+   * ADR-003 v6.1 D3's one writer, HANDED to this logger rather than owned by it.
+   *
+   * A `SessionLogger` is constructed per child spawn and closed at child exit; the journal spans
+   * the session — every respawn, every model switch, and P3 Part 5's `--resume`. So it cannot live
+   * here, and the only thing this class does with it is ROUTE: journal-class events go to the
+   * journal, and the JSONL log gets the same events with their payload replaced by a digest.
+   *
+   * Optional, because two callers have no journal and must keep working: the eval harness and
+   * every test that builds a logger for its transcript behaviour.
+   */
+  private readonly journal: SessionJournal | undefined;
+
+  constructor(projectRoot: string, tuiVersion: string, journal?: SessionJournal) {
     const dir = path.join(projectRoot, ".motoko", "logfile");
     fs.mkdirSync(dir, { recursive: true });
 
@@ -233,15 +248,21 @@ export class SessionLogger {
     // ISO-timestamp filename, (c) AILANG-side derive_session_id — only (a)
     // and (c) matched. Now all three converge on the env var when set.
     // ISO timestamp remains the fallback for interactive runs (no env var).
-    const envID = (process.env.MOTOKO_SESSION_ID ?? "").trim();
-    const stem = envID !== ""
-      ? sanitizeSessionID(envID)
-      : `session_${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    // ADR-003 v6.1 D5 REPLACED THE ISO FALLBACK, and that is the last of the issue's ids.
+    //
+    // The rule used to be "the env var when the adapter set one, otherwise an ISO timestamp", and
+    // interactively that produced a log named one thing while the child called the session another
+    // — the two-ids failure at one level down. `sessionIdentity()` IS the env var when one is set,
+    // so the adapter's exact-match `findSessionJSONL` search is unchanged; when none is set it is
+    // the id this host minted and forwarded to the child as MOTOKO_SESSION_ID, so the log, the
+    // journal directory and every wire event now share one string.
+    const stem = sanitizeSessionID(sessionIdentity());
     this.filePath = path.join(dir, `${stem}.jsonl`);
     this.markdownPath = path.join(dir, `${stem}.md`);
     this.jsonlStream = fs.createWriteStream(this.filePath, { flags: "a" });
     this.markdownStream = fs.createWriteStream(this.markdownPath, { flags: "a" });
     this.tuiVersion = tuiVersion;
+    this.journal = journal;
   }
 
   logUserInput(content: string): void {
@@ -365,9 +386,32 @@ export class SessionLogger {
     }
   }
 
+  /**
+   * ADR-003 v6.1 D3's routing, and its digest rule, which land together or the log doubles.
+   *
+   * Journal-class events become entries; EVERY event still goes to the JSONL log, journal-class
+   * ones with their payload replaced by a digest. The two halves are one commit because
+   * `parseAgentEventLine` accepts any object with a string `type` and this method used to write
+   * unknown types verbatim — so from the moment P3 Part 3 put `history_seeded` on the wire, the
+   * log has been carrying the whole conversation a second time (measured there: 87% of the wire's
+   * bytes, ~200 KB per turn at a long history). Routing without substituting would have made the
+   * log carry it a THIRD time, once per file.
+   *
+   * The journal is appended to BEFORE the log line is written. Both are best-effort with respect
+   * to each other — `SessionJournal.record` swallows its own IO failures and reports them — but
+   * the order is the one an operator reads them back in, and the journal is the file that has to
+   * survive a `kill -9` between the two.
+   */
   log(event: AgentEvent): void {
     if (this.closed) return;
-    this.jsonlStream.write(`${JSON.stringify(event)}\n`);
+    const asJson = event as unknown as Record<string, unknown>;
+    const type = typeof asJson.type === "string" ? asJson.type : "";
+    if (this.journal && isJournalClass(type)) {
+      this.journal.record(asJson);
+      this.jsonlStream.write(`${JSON.stringify(substituteJournalPayload(asJson))}\n`);
+    } else {
+      this.jsonlStream.write(`${JSON.stringify(event)}\n`);
+    }
     this.logTranscriptEvent(event);
   }
 

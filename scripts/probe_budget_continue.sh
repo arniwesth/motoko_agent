@@ -298,10 +298,25 @@ check("A3 neither run emits an error event",
       "error events = %d%s" % (len(errors),
                                "" if not errors else " (%s)" % [e.get("message") for e in errors]))
 
-# --- A4: P3, reported and not asserted --------------------------------------
+# --- A4: ONE SESSION ID ACROSS BOTH RUNS (ADR-003 v6.1 D5) ------------------
+#
+# ASSERTED SINCE PLAN-003 P3 PART 4, where it stopped being a P3 promise and
+# became a mechanism: the host mints the id once and forwards it as
+# MOTOKO_SESSION_ID (`runtime-process.ts`'s `buildChildEnv`), and
+# `derive_session_id` returns the environment value whenever it is non-empty
+# (`session.ail`). Before that, each traced run read its own clock and a
+# follow-up turn called the session something new — the issue's two ids.
+#
+# THE PROBE SETS THE VARIABLE ITSELF, because the probe is HOSTLESS by design:
+# it drives `rpc.main` directly, with no TUI, for the reason the header gives.
+# So it stands in for the host on exactly this one point, and what it checks is
+# the CHILD's half of D5 — that one id reaches every wire event of every run in
+# the process. The host's half is checked in `src/tui/src/session-identity.test.ts`.
 ids = sorted({e["session_id"] for e in exhausted + resumed if "session_id" in e})
-print("probe: session ids across both runs = %s  (P3 makes this one; in P1 each "
-      "traced run derives its own, session.ail:3137-3139)" % ids)
+check("A4 one session id across both runs (D5)",
+      len(ids) == 1,
+      "session ids = %s%s" % (ids, "" if len(ids) == 1 else
+                              " — MOTOKO_SESSION_ID did not reach derive_session_id"))
 
 print("")
 failed = 0
@@ -425,6 +440,16 @@ echo "probe: model=$MODEL  profile=$PROFILE  max_steps=$MAX_STEPS"
 echo "probe: workdir=$RUNDIR"
 echo "probe: MOTOKO_HEADLESS is unset — the conversation loop will read stdin"
 
+# ADR-003 v6.1 D5, THE HOST'S JOB, DONE HERE BECAUSE THIS PROBE HAS NO HOST.
+# The TUI mints one session id per session and forwards it as MOTOKO_SESSION_ID;
+# `derive_session_id` returns it whenever it is non-empty, which is what makes
+# both of this probe's runs one session instead of two. A probe that left it
+# unset would measure the failure D5 exists to fix and call it the baseline.
+# `MOTOKO_RESUME_COUNT` is 0 for the same reason: this is a fresh session, not a
+# resumed one, and `run_id` is `<session_id>.r<resume_count>.<run_ordinal>`.
+SESSION_ID="${MOTOKO_SESSION_ID:-probe_$$_$(date +%s)}"
+echo "probe: MOTOKO_SESSION_ID=$SESSION_ID (D5: the host mints one; here the probe does)"
+
 # MOTOKO_HEADLESS is deliberately absent from this env: `env -u` removes it even
 # if the caller exported an empty one, which `headless_mode()` would read as
 # false anyway (`rpc.ail:189-192`) but which would be a silent dependency.
@@ -437,6 +462,8 @@ env -u MOTOKO_HEADLESS \
     AILANG_FS_SANDBOX="$RUNDIR" \
     AILANG_NO_VERSION_WARNINGS=1 \
     MOTOKO_STREAM_EVENTS=1 \
+    MOTOKO_SESSION_ID="$SESSION_ID" \
+    MOTOKO_RESUME_COUNT=0 \
     MOTOKO_PROFILE_DIR="$PROFILE_DIR" \
   ailang run \
     --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace \

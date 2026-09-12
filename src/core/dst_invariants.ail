@@ -207,7 +207,7 @@ import src/core/journal (
   -- IMPORTED and not restated for the reason `journal.ail` states at their
   -- declaration: the chain digest has exactly one definition, and a second one
   -- here would be an invariant that agrees with itself.
-  chain_digest_over, chain_empty_base, messages_of_json
+  chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base, messages_of_json
 )
 import std/json (Json, encode)
 import src/core/ports (
@@ -1115,8 +1115,21 @@ pure func journal_payload_rows(acc: JournalPayloadAcc, e: LedgerEvent) -> [Viola
       ++ (match messages_of_json(i.messages) {
             Err(why) => [JournalPayloadDisagrees("seed.messages/${why}")],
             Ok(ms) =>
-              if i.digest == chain_digest_over(chain_empty_base(), ms) then []
-              else [JournalPayloadDisagrees("seed.digest")]
+              (if i.digest == chain_digest_over(chain_empty_base(), ms) then []
+               else [JournalPayloadDisagrees("seed.digest")])
+              -- P3 Part 4. THE SEED'S PREFIX CHAIN, which the HOST copies into the
+              -- N `history_appended` entries it expands this event into. Nothing
+              -- else sees it: the fold reads the entries and never the event, and
+              -- the AILANG twin recomputes the same values rather than reading
+              -- them — which is exactly why the field needs a rule here. A child
+              -- that reported a chain disagreeing with its own `messages` would
+              -- write a journal that refuses at its first history entry, and the
+              -- first place that could be noticed would be a live resume.
+              -- Compared through `encode`, because `Json` has no `Eq` instance and the
+              -- projection is a byte surface anyway: the host reads these values out
+              -- of a JSON line, so JSON is the form the comparison should be in.
+              ++ (if encode(chain_digests_json(chain_digests_over(chain_empty_base(), ms))) == encode(i.digests) then []
+                  else [JournalPayloadDisagrees("seed.digests")])
           }),
     StateDelta(i) =>
       match i.ext_artifacts {

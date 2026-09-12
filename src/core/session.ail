@@ -182,12 +182,12 @@ import src/core/journal (
   -- `phase_vocab.canonical_message_frame`'s only caller and the chain digest has
   -- exactly one definition (P3 Part 2's note at its declaration). `message_json`
   -- / `messages_json` are the same argument for the message ENCODER — ADR-003 D1
-  -- refuses a second one, and the journal's payloads cross pre-encoded because
-  -- `phase_vocab` cannot name a codec that lives in a module importing it.
-  chain_digest_after,
-  chain_empty_base,
-  message_json,
-  messages_json
+  -- refuses a second one, and the journal's payloads cross pre-encoded. P3 Part 4
+  -- adds `chain_digests_over`/`_json` for the same reason again: the seed's
+  -- PREFIX chain, which the TypeScript host must write into N entries the fold
+  -- checks one by one and cannot recompute without a second frame function.
+  chain_digest_after, chain_digests_over, chain_digests_json,
+  chain_empty_base, message_json, messages_json
 )
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
@@ -3909,16 +3909,16 @@ func run_v2_traced_from_seed(
   -- not this part's and is not needed by anything here.
   --
   -- `digest` IS THE CHAIN QUANTITY, not `digest_messages(history)`. P3 Part 2
-  -- recorded the gap this closes: D1's third host arm compares this field with
-  -- the last history entry's `digest_after`, and a whole-list hash of a
-  -- different canonical form is not comparable with an incremental chain. Both
-  -- sides are now `chain_digest_after` folded from `chain_empty_base()`, which
-  -- is exactly what `journal.journal_lines_of_records` recomputes when it
-  -- expands this seed into N `history_appended` entries.
+  -- recorded the gap: D1's third arm compares it with the last history entry's
+  -- `digest_after`, and a whole-list hash of another canonical form is not
+  -- comparable with an incremental chain. Both are now `chain_digest_after`
+  -- folded from `chain_empty_base()`. `digests` (P3 Part 4) is that fold's
+  -- INTERMEDIATE values, one per message: the TypeScript host writes N of them
+  -- into N entries and cannot recompute one without a second frame function.
   let seed_event = HistorySeeded({
     run_id: identity.run_id,
     messages: messages_json(seeded.msgs),
-    digest: seeded.history_digest.at
+    digest: seeded.history_digest.at, digests: chain_digests_json(chain_digests_over(chain_empty_base(), seeded.msgs))
   });
   let _ = ledger_emit(session_id, seed_event);
   let st = { seeded | trace: ledger_append(seeded.trace, WireRecord(seed_event)) };

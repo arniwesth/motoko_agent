@@ -27,6 +27,12 @@ src/tui/dist/
 
 # Session data
 .motoko/logfile/
+# ADR-003 v6.1 D1's session journal, beside the log and ignored for the same
+# reason with one more: the JSONL log carries digests, and THIS carries the
+# conversation verbatim — every prompt, every tool output, every file the model
+# read. It is per-session runtime state, its directory is created 0700, and
+# committing one would publish a transcript.
+.motoko/sessions/
 .motoko-store/
 .omp
 
@@ -46,6 +52,12 @@ tmp/*
 eval_results/*
 logs/*
 .motoko/logfile/
+# ADR-003 v6.1 D1's session journal, beside the log and ignored for the same
+# reason with one more: the JSONL log carries digests, and THIS carries the
+# conversation verbatim — every prompt, every tool output, every file the model
+# read. It is per-session runtime state, its directory is created 0700, and
+# committing one would publish a transcript.
+.motoko/sessions/
 polyglot_logs/
 benchmark_generared_files/
 benchmarks/results/
