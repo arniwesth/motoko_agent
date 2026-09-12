@@ -44,6 +44,7 @@ import type {
 import { type ScratchpadSegment, scratchpadImageCapabilityLabel, scratchpadImageExitSequence, makeImageSegment } from "./scratchpad/image-segment.js";
 import { execSync } from "child_process";
 import { reportRunState as reportRunStateToHerdr } from "./herdr-agent-state.js";
+import { MemorySampler, formatProcessMemory } from "./process-memory.js";
 // NOTE: The ASCII-art banner is printed unconditionally in main() before the 
 // TUI starts here — ANSI escapes in Text children corrupt the layout system.
 
@@ -4277,6 +4278,9 @@ export class AgentUI {
   // Status bar
   // ---------------------------------------------------------------------------
 
+  /** The AILANG child's memory, sampled every 2 s off the 150 ms status tick (`process-memory.ts`). */
+  private readonly runtimeMemory = new MemorySampler();
+
   private updateStatus(): void {
     const previewWidth = this.toolPreviewWidth();
     if (previewWidth !== this.lastToolPreviewWidth) {
@@ -4294,7 +4298,9 @@ export class AgentUI {
       : "";
     const spinnerPrefix = spinner ? `${spinner} ` : "";
     const composeText = this.composeFooterStatus !== "" ? ` | ${this.composeFooterStatus}` : "";
-    const line1 = `[λ] ${spinnerPrefix}state: ${this.waitState.state} | step ${this.step} | elapsed: ${elapsedSec}s | last update: ${sinceUpdateSec}s ago | at: ${lastUpdateTs}${toolsText}${composeText}`;
+    const memory = this.runtimeMemory.poll(this.runtimeProcess?.pid);
+    const memoryText = memory ? ` | ${formatProcessMemory(memory)}` : "";
+    const line1 = `[λ] ${spinnerPrefix}state: ${this.waitState.state} | step ${this.step}${memoryText} | elapsed:${elapsedSec}s | last update: ${sinceUpdateSec}s ago | at: ${lastUpdateTs}${toolsText}${composeText}`;
     const extPart = this.loadedExtensions !== "" ? ` | ext: ${this.loadedExtensions}` : "";
     const line2Base = `    profile: ${this.profile} | model: ${this.model || "—"}${this.branch ? ` | branch: ${this.branch}` : ""}${extPart}`;
     const stateColor =

@@ -845,6 +845,11 @@ export class RuntimeProcess {
     return this.dead;
   }
 
+  /** The AILANG child's pid while it is alive — the footer samples its memory (`process-memory.ts`). */
+  get pid(): number | undefined {
+    return this.dead ? undefined : this.proc.pid;
+  }
+
   abort(): void {
     this.send({ type: "abort" });
   }
