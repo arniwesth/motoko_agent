@@ -290,6 +290,37 @@ recorded_stream:
 # dropping adjacent repeats — leaves gate 1 fully GREEN and turns gate 2 red on
 # count, order and fixture adequacy. Neither gate subsumes the other, and gate 1
 # alone would ship a green check over the defect D6.4 exists to find.
+# PLAN-003 P3 Part 5: ADR-003 v6.1 D6's CROSS-PROCESS resume, through the harness.
+# A traced run to a 3-step budget, its journal built from its own trace with the
+# twin P3 Part 2 wrote for the `JournalFold` family, folded, planned with the
+# decision the live `--resume` child makes (`journal.plan_resume`), and resumed
+# through `c2_state_from_continuation` in a second traced run — asserting the
+# second run's `HistorySeeded.digest` equals the first run's last `digest_after`,
+# and a same-profile edited prompt refused, then forced.
+#
+# TWO PRODUCERS FOR `SessionResumed`, named as S16 requires: the PROJECTED count is
+# the `session_resumed` lines `ledger_emit` wrote to stdout; the APPENDED count is
+# the records the script found in the returned traces. `run_ledger_parity_wire.sh`
+# demands projected == appended for every Logical variant outside the gap
+# register, and its eight subjects cannot reach this one, so the comparison for
+# it is made here, and a zero on both sides is a RED (vacuity), not a pass.
+.PHONY: journal_resume
+journal_resume:
+	@set -eu; \
+	out="$$(mktemp)"; \
+	rc=0; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	  --entry main scripts/dst/journal_resume_dst.ail < /dev/null > "$$out" 2>&1 || rc=$$?; \
+	grep -v '^{' "$$out" | grep -v '^RESUME_TRACE_' || true; \
+	wire="$$(grep -c '"type":"session_resumed"' "$$out" || true)"; \
+	trace="$$(sed -n 's/^RESUME_TRACE_SESSION_RESUMED \([0-9]*\)$$/\1/p' "$$out" | tail -1)"; \
+	rm -f "$$out"; \
+	if [ "$$rc" -ne 0 ]; then echo "journal_resume FAIL (exit $$rc)"; exit 1; fi; \
+	if [ -z "$$trace" ] || [ "$$wire" = "0" ] || [ "$$wire" != "$$trace" ]; then \
+	  echo "  ✗ SessionResumed: projected $$wire, appended $${trace:-<unread>}"; exit 1; \
+	fi; \
+	echo "  ✓ SessionResumed: projected $$wire, returned $$trace (D6.4, out of process)"
+
 .PHONY: stream_parity
 stream_parity:
 	@set -eu; \
@@ -444,7 +475,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
   registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest \
-  herdr_graded
+  herdr_graded journal_resume
 
 # The graded session for a herdr DST profile (021 step 2's demonstration half).
 #

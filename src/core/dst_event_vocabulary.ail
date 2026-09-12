@@ -51,10 +51,10 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Of the 35 Logical rows, **32 reach the returned trace now
--- and 3 do not**; the three are `d64_gap_register`'s entries — two of long
--- standing, and ADR-003 D1's `SessionResumed`, which only a `--resume` child
--- emits (PLAN-003 P3 Part 5). The other four journal-class variants were
+-- that is deliberate. Of the 35 Logical rows, **33 reach the returned trace now
+-- and 2 do not**; the two are `d64_gap_register`'s entries, both of long
+-- standing. ADR-003 D1's `SessionResumed` was the third until PLAN-003 P3 Part 5,
+-- whose resumed traced entry appends it as the first record of the frame. The other four journal-class variants were
 -- declared at P3 Part 1 two parts BEFORE the commit that emits them, because
 -- the vocabulary gate requires a variant, its row and its golden to land
 -- together (§0.3) and P3 Part 2's fold cannot name a variant that does not
@@ -460,9 +460,10 @@ export pure func event_vocabulary() -> [EventRow] {
     -- same commit — which is what the register's shrink-only rule demands and
     -- what `parity_register_findings` pins in both directions.
     --
-    -- `SessionResumed` STAYS FALSE, and it is the only one that can: it is
-    -- emitted by a child spawned with `--resume`, which is P3 Part 5's flag, so
-    -- no run in this tree constructs one. `scripts/dst/run_ledger_parity_wire.sh`
+    -- `SessionResumed` STAYED FALSE until P3 Part 5, because only a child spawned
+    -- with `--resume` constructs one; Part 5's `run_v2_session_resumed_traced`
+    -- emits it and appends it as the resumed frame's first record, and `make
+    -- journal_resume` compares the two out of process. `scripts/dst/run_ledger_parity_wire.sh`
     -- reads the register and demands projected==appended for every Logical
     -- variant NOT in it, so the four flipped here are now under that gate and
     -- the one left is still excused by name.
@@ -518,7 +519,7 @@ export pure func event_vocabulary() -> [EventRow] {
       -- `prompt_digest_to` is what tells the host to journal the run's
       -- HistorySeeded as a replacement rather than compare it, so this event's
       -- content decides how the NEXT one is recorded.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "SessionStart", wire_names: ["session_start"],
       payload: [req("task"), req("model"), req("mode"), req("run_id")],
@@ -996,19 +997,20 @@ pure func test_duplicate_row_is_rejected() -> bool
 -- P3 PART 3 CLOSED FOUR OF THE FIVE, and the four are asserted NEGATIVELY here
 -- for the same reason they were asserted positively before: an emit that
 -- regressed into a projection-only site would put the variant back in the gap,
--- and a bare count of three would not say which three. `SessionResumed` stays
+-- and a bare count would not say which. P3 PART 5 CLOSED THE FIFTH, and
+-- `SessionResumed` is now asserted to have left too. (Before it:) `SessionResumed` stayed
 -- and is asserted positively — it is emitted only by a child spawned with
 -- `--resume`, which is P3 Part 5's flag, so no run in this tree can produce one.
 -- If P3 Part 5 does not land, this test is the thing that says so.
 pure func test_logical_gap_is_recorded() -> bool
   tests [((), true)]
   {
-    List.length(logical_variants_not_in_trace(event_vocabulary())) == 3
+    List.length(logical_variants_not_in_trace(event_vocabulary())) == 2
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistorySeeded")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistoryAppended")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "HistoryReplaced")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "StateDelta")
-      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "SessionResumed")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "SessionResumed")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "StreamDelta")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "DoneEvent")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "CostExhausted")

@@ -1,0 +1,319 @@
+-- ============================================================================
+-- journal_resume_dst.ail — PLAN-003 P3 Part 5's GATE: ADR-003 v6.1 D6's
+-- cross-process resume, through the harness.
+--
+-- PLAN-003 §0.6: the deterministic harness never reaches the conversation loop,
+-- but the CROSS-PROCESS resume is visible to it, because a resume is a fold of a
+-- journal and a journal can be built from a traced run's own records. So:
+--
+--   1. a traced run to a 3-step budget — it suspends;
+--   2. its journal, built from its trace with `journal.journal_lines_of_records`,
+--      the id assignment P3 Part 2 wrote ONCE for the `JournalFold` family and
+--      for this script;
+--   3. folded with `journal.fold_journal`, planned with `journal.plan_resume` —
+--      the SAME decision `rpc.run_with_config` makes for a live `--resume`
+--      child, not a copy of it;
+--   4. resumed through `c2_state_from_continuation` in a second traced run
+--      (`session.run_v2_session_resumed_traced`), and the gate's assertion: the
+--      second run's `HistorySeeded.digest` equals the first run's last
+--      `digest_after`.
+--
+-- Then the gate's second sentence: a same-profile resume against an edited
+-- prompt REFUSED, then FORCED — and the forced resume run and folded too, since a
+-- plan that accepts a journal the fold then refuses is not a resume.
+--
+-- WHAT IS DEFERRED, SAID HERE AND NOT IN A FOOTNOTE: "and, once PLAN-001 P2 has
+-- landed, BEGIN₂.ordinal₀ == END₁.final". `WorldState` has no `ordinal` at this
+-- commit, so `run_finished.world_ordinal` is 0 by the plan's stated wait and
+-- `SessionResumed.from_ordinal` is 0 with it. The row below asserts that value as
+-- what it is and prints the deferral; it is not a pass of the ordinal clause.
+--
+-- The Make target runs this out of process and compares the `session_resumed`
+-- lines on stdout (PROJECTED by `ledger_emit`) with the `SessionResumed` records
+-- this script counts in the returned traces (APPENDED) — D6.4's wire gate for
+-- the one variant `run_ledger_parity_wire.sh`'s fixture cannot reach.
+-- ============================================================================
+
+module scripts/dst/journal_resume_dst
+
+import std/io (println, exit)
+import std/list (length)
+import std/ai (Message)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/json (Json, encode)
+import src/core/config (CostRates)
+import src/core/phase_vocab (
+  LedgerRecord, WireRecord, LedgerEvent,
+  HistorySeeded, HistoryAppended, SessionResumed,
+  system_prefix_digest_for, take_system_prefix
+)
+import src/core/session (TracedSessionResult)
+import src/core/session as Session
+import src/core/journal (
+  journal_lines_of_records, journal_leaf, fold_journal, plan_resume,
+  ResumeInvocation, ResumePlan, HeaderEntry, BootInputs, RunIdentity, Continuation,
+  SessionState, boundary_id, refusal_id, chain_digest_over, chain_empty_base
+)
+import src/core/ext/runtime (ext_set_digest)
+import src/core/test/stub_step (Scripted, continuing_token_step, deny_all_rt)
+import src/core/ports (ScriptedStep)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
+
+-- ----------------------------------------------------------------------------
+-- The fixture: P1 Part 1's suspension run, byte for byte in its inputs.
+-- ----------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func sys() -> Message { msg("system", "s") }
+
+func history() -> [Message] { [sys(), msg("user", "u")] }
+
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func model() -> string { "phase-c-model" }
+
+-- Five steps against a budget of three: the BUDGET ends each run.
+func continuing_script() -> [ScriptedStep] {
+  [
+    continuing_token_step(100, 50, "tc1"),
+    continuing_token_step(100, 50, "tc2"),
+    continuing_token_step(100, 50, "tc3"),
+    continuing_token_step(100, 50, "tc4"),
+    continuing_token_step(100, 50, "tc5")
+  ]
+}
+
+func boot() -> BootInputs {
+  {
+    task: "task", env_url: "", hybrid_tools: false, budget: budget(), step_budget: 3,
+    ohmy_pi: false, max_cost_millicents: 0, cost_rates: zero_rates()
+  }
+}
+
+-- The header a live host would have completed for this session: the workdir it
+-- ran in, the profile, and the two digests the child reports — the system prefix
+-- over the one system message, and the extension set FROM THE REGISTRY.
+func header(rt: ExtRuntime) -> HeaderEntry {
+  {
+    schema_version: 1, session_id: "sess_resume", workdir: ".", profile: "dst",
+    ext_set_digest: ext_set_digest(rt), model: model(),
+    system_prefix_digest: system_prefix_digest_for([sys()]), boot: boot()
+  }
+}
+
+func invocation(rt: ExtRuntime, system: Message, from_id: string, force: bool) -> ResumeInvocation {
+  {
+    workdir: ".", ext_set_digest: ext_set_digest(rt), profile: "dst", system: system,
+    boot: boot(), model: model(), resume_count: 1, from_id: from_id, leased: false, force: force
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Reading traces.
+-- ----------------------------------------------------------------------------
+
+func last_digest_after(records: [LedgerRecord], acc: string) -> string {
+  match records {
+    [] => acc,
+    r :: rest => last_digest_after(rest, match r {
+      WireRecord(e) => match e { HistoryAppended(i) => i.digest_after, _ => acc },
+      _ => acc
+    })
+  }
+}
+
+func first_seed(records: [LedgerRecord]) -> Option[{ digest: string, messages: Json }] {
+  match records {
+    [] => None,
+    r :: rest => match r {
+      WireRecord(e) => match e {
+        HistorySeeded(i) => Some({ digest: i.digest, messages: i.messages }),
+        _ => first_seed(rest)
+      },
+      _ => first_seed(rest)
+    }
+  }
+}
+
+func count_session_resumed(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => (match r { WireRecord(e) => match e { SessionResumed(_) => 1, _ => 0 }, _ => 0 }) + count_session_resumed(rest)
+  }
+}
+
+func first_is_session_resumed(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => false,
+    r :: _ => match r { WireRecord(e) => match e { SessionResumed(_) => true, _ => false }, _ => false }
+  }
+}
+
+func message_equal(a: Message, b: Message) -> bool {
+  a.role == b.role && a.content == b.content && a.tool_call_id == b.tool_call_id
+    && length(a.tool_calls) == length(b.tool_calls)
+}
+
+func messages_equal(a: [Message], b: [Message]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { y :: ys => message_equal(x, y) && messages_equal(xs, ys), [] => false }
+  }
+}
+
+func suspended_history(t: TracedSessionResult) -> [Message] {
+  match t.suspended { Some(c) => c.history, None => [] }
+}
+
+func head_content(ms: [Message]) -> string {
+  match ms { m :: _ => m.content, [] => "<empty>" }
+}
+
+-- ----------------------------------------------------------------------------
+-- Reporting. Every row is printed; the script fails if any row is red.
+-- ----------------------------------------------------------------------------
+
+func row(name: string, ok: bool, detail: string) -> int ! {IO} {
+  let _ = if ok then println("  ✓ ${name}") else println("  ✗ ${name}\n      ${detail}");
+  if ok then 0 else 1
+}
+
+func fold_or_empty(lines: [Json]) -> { ok: bool, why: string, state: Option[SessionState] } {
+  match fold_journal(lines, journal_leaf(lines)) {
+    Ok(s) => { ok: true, why: "", state: Some(s) },
+    Err(r) => { ok: false, why: refusal_id(r), state: None }
+  }
+}
+
+export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let rt = deny_all_rt();
+  let _ = println("== journal_resume: ADR-003 D6's cross-process resume, through the harness ==");
+
+  -- 1. The first run, to its 3-step budget.
+  let run1 = Session.run_v2_session_traced(rt, "task", "", false, budget(), model(), history(), ".", 3, false, 0, zero_rates(), Scripted(continuing_script()));
+  let hist1 = suspended_history(run1);
+  let last1 = last_digest_after(run1.trace.records, "");
+  let a = row("the first run suspends at its step budget holding 8 messages", length(hist1) == 8,
+              "suspended history ${show(length(hist1))}");
+
+  -- 2 + 3. Its journal, from its own trace, folded and planned.
+  let lines1 = journal_lines_of_records(header(rt), run1.trace.records);
+  let leaf1 = journal_leaf(lines1);
+  let folded1 = fold_or_empty(lines1);
+  let s1 = folded1.state;
+  let b = row("the first run's journal folds", folded1.ok, "refused: ${folded1.why}");
+  let c = row("the fold's boundary is `suspended` and its history is the continuation's",
+              match s1 { Some(s) => boundary_id(s.last) == "suspended" && messages_equal(s.history, hist1) && s.cumulative.provider_calls_completed == 3, None => false },
+              match s1 { Some(s) => "last=${boundary_id(s.last)} history=${show(length(s.history))} completed=${show(s.cumulative.provider_calls_completed)}", None => "no fold" });
+
+  match s1 {
+    None => {
+      let _ = println("journal_resume FAIL (the first journal did not fold; nothing to resume)");
+      exit(1)
+    },
+    Some(s) => match plan_resume(s, invocation(rt, sys(), leaf1, false)) {
+      Err(r) => {
+        let _ = println("  ✗ an unchanged resume is planned\n      refused: ${refusal_id(r)}");
+        let _ = println("journal_resume FAIL");
+        exit(1)
+      },
+      Ok(plan) => {
+        let d = row("an unchanged resume is planned, holding the continuation, forced=false, one prompt digest",
+                    (match plan.suspended { Some(_) => true, None => false })
+                      && not plan.info.forced && not plan.head_replaced
+                      && plan.info.prompt_digest_from == plan.info.prompt_digest_to
+                      && plan.info.from_id == leaf1,
+                    "forced=${show(plan.info.forced)} replaced=${show(plan.head_replaced)} from_id=${plan.info.from_id} leaf=${leaf1}");
+        -- THE DEFERRED CLAUSE, asserted as the value it has today and printed as
+        -- deferred rather than counted as the ordinal pass.
+        let e = row("from_ordinal is 0 — DEFERRED: BEGIN₂.ordinal₀ == END₁.final waits for PLAN-001 P2's `ordinal` (WorldState has none)",
+                    plan.info.from_ordinal == 0, "from_ordinal=${show(plan.info.from_ordinal)}");
+
+        match plan.suspended {
+          None => { let _ = println("journal_resume FAIL (no continuation)"); exit(1) },
+          Some(cont) => {
+            -- 4. The resume, in a second traced run.
+            let identity: RunIdentity = { session_id: "sess_resume", run_id: "sess_resume.r1.0", profile: "dst" };
+            let run2 = Session.run_v2_session_resumed_traced(rt, ".", 3, Scripted(continuing_script()), identity, plan.info, cont);
+            let seed2 = first_seed(run2.trace.records);
+            let seed2_digest = match seed2 { Some(x) => x.digest, None => "" };
+            -- THE GATE'S ASSERTION.
+            let f = row("THE GATE: the resumed run's HistorySeeded.digest equals the first run's last digest_after",
+                        last1 != "" && seed2_digest == last1,
+                        "seed2=${seed2_digest} last1=${last1}");
+            let g = row("SessionResumed is the FIRST record of the resumed frame, and there is exactly one",
+                        first_is_session_resumed(run2.trace.records) && count_session_resumed(run2.trace.records) == 1,
+                        "count=${show(count_session_resumed(run2.trace.records))}");
+            let h = row("the resumed run starts from the folded history and the step count carries (3 + 3 completed)",
+                        run2.final.cumulative.provider_calls_completed == 6
+                          && length(run2.final.history) == 14
+                          && messages_equal(take_first(run2.final.history, 8), hist1),
+                        "completed=${show(run2.final.cumulative.provider_calls_completed)} history=${show(length(run2.final.history))}");
+
+            -- The session's journal across BOTH frames, as the host would have
+            -- written it: the twin sees the `resumed` entry and meets the resumed
+            -- run's seed with D1's third arm, so the file stays one chain.
+            let lines12 = journal_lines_of_records(header(rt), run1.trace.records ++ run2.trace.records);
+            let folded12 = fold_or_empty(lines12);
+            let i = row("the two-frame journal folds to the resumed run's final history",
+                        match folded12.state { Some(s12) => messages_equal(s12.history, run2.final.history) && boundary_id(s12.last) == "suspended" && s12.cumulative.provider_calls_completed == 6, None => false },
+                        "refused: ${folded12.why}");
+
+            -- The gate's second sentence: an edited prompt under the same profile.
+            let edited = msg("system", "s, edited");
+            let refused = plan_resume(s, invocation(rt, edited, leaf1, false));
+            let j = row("a same-profile resume against an edited prompt is REFUSED with `prompt`",
+                        match refused { Err(r) => refusal_id(r) == "prompt", Ok(_) => false },
+                        match refused { Err(r) => "refused: ${refusal_id(r)}", Ok(_) => "accepted" });
+            let forced_n = match plan_resume(s, invocation(rt, edited, leaf1, true)) {
+              Err(r) => row("...and FORCED", false, "still refused: ${refusal_id(r)}"),
+              Ok(fp) => {
+                let k = row("...and FORCED: accepted, forced=true, the head replaced by the edited prompt",
+                            fp.info.forced && fp.head_replaced && head_content(fp.history) == "s, edited"
+                              && length(take_system_prefix(fp.history)) == 1,
+                            "forced=${show(fp.info.forced)} replaced=${show(fp.head_replaced)} head=${head_content(fp.history)}");
+                match fp.suspended {
+                  None => k + row("the forced plan holds the continuation", false, "none"),
+                  Some(fc) => {
+                    let identity3: RunIdentity = { session_id: "sess_resume", run_id: "sess_resume.r1.0", profile: "dst" };
+                    let run3 = Session.run_v2_session_resumed_traced(rt, ".", 3, Scripted(continuing_script()), identity3, fp.info, fc);
+                    let lines13 = journal_lines_of_records(header(rt), run1.trace.records ++ run3.trace.records);
+                    let folded13 = fold_or_empty(lines13);
+                    k + row("the forced resume's two-frame journal folds, through D1's second arm, to the edited head",
+                            match folded13.state { Some(s13) => head_content(s13.history) == "s, edited" && messages_equal(s13.history, run3.final.history), None => false },
+                            "refused: ${folded13.why}")
+                      + row("RESUME_TRACE count for the forced frame", count_session_resumed(run3.trace.records) == 1, "count=${show(count_session_resumed(run3.trace.records))}")
+                      + print_trace_count(count_session_resumed(run2.trace.records) + count_session_resumed(run3.trace.records))
+                  }
+                }
+              }
+            };
+            let failed = a + b + c + d + e + f + g + h + i + j + forced_n;
+            if failed == 0 then println("journal_resume PASS rows=13")
+            else {
+              let _ = println("journal_resume FAIL failed=${show(failed)}");
+              exit(1)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- The APPENDED side of the Make target's wire comparison, on its own line so the
+-- recipe reads it without parsing prose. Returns 0: it is a report, not a row.
+func print_trace_count(n: int) -> int ! {IO} {
+  let _ = println("RESUME_TRACE_SESSION_RESUMED ${show(n)}");
+  0
+}
+
+func take_first(ms: [Message], n: int) -> [Message] {
+  if n <= 0 then [] else match ms { [] => [], m :: rest => m :: take_first(rest, n - 1) }
+}

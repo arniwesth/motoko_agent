@@ -602,3 +602,74 @@ describe("a second process on an existing journal", () => {
     expect(second.currentLeaf).toBe("0001");
   });
 });
+
+// PLAN-003 P3 Part 5's decisions on Part 4's open items, host side.
+describe("resume bookkeeping", () => {
+  // Open item 1: the startup banner is a `session_start` with no `run_id`, and it opens no run.
+  it("journals no run_started for a session_start that names no run", () => {
+    const j = open();
+    expect(j.record({ type: "session_start", task: "", model: "m", brainVersion: "v", ailangBuilt: "b" })).toBe(0);
+    expect(j.record({ type: "session_start", run_id: "sess-1.r0.0" })).toBe(1);
+    expect(lines(j).map((l) => l.type)).toEqual(["header", "run_started"]);
+  });
+
+  // Open item 2: the unresumable reason survives the process that found it.
+  it("persists an unresumable reason beside the journal and adopts it in a new process", () => {
+    const j = open();
+    j.record({ type: "history_seeded", run_id: "r0", messages: [msg("system", "s")], digest: "sha256:seed", digests: ["sha256:seed"] });
+    expect(j.canResume).toBe(true);
+    j.record({ type: "history_seeded", run_id: "r1", messages: [msg("system", "s")], digest: "sha256:other", digests: ["sha256:other"] });
+    expect(j.canResume).toBe(false);
+    expect(fs.readFileSync(j.unresumablePath, "utf8")).toContain("does not match");
+    const again = new SessionJournal(root, "sess-1", { onError: () => {} });
+    expect(again.unresumable).toContain("does not match");
+    expect(again.canResume).toBe(false);
+    // The first reason is the cause; a later refusal does not overwrite it.
+    again.markUnresumable("a --resume was refused (digest): later");
+    expect(again.unresumable).toContain("does not match");
+  });
+
+  // The kill -9 gate's finding: the fold strips an open call from the assistant that made it, so the
+  // resume seed's chain cannot equal the journal's. With calls open at `session_resumed`, the seed
+  // is a whole-history `history_replaced` (reason `resume`), and the session stays resumable.
+  it("journals the seed after a resume with open tool calls as a history_replaced", () => {
+    const j = open();
+    j.record({ type: "history_seeded", run_id: "r0", messages: [msg("system", "s"), msg("user", "u")], digest: "sha256:d1", digests: ["sha256:d0", "sha256:d1"] });
+    j.record({ type: "history_appended", run_id: "r0", step: 1, message: msg("assistant", "", { tool_calls: [{ id: "call_7", name: "bash", arguments: "{}" }] }), replaces_previous: false, digest_after: "sha256:d2" });
+    expect(j.pendingToolCalls).toEqual(["call_7"]);
+    j.record({
+      type: "session_resumed",
+      resume_count: 1, from_id: "0004", from_ordinal: 0,
+      profile_from: "p", profile_to: "p",
+      prompt_digest_from: "sha256:a", prompt_digest_to: "sha256:a", forced: false,
+    });
+    const stripped = [msg("system", "s"), msg("user", "u"), msg("assistant", "")];
+    expect(j.record({ type: "history_seeded", run_id: "r1.0", messages: stripped, digest: "sha256:stripped", digests: ["x", "y", "sha256:stripped"] })).toBe(1);
+    const last = lines(j).pop()!;
+    expect(last.type).toBe("history_replaced");
+    expect(last.reason).toBe("resume");
+    expect(last.digest_after).toBe("sha256:stripped");
+    expect(j.unresumable).toBeNull();
+    expect(j.pendingToolCalls).toEqual([]);
+  });
+
+  // ...and an ordinary resume (no open calls, no checkpoint, same prompt) still compare-and-drops.
+  it("still compares and drops the seed after an ordinary resume", () => {
+    const j = open();
+    j.record({ type: "history_seeded", run_id: "r0", messages: [msg("system", "s")], digest: "sha256:seed", digests: ["sha256:seed"] });
+    j.record({
+      type: "session_resumed",
+      resume_count: 1, from_id: "0001", from_ordinal: 0,
+      profile_from: "p", profile_to: "p",
+      prompt_digest_from: "sha256:a", prompt_digest_to: "sha256:a", forced: false,
+    });
+    expect(j.record({ type: "history_seeded", run_id: "r1.0", messages: [msg("system", "s")], digest: "sha256:seed", digests: ["sha256:seed"] })).toBe(0);
+    expect(lines(j).map((l) => l.type)).toEqual(["header", "history_appended", "resumed"]);
+    expect(j.unresumable).toBeNull();
+  });
+
+  it("cannot resume a journal with no history yet", () => {
+    const j = open();
+    expect(j.canResume).toBe(false);
+  });
+});

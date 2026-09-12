@@ -181,7 +181,21 @@ export class SessionJournal {
    */
   private replaceNextSeed = false;
 
-  /** Whether anything has made this session unresumable. D1's third arm sets it on a mismatch. */
+  /** The `reason` the armed replacement is written with: `profile_switch` or `resume`. */
+  private replaceReason = "profile_switch";
+
+  /**
+   * Whether anything has made this session unresumable. D1's third arm sets it on a mismatch, and a
+   * child's `session_resume_refused` sets it through `markUnresumable`.
+   *
+   * PERSISTED BESIDE THE JOURNAL, NOT IN IT — PLAN-003 P3 Part 5, deciding Part 4's second open item.
+   * In memory only, a divergence the host saw was lost with the process, and the next `--resume`
+   * discovered it as a bare `Digest(seq)` refusal instead of as the reason the host had in hand.
+   * It is not a journal ENTRY because the fold refuses a type it does not know (so a new one would
+   * make every older fold refuse the file) and because D1's entry types are the ADR's to add; it is
+   * a host-written sidecar, `unresumable`, read back by `adopt()` like everything else the writer
+   * would otherwise lose across a process.
+   */
   private unresumableReason: string | null = null;
 
   /**
@@ -210,6 +224,39 @@ export class SessionJournal {
       // refuses to start. The mode is set on creation; this only repairs it.
     }
     this.adopt();
+    try {
+      const reason = fs.readFileSync(this.unresumablePath, "utf8").trim();
+      if (reason !== "") this.unresumableReason = reason;
+    } catch {
+      // No sidecar: nothing has made this session unresumable.
+    }
+  }
+
+  /** The sidecar that carries `unresumable` across processes. */
+  get unresumablePath(): string {
+    return path.join(this.dir, "unresumable");
+  }
+
+  /**
+   * Record why this session cannot be resumed, in memory AND on disk — synchronously, because the
+   * refusal that calls this is followed at once by the child's exit and possibly the host's.
+   * The first reason wins: it is the cause, and later ones are its consequences.
+   */
+  markUnresumable(reason: string): void {
+    if (this.unresumableReason === null) this.unresumableReason = reason;
+    try {
+      fs.writeFileSync(this.unresumablePath, `${this.unresumableReason}\n`, { mode: 0o600 });
+    } catch (e) {
+      this.onError(`could not persist the unresumable reason: ${String(e)}`);
+    }
+  }
+
+  /**
+   * Whether a `--resume` of this journal has anything to fold: a history was seeded and nothing has
+   * marked the session unresumable. A restart before the first task is an ordinary fresh spawn.
+   */
+  get canResume(): boolean {
+    return this.seeded && this.unresumableReason === null;
   }
 
   /**
@@ -450,7 +497,15 @@ export class SessionJournal {
       case "session_start": {
         // `run_summary` carries no `run_id` — it is the run's summary and the run is the frame it
         // is in — so `run_finished` takes the id this event names, exactly as the twin does.
+        //
+        // ONLY A `session_start` THAT NAMES A RUN OPENS ONE (PLAN-003 P3 Part 5, deciding Part 4's
+        // first open item). `rpc.ail`'s startup banner is also a `session_start`, emitted before a
+        // task exists — on a pre-warm spawn, before any run exists at all — and it carries no
+        // `run_id`; journaling it wrote a `run_started` with an empty id for every spawn. The
+        // conversation loop now emits a `SessionStart` with the run's id for the FIRST run too,
+        // so every run still opens with one and the banner opens none.
         const runId = str(event.run_id);
+        if (runId === "") return 0;
         this.noteRunId(runId);
         return this.append("run_started", { run_id: runId }) ? 1 : 0;
       }
@@ -483,7 +538,9 @@ export class SessionJournal {
    *    sealing a child-computed value, and it is the only place it cannot be.
    * 2. AFTER A RESUME THAT CHANGED THE PROMPT DIGEST — a profile switch replaced the whole head
    *    prefix (D6 step 4), so the seed is a NEW head and becomes a `history_replaced` that re-bases
-   *    the chain. `replaceNextSeed` is set by `recordResumed` from the entry it just wrote.
+   *    the chain. `replaceNextSeed` is set by `recordResumed` from the entry it just wrote — and
+   *    also, with `reason: "resume"`, when a resume follows open tool calls (the fold strips them)
+   *    or a checkpoint (the chain was rebased), where arm 3's compare fails by construction.
    * 3. OTHERWISE — a follow-up turn re-stating the history the journal already holds. The host
    *    COMPARES the seed's `digest` with the last history entry's `digest_after`, both
    *    child-computed, and DROPS the event. A mismatch is logged and marks the session
@@ -510,10 +567,11 @@ export class SessionJournal {
         // FAIL CLOSED, and say so. A seed whose chain does not match its messages cannot be
         // expanded into entries the fold will accept, and writing a partial expansion would leave
         // a journal that refuses at its first history entry with no record of why.
-        this.unresumableReason =
+        const reason =
           `history_seeded carried ${digests.length} digest(s) for ${messages.length} message(s); ` +
           `the seed cannot be expanded and the session is not resumable`;
-        this.onError(this.unresumableReason);
+        this.markUnresumable(reason);
+        this.onError(reason);
         return 0;
       }
       let written = 0;
@@ -545,7 +603,7 @@ export class SessionJournal {
       const ok = this.append("history_replaced", {
         run_id: runId,
         step: 0,
-        reason: "profile_switch",
+        reason: this.replaceReason,
         messages,
         digest_after: digest,
       });
@@ -570,10 +628,11 @@ export class SessionJournal {
         ? " — a history_replaced has been journaled since the last seed, so this is the" +
           " conversation loop's known chain limitation (P3 Part 3 §4), not a corrupted journal"
         : "";
-      this.unresumableReason =
+      const reason =
         `history_seeded digest ${digest || "(empty)"} does not match the last history entry's ` +
         `digest_after ${this.chainDigest || "(empty)"}; the child's history and the journal's have diverged${known}`;
-      this.onError(this.unresumableReason);
+      this.markUnresumable(reason);
+      this.onError(reason);
     }
     return 0;
   }
@@ -692,7 +751,19 @@ export class SessionJournal {
     // D1's second arm arms itself HERE, from the entry just written, rather than from a flag the
     // resumer sets by hand: the condition is a property of the `resumed` entry and reading it off
     // the entry is what keeps the two in step.
-    this.replaceNextSeed = from !== to;
+    //
+    // AND IN TWO MORE CASES THE HOST ALREADY KNOWS, found by P3 Part 5's kill -9 gate. The resumed
+    // child seeds the FOLDED history, and the fold does not always hand back the chain the journal
+    // holds: (1) a crash mid tool-phase leaves open calls, which the fold STRIPS from the assistant
+    // message that made them, so the seed's chain covers a message no entry carries; (2) after a
+    // checkpoint the journal's chain is `chain_digest_base`-rebased while the seed is the chain over
+    // the whole history from empty. Either way arm 3's compare fails by construction and marked
+    // every crash resume unresumable — the live journal then refused at the resumed turn's first
+    // append. The open-call set is the host's twin of the fold's dangling rule and
+    // `replacedSinceSeed` is the checkpoint, so both are read, not computed; the replacement is
+    // `reason: "resume"`, which the fold re-bases exactly as it does a profile switch.
+    this.replaceNextSeed = from !== to || this.openCallIds.length > 0 || this.replacedSinceSeed;
+    this.replaceReason = from !== to ? "profile_switch" : "resume";
     let n = 1;
     if (profileTo !== "" && profileTo !== profileFrom) {
       if (this.append("settings", { profile: profileTo })) n += 1;

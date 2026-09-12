@@ -774,9 +774,12 @@ export pure func display_only_baseline() -> [string] {
 -- step end — each APPENDED where it is emitted, so all four leave the
 -- vocabulary's gap and leave this register in the same commit, which is exactly
 -- what the rule demands and what `parity_register_findings` pins in both
--- directions. `SessionResumed` stays, and it is the only one that can: it is
--- emitted by a child spawned with `--resume`, which is P3 Part 5's flag, so no
--- run in this tree can produce one yet.
+-- directions. `SessionResumed` stayed, because only a child spawned with
+-- `--resume` emits it, and P3 PART 5 CLOSES IT: `session.run_v2_session_resumed_traced`
+-- emits it AND appends it as the first record of the resumed frame, which is the
+-- same move that took the four out. Its wire comparison is made by `make
+-- journal_resume`, out of process, because `run_ledger_parity_wire.sh`'s eight
+-- subjects never resume.
 --
 -- WHAT THE SHRINK BUYS, and it is not bookkeeping:
 -- `scripts/dst/run_ledger_parity_wire.sh` reads this register and, for every
@@ -798,8 +801,7 @@ export pure func display_only_baseline() -> [string] {
 -- event nothing constructs, which would be a false survey kept flat by a lie.
 export pure func d64_gap_register() -> [string] {
   ["ScratchpadResult",
-   "SessionSuspend",
-   "SessionResumed"]
+   "SessionSuspend"]
 }
 
 -- Why each registered variant is still a gap, so the register is a work list
@@ -829,9 +831,8 @@ export pure func parity_gap_reasons() -> [ParityGap] {
   [{ variant: "ScratchpadResult",
      why: "MEASURED 0 `scratchpad_result` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Its two emission sites are in `tool_phase.execute_allowed_tool_call` and both are now inside the returned `emitted` log, so this is a REACHABILITY gap and not a parity one: if a run emits it, it reaches the trace. Closing it needs a run that emits it, and the only such run is one where a tool named `scratchpad` is served by a hook returning `Handled` with a `cells` key in its metadata. WI-D2 declined to construct one — a constructed scenario would close this register entry while establishing nothing about a profile." },
    { variant: "SessionSuspend",
-     why: "MEASURED 0 `session_suspend` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Emitted on the suspend control path; no profile in this tree has a suspend trigger, so the count is 0 rather than small. Same shape as ScratchpadResult: a coverage gap, not a parity one." },
-   { variant: "SessionResumed",
-     why: "MEASURED 0 emit sites: `grep -c 'SessionResumed(' src/core/session.ail` is 0 at PLAN-003 P3 Part 3, which emitted the other four of D1's five journal-class variants and left this one. It is a DECLARATION gap and it is the last of the five, for a reason the other four did not have: it is emitted only by a child spawned with `--resume`, which is P3 Part 5's flag, so no run in this tree can produce one. The four that left did so by being appended where they are emitted, which is what `run_ledger_parity_wire.sh` now demands of them." }]
+     why: "MEASURED 0 `session_suspend` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Emitted on the suspend control path; no profile in this tree has a suspend trigger, so the count is 0 rather than small. Same shape as ScratchpadResult: a coverage gap, not a parity one." }
+]
 }
 
 -- ============================================================================
@@ -2139,7 +2140,8 @@ pure func all_obligations_nonempty(fs: [InvariantFamily]) -> bool {
 -- closed the other eleven, **SEVEN at PLAN-003 P3 Part 1** — the one move that
 -- was not a closure, ADR-003 D1's five journal-class variants declared two parts
 -- before the commit that emits them — and **THREE at P3 Part 3**, which emits
--- four of the five and leaves `SessionResumed` for Part 5's `--resume`. The
+-- four of the five and leaves `SessionResumed` for Part 5's `--resume` — and
+-- **TWO at P3 Part 5**, whose resumed traced entry appends it. The
 -- literal is
 -- deliberately not derived from `d64_gap_register()`: a row asserting the
 -- register equals itself is green after any edit, and shrinking the register is
@@ -2148,7 +2150,7 @@ pure func test_parity_register_agrees_with_the_vocabulary() -> bool
   tests [((), true)]
   {
     List.length(parity_register_findings()) == 0
-      && List.length(d64_gap_register()) == 3
+      && List.length(d64_gap_register()) == 2
       && List.length(display_only_baseline()) == 6
   }
 

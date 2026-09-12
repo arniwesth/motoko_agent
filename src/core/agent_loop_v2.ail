@@ -14,6 +14,7 @@ import src/core/test/stub_step (StepProvider, Scripted)
 import src/core/ports (ScriptedStep)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/session as Session
+import src/core/journal (ResumePlan)
 
 export func run_v2(
   rt: ExtRuntime,
@@ -126,4 +127,24 @@ export func run_v2_with_stub_port_adapter(
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
+}
+
+-- ADR-003 v6.1 D6's cross-process resume (PLAN-003 P3 Part 5), through the same
+-- facade and for the same one caller as the entry above.
+export func run_v2_resume_with_conversation(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  plan: ResumePlan,
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  profile: string,
+  resume_count: int
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_resume_with_conversation(rt, env_url, hybrid_tools, budget, plan, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, profile, resume_count)
 }

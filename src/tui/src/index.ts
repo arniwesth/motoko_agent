@@ -28,12 +28,12 @@ import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
 import { initHerdrReporter, reportSessionPath } from "./herdr-agent-state.js";
 import { initExitActions } from "./exit-actions.js";
-import { sessionIdentity } from "./session-identity.js";
+import { sessionIdentity, bumpSessionResumeCount } from "./session-identity.js";
 import { SessionJournal } from "./session-journal.js";
 import { acquireLease, registerLeaseHooks } from "./session-lease.js";
 import { activeProfile } from "./config.js";
 import { resolveRuntimeModel } from "./models.js";
-import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
+import type { AgentEvent, DelegatedCall, ResumeSpawn } from "./runtime-process.js";
 import type { ScratchpadCellResult } from "./scratchpad/frames.js";
 
 // Like describeToolCall but also checks call.arguments for native dispatch
@@ -999,7 +999,7 @@ async function main(): Promise<void> {
 
   const ui = new AgentUI({ version: pkgVersion, model, profile, ailangVersion, extensions: profileAgent.extensions });
 
-  function spawnRuntimeProcess(task: string, logPrompt: boolean): void {
+  function spawnRuntimeProcess(task: string, logPrompt: boolean, resume?: ResumeSpawn): void {
     errorOccurred = false;
     const logger = new SessionLogger(projectRoot, pkgVersion, journal);
     sessionLogger = logger;
@@ -1025,6 +1025,14 @@ async function main(): Promise<void> {
         // process that never took it, and would then fire on whatever unrelated exit came later.
         // The `=== "error"` test below is what keeps that true; a future `||` here would break it.
         if (event.type === "error") errorOccurred = true;
+        // PLAN-003 P3 Part 5. A `--resume` child that refused the journal says which rule, then exits
+        // 3. The reason is PERSISTED beside the journal (`markUnresumable`), so the next restart
+        // spawns fresh instead of retrying a resume that will refuse again, and it recovers into
+        // awaiting a task exactly as an exit after `error` does — the refusal is already on screen.
+        if (event.type === "session_resume_refused") {
+          journal.markUnresumable(`a --resume was refused (${event.refusal}): ${event.message}`);
+          errorOccurred = true;
+        }
         completeHeaderFrom(event);
         logger.log(event);
         ui.handleEvent(event);
@@ -1055,7 +1063,9 @@ async function main(): Promise<void> {
           // The respawn carries an empty task, which rpc.ail now treats as "no
           // opening turn" — it blocks on stdin instead of burning a model call on
           // a blank user message. So the UI has to go back to awaiting a task, or
-          // shouldLockPlainInput would refuse the user's next prompt.
+          // shouldLockPlainInput would refuse the user's next prompt. A RESUMED
+          // respawn (below) waits the same way: the child enters its conversation
+          // loop between turns, or holding the suspended run, and reads stdin.
           ui.setAwaitingTask(true);
           preWarmIdle = true;
           // Small delay before respawn
@@ -1065,7 +1075,7 @@ async function main(): Promise<void> {
             // too would overwrite `runtimeProcess` and orphan the one actually
             // running their task.
             if (runtimeProcess && !runtimeProcess.isDead) return;
-            spawnRuntimeProcess("", false);
+            respawnForRestart();
           }, 100);
         } else if (interrupted) {
           // ESC was pressed — don't exit; let the user submit a new task.
@@ -1101,8 +1111,35 @@ async function main(): Promise<void> {
           });
         }
       },
+      resume,
     );
     ui.runtimeProcess = runtimeProcess;
+  }
+
+  /**
+   * ADR-003 v6.1 D6: A RESTART RESUMES THE SESSION FROM ITS JOURNAL (PLAN-003 P3 Part 5).
+   *
+   * `/restart` (and a profile switch, which is a restart with `--profile`) used to respawn with an
+   * empty task, and the new process began a history nobody had — which D1's third arm then refused
+   * to splice into the journal, marking the session unresumable. Now the respawn passes
+   * `--resume <journal>`: the child folds it, applies D5's compatibility rows against the runtime it
+   * built for the (possibly new) profile, and continues the same conversation. The lease is already
+   * this process's (D6 step 1); the resume count is bumped so the new runs are `r<n>.*`.
+   *
+   * It falls back to the old fresh respawn when there is nothing to resume — no history seeded yet —
+   * or when the session is already known to be unresumable, and SAYS WHY in the latter case rather
+   * than retrying a resume that will refuse.
+   */
+  function respawnForRestart(): void {
+    if (journal.canResume) {
+      bumpSessionResumeCount();
+      spawnRuntimeProcess("", false, { journalPath: journal.filePath });
+      return;
+    }
+    if (journal.unresumable) {
+      ui.addHistoryText(`Not resuming this session: ${journal.unresumable}`, "red");
+    }
+    spawnRuntimeProcess("", false);
   }
 
   ui.onModelChange = (newModel) => {
@@ -1141,7 +1178,7 @@ async function main(): Promise<void> {
       // No running process — start fresh
       profile = newProfile ?? profile;
       ui.setProfile(profile);
-      spawnRuntimeProcess("", false);
+      respawnForRestart();
     }
   };
 
@@ -1172,7 +1209,14 @@ async function main(): Promise<void> {
     // cache key includes the compiler commit, so rebuilding `ailang` invalidates
     // it). rpc.ail runs no opening turn for an empty task, so this costs no
     // model call — it only pays the compile early.
-    spawnRuntimeProcess("", false);
+    //
+    // ADR-003 v6.1 D6 (PLAN-003 P3 Part 5): A MOTOKO STARTED ON A SESSION THAT ALREADY HAS A
+    // JOURNAL RESUMES IT. This is the crash half of the second judging number: after a `kill -9`
+    // the next Motoko on that session id takes the stale lease over (P3 Part 4) and adopts the
+    // journal — and a FRESH pre-spawn would then seed a history nobody had, which D1's third arm
+    // refuses to splice in and marks the session unresumable. `respawnForRestart` resumes when the
+    // adopted journal can be resumed and spawns fresh otherwise, which for a new session is always.
+    respawnForRestart();
     preWarmIdle = true;
   }
 }

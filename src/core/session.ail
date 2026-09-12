@@ -128,7 +128,7 @@ import src/core/phase_vocab (
   StateDelta,
   take_system_prefix,
   digest_messages,
-  SessionStart,
+  SessionStart, SessionResumed, SessionResumedInfo,
   ErrorEvent,
   StepState,
   StepPolicy,
@@ -187,7 +187,7 @@ import src/core/journal (
   -- PREFIX chain, which the TypeScript host must write into N entries the fold
   -- checks one by one and cannot recompute without a second frame function.
   chain_digest_after, chain_digests_over, chain_digests_json,
-  chain_empty_base, message_json, messages_json
+  chain_empty_base, message_json, messages_json, ResumePlan, resume_view_json
 )
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
@@ -4631,6 +4631,21 @@ export func run_v2_with_conversation(
   -- `resume_count` may not be 0 and the id every event of this loop is stamped
   -- with is the loop's own.
   let initial_identity = loop_run_identity(session_id, profile, resume_count, initial_ordinal);
+  -- PLAN-003 P3 Part 5, DECIDING P3 Part 4's first open item: `run_started.run_id`
+  -- was EMPTY for a session's first run, because the only `session_start` that run
+  -- ever produced was `rpc.ail`'s startup banner — emitted before a task exists,
+  -- and on a pre-warm spawn before any run exists at all. Every FOLLOW-UP turn has
+  -- always opened with a `SessionStart` carrying its `run_id` (the loop below), so
+  -- the first run now does the same and the wire is uniform: every traced run of
+  -- the conversation loop opens with the `SessionStart` that names it. The host
+  -- journals a `run_started` only from a `session_start` that carries one, so the
+  -- banner stops producing an entry for a run that may never happen.
+  let _ = ledger_emit(session_id, SessionStart({
+    task: task,
+    model: model,
+    mode: "v2",
+    run_id: initial_identity.run_id
+  }));
   let initial_traced = run_v2_from_messages_traced_with_identity(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider, zero_runtime_status_counts(), Some(initial_identity));
   let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider.ports, initial_traced.world);
   let initial_counts = runtime_status_counts(initial_traced.trace);
@@ -4680,6 +4695,110 @@ export func run_v2_with_conversation(
       }
   }
   }
+}
+
+
+-- ============================================================================
+-- ADR-003 v6.1 D6, THE CROSS-PROCESS RESUME'S SESSION HALF (PLAN-003 P3 Part 5).
+--
+-- `rpc.run_with_config` has read the journal (ambient `readFile`, §0.8), folded
+-- it, built the runtime for the invoked profile and `journal.plan_resume` has
+-- decided. What is left is D6 step 5: emit `SessionResumed`, then enter the
+-- conversation loop — holding the continuation when the boundary was
+-- `Suspended`, between turns with the folded history otherwise. There is no
+-- `await_first_task`: the loop's own `readLine` is the wait, exactly as the
+-- empty-task path's.
+--
+-- BELOW EVERY ANCHOR ON PURPOSE (`make anchors` pins five routed clock sites, the
+-- last at the traced entry's prelude); nothing above this block moves a line.
+-- ============================================================================
+
+-- THE LIVE ENTRY. Two wire records and one display line, in this order, and the
+-- order is the point:
+--
+--   1. `SessionResumed` — D5: "emitted first by the resumed child". The host's
+--      `resumed` entry, plus a `settings` entry on a switch.
+--   2. `HistorySeeded` carrying the RESUMED history — the resume seed. PLAN-003
+--      puts this on "the resumed run's" seed; it is emitted HERE, before the loop,
+--      and that is drift with a reason that cannot be argued around: the loop's
+--      first act on the operator's message is its own `HistoryAppended`
+--      (`:3409`'s site), which the host journals BEFORE the traced run's seed ever
+--      arrives. After a profile switch that append's `digest_after` chains from
+--      the NEW head, so a replacement written only when the run's seed arrived
+--      would follow an entry the fold must refuse. Seeding here puts D1's second
+--      arm (`history_replaced`, re-basing the chain) ahead of every entry that
+--      depends on it. On a same-profile resume the same seed meets D1's THIRD arm
+--      and is a host-side check, before the operator types anything, that the
+--      child's resumed chain continues the journal's. The traced run's own seed
+--      then meets arm 3 as every follow-up turn's does.
+--   3. `session_resume_view` — not journal-class, no messages: the marker line the
+--      TUI prints under the resume seed's history (`journal.resume_view_json`).
+--
+-- The seed's `run_id` is the identity the resumed process's FIRST traced run
+-- will carry (`r<resume_count>.0`), so the entries it produces are attributed to
+-- the run that continues them.
+export func run_v2_resume_with_conversation(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  plan: ResumePlan,
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  profile: string,
+  resume_count: int
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let live_provider = ported_provider(rt, provider);
+  let init = session_policy_init(live_provider.ports, live_provider.world, plan.model, step_budget, max_cost_millicents, cost_rates);
+  let started_provider = { live_provider | world: init.next_state };
+  let session_id = derive_session_id(started_provider.ports, started_provider.world).id;
+  let initial_ordinal = 0;
+  let identity = loop_run_identity(session_id, profile, resume_count, initial_ordinal);
+  let _ = ledger_emit(session_id, SessionResumed(plan.info));
+  let _ = ledger_emit(session_id, HistorySeeded({
+    run_id: identity.run_id,
+    messages: messages_json(plan.history),
+    digest: c2_seed_digest(plan.history).at,
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), plan.history))
+  }));
+  let _ = emit_json(resume_view_json(plan));
+  -- `prior_counts` is the folded `cumulative` on BOTH arms, which is the judging
+  -- number crossing the process boundary: the held continuation carries it as
+  -- its own `cumulative` too, and the between-turns arm seeds the next run's
+  -- `prior_counts` with it, so the step count continues either way.
+  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, plan.model, plan.history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, plan.cumulative, plan.suspended, initial_ordinal, plan.boot.task, profile, resume_count)
+}
+
+-- THE HARNESS ENTRY, for `scripts/dst/journal_resume_dst.ail`: one traced run
+-- resumed from a continuation through `c2_state_from_continuation` (via
+-- `run_v2_from_continuation_traced`, unchanged), with `SessionResumed` emitted and
+-- APPENDED as the first record of the resumed frame (D5), ahead of the frame's
+-- `HistorySeeded`. The live path above cannot append it — the conversation loop
+-- holds no trace, the same reason its operator `HistoryAppended` is emitted and
+-- not appended — so this entry is where the variant reaches a returned trace and
+-- leaves D6.4's gap register.
+--
+-- A NEW EXPORT, not a changed one (§0.7): the policy is initialised exactly as
+-- `run_v2_session_traced` does it, from the continuation's own model and boot.
+export func run_v2_session_resumed_traced(
+  rt: ExtRuntime,
+  workdir: string,
+  step_budget: int,
+  provider: StepProvider,
+  identity: RunIdentity,
+  resumed: SessionResumedInfo,
+  c: Continuation
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let pp = ported_provider(rt, provider);
+  let init = session_policy_init(pp.ports, pp.world, c.model, step_budget, c.boot.max_cost_millicents, c.boot.cost_rates);
+  let opening = SessionResumed(resumed);
+  let _ = ledger_emit(identity.session_id, opening);
+  let r = run_v2_from_continuation_traced(rt, init.policy, workdir, { pp | world: init.next_state }, identity, c);
+  { r | trace: { records: WireRecord(opening) :: r.trace.records }, emissions: opening :: r.emissions }
 }
 
 -- Run loop_v2 with a scripted provider. No real LLM call made.

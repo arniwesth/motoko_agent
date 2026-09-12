@@ -127,6 +127,11 @@ export type CliOverrides = {
   ext_order: string,
   system_prompt: string,
   no_backend: bool,
+  -- ADR-003 v6.1 D6 (PLAN-003 P3 Part 5): the journal a `--resume` child folds,
+  -- and `--resume-force`, which overrides the extension-set and prompt rows and
+  -- neither the workdir nor the lease (`journal.resume_refusal`).
+  resume: string,
+  resume_force: bool,
   task: string
 }
 
@@ -134,7 +139,9 @@ export type InvocationConfig = {
   task: string,
   model_override: string,
   workdir_override: string,
-  ailang_built: string
+  ailang_built: string,
+  resume: string,
+  resume_force: bool
 }
 
 export type RuntimeConfig = {
@@ -165,6 +172,8 @@ func empty_cli() -> CliOverrides {
     ext_order: "",
     system_prompt: "",
     no_backend: false,
+    resume: "",
+    resume_force: false,
     task: ""
   }
 }
@@ -226,6 +235,7 @@ func apply_flag_value(cli: CliOverrides, flag: string, value: string) -> CliOver
   else if flag == "--port" then { cli | port: match _stringToInt(value) { Some(n) => n, None => 0 } }
   else if flag == "--ext-order" then { cli | ext_order: value }
   else if flag == "--system-prompt" then { cli | system_prompt: value }
+  else if flag == "--resume" then { cli | resume: value }
   else cli
 }
 
@@ -233,6 +243,10 @@ func parse_cli_args_rec(args: [string], cli: CliOverrides) -> CliOverrides {
   match args {
     [] => cli,
     "--no-backend" :: rest => parse_cli_args_rec(rest, { cli | no_backend: true }),
+    -- BARE, beside `--no-backend`, and ahead of the `flag :: value` arm for the
+    -- reason that arm's shape gives: `--resume-force <task>` would otherwise
+    -- consume the task as the flag's value.
+    "--resume-force" :: rest => parse_cli_args_rec(rest, { cli | resume_force: true }),
     flag :: value :: rest =>
       if startsWith(flag, "--") then {
         if startsWith(value, "--") then parse_cli_args_rec(value :: rest, cli)
@@ -257,6 +271,21 @@ func cli_all_flags() -> bool
   {
     let c = parse_cli_args(["--profile", "bench", "--model", "openai/gpt-4o", "--workdir", "/tmp/repo", "--port", "9090", "--ext-order", "compose,context_mode", "--system-prompt", "SYSTEM.md", "--no-backend", "Fix it"]);
     c.profile == "bench" && c.model == "openai/gpt-4o" && c.workdir == "/tmp/repo" && c.port == 9090 && c.ext_order == "compose,context_mode" && c.system_prompt == "SYSTEM.md" && c.no_backend && c.task == "Fix it"
+  }
+
+-- PLAN-003 P3 Part 5. `--resume <path>` takes a value; `--resume-force` does
+-- not, and must not eat what follows it — the host puts the (empty) task last.
+func cli_resume_flags() -> bool
+  tests [((), true)]
+  {
+    let c = parse_cli_args(["--profile", "p", "--resume", "/s/journal.jsonl", "--resume-force", "Fix it"]);
+    let bare = parse_cli_args(["--resume", "/s/journal.jsonl", "--resume-force", ""]);
+    let none = parse_cli_args(["--profile", "p", "Fix it"]);
+    let inv = load_invocation_from_cli(["--resume", "/s/journal.jsonl", "--resume-force", ""]);
+    c.resume == "/s/journal.jsonl" && c.resume_force && c.task == "Fix it" && c.profile == "p"
+      && bare.resume == "/s/journal.jsonl" && bare.resume_force && bare.task == ""
+      && none.resume == "" && not none.resume_force
+      && inv.resume == "/s/journal.jsonl" && inv.resume_force
   }
 
 func cli_last_positional_wins() -> bool
@@ -583,7 +612,9 @@ export func load_invocation_from_cli(args: [string]) -> InvocationConfig {
     task: cli.task,
     model_override: cli.model,
     workdir_override: cli.workdir,
-    ailang_built: "unknown"
+    ailang_built: "unknown",
+    resume: cli.resume,
+    resume_force: cli.resume_force
   }
 }
 

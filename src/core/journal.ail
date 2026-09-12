@@ -38,7 +38,8 @@ module src/core/journal
 
 import std/ai (Message, ToolCall, ImagePart)
 import std/crypto (sha256Hex)
-import std/json (Json, jo, ja, kv, js, jb, jint, encode, get, has, asString, asArray, asObject, getString, getInt, getBool, getArray)
+import std/json (Json, jo, ja, kv, js, jb, jint, encode, decode, get, has, asString, asArray, asObject, getString, getInt, getBool, getArray)
+import std/string (split, endsWith)
 import std/list as List (length, map, foldl)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
@@ -56,8 +57,10 @@ import src/core/phase_vocab (
   digest_messages,
   LedgerRecord, WireRecord, LedgerEvent,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
-  SessionStart, RunSummary, RunSuspended
+  SessionStart, RunSummary, RunSuspended,
+  SessionResumedInfo, system_prefix_digest_for
 )
+import src/core/recovery (count_persist_nudges)
 import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, TokenTelemetry)
 
@@ -1245,7 +1248,13 @@ export type SessionState = {
   ext_artifacts: Json,
   model: string,
   profile: string,
-  last: Boundary
+  last: Boundary,
+  -- The last `run_finished.world_ordinal` on the path: D5's `from_ordinal`, which
+  -- is the previous frame's `final` itself. 0 until PLAN-001 P2 lands `ordinal`
+  -- (the host writes 0 and the twin writes 0), and carried here rather than read
+  -- off `last` because the last BOUNDARY is usually not a `run_finished` — a
+  -- restart ends in `exit`, a crash ends mid-run.
+  world_ordinal: int
 }
 
 -- A message and the entry that contributed it. The seq rides along because
@@ -1353,7 +1362,8 @@ type FoldAcc = {
   ext_artifacts: Json,
   model: string,
   profile: string,
-  last: Boundary
+  last: Boundary,
+  world_ordinal: int
 }
 
 pure func fold_append(acc: FoldAcc, e: JournalEntry) -> FoldAcc {
@@ -1376,16 +1386,39 @@ pure func fold_append(acc: FoldAcc, e: JournalEntry) -> FoldAcc {
   }
 }
 
+-- TWO REASONS, TWO RULES, and PLAN-003 P3 Part 5 is where the second one became
+-- reachable.
+--
+--   `checkpoint` is D4 rule 3 verbatim: the head system prefix is KEPT, the
+--   entry's `messages` (the summary) follow it, and the chain re-bases to
+--   `chain_digest_base(prefix ++ messages)`.
+--
+--   `profile_switch` is D6 step 4's: the switch REPLACES the whole head prefix,
+--   so the entry's `messages` are the whole new history, head included, and
+--   keeping the old prefix in front of it would fold to two system prompts. Its
+--   `digest_after` is the chain quantity the child's resume seed carries —
+--   `chain_digest_over(chain_empty_base(), messages)`, the same value
+--   `HistorySeeded.digest` is — because D1's second host arm writes this entry
+--   FROM that seed and copies its digest rather than computing one. A
+--   `chain_digest_base` rule here (Part 2's, written before any producer of this
+--   reason existed) would refuse every profile switch the host can write; the
+--   host's Part 4 test already writes exactly this shape.
 pure func fold_replace(acc: FoldAcc, e: JournalEntry) -> FoldAcc {
   match replaced_of_entry(e) {
     Err(r) => { acc | err: Some(r) },
     Ok(rep) => {
+      -- `resume` is the same whole-history replacement (P3 Part 5's kill -9 gate):
+      -- the seed of a resume whose folded history is not the journal's chain — open
+      -- calls stripped, or a checkpoint-rebased chain — written by the host from the
+      -- seed and carrying its digest, exactly as a switch's is.
+      let switch = rep.reason == "profile_switch" || rep.reason == "resume";
       let forward = reverse_hist(acc.rev_msgs);
-      let prefix = take_system_hist(forward);
-      let kept = match rep.first_kept { None => [], Some(i) => drop_hist(i, forward) };
+      let prefix = if switch then [] else take_system_hist(forward);
+      let kept = if switch then [] else match rep.first_kept { None => [], Some(i) => drop_hist(i, forward) };
       let replacement = tag_messages(e.seq, rep.messages);
       let emitted = prefix ++ replacement ++ kept;
-      let expected = chain_digest_base(hist_messages(prefix ++ replacement));
+      let expected = if switch then chain_digest_over(chain_empty_base(), rep.messages)
+                     else chain_digest_base(hist_messages(prefix ++ replacement));
       if rep.digest_after != expected then { acc | err: Some(Digest(e.seq)) }
       else {
         acc | rev_msgs: reverse_hist(emitted),
@@ -1430,9 +1463,23 @@ pure func fold_entry(acc: FoldAcc, e: JournalEntry) -> FoldAcc {
         Err(r) => { acc | err: Some(r) },
         Ok(_) => { acc | last: BoundaryOpen("run_started") }
       }
+      -- A `run_finished` THAT CLOSES THE RUN WHICH JUST SUSPENDED KEEPS THE
+      -- SUSPENSION AS THE BOUNDARY. Found by P3 Part 5's resume gate, not
+      -- anticipated: D2 puts `run_suspended` IMMEDIATELY BEFORE `run_summary` on
+      -- the wire (the P1 Part 1 fixture pins that order), so every suspended run's
+      -- journal ends `suspended, run_finished`, and D4 rule 6 read literally ("the
+      -- last entry's type") folds EVERY suspension to "between turns" — the held
+      -- continuation D6 step 5 routes `Suspended` to would be unreachable from any
+      -- journal a host or the twin can write. The summary is the frame closing, the
+      -- suspension is how it closed; the ordinal is still the summary's.
       else if e.kind == "run_finished" then match run_finished_of_entry(e) {
         Err(r) => { acc | err: Some(r) },
-        Ok(f) => { acc | last: BoundaryRunFinished(f.run_id, f.world_ordinal) }
+        Ok(f) => match acc.last {
+          BoundarySuspended(rid, _) =>
+            if rid == f.run_id then { acc | world_ordinal: f.world_ordinal }
+            else { acc | last: BoundaryRunFinished(f.run_id, f.world_ordinal), world_ordinal: f.world_ordinal },
+          _ => { acc | last: BoundaryRunFinished(f.run_id, f.world_ordinal), world_ordinal: f.world_ordinal }
+        }
       }
       else if e.kind == "suspended" then match suspended_of_entry(e) {
         Err(r) => { acc | err: Some(r) },
@@ -1531,7 +1578,8 @@ export pure func fold_journal(entries: [Json], leaf: string) -> Result[SessionSt
               ext_artifacts: empty_ext_artifacts(),
               model: header.model,
               profile: header.profile,
-              last: BoundaryOpen("header")
+              last: BoundaryOpen("header"),
+              world_ordinal: 0
             };
             let acc = List.foldl(fold_entry, acc0, rest);
             match acc.err {
@@ -1572,7 +1620,8 @@ pure func finish_fold(header: HeaderEntry, acc: FoldAcc) -> Result[SessionState,
               ext_artifacts: acc.ext_artifacts,
               model: acc.model,
               profile: acc.profile,
-              last: acc.last
+              last: acc.last,
+              world_ordinal: acc.world_ordinal
             };
             Ok(st)
           }
@@ -1626,10 +1675,14 @@ export type ResumeContext = {
 export pure func resume_refusal(h: HeaderEntry, ctx: ResumeContext) -> Option[Refusal] {
   if ctx.leased then Some(Leased)
   else if h.workdir != ctx.workdir then Some(Workdir)
-  else if h.ext_set_digest != ctx.ext_set_digest && not ctx.force then Some(ExtSet)
-  -- A PROFILE SWITCH IS ACCEPTED (D5) and is not a prompt refusal: the resumer
-  -- replaces the head system prefix and resets `ext_artifacts`. The prompt
-  -- digest is therefore only compared UNDER THE SAME PROFILE.
+  -- A PROFILE SWITCH IS ACCEPTED (D5) and is neither an extension-set refusal
+  -- nor a prompt refusal: the resumer replaces the head system prefix and resets
+  -- `ext_artifacts`. BOTH digests are therefore only compared UNDER THE SAME
+  -- PROFILE. D5 says "extension-set digest under the same profile" in so many
+  -- words; Part 2 conditioned only the prompt row on it, so a switch into a
+  -- profile with other extensions — the ordinary switch — was refused as
+  -- `ExtSet`. Corrected at P3 Part 5, the part that is the row's first caller.
+  else if h.profile == ctx.profile && h.ext_set_digest != ctx.ext_set_digest && not ctx.force then Some(ExtSet)
   else if h.profile == ctx.profile && h.system_prefix_digest != ctx.system_prefix_digest && not ctx.force
   then Some(Prompt)
   else None
@@ -1755,7 +1808,26 @@ type TwinAcc = {
   parent: string,
   digest: string,
   run_id: string,
-  seeded: bool
+  seeded: bool,
+  -- D1's second arm, armed by a `SessionResumed` whose prompt digests differ and
+  -- consumed by the next `HistorySeeded` — the host's `replaceNextSeed`, same
+  -- rule, same one-shot.
+  replace_next_seed: bool,
+  -- `profile_switch` or `resume`, the reason the armed replacement carries.
+  replace_reason: string,
+  -- A `history_replaced` since the last seed: the chain is rebased, so a resume
+  -- seed cannot compare equal — the host's `replacedSinceSeed`.
+  replaced_since_seed: bool
+}
+
+-- Whether the journal so far folds with dangling calls: the fold's OWN rule, read
+-- off the twin's lines rather than restated (the host keeps a three-line twin of
+-- it; this module has the rule itself).
+pure func twin_has_dangling(acc: TwinAcc) -> bool {
+  match fold_journal(reverse_json(acc.lines), acc.parent) {
+    Ok(s) => List.length(s.dangling) > 0,
+    Err(_) => false
+  }
 }
 
 pure func cons_json(acc: [Json], j: Json) -> [Json] { j :: acc }
@@ -1804,14 +1876,25 @@ pure func twin_event(acc: TwinAcc, e: LedgerEvent) -> TwinAcc {
     SessionStart(i) =>
       twin_line({ acc | run_id: i.run_id }, "run_started", [kv("run_id", js(i.run_id))]),
 
-    -- D1's THREE HOST ARMS, collapsed to the one a single run's trace exercises.
-    -- The first `HistorySeeded` of the path is expanded into N
-    -- `history_appended` entries (arm 1); a later one is DROPPED (arm 3, the
-    -- compare-and-drop, whose comparison the host makes and the fold never
-    -- sees). Arm 2 — the profile-switch rewrite into a `history_replaced` — is
-    -- the resumer's and belongs to P3 Part 5, which is why it is not here.
+    -- D1's THREE HOST ARMS. The first `HistorySeeded` of the path is expanded
+    -- into N `history_appended` entries (arm 1). After a `SessionResumed` whose
+    -- prompt digests differ, the next one is a `history_replaced` carrying the
+    -- new head (arm 2, P3 Part 5 — the resume script feeds this twin two frames,
+    -- and a twin without the arm would fold a profile switch to the OLD head).
+    -- Any other later one is DROPPED (arm 3, the compare-and-drop, whose
+    -- comparison the host makes and the fold never sees).
     HistorySeeded(i) =>
-      if acc.seeded then acc
+      if acc.seeded && acc.replace_next_seed then {
+        let next = twin_line({ acc | run_id: i.run_id }, "history_replaced", [
+          kv("run_id", js(i.run_id)),
+          kv("step", jint(0)),
+          kv("reason", js(acc.replace_reason)),
+          kv("messages", i.messages),
+          kv("digest_after", js(i.digest))
+        ]);
+        { next | digest: i.digest, replace_next_seed: false, replaced_since_seed: false }
+      }
+      else if acc.seeded then acc
       else match messages_of_json(i.messages) {
         -- A seed that does not decode is journaled VERBATIM into one entry, so
         -- the fold refuses it at `Entry(seq, "message")` rather than being handed
@@ -1845,7 +1928,7 @@ pure func twin_event(acc: TwinAcc, e: LedgerEvent) -> TwinAcc {
                   kv("digest_after", js(i.digest_after))];
       let kvs = match i.first_kept { None => base, Some(n) => base ++ [kv("first_kept", jint(n))] };
       let next = twin_line({ acc | run_id: i.run_id }, "history_replaced", kvs);
-      { next | digest: i.digest_after }
+      { next | digest: i.digest_after, replaced_since_seed: true }
     },
 
     StateDelta(i) => {
@@ -1873,8 +1956,16 @@ pure func twin_event(acc: TwinAcc, e: LedgerEvent) -> TwinAcc {
         kv("prompt_digest_to", js(i.prompt_digest_to)),
         kv("forced", jb(i.forced))
       ]);
-      if i.profile_to == i.profile_from then resumed
-      else twin_line(resumed, "settings", [kv("profile", js(i.profile_to))])
+      -- Armed on a prompt change (`profile_switch`) and, with `resume`, wherever the
+      -- folded history the resumed child seeds cannot be the journal's chain: open
+      -- calls the fold strips, or a checkpoint-rebased chain. The host's rule.
+      let switch = i.prompt_digest_from != i.prompt_digest_to;
+      let armed = {
+        resumed | replace_next_seed: switch || acc.replaced_since_seed || twin_has_dangling(acc),
+                  replace_reason: if switch then "profile_switch" else "resume"
+      };
+      if i.profile_to == i.profile_from then armed
+      else twin_line(armed, "settings", [kv("profile", js(i.profile_to))])
     },
 
     RunSuspended(i) =>
@@ -1910,7 +2001,8 @@ pure func twin_record(acc: TwinAcc, r: LedgerRecord) -> TwinAcc {
 
 export pure func journal_lines_of_records(header: HeaderEntry, records: [LedgerRecord]) -> [Json] {
   let acc0: TwinAcc = {
-    lines: [], seq: 0, parent: "", digest: chain_empty_base(), run_id: "", seeded: false
+    lines: [], seq: 0, parent: "", digest: chain_empty_base(), run_id: "", seeded: false,
+    replace_next_seed: false, replace_reason: "profile_switch", replaced_since_seed: false
   };
   let with_header = twin_root(acc0, "header", header_kvs(header));
   let acc = List.foldl(twin_record, with_header, records);
@@ -1927,6 +2019,248 @@ pure func last_id_step(acc: string, j: Json) -> string {
 
 export pure func journal_leaf(lines: [Json]) -> string {
   List.foldl(last_id_step, "", lines)
+}
+
+-- ============================================================================
+-- ADR-003 v6.1 D6, THE CROSS-PROCESS RESUME'S PURE HALF (PLAN-003 P3 Part 5).
+--
+-- `rpc.run_with_config` does what needs effects — the ambient `readFile` of the
+-- journal (§0.8), building the extension runtime for the INVOKED profile, the
+-- budget plan and the system prompt from `header.boot.task` — and hands this
+-- function what it built. Everything that DECIDES is here, pure, so the resume
+-- DST script calls the same decision the live child does instead of a copy of it.
+--
+-- WHAT IT DECIDES, in D6's order:
+--
+--   3. The compatibility rows (`resume_refusal`), against the RECORDED side,
+--      which is not simply the header. The prompt comparand is the digest of the
+--      head the FOLDED history actually carries: after an earlier profile switch
+--      the header's `system_prefix_digest` describes a prompt the session no
+--      longer has, and the fold's head is what the provider was last sent. The
+--      extension-set comparand is the header's only while the session is still on
+--      the header's profile — the journal records no extension set for a profile
+--      it switched into, so under another profile that row has nothing to compare
+--      and is vacuous rather than invented.
+--   4. Same profile and a different prompt digest: refused unless forced. A
+--      different profile: the WHOLE head prefix is replaced by the one new system
+--      message and `ext_artifacts` reset. A forced same-profile prompt change also
+--      replaces the head — the invoked runtime's prompt is what was forced — but
+--      keeps the artifacts, since the extensions that own them did not change.
+--   5. The boundary: `Suspended` becomes a held continuation; `RunFinished`,
+--      `Exit` and an open boundary (the process died mid-run) become "between
+--      turns" with the folded history.
+--
+-- WHAT IT DOES NOT DO: take the lease (the host's, before the spawn — D6 step 1),
+-- compute a digest over anything the child did not build (the prompt digest is
+-- `system_prefix_digest_for` over the message the invoked runtime built, the same
+-- function `v2_mode`'s header report uses), or write anything.
+-- ============================================================================
+
+export type ResumeInvocation = {
+  -- The canonical workdir of the invocation, compared with the header's.
+  workdir: string,
+  -- `ext/runtime.ext_set_digest` of the runtime built for the INVOKED profile —
+  -- from the registry, never from `session_start`'s names (D5).
+  ext_set_digest: string,
+  profile: string,
+  -- The one system message the invoked runtime built from `header.boot.task`.
+  system: Message,
+  -- The invoked runtime's boot inputs; `task` is `header.boot.task`.
+  boot: BootInputs,
+  -- `--model` when given, else the folded model. Resolved by the caller, which
+  -- is the one that knows whether the flag was passed.
+  model: string,
+  resume_count: int,
+  -- The entry the fold started from: `SessionResumed.from_id`.
+  from_id: string,
+  leased: bool,
+  force: bool
+}
+
+export type ResumePlan = {
+  history: [Message],
+  cumulative: RuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts: Json,
+  model: string,
+  profile: string,
+  boot: BootInputs,
+  -- `Some` exactly when the fold's boundary is `Suspended` (D6 step 5).
+  suspended: Option[Continuation],
+  info: SessionResumedInfo,
+  dangling: [string],
+  last: Boundary,
+  head_replaced: bool
+}
+
+-- The digest of a history's head system prefix, which is what a prompt
+-- comparison is about. `system_prefix_digest_for` over `take_system_prefix`, so
+-- a first session's value is byte-identical to the header's (`rpc.ail` digests
+-- the one system message it built, which is that history's whole prefix).
+export pure func head_prefix_digest(ms: [Message]) -> string {
+  system_prefix_digest_for(take_system_prefix(ms))
+}
+
+pure func drop_messages(n: int, ms: [Message]) -> [Message] {
+  if n <= 0 then ms else match ms { [] => [], _ :: rest => drop_messages(n - 1, rest) }
+}
+
+pure func is_some_refusal(o: Option[Refusal]) -> bool {
+  match o { None => false, Some(_) => true }
+}
+
+export pure func plan_resume(s: SessionState, inv: ResumeInvocation) -> Result[ResumePlan, Refusal] {
+  -- A journal whose history folded to nothing has nothing to resume, and D3
+  -- names the refusal: a header that was never completed, because the child died
+  -- before it could report one, is the only way to get here.
+  if List.length(s.history) == 0 then Err(Header)
+  else {
+    let digest_from = head_prefix_digest(s.history);
+    let digest_to = system_prefix_digest_for([inv.system]);
+    let recorded: HeaderEntry = {
+      s.header | profile: s.profile,
+                 system_prefix_digest: digest_from,
+                 ext_set_digest: if s.profile == s.header.profile then s.header.ext_set_digest else inv.ext_set_digest
+    };
+    let ctx: ResumeContext = {
+      workdir: inv.workdir,
+      ext_set_digest: inv.ext_set_digest,
+      system_prefix_digest: digest_to,
+      profile: inv.profile,
+      leased: inv.leased,
+      force: false
+    };
+    let unforced = resume_refusal(recorded, ctx);
+    match resume_refusal(recorded, { ctx | force: inv.force }) {
+      Some(r) => Err(r),
+      None => {
+        let switched = s.profile != inv.profile;
+        let replaced = digest_from != digest_to;
+        let history = if replaced
+                      then [inv.system] ++ drop_messages(List.length(take_system_prefix(s.history)), s.history)
+                      else s.history;
+        let artifacts = if switched then empty_ext_artifacts() else s.ext_artifacts;
+        let suspended = match s.last {
+          BoundarySuspended(_, _) => Some({
+            history: history,
+            step_idx: 0,
+            cumulative: s.cumulative,
+            telemetry: s.telemetry,
+            ext_artifacts: artifacts,
+            -- RE-DERIVED, and only here: the journal carries no nudge count, and
+            -- the nudges a previous run spent are in the history it journaled.
+            nudges_used: count_persist_nudges(history),
+            model: inv.model,
+            profile: inv.profile,
+            boot: inv.boot
+          }),
+          _ => None
+        };
+        let plan: ResumePlan = {
+          history: history,
+          cumulative: s.cumulative,
+          telemetry: s.telemetry,
+          ext_artifacts: artifacts,
+          model: inv.model,
+          profile: inv.profile,
+          boot: inv.boot,
+          suspended: suspended,
+          info: {
+            resume_count: inv.resume_count,
+            from_id: inv.from_id,
+            from_ordinal: s.world_ordinal,
+            profile_from: s.profile,
+            profile_to: inv.profile,
+            prompt_digest_from: digest_from,
+            prompt_digest_to: digest_to,
+            -- "A resume that overrode a refusal is not the same event as one that
+            -- did not need to" (`SessionResumedInfo`): `forced` is the flag AND a
+            -- refusal it overrode, not the flag alone.
+            forced: inv.force && is_some_refusal(unforced)
+          },
+          dangling: s.dangling,
+          last: s.last,
+          head_replaced: replaced
+        };
+        Ok(plan)
+      }
+    }
+  }
+}
+
+-- THE JOURNAL FILE AS ENTRIES, for the child's resume read. One JSON value per
+-- line; blank lines are skipped. A line that does not decode is a refusal
+-- (`Entry(line, "json")`) — a fold that dropped what it could not read would fold
+-- a prefix of the session and report it as the session — with ONE exception: the
+-- final segment of a file that does not end in a newline, which is exactly what
+-- a crash mid-append leaves and what the host's own adoption stops at
+-- (`session-journal.ts`, `adopt`). Everything before it was flushed whole.
+type LineAcc = { out: [Json], err: Option[Refusal], idx: int, last: int }
+
+func parse_line_step(acc: LineAcc, l: string) -> LineAcc {
+  match acc.err {
+    Some(_) => acc,
+    None =>
+      if l == "" then { acc | idx: acc.idx + 1 }
+      else match decode(l) {
+        Ok(j) => { acc | out: j :: acc.out, idx: acc.idx + 1 },
+        Err(_) =>
+          if acc.idx == acc.last then { acc | idx: acc.idx + 1 }
+          else { acc | err: Some(Entry(acc.idx, "json")), idx: acc.idx + 1 }
+      }
+  }
+}
+
+export func parse_journal_text(raw: string) -> Result[[Json], Refusal] {
+  let segments = split(raw, "\n");
+  -- The torn tail can only be the LAST segment, and only when the file does not
+  -- end with a newline; `-1` disables the exception for a file that does.
+  let last = if endsWith(raw, "\n") then -1 else List.length(segments) - 1;
+  let acc = List.foldl(parse_line_step, { out: [], err: None, idx: 0, last: last }, segments);
+  match acc.err {
+    Some(r) => Err(r),
+    None => Ok(reverse_json(acc.out))
+  }
+}
+
+-- What the TUI needs to say about a resume and cannot compute: D6's marker line
+-- (the resume count, the last boundary's reason, both profiles on a switch, the
+-- dangling calls stripped) and the counts that carry the step count across. NOT
+-- journal-class and carries NO messages — the history the TUI prints is the
+-- resume seed's, already on the wire, so the JSONL log (which substitutes only
+-- journal-class payloads) does not gain a second copy of the conversation.
+export pure func boundary_detail(b: Boundary) -> string {
+  match b {
+    BoundaryRunFinished(run_id, _) => "run ${run_id} finished",
+    BoundarySuspended(run_id, step) => "run ${run_id} suspended at step ${show(step)}",
+    BoundaryExit(reason) => "exit (${reason})",
+    BoundaryOpen(kind) => "the process died mid-run, after a ${kind}"
+  }
+}
+
+export pure func resume_view_json(p: ResumePlan) -> Json {
+  jo([
+    kv("type", js("session_resume_view")),
+    kv("resume_count", jint(p.info.resume_count)),
+    kv("from_id", js(p.info.from_id)),
+    kv("boundary", js(boundary_id(p.last))),
+    kv("boundary_detail", js(boundary_detail(p.last))),
+    kv("suspended", jb(match p.suspended { None => false, Some(_) => true })),
+    kv("profile_from", js(p.info.profile_from)),
+    kv("profile_to", js(p.info.profile_to)),
+    kv("head_replaced", jb(p.head_replaced)),
+    kv("forced", jb(p.info.forced)),
+    kv("dangling", ja(List.map(js, p.dangling))),
+    -- D6 step 4's "reset `ext_artifacts`" made OBSERVABLE: the fold cannot show it
+    -- (the journal's last `state_delta` still holds the pre-switch artifacts; the
+    -- reset is the resumed process's), so the resumed child reports it — the
+    -- digest in `StateDelta.ext_artifacts_digest`'s form, and whether it is empty.
+    kv("ext_artifacts_digest", js("sha256:${sha256Hex(encode(p.ext_artifacts))}")),
+    kv("ext_artifacts_empty", jb(encode(p.ext_artifacts) == encode(empty_ext_artifacts()))),
+    kv("messages", jint(List.length(p.history))),
+    kv("provider_calls_started", jint(p.cumulative.provider_calls_started)),
+    kv("provider_calls_completed", jint(p.cumulative.provider_calls_completed))
+  ])
 }
 
 -- ============================================================================
@@ -2538,6 +2872,9 @@ pure func test_refusal_compatibility_rows() -> bool
       && refusal_is(resume_refusal(h, { ok_ctx | leased: true, force: true }), "leased")
       -- A PROFILE SWITCH IS ACCEPTED and is not a prompt refusal (D5).
       && (match resume_refusal(h, { ok_ctx | profile: "probe-budget", system_prefix_digest: "sha256:other" }) { None => true, Some(_) => false })
+      -- ...and not an extension-set refusal either: D5's "under the same profile"
+      -- conditions BOTH rows (corrected at P3 Part 5).
+      && (match resume_refusal(h, { ok_ctx | profile: "probe-budget", ext_set_digest: "sha256:other" }) { None => true, Some(_) => false })
   }
 
 -- ---------------------------------------------------------------------------
@@ -2804,4 +3141,238 @@ pure func test_settings_resumed_and_exit_entries() -> bool
             Ok(_) => false,
             Err(e) => match e { Entry(seq, f) => seq == 6 && f == "type=park", _ => false }
           })
+  }
+
+-- ---------------------------------------------------------------------------
+-- PLAN-003 P3 Part 5: the resume plan, the profile-switch fold, the file read.
+-- ---------------------------------------------------------------------------
+
+pure func t_boot() -> BootInputs { { empty_boot() | task: "list the files", step_budget: 3 } }
+
+-- A folded session on profile `dogfood` whose header carries the digests a live
+-- child would have reported for `t_sys()`.
+pure func t_session(last_suspended: bool) -> SessionState {
+  let base = [t_start(), t_seeded(),
+              t_append(1, t_assistant_calls(), false, chain_digest_after(t_seed_digest(), t_assistant_calls())),
+              t_append(1, t_tool_result(), false, chain_digest_after(chain_digest_after(t_seed_digest(), t_assistant_calls()), t_tool_result())),
+              t_delta()];
+  let rs = if last_suspended
+           then base ++ [WireRecord(RunSuspended({ session_id: "sess_1", run_id: t_run_id(), reason: "budget_exhausted", step: 3 }))]
+           else base ++ [t_summary()];
+  let h: HeaderEntry = {
+    schema_version: 1, session_id: "sess_1", workdir: "/w", profile: "dogfood",
+    ext_set_digest: "sha256:ext", model: "m",
+    system_prefix_digest: system_prefix_digest_for([t_sys()]), boot: t_boot()
+  };
+  let lines = journal_lines_of_records(h, rs);
+  match fold_journal(lines, journal_leaf(lines)) {
+    Ok(s) => s,
+    Err(_) => { header: h, history: [], dangling: [], cumulative: zero_runtime_status_counts(),
+                telemetry: zero_token_telemetry(), ext_artifacts: empty_ext_artifacts(),
+                model: "", profile: "", last: BoundaryOpen("fixture-did-not-fold"), world_ordinal: 0 }
+  }
+}
+
+pure func t_invocation(profile: string, system: Message, force: bool) -> ResumeInvocation {
+  { workdir: "/w", ext_set_digest: "sha256:ext", profile: profile, system: system,
+    boot: t_boot(), model: "m", resume_count: 1, from_id: "0007", leased: false, force: force }
+}
+
+pure func plan_refused_with(r: Result[ResumePlan, Refusal], id: string) -> bool {
+  match r { Ok(_) => false, Err(e) => refusal_id(e) == id }
+}
+
+-- THE GATE'S SECOND SENTENCE, at the function the live child calls: a
+-- same-profile resume against an edited prompt is refused, then forced — and the
+-- forced plan replaces the head, records `forced: true`, and keeps the artifacts.
+pure func test_plan_resume_edited_prompt_refused_then_forced() -> bool
+  tests [((), true)]
+  {
+    let s = t_session(false);
+    let edited = msg("system", "you are motoko, edited");
+    let same = plan_resume(s, t_invocation("dogfood", t_sys(), false));
+    let refused = plan_resume(s, t_invocation("dogfood", edited, false));
+    let forced = plan_resume(s, t_invocation("dogfood", edited, true));
+    List.length(s.history) == 4
+      && (match same { Err(_) => false, Ok(p) =>
+            not p.head_replaced && not p.info.forced
+              && p.info.prompt_digest_from == p.info.prompt_digest_to
+              && p.info.prompt_digest_from == s.header.system_prefix_digest
+              && List.length(p.history) == 4
+              && (match p.suspended { None => true, Some(_) => false }) })
+      && plan_refused_with(refused, "prompt")
+      && (match forced { Err(_) => false, Ok(p) =>
+            p.head_replaced && p.info.forced
+              && p.info.prompt_digest_from != p.info.prompt_digest_to
+              && (match p.history { h :: rest => h.content == "you are motoko, edited" && List.length(rest) == 3, [] => false }) })
+      -- `forced` is the flag AND a refusal it overrode: forcing a resume that
+      -- needed nothing records `false`.
+      && (match plan_resume(s, t_invocation("dogfood", t_sys(), true)) { Err(_) => false, Ok(p) => not p.info.forced })
+      -- The lease and the workdir are not forceable, through the plan too.
+      && plan_refused_with(plan_resume(s, { t_invocation("dogfood", edited, true) | leased: true }), "leased")
+      && plan_refused_with(plan_resume(s, { t_invocation("dogfood", edited, true) | workdir: "/elsewhere" }), "workdir")
+  }
+
+-- A PROFILE MISMATCH NEVER REFUSES (the part's first "do not"): a switch into a
+-- profile with another prompt AND another extension set is accepted, replaces
+-- the whole head, resets the artifacts, keeps the tail and names both profiles.
+pure func test_plan_resume_profile_switch_replaces_head() -> bool
+  tests [((), true)]
+  {
+    let s0 = t_session(true);
+    let s = { s0 | ext_artifacts: jo([kv("k", js("v"))]) };
+    let other = msg("system", "you are the probe profile");
+    let inv0 = t_invocation("probe-budget", other, false);
+    let inv = { inv0 | ext_set_digest: "sha256:other-ext" };
+    match plan_resume(s, inv) {
+      Err(_) => false,
+      Ok(p) => {
+        p.head_replaced && not p.info.forced
+          && p.info.profile_from == "dogfood" && p.info.profile_to == "probe-budget"
+          && encode(p.ext_artifacts) == encode(empty_ext_artifacts())
+          && List.length(p.history) == 4
+          && head_then_task(p.history, "you are the probe profile", "list the files")
+          -- The boundary was `Suspended`, so the continuation is held, on the new
+          -- profile, with the counts carried.
+          && (match p.suspended { None => false, Some(c) =>
+                c.profile == "probe-budget" && c.step_idx == 0
+                  && c.cumulative.provider_calls_completed == 2
+                  && List.length(c.history) == 4 })
+      }
+    }
+  }
+
+pure func head_then_task(ms: [Message], head: string, task: string) -> bool {
+  match ms {
+    h :: rest => h.content == head && (match rest { u :: _ => u.content == task, [] => false }),
+    [] => false
+  }
+}
+
+-- D1's second arm through the twin, and the fold of what it writes: a session,
+-- a `SessionResumed` that switched profile, and the resumed run's seed carrying
+-- the new head fold to the NEW history with one system prompt, and the chain
+-- continues from the replacement. The same journal with the replacement's digest
+-- taken from `chain_digest_base` (Part 2's checkpoint rule) is refused there.
+pure func test_profile_switch_replacement_folds() -> bool
+  tests [((), true)]
+  {
+    let s = t_session(false);
+    let other = msg("system", "you are the probe profile");
+    match plan_resume(s, t_invocation("probe-budget", other, false)) {
+      Err(_) => false,
+      Ok(p) => {
+        let rid2 = "sess_1.r1.0";
+        let seed_digest = chain_digest_over(chain_empty_base(), p.history);
+        let user2 = msg("user", "and now?");
+        let frame2 = [WireRecord(SessionResumed(p.info)),
+                      WireRecord(HistorySeeded({ run_id: rid2, messages: messages_json(p.history), digest: seed_digest,
+                                                 digests: chain_digests_json(chain_digests_over(chain_empty_base(), p.history)) })),
+                      WireRecord(HistoryAppended({ run_id: rid2, step: 0, message: message_json(user2), replaces_previous: false,
+                                                   digest_after: chain_digest_after(seed_digest, user2) }))];
+        let rs1 = [t_start(), t_seeded(),
+                   t_append(1, t_assistant_calls(), false, chain_digest_after(t_seed_digest(), t_assistant_calls())),
+                   t_append(1, t_tool_result(), false, chain_digest_after(chain_digest_after(t_seed_digest(), t_assistant_calls()), t_tool_result())),
+                   t_delta(), t_summary()];
+        let lines = journal_lines_of_records(harness_header(t_identity(), "m"), rs1 ++ frame2);
+        let kinds = join_kinds(List.map(line_kind, lines));
+        let rep_idx = List.length(lines) - 2;
+        let base_rule = mutate_field(lines, rep_idx, "digest_after", js(chain_digest_base(p.history)));
+        contains_kind_order(kinds)
+          && (match t_fold(lines) {
+                Err(_) => false,
+                Ok(st) => st.profile == "probe-budget"
+                            && List.length(st.history) == 5
+                            && (match st.history { h :: _ => h.content == "you are the probe profile", [] => false })
+                            && List.length(take_system_prefix(st.history)) == 1
+              })
+          && (match t_fold(base_rule) { Ok(_) => false, Err(e) => match e { Digest(seq) => seq == rep_idx, _ => false } })
+      }
+    }
+  }
+
+pure func contains_kind_order(kinds: string) -> bool {
+  kinds == "header,run_started,history_appended,history_appended,history_appended,history_appended,state_delta,run_finished,resumed,settings,history_replaced,history_appended"
+}
+
+-- The file read the child performs: blank lines skipped, a torn tail (no final
+-- newline) dropped, a torn middle refused at its line.
+func test_parse_journal_text_torn_tail_only() -> bool
+  tests [((), true)]
+  {
+    let good = "{\"id\":\"0000\"}\n\n{\"id\":\"0001\"}\n";
+    let torn = "{\"id\":\"0000\"}\n{\"id\":\"0001\"}\n{\"id\":\"00";
+    let middle = "{\"id\":\"0000\"}\n{\"id\":\"00\n{\"id\":\"0002\"}\n";
+    (match parse_journal_text(good) { Err(_) => false, Ok(es) => List.length(es) == 2 && journal_leaf(es) == "0001" })
+      && (match parse_journal_text(torn) { Err(_) => false, Ok(es) => List.length(es) == 2 && journal_leaf(es) == "0001" })
+      && (match parse_journal_text(middle) { Ok(_) => false, Err(e) => match e { Entry(line, f) => line == 1 && f == "json", _ => false } })
+  }
+
+-- D2's wire order is `run_suspended` then `run_summary`, so a suspended run's
+-- journal ends in `run_finished`: the boundary must stay `Suspended` (the resume
+-- gate's finding), while a `run_finished` for ANOTHER run after it does not.
+pure func test_suspension_survives_its_own_run_summary() -> bool
+  tests [((), true)]
+  {
+    let suspended = WireRecord(RunSuspended({ session_id: "sess_1", run_id: t_run_id(), reason: "budget_exhausted", step: 3 }));
+    let rs = [t_start(), t_seeded(), t_delta(), suspended, t_summary()];
+    let lines = journal_lines_of_records(harness_header(t_identity(), "m"), rs);
+    let other_run = mutate_field(lines, List.length(lines) - 1, "run_id", js("sess_1.r0.1"));
+    (match t_fold(lines) { Err(_) => false, Ok(st) =>
+        (match st.last { BoundarySuspended(rid, step) => rid == t_run_id() && step == 3, _ => false }) })
+      && (match t_fold(other_run) { Err(_) => false, Ok(st) => boundary_id(st.last) == "run_finished" })
+  }
+
+-- THE KILL -9 GATE'S FINDING, at the functions it went through. A crash mid
+-- tool-phase: the fold strips the open call from the assistant that made it, so
+-- the resume seed's chain CANNOT equal the journal's last `digest_after`, and
+-- D1's compare-and-drop would leave every later entry chaining from a digest no
+-- entry reaches (the live journal refused `Digest(9)`). With the twin's `resume`
+-- replacement the two-frame journal folds to the stripped history; the same
+-- entry read under the checkpoint rule is refused at that entry.
+pure func t_crash_header() -> HeaderEntry {
+  {
+    schema_version: 1, session_id: "sess_1", workdir: "/w", profile: "dogfood",
+    ext_set_digest: "sha256:ext", model: "m",
+    system_prefix_digest: system_prefix_digest_for([t_sys()]), boot: t_boot()
+  }
+}
+
+pure func no_calls_at(ms: [Message], i: int) -> bool {
+  match ms {
+    [] => false,
+    m :: rest => if i == 0 then m.role == "assistant" && List.length(m.tool_calls) == 0 else no_calls_at(rest, i - 1)
+  }
+}
+
+pure func test_crash_resume_replacement_folds() -> bool
+  tests [((), true)]
+  {
+    let d_assistant = chain_digest_after(t_seed_digest(), t_assistant_calls());
+    let crashed = [t_start(), t_seeded(), t_append(1, t_assistant_calls(), false, d_assistant), t_delta()];
+    match t_fold(journal_lines_of_records(t_crash_header(), crashed)) {
+      Err(_) => false,
+      Ok(s) => match plan_resume(s, t_invocation("dogfood", t_sys(), false)) {
+        Err(_) => false,
+        Ok(p) => {
+          let rid2 = "sess_1.r1.0";
+          let seed_digest = chain_digest_over(chain_empty_base(), p.history);
+          let user2 = msg("user", "the call was interrupted");
+          let frame2 = [WireRecord(SessionResumed(p.info)),
+                        WireRecord(HistorySeeded({ run_id: rid2, messages: messages_json(p.history), digest: seed_digest,
+                                                   digests: chain_digests_json(chain_digests_over(chain_empty_base(), p.history)) })),
+                        WireRecord(HistoryAppended({ run_id: rid2, step: 0, message: message_json(user2), replaces_previous: false,
+                                                     digest_after: chain_digest_after(seed_digest, user2) }))];
+          let lines = journal_lines_of_records(t_crash_header(), crashed ++ frame2);
+          let rep_idx = List.length(lines) - 2;
+          let as_checkpoint = mutate_field(lines, rep_idx, "reason", js("checkpoint"));
+          List.length(s.dangling) == 1
+            && seed_digest != d_assistant
+            && join_kinds(List.map(line_kind, lines)) == "header,run_started,history_appended,history_appended,history_appended,state_delta,resumed,history_replaced,history_appended"
+            && (match t_fold(lines) { Err(_) => false, Ok(st) =>
+                  List.length(st.history) == 4 && List.length(st.dangling) == 0 && no_calls_at(st.history, 2) })
+            && (match t_fold(as_checkpoint) { Ok(_) => false, Err(e) => match e { Digest(seq) => seq == rep_idx, _ => false } })
+        }
+      }
+    }
   }

@@ -111,6 +111,13 @@ export type AgentEvent =
   | { type: "history_replaced"; run_id: string; step: number; reason: string; first_kept?: number; messages: unknown[]; digest_after: string }
   | { type: "state_delta"; run_id: string; step: number; cumulative: Record<string, number>; telemetry: Record<string, number>; ext_artifacts_digest: string; ext_artifacts?: unknown }
   | { type: "session_resumed"; resume_count: number; from_id: string; from_ordinal: number; profile_from: string; profile_to: string; prompt_digest_from: string; prompt_digest_to: string; forced: boolean }
+  // PLAN-003 P3 Part 5, both from a `--resume` child and NEITHER journal-class. `session_resume_view`
+  // is the marker line the TUI prints under the resume seed's history (`journal.resume_view_json`):
+  // it carries no messages, so the JSONL log gains no second copy of the conversation.
+  // `session_resume_refused` is the child saying which compatibility or fold rule refused the
+  // journal, immediately before it exits 3.
+  | { type: "session_resume_view"; resume_count: number; from_id: string; boundary: string; boundary_detail: string; suspended: boolean; profile_from: string; profile_to: string; head_replaced: boolean; forced: boolean; dangling: string[]; ext_artifacts_digest: string; ext_artifacts_empty: boolean; messages: number; provider_calls_started: number; provider_calls_completed: number }
+  | { type: "session_resume_refused"; journal: string; refusal: string; message: string }
   | { type: "error"; message: string }
   | { type: "warning"; message: string }
   | { type: "tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
@@ -405,6 +412,12 @@ export function buildChildEnv(
     // sixth key would make all five red (PLAN-003 §0.8). It is the middle field of
     // `run_id = <session_id>.r<resume_count>.<run_ordinal>`.
     MOTOKO_RESUME_COUNT: String(sessionResumeCount()),
+    // THE WORKDIR THE HEADER RECORDS, D5's canonical-workdir row (PLAN-003 P3 Part 5). The header
+    // is written from this exact string (`index.ts`), while `--workdir` reaches the child in
+    // `supervisorWorkdirArg`'s relative form — "." for the common case — so a child comparing its
+    // flag with the header would refuse every ordinary resume. Forwarding the same string makes
+    // the row compare like with like; the child reads it ambiently (`rpc.invoked_workdir`).
+    MOTOKO_WORKDIR: workdir,
     // WHERE THIS TURN'S EXIT ACTIONS GET PUBLISHED (ABI 7.0).
     //
     // The host names the file and the runtime reads the name — never the other way round, and
@@ -514,6 +527,16 @@ export function buildChildEnv(
   return childEnv;
 }
 
+/**
+ * ADR-003 v6.1 D6's `--resume` (PLAN-003 P3 Part 5): the journal a respawned child folds, and
+ * `--resume-force`, which overrides the extension-set and prompt compatibility rows and neither
+ * the workdir nor the lease.
+ */
+export interface ResumeSpawn {
+  journalPath: string;
+  force?: boolean;
+}
+
 export function buildSupervisorArgs(
   resolvedProfile: string,
   model: string,
@@ -521,6 +544,7 @@ export function buildSupervisorArgs(
   port: number,
   systemPrompt: string,
   task: string,
+  resume?: ResumeSpawn,
 ): string[] {
   const supervisorArgs = [
     "--profile",
@@ -534,6 +558,12 @@ export function buildSupervisorArgs(
   ];
   if (systemPrompt.trim() !== "") {
     supervisorArgs.push("--system-prompt", systemPrompt);
+  }
+  // BEFORE the task, which stays last: `config.parse_cli_args` reads the final positional as the
+  // task, and `--resume-force` is a BARE flag there precisely so it cannot eat it.
+  if (resume && resume.journalPath.trim() !== "") {
+    supervisorArgs.push("--resume", resume.journalPath);
+    if (resume.force) supervisorArgs.push("--resume-force");
   }
   supervisorArgs.push(task);
   return supervisorArgs;
@@ -556,7 +586,8 @@ export class RuntimeProcess {
     openaiBaseUrl: string,
     aiOptionsJson: string,
     onEvent: (e: AgentEvent) => void,
-    onExit: () => void
+    onExit: () => void,
+    resume?: ResumeSpawn,
   ) {
     this.workdir = workdir;
     this.onEvent = onEvent;
@@ -593,7 +624,7 @@ export class RuntimeProcess {
       );
     }
 
-    const supervisorArgs = buildSupervisorArgs(resolvedProfile, model, workdir, port, systemPrompt, task);
+    const supervisorArgs = buildSupervisorArgs(resolvedProfile, model, workdir, port, systemPrompt, task, resume);
 
     this.proc = spawn(
       ailangBin,

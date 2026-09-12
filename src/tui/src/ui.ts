@@ -2304,6 +2304,16 @@ export class AgentUI {
     }
   }
 
+  /**
+   * ADR-003 v6.1 D6's resumed TUI (PLAN-003 P3 Part 5). A `--resume` child emits, in order,
+   * `session_resumed`, the resume seed (`history_seeded` carrying the resumed history) and
+   * `session_resume_view`; the history is printed from the SEED, so the marker event carries no
+   * messages and the JSONL log gains no second copy of the conversation. Only the seed that follows
+   * a `session_resumed` is captured — every traced run seeds too, and those are not for display.
+   */
+  private resumePending = false;
+  private resumeSeedMessages: unknown[] | null = null;
+
   handleEvent(event: AgentEvent): void {
     this.lastUpdateMs = Date.now();
     switch (event.type) {
@@ -2781,6 +2791,34 @@ export class AgentUI {
       //
       // `run_suspended` arrives immediately BEFORE `run_summary` (session.ail's `c2_suspend`
       // appends and emits it before `c2_finalize`), and no `error` follows it outside headless.
+      case "session_resumed":
+        this.resumePending = true;
+        this.resumeSeedMessages = null;
+        break;
+      case "history_seeded":
+        if (this.resumePending && this.resumeSeedMessages === null) {
+          this.resumeSeedMessages = Array.isArray(event.messages) ? event.messages : [];
+        }
+        break;
+      case "session_resume_view": {
+        const lines = formatResumedHistory(this.resumeSeedMessages ?? [], event);
+        for (const line of lines.history) this.appendHistoryStyled(line.text, line.dim ? chalk.dim : (s: string) => s);
+        this.appendHistoryStyled(lines.marker, chalk.cyanBright);
+        this.resumePending = false;
+        this.resumeSeedMessages = null;
+        this.setRunState("idle");
+        this.tui.setFocus(this.cmdInput);
+        this.updateStatus();
+        break;
+      }
+      case "session_resume_refused":
+        this.resumePending = false;
+        this.resumeSeedMessages = null;
+        this.appendHistoryStyled(
+          `Resume refused (${event.refusal}): ${event.message} The next prompt starts a fresh run in this session.`,
+          chalk.redBright,
+        );
+        break;
       case "run_suspended":
         this.composeFooterStatus = "";
         this.setRunState("suspended");
@@ -4294,4 +4332,59 @@ export class AgentUI {
     this.overlayHandle?.hide();
     this.tui.stop();
   }
+}
+
+type ResumeView = Extract<AgentEvent, { type: "session_resume_view" }>;
+
+function clip(text: string, max: number): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  return one.length <= max ? one : `${one.slice(0, max - 1)}…`;
+}
+
+/**
+ * The folded history and D6's marker line, as text (PLAN-003 P3 Part 5). Pure so it is testable
+ * without a terminal. The marker names what ADR-003 D6 says the TUI names: the resume count, the
+ * last boundary's reason, both profiles on a switch, and the dangling tool calls a crash left — plus
+ * the provider calls carried, which is the step count continuing across the process.
+ *
+ * The system prompt is summarised, not printed: it is the profile's, it can be thousands of lines,
+ * and the operator did not write it. Tool results are one clipped line each.
+ */
+export function formatResumedHistory(
+  messages: unknown[],
+  view: ResumeView,
+): { history: Array<{ text: string; dim: boolean }>; marker: string } {
+  const history: Array<{ text: string; dim: boolean }> = [];
+  for (const raw of messages) {
+    if (!raw || typeof raw !== "object") continue;
+    const m = raw as Record<string, unknown>;
+    const role = typeof m.role === "string" ? m.role : "";
+    const content = typeof m.content === "string" ? m.content : "";
+    if (role === "system") {
+      history.push({ text: `[system prompt, ${content.length} chars]`, dim: true });
+    } else if (role === "user") {
+      history.push({ text: `> ${clip(content, 400)}`, dim: false });
+    } else if (role === "assistant") {
+      if (content.trim() !== "") history.push({ text: clip(content, 400), dim: false });
+      const calls = Array.isArray(m.tool_calls) ? (m.tool_calls as Array<Record<string, unknown>>) : [];
+      for (const c of calls) {
+        const name = typeof c.name === "string" ? c.name : "?";
+        const args = typeof c.arguments === "string" ? c.arguments : "";
+        history.push({ text: `→ ${name}(${clip(args, 120)})`, dim: true });
+      }
+    } else if (role === "tool") {
+      history.push({ text: `  ${clip(content, 160)}`, dim: true });
+    }
+  }
+  const parts = [`── resumed session #${view.resume_count}`, `last boundary: ${view.boundary_detail}`];
+  if (view.profile_from !== view.profile_to) parts.push(`profile ${view.profile_from} → ${view.profile_to}`);
+  if (view.head_replaced) parts.push("system prompt replaced");
+  if (view.forced) parts.push("forced");
+  if (view.profile_from !== view.profile_to && view.ext_artifacts_empty) parts.push("extension artifacts reset");
+  if (view.dangling.length > 0) {
+    parts.push(`stripped ${view.dangling.length} dangling tool call(s): ${view.dangling.join(", ")}`);
+  }
+  parts.push(`${view.messages} messages, ${view.provider_calls_completed} provider call(s) carried`);
+  parts.push(view.suspended ? "the suspended run is held — send a message to continue it" : "send a message to continue");
+  return { history, marker: `${parts.join(" · ")} ──` };
 }

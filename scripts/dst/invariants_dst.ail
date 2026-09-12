@@ -734,12 +734,14 @@ func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
   -- P3 Part 2's fold cannot name a variant that does not exist), and Part 3
   -- emits four of them — appended where they are emitted, which is what takes
   -- them out of the gap. All four are asserted by NAME to have LEFT and
-  -- `SessionResumed` by name to have stayed, in the same both-directions style
+  -- `SessionResumed` by name to have stayed — until P3 Part 5, whose resumed
+  -- traced entry appends it, so it is now asserted to have LEFT, making the gap
+  -- TWO — in the same both-directions style
   -- as the closures: a count of three is satisfied by any three, and what this
   -- row claims is that the two old gaps are still the old gaps, the four are
   -- gone, and the one that remains is the one `--resume` has not landed for.
-  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3, eleven more by WI-D2; ADR-003 D1's five declared at PLAN-003 P3 Part 1 and four of them emitted at P3 Part 3)",
-                 List.length(gap) == 3
+  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3, eleven more by WI-D2; ADR-003 D1's five declared at PLAN-003 P3 Part 1, four emitted at P3 Part 3, SessionResumed appended at P3 Part 5)",
+                 List.length(gap) == 2
                    && not contains_str(gap, "DoneEvent")
                    && not contains_str(gap, "StreamDelta")
                    && contains_str(gap, "ScratchpadResult")
@@ -748,7 +750,7 @@ func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
                    && not contains_str(gap, "HistoryAppended")
                    && not contains_str(gap, "HistoryReplaced")
                    && not contains_str(gap, "StateDelta")
-                   && contains_str(gap, "SessionResumed"),
+                   && not contains_str(gap, "SessionResumed"),
                  "the gap is ${List.length(gap)}: ${join_str(gap)}");
   let c = report("every registered gap carries a reason",
                  List.length(parity_gap_reasons()) == List.length(d64_gap_register()),
