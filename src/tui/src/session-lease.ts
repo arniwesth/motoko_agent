@@ -37,17 +37,51 @@ export type LeaseOutcome =
   | { kind: "acquired"; lease: SessionLease }
   | { kind: "refused"; heldBy: LeaseRecord };
 
-/** Is a pid a live process this user can signal? Signal 0 tests existence without delivering one. */
-function pidAlive(pid: number, kill: (pid: number, signal: number) => void): boolean {
+/**
+ * The Linux process state letter from `/proc/<pid>/stat` (`R`, `S`, `Z`, …), or null where there is
+ * no procfs or no such process. The state follows the LAST `)`, because the command name between
+ * the parentheses may itself contain spaces and parentheses.
+ */
+export function readProcState(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 1).trim().charAt(0);
+    return state === "" ? null : state;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is a pid a live process that could still write the journal? Signal 0 tests existence without
+ * delivering one — and a ZOMBIE EXISTS: it answers signal 0 until something reaps it.
+ *
+ * THAT IS NOT HYPOTHETICAL HERE. This container's PID 1 is `sleep infinity`, which reaps nothing, so
+ * a Motoko whose parent chain is gone when it dies stays `<defunct>` forever (200 of them on
+ * 2026-09-12). Closing the pane of a running Motoko did exactly that: the TUI died without its exit
+ * hooks, its lease stayed, and every restart on that session id was refused as "already held by"
+ * a process that could never write again — the crash the stale-lease rule exists to recover from,
+ * made unrecoverable. A zombie or dead (`Z`/`X`) owner is gone. Where there is no procfs the state
+ * is unknown and signal 0 decides, as before.
+ */
+function pidAlive(
+  pid: number,
+  kill: (pid: number, signal: number) => void,
+  procState: (pid: number) => string | null = readProcState,
+): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
+  let exists: boolean;
   try {
     kill(pid, 0);
-    return true;
+    exists = true;
   } catch (e) {
     // EPERM means the process EXISTS and belongs to someone else — a live owner this process may
     // not signal is still a live owner, and reading it as "gone" is how a second writer gets in.
-    return (e as NodeJS.ErrnoException)?.code === "EPERM";
+    exists = (e as NodeJS.ErrnoException)?.code === "EPERM";
   }
+  if (!exists) return false;
+  const state = procState(pid);
+  return state !== "Z" && state !== "X";
 }
 
 export function readLease(leasePath: string): LeaseRecord | null {
@@ -115,6 +149,8 @@ export interface AcquireOptions {
   now?: () => number;
   pid?: number;
   kill?: (pid: number, signal: number) => void;
+  /** The owner's process state letter; `readProcState` by default. A `Z`/`X` owner is gone. */
+  procState?: (pid: number) => string | null;
 }
 
 /**
@@ -137,7 +173,12 @@ export function acquireLease(
   const pid = options.pid ?? process.pid;
   const kill = options.kill ?? ((p, s) => process.kill(p, s));
   const held = readLease(leasePath);
-  if (held && held.owner_pid !== pid && pidAlive(held.owner_pid, kill) && options.force !== true) {
+  if (
+    held &&
+    held.owner_pid !== pid &&
+    pidAlive(held.owner_pid, kill, options.procState ?? readProcState) &&
+    options.force !== true
+  ) {
     return { kind: "refused", heldBy: held };
   }
   const record: LeaseRecord = {

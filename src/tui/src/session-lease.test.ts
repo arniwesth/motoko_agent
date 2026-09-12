@@ -99,6 +99,25 @@ describe("acquiring and refusing the lease", () => {
     expect(readLease(path.join(root, "lease"))!.owner_pid).toBe(1002);
   });
 
+  // A ZOMBIE answers signal 0 until something reaps it, and this container's PID 1 (`sleep infinity`)
+  // reaps nothing. A Motoko whose pane was closed died as a zombie on 2026-09-12 and its session
+  // could not be resumed: every restart was refused as "already held by" the dead pid.
+  it("takes over a lease whose owner is a zombie, even though signal 0 still finds it", () => {
+    acquireLease(root, "sess-1", { pid: 1001 });
+    const second = acquireLease(root, "sess-1", { pid: 1002, kill: () => {}, procState: () => "Z" });
+    expect(second.kind).toBe("acquired");
+    expect(readLease(path.join(root, "lease"))!.owner_pid).toBe(1002);
+    acquireLease(root, "sess-2", { pid: 2001 });
+    expect(acquireLease(root, "sess-2", { pid: 2002, kill: () => {}, procState: () => "X" }).kind).toBe("acquired");
+  });
+
+  it("still refuses a running or sleeping owner, and falls back to signal 0 without procfs", () => {
+    acquireLease(root, "sess-1", { pid: 1001 });
+    for (const state of ["R", "S", "D", null]) {
+      expect(acquireLease(root, "sess-1", { pid: 1002, kill: () => {}, procState: () => state }).kind).toBe("refused");
+    }
+  });
+
   // EPERM means the process EXISTS and belongs to someone else. Reading that as "gone" is exactly
   // how a second writer gets in.
   it("treats a live owner it may not signal as live", () => {
