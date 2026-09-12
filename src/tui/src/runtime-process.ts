@@ -141,6 +141,26 @@ export function parseAgentEventLine(line: string): AgentEvent | null {
   }
 }
 
+/**
+ * What to tell the operator when the runtime child exits WITHOUT a terminal event before it, or
+ * null when the exit is clean. `.agent/issues/a-killed-motoko-process-exits-silently.md`: the
+ * container's OOM killer SIGKILLs the child mid tool-phase (2026-09-08, 2026-09-12), the child can
+ * say nothing, and an exit callback that ignores `(code, signal)` turns that death into a finish.
+ */
+export function describeUnexplainedExit(code: number | null, signal: NodeJS.Signals | null): string | null {
+  const unsaid = "before it reported done or an error";
+  if (signal === "SIGKILL") {
+    return `The AILANG runtime was killed (SIGKILL) ${unsaid}. This is usually the out-of-memory killer: ` +
+      "a rise in oom_kill in /sys/fs/cgroup/memory.events confirms it.";
+  }
+  if (signal) return `The AILANG runtime was killed by ${signal} ${unsaid}.`;
+  if (code !== null && code !== 0) return `The AILANG runtime exited with code ${code} ${unsaid}.`;
+  return null;
+}
+
+/** Events after which the child's exit is already explained on the wire (refusal: `rpc.ail` exits 3). */
+const EXIT_EXPLAINING_EVENTS = new Set(["done", "error", "session_resume_refused"]);
+
 export function providerSelectionModel(model: string, openaiBaseUrl: string): string {
   const trimmed = model.trim();
   if (trimmed === "openrouter/auto") return trimmed;
@@ -658,6 +678,9 @@ export class RuntimeProcess {
     rl.on("line", (line) => {
       const event = parseAgentEventLine(line);
       if (!event) return;
+      // The LAST event, not any: a TTY runtime says `done` and then serves the next turn, and the
+      // 2026-09-12 OOM kill landed 650 steps into such a session.
+      this.exitExplained = EXIT_EXPLAINING_EVENTS.has(event.type);
       this.onEvent(event);
       if (event.type === "tool_calls") {
         setImmediate(() => {
@@ -676,9 +699,14 @@ export class RuntimeProcess {
       this.onEvent({ type: "warning", message });
     });
 
-    this.proc.on("exit", () => {
+    this.proc.on("exit", (code, signal) => {
       this.dead = true;
       stderrRl.close();
+      // A killed child cannot say it was killed, so the host says it — as an `error`, which is what
+      // makes the TTY recover into awaiting a task and the headless loggers exit 1, where a silent
+      // `onExit()` would have exited 0 as if the run had finished.
+      const unexplained = this.exitExplained || this.killRequested ? null : describeUnexplainedExit(code, signal);
+      if (unexplained) this.onEvent({ type: "error", message: unexplained });
       onExit();
     });
   }
@@ -821,8 +849,14 @@ export class RuntimeProcess {
     this.send({ type: "abort" });
   }
 
+  /** True while the last wire event (`done`, `error`, a resume refusal) already accounts for an exit. */
+  private exitExplained = false;
+  /** Set by `kill()`: a death the host asked for (quit, ESC) is not reported as one. */
+  private killRequested = false;
+
   kill(): void {
     if (this.dead) return;
+    this.killRequested = true;
     this.proc.kill("SIGTERM");
   }
 
