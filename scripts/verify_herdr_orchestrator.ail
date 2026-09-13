@@ -46,7 +46,7 @@ import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_toke
 import src/core/ext/runtime (dispatch_tool_policy)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, make_hooks_with)
 import pkg/sunholo/motoko_ext_herdr/register (orchestrator_mode)
-import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, orchestrator_on_for_tests, direct_marker, show_mode)
+import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, orchestrator_on_for_tests, direct_marker, show_mode, default_guarded)
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -261,21 +261,40 @@ func case_registration() -> int ! {IO, FS, Env} {
   let _ = writeFile("${tmp_dagr()}/a-legacy.json", run_doc("w1:p18", ""));
   let _ = writeFile("${tmp_dagr()}/b-plan.json", run_doc("w1:p18", "delegate"));
   let _ = writeFile("${tmp_dagr()}/c-other.json", run_doc("w2:p5", "delegate"));
+  let _ = writeFile("${tmp_dagr()}/d-second.json", run_doc("w1:p18", "delegate"));
   let _ = writeFile("${tmp_dagr()}/.plan-w1-p18-100", "./.tmp-herdr-orch/dagr/c-other.json");
   let mine = show_mode(orchestrator_mode(".", mk_cfg("w1:p18", 0), true));
   let other = show_mode(orchestrator_mode(".", mk_cfg("w2:p5", 0), true));
   let stranger = show_mode(orchestrator_mode(".", mk_cfg("w9:p9", 0), true));
   let delegate = show_mode(orchestrator_mode(".", mk_cfg("w1:p18", 1), true));
   let outside = show_mode(orchestrator_mode(".", mk_cfg("w1:p18", 0), false));
-  check("from disk: the named pane is on, from the run file that says delegate",
-        mine == "on:.tmp-herdr-orch/dagr/b-plan.json:w1:p18:1:src/,scripts/,packages/,tools/", mine)
+  check("from disk: the named pane is on, from EVERY run file that says delegate, the legacy one skipped",
+        mine == "on:.tmp-herdr-orch/dagr/b-plan.json,.tmp-herdr-orch/dagr/d-second.json:w1:p18:1:src/,scripts/,packages/,tools/", mine)
   + check("from disk: each pane gets its own run", contains(other, "c-other.json:w2:p5"), other)
   + check("from disk: a pane no run names is off", stranger == "off", stranger)
   + check("from disk: a delegate (depth 1) is off even in the named pane", delegate == "off", delegate)
   + check("from disk: outside a herdr pane is off", outside == "off", outside)
 }
 
+-- THE MEASURED CASE: pane w1:p18 owns run-plan001 AND run-plan003, and the note
+-- named only the first, so a PLAN-003 task was pointed at the PLAN-001 file.
+func case_multi_run() -> int ! {IO, Process, FS, Clock} {
+  let m: OrchestratorMode = {
+    on: true, run_paths: [".dagr/run-plan001.json", ".dagr/run-plan003.json"],
+    pane: "w1:p18", max_in_flight: 1, guarded: default_guarded()
+  };
+  let caps = make_hooks_with(mk_cfg("w1:p18", 0), ["Delegate", "DelegateCheck"], m);
+  let text = join("\n", patch_of(caps, mk_ctx([])).append);
+  let reason = show_decision(policy_of(caps, mk_ctx([]), edit_call("src/core/session.ail")));
+  check("several runs: the note names every run file",
+        contains(text, ".dagr/run-plan001.json") && contains(text, ".dagr/run-plan003.json"), text)
+  + check("several runs: the note says to use the run file that holds the task, not the first",
+        contains(text, "holds the task") && contains(text, "dagr_plan: \"") == false, text)
+  + check("several runs: the refusal names every run file and the same rule",
+        contains(reason, ".dagr/run-plan003.json") && contains(reason, "holds the task") && contains(reason, "dagr_plan: \"") == false, reason)
+}
+
 export func main() -> () ! {IO, FS, Env, Clock, Process} {
-  let fails = case_atoms() + case_prompt() + case_policy() + case_hatch() + case_host_merge() + case_registration();
+  let fails = case_atoms() + case_prompt() + case_policy() + case_hatch() + case_host_merge() + case_registration() + case_multi_run();
   if fails > 0 then { println("${show(fails)} case(s) failed"); exit(1) } else ()
 }

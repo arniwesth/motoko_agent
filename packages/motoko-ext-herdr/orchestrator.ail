@@ -63,9 +63,13 @@ import pkg/sunholo/motoko_ext_abi/types (ToolCallEnvelope, ToolPolicyDecision, D
 
 export type OrchestratorMode = {
   on: bool,
-  -- The run file that put this pane in the mode, as the model should pass it in
-  -- `dagr_plan` (e.g. ".dagr/run-plan001.json").
-  run_path: string,
+  -- EVERY run file that names this pane with `mode: "delegate"`, in listing
+  -- order, as the model should pass one in `dagr_plan` (e.g.
+  -- ".dagr/run-plan001.json"). Several is ordinary: one orchestrator pane
+  -- commonly owns a plan per ADR. The prompt and the refusal then name them all
+  -- and say to pick the file that holds the task, because naming only the first
+  -- sent a PLAN-003 task toward run-plan001.json (measured 2026-09-13).
+  run_paths: [string],
   pane: string,
   max_in_flight: int,
   -- Path prefixes, relative to the workdir, whose edits are delegated work.
@@ -82,7 +86,7 @@ export pure func mode_marker() -> string { "[motoko-herdr-orchestrator]" }
 export pure func default_guarded() -> [string] { ["src/", "scripts/", "packages/", "tools/"] }
 
 export pure func orchestrator_off() -> OrchestratorMode {
-  { on: false, run_path: "", pane: "", max_in_flight: 1, guarded: default_guarded() }
+  { on: false, run_paths: [], pane: "", max_in_flight: 1, guarded: default_guarded() }
 }
 
 pure func str_or(o: Option[string]) -> string {
@@ -123,7 +127,7 @@ export pure func mode_from_doc(path: string, content: string, own_pane: string) 
           if pane != own_pane || mode != "delegate" then None
           else Some({
             on: true,
-            run_path: display_path(path),
+            run_paths: [display_path(path)],
             pane: pane,
             max_in_flight: match getInt(o, "max_in_flight") { Some(n) => if n < 1 then 1 else n, None => 1 },
             guarded: match getStringArray(o, "guarded_paths") {
@@ -139,7 +143,7 @@ export pure func mode_from_doc(path: string, content: string, own_pane: string) 
 
 export pure func show_mode(m: OrchestratorMode) -> string {
   if m.on == false then "off"
-  else "on:${m.run_path}:${m.pane}:${intToStr(m.max_in_flight)}:${join(",", m.guarded)}"
+  else "on:${join(",", m.run_paths)}:${m.pane}:${intToStr(m.max_in_flight)}:${join(",", m.guarded)}"
 }
 
 export pure func mode_from_doc_str(path: string, content: string, own_pane: string) -> string
@@ -176,17 +180,61 @@ export pure func mode_from_doc_str(path: string, content: string, own_pane: stri
   }
 }
 
--- The first run file that names this pane wins. The order is the directory
--- listing's; two run files both claiming the same pane is an operator error the
--- prompt note makes visible by naming the one in effect.
-pure func first_mode(docs: [RunDoc], own_pane: string) -> OrchestratorMode {
+-- EVERY run file that names this pane counts, merged in listing order. The limit
+-- is the SMALLEST any of them declares and the guarded paths are the UNION: a
+-- run that asks for less concurrency or guards more is not overruled by
+-- another run on the same pane.
+pure func all_modes(docs: [RunDoc], own_pane: string, acc: OrchestratorMode) -> OrchestratorMode {
   match docs {
-    [] => orchestrator_off(),
+    [] => acc,
     d :: rest => match mode_from_doc(d.path, d.content, own_pane) {
-      Some(m) => m,
-      None => first_mode(rest, own_pane)
+      Some(m) => all_modes(rest, own_pane, if acc.on then merge_modes(acc, m) else m),
+      None => all_modes(rest, own_pane, acc)
     }
   }
+}
+
+pure func merge_modes(a: OrchestratorMode, b: OrchestratorMode) -> OrchestratorMode {
+  { on: true,
+    run_paths: a.run_paths ++ b.run_paths,
+    pane: a.pane,
+    max_in_flight: if b.max_in_flight < a.max_in_flight then b.max_in_flight else a.max_in_flight,
+    guarded: union_str(a.guarded, b.guarded) }
+}
+
+pure func union_str(a: [string], b: [string]) -> [string] {
+  match b {
+    [] => a,
+    x :: rest => union_str(if has_str(a, x) then a else a ++ [x], rest)
+  }
+}
+
+pure func has_str(xs: [string], x: string) -> bool {
+  match xs { [] => false, y :: rest => y == x || has_str(rest, x) }
+}
+
+-- Two run files, resolved as registration would: the merge rules above.
+export pure func resolve_two_str(content_a: string, content_b: string, own_pane: string) -> string
+  tests [
+    -- both name the pane: both listed, in order
+    (("{\"run\":{\"orchestrator\":{\"pane\":\"w1:p18\",\"mode\":\"delegate\"}}}",
+      "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p18\",\"mode\":\"delegate\"}}}", "w1:p18"),
+     "on:a.json,b.json:w1:p18:1:src/,scripts/,packages/,tools/"),
+    -- only the second names it with the mode: the first is skipped, not merged
+    (("{\"run\":{\"orchestrator\":{\"pane\":\"w1:p18\"}}}",
+      "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p18\",\"mode\":\"delegate\"}}}", "w1:p18"),
+     "on:b.json:w1:p18:1:src/,scripts/,packages/,tools/"),
+    -- the smaller limit wins, in either order
+    (("{\"run\":{\"orchestrator\":{\"pane\":\"w1:p1\",\"mode\":\"delegate\",\"max_in_flight\":3,\"guarded_paths\":[\"src/\"]}}}",
+      "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p1\",\"mode\":\"delegate\",\"max_in_flight\":2,\"guarded_paths\":[\"scripts/\",\"src/\"]}}}", "w1:p1"),
+     "on:a.json,b.json:w1:p1:2:src/,scripts/"),
+    -- neither: off
+    (("{\"run\":{\"orchestrator\":{\"pane\":\"w1:p18\"}}}", "not json", "w1:p18"), "off")
+  ]
+{
+  let a: RunDoc = { path: "a.json", content: content_a };
+  let b: RunDoc = { path: "b.json", content: content_b };
+  show_mode(resolve_mode("", true, 0, own_pane, [a, b]))
 }
 
 -- Whether registration should look at run files at all. Off when the operator
@@ -207,7 +255,7 @@ export pure func should_scan(switch: string, gate_open: bool, depth: int) -> boo
 }
 
 export pure func resolve_mode(switch: string, gate_open: bool, depth: int, own_pane: string, docs: [RunDoc]) -> OrchestratorMode {
-  if should_scan(switch, gate_open, depth) then first_mode(docs, own_pane) else orchestrator_off()
+  if should_scan(switch, gate_open, depth) then all_modes(docs, own_pane, orchestrator_off()) else orchestrator_off()
 }
 
 -- Run-file candidates in a dagr directory listing: JSON documents, not the
@@ -230,15 +278,38 @@ export pure func is_run_doc_name(name: string) -> bool
 -- The prompt note
 -- ---------------------------------------------------------------------------
 
+pure func backticked(xs: [string]) -> [string] {
+  match xs { [] => [], x :: rest => "`${x}`" :: backticked(rest) }
+}
+
+pure func first_run(m: OrchestratorMode) -> string {
+  match m.run_paths { r :: _ => r, [] => "" }
+}
+
+pure func is_single_run(m: OrchestratorMode) -> bool {
+  count_str(m.run_paths) == 1
+}
+
+-- How the model should fill `dagr_plan`. One run: that file. Several: whichever
+-- holds the task, because a task id lives in exactly one plan.
+pure func plan_instruction(m: OrchestratorMode) -> string {
+  if is_single_run(m) then "`dagr_plan: \"${first_run(m)}\"`"
+  else "`dagr_plan` set to the run file that holds the task (one of ${join(", ", backticked(m.run_paths))})"
+}
+
 export pure func prompt_note(m: OrchestratorMode) -> string {
   let limit = if m.max_in_flight == 1 then "one delegation" else "${intToStr(m.max_in_flight)} delegations";
+  let whom =
+    if is_single_run(m) then "`${first_run(m)}` (`run.orchestrator.mode` is \"delegate\")"
+    else "${intToStr(count_str(m.run_paths))} runs, ${join(", ", backticked(m.run_paths))} (each has `run.orchestrator.mode` \"delegate\")";
   join("\n", [
     "## Orchestrator mode ${mode_marker()}",
-    "This pane (${m.pane}) is the orchestrator for `${m.run_path}` (`run.orchestrator.mode` is \"delegate\"). You route the work; delegates implement it.",
-    "- Implementation goes to `Delegate` with `dagr_plan: \"${m.run_path}\"` and the task id: edits under ${join(", ", m.guarded)} and the fix-and-rerun iteration that comes with them. At most ${limit} in flight.",
+    "This pane (${m.pane}) is the orchestrator for ${whom}. You route the work; delegates implement it.",
+    "- Implementation goes to `Delegate` with ${plan_instruction(m)} and the task id: edits under ${join(", ", m.guarded)} and the fix-and-rerun iteration that comes with them. At most ${limit} in flight.",
     "- Your own work: read, plan, write the brief, `DelegateCheck`, verify the delegate's commit from git, re-run the named gates, settle the run file, report.",
     "- A defect you find while verifying is a new delegation (or a retry of the task), not an edit. Edits to those paths are refused by tool policy.",
-    "- A handoff you write must say that the next session is this run's orchestrator and delegates.",
+    if is_single_run(m) then "- A handoff you write must say that the next session is this run's orchestrator and delegates."
+    else "- A handoff you write must say that the next session is these runs' orchestrator and delegates.",
     "- Only the operator can lift this, for one message, by writing ${direct_marker()} in it."
   ])
 }
@@ -251,12 +322,28 @@ export pure func prompt_patch(m: OrchestratorMode) -> PromptPatch {
 export pure func prompt_patch_str(on: bool) -> string
   tests [(true, "0/1:yes:yes:yes"), (false, "0/0:no:no:no")]
 {
-  let m = if on then { on: true, run_path: ".dagr/run-plan001.json", pane: "w1:p18", max_in_flight: 1, guarded: default_guarded() }
-          else orchestrator_off();
+  let m = if on then orchestrator_on_for_tests() else orchestrator_off();
   let p = prompt_patch(m);
   let text = join("\n", p.append);
   let yn = \b. if b then "yes" else "no";
   "${intToStr(count_str(p.prepend))}/${intToStr(count_str(p.append))}:${yn(contains(text, "Delegate"))}:${yn(contains(text, ".dagr/run-plan001.json"))}:${yn(contains(text, direct_marker()))}"
+}
+
+-- The wording for one run and for several. One: the plan is named as the value
+-- to pass, exactly as before several were possible. Several: every file is
+-- named, the single-file instruction is ABSENT, and the rule is "the file that
+-- holds the task".
+export pure func prompt_note_runs_str(n: int) -> string
+  tests [
+    (1, "names001:yes names003:no single-form:yes holds-task:no"),
+    (2, "names001:yes names003:yes single-form:no holds-task:yes")
+  ]
+{
+  let paths = if n == 1 then [".dagr/run-plan001.json"] else [".dagr/run-plan001.json", ".dagr/run-plan003.json"];
+  let m = { on: true, run_paths: paths, pane: "w1:p18", max_in_flight: 1, guarded: default_guarded() };
+  let t = prompt_note(m);
+  let yn = \b. if b then "yes" else "no";
+  "names001:${yn(contains(t, "run-plan001.json"))} names003:${yn(contains(t, "run-plan003.json"))} single-form:${yn(contains(t, "dagr_plan: \""))} holds-task:${yn(contains(t, "holds the task"))}"
 }
 
 pure func count_str(xs: [string]) -> int {
@@ -514,7 +601,7 @@ export pure func tool_violation(m: OrchestratorMode, workdir: string, tool: stri
 }
 
 export pure func orchestrator_on_for_tests() -> OrchestratorMode {
-  { on: true, run_path: ".dagr/run-plan001.json", pane: "w1:p18", max_in_flight: 1, guarded: default_guarded() }
+  { on: true, run_paths: [".dagr/run-plan001.json"], pane: "w1:p18", max_in_flight: 1, guarded: default_guarded() }
 }
 
 -- Guard extensions inject USER-role feedback carrying a `[motoko-…]` marker
@@ -544,7 +631,7 @@ export pure func operator_lifted(history: [Msg]) -> bool {
 
 export pure func deny_reason(m: OrchestratorMode, violation: string) -> string {
   let limit = if m.max_in_flight == 1 then "one delegation" else "${intToStr(m.max_in_flight)} delegations";
-  "orchestrator mode (pane ${m.pane}, ${m.run_path}): ${violation} is implementation work, and this pane delegates it. Send it to `Delegate` with `dagr_plan: \"${m.run_path}\"` (at most ${limit} in flight), then verify the delegate's commit from git. Reads, git, dagr, herdr and test runs are still yours. ${mode_marker()}"
+  "orchestrator mode (pane ${m.pane}, ${join(", ", m.run_paths)}): ${violation} is implementation work, and this pane delegates it. Send it to `Delegate` with ${plan_instruction(m)} (at most ${limit} in flight), then verify the delegate's commit from git. Reads, git, dagr, herdr and test runs are still yours. ${mode_marker()}"
 }
 
 export pure func decide(m: OrchestratorMode, workdir: string, history: [Msg], call: ToolCallEnvelope) -> ToolPolicyDecision {
