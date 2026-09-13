@@ -9,10 +9,10 @@ module src/core/phase_vocab
 import std/ai (Message, ToolCall, ImagePart, StepResult)
 import std/crypto (sha256Hex)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode)
-import std/list as List (length)
+import std/list as List (length, map)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (contains, substring, replaceMany)
+import std/string (contains, substring, replaceMany, concat)
 import std/string as Str (length)
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, output_token_allowance, effective_input_limit, calibrated_tokens_anchored, calibrated_usage_percent_anchored)
 import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
@@ -289,12 +289,15 @@ pure func canonical_tool_calls(calls: [ToolCall]) -> string {
   }
 }
 
+pure func canonical_message(m: Message) -> string {
+  "m{${frame("role", m.role)}${frame("content", digest_content(m.content))}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}}"
+}
+
+-- One join over per-message frames, not a right-nested interpolation: nesting
+-- copies the whole already-built suffix at every message, O(n x history bytes)
+-- per digest, and this runs twice per CallModel step. Byte-identical output.
 pure func canonical_messages(msgs: [Message]) -> string {
-  match msgs {
-    [] => "m-end;"
-    m :: rest =>
-      "m{${frame("role", m.role)}${frame("content", digest_content(m.content))}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}}${canonical_messages(rest)}"
-  }
+  concat(List.map(canonical_message, msgs) ++ ["m-end;"])
 }
 
 -- EXPORTED FOR `journal.ail` (ADR-003 D1, PLAN-003 P1 Part 3). The journal's
