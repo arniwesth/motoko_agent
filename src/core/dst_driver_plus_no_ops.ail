@@ -212,7 +212,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- entries) to the extension's OWN list (`registered_atoms_of`, 4 entries in
 -- all). `check_no_op_profile.py` cross-checks each claim against B2's
 -- enumeration, which is what turned v10 red — as B8 §5 said it would.
-export pure func no_ops_version() -> string { "18" }
+export pure func no_ops_version() -> string { "19" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -392,7 +392,12 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- the routed clock set is unchanged. See `driver_only_attribution_ref`,
     -- which carries the full account and the reason a contract cannot dodge this
     -- the way WI-D19 dodged it.
-    content_hash: "sha256:2c86584ba403ff0501c01c887a4a41089b978b496ced23135dc86b05f12fbdbd" }
+    -- PLAN-001 P1C: re-recorded with `driver_only`'s, from
+    -- sha256:2c86584ba403ff0501c01c887a4a41089b978b496ced23135dc86b05f12fbdbd.
+    -- All five session anchors moved +9/+9/+9/+9/+18, pushed by PLAN-001 P1B.
+    -- An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38" }
 }
 
 -- ---------------------------------------------------------------------------

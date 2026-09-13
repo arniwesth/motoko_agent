@@ -217,7 +217,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
 -- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
 -- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
-export pure func compose_profile_version() -> string { "10" }
+export pure func compose_profile_version() -> string { "11" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -361,7 +361,12 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +14, pushed by a Z3 contract on
     -- `trace_sensitive_key`. An anchor re-measurement, not a table correction.
     -- See `driver_only_attribution_ref`.
-    content_hash: "sha256:2c86584ba403ff0501c01c887a4a41089b978b496ced23135dc86b05f12fbdbd" }
+    -- PLAN-001 P1C: re-recorded with both predecessors', from
+    -- sha256:2c86584ba403ff0501c01c887a4a41089b978b496ced23135dc86b05f12fbdbd.
+    -- All five session anchors moved +9/+9/+9/+9/+18, pushed by PLAN-001 P1B.
+    -- An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38" }
 }
 
 -- ---------------------------------------------------------------------------

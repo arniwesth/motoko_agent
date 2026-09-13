@@ -62,11 +62,19 @@ export pure func output_token_allowance() -> int { 65536 }
 -- surfaces (mk_v2_ext_ctx sites, rpc hook-context literals, checkpoint
 -- denominators, status int, EmptyStopFinalize wire field) so their schemas
 -- and goldens do not move.
+--
+-- P1C step 8: the `r.raw_window > 0` guard is what makes `ensures { result >=
+-- 0 }` TRUE. P1A carried the ensures over the bare `r.raw_window` and `ailang
+-- verify` answered VIOLATION with `Bounded({ raw_window: -1 })`: positivity is
+-- by construction (the two resolvers), and the type cannot say so. The guard
+-- is unreachable from either resolver, so every constructed `Bounded` reads
+-- exactly what it read before (rule 4); a hand-built non-positive fixture now
+-- reads 0, the same int an unmeasured arm reads, instead of a negative window.
 export pure func raw_window_of(limit: ContextLimit) -> int
   ensures { result >= 0 }
 {
   match limit {
-    Bounded(r) => r.raw_window,
+    Bounded(r) => if r.raw_window > 0 then r.raw_window else 0,
     Disabled => 0,
     Unknown(_) => 0
   }
@@ -74,16 +82,31 @@ export pure func raw_window_of(limit: ContextLimit) -> int
 
 -- b. working_budget_for_ext: reproduces max(0, effective(raw) - pinned) for
 -- the pre-step call. Separate from raw_window_of by rule 4.
+--
+-- P1C step 8: the allowance is a `let` literal rather than a call to
+-- `output_token_allowance()`, because `ailang verify` SKIPS any function that
+-- calls a `() -> int` ("unencodable type ()"), which left this contract blocked
+-- since P1A. `working_budget_allowance_is_the_seal_allowance` below pins the two
+-- equal, so the literal cannot drift from the one home silently.
 export pure func working_budget_for_ext(limit: ContextLimit, pinned_tokens: int) -> int
   requires { pinned_tokens >= 0 }
-  ensures { result >= 0 }
+  ensures { result >= 0 && result <= raw_window_of(limit) }
 {
   let raw = raw_window_of(limit);
-  let eff = if raw <= output_token_allowance() then 0 else raw - output_token_allowance();
+  let allowance = 65536;
+  let eff = if raw <= allowance then 0 else raw - allowance;
   if eff <= pinned_tokens then 0 else eff - pinned_tokens
 }
 
--- c. effective_input_limit: the seal. Takes the sum where phase_vocab's
+-- c. effective_input_limit: the seal. NO CONTRACT, and P1C step 8 records why
+-- rather than attaching one: its result is the `InputBudget` sum, and `ailang
+-- verify` cannot encode it — a wrapper carrying `ensures { match result {
+-- Budget(n) => n >= 0, NoBudget(_) => true } }` SKIPS with "calls user function
+-- effective_input_limit that is not SMT-encodable in this context". An int-only
+-- restatement would be `working_budget_for_ext` at pinned 0, which already
+-- carries the substantive bound.
+--
+-- Takes the sum where phase_vocab's
 -- seal_compacted_payload took raw_context_limit: int. Internal; not an ABI
 -- change. Unknown and Disabled seal to NoBudget with their reason; a
 -- non-positive Bounded window (which the resolvers never construct) seals
@@ -211,4 +234,18 @@ pure func seal_roundtrip_bounded() -> bool
     Budget(n) => n == 196608,
     NoBudget(_) => false
   }
+}
+
+pure func working_budget_allowance_is_the_seal_allowance() -> bool
+  tests [((), true)]
+{
+  working_budget_for_ext(Bounded({ raw_window: output_token_allowance() + 5, source: Catalogue }), 0) == 5
+    && working_budget_for_ext(Bounded({ raw_window: output_token_allowance(), source: Catalogue }), 0) == 0
+}
+
+pure func raw_window_of_non_positive_bounded_is_zero() -> bool
+  tests [((), true)]
+{
+  raw_window_of(Bounded({ raw_window: 0, source: Catalogue })) == 0
+    && raw_window_of(Bounded({ raw_window: -1, source: ProfileOverride })) == 0
 }

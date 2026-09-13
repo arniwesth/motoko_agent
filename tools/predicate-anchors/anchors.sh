@@ -548,8 +548,29 @@ check src/core/tool_phase.ail 389 'exec_scratchpad_cell_ws' "the call attributed
 # priced ONE P3 re-baseline, which Part 3 spent. A second re-issue of three
 # profiles for a payload field would have been drift the plan never priced.
 
+# PLAN-001 P1C RE-BASELINED THE FIVE session.ail ANCHORS A TENTH TIME --
+# `1422/1681/1793/3884/4096 -> 1431/1690/1802/3893/4114` (+9, +9, +9, +9, +18).
+# The drift is PLAN-001 P1B's (`ad558d0`): `runtime_status_json`'s
+# `context_limit_source` field and its step-3 comment above the first anchor,
+# the `ContextLimitResolved` emit at `run_v2_traced_from_seed` above the fourth,
+# and the same record at the untraced entry above the fifth (hence +18). P1B
+# recorded the move and left the gate to P1C on purpose, so the re-issue is paid
+# ONCE for P1's session.ail edits rather than once per part.
+#
+# THE D4 JUDGEMENT, with the evidence: `grep -o 'clock_now.*'` over
+# `git show ad558d0~1:src/core/session.ail` and over the tree is IDENTICAL
+# (thirteen hits, same text, same order), and all five anchored expressions are
+# byte-identical at their new offsets. No site was added, removed or re-routed.
+#
+# WIDTH: the six-file form. This file, `dst_attribution_table.ail` (5 rows + 1
+# test literal), `attribution_table_dst.ail` (1 literal in `omitted_site`; its
+# synthetic `:4242` "discovered by nobody" site is not an anchor and still names
+# no live site), and the three profiles: driver_only v29 -> v30, no_ops v18 ->
+# v19, compose v10 -> v11. `driver_plus_herdr` is NOT re-issued, for the reason
+# the PLAN-003 P3 Part 3 note gives; it stays in DST_KNOWN_RED.
+
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1422 1681 1793 3884 4096; do
+for l in 1431 1690 1802 3893 4114; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

@@ -509,7 +509,7 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "29" }
+export pure func driver_only_version() -> string { "30" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -816,7 +816,16 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- expressions are byte-identical at their new offsets, so no site was added,
     -- removed, re-argued or re-routed and the D4 judgement has the same answer
     -- it had before.
-    content_hash: "sha256:2c86584ba403ff0501c01c887a4a41089b978b496ced23135dc86b05f12fbdbd" }
+    -- PLAN-001 P1C: re-recorded with both successors', from
+    -- sha256:2c86584ba403ff0501c01c887a4a41089b978b496ced23135dc86b05f12fbdbd.
+    -- All five session anchors moved — 1422/1681/1793/3884/4096 ->
+    -- 1431/1690/1802/3893/4114 (+9, +9, +9, +9, +18) — pushed by PLAN-001 P1B
+    -- (`ad558d0`: the `context_limit_source` status field, `ContextLimitResolved`
+    -- at the per-run entry and the policy storing the sum), which recorded the
+    -- drift and left the re-issue to P1C. NOT A TABLE CORRECTION: `clock_now(`
+    -- text identical against `git show ad558d0~1:`, thirteen hits, and all five
+    -- anchored expressions byte-identical at their new offsets.
+    content_hash: "sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38" }
 }
 
 -- ---------------------------------------------------------------------------
