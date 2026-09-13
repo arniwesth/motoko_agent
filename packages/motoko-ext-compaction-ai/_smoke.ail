@@ -28,6 +28,7 @@
 
 module sunholo/motoko_ext_compaction_ai/_smoke
 
+import std/json (ja)
 import std/io (println)
 import std/string (length, contains)
 import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config)
@@ -57,6 +58,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     state_key: "k",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     context_limit: 1,
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),

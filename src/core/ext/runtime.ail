@@ -3,7 +3,7 @@ module src/core/ext/runtime
 import std/clock (now)
 import std/io (println)
 import std/crypto (sha256Hex)
-import std/json (Json, encode, jo, kv, js, jnum, get, asString)
+import std/json (Json, encode, jo, kv, js, jnum, get, asString, ja)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import std/string (startsWith, length as string_length, charAt, charCode)
@@ -744,6 +744,7 @@ func smoke_ctx() -> ExtCtx {
 	    state_key: "k",
 	    finish_reason: "",
 	    work_in_flight: [],
+	    open_waits: ja([]),
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),

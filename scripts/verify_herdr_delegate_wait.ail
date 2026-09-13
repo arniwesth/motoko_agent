@@ -29,7 +29,7 @@
 module scripts/verify_herdr_delegate_wait
 
 import std/io (println, exit)
-import std/json (Json, jo, kv, js, encode, decode, get, asString, asArray, asObject)
+import std/json (Json, jo, kv, js, encode, decode, get, asString, asArray, asObject, ja)
 import std/string (contains)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -227,6 +227,7 @@ func mk_ctx(p: ExtPorts, world: ExtWorld) -> ExtCtx {
     state_key: "test", context_limit: 0, ports: p,
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
     world: world }
 }

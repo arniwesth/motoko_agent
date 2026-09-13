@@ -217,7 +217,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
 -- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
 -- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
-export pure func compose_profile_version() -> string { "11" }
+export pure func compose_profile_version() -> string { "12" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -366,7 +366,12 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +9/+9/+9/+9/+18, pushed by PLAN-001 P1B.
     -- An anchor re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38" }
+        -- PLAN-002 W2: re-recorded with both predecessors', from
+    -- sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38.
+    -- All five session anchors moved +16/+16/+16/+119/+119, pushed by PLAN-002
+    -- W2. An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:2ec1e8dd776def8ce158ffcf3ccfc31dd06500cebcf6af8a306c95147f17009e" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -721,7 +726,7 @@ export pure func driver_plus_compose() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface, ABI 7.3 (the WorkInFlight variant; 7.0 added ExitIntent; was 6.0 at B8, 5.0 before it). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
+        note: "the motoko-ext-abi hook surface, ABI 7.4 (ExtCtx.open_waits; 7.3 the WorkInFlight variant; 7.0 added ExitIntent; was 6.0 at B8, 5.0 before it). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
       { boundary_id: "extension.ext_ports", included: true,
         note: "the ExtPorts surface an extension uses to reach the world. **INCLUDED, and this is the whole difference between this profile and both predecessors.** driver_only excluded it because it installs nothing; driver_plus_no_ops excluded it BY MEASUREMENT, classifier 3 reporting 0 ExtPorts field calls in each installed closure, and named it 'the boundary WI-C5's compose-bearing profile would have to include'. This is that profile and it includes it: classifier 3 reports 36 ExtPorts field calls in compose's closure, and the graded session records one of them — a tool_handle — as an origin-tagged interaction in the recorded program" }
     ],
@@ -1056,7 +1061,7 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
 pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
   tests [((), true)]
   {
-    -- SIX SINCE ABI 7.3, five before it. This is the third hand-pinned count in
+    -- SIX SINCE the 7.3 ABI bump, five before it. This is the third hand-pinned count in
     -- the tree that has to move when a row-declaring kind is added — the
     -- barrier count and `EXPECTED_CAPABILITY_KINDS` are the others — and it is
     -- pinned rather than derived for their reason: a kind added to the ABI and
@@ -1074,7 +1079,7 @@ pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = compose_manifest("r", "t", "7.3", "{}", ["env_get"], [], "r");
+    let m = compose_manifest("r", "t", "7.4", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_compose().installed_packages)
       && List.length(m.extension_packages) == 1
       && m.profile_id == compose_profile_id()

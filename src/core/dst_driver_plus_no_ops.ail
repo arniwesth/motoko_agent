@@ -212,7 +212,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- entries) to the extension's OWN list (`registered_atoms_of`, 4 entries in
 -- all). `check_no_op_profile.py` cross-checks each claim against B2's
 -- enumeration, which is what turned v10 red — as B8 §5 said it would.
-export pure func no_ops_version() -> string { "19" }
+export pure func no_ops_version() -> string { "20" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -397,7 +397,12 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +9/+9/+9/+9/+18, pushed by PLAN-001 P1B.
     -- An anchor re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38" }
+        -- PLAN-002 W2: re-recorded with `driver_only`'s, from
+    -- sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38.
+    -- All five session anchors moved +16/+16/+16/+119/+119, pushed by PLAN-002
+    -- W2. An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:2ec1e8dd776def8ce158ffcf3ccfc31dd06500cebcf6af8a306c95147f17009e" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -676,7 +681,7 @@ export pure func driver_plus_no_ops() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface, ABI 7.3 (the WorkInFlight variant; 7.0 added ExitIntent; was 6.0 at B8, 5.0 before it). INCLUDED, which is the whole difference between this profile and driver_only: four extensions' hooks are dispatched across it on every run. What that buys is the DISPATCH being under test, not the extensions' effects — they perform none, and the coverage statement says so" },
+        note: "the motoko-ext-abi hook surface, ABI 7.4 (ExtCtx.open_waits; 7.3 the WorkInFlight variant; 7.0 added ExitIntent; was 6.0 at B8, 5.0 before it). INCLUDED, which is the whole difference between this profile and driver_only: four extensions' hooks are dispatched across it on every run. What that buys is the DISPATCH being under test, not the extensions' effects — they perform none, and the coverage statement says so" },
       { boundary_id: "extension.ext_ports", included: false,
         note: "the ExtPorts surface an extension uses to reach the world. EXCLUDED, and by MEASUREMENT rather than by declaration: classifier 3 reports 0 ExtPorts field calls in each of the four installed closures, so no installed hook crosses this boundary at all. It is the boundary WI-C5's compose-bearing profile would have to include, and naming it excluded here is what keeps that visible" }
     ],
@@ -978,7 +983,7 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = no_ops_manifest("r", "t", "7.3", "{}", ["env_get"], [], "r");
+    let m = no_ops_manifest("r", "t", "7.4", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_no_ops().installed_packages)
       && List.length(m.extension_packages) == 4
       && m.profile_id == no_ops_id()

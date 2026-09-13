@@ -48,7 +48,7 @@ module scripts/dst/compose_live_exec
 
 import std/io (println, exit)
 import std/string (contains)
-import std/json (jo)
+import std/json (jo, ja)
 import src/core/config (VerificationConfig)
 import src/core/session as Session (ext_ports_of)
 import src/core/ports (empty_world_state)
@@ -120,6 +120,7 @@ func live_ctx(r: ExtRuntime) -> ExtCtx ! {AI, Clock, Env, FS, IO, Net, Process, 
     state_key: "live",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     context_limit: 0,
     ports: Session.ext_ports_of(live_ports(r), w, ""),
     artifacts: jo([]),

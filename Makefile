@@ -386,7 +386,7 @@ depth_canary:
 phase_c_l1: compaction_dst
 	ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
 	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
-	ailang run --caps IO,Env,Clock,FS,Trace --entry main scripts/dst/phase_c2_wiring_scenarios.ail
+	ailang run --caps IO,Env,Clock,FS,Process,Trace --entry main scripts/dst/phase_c2_wiring_scenarios.ail
 
 # WI-C5. D5's declared-versus-performed detector, which D5 itself names and
 # records as unavailable. Two producers, and S16 requires them named:
@@ -2369,7 +2369,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2437,6 +2437,15 @@ verify_herdr_check_answer:
 # true exactly on the settle paths; a motoko check re-reads the answer before
 # settling `lost`. Scripted ports, no herdr. Then W2 gate 6's fixtures: each
 # committed JSON must equal what herdr.ail's builders print, byte for byte.
+# PLAN-002 W2 gate 6 (R7): the core half of the cross-producer check. W1b's
+# fixtures (above) are kept equal to herdr.ail's builder; this decodes the same
+# files with the core's strict WaitDescriptor decoder and apply_tool_lifecycle.
+.PHONY: verify_wait_descriptor_fixtures
+verify_wait_descriptor_fixtures:
+	@out=$$(ailang run --caps IO,FS --entry main scripts/verify_wait_descriptor_fixtures.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_wait_descriptor_fixtures: the core does not read W1b's Delegate/DelegateCheck envelopes as PLAN-002 W2 Part 3 does" && exit 1)
+
 .PHONY: verify_herdr_delegate_wait
 verify_herdr_delegate_wait:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \

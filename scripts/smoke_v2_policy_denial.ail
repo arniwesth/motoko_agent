@@ -24,7 +24,7 @@ import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
 import src/core/ext/runtime (dispatch_tool_policy)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/tool_contract (ToolCallEnvelope)
-import std/json (jo, kv, js, encode)
+import std/json (jo, kv, js, encode, ja)
 import src/core/config (VerificationConfig)
 import std/ai (ToolSchema)
 
@@ -98,6 +98,7 @@ export func main() -> () ! {IO, Clock, Env} {
 	    state_key: "test",
 	    finish_reason: "",
 	    work_in_flight: [],
+	    open_waits: ja([]),
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),

@@ -1,5 +1,6 @@
 module scripts/dst/compaction_policy_dst
 
+import std/json (ja)
 import std/io (println, exit)
 import std/list (length)
 import std/result (Result, Ok, Err)
@@ -59,6 +60,7 @@ func ctx(limit: int) -> ExtCtx {
 	    state_key: "k",
 	    finish_reason: "",
 	    work_in_flight: [],
+	    open_waits: ja([]),
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
 	    telemetry: zero_token_telemetry(), world: empty_ext_world()

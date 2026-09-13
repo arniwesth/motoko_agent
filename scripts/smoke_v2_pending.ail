@@ -43,7 +43,7 @@ import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_toke
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
 import std/ai (ToolSchema)
-import std/json (jo)
+import std/json (jo, ja)
 
 -- New since a9b53e7: extensions declare their tool schemas via on_describe_tools.
 -- Test hooks return empty list (the canonical "extension provides no tools" answer).
@@ -137,6 +137,7 @@ func mk_ctx() -> ExtCtx {
 	    state_key: "test",
 	    finish_reason: "",
 	    work_in_flight: [],
+	    open_waits: ja([]),
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),

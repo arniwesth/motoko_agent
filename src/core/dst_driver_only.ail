@@ -509,7 +509,7 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "30" }
+export pure func driver_only_version() -> string { "31" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -825,7 +825,16 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- drift and left the re-issue to P1C. NOT A TABLE CORRECTION: `clock_now(`
     -- text identical against `git show ad558d0~1:`, thirteen hits, and all five
     -- anchored expressions byte-identical at their new offsets.
-    content_hash: "sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38" }
+        -- PLAN-002 W2: re-recorded with both successors', from
+    -- sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38.
+    -- All five session anchors moved — 1431/1690/1802/3893/4114 ->
+    -- 1447/1706/1818/4012/4233 (+16, +16, +16, +119, +119) — pushed by W2's own
+    -- ADR-002 D2/D3 edits (`C2LoopState.open_waits`, the `c2_after_dp7` split and
+    -- `classify_candidate`). NOT A TABLE CORRECTION: `clock_now(` text identical
+    -- against `git show 957c91e:`, thirteen hits, and all five anchored
+    -- expressions byte-identical at their new offsets. The tool_phase anchors did
+    -- not move.
+    content_hash: "sha256:2ec1e8dd776def8ce158ffcf3ccfc31dd06500cebcf6af8a306c95147f17009e" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -861,7 +870,7 @@ export pure func driver_only() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: false,
-        note: "the motoko-ext-abi hook surface, ABI 7.3 (the WorkInFlight variant; 7.0 the ExitIntent variant; 6.0 at B8, the Capability list; SAID 5.0 through B7, and this note SAID 4.0 from WI-A10 until WI-D14, 2026-08-07, and had been stale since WI-B2b took the ABI to 5.0 — nothing compared it, which is the transcription defect this module's header is about; `check_fixtures.py` now re-derives it from packages/motoko-ext-abi/ailang.toml). Excluded BECAUSE the install list is empty — no extension behaviour is in the system under test, which is what makes this the interim profile the ADR describes rather than a claim about extensions" }
+        note: "the motoko-ext-abi hook surface, ABI 7.4 (ExtCtx.open_waits; 7.3 the WorkInFlight variant; 7.0 the ExitIntent variant; 6.0 at B8, the Capability list; SAID 5.0 through B7, and this note SAID 4.0 from WI-A10 until WI-D14, 2026-08-07, and had been stale since WI-B2b took the ABI to 5.0 — nothing compared it, which is the transcription defect this module's header is about; `check_fixtures.py` now re-derives it from packages/motoko-ext-abi/ailang.toml). Excluded BECAUSE the install list is empty — no extension behaviour is in the system under test, which is what makes this the interim profile the ADR describes rather than a claim about extensions" }
     ],
 
     -- D5 field 4. The logical transitions the profile promises a fault leaves
@@ -1180,7 +1189,7 @@ pure func test_manifest_reads_the_vocabulary_version() -> bool
     -- test asserts — but a fixture carrying a stale version reads as current,
     -- and `check_fixtures.check_abi_version` is deliberately TOTAL over every
     -- manifest this file builds rather than only over the shipped ones.
-    let m = driver_only_manifest("r", "t", "7.3", "{}", ["ai_step"], [], "r");
+    let m = driver_only_manifest("r", "t", "7.4", "{}", ["ai_step"], [], "r");
     m.event_vocabulary_version == event_vocabulary_version()
       && m.profile_id == driver_only_id()
       -- Reads rather than transcribes. This line held the literal "1" and went

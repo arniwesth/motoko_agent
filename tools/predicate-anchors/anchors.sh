@@ -569,8 +569,29 @@ check src/core/tool_phase.ail 389 'exec_scratchpad_cell_ws' "the call attributed
 # v19, compose v10 -> v11. `driver_plus_herdr` is NOT re-issued, for the reason
 # the PLAN-003 P3 Part 3 note gives; it stays in DST_KNOWN_RED.
 
+# PLAN-002 W2 RE-BASELINED THE FIVE session.ail ANCHORS AN ELEVENTH TIME --
+# `1431/1690/1802/3893/4114 -> 1447/1706/1818/4012/4233` (+16, +16, +16, +119,
+# +119). The drift is W2's own (ADR-002 D2/D3): `C2LoopState.open_waits` and its
+# comment and the `StepState`/`WaitDescriptor` import line above the first three;
+# above the last two, additionally the `c2_after_dp7` split into
+# `c2_dp7_rejected_state`/`c2_dp7_approved_state`, `CandidateClass` and
+# `classify_candidate`, and the `open_waits` field in every loop literal. The
+# tool_phase.ail anchors (:388/:389/:484) did NOT move: W2's edits in that file
+# above :484 were written line-neutral (joined onto existing lines), because
+# :389 is also carried by four profile DST scripts.
+#
+# THE D4 JUDGEMENT, with the evidence: `grep -o 'clock_now.*'` over
+# `git show 957c91e:src/core/session.ail` and over the tree is IDENTICAL
+# (thirteen hits, same text, same order), and all five anchored expressions are
+# byte-identical at their new offsets. No site was added, removed or re-routed.
+#
+# WIDTH: the six-file form again -- this file, `dst_attribution_table.ail` (5
+# rows + 1 test literal), `attribution_table_dst.ail` (1 literal in
+# `omitted_site`), and the three profiles: driver_only v30 -> v31, no_ops v19 ->
+# v20, compose v11 -> v12. `driver_plus_herdr` is NOT re-issued (DST_KNOWN_RED).
+
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1431 1690 1802 3893 4114; do
+for l in 1447 1706 1818 4012 4233; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

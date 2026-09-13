@@ -585,6 +585,20 @@ export type ExtCtx = {
   -- distinction it buys a finalize hook: "the model's answer sounds unfinished"
   -- is a claim about prose, and "a delegate is still running" is not.
   work_in_flight: [WorkItem],
+  -- 7.4: the waits the conversation loop holds open (ADR-002 D2/D3, PLAN-002
+  -- W2), as a JSON array of the wire objects the producer writes -- a
+  -- `Delegate` result's `metadata.wait`, `{ id, delegate_kind, locator: { pane },
+  -- answer_path, run_key }` -- encoded by the core from its typed list. `[]`
+  -- means none.
+  --
+  -- `Json` AND NOT A TYPE, deliberately: this module imports only `std`, so it
+  -- cannot name the core's `WaitDescriptor`, and a mirror type here would give
+  -- one wire shape two owners. The core's strict decoder is the one owner.
+  --
+  -- Where `work_in_flight` is a DECLARATION other extensions made, this is the
+  -- loop's own VALIDATED state: a wait is here because a tool envelope carried
+  -- one and the core accepted it. No hook reads it yet (W4 does).
+  open_waits: Json,
   ports: ExtPorts,
   artifacts: Json,
   telemetry: TokenTelemetry,

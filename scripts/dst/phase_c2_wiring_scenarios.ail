@@ -10,12 +10,15 @@ import std/list (length)
 import std/ai (Message, ToolCall, ToolSchema, StreamChunk)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (contains)
+import std/string (contains, split)
 import std/json (jo, JString)
+import std/fs (writeFile, readFile)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/phase_vocab (
   CompactionStageRecord,
   DecisionRecord,
+  Dp7VerifierRejected,
+  ExtSolverFeedback,
   EmptyStopFinalize,
   LedgerEvent,
   LedgerRecord,
@@ -56,6 +59,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ExtRuntime,
   FinalizeDecision,
   NoDecision,
+  ContinueWithFeedback,
   PassThrough,
   PreStepDecision,
   PromptPatch,
@@ -1117,6 +1121,237 @@ func step_budget_suspends_with_history_scenario() -> Scenario {
   { id: "phase_c.c2.step_budget_suspends_with_history", seed: "fixed", run: scenario_step_budget_suspends_with_history }
 }
 
+-- ============================================================================
+-- PLAN-002 W2 gate 2: DP7 BEFORE THE SOLVER, driver-level, because
+-- `classify_candidate` is effectful. Every case below runs a VERIFIER-ENABLED
+-- runtime, which no other scenario in this file does; the Makefile line gained
+-- `Process` for exactly this (the verifier is an `exec`). Only these cases can
+-- go red on a stage-ORDER bug: `ledger_parity` and `smoke_driver` register no
+-- extension, so their sequences are order-invariant by construction.
+-- ============================================================================
+
+func w2_dp7_count_path() -> string {
+  ".ailang/w2-dp7-verifier-runs"
+}
+
+-- `exit 3` rejects (nothing recognisable as missing infrastructure is printed);
+-- `true` approves. Both append a line first, so a case can count RUNS, which is
+-- the only way to see an approval: an approving verifier emits no event.
+func w2_verifier(approve: bool) -> VerificationConfig {
+  let tail = if approve then "true" else "exit 3";
+  { enabled: true, command: "echo run >> ${w2_dp7_count_path()}; ${tail}" }
+}
+
+func w2_verifier_runs() -> int ! {FS} {
+  w2_count_lines(readFile(w2_dp7_count_path()))
+}
+
+func w2_count_lines(text: string) -> int {
+  w2_count_runs(split(text, "\n"))
+}
+
+func w2_count_runs(xs: [string]) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x == "run" then 1 else 0) + w2_count_runs(rest)
+  }
+}
+
+-- The (a)/(b)/(e) solver: feedback on the candidate `first`, no opinion on any
+-- other. A `ContinueWithFeedback` solver is the ADR's named case.
+func w2_feedback_on_first(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
+  if text == "first" then ContinueWithFeedback("w2 solver feedback") else NoDecision
+}, next_state: ctx.world } }
+
+func w2_feedback_hook() -> FixtureHooks {
+  fixture_hooks("w2_feedback_solver", {
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+      PassThrough
+    }, next_state: ctx.world } },
+    policy: no_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: w2_feedback_on_first
+  })
+}
+
+func w2_rt(entries: [FixtureHooks], approve: bool) -> ExtRuntime {
+  { registry: { entries: entries }, strict_mode: false, verification: w2_verifier(approve) }
+}
+
+func w2_run(rt: ExtRuntime, steps: int, persist_retries: int, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = writeFile(w2_dp7_count_path(), "");
+  Session.run_v2_session_traced_with_persist_retries(rt, "task", "", false, budget(), "phase-c-model", history(), ".", steps, false, 0, zero_rates(), persist_retries, Scripted(script))
+}
+
+func w2_count_event(records: [LedgerRecord], wire: string) -> int {
+  match records {
+    [] => 0,
+    r :: rest => (match r { WireRecord(e) => if event_wire_name(e) == wire then 1 else 0, _ => 0 }) + w2_count_event(rest, wire)
+  }
+}
+
+func w2_dp7_at_step(records: [LedgerRecord], step: int) -> int {
+  match records {
+    [] => 0,
+    r :: rest => (match r { WireRecord(Dp7VerifierRejected(info)) => if info.step == step then 1 else 0, _ => 0 }) + w2_dp7_at_step(rest, step)
+  }
+}
+
+func w2_feedback_at_step(records: [LedgerRecord], step: int) -> int {
+  match records {
+    [] => 0,
+    r :: rest => (match r { WireRecord(ExtSolverFeedback(info)) => if info.step == step then 1 else 0, _ => 0 }) + w2_feedback_at_step(rest, step)
+  }
+}
+
+func w2_prefix(actual: [string], expected: [string]) -> bool {
+  match expected {
+    [] => true,
+    e :: es => match actual { a :: as_ => a == e && w2_prefix(as_, es), [] => false }
+  }
+}
+
+func w2_nth_content(msgs: [Message], n: int) -> string {
+  match msgs {
+    [] => "",
+    m :: rest => if n == 0 then m.content else w2_nth_content(rest, n - 1)
+  }
+}
+
+func w2_checks(name: string, checks: [{ name: string, ok: bool, detail: string }]) -> Result[(), ScenarioFailure] {
+  match checks {
+    [] => Ok(()),
+    c :: rest => if c.ok then w2_checks(name, rest) else Err({ failed_invariant: "${name}: ${c.name}", trace: [c.detail] })
+  }
+}
+
+-- (a) The solver WOULD bounce the candidate and DP7 rejects it: the next
+-- injection is the DP7 rejection and no `ExtSolverFeedback` is recorded.
+func scenario_w2_dp7_rejects_before_feedback_solver() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let traced = w2_run(w2_rt([w2_feedback_hook()], false), 1, 0, [prose_step("first"), prose_step("first")]);
+  let runs = w2_verifier_runs();
+  let records = traced.trace.records;
+  let decisions = trace_decision_names(traced.trace);
+  let injected = w2_nth_content(final_history(traced), 3);
+  w2_checks("w2 (a)", [
+    { name: "the first injection follows CallModel", ok: w2_prefix(decisions, ["CallModel", "InjectUserMessage"]), detail: "decisions=${join_names(decisions)}" },
+    { name: "the injection is the DP7 rejection", ok: contains(injected, "does not type-check"), detail: "history[3]=${injected}" },
+    { name: "no ExtSolverFeedback recorded", ok: w2_count_event(records, "ext_solver_feedback") == 0, detail: "feedback=${show(w2_count_event(records, "ext_solver_feedback"))}" },
+    { name: "one Dp7VerifierRejected at step 0", ok: w2_dp7_at_step(records, 0) == 1, detail: "dp7@0=${show(w2_dp7_at_step(records, 0))}" },
+    { name: "the verifier ran once", ok: runs == 1, detail: "runs=${show(runs)}" }
+  ])
+}
+
+func w2_dp7_rejects_before_feedback_solver_scenario() -> Scenario {
+  { id: "phase_c.c2.w2_dp7_rejects_before_feedback_solver", seed: "fixed", run: scenario_w2_dp7_rejects_before_feedback_solver }
+}
+
+-- (b) DP7 approves, then the solver gives feedback, as today. The second
+-- candidate is approved by DP7 and finalized WITHOUT a second verifier run
+-- (stage 5 does not re-verify a non-blank candidate): two candidates, two runs.
+func scenario_w2_dp7_approves_then_feedback() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let traced = w2_run(w2_rt([w2_feedback_hook()], true), 8, 0, [prose_step("first"), prose_step("second")]);
+  let runs = w2_verifier_runs();
+  let records = traced.trace.records;
+  let decisions = trace_decision_names(traced.trace);
+  w2_checks("w2 (b)", [
+    { name: "run succeeds", ok: match traced.result { Ok(_) => true, Err(_) => false }, detail: "decisions=${join_names(decisions)}" },
+    { name: "decisions are feedback then finalize", ok: names_equal(decisions, ["CallModel", "InjectUserMessage", "CallModel", "Finalize"]), detail: "decisions=${join_names(decisions)}" },
+    { name: "one ExtSolverFeedback at step 0", ok: w2_feedback_at_step(records, 0) == 1 && w2_count_event(records, "ext_solver_feedback") == 1, detail: "feedback=${show(w2_count_event(records, "ext_solver_feedback"))}" },
+    { name: "no Dp7VerifierRejected", ok: w2_count_event(records, "dp7_verifier_rejected") == 0, detail: "dp7=${show(w2_count_event(records, "dp7_verifier_rejected"))}" },
+    { name: "the verifier ran once per candidate", ok: runs == 2, detail: "runs=${show(runs)}" }
+  ])
+}
+
+func w2_dp7_approves_then_feedback_scenario() -> Scenario {
+  { id: "phase_c.c2.w2_dp7_approves_then_feedback", seed: "fixed", run: scenario_w2_dp7_approves_then_feedback }
+}
+
+-- (c) A candidate the persist nudge would take (retries ENABLED: the default
+-- `MOTOKO_PERSIST_RETRIES=0` turns it off), and DP7 rejects it: rejection, no
+-- `PersistNudge`. No solver.
+func scenario_w2_dp7_rejects_before_persist_nudge() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let traced = w2_run(w2_rt([], false), 1, 1, [prose_step("not done"), prose_step("not done")]);
+  let records = traced.trace.records;
+  let decisions = trace_decision_names(traced.trace);
+  let injected = w2_nth_content(final_history(traced), 3);
+  w2_checks("w2 (c)", [
+    { name: "the first injection follows CallModel", ok: w2_prefix(decisions, ["CallModel", "InjectUserMessage"]), detail: "decisions=${join_names(decisions)}" },
+    { name: "the injection is the DP7 rejection", ok: contains(injected, "does not type-check"), detail: "history[3]=${injected}" },
+    { name: "no PersistNudge recorded", ok: w2_count_event(records, "persist_nudge") == 0, detail: "nudges=${show(w2_count_event(records, "persist_nudge"))}" },
+    { name: "one Dp7VerifierRejected at step 0", ok: w2_dp7_at_step(records, 0) == 1, detail: "dp7@0=${show(w2_dp7_at_step(records, 0))}" }
+  ])
+}
+
+func w2_dp7_rejects_before_persist_nudge_scenario() -> Scenario {
+  { id: "phase_c.c2.w2_dp7_rejects_before_persist_nudge", seed: "fixed", run: scenario_w2_dp7_rejects_before_persist_nudge }
+}
+
+-- (d) A BLANK candidate with `empty_stop_guard` registered: the guard's
+-- feedback, and no `Dp7VerifierRejected` at stage 2 (blank skips it). The
+-- verifier does not run for it at all, because the guard's feedback returns
+-- before stage 5.
+func scenario_w2_blank_candidate_goes_to_empty_stop_guard() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let traced = w2_run(w2_rt([guard_hook()], false), 1, 0, [prose_step(""), prose_step("")]);
+  let runs = w2_verifier_runs();
+  let records = traced.trace.records;
+  let decisions = trace_decision_names(traced.trace);
+  w2_checks("w2 (d)", [
+    { name: "the first injection follows CallModel", ok: w2_prefix(decisions, ["CallModel", "InjectUserMessage"]), detail: "decisions=${join_names(decisions)}" },
+    { name: "one ExtSolverFeedback at step 0", ok: w2_feedback_at_step(records, 0) == 1, detail: "feedback@0=${show(w2_feedback_at_step(records, 0))}" },
+    { name: "no Dp7VerifierRejected at step 0", ok: w2_dp7_at_step(records, 0) == 0, detail: "dp7@0=${show(w2_dp7_at_step(records, 0))}" },
+    { name: "the verifier did not run for step 0", ok: runs == 0, detail: "runs=${show(runs)}" }
+  ])
+}
+
+func w2_blank_candidate_goes_to_empty_stop_guard_scenario() -> Scenario {
+  { id: "phase_c.c2.w2_blank_candidate_goes_to_empty_stop_guard", seed: "fixed", run: scenario_w2_blank_candidate_goes_to_empty_stop_guard }
+}
+
+-- (d') §1 row 7: a blank candidate that CLEARS the completion policy is still
+-- verified at stage 5, as HEAD did through `c2_after_dp7`. No solver, so the
+-- blank candidate reaches finalize and the rejecting verifier rejects it.
+func scenario_w2_blank_candidate_still_verified_at_finalize() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let traced = w2_run(w2_rt([], false), 1, 0, [prose_step(""), prose_step("")]);
+  let runs = w2_verifier_runs();
+  let records = traced.trace.records;
+  w2_checks("w2 (d')", [
+    { name: "one Dp7VerifierRejected at step 0", ok: w2_dp7_at_step(records, 0) == 1, detail: "dp7@0=${show(w2_dp7_at_step(records, 0))}" },
+    { name: "the verifier ran once", ok: runs == 1, detail: "runs=${show(runs)}" }
+  ])
+}
+
+func w2_blank_candidate_still_verified_at_finalize_scenario() -> Scenario {
+  { id: "phase_c.c2.w2_blank_candidate_still_verified_at_finalize", seed: "fixed", run: scenario_w2_blank_candidate_still_verified_at_finalize }
+}
+
+-- (e) A multi-step run: the feedback solver for the first candidate, no opinion
+-- after it; the verifier rejects every candidate. At most one
+-- `Dp7VerifierRejected` per model step, and exactly one verifier run per
+-- candidate (three steps, three runs).
+func scenario_w2_at_most_one_dp7_rejection_per_step() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let traced = w2_run(w2_rt([w2_feedback_hook()], false), 3, 0, [prose_step("first"), prose_step("second"), prose_step("third"), prose_step("fourth")]);
+  let runs = w2_verifier_runs();
+  let records = traced.trace.records;
+  let total = w2_count_event(records, "dp7_verifier_rejected");
+  w2_checks("w2 (e)", [
+    { name: "at most one Dp7VerifierRejected at step 0", ok: w2_dp7_at_step(records, 0) <= 1, detail: "dp7@0=${show(w2_dp7_at_step(records, 0))}" },
+    { name: "at most one Dp7VerifierRejected at step 1", ok: w2_dp7_at_step(records, 1) <= 1, detail: "dp7@1=${show(w2_dp7_at_step(records, 1))}" },
+    { name: "at most one Dp7VerifierRejected at step 2", ok: w2_dp7_at_step(records, 2) <= 1, detail: "dp7@2=${show(w2_dp7_at_step(records, 2))}" },
+    { name: "every step's candidate was rejected once", ok: total == 3 && runs == 3, detail: "dp7=${show(total)} runs=${show(runs)}" },
+    { name: "no ExtSolverFeedback (DP7 rejected first)", ok: w2_count_event(records, "ext_solver_feedback") == 0, detail: "feedback=${show(w2_count_event(records, "ext_solver_feedback"))}" }
+  ])
+}
+
+func w2_at_most_one_dp7_rejection_per_step_scenario() -> Scenario {
+  { id: "phase_c.c2.w2_at_most_one_dp7_rejection_per_step", seed: "fixed", run: scenario_w2_at_most_one_dp7_rejection_per_step }
+}
+
 export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Stream, Trace} {
   let scenarios = [
     decision_record_append_name_round_trip_scenario(),
@@ -1138,7 +1373,13 @@ export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Str
 	    progress_contract_completion_passes_scenario(),
 	    progress_contract_allowed_compaction_passes_scenario(),
 	    progress_contract_no_contract_passes_scenario(),
-	    step_budget_suspends_with_history_scenario()
+	    step_budget_suspends_with_history_scenario(),
+	    w2_dp7_rejects_before_feedback_solver_scenario(),
+	    w2_dp7_approves_then_feedback_scenario(),
+	    w2_dp7_rejects_before_persist_nudge_scenario(),
+	    w2_blank_candidate_goes_to_empty_stop_guard_scenario(),
+	    w2_blank_candidate_still_verified_at_finalize_scenario(),
+	    w2_at_most_one_dp7_rejection_per_step_scenario()
 	  ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then

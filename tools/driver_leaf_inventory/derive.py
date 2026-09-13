@@ -130,7 +130,12 @@ HELPED = {
 # exclude — with the span applied the inventory is 24 sites and 0 unresolved,
 # which is what P1 Part 4 measured. §0.8's frozen `HELPED`, `CALL_RE` and
 # `REQUEST_CLASS` are untouched.
-BRIDGE_SPAN = ("src/core/session.ail", 1045, 1434)
+# RE-PINNED AT PLAN-002 W2, 1045-1434 -> 1061-1450, ALL +16, content UNCHANGED:
+# `diff` of `git show 957c91e:src/core/session.ail | sed -n '1045,1434p'` against
+# `sed -n '1061,1450p'` of the working tree is EMPTY. The +16 is above the span:
+# `C2LoopState.open_waits` and its comment (ADR-002 D2/D3), declared with the
+# record. No leaf was added, removed or re-routed.
+BRIDGE_SPAN = ("src/core/session.ail", 1061, 1450)
 
 AGGREGATE_HELPERS = [
     "resolve_context_limit",

@@ -46,7 +46,7 @@ import src/core/types (Msg)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
-import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
+import src/core/ext_world (world_to_token, token_to_world, clear_holder) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, effective_input_limit)
 import src/core/context_usage (resolve_context_limit_sum)
 import src/core/context_limit (Bounded, Catalogue, is_bounded, raw_window_of, working_budget_for_ext) -- PLAN-001 P1: the sum's three int projections; nothing else erases the reason
@@ -132,7 +132,7 @@ import src/core/phase_vocab (
   SessionStart, SessionResumed, SessionResumedInfo,
   ContextLimitResolved, context_limit_source_json, WorldRequest,
   ErrorEvent,
-  StepState,
+  StepState, WaitDescriptor, wait_descriptors_json,
   StepPolicy,
   StepDecision,
   PhaseResult,
@@ -565,7 +565,21 @@ type C2LoopState = {
   -- IT IS NOT IN `FinalState` AND NOT IN `Continuation`, and the gap that leaves
   -- is stated at the conversation loop's emit site rather than left to be found:
   -- both are ADR-003 D1/D4 types and widening them is the owner's, not a part's.
-  history_digest: HistoryDigest
+  history_digest: HistoryDigest,
+
+  -- ADR-002 D2/D3, PLAN-002 W2 Part 1. The waits this run holds open, in
+  -- registration order. Written in ONE place, the tool fold
+  -- (`tool_phase.dispatch_tool_entries_with_builtin` and the approval arm's
+  -- `execute_allowed_tool_call`), from each `Handled` envelope's lifted `wait`
+  -- and `settled` through `apply_tool_lifecycle`; every other literal carries
+  -- it. Projected to `StepState` and, encoded, to `ExtCtx.open_waits`.
+  --
+  -- INERT IN W2 (PLAN-002 §1 row 13). `classify_candidate`'s stage 3 treats it
+  -- as empty and no guard reads the ctx field; W4 activates both. Like
+  -- `history_digest` it is NOT in `FinalState` or `Continuation`: a run's waits
+  -- end with the run (D3's last lifecycle row), and ADR-003's `park` entry, not
+  -- this field, carries them across a durable park.
+  open_waits: [WaitDescriptor]
 }
 
 pure func zero_totals() -> RuntimeLoopTotals {
@@ -935,7 +949,8 @@ func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
       ext_artifacts: st.ext_artifacts,
       pending_tool_calls: st.pending_tool_calls,
       last_finish_reason: st.last_finish_reason,
-      last_response_text: st.last_response_text
+      last_response_text: st.last_response_text,
+      open_waits: st.open_waits
     })
   }
 }
@@ -973,7 +988,8 @@ func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, 
     -- The seed's chain, computed HERE and not at the traced entry, so the field
     -- is coherent from the record's first existence and the entry that emits
     -- `HistorySeeded` reads one derivation rather than repeating it.
-    history_digest: c2_seed_digest(history)
+    history_digest: c2_seed_digest(history),
+    open_waits: []
   }
 }
 
@@ -1881,6 +1897,9 @@ func mk_v2_ext_ctx(
   -- ABI 7.3. The host's aggregate of every `WorkInFlight` declaration, or []
   -- where none has been gathered — see the call sites.
   work_in_flight: [WorkItem],
+  -- ABI 7.4 (PLAN-002 W2 Part 1). `wait_descriptors_json` of the loop's
+  -- `open_waits` at the call site; no hook reads it until W4.
+  open_waits: Json,
   ports: ExtPorts,
   artifacts: Json,
   telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
@@ -1905,6 +1924,7 @@ func mk_v2_ext_ctx(
     state_key: "core:ext:v2",
     finish_reason: finish_reason,
     work_in_flight: work_in_flight,
+    open_waits: open_waits,
     context_limit: context_limit,
     ports: ports,
     artifacts: artifacts,
@@ -2618,7 +2638,10 @@ pure func c2_state_from_continuation(c: Continuation, provider: PortedProvider, 
     -- holds no `history_replaced`, and it is the same limitation the traced
     -- entry's seed has; both are stated at the conversation loop's emit site,
     -- with the shape of the fix and who owns it.
-    history_digest: c2_seed_digest(c.history)
+    history_digest: c2_seed_digest(c.history),
+    -- RESET, and not for want of a field: D3's "run ends → cleared" row.
+    -- `Continuation` carries no waits, and a resumed run is its own run.
+    open_waits: []
   }
 }
 
@@ -2822,7 +2845,8 @@ func c2_finish_tool_batch(
     prior_counts: st.prior_counts,
     trace: trace_with_history,
     emissions: st.emissions,
-    history_digest: appended.digest
+    history_digest: appended.digest,
+    open_waits: st.open_waits
   };
   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
 }
@@ -2873,111 +2897,203 @@ func c2_continue_tool_batch(
         emissions: st.emissions,
         -- ADR-003 D2: this site carries `st.msgs` UNCHANGED and therefore emits
         -- nothing. The digest is carried for the same reason the messages are.
-        history_digest: st.history_digest
+        history_digest: st.history_digest,
+        open_waits: st.open_waits
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
     }
   }
 }
 
-func c2_after_dp7(
-  rt: ExtRuntime,
-  task: string,
-  env_url: string,
-  hybrid_tools: bool,
-  budget: BudgetPlan,
-  policy: SessionPolicy,
-  model: string,
-  msgs_with_assistant: [Message],
-  workdir: string,
-  ohmy_pi: bool,
-  max_cost_millicents: int,
-	  cost_rates: CostRates,
-	  totals: RuntimeLoopTotals,
-	  ext_artifacts: Json,
-	  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
-	  st_provider: Ports,
-	  st_world_state: WorldState,
-  prior_counts: RuntimeStatusCounts,
+-- PLAN-002 W2 Part 4: `c2_after_dp7`, SPLIT. It was the verifier call and the
+-- two states it chose between; the verifier call now lives in
+-- `classify_candidate` (stage 2 for a non-blank candidate, stage 5 for a blank
+-- one) and these are the two states, shared by both stages. Content is the old
+-- arms' byte for byte: the same journal events in the same order, the same
+-- `nudges_used` recount, and the old call sites' `st.provider`,
+-- `st.prior_counts` and `st.history_digest`, which is why they take `st`
+-- rather than those fields one by one.
+--
+-- ADR-003 D2's `:2356`/`:2381` still hold here: ONE `HistoryAppended` for the
+-- one message (the assistant) that entered the history on this path, and
+-- `artifacts_changed` computed at the call site, where both artifact values are
+-- in scope.
+func c2_dp7_rejected_state(
   session_id: string,
   identity: RunIdentity,
-  started_at_ms: int,
+  st: C2LoopState,
+  msgs_with_assistant: [Message],
+  totals: RuntimeLoopTotals,
+  ext_artifacts: Json,
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
+  world: WorldState,
   trace: LedgerTrace,
   emissions: [LedgerEvent],
-  -- ADR-003 D2's `:2356`/`:2381`. This function takes `C2LoopState`'s fields one
-  -- by one rather than the record, so the two the journal needs arrive the same
-  -- way: the chain the assistant message extends, and whether the pre-step
-  -- chain's artifacts moved (computed once at the call site, where both the old
-  -- and the new value are in scope — here only the new one is).
-  history_digest: HistoryDigest,
   artifacts_changed: bool,
-  next_step_idx: int,
-  done_step_idx: int,
+  step_idx: int,
+  rejection: Dp7Rejection
+) -> C2LoopState ! {IO, Trace} {
+  let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
+  let trace_with_history = c2_journal(session_id, ledger_append(trace, WireRecord(rejection.event)), appended.events);
+  let trace_with_delta = c2_journal(session_id, trace_with_history,
+    [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, telemetry, ext_artifacts, artifacts_changed)]);
+  {
+    msgs: msgs_with_assistant,
+    step_idx: step_idx + 1,
+    totals: totals,
+    ext_artifacts: ext_artifacts,
+    telemetry: telemetry,
+    provider: st.provider,
+    world_state: world,
+    pending_tool_calls: [],
+    pending_tool_context: [],
+    pending_tool_prefix: [],
+    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+    last_finish_reason: "dp7_rejected",
+    last_response_text: rejection.errors,
+    nudges_used: count_persist_nudges(msgs_with_assistant),
+    finalize_source: "",
+    prior_counts: st.prior_counts,
+    trace: trace_with_delta,
+    emissions: emissions,
+    history_digest: appended.digest,
+    open_waits: st.open_waits
+  }
+}
+
+func c2_dp7_approved_state(
+  session_id: string,
+  identity: RunIdentity,
+  st: C2LoopState,
+  msgs_with_assistant: [Message],
+  totals: RuntimeLoopTotals,
+  ext_artifacts: Json,
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
+  world: WorldState,
+  trace: LedgerTrace,
+  emissions: [LedgerEvent],
+  artifacts_changed: bool,
+  step_idx: int,
   output: string,
   source: string
-) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  -- ONE EVENT FOR ONE MESSAGE: `msgs_with_assistant` is the whole history and
-  -- the assistant is the one message that entered it on this path.
-  let appended = c2_history_appended(identity.run_id, done_step_idx, history_digest, false, last_msg(msgs_with_assistant));
-  match dp7_rejection_errors(rt, workdir, done_step_idx, session_id) {
-    Some(rejection) => {
-      let errors = rejection.errors;
-      let trace_with_history = c2_journal(session_id, ledger_append(trace, WireRecord(rejection.event)), appended.events);
-      let trace_with_delta = c2_journal(session_id, trace_with_history,
-        [c2_state_delta_event(identity.run_id, done_step_idx, prior_counts, trace_with_history, telemetry, ext_artifacts, artifacts_changed)]);
-      let next_state: C2LoopState = {
-        msgs: msgs_with_assistant,
-	        step_idx: next_step_idx,
-	        totals: totals,
-	        ext_artifacts: ext_artifacts,
-	        telemetry: telemetry,
-	        provider: st_provider,
-	        world_state: st_world_state,
-        pending_tool_calls: [],
-        pending_tool_context: [],
-        pending_tool_prefix: [],
-        pending_tool_batched: true,
+) -> C2LoopState ! {IO, Trace} {
+  let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
+  let trace_with_history = c2_journal(session_id, trace, appended.events);
+  let trace_with_delta = c2_journal(session_id, trace_with_history,
+    [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, telemetry, ext_artifacts, artifacts_changed)]);
+  {
+    msgs: msgs_with_assistant,
+    step_idx: step_idx + 1,
+    totals: totals,
+    ext_artifacts: ext_artifacts,
+    telemetry: telemetry,
+    provider: st.provider,
+    world_state: world,
+    pending_tool_calls: [],
+    pending_tool_context: [],
+    pending_tool_prefix: [],
+    pending_tool_batched: true,
     accumulated_tool_msgs: [],
     pending_approval: None,
-        last_finish_reason: "dp7_rejected",
-        last_response_text: errors,
-        nudges_used: count_persist_nudges(msgs_with_assistant),
-        finalize_source: "",
-        prior_counts: prior_counts,
-        trace: trace_with_delta,
-        emissions: emissions,
-        history_digest: appended.digest
-      };
-      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
-    },
+    last_finish_reason: "dp7_approved",
+    last_response_text: output,
+    nudges_used: count_persist_nudges(msgs_with_assistant),
+    finalize_source: source,
+    prior_counts: st.prior_counts,
+    trace: trace_with_delta,
+    emissions: emissions,
+    history_digest: appended.digest,
+    open_waits: st.open_waits
+  }
+}
+
+-- ADR-002 D2, PLAN-002 W2 Part 4: what the no-tool-calls branch decided about
+-- the model's candidate. The events it emitted ride along so the caller appends
+-- exactly what was projected.
+type CandidateClass
+  = CandidateRejected({ rejection: Dp7Rejection, world: WorldState })
+  | CandidateFeedback({ event: LedgerEvent, feedback: string, world: WorldState })
+  | CandidateNudge({ event: LedgerEvent, world: WorldState })
+  | CandidateApproved({ output: string, source: string, world: WorldState })
+
+-- The candidate's classification, in D2's stage order and no other:
+--
+--   1. pending      upstream: tool calls or a pending approval never reach here.
+--   2. DP7          a NON-BLANK candidate (`trim(candidate) != ""`, PLAN-002
+--                   §0.2 rule 6) is verified FIRST; a rejection returns before
+--                   any completion policy runs, so a solver that would have
+--                   bounced the same candidate never sees it.
+--   3. waits        INERT in W2 (§1 row 13). `open_waits` is not read here.
+--   4. completion   `dispatch_solver_candidate`, then the persist nudge, as at
+--                   HEAD.
+--   5. finalize     a non-blank candidate is approved without a second verifier
+--                   run (stage 2 judged it); a BLANK one is verified here, as
+--                   HEAD's `c2_after_dp7` did (§1 row 7). So the verifier runs
+--                   at most once per candidate.
+--
+-- THE STAGE-2 WORLD IS `token_to_world(clear_holder(ctx.world))`. HEAD's
+-- rejection arm carried `token_to_world(finalized.next_state)`, and with no
+-- finalize hook registered that is `clear_holder(collected.next_state)` over an
+-- empty fold, i.e. `clear_holder(ctx.world)` (`ext/runtime.ail:722`, `:727`).
+-- Under stage 2 no hook has run, so this is that same expression with the fold
+-- removed. `ctx.world` is the intercept's successor, already holder-cleared by
+-- `dispatch_response_intercept`, and `clear_holder` is idempotent on it; it is
+-- written out so the equivalence with HEAD does not rest on that.
+--
+-- The row is the union of `dispatch_solver_candidate`'s and
+-- `dp7_rejection_errors`': nothing here recurses into the loop.
+func classify_candidate(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  candidate: string,
+  msgs_with_assistant: [Message],
+  workdir: string,
+  step_idx: int,
+  session_id: string,
+  persist_retries: int,
+  nudges_used: int
+) -> CandidateClass ! {Process, IO, Clock, Trace} {
+  let blank = trim(candidate) == "";
+  -- Stage 2.
+  let stage2 = if blank then None else dp7_rejection_errors(rt, workdir, step_idx, session_id);
+  match stage2 {
+    Some(rejection) => CandidateRejected({ rejection: rejection, world: token_to_world(clear_holder(ctx.world)) }),
     None => {
-      let trace_with_history = c2_journal(session_id, trace, appended.events);
-      let trace_with_delta = c2_journal(session_id, trace_with_history,
-        [c2_state_delta_event(identity.run_id, done_step_idx, prior_counts, trace_with_history, telemetry, ext_artifacts, artifacts_changed)]);
-      let next_state: C2LoopState = {
-        msgs: msgs_with_assistant,
-	        step_idx: next_step_idx,
-	        totals: totals,
-	        ext_artifacts: ext_artifacts,
-	        telemetry: telemetry,
-	        provider: st_provider,
-	        world_state: st_world_state,
-        pending_tool_calls: [],
-        pending_tool_context: [],
-        pending_tool_prefix: [],
-        pending_tool_batched: true,
-    accumulated_tool_msgs: [],
-    pending_approval: None,
-        last_finish_reason: "dp7_approved",
-        last_response_text: output,
-        nudges_used: count_persist_nudges(msgs_with_assistant),
-        finalize_source: source,
-        prior_counts: prior_counts,
-        trace: trace_with_delta,
-        emissions: emissions,
-        history_digest: appended.digest
+      -- Stage 3: inert in W2.
+      -- Stage 4. The solver's successor is the world from here on, whichever
+      -- decision won (WI-B2b).
+      let finalized = dispatch_solver_candidate(rt, ctx, candidate);
+      let world = token_to_world(finalized.next_state);
+      let completion = match finalized.decision {
+        Accept(output) => CandidateApproved({ output: output, source: "ext_solver_accept", world: world }),
+        ContinueWithFeedback(feedback) => {
+          let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
+          let _ = ledger_emit(session_id, event);
+          CandidateFeedback({ event: event, feedback: feedback, world: world })
+        },
+        NoDecision =>
+          if should_inject_persist_nudge(persist_retries, nudges_used, any_writefile_attempt(msgs_with_assistant)) then {
+            let event = PersistNudge({
+              step: step_idx,
+              nudge_num: nudges_used + 1,
+              budget: persist_retries
+            });
+            let _ = ledger_emit(session_id, event);
+            CandidateNudge({ event: event, world: world })
+          } else CandidateApproved({ output: candidate, source: "", world: world })
       };
-      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
+      -- Stage 5.
+      match completion {
+        CandidateApproved(approved) =>
+          if not blank then completion
+          else match dp7_rejection_errors(rt, workdir, step_idx, session_id) {
+            Some(rejection) => CandidateRejected({ rejection: rejection, world: approved.world }),
+            None => completion
+          },
+        _ => completion
+      }
     }
   }
 }
@@ -3106,7 +3222,8 @@ func c2_loop(
             prior_counts: st.prior_counts,
             trace: c2_journal(session_id, trace_with_decision, appended.events),
             emissions: st.emissions,
-            history_digest: appended.digest
+            history_digest: appended.digest,
+            open_waits: st.open_waits
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
         },
@@ -3166,7 +3283,8 @@ func c2_loop(
             prior_counts: st.prior_counts,
             trace: trace_with_delta,
             emissions: st.emissions,
-            history_digest: { at: digest_messages(cp_msgs), prev: st.history_digest.at }
+            history_digest: { at: digest_messages(cp_msgs), prev: st.history_digest.at },
+            open_waits: st.open_waits
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
         },
@@ -3206,7 +3324,7 @@ func c2_loop(
               -- comment above says this arm is prone to. The successor that
               -- disappears with the resolution is the resolution's own; the one
               -- that must survive is `input.next_state`, and it does, in `post`.
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), raw_window_of(policy.step.compaction.context_limit), "", [], ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), raw_window_of(policy.step.compaction.context_limit), "", [], wait_descriptors_json(post.open_waits), ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
               match resolution {
                 ApprovalDenied(reason) => {
                   let denied_event = NativeToolDenied({
@@ -3221,14 +3339,14 @@ func c2_loop(
                   c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, post, ledger_append(approved.trace, WireRecord(denied_event)), req, post.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
-                  let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
+                  let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, post.open_waits, \event. ledger_emit(session_id, event));
                   -- `after` carries BOTH advanced cursors: the approval queue
                   -- (from `post`) and the tool queue (from this execution).
                   -- WI-D2 adds a third thing to carry — `executed.emitted` — and
                   -- this is the site where forgetting it is least visible,
                   -- because the batch continues and the events would simply
                   -- never appear.
-                  let executed_w = witness(session_id, c2_trace_wire_events(approved.trace, executed.emitted), executed.next_state); let after: C2LoopState = { post | world_state: executed_w.world };
+                  let executed_w = witness(session_id, c2_trace_wire_events(approved.trace, executed.emitted), executed.next_state); let after: C2LoopState = { post | world_state: executed_w.world, open_waits: executed.open_waits };
                   c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, after, executed_w.trace, req, after.accumulated_tool_msgs ++ [executed.msg])
                 }
               }
@@ -3250,7 +3368,7 @@ func c2_loop(
           -- requests and nothing else. The dispatcher below therefore starts
           -- from the same world it would have started from, and `done.world` —
           -- the successor that IS load-bearing here — is untouched.
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, raw_window_of(policy.step.compaction.context_limit), "", [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, raw_window_of(policy.step.compaction.context_limit), "", [], wait_descriptors_json(st.open_waits), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let calls_event = NativeToolCalls({
             request_id: request_id,
@@ -3286,7 +3404,7 @@ func c2_loop(
             if call.name == "MotokoRuntimeStatus" then
               runtime_status_tool_message(call, encode(runtime_status_json(st, policy, tool_step_idx)))
             else None;
-          match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, [], \event. ledger_emit(session_id, event), runtime_builtin) {
+          match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, [], st.open_waits, \event. ledger_emit(session_id, event), runtime_builtin) {
             -- `done.world`, not `st.world_state`. The batch may have executed
             -- several tools and each one advanced the cursor; taking it off `st`
             -- type-checks and rewinds the world to before the batch.
@@ -3298,7 +3416,7 @@ func c2_loop(
             -- provider call, and for the same reason: a block appended in the
             -- wrong place satisfies a count and fails order.
             ToolDispatchDone(done) => { let tooled = witness(session_id, c2_trace_wire_events(trace_with_calls, done.emitted), done.world);
-              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { st | world_state: tooled.world }, tooled.trace, tool_step_idx, stream_id, done.msgs) },
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { st | world_state: tooled.world, open_waits: done.open_waits }, tooled.trace, tool_step_idx, stream_id, done.msgs) },
             ToolDispatchPending(pending) => { let paused = witness(session_id, c2_trace_wire_events(trace_with_calls, pending.emitted), pending.world);
               let next_state: C2LoopState = {
                 msgs: st.msgs,
@@ -3329,7 +3447,8 @@ func c2_loop(
                 emissions: st.emissions,
                 -- ADR-003 D2: `st.msgs` unchanged, so nothing is journaled and
                 -- the chain is carried.
-                history_digest: st.history_digest
+                history_digest: st.history_digest,
+                open_waits: pending.open_waits
               };
               c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
             }
@@ -3374,13 +3493,13 @@ func c2_loop(
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
           let ext_context_limit = working_budget_for_ext(policy.step.compaction.context_limit, pinned_tokens);
-          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, "", [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, "", [], wait_descriptors_json(st.open_waits), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           -- ADR-003 D1's `state_delta`: the artifacts go inline ONLY when they
           -- moved. Computed ONCE here, where both the old value (`st`) and the
           -- new one (`chain.artifacts`) are in scope — every step-end literal
-          -- below carries `chain.artifacts`, and `c2_after_dp7` receives only the
-          -- new one, so a per-site comparison would have to re-derive an old
+          -- below carries `chain.artifacts`, and the `c2_dp7_*_state` builders
+          -- receive only the new one, so a per-site comparison would have to re-derive an old
           -- value it does not hold.
           let artifacts_changed = encode(chain.artifacts) != encode(st.ext_artifacts);
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
@@ -3514,7 +3633,8 @@ func c2_loop(
                       -- a terminal arm's after a retried stream error.
                       trace: trace_with_delta,
                       emissions: emissions_after_call,
-                      history_digest: st.history_digest
+                      history_digest: st.history_digest,
+                      open_waits: st.open_waits
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                   } else {
@@ -3549,9 +3669,9 @@ func c2_loop(
                   -- FS round-trip into three more dispatches per step to
                   -- answer a question nothing currently asks. Widening it later
                   -- is this same three-line shape at those sites.
-                  let boot_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(stepped.world));
+                  let boot_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, [], wait_descriptors_json(st.open_waits), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(stepped.world));
                   let work = dispatch_work_in_flight(rt, boot_ctx);
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, work.items, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, work.next_state);
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, work.items, wait_descriptors_json(st.open_waits), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, work.next_state);
                   let trace_after_model = c2_trace_wire_events(ledger_append(trace_after_call, WireRecord(end_event)), phase.events);
                   -- WI-B2b. Bound rather than matched inline, because the
                   -- successor has to outlive the match: `intercepted.next_state`
@@ -3603,7 +3723,8 @@ func c2_loop(
                         prior_counts: st.prior_counts,
                         trace: trace_with_delta,
                         emissions: emissions_after_call,
-                        history_digest: appended.digest
+                        history_digest: appended.digest,
+                        open_waits: st.open_waits
                       };
                       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                     },
@@ -3648,7 +3769,8 @@ func c2_loop(
                           prior_counts: st.prior_counts,
                           trace: trace_with_delta,
                           emissions: emissions_after_call,
-                          history_digest: appended.digest
+                          history_digest: appended.digest,
+                          open_waits: st.open_waits
                         };
                         c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                       } else {
@@ -3709,7 +3831,8 @@ func c2_loop(
                               prior_counts: st.prior_counts,
                               trace: trace_with_delta,
                               emissions: emissions_after_call,
-                              history_digest: appended.digest
+                              history_digest: appended.digest,
+                              open_waits: st.open_waits
                             };
                             c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                           },
@@ -3718,15 +3841,18 @@ func c2_loop(
                             -- above is: every branch below carries the world
                             -- forward, and the solver hook's successor is the
                             -- current one from here on.
-                            let finalized = dispatch_solver_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content); -- WI-D19
-                            match finalized.decision {
-                              Accept(output) =>
-	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, identity, started_at_ms, trace_after_model, emissions_after_call, st.history_digest, artifacts_changed, step_idx + 1, step_idx, output, "ext_solver_accept"),
-                              ContinueWithFeedback(feedback) => {
-                                let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
-                                let _ = ledger_emit(session_id, event);
+                            -- PLAN-002 W2 Part 4 (ADR-002 D2). ONE classification, in stage
+                            -- order: DP7 before the completion policy for a non-blank
+                            -- candidate. See `classify_candidate`.
+                            let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, msgs_with_assistant, workdir, step_idx, session_id, policy.step.persist_retries, st.nudges_used); -- WI-D19
+                            match classified {
+                              CandidateRejected(rejected) =>
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_dp7_rejected_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, rejected.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, rejected.rejection)),
+                              CandidateApproved(approved) =>
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_dp7_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
+                              CandidateFeedback(fed) => {
                                 let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
-                                let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(event)), appended.events);
+                                let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(fed.event)), appended.events);
                                 let trace_with_delta = c2_journal(session_id, trace_with_history,
                                   [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
                                 let next_state: C2LoopState = {
@@ -3736,7 +3862,7 @@ func c2_loop(
 	                                  ext_artifacts: chain.artifacts,
 	                                  telemetry: applied.telemetry,
 	                                  provider: st.provider,
-	                                  world_state: token_to_world(finalized.next_state),
+	                                  world_state: fed.world,
                                   pending_tool_calls: [],
                                   pending_tool_context: [],
                                   pending_tool_prefix: [],
@@ -3744,54 +3870,47 @@ func c2_loop(
     accumulated_tool_msgs: [],
     pending_approval: None,
                                   last_finish_reason: "solver_feedback",
-                                  last_response_text: feedback,
+                                  last_response_text: fed.feedback,
                                   nudges_used: applied.nudges_used,
                                   finalize_source: "",
                                   prior_counts: st.prior_counts,
                                   trace: trace_with_delta,
                                   emissions: emissions_after_call,
-                                  history_digest: appended.digest
+                                  history_digest: appended.digest,
+                                  open_waits: st.open_waits
                                 };
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                               },
-                              NoDecision => {
-                                if should_inject_persist_nudge(policy.step.persist_retries, st.nudges_used, any_writefile_attempt(msgs_with_assistant)) then {
-                                  let event = PersistNudge({
-                                    step: step_idx,
-                                    nudge_num: st.nudges_used + 1,
-                                    budget: policy.step.persist_retries
-                                  });
-                                  let _ = ledger_emit(session_id, event);
-                                  let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
-                                  let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(event)), appended.events);
-                                  let trace_with_delta = c2_journal(session_id, trace_with_history,
-                                    [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
-                                  let next_state: C2LoopState = {
-                                    msgs: msgs_with_assistant,
-	                                    step_idx: step_idx + 1,
-	                                    totals: new_totals,
-	                                    ext_artifacts: chain.artifacts,
-	                                    telemetry: applied.telemetry,
-	                                    provider: st.provider,
-	                                    world_state: token_to_world(finalized.next_state),
-                                    pending_tool_calls: [],
-                                    pending_tool_context: [],
-                                    pending_tool_prefix: [],
-                                    pending_tool_batched: true,
+                              CandidateNudge(nudged) => {
+                                let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
+                                let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(nudged.event)), appended.events);
+                                let trace_with_delta = c2_journal(session_id, trace_with_history,
+                                  [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
+                                let next_state: C2LoopState = {
+                                  msgs: msgs_with_assistant,
+	                                  step_idx: step_idx + 1,
+	                                  totals: new_totals,
+	                                  ext_artifacts: chain.artifacts,
+	                                  telemetry: applied.telemetry,
+	                                  provider: st.provider,
+	                                  world_state: nudged.world,
+                                  pending_tool_calls: [],
+                                  pending_tool_context: [],
+                                  pending_tool_prefix: [],
+                                  pending_tool_batched: true,
     accumulated_tool_msgs: [],
     pending_approval: None,
-                                    last_finish_reason: "persist_nudge",
-                                    last_response_text: result.message.content,
-                                    nudges_used: st.nudges_used,
-                                    finalize_source: "",
-                                    prior_counts: st.prior_counts,
-                                    trace: trace_with_delta,
-                                    emissions: emissions_after_call,
-                                    history_digest: appended.digest
-                                  };
-                                  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
-                                } else
-	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, identity, started_at_ms, trace_after_model, emissions_after_call, st.history_digest, artifacts_changed, step_idx + 1, step_idx, result.message.content, "") -- WI-D19
+                                  last_finish_reason: "persist_nudge",
+                                  last_response_text: result.message.content,
+                                  nudges_used: st.nudges_used,
+                                  finalize_source: "",
+                                  prior_counts: st.prior_counts,
+                                  trace: trace_with_delta,
+                                  emissions: emissions_after_call,
+                                  history_digest: appended.digest,
+                                  open_waits: st.open_waits
+                                };
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                               }
                             }
                           }
@@ -4596,6 +4715,7 @@ func publish_turn_exit_manifest(
     state_key: "core:ext:exit",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     -- PLAN-001 P1 step 5: NO WINDOW IS SUPPLIED TO THE EXIT CONTEXT. This 0 is a
     -- literal, not a projection of the run's limit, and it is not `Disabled`.
     context_limit: 0,
@@ -5085,7 +5205,8 @@ func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Tra
       prior_counts: prior,
       trace: trace,
       emissions: [],
-      history_digest: c2_seed_digest([])
+      history_digest: c2_seed_digest([]),
+      open_waits: []
     };
     let policy: SessionPolicy = {
       step: {
@@ -5138,7 +5259,8 @@ func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
       prior_counts: zero_runtime_status_counts(),
       trace: { records: [] },
       emissions: [],
-      history_digest: c2_seed_digest([])
+      history_digest: c2_seed_digest([]),
+      open_waits: []
     };
     let policy: SessionPolicy = {
       step: {

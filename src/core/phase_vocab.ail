@@ -8,7 +8,7 @@ module src/core/phase_vocab
 
 import std/ai (Message, ToolCall, ImagePart, StepResult)
 import std/crypto (sha256Hex)
-import std/json (Json, jo, ja, kv, js, jnum, jb, encode)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode, get, asString, asNumber, asBool, asObject)
 import std/list as List (length, map)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
@@ -421,6 +421,269 @@ export type StepPolicy = {
   compaction: CompactionPolicy
 }
 
+-- ============================================================================
+-- ADR-002 D3, PLAN-002 W2 Parts 1 and 3: the wait descriptor and the lifecycle
+-- rows that need no wake.
+--
+-- A SUM, NOT A RECORD. v2's record admitted a timer with an answer path; the
+-- sum does not. Declared beside `StepState` because both loop states carry it,
+-- and `ports.ail` already imports this module, so W3's `ParkRequest` can name
+-- it without a cycle.
+--
+-- THE WIRE HAS NO DISCRIMINATOR KEY. W1b's producer (`herdr.ail`, the `wait` on
+-- `Delegate`'s metadata) writes `{ id, delegate_kind, locator: { pane },
+-- answer_path, run_key }` and nothing else, so the strict decoder tells the
+-- variants apart by their EXACT key sets. An object with an extra key, a
+-- missing key, a wrong-typed value or an empty string is `Err`, never a
+-- best-effort variant: a wait the core half-understood is a wait it would park
+-- on and never wake from.
+-- ============================================================================
+
+export type WaitDescriptor
+  = DelegateWait({ id: string, delegate_kind: string, locator: { pane: string }, answer_path: string, run_key: string })
+  | OperatorWait({ id: string })
+  | TimerWait({ id: string, deadline_ms: int })
+
+export pure func wait_id(w: WaitDescriptor) -> string {
+  match w {
+    DelegateWait(d) => d.id,
+    OperatorWait(o) => o.id,
+    TimerWait(t) => t.id
+  }
+}
+
+pure func json_field_names(fields: [{key: string, value: Json}]) -> [string] {
+  match fields {
+    [] => [],
+    f :: rest => f.key :: json_field_names(rest)
+  }
+}
+
+pure func string_list_has(xs: [string], x: string) -> bool {
+  match xs {
+    [] => false,
+    y :: rest => y == x || string_list_has(rest, x)
+  }
+}
+
+pure func string_list_covers(have: [string], want: [string]) -> bool {
+  match want {
+    [] => true,
+    w :: rest => string_list_has(have, w) && string_list_covers(have, rest)
+  }
+}
+
+-- Exactly `expected`: equal lengths and every expected key present, which also
+-- rejects a duplicated key (it would push an expected one out).
+pure func json_keys_exactly(fields: [{key: string, value: Json}], expected: [string]) -> bool {
+  List.length(fields) == List.length(expected) && string_list_covers(json_field_names(fields), expected)
+}
+
+pure func wait_required_string(obj: Json, key: string) -> Result[string, string] {
+  match get(obj, key) {
+    None => Err("wait: missing `${key}`"),
+    Some(v) => match asString(v) {
+      None => Err("wait: `${key}` is not a string"),
+      Some(s) => if s == "" then Err("wait: `${key}` is empty") else Ok(s)
+    }
+  }
+}
+
+pure func delegate_wait_from_json(obj: Json) -> Result[WaitDescriptor, string] {
+  match wait_required_string(obj, "id") {
+    Err(e) => Err(e),
+    Ok(id) => match wait_required_string(obj, "delegate_kind") {
+      Err(e) => Err(e),
+      Ok(kind) => match wait_required_string(obj, "answer_path") {
+        Err(e) => Err(e),
+        Ok(answer_path) => match wait_required_string(obj, "run_key") {
+          Err(e) => Err(e),
+          Ok(run_key) => match get(obj, "locator") {
+            None => Err("wait: missing `locator`"),
+            Some(loc) => match asObject(loc) {
+              None => Err("wait: `locator` is not an object"),
+              Some(loc_fields) =>
+                if not json_keys_exactly(loc_fields, ["pane"]) then Err("wait: `locator` must have exactly the key `pane`")
+                else match wait_required_string(loc, "pane") {
+                  Err(e) => Err(e),
+                  Ok(pane) => Ok(DelegateWait({ id: id, delegate_kind: kind, locator: { pane: pane }, answer_path: answer_path, run_key: run_key }))
+                }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func timer_wait_from_json(obj: Json) -> Result[WaitDescriptor, string] {
+  match wait_required_string(obj, "id") {
+    Err(e) => Err(e),
+    Ok(id) => match get(obj, "deadline_ms") {
+      None => Err("wait: missing `deadline_ms`"),
+      Some(v) => match asNumber(v) {
+        None => Err("wait: `deadline_ms` is not a number"),
+        Some(f) => {
+          let n = floatToInt(f);
+          if _int_to_float(n) != f then Err("wait: `deadline_ms` is not an integer")
+          else if n < 0 then Err("wait: `deadline_ms` is negative")
+          else Ok(TimerWait({ id: id, deadline_ms: n }))
+        }
+      }
+    }
+  }
+}
+
+-- The strict decoder (W2 Part 1). The ONE owner of the wire shape: the ABI's
+-- `ExtCtx.open_waits` is this module's encoding, and no mirror type exists.
+export pure func wait_descriptor_from_json(j: Json) -> Result[WaitDescriptor, string] {
+  match asObject(j) {
+    None => Err("wait: not an object"),
+    Some(fields) =>
+      if json_keys_exactly(fields, ["id", "delegate_kind", "locator", "answer_path", "run_key"]) then delegate_wait_from_json(j)
+      else if json_keys_exactly(fields, ["id", "deadline_ms"]) then timer_wait_from_json(j)
+      else if json_keys_exactly(fields, ["id"]) then
+        match wait_required_string(j, "id") { Err(e) => Err(e), Ok(id) => Ok(OperatorWait({ id: id })) }
+      else Err("wait: key set matches no variant (${encode(jo(fields))})")
+  }
+}
+
+-- Key order is the producer's (`herdr.ail`), so a `DelegateWait` re-encodes to
+-- the bytes W1b's fixtures hold.
+export pure func wait_descriptor_to_json(w: WaitDescriptor) -> Json {
+  match w {
+    DelegateWait(d) => jo([
+      kv("id", js(d.id)),
+      kv("delegate_kind", js(d.delegate_kind)),
+      kv("locator", jo([kv("pane", js(d.locator.pane))])),
+      kv("answer_path", js(d.answer_path)),
+      kv("run_key", js(d.run_key))
+    ]),
+    OperatorWait(o) => jo([kv("id", js(o.id))]),
+    TimerWait(t) => jo([kv("id", js(t.id)), kv("deadline_ms", jnum(_int_to_float(t.deadline_ms)))])
+  }
+}
+
+-- `ExtCtx.open_waits` (ABI 7.4): a JSON array, `[]` for none.
+export pure func wait_descriptors_json(ws: [WaitDescriptor]) -> Json {
+  ja(List.map(wait_descriptor_to_json, ws))
+}
+
+-- What a tool result's metadata says about a wait, lifted from the ENVELOPE —
+-- never from the model message, which the cap may have truncated.
+export type WaitLift = WaitAbsent | WaitValid(WaitDescriptor) | WaitInvalid(string)
+
+export pure func lift_wait(result_env: ToolResultEnvelope) -> WaitLift {
+  match get(result_env.metadata, "wait") {
+    None => WaitAbsent,
+    Some(w) => match wait_descriptor_from_json(w) {
+      Ok(d) => WaitValid(d),
+      Err(e) => WaitInvalid(e)
+    }
+  }
+}
+
+-- `settled: true` names the wait it settles by `metadata.delegate`, which is
+-- W1b's matching key: the Delegate's `wait.id` is that same handle.
+pure func settled_wait_id(result_env: ToolResultEnvelope) -> Option[string] {
+  match get(result_env.metadata, "settled") {
+    None => None,
+    Some(v) => match asBool(v) {
+      Some(b) =>
+        if not b then None
+        else match get(result_env.metadata, "delegate") {
+          None => None,
+          Some(d) => match asString(d) {
+            Some(id) => if id == "" then None else Some(id),
+            None => None
+          }
+        },
+      None => None
+    }
+  }
+}
+
+pure func remove_wait(ws: [WaitDescriptor], id: string) -> [WaitDescriptor] {
+  match ws {
+    [] => [],
+    w :: rest => if wait_id(w) == id then remove_wait(rest, id) else w :: remove_wait(rest, id)
+  }
+}
+
+pure func has_wait(ws: [WaitDescriptor], id: string) -> bool {
+  match ws {
+    [] => false,
+    w :: rest => wait_id(w) == id || has_wait(rest, id)
+  }
+}
+
+-- Registration is by id: the same id twice is one wait (the later descriptor
+-- wins, in place); a re-delegation carries a NEW id and is appended beside the
+-- old one, which stays until it is settled or lost.
+pure func register_wait(ws: [WaitDescriptor], w: WaitDescriptor) -> [WaitDescriptor] {
+  if has_wait(ws, wait_id(w)) then replace_wait(ws, w) else ws ++ [w]
+}
+
+pure func replace_wait(ws: [WaitDescriptor], w: WaitDescriptor) -> [WaitDescriptor] {
+  match ws {
+    [] => [],
+    x :: rest => if wait_id(x) == wait_id(w) then w :: rest else x :: replace_wait(rest, w)
+  }
+}
+
+-- ADR-002 D3's lifecycle, the rows that need no wake (W2 Part 3; the wake rows
+-- are W4's). Keyed on the ENVELOPE's metadata, not on the tool's name, so the
+-- core names no extension tool:
+--
+--   `Delegate` succeeds (exit 0, valid `wait`)        register
+--   `Delegate` fails (non-zero exit, or no/invalid `wait`)  nothing
+--   re-delegation (a new id)                           register; the old stays
+--   `settled: true`                                    remove `id == metadata.delegate`
+--   error without settling (`settled: false`)          keep
+--   settles an already-removed wait                    idempotent
+--   gone, second read fails (`lost`, `settled: true`)  remove
+--   run ends                                           `waits_at_run_end`
+--
+-- `_call` is the model's call the envelope answers. No non-wake row reads it;
+-- the invalid-wait diagnostic (`wait_diagnostic_event`) does.
+export pure func apply_tool_lifecycle(open_waits: [WaitDescriptor], _call: ToolCall, result_env: ToolResultEnvelope) -> [WaitDescriptor] {
+  let after_settle = match settled_wait_id(result_env) {
+    Some(id) => remove_wait(open_waits, id),
+    None => open_waits
+  };
+  if result_env.exit_code != 0 then after_settle
+  else match lift_wait(result_env) {
+    WaitValid(w) => register_wait(after_settle, w),
+    _ => after_settle
+  }
+}
+
+-- Run ends (`Finalize`, `Fail`, suspend): the waits are cleared with the run.
+-- ADR-003's `park` entry, not this list, is what carries them across a durable
+-- park, so a resumed run starts from here.
+export pure func waits_at_run_end(_open_waits: [WaitDescriptor]) -> [WaitDescriptor] {
+  []
+}
+
+-- An invalid `wait` registers nothing and leaves THIS in the tool result's
+-- emitted events. `ExtensionDiagnostic` is an existing variant, so the event
+-- vocabulary does not grow.
+export pure func wait_diagnostic_event(step: int, call: ToolCall, result_env: ToolResultEnvelope) -> Option[LedgerEvent] {
+  match lift_wait(result_env) {
+    WaitInvalid(reason) => Some(ExtensionDiagnostic({
+      step: step,
+      extension: "core:open_waits",
+      code: "invalid_wait",
+      fields: [
+        { key: "tool", value: call.name },
+        { key: "id", value: call.id },
+        { key: "reason", value: reason }
+      ]
+    })),
+    _ => None
+  }
+}
+
 export type StepState = {
   step_idx: int,
   history: History,
@@ -430,7 +693,10 @@ export type StepState = {
   ext_artifacts: Json,
   pending_tool_calls: [ToolCall],
   last_finish_reason: string,
-  last_response_text: string
+  last_response_text: string,
+  -- ADR-002 D2/D3, PLAN-002 W2. Projected from `C2LoopState.open_waits`.
+  -- `decide` does not read it in W2 (§1 row 13: stage 3 is inert).
+  open_waits: [WaitDescriptor]
 }
 
 export type StateDelta = {
@@ -458,7 +724,8 @@ export func apply_state_delta(s: StepState, d: StateDelta) -> StepState {
     ext_artifacts: match d.ext_artifacts { Some(a) => a, None => s.ext_artifacts },
     pending_tool_calls: match d.pending_tool_calls { Some(c) => c, None => s.pending_tool_calls },
     last_finish_reason: match d.last_finish_reason { Some(f) => f, None => s.last_finish_reason },
-    last_response_text: match d.last_response_text { Some(t) => t, None => s.last_response_text }
+    last_response_text: match d.last_response_text { Some(t) => t, None => s.last_response_text },
+    open_waits: s.open_waits
   }
 }
 
@@ -475,7 +742,8 @@ export func apply_checkpoint(s: StepState, plan: CheckpointPlan)
       ext_artifacts: s.ext_artifacts,
       pending_tool_calls: s.pending_tool_calls,
       last_finish_reason: s.last_finish_reason,
-      last_response_text: s.last_response_text
+      last_response_text: s.last_response_text,
+      open_waits: s.open_waits
     },
     event: cp.event
   }
@@ -1601,7 +1869,8 @@ pure func test_apply_checkpoint_returns_rewrite_with_event() -> bool
           ext_artifacts: jo([]),
           pending_tool_calls: [],
           last_finish_reason: "",
-          last_response_text: ""
+          last_response_text: "",
+          open_waits: []
         };
         let applied = apply_checkpoint(s, { reason: "test", summary: "summ" });
         match applied.event {
@@ -1776,4 +2045,218 @@ pure func test_handled_tool_message_uses_model_call_id() -> bool
       && m.tool_call_id == "model-call-id"
       && List.length(m.tool_calls) == 0
       && contains(m.content, "\"tool\":\"FakeTool\"")
+  }
+
+-- ============================================================================
+-- PLAN-002 W2 Parts 1 and 3: the strict decoder, and the lifecycle table row by
+-- row (W2 gate 5). The wake rows are W4's.
+-- ============================================================================
+
+pure func w2_wait_json(id: string, pane: string) -> Json {
+  jo([
+    kv("id", js(id)),
+    kv("delegate_kind", js("motoko")),
+    kv("locator", jo([kv("pane", js(pane))])),
+    kv("answer_path", js("/tmp/mot/answer-${id}.md")),
+    kv("run_key", js(id))
+  ])
+}
+
+pure func w2_call(name: string) -> ToolCall {
+  { id: "call-1", name: name, arguments: "{}" }
+}
+
+pure func w2_delegate_env(exit_code: int, stdout: string, wait: Json) -> ToolResultEnvelope {
+  { tool_call_id: "tc-1", tool: "Delegate", exit_code: exit_code, stdout: stdout, stderr: "",
+    metadata: jo([kv("delegate", js("d-1")), kv("pane_id", js("w1:pA")), kv("wait", wait)]) }
+}
+
+pure func w2_check_env(exit_code: int, delegate: string, settled: bool) -> ToolResultEnvelope {
+  { tool_call_id: "tc-2", tool: "DelegateCheck", exit_code: exit_code, stdout: "", stderr: "",
+    metadata: jo([kv("delegate", js(delegate)), kv("pane_id", js("w1:pA")), kv("settled", jb(settled))]) }
+}
+
+pure func w2_ids(ws: [WaitDescriptor]) -> [string] {
+  match ws {
+    [] => [],
+    w :: rest => wait_id(w) :: w2_ids(rest)
+  }
+}
+
+pure func w2_ids_are(ws: [WaitDescriptor], expected: [string]) -> bool {
+  encode(ja(List.map(js, w2_ids(ws)))) == encode(ja(List.map(js, expected)))
+}
+
+pure func w2_is_err(r: Result[WaitDescriptor, string]) -> bool {
+  match r { Err(_) => true, Ok(_) => false }
+}
+
+pure func w2_delegate(id: string) -> WaitDescriptor {
+  DelegateWait({ id: id, delegate_kind: "motoko", locator: { pane: "w1:pA" }, answer_path: "/tmp/mot/answer-${id}.md", run_key: id })
+}
+
+pure func test_wait_decoder_accepts_each_variant() -> bool
+  tests [((), true)]
+  {
+    let d = match wait_descriptor_from_json(w2_wait_json("d-1", "w1:pA")) {
+      Ok(DelegateWait(w)) => w.id == "d-1" && w.locator.pane == "w1:pA" && w.delegate_kind == "motoko" && w.run_key == "d-1",
+      _ => false
+    };
+    let o = match wait_descriptor_from_json(jo([kv("id", js("op-1"))])) {
+      Ok(OperatorWait(w)) => w.id == "op-1",
+      _ => false
+    };
+    let t = match wait_descriptor_from_json(jo([kv("id", js("t-1")), kv("deadline_ms", jnum(1787475025027.0))])) {
+      Ok(TimerWait(w)) => w.id == "t-1" && w.deadline_ms == 1787475025027,
+      _ => false
+    };
+    d && o && t
+  }
+
+pure func test_wait_decoder_round_trips_the_encoder() -> bool
+  tests [((), true)]
+  {
+    let ws = [w2_delegate("d-1"), OperatorWait({ id: "op-1" }), TimerWait({ id: "t-1", deadline_ms: 42 })];
+    let back = List.map(wait_descriptor_from_json, List.map(wait_descriptor_to_json, ws));
+    let ok = \r. match r { Ok(w) => encode(wait_descriptor_to_json(w)), Err(e) => "ERR ${e}" };
+    encode(wait_descriptor_to_json(w2_delegate("d-1"))) == encode(w2_wait_json("d-1", "w1:pA"))
+      && encode(ja(List.map(js, List.map(ok, back)))) == encode(ja(List.map(js, List.map(\w. encode(wait_descriptor_to_json(w)), ws))))
+      && encode(wait_descriptors_json([])) == "[]"
+  }
+
+pure func test_wait_decoder_is_strict() -> bool
+  tests [((), true)]
+  {
+    let missing = jo([kv("id", js("d-1")), kv("delegate_kind", js("motoko")), kv("locator", jo([kv("pane", js("w1:pA"))])), kv("answer_path", js("/a"))]);
+    let extra = jo([kv("id", js("d-1")), kv("delegate_kind", js("motoko")), kv("locator", jo([kv("pane", js("w1:pA"))])), kv("answer_path", js("/a")), kv("run_key", js("r")), kv("extra", js("x"))]);
+    let wrong_type = jo([kv("id", jnum(1.0)), kv("delegate_kind", js("motoko")), kv("locator", jo([kv("pane", js("w1:pA"))])), kv("answer_path", js("/a")), kv("run_key", js("r"))]);
+    let empty_id = w2_wait_json("", "w1:pA");
+    let empty_pane = w2_wait_json("d-1", "");
+    let bad_locator = jo([kv("id", js("d-1")), kv("delegate_kind", js("motoko")), kv("locator", jo([kv("pane", js("w1:pA")), kv("tab", js("t"))])), kv("answer_path", js("/a")), kv("run_key", js("r"))]);
+    let fractional = jo([kv("id", js("t-1")), kv("deadline_ms", jnum(1.5))]);
+    w2_is_err(wait_descriptor_from_json(missing))
+      && w2_is_err(wait_descriptor_from_json(extra))
+      && w2_is_err(wait_descriptor_from_json(wrong_type))
+      && w2_is_err(wait_descriptor_from_json(empty_id))
+      && w2_is_err(wait_descriptor_from_json(empty_pane))
+      && w2_is_err(wait_descriptor_from_json(bad_locator))
+      && w2_is_err(wait_descriptor_from_json(fractional))
+      && w2_is_err(wait_descriptor_from_json(js("d-1")))
+      && w2_is_err(wait_descriptor_from_json(jo([])))
+  }
+
+-- Row: `Delegate` succeeds → register.
+pure func test_lifecycle_delegate_succeeds_registers() -> bool
+  tests [((), true)]
+  {
+    let after = apply_tool_lifecycle([], w2_call("Delegate"), w2_delegate_env(0, "running", w2_wait_json("d-1", "w1:pA")));
+    w2_ids_are(after, ["d-1"])
+  }
+
+-- Row: `Delegate` fails → nothing. A non-zero exit registers nothing even with
+-- a well-formed `wait`, and a malformed `wait` registers nothing on exit 0.
+pure func test_lifecycle_delegate_fails_registers_nothing() -> bool
+  tests [((), true)]
+  {
+    let failed = apply_tool_lifecycle([], w2_call("Delegate"), w2_delegate_env(1, "", w2_wait_json("d-1", "w1:pA")));
+    let malformed_env = w2_delegate_env(0, "running", jo([kv("id", js("d-1"))  , kv("pane", js("w1:pA"))]));
+    let malformed = apply_tool_lifecycle([w2_delegate("d-0")], w2_call("Delegate"), malformed_env);
+    let no_wait: ToolResultEnvelope = { tool_call_id: "tc", tool: "Delegate", exit_code: 0, stdout: "", stderr: "", metadata: jo([]) };
+    w2_ids_are(failed, [])
+      && w2_ids_are(malformed, ["d-0"])
+      && w2_ids_are(apply_tool_lifecycle([], w2_call("Delegate"), no_wait), [])
+  }
+
+-- The invalid wait's diagnostic: present for a malformed `wait`, absent for a
+-- valid one and for no `wait` at all.
+pure func test_lifecycle_invalid_wait_leaves_a_diagnostic() -> bool
+  tests [((), true)]
+  {
+    let malformed_env = w2_delegate_env(0, "running", jo([kv("id", js("d-1"))]  ++ []) );
+    let bad = w2_delegate_env(0, "running", js("not-an-object"));
+    let diag = match wait_diagnostic_event(3, w2_call("Delegate"), bad) {
+      Some(ExtensionDiagnostic(info)) => info.step == 3 && info.code == "invalid_wait" && info.extension == "core:open_waits",
+      _ => false
+    };
+    let none_for_valid = match wait_diagnostic_event(3, w2_call("Delegate"), w2_delegate_env(0, "ok", w2_wait_json("d-1", "w1:pA"))) { None => true, Some(_) => false };
+    let none_for_operator_shape = match wait_diagnostic_event(3, w2_call("Delegate"), malformed_env) { None => true, Some(_) => false };
+    diag && none_for_valid && none_for_operator_shape
+  }
+
+-- Row: re-delegation → a new wait with a new id; the old one stays.
+pure func test_lifecycle_redelegation_keeps_the_old_wait() -> bool
+  tests [((), true)]
+  {
+    let first = apply_tool_lifecycle([], w2_call("Delegate"), w2_delegate_env(0, "", w2_wait_json("d-1", "w1:pA")));
+    let second = apply_tool_lifecycle(first, w2_call("Delegate"), w2_delegate_env(0, "", w2_wait_json("d-2", "w1:pB")));
+    let same_id_again = apply_tool_lifecycle(second, w2_call("Delegate"), w2_delegate_env(0, "", w2_wait_json("d-2", "w1:pC")));
+    w2_ids_are(second, ["d-1", "d-2"]) && w2_ids_are(same_id_again, ["d-1", "d-2"])
+  }
+
+-- Row: `DelegateCheck` with `settled: true` → remove `id == metadata.delegate`.
+pure func test_lifecycle_settled_check_removes_the_matching_wait() -> bool
+  tests [((), true)]
+  {
+    let after = apply_tool_lifecycle([w2_delegate("d-1"), w2_delegate("d-2")], w2_call("DelegateCheck"), w2_check_env(0, "d-1", true));
+    w2_ids_are(after, ["d-2"])
+  }
+
+-- Row: a check that returns an error without settling → keep.
+pure func test_lifecycle_error_without_settle_keeps() -> bool
+  tests [((), true)]
+  {
+    let after = apply_tool_lifecycle([w2_delegate("d-1")], w2_call("DelegateCheck"), w2_check_env(1, "d-1", false));
+    let pending = apply_tool_lifecycle([w2_delegate("d-1")], w2_call("DelegateCheck"), w2_check_env(0, "d-1", false));
+    w2_ids_are(after, ["d-1"]) && w2_ids_are(pending, ["d-1"])
+  }
+
+-- Row: a check that settles an already-removed wait → idempotent.
+pure func test_lifecycle_settling_a_removed_wait_is_idempotent() -> bool
+  tests [((), true)]
+  {
+    let once = apply_tool_lifecycle([w2_delegate("d-1"), w2_delegate("d-2")], w2_call("DelegateCheck"), w2_check_env(0, "d-1", true));
+    let twice = apply_tool_lifecycle(once, w2_call("DelegateCheck"), w2_check_env(0, "d-1", true));
+    w2_ids_are(once, ["d-2"]) && w2_ids_are(twice, ["d-2"])
+  }
+
+-- Row: gone, then the second read fails → the extension publishes `lost`, the
+-- check settles (non-zero exit, `settled: true`) → remove.
+pure func test_lifecycle_lost_settles_and_removes() -> bool
+  tests [((), true)]
+  {
+    let after = apply_tool_lifecycle([w2_delegate("d-1")], w2_call("DelegateCheck"), w2_check_env(1, "d-1", true));
+    w2_ids_are(after, [])
+  }
+
+-- Row: run ends → cleared.
+pure func test_lifecycle_run_end_clears() -> bool
+  tests [((), true)]
+  {
+    w2_ids_are(waits_at_run_end([w2_delegate("d-1"), OperatorWait({ id: "op" })]), [])
+  }
+
+-- Gate 5: a `Handled` envelope whose content is over the 65 536-byte cap still
+-- registers its wait, because the lift reads the envelope; the model message
+-- built from the same envelope IS truncated.
+pure func test_lifecycle_registers_despite_truncated_model_message() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let env = w2_delegate_env(0, x1024, w2_wait_json("d-big", "w1:pZ"));
+    let msg = handled_tool_message("call-1", env);
+    let after = apply_tool_lifecycle([], w2_call("Delegate"), env);
+    Str.length(msg.content) == 65536
+      && contains(msg.content, "...[truncated; original ")
+      && not contains(msg.content, "d-big")
+      && w2_ids_are(after, ["d-big"])
   }

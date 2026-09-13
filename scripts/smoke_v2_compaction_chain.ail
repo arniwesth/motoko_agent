@@ -4,7 +4,7 @@ import std/io (println, exit)
 import std/result (Result, Ok, Err)
 import std/ai (Message)
 import std/option (None)
-import std/json (jo)
+import std/json (jo, ja)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/types (Msg)
 import src/core/test/scripted_ports (run_v2_with_scripted_ports)
@@ -61,6 +61,7 @@ func mk_ctx() -> ExtCtx {
     state_key: "chain",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),

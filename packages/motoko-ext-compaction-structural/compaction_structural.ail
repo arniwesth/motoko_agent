@@ -3,7 +3,7 @@ module sunholo/motoko_ext_compaction_structural/compaction_structural
 import std/string (contains, length, substring)
 import std/list (foldl)
 import std/result (Result, Ok, Err)
-import std/json (jo)
+import std/json (jo, ja)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, 
   ExtCtx,
   Msg,
@@ -232,6 +232,7 @@ func test_ctx(limit: int) -> ExtCtx {
     state_key: "k",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     context_limit: limit,
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),

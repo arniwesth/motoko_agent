@@ -19,7 +19,7 @@ module scripts/smoke_v2_handle
 
 import std/io (println)
 import std/option (None)
-import std/json (jo, kv, js, jnum, jb, encode)
+import std/json (jo, kv, js, jnum, jb, encode, ja)
 import std/ai (ToolSchema)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PromptPatch, BudgetPatch, Msg, PassThrough, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
 import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
@@ -110,6 +110,7 @@ export func main() -> () ! {Clock, Env, IO, AI, FS, Net, Process, Rand, SharedMe
     state_key: "test",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
