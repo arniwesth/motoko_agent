@@ -329,7 +329,7 @@ pure func fixture_summary(err: string, millicents: int) -> LedgerEvent {
     -- fixture's families reason about ORDER, terminality and cost, none of
     -- which reads this field, and a non-zero literal would imply an agreement
     -- with the fixture's trace that nothing in this file checks.
-    cumulative: zero_runtime_status_counts() })
+    cumulative: zero_runtime_status_counts(), world_ordinal: 0 })
 }
 
 -- THE RETURNED TRACE. Eighteen records: ten wire, seven decision, one

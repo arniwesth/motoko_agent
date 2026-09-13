@@ -717,9 +717,8 @@ export class SessionJournal {
     return this.append("run_finished", {
       run_id: str(event.run_id, this.lastRunId),
       cumulative: obj(event.cumulative) ?? {},
-      // PLAN-001 P2 has not landed `ordinal` on the world, so there is nothing to carry and D5's
-      // `from_ordinal` rule waits for it. `journal.ail` decodes the field strictly and ignores the
-      // value, which is what makes writing 0 now safe and the schema stable across that landing.
+      // The run's final world ordinal, on `run_summary` since PLAN-003 P3ORD. `journal.ail` decodes
+      // it strictly and the fold carries the last one into D5's `from_ordinal`.
       world_ordinal: num(event.world_ordinal),
       finish_reason: str(event.finish_reason),
     })

@@ -283,7 +283,10 @@ export pure func event_vocabulary() -> [EventRow] {
                 -- ADR-003 D1's `run_finished` counts, PLAN-003 P3 Part 1. A
                 -- payload change is a VERSION change under D8 — see the note on
                 -- `event_vocabulary_version` at the foot of this list.
-                req("cumulative")],
+                req("cumulative"),
+                -- D5's `run_finished.world_ordinal`, PLAN-003 P3ORD: the run's final
+                -- world ordinal, the resume's `from_ordinal`. Same D8 note.
+                req("world_ordinal")],
       -- D6.1's terminal record. `duration_ms` is a display-only FIELD of a
       -- logical event (D6.5) — the distinction is per event, not per field.
       classification: Logical, reaches_trace_today: true },

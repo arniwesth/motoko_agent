@@ -12,7 +12,7 @@
 --     None of them imports `session`, so the graph stays acyclic.
 --   * not `ports` and not `ext_world`, because the journal carries no
 --     `WorldState` (ADR-003 v6.1's retraction of v4.1's world decoding). What
---     crosses is `world_ordinal`, an int, and not before PLAN-001 P2 exists.
+--     crosses is `world_ordinal`, an int (`RunSummary.world_ordinal`, PLAN-003 P3ORD).
 --
 -- WHAT IS HERE IN P1 (PLAN-003 P1 Part 3): `Continuation` — the in-memory value
 -- a suspended run carries out, `RunIdentity`, `FinalState` — the comparand the
@@ -1027,10 +1027,9 @@ export pure func run_started_of_entry(e: JournalEntry) -> Result[RunStartedEntry
   }
 }
 
--- `world_ordinal` is decoded and carried and NOTHING READS IT YET: PLAN-001 P2
--- has not landed `ordinal` on the world (`ports.ail` has none), so the host
--- writes 0 and D5's `from_ordinal` rule waits for it. Decoding it strictly now
--- costs nothing and makes the schema stable across that landing.
+-- `world_ordinal` is the run's final `WorldState.ordinal`, carried on
+-- `RunSummary` since PLAN-003 P3ORD and copied off the wire by the host. The
+-- fold carries the last one into D5's `from_ordinal`.
 export type RunFinishedEntry = {
   run_id: string,
   cumulative: RuntimeStatusCounts,
@@ -1250,8 +1249,8 @@ export type SessionState = {
   profile: string,
   last: Boundary,
   -- The last `run_finished.world_ordinal` on the path: D5's `from_ordinal`, which
-  -- is the previous frame's `final` itself. 0 until PLAN-001 P2 lands `ordinal`
-  -- (the host writes 0 and the twin writes 0), and carried here rather than read
+  -- is the previous frame's `final` itself (`RunSummary.world_ordinal`, P3ORD),
+  -- and carried here rather than read
   -- off `last` because the last BOUNDARY is usually not a `run_finished` — a
   -- restart ends in `exit`, a crash ends mid-run.
   world_ordinal: int
@@ -1977,14 +1976,13 @@ pure func twin_event(acc: TwinAcc, e: LedgerEvent) -> TwinAcc {
 
     -- `RunSummaryInfo` carries no `run_id` — it is the run's summary and the run
     -- is the frame it is in — so the entry takes the id the twin has been
-    -- carrying since `run_started`. `world_ordinal` is 0 until PLAN-001 P2 lands
-    -- `ordinal` on the world, which is the plan's stated wait, and the fold
-    -- ignores the value.
+    -- carrying since `run_started`. `world_ordinal` is the summary's own, the
+    -- run's final world ordinal (P3ORD), as the host copies it.
     RunSummary(i) =>
       twin_line(acc, "run_finished", [
         kv("run_id", js(acc.run_id)),
         kv("cumulative", counts_json(i.cumulative)),
-        kv("world_ordinal", jint(0)),
+        kv("world_ordinal", jint(i.world_ordinal)),
         kv("finish_reason", js(i.finish_reason))
       ]),
 
@@ -2622,7 +2620,7 @@ pure func t_summary() -> LedgerRecord {
     model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
     input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0,
     cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
-    duration_ms: 5, error: "", cumulative: t_counts()
+    duration_ms: 5, error: "", cumulative: t_counts(), world_ordinal: 4
   }))
 }
 

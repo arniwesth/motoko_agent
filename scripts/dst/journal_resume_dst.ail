@@ -22,11 +22,16 @@
 -- prompt REFUSED, then FORCED — and the forced resume run and folded too, since a
 -- plan that accepts a journal the fold then refuses is not a resume.
 --
--- WHAT IS DEFERRED, SAID HERE AND NOT IN A FOOTNOTE: "and, once PLAN-001 P2 has
--- landed, BEGIN₂.ordinal₀ == END₁.final". `WorldState` has no `ordinal` at this
--- commit, so `run_finished.world_ordinal` is 0 by the plan's stated wait and
--- `SessionResumed.from_ordinal` is 0 with it. The row below asserts that value as
--- what it is and prints the deferral; it is not a pass of the ordinal clause.
+-- And the gate's ordinal clause, "BEGIN₂.ordinal₀ == END₁.final" (PLAN-003
+-- P3ORD): `RunSummary.world_ordinal` carries the first run's final world ordinal
+-- into its journal, and the plan's `from_ordinal` — the ordinal the resumed
+-- frame opens at — must equal the first run's returned `world.ordinal`.
+--
+-- WHAT THAT ROW DOES NOT SAY: the resumed run's WORLD is not seeded from
+-- `from_ordinal`. `run_v2_session_resumed_traced` (and the live
+-- `run_v2_resume_with_conversation`) start from the provider's world, so the
+-- resumed frame's `world_request` ordinals restart at 1. The row pins the
+-- declared opening ordinal, not a continued witness sequence.
 --
 -- The Make target runs this out of process and compares the `session_resumed`
 -- lines on stdout (PROJECTED by `ledger_emit`) with the `SessionResumed` records
@@ -230,10 +235,17 @@ export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Str
                       && plan.info.prompt_digest_from == plan.info.prompt_digest_to
                       && plan.info.from_id == leaf1,
                     "forced=${show(plan.info.forced)} replaced=${show(plan.head_replaced)} from_id=${plan.info.from_id} leaf=${leaf1}");
-        -- THE DEFERRED CLAUSE, asserted as the value it has today and printed as
-        -- deferred rather than counted as the ordinal pass.
-        let e = row("from_ordinal is 0 — DEFERRED: BEGIN₂.ordinal₀ == END₁.final waits for PLAN-001 P2's `ordinal` (WorldState has none)",
-                    plan.info.from_ordinal == 0, "from_ordinal=${show(plan.info.from_ordinal)}");
+        -- THE ORDINAL CLAUSE (P3ORD). END₁.final is the first run's returned
+        -- world ordinal, the value `run_world_framed_wire.sh` reads as a frame's
+        -- final; BEGIN₂.ordinal₀ is the ordinal the resumed frame opens at, which
+        -- is `SessionResumed.from_ordinal` — the fold's last
+        -- `run_finished.world_ordinal`. The pair is only equal if `c2_finalize`
+        -- puts the final world on `RunSummary`, the twin carries it into the
+        -- journal, and the fold and plan carry it out. A zero final would make
+        -- the equality vacuous, so it is required non-zero.
+        let e = row("BEGIN₂.ordinal₀ == END₁.final: the resumed frame opens at the first run's final world ordinal",
+                    run1.world.ordinal > 0 && plan.info.from_ordinal == run1.world.ordinal,
+                    "from_ordinal=${show(plan.info.from_ordinal)} final1=${show(run1.world.ordinal)}");
 
         match plan.suspended {
           None => { let _ = println("journal_resume FAIL (no continuation)"); exit(1) },
