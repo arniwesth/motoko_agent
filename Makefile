@@ -350,6 +350,19 @@ stream_parity:
 ledger_parity:
 	./scripts/dst/run_ledger_parity_wire.sh
 
+# PLAN-001 P2 Part 3 (ADR-001 D2 part 3). The world ordinal checked PER FRAMED
+# RUN on the stdout wire: `ledger_parity_dst.ail` prints WORLD_RUN_BEGIN/END
+# around each of its eight traced invocations, and the gate demands strict +1
+# ordinals from each frame's ordinal0 to its final, with every `world_request`
+# inside a frame. Its own target rather than a row of `ledger_parity`: a
+# different claim over the same run, so a red here names an ordinal, not a
+# parity count. `--selftest` first shows every red class on a synthetic wire,
+# so the green that follows is not a checker that cannot fail.
+.PHONY: world_framed_wire
+world_framed_wire:
+	./scripts/dst/run_world_framed_wire.sh --selftest
+	./scripts/dst/run_world_framed_wire.sh
+
 # The gate for motoko_agent#160. Two tiers, both using a deliberately LOW
 # `--max-recursion-depth` as the instrument, because AILANG has no depth counter
 # to read and no tail-call elimination: anything on the driver's per-step path
@@ -475,7 +488,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
   registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest \
-  herdr_graded journal_resume
+  herdr_graded journal_resume world_framed_wire
 
 # The graded session for a herdr DST profile (021 step 2's demonstration half).
 #

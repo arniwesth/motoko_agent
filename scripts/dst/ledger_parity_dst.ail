@@ -70,7 +70,8 @@ import src/core/test/ext_fixture (fixture_hooks, FixtureHooks, FixtureOverrides)
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
 import src/core/test/stub_step (
-  Scripted, ScriptedWorld, empty_rt,
+  StepProvider, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, LiveAI, Ported,
+  scripted_world_state, empty_rt,
   prose_step, tool_step, continuing_token_step, chunked_prose_step
 )
 import src/core/ports (ScriptedStep, WorldState, empty_world_state)
@@ -369,6 +370,55 @@ func census(label: string, want: [string], got: [string]) -> bool ! {IO} {
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- PLAN-001 P2 Part 3: per-run frames on the stdout wire
+-- ---------------------------------------------------------------------------
+--
+-- Each traced invocation in `main` is bracketed by two lines THIS SCRIPT
+-- prints: `WORLD_RUN_BEGIN <label> <ordinal0>` before the OUTER entry call and
+-- `WORLD_RUN_END <label> <final>` after it. `run_world_framed_wire.sh`
+-- partitions the `world_request` wire lines by these frames and demands, per
+-- frame, ordinals exactly ordinal0+1, ordinal0+2, ... and last == final. All
+-- eight subjects share `session_0` and restart at 1, so without the frame a run
+-- that dropped its LAST request reads as a shorter run (cF1).
+--
+-- ordinal0 is the world HANDED to the outer call, not the one at
+-- `HistorySeeded`: the bootstrap witnesses cover `session_policy_init`, which
+-- runs in the outer entry first. `ported_provider` is private to session.ail,
+-- so its world choice is mirrored here one constructor at a time.
+--
+-- final is `run.world.ordinal` — `DstResult` carries no world, and
+-- `RunSummary`/`done` are not frame boundaries (the exit publish is a request
+-- under test). A run returning with `pending` non-empty dropped a witness, so
+-- END is REFUSED and the refusal is carried into this script's own verdict.
+pure func frame_ordinal0(p: StepProvider) -> int {
+  match p {
+    Scripted(script) => scripted_world_state(script).ordinal,
+    ScriptedWorld(w) => w.ordinal,
+    RecordingWorld(w) => w.ordinal,
+    GeneratedWorld(w) => w.ordinal,
+    LiveAI => empty_world_state().ordinal,
+    Ported(_) => empty_world_state().ordinal
+  }
+}
+
+func begin_frame(label: string, p: StepProvider) -> () ! {IO} {
+  println("WORLD_RUN_BEGIN ${label} ${show(frame_ordinal0(p))}")
+}
+
+func end_frame(label: string, run: TracedSessionResult) -> bool ! {IO} {
+  let held = List.length(run.world.pending);
+  if held == 0 then {
+    let _ = println("WORLD_RUN_END ${label} ${show(run.world.ordinal)}");
+    true
+  } else {
+    let _ = println("WORLD_RUN_REFUSED ${label} pending=${show(held)}");
+    report("${label}: the run returned with world.pending empty, so its frame may close",
+           false,
+           "${show(held)} witness(es) still pending at return — a helped leaf advanced and was never witnessed; END is refused")
+  }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   println("=== ledger_parity_dst (D6.4, general obligation) ===");
 
@@ -388,64 +438,88 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
               "an empty register is a claim that every Logical variant reaches the trace, which this profile cannot establish");
 
   -- Subject 1: native dispatch. The tool-dispatch fold's allowed path.
+  let p1 = Scripted(tool_script());
+  let _ = begin_frame("native", p1);
   let native = Session.run_v2_session_traced(
     empty_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 6, false, 0, zero_rates(), Scripted(tool_script())
+    [system_msg()], "/tmp", 6, false, 0, zero_rates(), p1
   );
+  let f1 = end_frame("native", native);
   let r1 = check_scenario("native", native,
     ["NativeToolCalls", "V2ToolDispatchStart", "V2ToolDispatchComplete", "NativeToolResults", "ThinkingStreamEnd"]);
 
   -- Subject 2: policy denial. The fold's Deny arm.
+  let p2 = Scripted(tool_script());
+  let _ = begin_frame("denied", p2);
   let denied = Session.run_v2_session_traced(
     deny_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 6, false, 0, zero_rates(), Scripted(tool_script())
+    [system_msg()], "/tmp", 6, false, 0, zero_rates(), p2
   );
+  let f2 = end_frame("denied", denied);
   let r2 = check_scenario("denied", denied, ["NativeToolDenied"]);
 
   -- Subject 3: approval. The fold's Pending arm, then the driver's resolution.
+  let p3 = ScriptedWorld(approval_world());
+  let _ = begin_frame("pending", p3);
   let pending = Session.run_v2_session_traced(
     pending_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 6, false, 0, zero_rates(), ScriptedWorld(approval_world())
+    [system_msg()], "/tmp", 6, false, 0, zero_rates(), p3
   );
+  let f3 = end_frame("pending", pending);
   let r3 = check_scenario("pending", pending, ["ToolPending", "NativeToolDenied"]);
 
   -- Subject 4: the errored half of the stream bracket.
+  let p4 = Scripted(errored_script());
+  let _ = begin_frame("errored", p4);
   let errored = Session.run_v2_session_traced(
     empty_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 6, false, 0, zero_rates(), Scripted(errored_script())
+    [system_msg()], "/tmp", 6, false, 0, zero_rates(), p4
   );
+  let f4 = end_frame("errored", errored);
   let r4 = check_scenario("errored", errored, ["ThinkingStreamEnd"]);
 
   -- Subject 5: the cost-cap terminal path.
+  let p5 = Scripted(metered_script());
+  let _ = begin_frame("capped", p5);
   let capped = Session.run_v2_session_traced(
     deny_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 6, false, 1, metered_rates(), Scripted(metered_script())
+    [system_msg()], "/tmp", 6, false, 1, metered_rates(), p5
   );
+  let f5 = end_frame("capped", capped);
   let r5 = check_scenario("capped", capped, ["CostExhausted"]);
 
   -- Subject 6: the DP7 re-injection path, which is NOT terminal — the run
   -- continues after it, which is why its append is unconstrained by D6.1.
+  let p6 = Scripted([prose_step("done"), prose_step("done again")]);
+  let _ = begin_frame("dp7", p6);
   let rejected = Session.run_v2_session_traced(
     dp7_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 4, false, 0, zero_rates(), Scripted([prose_step("done"), prose_step("done again")])
+    [system_msg()], "/tmp", 4, false, 0, zero_rates(), p6
   );
+  let f6 = end_frame("dp7", rejected);
   let r6 = check_scenario("dp7", rejected, ["Dp7VerifierRejected"]);
 
   -- Subject 7: an extension-served tool. See `handled_rt`.
+  let p7 = Scripted(tool_script());
+  let _ = begin_frame("handled", p7);
   let handled = Session.run_v2_session_traced(
     handled_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 6, false, 0, zero_rates(), Scripted(tool_script())
+    [system_msg()], "/tmp", 6, false, 0, zero_rates(), p7
   );
+  let f7 = end_frame("handled", handled);
   let r7 = check_scenario("handled", handled, ["ExtToolHandled"]);
 
   -- Subject 8: the v2 Delegated backend, which defers rather than executing.
   -- `ohmy_pi` true and a shell token in the command is what routes BashExec to
   -- Delegated (`tool_runtime.needs_delegation_for_process`); without both, the
   -- call goes Native and this subject silently becomes a duplicate of `native`.
+  let p8 = Scripted(delegated_script());
+  let _ = begin_frame("delegated", p8);
   let delegated = Session.run_v2_session_traced(
     empty_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 6, true, 0, zero_rates(), Scripted(delegated_script())
+    [system_msg()], "/tmp", 6, true, 0, zero_rates(), p8
   );
+  let f8 = end_frame("delegated", delegated);
   let r8 = check_scenario("delegated", delegated, ["DelegatedToolDeferred"]);
 
   -- ORDER, PINNED, because the wire comparison cannot see it. The shell counts
@@ -507,8 +581,10 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
               "the native subject denied a tool, so it is not isolating the allowed arm");
 
   let _ = println("LEDGER_SUBJECTS 8");
+  let _ = println("WORLD_RUN_FRAMES 8");
+  let framed = f1 && f2 && f3 && f4 && f5 && f6 && f7 && f8;
 
-  if req_ok && r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && order_ok && disjoint then println("ledger_parity_dst PASS")
+  if req_ok && r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && order_ok && disjoint && framed then println("ledger_parity_dst PASS")
   else {
     let _ = println("ledger_parity_dst FAIL");
     exit(1)
