@@ -47,7 +47,7 @@ describe("run-state mapping", () => {
   it("maps every Motoko run state to a herdr state", () => {
     // Exhaustive by construction: the array is typed as the full union, so adding a RunState
     // member without extending mapRunState fails to compile here as well as at the ui.ts call site.
-    const all: MotokoRunState[] = ["idle", "thinking", "tools_wait", "tools_run", "error", "suspended"];
+    const all: MotokoRunState[] = ["idle", "thinking", "tools_wait", "tools_run", "error", "suspended", "done"];
     expect(all.map((s) => mapRunState(s).state)).toEqual([
       "idle",
       "working",
@@ -55,15 +55,23 @@ describe("run-state mapping", () => {
       "working",
       "blocked",
       "blocked",
+      "idle",
     ]);
   });
 
-  it("carries a message only for the blocked states", () => {
+  it("carries a message only for the blocked states and done", () => {
     expect(mapRunState("error").message).toMatch(/error/);
     expect(mapRunState("suspended").message).toMatch(/continue/);
     for (const s of ["idle", "thinking", "tools_wait", "tools_run"] as MotokoRunState[]) {
       expect(mapRunState(s).message).toBeUndefined();
     }
+  });
+
+  // ADR-002 v4.2 D1.1 / PLAN-002 W1b: `done` is herdr idle with the message "done", which is the
+  // only thing that tells a finished Motoko from one that has not started.
+  it("maps done to idle with the message done", () => {
+    expect(mapRunState("done")).toEqual({ state: "idle", message: "done" });
+    expect(mapRunState("done")).not.toEqual(mapRunState("idle"));
   });
 
   // ADR-003 v6.1 D2. `suspended` and `error` are both `blocked`, so the STATE alone cannot tell an

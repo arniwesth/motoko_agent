@@ -1,4 +1,5 @@
 import type { AgentEvent } from "./runtime-process.js";
+import { ANSWER_UNPUBLISHED_EXIT_CODE } from "./answer-file.js";
 import { formatResumedHistory } from "./ui.js";
 
 /**
@@ -25,6 +26,7 @@ export const RESUME_REFUSED_EXIT_CODE = 3;
 
 export class HeadlessOutcome {
   private code = 0;
+  private answerRefused = false;
 
   /** The stderr line this event calls for, or null; records the non-zero exit it implies. */
   observe(event: AgentEvent): string | null {
@@ -43,7 +45,21 @@ export class HeadlessOutcome {
     }
   }
 
-  /** 0 unless a `run_suspended` or `session_resume_refused` was seen. */
+  /**
+   * ADR-002 D1.2: an `--answer-file` one-shot published nothing (empty `done`, error, abort or a
+   * failed write). The logger has already put the reason on stderr; this records the exit.
+   */
+  refuseAnswer(): void {
+    this.answerRefused = true;
+    if (this.code === 0) this.code = ANSWER_UNPUBLISHED_EXIT_CODE;
+  }
+
+  /** The exit a `done` takes: 0, unless the answer it should have published was not. */
+  get doneExitCode(): number {
+    return this.answerRefused ? ANSWER_UNPUBLISHED_EXIT_CODE : 0;
+  }
+
+  /** 0 unless a `run_suspended`, a `session_resume_refused` or an unpublished answer was seen. */
   get exitCode(): number {
     return this.code;
   }

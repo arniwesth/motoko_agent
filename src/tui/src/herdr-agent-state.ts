@@ -40,7 +40,7 @@ import { spawn, spawnSync } from "child_process";
  * passes it a `RunState`, so a new `RunState` member that is absent here fails to typecheck at the
  * call site rather than silently reporting nothing.
  */
-export type MotokoRunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended";
+export type MotokoRunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended" | "done";
 
 /** The four states herdr's `pane report-agent --state` accepts. */
 export type HerdrState = "idle" | "working" | "blocked" | "unknown";
@@ -86,11 +86,18 @@ export interface HerdrReport {
  * ADR-003's whole point is that reaching the budget is no longer a failure. The two therefore
  * differ in the MESSAGE, which is the only thing herdr shows beside a blocked row, and the message
  * says what to send.
+ *
+ * `done` (ADR-002 v4.2 D1.1, PLAN-002 W1b) is herdr `idle` with the message `done`: the task
+ * finished, where plain `idle` also means "started and has not begun". Whether herdr SHOWS an idle
+ * row's message is W1a's probe: herdr 0.8.2 accepts it and no CLI or socket read returns it, so
+ * outside Motoko's own status line the two still read alike until the answer/exit protocol is used.
  */
 export function mapRunState(state: MotokoRunState): HerdrReport {
   switch (state) {
     case "idle":
       return { state: "idle" };
+    case "done":
+      return { state: "idle", message: "done" };
     case "thinking":
     case "tools_wait":
     case "tools_run":

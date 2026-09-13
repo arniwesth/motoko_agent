@@ -1,0 +1,412 @@
+-- scripts/verify_herdr_delegate_wait.ail
+--
+-- PLAN-002 W1b, the extension half of its gate: ADR-002 v4.2 D1.4 (re-read
+-- before `lost`) and D3's PRODUCER (`wait` on `Delegate`, `settled` on
+-- `DelegateCheck`). Everything here is driven through the exported
+-- `on_tool_handle` with scripted ports — no herdr, no filesystem — because every
+-- case is a path through an effectful handler, which inline `tests [...]` cannot
+-- reach. The pure halves (`meta_delegate`, `meta_timed`, the gate-6 fixtures)
+-- are pinned in `herdr.ail` itself.
+--
+-- WHAT IS ASSERTED
+--   Delegate       `wait` on a motoko and a claude success, each field; absent
+--                  on a failed launch; the motoko launch runs one-shot with
+--                  `--answer-file` (D1.3); a check's `metadata.delegate` equals
+--                  the `wait.id` of the Delegate that returned the handle.
+--   motoko check   `settled` on every return: early answer, the D1.4 re-read
+--                  finding the answer, gone-and-lost, error-only, post-wait
+--                  answer, post-wait lost, not yet.
+--   claude check   `settled` on every return, including the R11 arms with no
+--                  pane (`pane_id: ""`, raw `delegate`).
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run \
+--     --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+--     --ai-stub --entry main scripts/verify_herdr_delegate_wait.ail
+--   ... --entry print_fixtures ...   prints `FIXTURE <name> <json>` per fixture
+--
+-- Prints one OK/FAIL line per case; exits non-zero on any FAIL.
+module scripts/verify_herdr_delegate_wait
+
+import std/io (println, exit)
+import std/json (Json, jo, kv, js, encode, decode, get, asString, asArray, asObject)
+import std/string (contains)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtClockReading,
+  ToolCallEnvelope, ToolResultEnvelope, ToolHandleOutcome, ToolHandleDecision,
+  Handled, Delegate, BudgetPlan, empty_ext_world
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_herdr/herdr (
+  HerdrConfig, on_tool_handle,
+  fixture_delegate_motoko, fixture_delegate_claude, fixture_check_done, fixture_check_pending,
+  fixture_check_lost, fixture_check_error_only, fixture_check_arg_error
+)
+import src/core/test/herdr_fixture (argv_text, envelope, herdr_error, strings_of)
+
+-- ---------------------------------------------------------------------------
+-- A filesystem in the world token (verify_mot136's shape)
+-- ---------------------------------------------------------------------------
+
+func kvs_without(kvs: [{key: string, value: Json}], key: string) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    p :: rest => if p.key == key then kvs_without(rest, key) else p :: kvs_without(rest, key)
+  }
+}
+
+func obj_set(o: Json, key: string, v: Json) -> Json {
+  match asObject(o) {
+    None => jo([kv(key, v)]),
+    Some(kvs) => jo(kvs_without(kvs, key) ++ [kv(key, v)])
+  }
+}
+
+func obj_del(o: Json, key: string) -> Json {
+  match asObject(o) { None => o, Some(kvs) => jo(kvs_without(kvs, key)) }
+}
+
+func sfield(o: Json, key: string) -> string {
+  match get(o, key) {
+    None => "",
+    Some(v) => match asString(v) { Some(s) => s, None => "" }
+  }
+}
+
+func files_of(w: ExtWorld) -> Json {
+  match get(w.token, "files") { Some(f) => f, None => jo([]) }
+}
+
+func with_files(w: ExtWorld, f: Json) -> ExtWorld { { token: obj_set(w.token, "files", f) } }
+
+func read_file(w: ExtWorld, path: string) -> string { sfield(files_of(w), path) }
+
+func has_file(w: ExtWorld, path: string) -> bool {
+  match get(files_of(w), path) { Some(_) => true, None => false }
+}
+
+func put_file(w: ExtWorld, path: string, content: string) -> ExtWorld {
+  with_files(w, obj_set(files_of(w), path, js(content)))
+}
+
+func drop_file(w: ExtWorld, path: string) -> ExtWorld {
+  with_files(w, obj_del(files_of(w), path))
+}
+
+func fs_read(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if has_file(world, path)
+  then { present: true, content: read_file(world, path), next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+func fs_write(world: ExtWorld, path: string, content: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: put_file(world, path, content) }
+}
+
+func fs_remove(world: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: drop_file(world, path) }
+}
+
+func fs_dir(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: world }
+}
+
+func cmd_of(args_json: string) -> string {
+  match decode(args_json) { Err(_) => "", Ok(o) => sfield(o, "cmd") }
+}
+
+func argv_list(args_json: string) -> [string] {
+  match decode(args_json) {
+    Err(_) => [],
+    Ok(o) => match get(o, "args") {
+      None => [],
+      Some(a) => match asArray(a) { Some(xs) => strings_of(xs), None => [] }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The scripted herdr
+-- ---------------------------------------------------------------------------
+
+func clock_delegate() -> int { 1787475025027 }
+func clock_check() -> int { 1787475040757 }
+func the_handle() -> string { "mot-dlg-1787475025027@w1:pA" }
+func the_name() -> string { "mot-dlg-1787475025027" }
+func the_answer() -> string { "/tmp/mot/answer-mot-dlg-1787475025027.md" }
+func answer_text() -> string { "ANSWER-W1B: published before the row went away" }
+
+func ok_with(world: ExtWorld, stdout: string) -> ExtProcOutcome {
+  { output: envelope(stdout, "", 0), exit_code: 0, next_state: world }
+}
+
+func fail_with(world: ExtWorld, code: string) -> ExtProcOutcome {
+  { output: envelope("", herdr_error(code), 1), exit_code: 1, next_state: world }
+}
+
+func agent_json(status: string) -> string {
+  "{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent_status\":\"${status}\",\"pane_id\":\"w1:pA\"}}}"
+}
+
+-- THE ANSWER LANDS AT A CHOSEN CALL. `publish_on` names the herdr call during
+-- which the delegate's host publishes its answer: "get" for the D1.4 race (the
+-- early read saw nothing, the row is gone by `agent get`, the file is there by
+-- the re-read), "wait" for an answer arriving during the server-side wait.
+func publish_if(world: ExtWorld, publish_on: string, here: string) -> ExtWorld {
+  if publish_on == here then put_file(world, the_answer(), answer_text()) else world
+}
+
+-- `wait`: "ok" | "timeout" | "gone" | "unwell"
+-- `get_mode`: an agent status, or "gone" | "unwell"
+func scripted(split_ok: bool, wait: string, get_mode: string, publish_on: string)
+  -> (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS} {
+  func(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+    let cmd = cmd_of(args_json);
+    let argv = argv_text(args_json);
+    if cmd == "mv" then {
+      match argv_list(args_json) {
+        src :: rest => match rest {
+          dst :: _ => ok_with(drop_file(put_file(world, dst, read_file(world, src)), src), ""),
+          [] => fail_with(world, "mv_missing_destination")
+        },
+        [] => fail_with(world, "mv_missing_operand")
+      }
+    }
+    else if contains(argv, "pane split") then
+      if split_ok
+      then ok_with(world, "{\"id\":\"cli:pane:split\",\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"},\"type\":\"pane_info\"}}")
+      else fail_with(world, "pane_split_failed")
+    else if contains(argv, "pane list") then
+      ok_with(world, "{\"result\":{\"panes\":[{\"pane_id\":\"w1:p1\"}]}}")
+    else if contains(argv, "pane run") then
+      ok_with(put_file(world, "/tmp/.last-pane-run", argv), "{\"result\":{}}")
+    else if contains(argv, "agent explain") then
+      ok_with(world, "{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}")
+    else if contains(argv, "agent wait") then {
+      let w2 = publish_if(world, publish_on, "wait");
+      if wait == "gone" then fail_with(w2, "agent_not_found")
+      else if wait == "unwell" then fail_with(w2, "server_not_running")
+      else if wait == "timeout" then fail_with(w2, "timeout")
+      else ok_with(w2, "{\"result\":{}}")
+    }
+    else if contains(argv, "agent get") then {
+      let w2 = publish_if(world, publish_on, "get");
+      if get_mode == "gone" then fail_with(w2, "agent_not_found")
+      else if get_mode == "unwell" then fail_with(w2, "server_not_running")
+      else ok_with(w2, agent_json(get_mode))
+    }
+    else ok_with(world, "")
+  }
+}
+
+func clock_at(ms: int) -> (ExtWorld) -> ExtClockReading ! {Clock} {
+  func(world: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: ms, next_state: world } }
+}
+
+func ports(ms: int, split_ok: bool, wait: string, get_mode: string, publish_on: string) -> ExtPorts {
+  let base = noop_ext_ports();
+  { ai_step: base.ai_step,
+    tool_handle: scripted(split_ok, wait, get_mode, publish_on),
+    file_read: fs_read,
+    file_write: fs_write,
+    file_remove: fs_remove,
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: fs_dir,
+    clock_now: clock_at(ms),
+    env_get: base.env_get }
+}
+
+func mk_ctx(p: ExtPorts, world: ExtWorld) -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-w1b", step: 0, model: "test-model", cwd: "/tmp",
+    hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
+    env_server_url: "", budget_remaining: 4, history_slice: [],
+    state_key: "test", context_limit: 0, ports: p,
+    finish_reason: "",
+    work_in_flight: [],
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: world }
+}
+
+func mk_cfg() -> HerdrConfig {
+  { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: "",
+    allowed_kinds: "claude,motoko", depth: 0, max_depth: 1, motoko_script: "./x.sh",
+    session_ms: "200", sweep_stale: false, dagr_dir: "/tmp/.dagr",
+    dagr_pane: false,
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
+    reap_on_exit: false, settle_on_exit: false, sweep_settle: false, dagr_bin: "dagr", dagr_plan: "" }
+}
+
+func drive(world: ExtWorld, p: ExtPorts, call: ToolCallEnvelope)
+  -> { r: ToolResultEnvelope, w: ExtWorld } ! {IO, Process, FS, Clock} {
+  let out = on_tool_handle(mk_cfg(), mk_ctx(p, world), call);
+  match out.decision {
+    Handled(r) => { r: r, w: out.next_state },
+    Delegate => { r: { tool_call_id: call.id, tool: call.tool, exit_code: 99, stdout: "",
+                       stderr: "on_tool_handle delegated the call", metadata: jo([]) },
+                  w: out.next_state }
+  }
+}
+
+func delegate_call(kind: string) -> ToolCallEnvelope {
+  { id: "d-${kind}", tool: "Delegate",
+    arguments: jo([kv("prompt", js("w1b ${kind} work")), kv("kind", js(kind))]) }
+}
+
+func check_call(name: string) -> ToolCallEnvelope {
+  { id: "c-${name}", tool: "DelegateCheck", arguments: jo([kv("name", js(name))]) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Reading the metadata
+-- ---------------------------------------------------------------------------
+
+func present(r: ToolResultEnvelope, key: string) -> bool {
+  match get(r.metadata, key) { Some(_) => true, None => false }
+}
+
+func mfield(r: ToolResultEnvelope, key: string) -> string { sfield(r.metadata, key) }
+
+func settled_of(r: ToolResultEnvelope) -> string {
+  match get(r.metadata, "settled") { None => "absent", Some(v) => encode(v) }
+}
+
+func wait_field(r: ToolResultEnvelope, key: string) -> string {
+  match get(r.metadata, "wait") { None => "<no wait>", Some(w) => sfield(w, key) }
+}
+
+func wait_pane(r: ToolResultEnvelope) -> string {
+  match get(r.metadata, "wait") {
+    None => "<no wait>",
+    Some(w) => match get(w, "locator") { None => "<no locator>", Some(l) => sfield(l, "pane") }
+  }
+}
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  if ok then { println("OK: ${label}"); true }
+  else { println("FAIL: ${label} — ${detail}"); false }
+}
+
+func describe(r: ToolResultEnvelope) -> string {
+  "exit ${show(r.exit_code)} settled=${settled_of(r)} delegate=`${mfield(r, "delegate")}` pane_id=`${mfield(r, "pane_id")}` metadata=${encode(r.metadata)}; stdout: ${r.stdout}; stderr: ${r.stderr}"
+}
+
+-- One DelegateCheck return: exit code, `settled`, and the two keys W2 matches on.
+func expect_check(label: string, r: ToolResultEnvelope, exit_code: int, settled: bool,
+                  delegate: string, pane: string) -> bool ! {IO} {
+  report(label,
+         r.exit_code == exit_code
+           && settled_of(r) == (if settled then "true" else "false")
+           && present(r, "delegate") && present(r, "pane_id")
+           && mfield(r, "delegate") == delegate && mfield(r, "pane_id") == pane,
+         describe(r))
+}
+
+func expect_wait(label: string, r: ToolResultEnvelope, kind: string) -> bool ! {IO} {
+  report(label,
+         r.exit_code == 0
+           && wait_field(r, "id") == mfield(r, "delegate")
+           && wait_field(r, "delegate_kind") == kind
+           && wait_pane(r) == "w1:pA"
+           && wait_field(r, "answer_path") == the_answer()
+           && wait_field(r, "run_key") == the_name(),
+         describe(r))
+}
+
+func motoko_check(world: ExtWorld, wait: string, get_mode: string, publish_on: string)
+  -> ToolResultEnvelope ! {IO, Process, FS, Clock} {
+  drive(world, ports(clock_check(), true, wait, get_mode, publish_on), check_call(the_handle())).r
+}
+
+func claude_check(world: ExtWorld, name: string, wait: string, get_mode: string, publish_on: string)
+  -> ToolResultEnvelope ! {IO, Process, FS, Clock} {
+  drive(world, ports(clock_check(), true, wait, get_mode, publish_on), check_call(name)).r
+}
+
+-- ---------------------------------------------------------------------------
+-- Cases
+-- ---------------------------------------------------------------------------
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let w0 = empty_ext_world();
+  let answered = put_file(w0, the_answer(), answer_text());
+
+  -- Delegate ----------------------------------------------------------------
+  let dm = drive(w0, ports(clock_delegate(), true, "ok", "idle", ""), delegate_call("motoko"));
+  let d1 = expect_wait("motoko Delegate carries wait {id=handle, kind, locator.pane, answer_path, run_key}", dm.r, "motoko");
+  let d1h = report("motoko Delegate's wait.id is the handle it returns",
+                   wait_field(dm.r, "id") == the_handle(), describe(dm.r));
+  let run_argv = read_file(dm.w, "/tmp/.last-pane-run");
+  let d1b = report("motoko launch runs one-shot with --answer-file (D1.3)",
+                   contains(run_argv, "--oneshot --answer-file '${the_answer()}'"), "pane run argv: ${run_argv}");
+  let dc = drive(w0, ports(clock_delegate(), true, "ok", "idle", ""), delegate_call("claude"));
+  let d2 = expect_wait("claude Delegate carries wait {id=name, kind, locator.pane, answer_path, run_key}", dc.r, "claude");
+  let d2h = report("claude Delegate's wait.id is the name it returns",
+                   wait_field(dc.r, "id") == the_name(), describe(dc.r));
+  let df = drive(w0, ports(clock_delegate(), false, "ok", "idle", ""), delegate_call("claude"));
+  let d3 = report("a failed launch carries no wait", df.r.exit_code != 0 && present(df.r, "wait") == false, describe(df.r));
+  -- The matching key, end to end: check the handle Delegate returned.
+  let km = drive(put_file(dm.w, the_answer(), answer_text()),
+                 ports(clock_check(), true, "ok", "idle", ""), check_call(wait_field(dm.r, "id"))).r;
+  let d4 = report("a check's metadata.delegate equals the wait.id of the Delegate that returned the handle (motoko)",
+                  mfield(km, "delegate") == wait_field(dm.r, "id"), describe(km));
+  let kc = drive(put_file(dc.w, the_answer(), answer_text()),
+                 ports(clock_check(), true, "ok", "idle", ""), check_call(wait_field(dc.r, "id"))).r;
+  let d5 = report("a check's metadata.delegate equals the wait.id of the Delegate that returned the handle (claude)",
+                  mfield(kc, "delegate") == wait_field(dc.r, "id"), describe(kc));
+
+  -- motoko DelegateCheck ------------------------------------------------------
+  let h = the_handle();
+  let m1 = expect_check("motoko early answer -> settled true", motoko_check(answered, "ok", "working", ""), 0, true, h, "w1:pA");
+  let rr = motoko_check(w0, "ok", "gone", "get");
+  let m2 = expect_check("D1.4: answer lands between the early read and agent_not_found -> re-read settles done", rr, 0, true, h, "w1:pA");
+  let m2b = report("D1.4: the re-read's result carries the answer", contains(rr.stdout, answer_text()), describe(rr));
+  let m3 = expect_check("D1.4: gone and still no answer on the re-read -> lost, settled true (was jo([]))",
+                        motoko_check(w0, "ok", "gone", ""), 1, true, h, "w1:pA");
+  let m4 = expect_check("motoko agent get fails, herdr unwell -> error-only, settled false (was jo([]))",
+                        motoko_check(w0, "ok", "unwell", ""), 1, false, h, "w1:pA");
+  let m5 = expect_check("motoko post-wait answer -> settled true", motoko_check(w0, "ok", "working", "wait"), 0, true, h, "w1:pA");
+  let m6 = expect_check("motoko post-wait lost -> settled true", motoko_check(w0, "gone", "working", ""), 1, true, h, "w1:pA");
+  let m7 = expect_check("motoko not yet -> settled false", motoko_check(w0, "timeout", "working", ""), 0, false, h, "w1:pA");
+
+  -- claude/codex DelegateCheck --------------------------------------------------
+  let n = the_name();
+  let c1 = expect_check("R11: empty name -> pane_id \"\", delegate \"\", settled false",
+                        claude_check(w0, "", "ok", "idle", ""), 1, false, "", "");
+  let c2 = expect_check("R11: a name this extension never issued -> pane_id \"\", raw delegate, settled false",
+                        claude_check(w0, "someone-elses-agent", "ok", "idle", ""), 1, false, "someone-elses-agent", "");
+  let c3 = expect_check("claude early answer -> settled true", claude_check(answered, n, "ok", "idle", ""), 0, true, n, "w1:pA");
+  let c4 = expect_check("R11: claude wait says agent_not_found -> settled lost, pane_id \"\", settled true",
+                        claude_check(w0, n, "gone", "idle", ""), 1, true, n, "");
+  let c5 = expect_check("R11: claude wait fails, herdr unwell -> pane_id \"\", settled false",
+                        claude_check(w0, n, "unwell", "idle", ""), 1, false, n, "");
+  let c6 = expect_check("claude agent get says agent_not_found after the wait -> settled true",
+                        claude_check(w0, n, "ok", "gone", ""), 1, true, n, "");
+  let c7 = expect_check("claude agent get fails, herdr unwell -> settled false",
+                        claude_check(w0, n, "ok", "unwell", ""), 1, false, n, "");
+  let c8 = expect_check("claude post-wait answer -> settled true", claude_check(w0, n, "ok", "working", "get"), 0, true, n, "w1:pA");
+  let c9 = expect_check("claude blocked -> settled false", claude_check(w0, n, "ok", "blocked", ""), 0, false, n, "w1:pA");
+  let c10 = expect_check("claude settled with no answer -> settled_unverified, settled true",
+                         claude_check(w0, n, "ok", "idle", ""), 1, true, n, "w1:pA");
+  let c11 = expect_check("claude still working -> settled false", claude_check(w0, n, "timeout", "working", ""), 0, false, n, "w1:pA");
+
+  if d1 && d1h && d1b && d2 && d2h && d3 && d4 && d5
+     && m1 && m2 && m2b && m3 && m4 && m5 && m6 && m7
+     && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11
+  then () else exit(1)
+}
+
+-- One line per gate-6 fixture; the Makefile target diffs each against
+-- `packages/motoko-ext-herdr/fixtures/plan002-gate6/<name>.json`.
+export func print_fixtures() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  println("FIXTURE delegate_motoko ${fixture_delegate_motoko()}");
+  println("FIXTURE delegate_claude ${fixture_delegate_claude()}");
+  println("FIXTURE check_done ${fixture_check_done()}");
+  println("FIXTURE check_pending ${fixture_check_pending()}");
+  println("FIXTURE check_lost ${fixture_check_lost()}");
+  println("FIXTURE check_error_only ${fixture_check_error_only()}");
+  println("FIXTURE check_arg_error ${fixture_check_arg_error()}")
+}

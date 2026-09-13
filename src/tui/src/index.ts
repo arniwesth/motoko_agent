@@ -26,6 +26,14 @@ import { startEnvServer } from "./env-server.js";
 import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { HeadlessOutcome, formatResumeViewLine } from "./headless-outcome.js";
+import {
+  ANSWER_UNPUBLISHED_EXIT_CODE,
+  type AnswerPublication,
+  finishOneShot,
+  formatUnpublished,
+  publishAnswer,
+  unpublishedOnExit,
+} from "./answer-file.js";
 import { SessionLogger } from "./session-logger.js";
 import { initHerdrReporter, reportSessionPath } from "./herdr-agent-state.js";
 import { initExitActions } from "./exit-actions.js";
@@ -517,7 +525,7 @@ class PlainLogger {
         break;
       case "done":
         process.stdout.write(`[done] ${event.step} step(s)\n${event.output}\n`);
-        process.exit(0);
+        process.exit(this.outcome.doneExitCode);
         break;
       case "error":
         process.stderr.write(`[error] ${event.message}\n`);
@@ -576,6 +584,12 @@ class PlainLogger {
     }
   }
 
+  // ADR-002 D1.2: an `--answer-file` one-shot that published nothing says why and exits non-zero.
+  refuseAnswer(publication: Extract<AnswerPublication, { ok: false }>): void {
+    process.stderr.write(formatUnpublished(publication));
+    this.outcome.refuseAnswer();
+  }
+
   // Called once the runtime has exited and the session log is drained. A run that suspended or
   // was refused a resume, and was not already ended by an `error`, exits non-zero here.
   stop(): void {
@@ -595,8 +609,13 @@ class JsonlLogger {
     // reason goes to stderr, and its non-zero exit is taken on the `error` or in `stop()`.
     const reason = this.outcome.observe(event);
     if (reason !== null) process.stderr.write(reason);
-    if (event.type === "done") process.exit(0);
+    if (event.type === "done") process.exit(this.outcome.doneExitCode);
     if (event.type === "error") process.exit(1);
+  }
+
+  refuseAnswer(publication: Extract<AnswerPublication, { ok: false }>): void {
+    process.stderr.write(formatUnpublished(publication));
+    this.outcome.refuseAnswer();
   }
 
   stop(): void {
@@ -611,25 +630,38 @@ class JsonlLogger {
 // M-MOTOKO-EVAL-HARNESS-HARDENING M2b + M2c (gaps #7, #8): parse motoko-
 // specific CLI flags before treating argv[2] as task text.
 //   --headless       — force MOTOKO_HEADLESS=1 (more discoverable than env var)
+//   --oneshot        — interactive one-shot: TTY display, exit after the first task's `done`
+//   --answer-file P  — publish the final answer to P (ADR-002 D1.2); see answer-file.ts
 //   --version, -v    — print structured version info to stdout and exit 0
 // Recognized flags are removed from process.argv so downstream argv[2] reads
 // still work for the task text. Unknown flags pass through to the task text
 // (so "motoko --whatever ..." doesn't break).
 function parseMotokoFlags(): {
   headless: boolean;
+  oneshot: boolean;
+  answerFile: string | null;
   printVersion: boolean;
   systemPrompt: string | null;
 } {
   const flags: {
     headless: boolean;
+    oneshot: boolean;
+    answerFile: string | null;
     printVersion: boolean;
     systemPrompt: string | null;
-  } = { headless: false, printVersion: false, systemPrompt: null };
+  } = { headless: false, oneshot: false, answerFile: null, printVersion: false, systemPrompt: null };
   const remaining: string[] = [process.argv[0], process.argv[1]];
   for (let i = 2; i < process.argv.length; i++) {
     const arg = process.argv[i];
     if (arg === "--headless") {
       flags.headless = true;
+    } else if (arg === "--oneshot") {
+      // ADR-002 D1.3. `--headless` is the plain/JSONL one-shot and already exits on `done`; this is
+      // the same one task with the TUI kept, which is what a delegate in a herdr pane wants.
+      flags.oneshot = true;
+    } else if (arg === "--answer-file") {
+      flags.answerFile = process.argv[i + 1] ?? "";
+      i++; // consume the value
     } else if (arg === "--version" || arg === "-v") {
       flags.printVersion = true;
     } else if (arg === "--system-prompt") {
@@ -731,6 +763,15 @@ async function main(): Promise<void> {
       process.env.SYSTEM_MD = materialized;
     }
   }
+  // ADR-002 D1.2. Resolved against the workdir, the same base a task's own relative paths use.
+  if (motokoFlags.answerFile !== null && motokoFlags.answerFile.trim() === "") {
+    process.stderr.write("--answer-file needs a path.\n");
+    process.exit(2);
+  }
+  const answerFile = motokoFlags.answerFile !== null ? path.resolve(workdir, motokoFlags.answerFile) : null;
+  // Set when the operator aborts or interrupts: an aborted run publishes nothing, and no runtime
+  // event says it was aborted.
+  let abortRequested = false;
   // M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): default
   // ENV_PORT to 0 = let the kernel pick a free port atomically when
   // startEnvServer binds. The wrapper used to do its own pick_free_port
@@ -953,11 +994,16 @@ async function main(): Promise<void> {
       journal.record({ type: "model_change", model: newModel });
       runtimeProcess!.setModel(newModel);
     };
-    ui.onAbort = () => runtimeProcess!.abort();
+    ui.onAbort = () => {
+      abortRequested = true;
+      runtimeProcess!.abort();
+    };
     ui.onUserMessage = (content) => {
       logger.logUserInput(content);
       runtimeProcess!.sendUserMessage(content);
     };
+    // Whether a `done`/`error` reached this callback, so an exit without one is known unpublished.
+    let terminalSeen = false;
     runtimeProcess = new RuntimeProcess(
       task,
       envUrl,
@@ -977,7 +1023,14 @@ async function main(): Promise<void> {
         // events emitted in the same flush window. See M-MOTOKO-EVAL-HARNESS-
         // HARDENING gap #1 / gap #10 for the bisection.
         if (event.type === "done" || event.type === "error") {
+          terminalSeen = true;
           void logger.close().then(() => {
+            // ADR-002 D1.2: publish after the drain and BEFORE the logger's exit, so the answer is
+            // on disk before exit actions and the herdr reporter's release run.
+            if (answerFile !== null) {
+              const publication = publishAnswer(answerFile, event, abortRequested);
+              if (!publication.ok) ui.refuseAnswer(publication);
+            }
             ui.handleEvent(event);
           });
           return;
@@ -999,6 +1052,8 @@ async function main(): Promise<void> {
         journal.writeExit("child_exit");
         const closing = logger.close();
         sessionLogger = undefined;
+        // No terminal event reached the writer — killed, crashed, aborted: nothing was published.
+        if (answerFile !== null && !terminalSeen) ui.refuseAnswer(unpublishedOnExit(answerFile, abortRequested));
         // After the drain: a logger whose run suspended without an `error` exits non-zero in
         // `stop()` (PLAN-003 P3 Part 6), and an exit before the drain loses the log's tail.
         void closing.then(() => ui.stop());
@@ -1013,6 +1068,14 @@ async function main(): Promise<void> {
   process.env.AILANG_BUILT = ailangVersion;
 
   const ui = new AgentUI({ version: pkgVersion, model, profile, ailangVersion, extensions: profileAgent.extensions });
+  const oneShot = motokoFlags.oneshot;
+  // Set once a one-shot's terminal event is being finished, so the runtime's exit does not race it.
+  let oneShotFinishing = false;
+  if (answerFile !== null && !oneShot) {
+    // PLAN-002 W1b: the TTY writer runs only in an `--answer-file` one-shot. An interactive session
+    // has no single final answer to publish.
+    process.stderr.write("--answer-file is ignored in an interactive session; add --oneshot.\n");
+  }
 
   function spawnRuntimeProcess(task: string, logPrompt: boolean, resume?: ResumeSpawn): void {
     errorOccurred = false;
@@ -1050,6 +1113,20 @@ async function main(): Promise<void> {
         }
         completeHeaderFrom(event);
         logger.log(event);
+        // ADR-002 D1.3, the interactive one-shot. At HEAD the TTY path never exits on `done`; under
+        // `--oneshot` it does, and only after the answer is published (D1.2) and the logger has
+        // DRAINED (R4) — `logger.log` above is synchronous and is not a drain. See `finishOneShot`.
+        if (oneShot && (event.type === "done" || event.type === "error")) {
+          oneShotFinishing = true;
+          void finishOneShot(event, answerFile, abortRequested || interrupted, {
+            forward: (e) => ui.handleEvent(e),
+            close: () => logger.close(),
+            stopUi: () => ui.stop(),
+            stderr: (line) => process.stderr.write(line),
+            exit: (code) => process.exit(code),
+          });
+          return;
+        }
         ui.handleEvent(event);
       },
       () => {
@@ -1059,6 +1136,21 @@ async function main(): Promise<void> {
         sessionLogger = undefined;
         ui.runtimeProcess = undefined;
         const pendingRestart = runtimeProcess?.restartPending;
+        // A one-shot whose runtime exited with no `done`/`error` to finish on (an ESC interrupt, a
+        // kill, a crash) ends here too — non-zero, and never into awaiting another task. A `done` or
+        // `error` already on its way through `finishOneShot` owns the exit.
+        if (oneShot && !pendingRestart) {
+          journal.writeExit(interrupted || abortRequested ? "abort" : "child_exit");
+          if (oneShotFinishing) return;
+          const unpublished = answerFile !== null ? unpublishedOnExit(answerFile, interrupted || abortRequested) : null;
+          void closing.then(() => {
+            ui.stop();
+            if (unpublished !== null && !unpublished.ok) process.stderr.write(formatUnpublished(unpublished));
+            else process.stderr.write("[oneshot] the runtime exited before its task finished\n");
+            process.exit(unpublished !== null ? ANSWER_UNPUBLISHED_EXIT_CODE : 1);
+          });
+          return;
+        }
         // D1's `exit`, with the reason this exit actually had. `abort` and `restart` are the SAME
         // entry with their reason — that is what replaced v4.1's two metadata rewrites — and the
         // three are distinguishable HERE and nowhere later: by the time the process hook runs, a
@@ -1180,6 +1272,7 @@ async function main(): Promise<void> {
     // up, and the next Ctrl+C is then swallowed by RuntimeProcess.send()'s
     // dead-child guard — leaving no way out of the TUI at all.
     if (runtimeProcess && !runtimeProcess.isDead && !preWarmIdle) {
+      abortRequested = true;
       runtimeProcess.abort();
       return;
     }

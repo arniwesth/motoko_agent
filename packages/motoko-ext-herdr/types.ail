@@ -767,12 +767,19 @@ export pure func motoko_task_text(task: string, answer: string) -> string
   ]
   { "Read the task described in ${task} and carry it out. Write your final answer as Markdown to ${answer}, then stop." }
 
+-- ADR-002 v4.2 D1.2/D1.3 (PLAN-002 W1b): A MOTOKO DELEGATE RUNS ONE-SHOT AND
+-- THE HOST PUBLISHES ITS ANSWER. `--oneshot` keeps the pane's TUI and exits
+-- after the task's `done`; `--answer-file` makes the host write that `done` to
+-- the answer path atomically, before it exits. The task text above still asks
+-- the model to write the file: the host's rule is that an existing non-empty
+-- file wins, so both channels land on the same path. `motoko_payload_is_safe`
+-- already covers the answer path — it is inside the task text it checks.
 export pure func motoko_run_payload(script: string, task: string, answer: string) -> string
   tests [
     (("./scripts/run-agent.sh", "/tmp/m/task-a.md", "/tmp/m/answer-a.md"),
-     "./scripts/run-agent.sh 'Read the task described in /tmp/m/task-a.md and carry it out. Write your final answer as Markdown to /tmp/m/answer-a.md, then stop.'")
+     "./scripts/run-agent.sh --oneshot --answer-file '/tmp/m/answer-a.md' 'Read the task described in /tmp/m/task-a.md and carry it out. Write your final answer as Markdown to /tmp/m/answer-a.md, then stop.'")
   ]
-  { "${script} '${motoko_task_text(task, answer)}'" }
+  { "${script} --oneshot --answer-file '${answer}' '${motoko_task_text(task, answer)}'" }
 
 -- Checked on the PARTS, not the assembled payload — the payload contains the
 -- quotes on purpose, so asserting the whole string is quote-free is both wrong

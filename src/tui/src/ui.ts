@@ -795,7 +795,7 @@ function formatTimestamp(now: Date = new Date()): string {
  * (ADR-003's whole point is that the budget is no longer a failure), and it is not an
  * `isWaitingState` — nothing is running, so there is no spinner and nothing for ESC to abort.
  */
-export type RunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended";
+export type RunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended" | "done";
 type HintPhase = "thinking" | "tools";
 type ToolRowStatus = "queued" | "running" | "done" | "failed";
 type PlannedToolStatus = "planned" | "running" | "done" | "error" | "planned_unexecuted" | "runtime_only" | "filtered";
@@ -2756,7 +2756,10 @@ export class AgentUI {
           }
         }
         this.composeFooterStatus = "";
-        this.setRunState("idle");
+        // ADR-002 D1.1: `done`, not `idle` — the task finished, where `idle` also means "has not
+        // begun". Left on the next input: the follow-up and first-task branches of `handleCommand`
+        // both move to `thinking`, and `setAwaitingTask(true)` to `idle`.
+        this.setRunState("done");
         // Mark task done so plain-text input routes to the runtime process as follow-ups.
         this.taskDone = true;
         // Return keyboard focus to input once the task is complete.

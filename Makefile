@@ -2369,7 +2369,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2431,6 +2431,26 @@ verify_herdr_check_answer:
 		scripts/verify_mot131_early_answer.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_herdr_check_answer: DelegateCheck lost a delivered answer (MOT-131)" && exit 1)
+
+# PLAN-002 W1b (ADR-002 v4.2 D1.4 and D3's producer). `Delegate` carries a
+# `wait` whose id is the handle; every `DelegateCheck` return carries `settled`,
+# true exactly on the settle paths; a motoko check re-reads the answer before
+# settling `lost`. Scripted ports, no herdr. Then W2 gate 6's fixtures: each
+# committed JSON must equal what herdr.ail's builders print, byte for byte.
+.PHONY: verify_herdr_delegate_wait
+verify_herdr_delegate_wait:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_herdr_delegate_wait.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_herdr_delegate_wait: a Delegate wait or a DelegateCheck settled flag is wrong (PLAN-002 W1b)" && exit 1)
+	@fx=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry print_fixtures \
+		scripts/verify_herdr_delegate_wait.ail 2>/dev/null | grep '^FIXTURE '); \
+	[ -n "$$fx" ] || (echo "verify_herdr_delegate_wait: print_fixtures printed nothing" && exit 1); \
+	printf '%s\n' "$$fx" | while read -r _ name json; do \
+		printf '%s\n' "$$json" | cmp -s - packages/motoko-ext-herdr/fixtures/plan002-gate6/$$name.json \
+			|| { echo "FAIL: fixture $$name differs from herdr.ail's builder"; exit 1; }; \
+		echo "OK: fixture $$name matches herdr.ail's builder"; \
+	done
 
 # MOT-133 / F-5: every delegate pane carries an ownership token, and a pane
 # tagged by a session that is gone is REPORTED, not closed, unless the operator
