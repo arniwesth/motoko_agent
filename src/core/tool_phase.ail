@@ -42,7 +42,7 @@ import src/core/tool_contract (ToolResultEnvelope)
 -- WI-D20. The world token's codec, imported HERE because `on_tool_handle` is the
 -- second hook slot to perform world-threading effects and this is the site that
 -- both feeds it a world and receives its successor. See `execute_allowed_tool_call`.
-import src/core/ext_world (world_to_token, token_to_world)
+import src/core/ext_world (world_to_token, token_to_world) import src/core/world_ordinal (advance) import src/core/ports (ClockRead, EnvRead, ToolExec) -- PLAN-001 P2 Part 1, joined onto this line: tool_phase.ail:388/:389/:484 are attribution anchors
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for_v2)
 import src/core/types (ToolBackend)
@@ -482,14 +482,14 @@ export func execute_allowed_tool_call(
             -- native dispatch, so starting the clock from `world` would discard
             -- whatever it did and then overwrite it with this call's successor.
             let started = ports.clock_now(handle_world);
-            let budget = ports.env_get(started.next_state, "MOTOKO_TOOL_TIMEOUT_MS", "0");
+            let budget = ports.env_get(advance(started.next_state, ClockRead), "MOTOKO_TOOL_TIMEOUT_MS", "0");
             let invocation: ToolInvocation = {
               call: tool_call_to_envelope(call),
               workdir: workdir,
               timeout_ms: parse_timeout_ms(budget.value),
               started_at_ms: started.now_ms
             };
-            let execution = ports.tool_exec(budget.next_state, invocation);
+            let execution = ports.tool_exec(advance(budget.next_state, EnvRead), invocation);
             let complete_event = V2ToolDispatchComplete({
               step: step_idx,
               stream_id: stream_id,
@@ -498,7 +498,7 @@ export func execute_allowed_tool_call(
             let _ = emit(complete_event);
             {
               msg: tool_outcome_message(call, execution.outcome),
-              next_state: execution.next_state,
+              next_state: advance(execution.next_state, ToolExec),
               -- START then COMPLETE, which is the order they happened in. The
               -- driver appends this log positionally, so a reversal here is a
               -- reversal in the returned trace.

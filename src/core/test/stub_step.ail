@@ -41,7 +41,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision, ToolHandleDecision,
   ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PassThrough
 )
-import src/core/test/ext_fixture (fixture_hooks)  -- B7; joined the line above so anchors.sh's :203 does not move
+import src/core/test/ext_fixture (fixture_hooks) import src/core/world_ordinal (advance) import src/core/ports (ModelStep)  -- B7; joined the line above so anchors.sh's :203 does not move (PLAN-001 P2 Part 1 joined `advance` here for the same reason)
 import src/core/types (Msg)
 -- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
 -- `WorldState` can carry it without either the port module or the driver
@@ -709,7 +709,10 @@ export func dispatch_step(
   msgs: [Message],
   on_chunk: (StreamChunk) -> () ! {IO, Trace}
 ) -> ProviderExchange ! {AI, IO, Trace} {
-  ports.model_step(state, model, msgs, on_chunk)
+  let exchange = ports.model_step(state, model, msgs, on_chunk);
+  -- PLAN-001 P2 Part 1: the driver's one helped ModelStep leaf. The exchange is
+  -- still propagated whole; only its successor is advanced.
+  { exchange | next_state: advance(exchange.next_state, ModelStep) }
 }
 
 -- Constructor helpers for test scripts

@@ -467,8 +467,47 @@ export type WorldState = {
   -- only the
   -- GENERATING adapters do, which is what keeps adding this field
   -- behaviour-preserving for every existing target.
-  gen: GeneratorState
+  gen: GeneratorState,
+
+  -- PLAN-001 P2 Part 1 (ADR-001 D2 part 1): THE WORLD ORDINAL AND ITS PENDING
+  -- WITNESSES. `ordinal` counts the HELPED leaf requests this world has seen —
+  -- the direct `Ports`/`ContextReader` calls by driver-side code that
+  -- `tools/driver_leaf_inventory/derive.py` lists — and `pending` holds one
+  -- witness per request not yet written to the wire, in request order.
+  --
+  -- ONE WRITER: `world_ordinal.advance`, called on the successor each helped
+  -- leaf's port returned. The adapters never touch either field, so a live
+  -- adapter's identity transition stays an identity, and the ten `ExtPorts`
+  -- forwarding closures (extension-initiated, exempt) never advance it.
+  --
+  -- NOT the interaction log's ordinal. `log`'s encounter ordinals exist only
+  -- under the recording adapters and number interactions; this one numbers
+  -- helped requests under every adapter. Subtracting one from the other gives
+  -- no census (cF2).
+  --
+  -- NOT PERSISTED IN THE PROGRAM. `InitialWorld` has no counterpart, and
+  -- `dst_replay.world_state_of` starts from `empty_world_state()`, so a replay
+  -- starts at ordinal 0 with nothing pending. The world TOKEN carries both
+  -- (`ext_world.world_json`), because a bridge call round-trips the driver's
+  -- world through it mid-run and a codec that dropped them would reset the count.
+  ordinal: int,
+  pending: [RequestWitness]
 }
+
+-- The kind of a helped leaf request. CLOSED, and frozen at five by P-INV
+-- (`derive.py`'s `REQUEST_CLASS`): a new helped kind adds a variant here and a
+-- row in Part 4's vocabulary projection, never a catch-all. `approval_read` is
+-- `ToolExec` (the approval gate classes the dispatch it guards), and exemption
+-- is structural rather than a sixth variant.
+--
+-- `EnvRead` and `FileRead` share their spelling with the port RESULT records
+-- above them. The type and the constructor live in different namespaces and
+-- both import under the one name; the spelling is P-INV's, kept.
+export type RequestClass = EnvRead | FileRead | ClockRead | ToolExec | ModelStep
+
+-- One helped request not yet on the wire: the ordinal `advance` gave it and its
+-- class. `request_class` and not the plan's `class`, which AILANG reserves.
+export type RequestWitness = { ordinal: int, request_class: RequestClass }
 
 -- One scripted tool outcome. The fields are ordered by the fault they express,
 -- and the adapter checks them in that order:
@@ -723,7 +762,8 @@ export type PortedProvider = {
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
   { script: [], clock_ms: 0, approvals: [], env: [], files: [], tools: [],
-    ext_effects: [], holder_ext_id: "", log: [], gen: no_generator() }
+    ext_effects: [], holder_ext_id: "", log: [], gen: no_generator(),
+    ordinal: 0, pending: [] }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the

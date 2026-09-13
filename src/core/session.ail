@@ -197,7 +197,7 @@ import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir) -- WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
+import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec) import src/core/world_ordinal (advance) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -1684,11 +1684,11 @@ pure func test_thinking_and_reasoning_kinds_are_distinguished() -> bool
 -- read-shaped function that sometimes swallows its successor is how a cursor
 -- silently stops advancing.
 func derive_session_id(ports: Ports, world: WorldState) -> { id: string, next_state: WorldState } ! {Env, Clock} {
-  let env_id = ports.env_get(world, "MOTOKO_SESSION_ID", "");
+  let env_id = ports.env_get(world, "MOTOKO_SESSION_ID", ""); let env_id = { env_id | next_state: advance(env_id.next_state, EnvRead) };
   if env_id.value != "" then { id: env_id.value, next_state: env_id.next_state }
   else {
     let reading = ports.clock_now(env_id.next_state);
-    { id: "session_${show(reading.now_ms)}", next_state: reading.next_state }
+    { id: "session_${show(reading.now_ms)}", next_state: advance(reading.next_state, ClockRead) }
   }
 }
 
@@ -1808,7 +1808,7 @@ func c2_finalize(
   -- sole terminal record LITERAL — the structural guard `make terminal_trace`
   -- counts exactly one `{ result:` in this file — while still giving D2 its
   -- fourth channel.
-  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: reading.next_state, emissions: emissions, suspended: None, final: final }
+  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: advance(reading.next_state, ClockRead), emissions: emissions, suspended: None, final: final }
 }
 
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
@@ -2306,14 +2306,14 @@ export type SessionPolicyInit = { policy: SessionPolicy, next_state: WorldState 
 func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicyInit ! {Env, FS} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
   let r_persist = ports.env_get(world, "MOTOKO_PERSIST_RETRIES", "0");
-  let r_retry = ports.env_get(r_persist.next_state, "MOTOKO_RETRY_STREAM_ERROR", "1");
-  let r_base = ports.env_get(r_retry.next_state, "OPENAI_BASE_URL", "");
-  let r_headless = ports.env_get(r_base.next_state, "MOTOKO_HEADLESS", "");
+  let r_retry = ports.env_get(advance(r_persist.next_state, EnvRead), "MOTOKO_RETRY_STREAM_ERROR", "1");
+  let r_base = ports.env_get(advance(r_retry.next_state, EnvRead), "OPENAI_BASE_URL", "");
+  let r_headless = ports.env_get(advance(r_base.next_state, EnvRead), "MOTOKO_HEADLESS", "");
   -- WI-D3's filesystem class. The fifth request this function makes, threaded
   -- from the fourth's successor exactly like the four env reads above and for
   -- the same reason A13 stage 2 gave: once a read appends to the world's log,
   -- discarding the successor drops every read it carried.
-  let r_limit = resolve_context_limit_sum(context_reader_of(ports), r_headless.next_state, model);
+  let r_limit = resolve_context_limit_sum(context_reader_of(ports), advance(r_headless.next_state, EnvRead), model);
   let persist_retries = parse_persist_retries_budget(r_persist.value);
   let retry_stream_errors = r_retry.value != "0";
   let provider_base_url = r_base.value;
@@ -3194,7 +3194,7 @@ func c2_loop(
               -- point would silently read the pre-approval world. Passing `st`
               -- here instead of `post` is the freeze this class's assertion
               -- catches — the queue would never advance.
-              let post: C2LoopState = { st | world_state: input.next_state };
+              let post: C2LoopState = { st | world_state: advance(input.next_state, ToolExec) };
               let tool_step_idx = c2_done_step(post.step_idx);
               -- WI-D4 removed WI-D3's `post_ctx` here, and THIS is the site
               -- where doing it carelessly would have cost something. `post_ctx`
@@ -3480,7 +3480,7 @@ func c2_loop(
                   -- read" from WI-A12 until WI-D3; it is the last one IN
                   -- session.ail and it is no longer the last in the driver —
                   -- `context_usage` reads four more through the same port.
-                  let _ = if not e.retryable && st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", "").value != "" then capture_failing_payload(e, compacted_msgs) else ();
+                  let _ = if not e.retryable then { let capture = st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", ""); let _ = if capture.value != "" then capture_failing_payload(e, compacted_msgs) else (); advance(capture.next_state, EnvRead) } else st.world_state; -- PLAN-001 P2 Part 1: advanced, same conditional request; the successor is STILL DISCARDED, Part 5(b)'s red-first state
                   if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
                     let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
                     let _ = ledger_emit(session_id, retry_event);
@@ -3891,15 +3891,15 @@ func run_v2_traced_from_seed(
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let derived = derive_session_id(provider.ports, provider.world);
   let started = provider.ports.clock_now(derived.next_state);
-  let session_id = derived.id;
+  let session_id = derived.id; let started_world = advance(started.next_state, ClockRead);
   let started_at_ms = started.now_ms;
   let identity = match requested_identity {
     Some(i) => i,
     None => default_run_identity(session_id)
   };
   let seeded = match seed {
-    SeedMessages(m) => c2_initial_state_with_counts(m.history, provider, started.next_state, m.prior_counts),
-    SeedContinuation(c) => c2_state_from_continuation(c, provider, started.next_state)
+    SeedMessages(m) => c2_initial_state_with_counts(m.history, provider, started_world, m.prior_counts),
+    SeedContinuation(c) => c2_state_from_continuation(c, provider, started_world)
   };
   -- ADR-003 v6.1 D2: `HistorySeeded`, ONCE PER TRACED RUN, HERE — after the
   -- constructor and before `c2_loop`, so it is the FIRST journal-class record of
@@ -4112,7 +4112,7 @@ func run_v2_from_messages_with_policy_and_counts(
   -- reads, leaving the loop on an un-advanced clock.
   let derived = derive_session_id(provider.ports, provider.world);
   let started = provider.ports.clock_now(derived.next_state);
-  let session_id = derived.id;
+  let session_id = derived.id; let started_world = advance(started.next_state, ClockRead);
   let started_at_ms = started.now_ms;
   -- The untraced entry has no caller that can hold an identity — it discards
   -- the whole `TracedSessionResult` but its `.result` — so it takes the default
@@ -4122,7 +4122,7 @@ func run_v2_from_messages_with_policy_and_counts(
   -- `run_v2_traced_from_seed` (the untraced `run_v2`): the same one record.
   let limit_event = ContextLimitResolved({ run_id: identity.run_id, limit: policy.step.compaction.context_limit });
   let _ = ledger_emit(session_id, limit_event);
-  let initial = c2_initial_state_with_counts(history, provider, started.next_state, prior_counts);
+  let initial = c2_initial_state_with_counts(history, provider, started_world, prior_counts);
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
   let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { initial | trace: ledger_append(initial.trace, WireRecord(limit_event)) }).result;
@@ -4532,7 +4532,7 @@ func publish_turn_exit_manifest(
   -- driver: `make world_state` rejects an un-routed env read on that path, and
   -- it is right to -- a replayed run must see the same name the recorded one
   -- did. The successor is threaded into the ctx the render receives.
-  let named = ports.env_get(world, manifest_path_var(), "");
+  let named = ports.env_get(world, manifest_path_var(), ""); let named_world = advance(named.next_state, EnvRead);
   let ctx: ExtCtx = {
     task: task,
     step: 0,
@@ -4551,10 +4551,10 @@ func publish_turn_exit_manifest(
     -- PLAN-001 P1 step 5: NO WINDOW IS SUPPLIED TO THE EXIT CONTEXT. This 0 is a
     -- literal, not a projection of the run's limit, and it is not `Disabled`.
     context_limit: 0,
-    ports: ext_ports_of(ports, named.next_state, env_url),
+    ports: ext_ports_of(ports, named_world, env_url),
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(),
-    world: world_to_token(named.next_state)
+    world: world_to_token(named_world)
   };
   -- The result says whether the live file was replaced. Discarded on purpose:
   -- a manifest that could not be published leaves the previous one standing,

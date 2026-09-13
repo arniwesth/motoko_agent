@@ -6,7 +6,11 @@ import std/json (Json, decode, get, getInt, asString)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import src/core/types (Msg)
-import src/core/ports (ContextReader, WorldState)
+import src/core/ports (ContextReader, WorldState, EnvRead, FileRead)
+-- PLAN-001 P2 Part 1: every read below is a helped leaf and advances the
+-- ordinal on the successor its reader returned. `advance` is pure, so the
+-- `{Env}`/`{Env, FS}` rows here do not change.
+import src/core/world_ordinal (advance)
 import src/core/context_limit (
   ContextLimit, Disabled, Unknown,
   ProfileMiss, ProfileConfigAbsent, ProfileConfigUndecodable, ProfileKeyAbsent, ProfileKeyNonPositive,
@@ -54,18 +58,20 @@ export type ContextLimitRead = {
 -- deleted it.
 func catalog_path(r: ContextReader, w: WorldState) -> PathRead ! {Env, FS} {
   let explicit = r.env_get(w, "MOTOKO_MODELS_FILE", "");
+  let explicit_world = advance(explicit.next_state, EnvRead);
   if explicit.value != "" then
-    { path: explicit.value, next_state: explicit.next_state }
+    { path: explicit.value, next_state: explicit_world }
   else {
-    let probe = r.file_read(explicit.next_state, ".motoko/model-catalog.json");
+    let probe = r.file_read(explicit_world, ".motoko/model-catalog.json");
+    let probe_world = advance(probe.next_state, FileRead);
     if probe.present then
-      { path: ".motoko/model-catalog.json", next_state: probe.next_state }
+      { path: ".motoko/model-catalog.json", next_state: probe_world }
     else {
-      let repo = r.env_get(probe.next_state, "MOTOKO_REPO", "");
+      let repo = r.env_get(probe_world, "MOTOKO_REPO", "");
       let path =
         if repo.value != "" then "${repo.value}/.motoko/model-catalog.json"
         else ".motoko/model-catalog.json";
-      { path: path, next_state: repo.next_state }
+      { path: path, next_state: advance(repo.next_state, EnvRead) }
     }
   }
 }
@@ -102,7 +108,8 @@ type CatalogueRead = { outcome: CatalogueOutcome, next_state: WorldState }
 func catalogue_read(r: ContextReader, w: WorldState, model: string) -> CatalogueRead ! {Env, FS} {
   let located = catalog_path(r, w);
   let read = r.file_read(located.next_state, located.path);
-  if not read.present then { outcome: CatalogueMissed(CatalogueAbsent), next_state: read.next_state }
+  let read_world = advance(read.next_state, FileRead);
+  if not read.present then { outcome: CatalogueMissed(CatalogueAbsent), next_state: read_world }
   else {
     let outcome = match decode(read.content) {
       Err(_) => CatalogueMissed(CatalogueUndecodable),
@@ -114,7 +121,7 @@ func catalogue_read(r: ContextReader, w: WorldState, model: string) -> Catalogue
         None => CatalogueMissed(CatalogueUndecodable)
       }
     };
-    { outcome: outcome, next_state: read.next_state }
+    { outcome: outcome, next_state: read_world }
   }
 }
 
@@ -131,15 +138,16 @@ export func catalog_context_limit_for(r: ContextReader, w: WorldState, model: st
 -- else `.motoko/config/<MOTOKO_CONFIG|default>` under an optional MOTOKO_REPO.
 func profile_dir_path(r: ContextReader, w: WorldState) -> PathRead ! {Env} {
   let explicit = r.env_get(w, "MOTOKO_PROFILE_DIR", "");
+  let explicit_world = advance(explicit.next_state, EnvRead);
   if explicit.value != "" then
-    { path: explicit.value, next_state: explicit.next_state }
+    { path: explicit.value, next_state: explicit_world }
   else {
-    let profile = r.env_get(explicit.next_state, "MOTOKO_CONFIG", "default");
-    let repo = r.env_get(profile.next_state, "MOTOKO_REPO", "");
+    let profile = r.env_get(explicit_world, "MOTOKO_CONFIG", "default");
+    let repo = r.env_get(advance(profile.next_state, EnvRead), "MOTOKO_REPO", "");
     let path =
       if repo.value != "" then "${repo.value}/.motoko/config/${profile.value}"
       else ".motoko/config/${profile.value}";
-    { path: path, next_state: repo.next_state }
+    { path: path, next_state: advance(repo.next_state, EnvRead) }
   }
 }
 
@@ -170,7 +178,8 @@ pure func declares_disabled(agent: Json) -> bool {
 func config_context_limit_override(r: ContextReader, w: WorldState) -> ProfileRead ! {Env, FS} {
   let dir = profile_dir_path(r, w);
   let read = r.file_read(dir.next_state, "${dir.path}/config.json");
-  if not read.present then { outcome: ProfileMissed(ProfileConfigAbsent), next_state: read.next_state }
+  let read_world = advance(read.next_state, FileRead);
+  if not read.present then { outcome: ProfileMissed(ProfileConfigAbsent), next_state: read_world }
   else {
     let outcome = match decode(read.content) {
       Err(_) => ProfileMissed(ProfileConfigUndecodable),
@@ -182,7 +191,7 @@ func config_context_limit_override(r: ContextReader, w: WorldState) -> ProfileRe
         None => ProfileMissed(ProfileKeyAbsent)
       }
     };
-    { outcome: outcome, next_state: read.next_state }
+    { outcome: outcome, next_state: read_world }
   }
 }
 

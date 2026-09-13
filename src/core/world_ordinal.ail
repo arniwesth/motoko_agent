@@ -1,0 +1,113 @@
+-- src/core/world_ordinal.ail
+--
+-- PLAN-001 P2 Part 1 (ADR-001 D2 part 1): THE ONE PURE WRITER of
+-- `WorldState.ordinal` and `WorldState.pending`.
+--
+-- A helped leaf request — a direct `Ports`/`ContextReader` call by driver-side
+-- code, as `tools/driver_leaf_inventory/derive.py` lists them — calls `advance`
+-- on the successor the port returned, before that successor reaches anything
+-- else. Nothing else in the tree writes either field: the three full
+-- `WorldState` literals (`empty_world_state`, `world_of_json`,
+-- `codec_fixture_world`) only construct them, and every other site copies them
+-- through a record update of some other field.
+--
+-- A LEAF MODULE, on `context_limit.ail`'s pattern: it imports `ports` and the
+-- standard library and nothing above them, so `context_usage`, `tool_phase`,
+-- `stub_step` and `session` can all import it without a cycle. It is PURE, so
+-- the `{Env}`/`{Env, FS}` rows of the readers that call it do not change.
+--
+-- What this module does NOT do is drain `pending`. That is Part 2's `witness`,
+-- in `session.ail`, because `ledger_emit` is private there. Until it lands,
+-- `pending` grows by one per helped request for the whole run; Part 3's gate
+-- is what makes a non-empty `pending` at a frame boundary red.
+module src/core/world_ordinal
+
+import src/core/ports (WorldState, RequestClass, RequestWitness, EnvRead, FileRead, ClockRead, ToolExec, ModelStep, empty_world_state)
+import std/option (Option, Some, None)
+import std/list as List (length)
+
+-- The successor with the ordinal advanced by exactly one and this request's
+-- witness pushed at the TAIL of `pending`, carrying the NEW ordinal. The tail
+-- and not the head because `witness` drains the queue in request order, and
+-- the wire gate reads that order as strict +1.
+export pure func advance(w: WorldState, c: RequestClass) -> WorldState {
+  let next = w.ordinal + 1;
+  { w | ordinal: next, pending: w.pending ++ [{ ordinal: next, request_class: c }] }
+}
+
+-- The wire ids of the five classes. Used by the world token's codec here, and
+-- the id Part 4's `WorldRequest` projection is expected to reuse, so the class
+-- has one spelling on every wire.
+export pure func request_class_id(c: RequestClass) -> string {
+  match c {
+    EnvRead => "env_read",
+    FileRead => "file_read",
+    ClockRead => "clock_read",
+    ToolExec => "tool_exec",
+    ModelStep => "model_step"
+  }
+}
+
+-- The inverse. `None` for an id this module did not write: the codec decides
+-- what an unknown id means, and dropping it silently here would be a decoder
+-- that loses a witness while every count still balances.
+export pure func request_class_of_id(id: string) -> Option[RequestClass] {
+  if id == "env_read" then Some(EnvRead)
+  else if id == "file_read" then Some(FileRead)
+  else if id == "clock_read" then Some(ClockRead)
+  else if id == "tool_exec" then Some(ToolExec)
+  else if id == "model_step" then Some(ModelStep)
+  else None
+}
+
+-- Not a fourth full literal: the tests start from the port layer's own empty
+-- world, so a field added to `WorldState` is added once, there.
+pure func test_world() -> WorldState { empty_world_state() }
+
+-- One request: +1, one witness, carrying the new ordinal and the class.
+pure func test_advance_writes_ordinal_and_one_witness() -> bool
+  tests [((), true)]
+  {
+    let w = advance({ test_world() | ordinal: 13 }, FileRead);
+    w.ordinal == 14
+      && (match w.pending {
+            p :: [] => p.ordinal == 14 && request_class_id(p.request_class) == "file_read",
+            _ => false
+          })
+  }
+
+-- Three requests: strict +1 and REQUEST ORDER in the queue, with an existing
+-- witness left in front. A head push would pass the count and fail the order.
+pure func test_advance_pushes_at_the_tail_in_request_order() -> bool
+  tests [((), true)]
+  {
+    let seeded = { test_world() | ordinal: 5, pending: [{ ordinal: 5, request_class: ModelStep }] };
+    let w = advance(advance(advance(seeded, EnvRead), ClockRead), ToolExec);
+    w.ordinal == 8 && List.length(w.pending) == 4
+      && (match w.pending {
+            a :: b :: c :: d :: [] =>
+              a.ordinal == 5 && request_class_id(a.request_class) == "model_step"
+                && b.ordinal == 6 && request_class_id(b.request_class) == "env_read"
+                && c.ordinal == 7 && request_class_id(c.request_class) == "clock_read"
+                && d.ordinal == 8 && request_class_id(d.request_class) == "tool_exec",
+            _ => false
+          })
+  }
+
+-- Every class's id decodes back to the same id, the five ids are distinct, and
+-- an id nobody wrote is `None`.
+pure func test_request_class_ids_round_trip_and_are_distinct() -> bool
+  tests [((), true)]
+  {
+    let back = \c. match request_class_of_id(request_class_id(c)) {
+      Some(d) => request_class_id(d) == request_class_id(c),
+      None => false
+    };
+    back(EnvRead) && back(FileRead) && back(ClockRead) && back(ToolExec) && back(ModelStep)
+      && request_class_id(EnvRead) != request_class_id(FileRead)
+      && request_class_id(FileRead) != request_class_id(ClockRead)
+      && request_class_id(ClockRead) != request_class_id(ToolExec)
+      && request_class_id(ToolExec) != request_class_id(ModelStep)
+      && request_class_id(ModelStep) != request_class_id(EnvRead)
+      && (match request_class_of_id("wake_read") { Some(_) => false, None => true })
+  }

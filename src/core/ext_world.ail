@@ -38,7 +38,10 @@ import std/result (Ok, Err)
 import std/ai (ToolCall)
 -- WI-D18: `FsNode` is the kinded `WorldState.files` entry — see that field for
 -- the representation argument. The token has to carry the kind explicitly.
-import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
+import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state, RequestWitness, EnvRead, ToolExec, ModelStep)
+-- PLAN-001 P2 Part 1: the class ids have ONE spelling, owned by the writer's
+-- module, so the token and Part 4's wire record cannot disagree on a name.
+import src/core/world_ordinal (advance, request_class_id, request_class_of_id)
 -- WI-D22 moved `FsNode` out of `ports` into a std-only module so that
 -- `dst_program` could name it without importing the port layer, and exported the
 -- KIND VOCABULARY with it. This codec and `dst_persistence`'s are deliberately
@@ -114,6 +117,38 @@ pure func strings_of(xs: [Json]) -> [string] {
   match xs {
     [] => [],
     x :: rest => (match asString(x) { None => "", Some(v) => v }) :: strings_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- PLAN-001 P2 Part 1: [RequestWitness] <-> [Json]
+--
+-- An entry whose class id this module did not write is DROPPED, not defaulted
+-- to some class. There is no catch-all variant to default to, and inventing one
+-- here would put a witness of a request nobody made on the wire. The drop is
+-- not silent where it matters: `ordinal` crosses separately, so a lost witness
+-- leaves the ordinal ahead of the witnesses, which is Part 3's final-mismatch red.
+-- ---------------------------------------------------------------------------
+
+pure func pending_json(ws: [RequestWitness]) -> [Json] {
+  match ws {
+    [] => [],
+    w :: rest =>
+      jo([kv("ordinal", jint(w.ordinal)), kv("class", js(request_class_id(w.request_class)))])
+        :: pending_json(rest)
+  }
+}
+
+pure func pending_of(xs: [Json]) -> [RequestWitness] {
+  match xs {
+    [] => [],
+    x :: rest => match request_class_of_id(str_field(x, "class", "")) {
+      Some(c) => {
+        let witness: RequestWitness = { ordinal: int_field(x, "ordinal", 0), request_class: c };
+        witness :: pending_of(rest)
+      },
+      None => pending_of(rest)
+    }
   }
 }
 
@@ -536,7 +571,13 @@ export pure func world_json(w: WorldState) -> Json {
     kv("ext_effects", ja(scripted_tools_json(w.ext_effects))),
     kv("holder_ext_id", js(w.holder_ext_id)),
     kv("log", ja(interactions_json(w.log))),
-    kv("gen", generator_json(w.gen))
+    kv("gen", generator_json(w.gen)),
+    -- PLAN-001 P2 Part 1. Both cross, for the reason `ext_effects` does: every
+    -- bridge closure in `session.ext_ports_of` decodes the driver's world from
+    -- this token and re-encodes its successor, so a token without them would
+    -- reset the ordinal to 0 and empty `pending` at the first extension call.
+    kv("ordinal", jint(w.ordinal)),
+    kv("pending", ja(pending_json(w.pending)))
   ])
 }
 
@@ -550,7 +591,9 @@ export pure func world_of_json(j: Json) -> WorldState {
     ext_effects: scripted_tools_of(json_array(j, "ext_effects")),
     holder_ext_id: str_field(j, "holder_ext_id", ""),
     log: interactions_of(json_array(j, "log")),
-    gen: generator_of(obj_field(j, "gen")) }
+    gen: generator_of(obj_field(j, "gen")),
+    ordinal: int_field(j, "ordinal", 0),
+    pending: pending_of(json_array(j, "pending")) }
 }
 
 -- The extension-facing pair. `world_to_token` is total; `token_to_world` is
@@ -704,7 +747,14 @@ pure func codec_fixture_world() -> WorldState {
            bounds: { max_interactions: 41, max_chunks_per_interaction: 43,
                      max_payload_bytes: 47, max_resource_size: 53,
                      max_clock_advance_ms: 59, chunk_draw_hi: 71 },
-           failures: [{ bound: "max_payload_bytes", limit: 61, requested: 67 }] } }
+           failures: [{ bound: "max_payload_bytes", limit: 61, requested: 67 }] },
+    -- PLAN-001 P2 Part 1. NONZERO, and distinct from every other quantity here
+    -- (S7): a decoder that defaults the ordinal reads 0, and one that reads it
+    -- out of `clock_ms` or a count reads a value this fixture does not hold. TWO
+    -- witnesses of different classes and ordinals, so a collapsed, reversed or
+    -- class-defaulted queue is visible.
+    ordinal: 263,
+    pending: [{ ordinal: 262, request_class: ToolExec }, { ordinal: 263, request_class: ModelStep }] }
 }
 
 pure func eq_scripted_step(a: ScriptedStep, b: ScriptedStep) -> bool {
@@ -732,6 +782,44 @@ pure func test_the_world_token_round_trips_every_scalar_field() -> bool
       -- effect to nobody.
       && List.length(back.ext_effects) == List.length(w.ext_effects)
       && back.holder_ext_id == w.holder_ext_id
+  }
+
+-- PLAN-001 P2 Part 1: THE CODEC DOES NOT RESET THE ORDINAL. The nonzero world
+-- crosses the token, then the next helped request's `advance` runs on what came
+-- back — the order a bridge call followed by a driver leaf produces. A decoder
+-- that reset either field would number that request 1 with one witness; the
+-- round trip must number it 264 behind the two witnesses it carried, in order.
+-- The real-port half (a token round trip followed by `context_usage`'s reads
+-- through scripted ports) is `world_state_probe`'s ordinal row.
+pure func test_the_world_token_carries_the_ordinal_and_pending_witnesses() -> bool
+  tests [((), true)]
+  {
+    let back = token_to_world(world_to_token(codec_fixture_world()));
+    let next = advance(back, EnvRead);
+    back.ordinal == 263 && next.ordinal == 264
+      && (match next.pending {
+            a :: b :: c :: [] =>
+              a.ordinal == 262 && request_class_id(a.request_class) == "tool_exec"
+                && b.ordinal == 263 && request_class_id(b.request_class) == "model_step"
+                && c.ordinal == 264 && request_class_id(c.request_class) == "env_read",
+            _ => false
+          })
+  }
+
+-- An unreadable witness is dropped while the ordinal survives, so the token
+-- that lost it still reads AHEAD of its witnesses rather than consistent.
+pure func test_an_unknown_witness_class_is_dropped_and_the_ordinal_kept() -> bool
+  tests [((), true)]
+  {
+    let forged = jo([kv("ordinal", jnum(7.0)),
+                     kv("pending", ja([jo([kv("ordinal", jnum(6.0)), kv("class", js("wake_read"))]),
+                                       jo([kv("ordinal", jnum(7.0)), kv("class", js("env_read"))])]))]);
+    let w = world_of_json(forged);
+    w.ordinal == 7
+      && (match w.pending {
+            only :: [] => only.ordinal == 7 && request_class_id(only.request_class) == "env_read",
+            _ => false
+          })
   }
 
 -- WI-D24. The stamp's own row, and it exists because the first implementation
