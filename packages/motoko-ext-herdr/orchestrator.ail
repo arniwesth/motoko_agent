@@ -1,0 +1,558 @@
+module sunholo/motoko_ext_herdr/orchestrator
+
+-- ORCHESTRATOR MODE: the pane that owns a dagr run ROUTES work and does not
+-- implement it.
+--
+-- WHY IT EXISTS, measured rather than feared. The 2026-09-12 session was told in
+-- chat to "delegate P2A and continue down the graph … one delegation in flight at
+-- a time" and did: 10 `Delegate`, 122 `DelegateCheck`. The 2026-09-13 session
+-- that resumed from its handoff made ZERO delegations — 395 `BashExec`, 29
+-- `EditFile` — and fixed five DST reds in its own context, reaching ~319k input
+-- tokens and 6.5 GiB RSS, the shape that OOM-killed the orchestrator before it.
+-- Nothing had changed except that the instruction lived in a chat turn, and a
+-- chat turn does not survive a handoff. The handoff the model wrote carried the
+-- state and the traps but not the role.
+--
+-- SO THE ROLE LIVES IN THE RUN FILE, which every session already reconciles:
+--
+--   "run": { "orchestrator": { "pane": "w1:p18", "mode": "delegate",
+--                              "max_in_flight": 1 } }
+--
+-- `pane` was already there. `mode` and `max_in_flight` are new and pass
+-- `dagr check --strict` (measured on a copy of run-plan001.json). A session is in
+-- orchestrator mode when ITS OWN pane is the one a run names with
+-- `mode: "delegate"`. A delegate runs in a different pane, so it is never in the
+-- mode and never told to delegate further.
+--
+-- WHAT IT DOES, in two atoms, both pure:
+--
+--   PromptShaper  a standing role note appended to the system prompt, so the
+--                 role survives compaction and restarts instead of scrolling out
+--                 of context with the chat turn that stated it.
+--   ToolPolicy    `Deny` for implementation edits: `WriteFile`/`EditFile` under a
+--                 guarded path, and the shell forms that write there. The reason
+--                 string names `Delegate` and the plan, so a refused call teaches
+--                 the next one.
+--
+-- WHAT IT DOES NOT DENY, deliberately: reads, `git`, `dagr`, `herdr`, and test
+-- runs. The orchestrator's own job includes verifying a delegate's commit and
+-- re-running the named gates before settling (the 2026-09-13 handoff, trap 1:
+-- answer files do not arrive, so settlement rests on the orchestrator's own
+-- re-run). With edits refused there is nothing to iterate on, so a test run is
+-- verification.
+--
+-- IT IS A NUDGE WITH TEETH, NOT A SANDBOX. `python3 - <<EOF` can still write a
+-- file. The shell rules cover the forms Motoko actually used to edit; the prompt
+-- note covers intent.
+--
+-- ONE ESCAPE HATCH, and only the operator holds it: `[orchestrator:direct]` in
+-- the latest operator message lifts the policy for that message. Guard
+-- injections are user-role too, so they are skipped when finding "the latest
+-- operator message" — otherwise a progress-guard nudge mid-turn would silently
+-- re-impose the policy the operator just lifted.
+
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (contains, startsWith, endsWith, trim, toLower, split, splitAny, join, words, intToStr, length, substring)
+import std/json (Json, get, asString, asArray, decode, getString, getObject, getInt, getStringArray)
+import pkg/sunholo/motoko_ext_abi/types (ToolCallEnvelope, ToolPolicyDecision, Deny, NoOpinion, PromptPatch, Msg)
+
+-- ---------------------------------------------------------------------------
+-- The mode
+-- ---------------------------------------------------------------------------
+
+export type OrchestratorMode = {
+  on: bool,
+  -- The run file that put this pane in the mode, as the model should pass it in
+  -- `dagr_plan` (e.g. ".dagr/run-plan001.json").
+  run_path: string,
+  pane: string,
+  max_in_flight: int,
+  -- Path prefixes, relative to the workdir, whose edits are delegated work.
+  guarded: [string]
+}
+
+-- One run file as read at registration: its path and its raw content.
+export type RunDoc = { path: string, content: string }
+
+export pure func direct_marker() -> string { "[orchestrator:direct]" }
+
+export pure func mode_marker() -> string { "[motoko-herdr-orchestrator]" }
+
+export pure func default_guarded() -> [string] { ["src/", "scripts/", "packages/", "tools/"] }
+
+export pure func orchestrator_off() -> OrchestratorMode {
+  { on: false, run_path: "", pane: "", max_in_flight: 1, guarded: default_guarded() }
+}
+
+pure func str_or(o: Option[string]) -> string {
+  match o { Some(s) => s, None => "" }
+}
+
+pure func nonempty_or(xs: [string], fallback: [string]) -> [string] {
+  match xs { [] => fallback, _ => xs }
+}
+
+-- "./.dagr/run-plan001.json" -> ".dagr/run-plan001.json": the form the model
+-- passes as `dagr_plan`, and a stable string for the prompt.
+export pure func display_path(path: string) -> string
+  tests [
+    ("./.dagr/run-plan001.json", ".dagr/run-plan001.json"),
+    (".dagr/run-plan001.json", ".dagr/run-plan001.json"),
+    ("/w/.dagr/run.json", "/w/.dagr/run.json")
+  ]
+{
+  if startsWith(path, "./") then display_path(substring(path, 2, length(path))) else path
+}
+
+-- The mode ONE run file puts `own_pane` in, if any. Every miss is `None`, and
+-- none of them is an error: most run files name no orchestrator mode, a
+-- document that does not parse is the operator's to fix, and an empty pane id
+-- (outside herdr) matches nothing.
+export pure func mode_from_doc(path: string, content: string, own_pane: string) -> Option[OrchestratorMode] {
+  if own_pane == "" || content == "" then None
+  else match decode(content) {
+    Err(_) => None,
+    Ok(d) => match get(d, "run") {
+      None => None,
+      Some(run) => match getObject(run, "orchestrator") {
+        None => None,
+        Some(o) => {
+          let pane = str_or(getString(o, "pane"));
+          let mode = toLower(trim(str_or(getString(o, "mode"))));
+          if pane != own_pane || mode != "delegate" then None
+          else Some({
+            on: true,
+            run_path: display_path(path),
+            pane: pane,
+            max_in_flight: match getInt(o, "max_in_flight") { Some(n) => if n < 1 then 1 else n, None => 1 },
+            guarded: match getStringArray(o, "guarded_paths") {
+              Some(xs) => nonempty_or(xs, default_guarded()),
+              None => default_guarded()
+            }
+          })
+        }
+      }
+    }
+  }
+}
+
+export pure func show_mode(m: OrchestratorMode) -> string {
+  if m.on == false then "off"
+  else "on:${m.run_path}:${m.pane}:${intToStr(m.max_in_flight)}:${join(",", m.guarded)}"
+}
+
+export pure func mode_from_doc_str(path: string, content: string, own_pane: string) -> string
+  tests [
+    -- the pane named, with the mode: on, defaults filled
+    (("./.dagr/run-plan001.json", "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p18\",\"mode\":\"delegate\"}}}", "w1:p18"),
+     "on:.dagr/run-plan001.json:w1:p18:1:src/,scripts/,packages/,tools/"),
+    -- declared limit and guarded paths are read
+    (("r.json", "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p1\",\"mode\":\"delegate\",\"max_in_flight\":2,\"guarded_paths\":[\"src/\"]}}}", "w1:p1"),
+     "on:r.json:w1:p1:2:src/"),
+    -- a nonsense limit is clamped rather than read as "no delegation allowed"
+    (("r.json", "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p1\",\"mode\":\"delegate\",\"max_in_flight\":0}}}", "w1:p1"),
+     "on:r.json:w1:p1:1:src/,scripts/,packages/,tools/"),
+    -- an EMPTY guarded list falls back rather than guarding nothing
+    (("r.json", "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p1\",\"mode\":\"delegate\",\"guarded_paths\":[]}}}", "w1:p1"),
+     "on:r.json:w1:p1:1:src/,scripts/,packages/,tools/"),
+    -- THE PRE-EXISTING SHAPE: a pane with no mode is not orchestrator mode.
+    -- Both run files in this repo looked like this before the field existed.
+    (("r.json", "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p18\"}}}", "w1:p18"), "off"),
+    -- another pane's run: a delegate reading the orchestrator's file stays off
+    (("r.json", "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p18\",\"mode\":\"delegate\"}}}", "w3:pQ"), "off"),
+    -- outside herdr there is no pane id, and "" must not match an empty field
+    (("r.json", "{\"run\":{\"orchestrator\":{\"pane\":\"\",\"mode\":\"delegate\"}}}", ""), "off"),
+    -- a mode this code does not know is off, not a guess
+    (("r.json", "{\"run\":{\"orchestrator\":{\"pane\":\"w1:p1\",\"mode\":\"direct\"}}}", "w1:p1"), "off"),
+    (("r.json", "not json", "w1:p1"), "off"),
+    (("r.json", "", "w1:p1"), "off"),
+    (("r.json", "{\"tasks\":[]}", "w1:p1"), "off")
+  ]
+{
+  match mode_from_doc(path, content, own_pane) {
+    Some(m) => show_mode(m),
+    None => "off"
+  }
+}
+
+-- The first run file that names this pane wins. The order is the directory
+-- listing's; two run files both claiming the same pane is an operator error the
+-- prompt note makes visible by naming the one in effect.
+pure func first_mode(docs: [RunDoc], own_pane: string) -> OrchestratorMode {
+  match docs {
+    [] => orchestrator_off(),
+    d :: rest => match mode_from_doc(d.path, d.content, own_pane) {
+      Some(m) => m,
+      None => first_mode(rest, own_pane)
+    }
+  }
+}
+
+-- Whether registration should look at run files at all. Off when the operator
+-- switched it off (`HERDR_ORCHESTRATOR=off`), outside a herdr pane (no Delegate
+-- tool to route to — a note telling the model to call a tool it does not have
+-- is worse than none), and in a delegate (depth > 0).
+export pure func should_scan(switch: string, gate_open: bool, depth: int) -> bool
+  tests [
+    (("", true, 0), true),
+    (("auto", true, 0), true),
+    (("off", true, 0), false),
+    ((" OFF ", true, 0), false),
+    (("", false, 0), false),
+    (("", true, 1), false)
+  ]
+{
+  toLower(trim(switch)) != "off" && gate_open && depth == 0
+}
+
+export pure func resolve_mode(switch: string, gate_open: bool, depth: int, own_pane: string, docs: [RunDoc]) -> OrchestratorMode {
+  if should_scan(switch, gate_open, depth) then first_mode(docs, own_pane) else orchestrator_off()
+}
+
+-- Run-file candidates in a dagr directory listing: JSON documents, not the
+-- producer's dot-markers or its `.tmp`/`.settled`/`.sweep-` scratch.
+export pure func is_run_doc_name(name: string) -> bool
+  tests [
+    ("run-plan001.json", true),
+    ("run-w1-p18-1789293423477.json", true),
+    (".pane", false),
+    (".plan-w1-p18-100", false),
+    ("run-w1-p1-200.json.tmp", false),
+    ("run-w1-p1-200.json.settled", false),
+    ("notes.txt", false)
+  ]
+{
+  endsWith(name, ".json") && startsWith(name, ".") == false
+}
+
+-- ---------------------------------------------------------------------------
+-- The prompt note
+-- ---------------------------------------------------------------------------
+
+export pure func prompt_note(m: OrchestratorMode) -> string {
+  let limit = if m.max_in_flight == 1 then "one delegation" else "${intToStr(m.max_in_flight)} delegations";
+  join("\n", [
+    "## Orchestrator mode ${mode_marker()}",
+    "This pane (${m.pane}) is the orchestrator for `${m.run_path}` (`run.orchestrator.mode` is \"delegate\"). You route the work; delegates implement it.",
+    "- Implementation goes to `Delegate` with `dagr_plan: \"${m.run_path}\"` and the task id: edits under ${join(", ", m.guarded)} and the fix-and-rerun iteration that comes with them. At most ${limit} in flight.",
+    "- Your own work: read, plan, write the brief, `DelegateCheck`, verify the delegate's commit from git, re-run the named gates, settle the run file, report.",
+    "- A defect you find while verifying is a new delegation (or a retry of the task), not an edit. Edits to those paths are refused by tool policy.",
+    "- A handoff you write must say that the next session is this run's orchestrator and delegates.",
+    "- Only the operator can lift this, for one message, by writing ${direct_marker()} in it."
+  ])
+}
+
+export pure func prompt_patch(m: OrchestratorMode) -> PromptPatch {
+  if m.on then { prepend: [], append: [prompt_note(m)] }
+  else { prepend: [], append: [] }
+}
+
+export pure func prompt_patch_str(on: bool) -> string
+  tests [(true, "0/1:yes:yes:yes"), (false, "0/0:no:no:no")]
+{
+  let m = if on then { on: true, run_path: ".dagr/run-plan001.json", pane: "w1:p18", max_in_flight: 1, guarded: default_guarded() }
+          else orchestrator_off();
+  let p = prompt_patch(m);
+  let text = join("\n", p.append);
+  let yn = \b. if b then "yes" else "no";
+  "${intToStr(count_str(p.prepend))}/${intToStr(count_str(p.append))}:${yn(contains(text, "Delegate"))}:${yn(contains(text, ".dagr/run-plan001.json"))}:${yn(contains(text, direct_marker()))}"
+}
+
+pure func count_str(xs: [string]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + count_str(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Paths
+-- ---------------------------------------------------------------------------
+
+-- A tool path relative to the workdir, so a prefix test means something.
+-- Absolute paths outside the workdir stay absolute and match no guarded prefix.
+export pure func normalize_path(workdir: string, path: string) -> string
+  tests [
+    ((".", "./src/core/x.ail"), "src/core/x.ail"),
+    ((".", "src/core/x.ail"), "src/core/x.ail"),
+    (("/w", "/w/src/x.ail"), "src/x.ail"),
+    (("/w/", "/w/src/x.ail"), "src/x.ail"),
+    (("/w", "/other/src/x.ail"), "/other/src/x.ail"),
+    (("/w", "  ./scripts/a.ail "), "scripts/a.ail")
+  ]
+{
+  let p = trim(path);
+  let wd = if endsWith(workdir, "/") then workdir else "${workdir}/";
+  let rel = if workdir != "" && workdir != "." && startsWith(p, wd) then substring(p, length(wd), length(p)) else p;
+  display_path(rel)
+}
+
+export pure func is_guarded(guarded: [string], rel: string) -> bool
+  tests [
+    ((["src/", "scripts/"], "src/core/session.ail"), true),
+    ((["src/", "scripts/"], "scripts/dst/a.ail"), true),
+    ((["src/", "scripts/"], ".agent/projects/HANDOFF.md"), false),
+    ((["src/", "scripts/"], ".dagr/run-plan001.json"), false),
+    -- a prefix is a directory, not a name stem
+    ((["src/"], "srcs/x"), false),
+    ((["src"], "src/x"), true),
+    ((["src/"], "src"), true)
+  ]
+{
+  match guarded {
+    [] => false,
+    g :: rest => {
+      let dir = if endsWith(g, "/") then g else "${g}/";
+      let bare = substring(dir, 0, length(dir) - 1);
+      rel == bare || startsWith(rel, dir) || is_guarded(rest, rel)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Shell commands
+-- ---------------------------------------------------------------------------
+
+-- Leading words that do not change what a command IS: `env -u X`, `VAR=val`,
+-- `nohup`, `timeout 28`. Motoko's own sweeps were written
+-- `nohup env -u AILANG_FS_SANDBOX make dst …`.
+pure func skip_prefix(ws: [string]) -> [string] {
+  match ws {
+    [] => [],
+    w :: rest =>
+      if w == "env" || w == "nohup" || w == "time" || w == "exec" || w == "command" || w == "sudo" then skip_prefix(rest)
+      else if w == "-u" || w == "timeout" then match rest { _ :: r2 => skip_prefix(r2), [] => [] }
+      else if contains(w, "=") && startsWith(w, "-") == false then skip_prefix(rest)
+      else ws
+  }
+}
+
+pure func basename(w: string) -> string {
+  match reverse_str(split(w, "/")) { x :: _ => x, [] => w }
+}
+
+pure func reverse_str(xs: [string]) -> [string] {
+  rev_acc(xs, [])
+}
+
+pure func rev_acc(xs: [string], acc: [string]) -> [string] {
+  match xs { [] => acc, x :: rest => rev_acc(rest, x :: acc) }
+}
+
+pure func unquote(w: string) -> string {
+  if length(w) >= 2 && ((startsWith(w, "\"") && endsWith(w, "\"")) || (startsWith(w, "'") && endsWith(w, "'")))
+  then substring(w, 1, length(w) - 1)
+  else w
+}
+
+pure func any_guarded(guarded: [string], ws: [string]) -> Option[string] {
+  match ws {
+    [] => None,
+    w :: rest => {
+      let p = normalize_path(".", unquote(w));
+      if startsWith(p, "-") == false && is_guarded(guarded, p) then Some(p) else any_guarded(guarded, rest)
+    }
+  }
+}
+
+-- Direct recursion rather than a predicate parameter: an applied parameter is a
+-- callee `make ext_hook_scope_selftest` cannot classify (its DOOR-3 residue).
+pure func has_in_place_flag(ws: [string]) -> bool {
+  match ws { [] => false, w :: rest => is_in_place_flag(w) || has_in_place_flag(rest) }
+}
+
+-- `> path`, `>> path`, `>path`, `2> path`: the target of a redirection.
+pure func redirect_target(guarded: [string], ws: [string]) -> Option[string] {
+  match ws {
+    [] => None,
+    w :: rest =>
+      if w == ">" || w == ">>" || w == "1>" || w == "2>" || w == "&>" then
+        match rest {
+          t :: r2 => match any_guarded(guarded, [t]) { Some(p) => Some(p), None => redirect_target(guarded, r2) },
+          [] => None
+        }
+      else if startsWith(w, ">") && length(w) > 1 then
+        match any_guarded(guarded, [substring(w, if startsWith(w, ">>") then 2 else 1, length(w))]) {
+          Some(p) => Some(p),
+          None => redirect_target(guarded, rest)
+        }
+      else redirect_target(guarded, rest)
+  }
+}
+
+-- `-i`, `-i.bak`, `--in-place`, and a short-flag cluster carrying `i`: perl is
+-- written `-pi -e …` far more often than `-i -p -e …`.
+pure func is_in_place_flag(w: string) -> bool
+  tests [("-i", true), ("-i.bak", true), ("--in-place", true), ("-pi", true), ("-pie", true),
+         ("-n", false), ("-e", false), ("--expression", false), ("i", false)]
+{
+  startsWith(w, "--in-place")
+  || (startsWith(w, "-") && startsWith(w, "--") == false && contains(split_flag_cluster(w), "i"))
+}
+
+-- The letters of a short-flag cluster, up to any attached suffix (`-i.bak`).
+pure func split_flag_cluster(w: string) -> string {
+  match split(substring(w, 1, length(w)), ".") { x :: _ => x, [] => "" }
+}
+
+-- One simple command, already split into words. "" when it writes no guarded
+-- path.
+pure func segment_violation(guarded: [string], ws0: [string]) -> string {
+  let ws = skip_prefix(ws0);
+  match ws {
+    [] => "",
+    h0 :: args => {
+      let h = basename(h0);
+      let redirect = redirect_target(guarded, args);
+      match redirect {
+        Some(p) => "a shell redirection into ${p}",
+        None =>
+          if (h == "sed" || h == "perl") && has_in_place_flag(args) then
+            match any_guarded(guarded, args) { Some(p) => "an in-place ${h} edit of ${p}", None => "" }
+          else if h == "tee" || h == "cp" || h == "mv" || h == "rm" || h == "install" || h == "patch" || h == "truncate" || h == "touch" then
+            match any_guarded(guarded, args) { Some(p) => "`${h}` on ${p}", None => "" }
+          else if h == "git" then
+            match args {
+              sub :: rest =>
+                if sub == "apply" || sub == "am" then "`git ${sub}`"
+                else if sub == "stash" then "`git stash`"
+                else if sub == "checkout" || sub == "restore" then
+                  match any_guarded(guarded, rest) { Some(p) => "`git ${sub}` of ${p}", None => "" }
+                else "",
+              [] => ""
+            }
+          else ""
+      }
+    }
+  }
+}
+
+pure func first_violation(guarded: [string], segs: [string]) -> string {
+  match segs {
+    [] => "",
+    s :: rest => {
+      let v = segment_violation(guarded, words(trim(s)));
+      if v != "" then v else first_violation(guarded, rest)
+    }
+  }
+}
+
+-- "" when the command writes no guarded path; otherwise what it would do.
+-- Separators split a command line into simple commands; a redirection stays
+-- inside its segment.
+export pure func cmd_violation(guarded: [string], cmd: string) -> string
+  tests [
+    -- reads, git, dagr, herdr and test runs are the orchestrator's own work
+    ((["src/", "scripts/"], "grep -n foo src/core/session.ail | head"), ""),
+    ((["src/", "scripts/"], "sed -n '1,20p' scripts/dst/a.ail"), ""),
+    ((["src/", "scripts/"], "git diff --stat; git log --oneline -3 -- src/core/session.ail"), ""),
+    ((["src/", "scripts/"], "nohup env -u AILANG_FS_SANDBOX make dst DST_JOBS=2 > .ailang/dst.out 2>&1 &"), ""),
+    ((["src/", "scripts/"], "timeout 28 ailang check src/core/dst_discovery.ail 2>&1 | tail -n 2"), ""),
+    ((["src/", "scripts/"], "dagr check --strict --json .dagr/run-plan001.json"), ""),
+    ((["src/", "scripts/"], "cat .dagr/run-plan001.json > /tmp/x.json"), ""),
+    -- the edit forms
+    ((["src/", "scripts/"], "sed -i 's/a/b/' src/core/session.ail"), "an in-place sed edit of src/core/session.ail"),
+    ((["src/", "scripts/"], "cd . && perl -pi -e 's/a/b/' ./scripts/dst/a.ail"), "an in-place perl edit of scripts/dst/a.ail"),
+    ((["src/", "scripts/"], "cat <<'EOF' > src/core/new.ail"), "a shell redirection into src/core/new.ail"),
+    ((["src/", "scripts/"], "echo x >>scripts/dst/a.ail"), "a shell redirection into scripts/dst/a.ail"),
+    ((["src/", "scripts/"], "printf '%s' x | tee src/core/a.ail"), "`tee` on src/core/a.ail"),
+    ((["src/", "scripts/"], "cp /tmp/fixed.ail src/core/a.ail"), "`cp` on src/core/a.ail"),
+    ((["src/", "scripts/"], "git apply /tmp/fix.patch"), "`git apply`"),
+    ((["src/", "scripts/"], "git stash"), "`git stash`"),
+    ((["src/", "scripts/"], "git checkout -- src/core/a.ail"), "`git checkout` of src/core/a.ail"),
+    ((["src/", "scripts/"], "git checkout -b topic"), ""),
+    -- an unguarded target is not implementation work
+    ((["src/", "scripts/"], "echo note >> .agent/projects/HANDOFF.md"), ""),
+    ((["src/", "scripts/"], "sed -i 's/a/b/' .dagr/run-plan001.json"), "")
+  ]
+{
+  first_violation(guarded, splitAny(cmd, [";", "&", "|", "\n", "(", ")", "`"]))
+}
+
+-- ---------------------------------------------------------------------------
+-- The policy
+-- ---------------------------------------------------------------------------
+
+pure func arg_str(args: Json, key: string) -> string {
+  str_or(getString(args, key))
+}
+
+pure func arg_words(args: Json, key: string) -> string {
+  match get(args, key) {
+    None => "",
+    Some(v) => match asArray(v) {
+      None => "",
+      Some(xs) => join(" ", strings_of(xs))
+    }
+  }
+}
+
+pure func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => match asString(x) { Some(s) => s :: strings_of(rest), None => strings_of(rest) }
+  }
+}
+
+-- What a tool call would do that is delegated work; "" when nothing.
+export pure func tool_violation(m: OrchestratorMode, workdir: string, tool: string, path: string, cmd: string) -> string
+  tests [
+    ((orchestrator_on_for_tests(), ".", "EditFile", "src/core/session.ail", ""), "EditFile on src/core/session.ail"),
+    ((orchestrator_on_for_tests(), "/w", "WriteFile", "/w/scripts/dst/a.ail", ""), "WriteFile on scripts/dst/a.ail"),
+    ((orchestrator_on_for_tests(), ".", "WriteFile", ".agent/projects/HANDOFF.md", ""), ""),
+    ((orchestrator_on_for_tests(), ".", "WriteFile", ".motoko/herdr-delegates/brief.md", ""), ""),
+    ((orchestrator_on_for_tests(), ".", "ReadFile", "src/core/session.ail", ""), ""),
+    ((orchestrator_on_for_tests(), ".", "BashExec", "", "sed -i 's/a/b/' src/core/a.ail"), "an in-place sed edit of src/core/a.ail"),
+    ((orchestrator_on_for_tests(), ".", "BashExec", "", "make discovery"), ""),
+    ((orchestrator_on_for_tests(), ".", "Delegate", "", ""), "")
+  ]
+{
+  if tool == "WriteFile" || tool == "EditFile" then {
+    let rel = normalize_path(workdir, path);
+    if is_guarded(m.guarded, rel) then "${tool} on ${rel}" else ""
+  }
+  else if tool == "BashExec" then cmd_violation(m.guarded, cmd)
+  else ""
+}
+
+export pure func orchestrator_on_for_tests() -> OrchestratorMode {
+  { on: true, run_path: ".dagr/run-plan001.json", pane: "w1:p18", max_in_flight: 1, guarded: default_guarded() }
+}
+
+-- Guard extensions inject USER-role feedback carrying a `[motoko-…]` marker
+-- (`[motoko-progress-contract-guard]` and its siblings). Those are not the
+-- operator speaking.
+export pure func is_operator_message(role: string, content: string) -> bool
+  tests [
+    (("user", "Lets tackle 1. [orchestrator:direct]"), true),
+    (("user", "You stopped while … [motoko-progress-contract-guard]"), false),
+    (("assistant", "[orchestrator:direct]"), false),
+    (("tool", "[orchestrator:direct]"), false)
+  ]
+{
+  role == "user" && contains(content, "[motoko-") == false
+}
+
+pure func latest_operator(history: [Msg], found: string) -> string {
+  match history {
+    [] => found,
+    m :: rest => latest_operator(rest, if is_operator_message(m.role, m.content) then m.content else found)
+  }
+}
+
+export pure func operator_lifted(history: [Msg]) -> bool {
+  contains(latest_operator(history, ""), direct_marker())
+}
+
+export pure func deny_reason(m: OrchestratorMode, violation: string) -> string {
+  let limit = if m.max_in_flight == 1 then "one delegation" else "${intToStr(m.max_in_flight)} delegations";
+  "orchestrator mode (pane ${m.pane}, ${m.run_path}): ${violation} is implementation work, and this pane delegates it. Send it to `Delegate` with `dagr_plan: \"${m.run_path}\"` (at most ${limit} in flight), then verify the delegate's commit from git. Reads, git, dagr, herdr and test runs are still yours. ${mode_marker()}"
+}
+
+export pure func decide(m: OrchestratorMode, workdir: string, history: [Msg], call: ToolCallEnvelope) -> ToolPolicyDecision {
+  if m.on == false then NoOpinion
+  else {
+    let cmd = trim("${arg_str(call.arguments, "cmd")} ${arg_words(call.arguments, "args")}");
+    let v = tool_violation(m, workdir, call.tool, arg_str(call.arguments, "path"), cmd);
+    if v == "" || operator_lifted(history) then NoOpinion
+    else Deny(deny_reason(m, v))
+  }
+}

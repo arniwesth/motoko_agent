@@ -511,6 +511,11 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
 # The list is every `getEnvOr("HERDR_…")` in packages/motoko-ext-herdr/register.ail
 # that this recipe does not set; a new one there belongs here too.
 #
+# HERDR_ORCHESTRATOR IS SET, TO off, rather than unset: unset, the extension
+# lists and reads the dagr directory at registration to look for orchestrator
+# mode, which is an ambient FS read this profile does not disclose. Off, no file
+# is read and the call sequence is the one the profile was measured on.
+#
 # HERDR_BIN_PATH names the real binary and NOTHING RUNS IT: every call is served
 # from WorldState.ext_effects, and the fixture carries one entry of slack so an
 # off-by-one produces a wrong answer rather than falling through to a live exec
@@ -523,7 +528,7 @@ herdr_graded:
 	       -u HERDR_REAP_ON_EXIT -u HERDR_CHECK_WAIT_MS -u HERDR_START_TIMEOUT_MS -u HERDR_MAX_OUTPUT_CHARS \
 	       -u HERDR_MOTOKO_SCRIPT -u HERDR_DAGR_PLAN -u HERDR_DAGR_SETTLE_ON_EXIT -u HERDR_SWEEP_SETTLE \
 	       -u HERDR_SWEEP_STALE \
-	       HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	       HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 HERDR_ORCHESTRATOR=off \
 	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
 	       HERDR_DELEGATE_DIR=./.tmp-herdr-graded/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-graded/dagr \
 	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
@@ -569,7 +574,7 @@ driver_plus_herdr:
 	       -u HERDR_REAP_ON_EXIT -u HERDR_CHECK_WAIT_MS -u HERDR_START_TIMEOUT_MS -u HERDR_MAX_OUTPUT_CHARS \
 	       -u HERDR_MOTOKO_SCRIPT -u HERDR_DAGR_PLAN -u HERDR_DAGR_SETTLE_ON_EXIT -u HERDR_SWEEP_SETTLE \
 	       -u HERDR_SWEEP_STALE \
-	       HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	       HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 HERDR_ORCHESTRATOR=off \
 	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
 	       HERDR_DELEGATE_DIR=./.tmp-herdr-profile/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-profile/dagr \
 	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
@@ -2336,7 +2341,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_delegate_kind verify_dagr_producer verify_exit_intent
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2460,6 +2465,34 @@ verify_herdr_dagr_pane:
 # schema requires `kind` exactly when the handler does — a schema that advises
 # omitting it while the handler refuses the omission costs a turn every time and
 # the model can only learn it by being refused.
+.PHONY: verify_herdr_orchestrator
+# ORCHESTRATOR MODE (packages/motoko-ext-herdr/orchestrator.ail). The pane a dagr
+# run names with `run.orchestrator.mode: "delegate"` gets a standing role note in
+# its system prompt and a tool policy that refuses implementation edits, naming
+# `Delegate` instead. Measured failure it pins: the 2026-09-13 session resumed from
+# a handoff and made ZERO delegations after its predecessor made ten, because the
+# instruction to delegate had lived only in a chat turn.
+#
+# TWO HALVES, and each reads a COUNT or a line, never only an exit status (WI-A17's
+# rule: `ailang test` exits 0 when every test was skipped). The inline tests cover
+# the pure rules; the script covers the atoms as registered, the operator's escape
+# hatch, the host's policy merge, and registration from real run files under
+# ./.tmp-herdr-orch. HERDR_ORCHESTRATOR is unset so the script sees the default.
+verify_herdr_orchestrator:
+	@out=$$(ailang test packages/motoko-ext-herdr/orchestrator.ail 2>&1 | grep -E '^[0-9]+ tests:'); \
+	echo "  orchestrator.ail: $$out"; \
+	if ! echo "$$out" | grep -qE '^[1-9][0-9]* tests: [0-9]+ passed, 0 failed, 0 skipped'; then \
+		echo "verify_herdr_orchestrator: orchestrator.ail inline tests are not all passing"; exit 1; \
+	fi
+	@rm -rf ./.tmp-herdr-orch; \
+	out=$$(env -u HERDR_ORCHESTRATOR AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_herdr_orchestrator.ail 2>/dev/null); rc=$$?; \
+	rm -rf ./.tmp-herdr-orch; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q '^FAIL' || ! echo "$$out" | grep -q '^OK'; then \
+		echo "verify_herdr_orchestrator: orchestrator mode regressed"; exit 1; \
+	fi
+
 .PHONY: verify_delegate_kind
 verify_delegate_kind:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
