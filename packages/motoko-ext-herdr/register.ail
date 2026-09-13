@@ -27,8 +27,11 @@ import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/option (Some, None)
 import pkg/sunholo/motoko_ext_abi/types (Capability)
-import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_allowed_kinds, default_max_depth)
-import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, tool_names)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_allowed_kinds, default_max_depth, path_within)
+import std/fs (listDir, isDir, readFileResult)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks_with, tool_names)
+import pkg/sunholo/motoko_ext_herdr/orchestrator (RunDoc, OrchestratorMode, resolve_mode, should_scan, is_run_doc_name)
 
 func parse_int_or(s: string, fallback: int) -> int {
   match stringToInt(s) {
@@ -207,6 +210,37 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
 
   -- The whole gate. Empty tools is a silent, correct no-op; it is not an error
   -- and must not be reported as one.
-  let tools = if herdr_env_ready(herdr_env, bin_path, pane_id) then tool_names() else [];
-  make_hooks(cfg, tools)
+  let gate_open = herdr_env_ready(herdr_env, bin_path, pane_id);
+  let tools = if gate_open then tool_names() else [];
+  make_hooks_with(cfg, tools, orchestrator_mode(workdir, cfg, gate_open))
+}
+
+-- ORCHESTRATOR MODE, resolved once (`orchestrator.ail` says why and what it does).
+-- `HERDR_ORCHESTRATOR=off` is the operator's switch; anything else means "read
+-- the run files". NO FILE IS READ unless the mode could apply — gate open, depth
+-- 0, switch not off — so the DST recipes that pin HERDR_ORCHESTRATOR=off keep
+-- the call sequence they had. The dagr directory is `path_within`-guarded for
+-- `work_dir`'s reason: a read outside AILANG_FS_SANDBOX is fatal, not an error.
+export func orchestrator_mode(workdir: string, cfg: HerdrConfig, gate_open: bool) -> OrchestratorMode ! {Env, FS} {
+  let switch = getEnvOr("HERDR_ORCHESTRATOR", "");
+  let docs =
+    if should_scan(switch, gate_open, cfg.depth) && path_within(workdir, cfg.dagr_dir) && isDir(cfg.dagr_dir)
+    then read_run_docs(cfg.dagr_dir, listDir(cfg.dagr_dir))
+    else [];
+  resolve_mode(switch, gate_open, cfg.depth, cfg.own_pane, docs)
+}
+
+export func read_run_docs(dir: string, names: [string]) -> [RunDoc] ! {FS} {
+  match names {
+    [] => [],
+    n :: rest =>
+      if is_run_doc_name(n) == false then read_run_docs(dir, rest)
+      else match readFileResult("${dir}/${n}") {
+        Ok(c) => {
+          let doc: RunDoc = { path: "${dir}/${n}", content: c };
+          doc :: read_run_docs(dir, rest)
+        },
+        Err(_) => read_run_docs(dir, rest)
+      }
+  }
 }

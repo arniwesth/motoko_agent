@@ -48,6 +48,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   abandoned_ids, settle_abandoned, sweep_tmp, prunable_scratch, prune_report,
   open_delegate_panes
 )
+import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, prompt_patch, decide)
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
   known_kind, kind_allowed, grants_relaxation, kind_model_args,
@@ -1845,6 +1846,15 @@ export func work_in_flight(cfg: HerdrConfig, ctx: ExtCtx) -> WorkOutcome ! {FS} 
 }
 
 export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO, Process, FS, Clock} {
+  make_hooks_with(cfg, tools, orchestrator_off())
+}
+
+-- `orch` is resolved ONCE, at registration (`register.ail`), because both atoms
+-- that read it are pure: a PromptShaper or ToolPolicy cannot reach `FS` to look
+-- at a run file per step. A run file that gains `mode: "delegate"` mid-session
+-- therefore takes effect at the next session, which is also when a handoff is
+-- read. See `orchestrator.ail`.
+export func make_hooks_with(cfg: HerdrConfig, tools: [string], orch: OrchestratorMode) -> [Capability] ! {IO, Process, FS, Clock} {
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       on_tool_handle(cfg, ctx, call)
@@ -1859,6 +1869,12 @@ export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO,
   let waiting = func(ctx: ExtCtx) -> WorkOutcome ! {FS} { work_in_flight(cfg, ctx) };
   [
     DescribeTools(describe),
+    -- ORCHESTRATOR MODE. REGISTERED IN EVERY CONFIGURATION, for `ExitIntent`'s
+    -- reason below: an atom that exists only in one environment changes the
+    -- coverage disclosure with it. Off, the patch is empty and the policy has
+    -- no opinion.
+    PromptShaper(\_ctx. prompt_patch(orch)),
+    ToolPolicy(\ctx call. decide(orch, ctx.workdir, ctx.history_slice, call)),
     -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this list only
     -- carries the decision, so the two can never disagree.
     ToolProvider(tools, handle),

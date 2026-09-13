@@ -1,0 +1,274 @@
+-- scripts/verify_herdr_orchestrator.ail
+--
+-- ORCHESTRATOR MODE, end to end through the atoms herdr registers. The pure
+-- rules have inline tests in `packages/motoko-ext-herdr/orchestrator.ail`; this
+-- file pins what those cannot see:
+--
+--   1. the atoms exist in EVERY configuration, in canonical order, and are inert
+--      when the mode is off — including through the old `make_hooks(cfg, tools)`
+--   2. on, the PromptShaper appends one note naming `Delegate` and the run file
+--   3. on, the ToolPolicy denies an implementation edit with a reason that names
+--      `Delegate` and the plan, and has no opinion on reads, test runs and
+--      unguarded writes
+--   4. the operator's `[orchestrator:direct]` lifts it; a later guard injection
+--      does not re-impose it; a later operator message without it does
+--   5. THE HOST MERGE: another extension's `Allow` does not outvote herdr's
+--      `Deny` in `dispatch_tool_policy`
+--   6. REGISTRATION FROM DISK: `orchestrator_mode` reads real run files and turns
+--      on only for the pane a run names with `mode: "delegate"` — not for a pane
+--      whose run file predates the field, not for another pane, not in a
+--      delegate, not outside herdr
+--
+-- The measured failure it exists for: a session resumed from a handoff made zero
+-- delegations after its predecessor made ten, because "delegate" had lived only
+-- in a chat turn (see `orchestrator.ail`'s header).
+--
+-- Usage (HERDR_ORCHESTRATOR must be unset; `make verify_herdr_orchestrator` does it):
+--   env -u HERDR_ORCHESTRATOR AILANG_RELAX_MODULES=1 ailang run \
+--     --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --ai-stub --entry main scripts/verify_herdr_orchestrator.ail
+--
+-- Prints one OK/FAIL line per case; exits non-zero on any FAIL.
+module scripts/verify_herdr_orchestrator
+
+import std/io (println, exit)
+import std/fs (writeFile, mkdirAll)
+import std/json (jo, ja, kv, js)
+import std/string (contains, join)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtPorts, BudgetPlan, Msg, Capability, ToolCallEnvelope, ToolPolicyDecision,
+  DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider,
+  ResponseInterceptor, SolverJudge, ExitIntent, WorkInFlight,
+  Allow, Deny, NoOpinion, Pending, PromptPatch,
+  ExtEntry, ExtRegistry, ExtRuntime, empty_ext_world
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/runtime (dispatch_tool_policy)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, make_hooks_with)
+import pkg/sunholo/motoko_ext_herdr/register (orchestrator_mode)
+import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, orchestrator_on_for_tests, direct_marker, show_mode)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func tmp_dagr() -> string { "./.tmp-herdr-orch/dagr" }
+
+func mk_cfg(own_pane: string, depth: int) -> HerdrConfig {
+  { bin: "herdr", own_pane: own_pane, work_dir: "./.tmp-herdr-orch/dlg", kind: "motoko",
+    allowed_kinds: "motoko", depth: depth, max_depth: 1, motoko_script: "./x.sh",
+    session_ms: "", sweep_stale: false, dagr_dir: tmp_dagr(), dagr_pane: false,
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
+    reap_on_exit: false, settle_on_exit: false, sweep_settle: false, dagr_bin: "dagr", dagr_plan: "" }
+}
+
+func msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func mk_ctx(history: [Msg]) -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-herdr-orchestrator", step: 0, model: "test-model", cwd: ".",
+    hybrid_tools: false, budget: budget, mode: "v2", workdir: ".",
+    env_server_url: "", budget_remaining: 4, history_slice: history,
+    state_key: "test", context_limit: 0, ports: noop_ext_ports(),
+    finish_reason: "", work_in_flight: [],
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: empty_ext_world() }
+}
+
+func edit_call(path: string) -> ToolCallEnvelope {
+  { id: "e1", tool: "EditFile", arguments: jo([kv("path", js(path)), kv("edits", ja([]))]) }
+}
+
+func bash_call(cmd: string) -> ToolCallEnvelope {
+  { id: "b1", tool: "BashExec", arguments: jo([kv("cmd", js(cmd))]) }
+}
+
+func write_call(path: string) -> ToolCallEnvelope {
+  { id: "w1", tool: "WriteFile", arguments: jo([kv("path", js(path)), kv("content", js("x"))]) }
+}
+
+func read_call(path: string) -> ToolCallEnvelope {
+  { id: "r1", tool: "ReadFile", arguments: jo([kv("path", js(path))]) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Reading the atoms back out of a registration
+-- ---------------------------------------------------------------------------
+
+func kind_of(c: Capability) -> string {
+  match c {
+    DescribeTools(_) => "describe_tools",
+    PromptShaper(_) => "prompt_shaper",
+    BudgetShaper(_) => "budget_shaper",
+    Compactor(_) => "compactor",
+    ToolPolicy(_) => "tool_policy",
+    ToolProvider(_, _) => "tool_provider",
+    ResponseInterceptor(_) => "response_interceptor",
+    SolverJudge(_) => "solver_judge",
+    ExitIntent(_, _, _) => "exit_intent",
+    WorkInFlight(_, _) => "work_in_flight"
+  }
+}
+
+func kinds(caps: [Capability]) -> string {
+  join(",", kinds_list(caps))
+}
+
+func kinds_list(caps: [Capability]) -> [string] {
+  match caps { [] => [], c :: rest => kind_of(c) :: kinds_list(rest) }
+}
+
+func patch_of(caps: [Capability], ctx: ExtCtx) -> PromptPatch {
+  match caps {
+    [] => { prepend: [], append: [] },
+    c :: rest => match c {
+      PromptShaper(f) => f(ctx),
+      _ => patch_of(rest, ctx)
+    }
+  }
+}
+
+func policy_of(caps: [Capability], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  match caps {
+    [] => NoOpinion,
+    c :: rest => match c {
+      ToolPolicy(f) => f(ctx, call),
+      _ => policy_of(rest, ctx, call)
+    }
+  }
+}
+
+func show_decision(d: ToolPolicyDecision) -> string {
+  match d {
+    Allow => "allow",
+    Deny(m) => "deny(${m})",
+    NoOpinion => "noop",
+    Pending(r, _) => "pending(${r})"
+  }
+}
+
+func is_deny(d: ToolPolicyDecision) -> bool {
+  match d { Deny(_) => true, _ => false }
+}
+
+func check(label: string, ok: bool, detail: string) -> int ! {IO} {
+  if ok then { println("OK: ${label}"); 0 }
+  else { println("FAIL: ${label} — ${detail}"); 1 }
+}
+
+func hooks_on() -> [Capability] ! {IO, Process, FS, Clock} {
+  make_hooks_with(mk_cfg("w1:p18", 0), ["Delegate", "DelegateCheck"], orchestrator_on_for_tests())
+}
+
+-- ---------------------------------------------------------------------------
+-- Cases
+-- ---------------------------------------------------------------------------
+
+func case_atoms() -> int ! {IO, Process, FS, Clock} {
+  let expected = "describe_tools,prompt_shaper,tool_policy,tool_provider,exit_intent,work_in_flight";
+  let on = kinds(hooks_on());
+  let legacy = make_hooks(mk_cfg("w1:p18", 0), []);
+  let ctx = mk_ctx([]);
+  let legacy_patch = patch_of(legacy, ctx);
+  let legacy_policy = policy_of(legacy, ctx, edit_call("src/core/session.ail"));
+  check("atoms are registered in canonical order", on == expected, on)
+  + check("atoms are registered through the old make_hooks too", kinds(legacy) == expected, kinds(legacy))
+  + check("off: the old make_hooks appends no note and has no opinion on an edit",
+          length_of(legacy_patch.append) == 0 && length_of(legacy_patch.prepend) == 0 && legacy_policy == NoOpinion,
+          show_decision(legacy_policy))
+}
+
+func case_prompt() -> int ! {IO, Process, FS, Clock} {
+  let p = patch_of(hooks_on(), mk_ctx([]));
+  let text = join("\n", p.append);
+  check("on: one note is appended, nothing prepended", length_of(p.prepend) == 0 && length_of(p.append) == 1, text)
+  + check("on: the note names Delegate, the run file and the operator's marker",
+          contains(text, "`Delegate`") && contains(text, ".dagr/run-plan001.json") && contains(text, direct_marker()),
+          text)
+}
+
+func length_of(xs: [string]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + length_of(rest) }
+}
+
+func case_policy() -> int ! {IO, Process, FS, Clock} {
+  let caps = hooks_on();
+  let ctx = mk_ctx([msg("user", "Lets tackle 1.")]);
+  let edit = policy_of(caps, ctx, edit_call("src/core/session.ail"));
+  let reason = show_decision(edit);
+  check("on: EditFile under src/ is denied", is_deny(edit), reason)
+  + check("on: the denial names Delegate and the plan",
+          contains(reason, "`Delegate`") && contains(reason, "dagr_plan: \".dagr/run-plan001.json\""), reason)
+  + check("on: a sed -i into scripts/ is denied",
+          is_deny(policy_of(caps, ctx, bash_call("sed -i 's/a/b/' scripts/dst/strict_replay_dst.ail"))), "")
+  + check("on: a detached make dst is the orchestrator's own verification",
+          policy_of(caps, ctx, bash_call("nohup env -u AILANG_FS_SANDBOX make dst DST_JOBS=2 > .ailang/dst.out 2>&1 &")) == NoOpinion, "")
+  + check("on: reading source is allowed", policy_of(caps, ctx, read_call("src/core/session.ail")) == NoOpinion, "")
+  + check("on: writing a handoff is allowed",
+          policy_of(caps, ctx, write_call(".agent/projects/013_core_architecture_for_dst/HANDOFF.md")) == NoOpinion, "")
+}
+
+func case_hatch() -> int ! {IO, Process, FS, Clock} {
+  let caps = hooks_on();
+  let call = edit_call("src/core/session.ail");
+  let lifted = mk_ctx([msg("user", "Fix it yourself this once. ${direct_marker()}"), msg("assistant", "ok")]);
+  let through_guard = mk_ctx([
+    msg("user", "Fix it yourself this once. ${direct_marker()}"),
+    msg("assistant", "working"),
+    msg("user", "You stopped while your own response indicates the task is still in progress. [motoko-progress-contract-guard]")
+  ]);
+  let reimposed = mk_ctx([
+    msg("user", "Fix it yourself this once. ${direct_marker()}"),
+    msg("assistant", "done"),
+    msg("user", "Now carry on with P3ORD.")
+  ]);
+  let quoted_by_model = mk_ctx([msg("user", "Carry on."), msg("assistant", "I could use ${direct_marker()}")]);
+  check("the operator's marker lifts the policy", policy_of(caps, lifted, call) == NoOpinion, "")
+  + check("a later guard injection does not re-impose it", policy_of(caps, through_guard, call) == NoOpinion, "")
+  + check("a later operator message without the marker re-imposes it", is_deny(policy_of(caps, reimposed, call)), "")
+  + check("the model cannot lift it by writing the marker itself", is_deny(policy_of(caps, quoted_by_model, call)), "")
+}
+
+func case_host_merge() -> int ! {IO, Clock, Process, FS} {
+  let other: ExtEntry = { id: "permissive#0", caps: [ToolPolicy(\_ctx _call. Allow)] };
+  let herdr: ExtEntry = { id: "herdr#1", caps: hooks_on() };
+  let rt: ExtRuntime = {
+    registry: { entries: [other, herdr] },
+    strict_mode: false,
+    verification: { enabled: false, command: "" }
+  };
+  let d = dispatch_tool_policy(rt, mk_ctx([]), edit_call("src/core/session.ail"));
+  check("the host merge: another extension's Allow does not outvote herdr's Deny", is_deny(d), show_decision(d))
+}
+
+func run_doc(pane: string, mode: string) -> string {
+  let m = if mode == "" then "" else ",\"mode\":\"${mode}\"";
+  "{\"dagr\":\"1\",\"run\":{\"id\":\"r\",\"orchestrator\":{\"pane\":\"${pane}\"${m}}},\"tasks\":[]}"
+}
+
+func case_registration() -> int ! {IO, FS, Env} {
+  let _ = mkdirAll(tmp_dagr());
+  -- sorted listing: a-legacy first, so the match has to look past it
+  let _ = writeFile("${tmp_dagr()}/a-legacy.json", run_doc("w1:p18", ""));
+  let _ = writeFile("${tmp_dagr()}/b-plan.json", run_doc("w1:p18", "delegate"));
+  let _ = writeFile("${tmp_dagr()}/c-other.json", run_doc("w2:p5", "delegate"));
+  let _ = writeFile("${tmp_dagr()}/.plan-w1-p18-100", "./.tmp-herdr-orch/dagr/c-other.json");
+  let mine = show_mode(orchestrator_mode(".", mk_cfg("w1:p18", 0), true));
+  let other = show_mode(orchestrator_mode(".", mk_cfg("w2:p5", 0), true));
+  let stranger = show_mode(orchestrator_mode(".", mk_cfg("w9:p9", 0), true));
+  let delegate = show_mode(orchestrator_mode(".", mk_cfg("w1:p18", 1), true));
+  let outside = show_mode(orchestrator_mode(".", mk_cfg("w1:p18", 0), false));
+  check("from disk: the named pane is on, from the run file that says delegate",
+        mine == "on:.tmp-herdr-orch/dagr/b-plan.json:w1:p18:1:src/,scripts/,packages/,tools/", mine)
+  + check("from disk: each pane gets its own run", contains(other, "c-other.json:w2:p5"), other)
+  + check("from disk: a pane no run names is off", stranger == "off", stranger)
+  + check("from disk: a delegate (depth 1) is off even in the named pane", delegate == "off", delegate)
+  + check("from disk: outside a herdr pane is off", outside == "off", outside)
+}
+
+export func main() -> () ! {IO, FS, Env, Clock, Process} {
+  let fails = case_atoms() + case_prompt() + case_policy() + case_hatch() + case_host_merge() + case_registration();
+  if fails > 0 then { println("${show(fails)} case(s) failed"); exit(1) } else ()
+}
