@@ -144,23 +144,27 @@ import src/core/dst_interaction (
 -- `tools/profile_definition/check_fixtures.py`'s pattern, applied to a list
 -- that is otherwise very easy to let drift.
 pure func synthetic_env() -> [{ key: string, value: string }] {
-  [{ key: "MOTOKO_SESSION_ID", value: "dst-session-0001" },
-   { key: "MOTOKO_PERSIST_RETRIES", value: "3" },
-   { key: "MOTOKO_RETRY_STREAM_ERROR", value: "0" },
-   { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
-   { key: "MOTOKO_HEADLESS", value: "1" },
-   { key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", value: "0" },
-   { key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
-   -- WI-D3's four. They are here because scenario 3 asserts this list IS
-   -- `driver_env_keys()` — routing `context_usage` put four more keys into the
-   -- recorded interaction log, and therefore into every persisted artifact, so
-   -- they are part of the surface the redaction detector has to cover. Values
-   -- are paths by nature and carry no credential shape, which is what the
-   -- name-axis row below then confirms rather than assumes.
-   { key: "MOTOKO_PROFILE_DIR", value: "/srv/motoko/.motoko/config/default" },
+  -- ORDER IS POSITIONAL: `scenario_the_surface_is_the_drivers` compares this
+  -- list against `driver_env_keys()` with `str_eq_list`, so the entries follow
+  -- the declared list's own (sorted) order, not source order.
+  [{ key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", value: "0" },
    { key: "MOTOKO_CONFIG", value: "default" },
+   { key: "MOTOKO_HEADLESS", value: "1" },
+   { key: "MOTOKO_MODELS_FILE", value: "/srv/motoko/.motoko/model-catalog.json" },
+   { key: "MOTOKO_PERSIST_RETRIES", value: "3" },
+   { key: "MOTOKO_PROFILE_DIR", value: "/srv/motoko/.motoko/config/default" },
    { key: "MOTOKO_REPO", value: "/srv/motoko" },
-   { key: "MOTOKO_MODELS_FILE", value: "/srv/motoko/.motoko/model-catalog.json" }]
+   { key: "MOTOKO_RETRY_STREAM_ERROR", value: "0" },
+   { key: "MOTOKO_SESSION_ID", value: "dst-session-0001" },
+   { key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
+   { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
+   -- P2T Part 5(a): the exit-manifest name read (`publish_turn_exit_manifest`,
+   -- session.ail:4582, key via `manifest_path_var()`). Its recorded value is
+   -- a MANIFEST PATH, not a credential: like the four path-valued keys above
+   -- it carries no credential shape, which the name-axis row confirms rather
+   -- than assumes. Empty here (no TUI names a file under DST) — and the empty
+   -- string is what `scan_text` skips, so the negative control holds.
+   { key: "MOTOKO_EXIT_MANIFEST", value: "" }]
 }
 
 pure func chunk(offset: int, text: string) -> StreamChunkRecord {
@@ -184,7 +188,7 @@ pure func streamed(advance: int, payload: string, cs: [StreamChunkRecord]) -> Ti
 -- chunks between them.
 --
 -- S7's no-two-equal rule, applied to the quantities this suite reads:
--- 9 interactions, 7 environment entries, 5 distinct kinds, 3 stream chunks.
+-- 9 interactions, 12 environment entries, 5 distinct kinds, 3 stream chunks.
 -- Pairwise distinct on purpose, and asserted below — a fixture whose counts
 -- coincide cannot distinguish a check that reads "how many interactions" from
 -- one that reads "how many chunks", and both type-check.

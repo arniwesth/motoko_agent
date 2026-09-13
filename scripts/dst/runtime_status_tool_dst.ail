@@ -8,7 +8,7 @@ import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (contains, replace, split)
 import src/core/config (CostRates, VerificationConfig)
-import src/core/phase_vocab (DecisionRecord, WireRecord, CompactionStageRecord, LedgerRecord, LedgerTrace, HistorySeeded, ContextLimitResolved, to_schema_v1_kvs)
+import src/core/phase_vocab (DecisionRecord, WireRecord, CompactionStageRecord, LedgerRecord, LedgerTrace, HistorySeeded, ContextLimitResolved, WorldRequest, to_schema_v1_kvs)
 import src/core/context_limit (ContextLimit, Bounded, Disabled, Unknown, Catalogue, ProfileConfigAbsent, ModelNotInCatalogue, raw_window_of, limit_arm_id)
 import src/core/fs_node (FsNode, FsFile)
 import src/core/session (TracedSessionResult)
@@ -307,26 +307,65 @@ func run_arm(model: string, world: WorldState) -> TracedSessionResult ! {AI, Clo
   Session.run_v2_session_traced(empty_rt(), "task", "", false, budget(), model, history(), ".", 8, false, 0, zero_rates(), ScriptedWorld(world))
 }
 
--- Witness 2: the returned trace. The record must be the SECOND one, directly
--- after the seed, and there must be exactly one of it.
+-- Witness 2: the returned trace. The limit record directly follows the seed,
+-- with only bootstrap `WorldRequest` witness records (the P2B prelude:
+-- session_policy_init, derive_session_id, start clock) allowed between them.
+-- P2B moved those witnesses ahead of the seed, so a strict first/second
+-- position check would reject every run; the seed stays the first
+-- JOURNAL-CLASS record (ADR-003 D2) and the limit stays the record after it.
 func second_record_limit(trace: LedgerTrace) -> Option[ContextLimit] {
-  match trace.records {
-    first :: second :: _ => match first {
-      WireRecord(e1) => match e1 {
-        HistorySeeded(_) => match second {
-          WireRecord(e2) => match e2 {
-            ContextLimitResolved(i) => Some(i.limit),
-            _ => None
-          },
-          _ => None
-        },
+  match limit_after_seed(skip_to_seed(trace.records)) {
+    Some(l) => Some(l),
+    None => None
+  }
+}
+
+-- The record after the seed, skipping witness records. Returns None unless
+-- the seed is present and the next non-witness record resolves the limit.
+func limit_after_seed(records: [LedgerRecord]) -> Option[ContextLimit] {
+  match records {
+    [] => None,
+    r :: rest => match r {
+      WireRecord(e) => match e {
+        HistorySeeded(_) => limit_after_witnesses(rest),
         _ => None
       },
       _ => None
-    },
-    _ => None
+    }
   }
 }
+
+func limit_after_witnesses(records: [LedgerRecord]) -> Option[ContextLimit] {
+  match records {
+    [] => None,
+    r :: rest => match r {
+      WireRecord(e) => match e {
+        WorldRequest(_) => limit_after_witnesses(rest),
+        ContextLimitResolved(i) => Some(i.limit),
+        _ => None
+      },
+      _ => None
+    }
+  }
+}
+
+-- Skip leading bootstrap witness records to the seed.
+func skip_to_seed(records: [LedgerRecord]) -> [LedgerRecord] {
+  match records {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(e) => match e {
+        HistorySeeded(_) => r :: rest,
+        WorldRequest(_) => skip_to_seed(rest),
+        _ => r :: rest
+      },
+      _ => r :: rest
+    }
+  }
+}
+
+-- (skip_to_seed above covers the pre-seed side; limit_after_witnesses above
+-- covers the seed-to-limit side.)
 
 func is_limit_record(r: LedgerRecord) -> bool {
   match r {

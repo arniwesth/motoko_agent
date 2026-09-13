@@ -657,6 +657,20 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
 -- exactly once per traced run: `session_policy_init` runs once before the loop
 -- and `derive_session_id` once at its start. A recorder that logged the first
 -- read of a key and dropped later ones would satisfy a presence check.
+-- P2T Part 5(a): the exit-manifest name read (`publish_turn_exit_manifest`,
+-- session.ail:4582, key via `manifest_path_var()`), once per run that reaches
+-- DoneEvent. These scenarios all terminate Ok through the success arm, so the
+-- publish runs and the read is expected exactly once — derived from the
+-- driver's control flow, like the five above. The count is a literal for the
+-- same reason the resolution counts are: the env class emits no ledger event.
+-- It is pinned in `driver_env_keys()` by the `verify_exit_intent` literal
+-- (`manifest_path_var() == "MOTOKO_EXIT_MANIFEST"`) because the Makefile
+-- re-derivation grep (anchored to `.env_get(<world>, "KEY"`) cannot see the
+-- indirection.
+func env_reads_exit_publish() -> [EnvExpectation] {
+  [{ key: "MOTOKO_EXIT_MANIFEST", count: 1 }]
+}
+
 func env_reads_always(resolutions: int) -> [EnvExpectation] {
   [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
    { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
@@ -664,6 +678,7 @@ func env_reads_always(resolutions: int) -> [EnvExpectation] {
    { key: "MOTOKO_HEADLESS",           count: 1 },
    { key: "MOTOKO_SESSION_ID",         count: 1 }]
     ++ env_reads_per_context_resolution(resolutions)
+    ++ env_reads_exit_publish()
 }
 
 -- MOTOKO_TOOL_TIMEOUT_MS is read once per NATIVE dispatch (tool_phase.ail:343),

@@ -28,6 +28,7 @@ import src/core/phase_vocab (
   TraceStagePassed,
   TraceStageRejected,
   TraceStageObserved,
+  WorldRequest,
   WireRecord,
   empty_ledger_trace,
   ledger_append,
@@ -869,10 +870,26 @@ func record_wire_name(r: LedgerRecord) -> string {
 -- The record immediately before the RunSummary. D2 puts `RunSuspended` there
 -- and nothing after the summary, which is `RecordAfterTerminal`'s clause
 -- (`dst_invariants.ail:788–796`) asserted here on the value.
+--
+-- P2B WITNESS CAVEAT: the finalize clock's `WorldRequest` witness is appended
+-- inside `c2_finalize` AFTER the trace handed in — so it lands between
+-- `RunSuspended` and `RunSummary` on the suspension path (and between
+-- `DoneEvent`/`CostExhausted` and `RunSummary` elsewhere). The row below
+-- therefore reads "the nearest non-witness record" rather than the literal
+-- predecessor: skipping the witness preserves the D2 ordering claim (the
+-- suspension is still the last JOURNAL-bearing record before the summary)
+-- without pinning the witness to either side of it.
 func name_before_summary(records: [LedgerRecord], prev: string) -> string {
   match records {
     [] => "<no summary>",
-    r :: rest => if is_run_summary(r) then prev else name_before_summary(rest, record_wire_name(r))
+    r :: rest => if is_run_summary(r) then prev
+                 else match r {
+                   WireRecord(e) => match e {
+                     WorldRequest(_) => name_before_summary(rest, prev),
+                     _ => name_before_summary(rest, record_wire_name(r))
+                   },
+                   _ => name_before_summary(rest, record_wire_name(r))
+                 }
   }
 }
 

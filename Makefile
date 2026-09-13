@@ -897,9 +897,28 @@ execution_program:
 # required `ports.env_get(`, and it silently missed session.ail's
 # MOTOKO_CAPTURE_FAILED_PAYLOAD read, which goes through `st.provider.env_get(`.
 # The derivation caught that itself on its first run — which is the argument for
-# deriving rather than declaring, made by the derivation. A key literal is
-# required, so session.ail's extension-bridge closure (whose key is a variable
-# supplied by an extension) correctly does not match.
+# deriving rather than declaring, made by the derivation.
+#
+# THE WORLD ARGUMENT IS DELIBERATELY UNANCHORED TOO. P2A threaded every helped
+# leaf's successor through `advance(…)` before the port call, so the first
+# argument is `world` at some sites and `advance(….next_state, EnvRead)` at
+# others. Anchoring the receiver's shape (bare `world` vs `advance(`) would
+# silently drop whichever form was not named — the same fail-OPEN shape the
+# receiver anchoring had. The grep therefore matches any first argument that
+# ends at the comma before the key literal.
+#
+# ONE KEY ARRIVES THROUGH AN INDIRECTION, and the literal grep cannot see
+# it — session.ail's exit-manifest read calls `manifest_path_var()` instead
+# of naming the literal, so `MOTOKO_EXIT_MANIFEST` never matches the syntactic
+# form above. The second derivation line below recovers it structurally: it
+# matches an `env_get` call whose key argument is a call (rather than a string
+# literal), and resolves the value through `manifest_path_var()`'s own test
+# vector in `src/core/ext/exit_manifest.ail` (pinned by `verify_exit_intent`'s
+# literal assertion `manifest_path_var() == "MOTOKO_EXIT_MANIFEST"`, not by
+# this grep). A change of the var name without updating the call site still
+# fails LOUDLY: the derived set would lose the key while `driver_env_keys()`
+# keeps it. An `env_get` indirection through any OTHER function fails LOUDLY
+# too — the resolved value would disagree with the declared set.
 # WI-D26: the LIVE half of the routed subprocess seam, and it is a SEPARATE
 # target from `discovery` on S14's grounds rather than for convenience.
 #
@@ -958,9 +977,18 @@ discovery:
 	else \
 		echo "  ✓ the interaction log matches the driver's own wire emissions (provider=$$w_prov, tool=$$w_tool)"; \
 	fi; \
-	derived=$$(grep -ohE '\.env_get\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*,\s*"[A-Z_]+"' \
+	derived=$$( { grep -ohE '\.env_get\([^;]*?"[A-Z_]+"' \
 	     src/core/session.ail src/core/tool_phase.ail src/core/context_usage.ail \
-	   | sed -E 's/.*"([A-Z_]+)"/\1/' | sort -u); \
+	   | sed -E 's/.*"([A-Z_]+)"/\1/'; \
+	   n_indirect=$$(grep -ohE '\.env_get\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*,\s*[a-zA-Z_][a-zA-Z0-9_.]*\(\)' \
+	     src/core/session.ail src/core/tool_phase.ail src/core/context_usage.ail | sort -u); \
+	   if [ -n "$$n_indirect" ]; then \
+	     fn=$$(printf '%s\n' "$$n_indirect" | sed -E 's/.*,\s*([a-zA-Z_][a-zA-Z0-9_.]*)\(\)/\1/'); \
+	     if [ "$$fn" = "manifest_path_var" ] \
+	       && grep -q 'manifest_path_var()' src/core/session.ail; then \
+	       sed -n 's/.*tests \[((), \(\"[A-Z_]*\"\)).*/\1/p' src/core/ext/exit_manifest.ail | tr -d '"'; \
+	     else printf '%s\n' "UNRESOLVED-ENV-INDIRECTION:$$fn"; fi; \
+	   fi; } | sort -u); \
 	declared=$$(sed -n '/^export pure func driver_env_keys/,/^}/p' src/core/dst_discovery.ail \
 	   | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u); \
 	if [ -z "$$derived" ]; then \
