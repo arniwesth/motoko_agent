@@ -6,13 +6,13 @@
 -- its wire projection as a maintained compatibility surface, and this artifact
 -- carries that obligation.
 --
--- One artifact binds, for every one of the 42 `LedgerEvent` variants:
+-- One artifact binds, for every one of the 43 `LedgerEvent` variants:
 --
 --   the variant itself; its wire name; its payload schema; and its
 --   classification as LOGICAL or DISPLAY-ONLY.
 --
 -- This is new construction. `phase_vocab.ledger_record_name` is not a seed and
--- is not grown here: it names three of the 42 and collapses the rest to the
+-- is not grown here: it names three of the 43 and collapses the rest to the
 -- literal "wire", which is a different thing that happens to share a subject.
 --
 -- ============================================================================
@@ -24,10 +24,10 @@
 -- one-name-per-variant artifact cannot represent that, so the shape is:
 --
 --   `event_wire_name`   a TOTAL projection over the value. Adding a variant is
---                       a compile error here, so drift in the 41 single-name
+--                       a compile error here, so drift in the 42 single-name
 --                       cases stays a compile error, which D6 names as the
 --                       preferred form.
---   `wire_names`        an ALLOWED-NAME SET per row — one entry for 41 rows,
+--   `wire_names`        an ALLOWED-NAME SET per row — one entry for 42 rows,
 --                       two for StreamDelta.
 --
 -- Both, not either. The total function makes the projection derivable; the
@@ -51,7 +51,7 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Of the 36 Logical rows, **34 reach the returned trace now
+-- that is deliberate. Of the 37 Logical rows, **35 reach the returned trace now
 -- and 2 do not**; the two are `d64_gap_register`'s entries, both of long
 -- standing. ADR-003 D1's `SessionResumed` was the third until PLAN-003 P3 Part 5,
 -- whose resumed traced entry appends it as the first record of the frame. The other four journal-class variants were
@@ -109,7 +109,7 @@ import src/core/phase_vocab (
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
   NativeToolResults, SessionSuspend, RunSuspended,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
-  ContextLimitResolved,
+  ContextLimitResolved, WorldRequest,
   SessionStart, ErrorEvent, TotalsUpdated,
   CheckpointTaken, StreamDelta
 )
@@ -188,6 +188,7 @@ export pure func event_variant_id(e: LedgerEvent) -> string {
     StateDelta(_) => "StateDelta",
     SessionResumed(_) => "SessionResumed",
     ContextLimitResolved(_) => "ContextLimitResolved",
+    WorldRequest(_) => "WorldRequest",
     SessionStart(_) => "SessionStart",
     ErrorEvent(_) => "ErrorEvent",
     TotalsUpdated(_) => "TotalsUpdated",
@@ -245,6 +246,7 @@ export pure func event_wire_name(e: LedgerEvent) -> string {
     StateDelta(_) => "state_delta",
     SessionResumed(_) => "session_resumed",
     ContextLimitResolved(_) => "context_limit_resolved",
+    WorldRequest(_) => "world_request",
     SessionStart(_) => "session_start",
     ErrorEvent(_) => "error",
     TotalsUpdated(_) => "loop_totals_updated",
@@ -532,6 +534,15 @@ export pure func event_vocabulary() -> [EventRow] {
       -- boundary turns on it. APPENDED where it is emitted, at the shared per-run
       -- entry (and at the untraced entry), so it is absent from
       -- `d64_gap_register` and the survey is true at the commit that adds it.
+      classification: Logical, reaches_trace_today: true },
+
+    { variant: "WorldRequest", wire_names: ["world_request"],
+      payload: [req("ordinal"), req("class")],
+      -- PLAN-001 P2 Part 2 (ADR-001 D2 part 4). LOGICAL: the per-run frame gate
+      -- reads these ordinals for strict +1, no repeat and final equality, so
+      -- presence, order and content all change an invariant result. ALWAYS
+      -- APPENDED where it is emitted (`session.witness` does both per record),
+      -- so it is absent from `d64_gap_register`.
       classification: Logical, reaches_trace_today: true },
 
     { variant: "SessionStart", wire_names: ["session_start"],
@@ -827,7 +838,7 @@ pure func has_rule(rs: [VocabularyRejection], rule: string) -> bool {
 pure func test_vocabulary_has_thirty_five_distinct_rows() -> bool
   tests [((), true)]
   {
-    List.length(event_vocabulary()) == 42
+    List.length(event_vocabulary()) == 43
       && no_dups(row_variants(event_vocabulary()), [])
   }
 
@@ -893,7 +904,7 @@ pure func test_classification_partitions_the_vocabulary() -> bool
   tests [((), true)]
   {
     let rows = event_vocabulary();
-    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 42
+    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 43
       && List.length(display_only_variants(rows)) == 6
   }
 

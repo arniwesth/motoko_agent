@@ -731,6 +731,12 @@ export type SessionSuspendInfo = { session_id: string, target_profile: string }
 -- policy carries, with its arm and — for `Unknown` — both misses. Logical: the
 -- arm is the reason an int 0 is unmeasured rather than healthy.
 export type ContextLimitResolvedInfo = { run_id: string, limit: ContextLimit }
+-- PLAN-001 P2 Part 2 (ADR-001 D2). ONE per helped leaf request, emitted AND
+-- appended by `session.witness` in request order, before the successor that
+-- carried it enters any driver record. `request_class` is
+-- `world_ordinal.request_class_id`'s spelling (`class` is reserved in AILANG);
+-- the wire key is `class`, the key the world token already uses.
+export type WorldRequestInfo = { ordinal: int, request_class: string }
 
 -- ADR-003 v6.1 D2. The typed suspension's wire record: a run that reached its
 -- step budget stops being an `error` and becomes this. It is APPENDED to the
@@ -1039,6 +1045,7 @@ export type LedgerEvent
   | StateDelta(StateDeltaInfo)               -- [NEW]  state_delta
   | SessionResumed(SessionResumedInfo)       -- [NEW]  session_resumed
   | ContextLimitResolved(ContextLimitResolvedInfo) -- [NEW] context_limit_resolved (PLAN-001 P1 step 4)
+  | WorldRequest(WorldRequestInfo)           -- [NEW]  world_request (PLAN-001 P2 Part 2)
   | SessionStart(SessionStartInfo)           -- [prod] session_start
   | ErrorEvent(ErrorInfo)                    -- [prod] error
   | TotalsUpdated(ThinkingInfo)              -- [NEW]  loop_totals_updated
@@ -1206,6 +1213,7 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     StateDelta(i) => state_delta_kvs(i),
     SessionResumed(i) => [kv("type", js("session_resumed")), kv("resume_count", jnum(_int_to_float(i.resume_count))), kv("from_id", js(i.from_id)), kv("from_ordinal", jnum(_int_to_float(i.from_ordinal))), kv("profile_from", js(i.profile_from)), kv("profile_to", js(i.profile_to)), kv("prompt_digest_from", js(i.prompt_digest_from)), kv("prompt_digest_to", js(i.prompt_digest_to)), kv("forced", jb(i.forced))],
     ContextLimitResolved(i) => [kv("type", js("context_limit_resolved")), kv("run_id", js(i.run_id)), kv("context_limit", jnum(_int_to_float(raw_window_of(i.limit)))), kv("context_limit_source", context_limit_source_json(i.limit))],
+    WorldRequest(i) => [kv("type", js("world_request")), kv("ordinal", jnum(_int_to_float(i.ordinal))), kv("class", js(i.request_class))],
     SessionStart(i) => [kv("type", js("session_start")), kv("task", js(i.task)), kv("model", js(i.model)), kv("mode", js(i.mode)), kv("run_id", js(i.run_id))],
     ErrorEvent(i) => [kv("type", js("error")), kv("source", js(i.source)), kv("code", js(i.code)), kv("message", js(i.message))],
     TotalsUpdated(i) => [kv("type", js("loop_totals_updated")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))],
@@ -1678,6 +1686,7 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Bounded({ raw_window: 71, source: Catalogue }) }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":71,\"context_limit_source\":{\"arm\":\"bounded\",\"origin\":\"catalogue\",\"profile_miss\":\"\",\"catalogue_miss\":\"\",\"model\":\"\"}}")
     && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Disabled }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":0,\"context_limit_source\":{\"arm\":\"disabled\",\"origin\":\"\",\"profile_miss\":\"\",\"catalogue_miss\":\"\",\"model\":\"\"}}")
     && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Unknown({ profile: ProfileKeyAbsent, catalogue: ModelNotInCatalogue("m") }) }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":0,\"context_limit_source\":{\"arm\":\"unknown\",\"origin\":\"\",\"profile_miss\":\"profile_key_absent\",\"catalogue_miss\":\"model_not_in_catalogue\",\"model\":\"m\"}}")
+    && golden(WorldRequest({ ordinal: 264, request_class: "env_read" }), "{\"type\":\"world_request\",\"ordinal\":264,\"class\":\"env_read\"}")
     -- RE-PINNED at PLAN-003 P3 Part 1: `run_id` joined SessionStartInfo.
     && golden(SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sid.r0.0" }), "{\"type\":\"session_start\",\"task\":\"t\",\"model\":\"m\",\"mode\":\"v2\",\"run_id\":\"sid.r0.0\"}")
     && golden(ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }), "{\"type\":\"error\",\"source\":\"agent_loop_v2\",\"code\":\"Internal\",\"message\":\"bad\"}")

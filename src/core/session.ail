@@ -130,7 +130,7 @@ import src/core/phase_vocab (
   take_system_prefix,
   digest_messages,
   SessionStart, SessionResumed, SessionResumedInfo,
-  ContextLimitResolved, context_limit_source_json,
+  ContextLimitResolved, context_limit_source_json, WorldRequest,
   ErrorEvent,
   StepState,
   StepPolicy,
@@ -197,7 +197,7 @@ import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec) import src/core/world_ordinal (advance) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
+import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -1800,7 +1800,7 @@ func c2_finalize(
   -- detect. The comment above this function already required a future read to
   -- thread its successor; this makes the existing one do so too.
   let reading = ports.clock_now(world);
-  let now_ms = reading.now_ms;
+  let now_ms = reading.now_ms; let clocked = witness(session_id, trace, advance(reading.next_state, ClockRead)); -- PLAN-001 P2 Part 2: witnessed before RunSummary and before the terminal literal
   let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit(), final.cumulative);
   let _ = ledger_emit(session_id, summary);
   -- `suspended: None` HERE, unconditionally, and the suspension sets it with a
@@ -1808,7 +1808,7 @@ func c2_finalize(
   -- sole terminal record LITERAL — the structural guard `make terminal_trace`
   -- counts exactly one `{ result:` in this file — while still giving D2 its
   -- fourth channel.
-  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: advance(reading.next_state, ClockRead), emissions: emissions, suspended: None, final: final }
+  { result: result, trace: ledger_append(clocked.trace, WireRecord(summary)), world: clocked.world, emissions: emissions, suspended: None, final: final }
 }
 
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
@@ -3194,7 +3194,7 @@ func c2_loop(
               -- point would silently read the pre-approval world. Passing `st`
               -- here instead of `post` is the freeze this class's assertion
               -- catches — the queue would never advance.
-              let post: C2LoopState = { st | world_state: advance(input.next_state, ToolExec) };
+              let approved = witness(session_id, trace_with_decision, advance(input.next_state, ToolExec)); let post: C2LoopState = { st | world_state: approved.world };
               let tool_step_idx = c2_done_step(post.step_idx);
               -- WI-D4 removed WI-D3's `post_ctx` here, and THIS is the site
               -- where doing it carelessly would have cost something. `post_ctx`
@@ -3218,7 +3218,7 @@ func c2_loop(
                   });
                   let _ = ledger_emit(session_id, denied_event);
                   let denial_msg = policy_denied_message(req.call, reason);
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, post, ledger_append(trace_with_decision, WireRecord(denied_event)), req, post.accumulated_tool_msgs ++ [denial_msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, post, ledger_append(approved.trace, WireRecord(denied_event)), req, post.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
                   let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
@@ -3228,8 +3228,8 @@ func c2_loop(
                   -- this is the site where forgetting it is least visible,
                   -- because the batch continues and the events would simply
                   -- never appear.
-                  let after: C2LoopState = { post | world_state: executed.next_state };
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, after, c2_trace_wire_events(trace_with_decision, executed.emitted), req, after.accumulated_tool_msgs ++ [executed.msg])
+                  let executed_w = witness(session_id, c2_trace_wire_events(approved.trace, executed.emitted), executed.next_state); let after: C2LoopState = { post | world_state: executed_w.world };
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, after, executed_w.trace, req, after.accumulated_tool_msgs ++ [executed.msg])
                 }
               }
             }
@@ -3297,9 +3297,9 @@ func c2_loop(
             -- happened — the same positioning the stream deltas get at the
             -- provider call, and for the same reason: a block appended in the
             -- wrong place satisfies a count and fails order.
-            ToolDispatchDone(done) =>
-              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { st | world_state: done.world }, c2_trace_wire_events(trace_with_calls, done.emitted), tool_step_idx, stream_id, done.msgs),
-            ToolDispatchPending(pending) => {
+            ToolDispatchDone(done) => { let tooled = witness(session_id, c2_trace_wire_events(trace_with_calls, done.emitted), done.world);
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { st | world_state: tooled.world }, tooled.trace, tool_step_idx, stream_id, done.msgs) },
+            ToolDispatchPending(pending) => { let paused = witness(session_id, c2_trace_wire_events(trace_with_calls, pending.emitted), pending.world);
               let next_state: C2LoopState = {
                 msgs: st.msgs,
 	                step_idx: st.step_idx,
@@ -3310,7 +3310,7 @@ func c2_loop(
 	                -- `pending.world`: tools already executed in this batch
 	                -- before the approval interrupted it, and their cursor
 	                -- advances must survive the suspension.
-	                world_state: pending.world,
+	                world_state: paused.world,
                 pending_tool_calls: [pending.request.call],
                 pending_tool_context: st.pending_tool_context,
                 pending_tool_prefix: st.pending_tool_prefix,
@@ -3325,7 +3325,7 @@ func c2_loop(
                 -- WI-D2: `pending.emitted`, and the suspension is exactly where
                 -- this is easy to drop — the branch already had to remember
                 -- `pending.world` and `pending.accumulated` for the same reason.
-                trace: c2_trace_wire_events(trace_with_calls, pending.emitted),
+                trace: paused.trace,
                 emissions: st.emissions,
                 -- ADR-003 D2: `st.msgs` unchanged, so nothing is journaled and
                 -- the chain is carried.
@@ -3463,7 +3463,7 @@ func c2_loop(
               let emissions_after_call = st.emissions ++ stream_events;
               -- The stream deltas sit between the prepared event and whatever
               -- the outcome produces, which is when they actually happened.
-              let trace_after_call = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), stream_events);
+              let stepped = witness(session_id, c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), stream_events), exchange.next_state); let trace_after_call = stepped.trace;
               match exchange.result {
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
@@ -3494,7 +3494,7 @@ func c2_loop(
 	                      ext_artifacts: chain.artifacts,
 	                      telemetry: st.telemetry,
 	                      provider: st.provider,
-	                      world_state: exchange.next_state,
+	                      world_state: stepped.world,
                       pending_tool_calls: [],
                       pending_tool_context: [],
                       pending_tool_prefix: [],
@@ -3519,7 +3519,7 @@ func c2_loop(
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                   } else {
                     -- Terminal: unretried provider/stream failure. WI-D1 made this `exchange.next_state` rather than `st.world_state` — plan rule S12, and the measurement is recorded at `ports.provider_outcome_record`. This edit is deliberately line-count-neutral (S18): the four routed clock anchors below it must not move.
-                    c2_finalize(st.provider, exchange.next_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_end, emissions_after_call, Err(e), c2_final_state(st))
+                    c2_finalize(st.provider, stepped.world, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_end, emissions_after_call, Err(e), c2_final_state(st))
                   }
                 },
                 Ok(result) => {
@@ -3549,7 +3549,7 @@ func c2_loop(
                   -- FS round-trip into three more dispatches per step to
                   -- answer a question nothing currently asks. Widening it later
                   -- is this same three-line shape at those sites.
-                  let boot_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
+                  let boot_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, [], ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(stepped.world));
                   let work = dispatch_work_in_flight(rt, boot_ctx);
                   let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, result.finish_reason, work.items, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, work.next_state);
                   let trace_after_model = c2_trace_wire_events(ledger_append(trace_after_call, WireRecord(end_event)), phase.events);
@@ -3891,7 +3891,7 @@ func run_v2_traced_from_seed(
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let derived = derive_session_id(provider.ports, provider.world);
   let started = provider.ports.clock_now(derived.next_state);
-  let session_id = derived.id; let started_world = advance(started.next_state, ClockRead);
+  let session_id = derived.id; let booted = witness(session_id, empty_ledger_trace(), advance(started.next_state, ClockRead)); let started_world = booted.world;
   let started_at_ms = started.now_ms;
   let identity = match requested_identity {
     Some(i) => i,
@@ -3939,7 +3939,7 @@ func run_v2_traced_from_seed(
   -- journal-class record and every existing record keeps its relative order.
   let limit_event = ContextLimitResolved({ run_id: identity.run_id, limit: policy.step.compaction.context_limit });
   let _ = ledger_emit(session_id, limit_event);
-  let st = { seeded | trace: ledger_append(ledger_append(seeded.trace, WireRecord(seed_event)), WireRecord(limit_event)) };
+  let st = { seeded | trace: ledger_append(ledger_append({ records: booted.trace.records ++ seeded.trace.records }, WireRecord(seed_event)), WireRecord(limit_event)) };
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
   let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, st);
@@ -4112,7 +4112,7 @@ func run_v2_from_messages_with_policy_and_counts(
   -- reads, leaving the loop on an un-advanced clock.
   let derived = derive_session_id(provider.ports, provider.world);
   let started = provider.ports.clock_now(derived.next_state);
-  let session_id = derived.id; let started_world = advance(started.next_state, ClockRead);
+  let session_id = derived.id; let booted = witness(session_id, empty_ledger_trace(), advance(started.next_state, ClockRead)); let started_world = booted.world;
   let started_at_ms = started.now_ms;
   -- The untraced entry has no caller that can hold an identity — it discards
   -- the whole `TracedSessionResult` but its `.result` — so it takes the default
@@ -4125,9 +4125,54 @@ func run_v2_from_messages_with_policy_and_counts(
   let initial = c2_initial_state_with_counts(history, provider, started_world, prior_counts);
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { initial | trace: ledger_append(initial.trace, WireRecord(limit_event)) }).result;
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { initial | trace: ledger_append({ records: booted.trace.records ++ initial.trace.records }, WireRecord(limit_event)) }).result;
   Trace.spanEnd(session_span);
   result
+}
+
+-- ============================================================================
+-- PLAN-001 P2 Part 2 (ADR-001 D2 part 2): THE ONE EFFECTFUL WITNESS.
+--
+-- `world_ordinal.advance` pushes a `RequestWitness` onto `pending` at every
+-- helped leaf; this drains it. For each witness, HEAD FIRST (request order), it
+-- EMITS `WorldRequest` on the wire and APPENDS the same event to the returned
+-- trace, then clears `pending`. It lives here because `ledger_emit` is private
+-- to this module and stays so.
+--
+-- THE ORDERING IS THE MECHANISM. It is called wherever a successor ARRIVES in
+-- this file, before that successor enters any driver record:
+--
+--   * bootstrap: both entries, after the session id and the start clock, with
+--     `empty_ledger_trace()`; the result's trace heads the seeded state's, so
+--     `session_policy_init`'s and `derive_session_id`'s reads are witnessed too;
+--   * `dispatch_step`'s exchange, at the `trace_after_call` junction (nothing
+--     between the call and it is a record, and the wire already holds the deltas);
+--   * the approval read, hoisted out of the `post` literal;
+--   * `execute_allowed_tool_call` and both `dispatch_tool_entries_with_builtin`
+--     outcomes (the `RunTools` arm);
+--   * `c2_finalize`'s clock, before `RunSummary` (which stays last) and before
+--     the terminal literal.
+--
+-- A world dropped AFTER its witness is what the frame gate (Part 3) sees as
+-- `final` behind the last `world_request`; a world dropped BEFORE it is the
+-- shape the wire cannot see, which is why no call site builds a record first.
+--
+-- NOT CALLED at the two production drops Part 5 owns (the provider-error env
+-- read and the exit manifest's): both successors are still discarded, and
+-- neither site holds a trace to return into until Part 5 reshapes them.
+func witness(session_id: string, trace: LedgerTrace, w: WorldState) -> { trace: LedgerTrace, world: WorldState } ! {IO, Trace} {
+  { trace: witness_drain(session_id, trace, w.pending), world: { w | pending: [] } }
+}
+
+func witness_drain(session_id: string, trace: LedgerTrace, pending: [RequestWitness]) -> LedgerTrace ! {IO, Trace} {
+  match pending {
+    [] => trace,
+    r :: rest => {
+      let e = WorldRequest({ ordinal: r.ordinal, request_class: request_class_id(r.request_class) });
+      let _ = ledger_emit(session_id, e);
+      witness_drain(session_id, ledger_append(trace, WireRecord(e)), rest)
+    }
+  }
 }
 
 export func run_v2(
