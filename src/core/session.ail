@@ -3068,11 +3068,11 @@ func c2_loop(
           -- order is untouched: D6.4 asks for PARITY, not one transition.
           let done_event = DoneEvent({ step: done_step, output: info.output, source: st.finalize_source });
           let trace_with_done = ledger_append(trace_after_empty_floor, WireRecord(done_event));
-          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, st.emissions, Ok(st.msgs), c2_final_state(st));
-          -- BEFORE `done`, DELIBERATELY. The TUI exits on `done` without waiting
-          -- for this process, so a manifest published after it is a race this
+          let published = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, st.provider, session_id, trace_with_done, st.world_state);
+          -- BEFORE `c2_finalize` (PLAN-001 P2 Part 5(a)): its env read is witnessed and its successor is the world the finalize clock reads, so RunSummary stays last. BEFORE `done`, DELIBERATELY:
+          -- the TUI exits on `done` without waiting for this process, so a manifest published after it is a race this
           -- code lost under measurement. See `publish_turn_exit_manifest`.
-          let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, st.provider, finalized.world);
+          let finalized = c2_finalize(st.provider, published.world, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, published.trace, st.emissions, Ok(st.msgs), c2_final_state(st));
           let _ = ledger_emit(session_id, done_event);
           finalized
         },
@@ -3480,11 +3480,11 @@ func c2_loop(
                   -- read" from WI-A12 until WI-D3; it is the last one IN
                   -- session.ail and it is no longer the last in the driver —
                   -- `context_usage` reads four more through the same port.
-                  let _ = if not e.retryable then { let capture = st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", ""); let _ = if capture.value != "" then capture_failing_payload(e, compacted_msgs) else (); advance(capture.next_state, EnvRead) } else st.world_state; -- PLAN-001 P2 Part 1: advanced, same conditional request; the successor is STILL DISCARDED, Part 5(b)'s red-first state
+                  let capt = if not e.retryable then { let capture = st.provider.env_get(stepped.world, "MOTOKO_CAPTURE_FAILED_PAYLOAD", ""); let _ = if capture.value != "" then capture_failing_payload(e, compacted_msgs) else (); witness(session_id, trace_after_end, advance(capture.next_state, EnvRead)) } else { trace: trace_after_end, world: stepped.world }; -- PLAN-001 P2 Part 5(b): read from the step's successor, advanced and witnessed; `capt` (not `exchange.next_state`) feeds both arms below. On a retryable error it is exactly `trace_after_end`/`stepped.world`
                   if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
                     let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
                     let _ = ledger_emit(session_id, retry_event);
-                    let trace_with_retry = ledger_append(trace_after_end, WireRecord(retry_event));
+                    let trace_with_retry = ledger_append(capt.trace, WireRecord(retry_event));
                     let trace_with_delta = c2_journal(session_id, trace_with_retry,
                       [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_retry, st.telemetry, chain.artifacts, artifacts_changed)]);
                     let next_state: C2LoopState = {
@@ -3494,7 +3494,7 @@ func c2_loop(
 	                      ext_artifacts: chain.artifacts,
 	                      telemetry: st.telemetry,
 	                      provider: st.provider,
-	                      world_state: stepped.world,
+	                      world_state: capt.world,
                       pending_tool_calls: [],
                       pending_tool_context: [],
                       pending_tool_prefix: [],
@@ -3518,8 +3518,8 @@ func c2_loop(
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                   } else {
-                    -- Terminal: unretried provider/stream failure. WI-D1 made this `exchange.next_state` rather than `st.world_state` — plan rule S12, and the measurement is recorded at `ports.provider_outcome_record`. This edit is deliberately line-count-neutral (S18): the four routed clock anchors below it must not move.
-                    c2_finalize(st.provider, stepped.world, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_end, emissions_after_call, Err(e), c2_final_state(st))
+                    -- Terminal: unretried provider/stream failure. WI-D1 made this `exchange.next_state` rather than `st.world_state`; PLAN-001 P2 Part 5(b) makes it `capt.world`, the capture read's witnessed successor — plan rule S12, and the measurement is recorded at `ports.provider_outcome_record`. This edit is deliberately line-count-neutral (S18): the four routed clock anchors below it must not move.
+                    c2_finalize(st.provider, capt.world, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, capt.trace, emissions_after_call, Err(e), c2_final_state(st))
                   }
                 },
                 Ok(result) => {
@@ -4460,7 +4460,7 @@ func conversation_loop_v2_with_policy(
           Some(c) => run_v2_from_continuation_traced(rt, policy, workdir, provider, identity, { c | history: c.history ++ [user_msg] }),
           None => run_v2_from_messages_traced_with_identity(rt, content, env_url, hybrid_tools, budget, policy, model, history ++ [user_msg], workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts, Some(identity))
         };
-        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, traced.world);
+        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, session_id, traced.trace, traced.world);
         let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
         -- D5's rule: one traced run happened on BOTH arms below, so the ordinal
         -- advances on all three outcomes.
@@ -4563,6 +4563,8 @@ func publish_turn_exit_manifest(
   hybrid_tools: bool,
   budget: BudgetPlan,
   ports: Ports,
+  session_id: string,
+  trace: LedgerTrace,
   -- THE TURN'S SUCCESSOR WORLD, not the provider's pre-turn one. `TracedSessionResult` carries
   -- `world` precisely so the state the turn produced can be handed on; passing `provider.world`
   -- rewinds the render to before the turn it is supposed to be summarising, which under scripted
@@ -4571,13 +4573,14 @@ func publish_turn_exit_manifest(
   -- extension fixture hides it by answering from canned content regardless of the world it is
   -- given — the same both-sides-mocked shape that hid the no-op ports bug.
   world: WorldState
-) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+) -> { world: WorldState, trace: LedgerTrace } ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   -- ROUTED, NOT AMBIENT. The manifest's name is read through `Ports.env_get`
   -- rather than `std/env`, because this now runs INSIDE the deterministic
   -- driver: `make world_state` rejects an un-routed env read on that path, and
   -- it is right to -- a replayed run must see the same name the recorded one
   -- did. The successor is threaded into the ctx the render receives.
   let named = ports.env_get(world, manifest_path_var(), ""); let named_world = advance(named.next_state, EnvRead);
+  let seen = witness(session_id, trace, named_world);
   let ctx: ExtCtx = {
     task: task,
     step: 0,
@@ -4596,17 +4599,17 @@ func publish_turn_exit_manifest(
     -- PLAN-001 P1 step 5: NO WINDOW IS SUPPLIED TO THE EXIT CONTEXT. This 0 is a
     -- literal, not a projection of the run's limit, and it is not `Disabled`.
     context_limit: 0,
-    ports: ext_ports_of(ports, named_world, env_url),
+    ports: ext_ports_of(ports, seen.world, env_url),
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(),
-    world: world_to_token(named_world)
+    world: world_to_token(seen.world)
   };
   -- The result says whether the live file was replaced. Discarded on purpose:
   -- a manifest that could not be published leaves the previous one standing,
   -- and failing a completed turn over a best-effort courtesy would be the
   -- wrong trade in the one direction that matters.
-  let _ = publish_exit_manifest(rt, ctx, named.value);
-  ()
+  let rendered = publish_exit_manifest(rt, ctx, named.value);
+  { world: token_to_world(rendered), trace: seen.trace }
 }
 
 export func conversation_loop_v2(
@@ -4717,7 +4720,7 @@ export func run_v2_with_conversation(
     run_id: initial_identity.run_id
   }));
   let initial_traced = run_v2_from_messages_traced_with_identity(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, started_provider, zero_runtime_status_counts(), Some(initial_identity));
-  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider.ports, initial_traced.world);
+  let _ = publish_turn_exit_manifest(rt, task, model, workdir, env_url, hybrid_tools, budget, started_provider.ports, session_id, initial_traced.trace, initial_traced.world);
   let initial_counts = runtime_status_counts(initial_traced.trace);
   let next_ordinal = next_run_ordinal(initial_ordinal);
   -- ADR-003 v6.1 D2, and this is the arm that DOES need the headless
