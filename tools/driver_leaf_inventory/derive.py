@@ -207,6 +207,232 @@ def scan_leaves(repo: Path):
     return sorted(out, key=lambda l: (l["file"], l["line"]))
 
 
+# --------------------------------------------------------------------------
+# order-of-witness over the TREE (PLAN-001 P2D; ADR-001 D2 part 6)
+# --------------------------------------------------------------------------
+#
+# Until P2D the tree scan only proved that every leaf RESOLVES to a class; the
+# order-of-witness rule was exercised on the four fixtures alone. This checks
+# it at the 24 production sites, with the same verdict function the fixtures
+# go through (`leaf_verdict`), so a fixture and a tree site cannot disagree
+# about what "witnessed in order" means.
+#
+# Per leaf, inside its enclosing function, textually:
+#   1. ADVANCED   the successor `B.next_state` of the leaf's binding `B` is
+#                 passed to `advance(` — else `un-advanced-and-unwitnessed`;
+#                 and it is never used un-advanced (up to a rebinding of `B`)
+#                 — else `un-advanced-carry`.
+#   2. IN ORDER   a `witness(` whose arguments carry the advanced successor
+#                 (inline, or through `let V = advance(B.next_state …)`) comes
+#                 before any record FIELD carrying it — else
+#                 `witnessed-after-construction`; no such witness and a field
+#                 carries it with a later `witness(` → the same verdict; no
+#                 witness at all → `advanced-unwitnessed`.
+#   3. RETURNED   a leaf in a function with no witness is legal only when the
+#                 function is a RETURNING helper below: its successor leaves in
+#                 a `next_state:` field and is witnessed ON RECEIPT.
+#
+# Receipts (RECEIPTS) are checked the same way at their binding in session.ail:
+# the first use of the received successor must be inside a `witness(` or inside
+# a helped leaf call whose own verdict is `clean`.
+#
+# WHAT THIS CANNOT SEE, recorded (the ADR's restricted claim, amended at P2D):
+#   - cross-function flow. Policy init and the eight `context_usage` reads reach
+#     their witness through `{ pp | world: init.next_state }` and the traced
+#     entry's provider (D2 part 2, Bootstrap); `execute_allowed_tool_call`'s
+#     successor threads through `dispatch_tool_entries_with_builtin`'s recursion
+#     to `ToolDispatchDone`/`Pending`. Those links are HAND-MAINTAINED
+#     (BOOTSTRAP_CHAIN below) and covered at runtime by `make world_framed_wire`.
+#   - a whole-record drop (`st` for `post`): no textual shape distinguishes it;
+#     the frame gate's repeated-ordinal red is the instrument.
+
+RETURNING = {
+    # function -> where its successor is witnessed (receipt), for the report
+    "derive_session_id": "receipt: traced entries' start-clock witness (RECEIPTS)",
+    "session_policy_init": "bootstrap chain (BOOTSTRAP_CHAIN; hand-maintained)",
+    "catalog_path": "bootstrap chain via resolve_context_limit_sum (hand-maintained)",
+    "catalogue_read": "bootstrap chain via resolve_context_limit_sum (hand-maintained)",
+    "profile_dir_path": "bootstrap chain via resolve_context_limit_sum (hand-maintained)",
+    "config_context_limit_override": "bootstrap chain via resolve_context_limit_sum (hand-maintained)",
+    "execute_allowed_tool_call": "receipt: c2_loop executed / ToolDispatchDone / ToolDispatchPending (RECEIPTS)",
+    "dispatch_step": "receipt: c2_loop exchange (RECEIPTS)",
+}
+
+# (helper, file, enclosing function, binding regex, received successor)
+RECEIPTS = [
+    ("dispatch_step", "src/core/session.ail", "c2_loop",
+     r"let\s+exchange\s*=\s*dispatch_step\s*\(", "exchange.next_state"),
+    ("execute_allowed_tool_call", "src/core/session.ail", "c2_loop",
+     r"let\s+executed\s*=\s*execute_allowed_tool_call\s*\(", "executed.next_state"),
+    ("execute_allowed_tool_call", "src/core/session.ail", "c2_loop",
+     r"ToolDispatchDone\s*\(\s*done\s*\)\s*=>", "done.world"),
+    ("execute_allowed_tool_call", "src/core/session.ail", "c2_loop",
+     r"ToolDispatchPending\s*\(\s*pending\s*\)\s*=>", "pending.world"),
+    ("derive_session_id", "src/core/session.ail", "run_v2_traced_from_seed",
+     r"let\s+derived\s*=\s*derive_session_id\s*\(", "derived.next_state"),
+    ("derive_session_id", "src/core/session.ail", "run_v2_from_messages_with_policy_and_counts",
+     r"let\s+derived\s*=\s*derive_session_id\s*\(", "derived.next_state"),
+]
+
+BOOTSTRAP_CHAIN = [
+    "session_policy_init's successor -> `{ pp | world: init.next_state }` -> the traced entry's "
+    "provider.world -> derive_session_id -> start clock -> witness (run_v2_traced_from_seed / "
+    "run_v2_from_messages_with_policy_and_counts)",
+    "context_usage's four functions -> resolve_context_limit_sum -> session_policy_init (above)",
+    "execute_allowed_tool_call -> dispatch_tool_entries_with_builtin recursion -> "
+    "ToolDispatchDone.world / ToolDispatchPending.world (RECEIPTS)",
+]
+
+CLEAN_VERDICTS = ("clean", "returned")
+
+FUNC_RE = re.compile(r"^(?:export\s+)?(?:pure\s+)?func\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
+
+
+def func_spans(clean: str):
+    starts = [(m.start(), m.group(1)) for m in FUNC_RE.finditer(clean)]
+    out = []
+    for i, (s, name) in enumerate(starts):
+        e = starts[i + 1][0] if i + 1 < len(starts) else len(clean)
+        out.append((s, e, name))
+    return out
+
+
+def enclosing(spans, pos: int):
+    for s, e, name in spans:
+        if s <= pos < e:
+            return s, e, name
+    return None
+
+
+def paren_span(clean: str, open_idx: int) -> int:
+    """Index just past the `)` matching the `(` at open_idx (strings/comments are blanked)."""
+    depth, i = 0, open_idx
+    while i < len(clean):
+        if clean[i] == "(":
+            depth += 1
+        elif clean[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return len(clean)
+
+
+def witness_calls(clean: str, lo: int, hi: int):
+    """(start, args_text) for every `witness(` CALL in [lo, hi)."""
+    out = []
+    for m in re.finditer(r"\bwitness\s*\(", clean[lo:hi]):
+        start = lo + m.start()
+        line_start = clean.rfind("\n", 0, start) + 1
+        if re.search(r"func\s+$", clean[line_start:start]):
+            continue  # a definition, not a call
+        open_idx = lo + m.end() - 1
+        out.append((start, clean[open_idx:paren_span(clean, open_idx)]))
+    return out
+
+
+def leaf_verdict(clean: str, call_start: int, fn_end: int, fn_name: str) -> str:
+    line_start = clean.rfind("\n", 0, call_start) + 1
+    lets = list(re.finditer(r"\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=", clean[line_start:call_start]))
+    if not lets:
+        return "unbound-leaf"
+    b = re.escape(lets[-1].group(1))
+    tail_end = fn_end
+    # a rebinding of B ends B's scope at the end of that line
+    rb = re.search(r"\blet\s+" + b + r"\s*(?::[^=]*)?=", clean[call_start:fn_end])
+    if rb:
+        eol = clean.find("\n", call_start + rb.end())
+        tail_end = fn_end if eol == -1 else min(fn_end, eol)
+    t0, tail = call_start, clean[call_start:tail_end]
+    adv = r"advance\s*\(\s*" + b + r"\.next_state\b"
+    if not re.search(adv, tail):
+        return "un-advanced-and-unwitnessed"
+    for m in re.finditer(r"\b" + b + r"\.next_state\b", tail):
+        if not re.search(r"advance\s*\(\s*$", tail[:m.start()]):
+            return "un-advanced-carry"
+    cands = [adv]
+    vm = re.search(r"\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=\s*" + adv, tail)
+    if vm:
+        cands.append(r"\b" + re.escape(vm.group(1)) + r"\b(?!\s*[:=(])")
+    carry = "(?:" + "|".join(cands) + ")"
+    wits = witness_calls(clean, t0, fn_end)
+    w = next((ws for ws, args in wits if re.search(carry, args)), None)
+    field = re.search(r"\b[A-Za-z_][A-Za-z0-9_]*\s*:\s*" + carry, clean[t0:fn_end])
+    field_at = None if field is None else t0 + field.start()
+    if w is not None:
+        if field_at is not None and field_at < w:
+            return "witnessed-after-construction"
+        return "clean"
+    if field_at is not None and any(ws > field_at for ws, _ in wits):
+        return "witnessed-after-construction"
+    if fn_name in RETURNING:
+        return "returned"
+    return "advanced-unwitnessed"
+
+
+def order_check(repo: Path, leaves, texts: dict | None = None):
+    """Attach a verdict to each leaf; check RECEIPTS. Returns (leaves, receipt_rows)."""
+    texts = texts or {}
+    cache = {}
+
+    def clean_of(rel):
+        if rel not in cache:
+            cache[rel] = strip_noise(texts.get(rel) or (repo / rel).read_text())
+        return cache[rel]
+
+    clean_verdict_at = {}
+    for leaf in leaves:
+        clean = clean_of(leaf["file"])
+        spans = func_spans(clean)
+        # re-locate the call on its line (offsets, not line numbers, drive the check)
+        ls = 0
+        for _ in range(leaf["line"] - 1):
+            ls = clean.find("\n", ls) + 1
+        le = clean.find("\n", ls)
+        m = CALL_RE.search(clean, ls, len(clean) if le == -1 else le)
+        encl = enclosing(spans, ls)
+        if m is None or encl is None:
+            leaf["order"], leaf["function"] = "unlocated", None
+            continue
+        _, fe, fn = encl
+        leaf["function"] = fn
+        leaf["order"] = leaf_verdict(clean, m.start(), fe, fn)
+        clean_verdict_at[(leaf["file"], m.start())] = leaf["order"]
+
+    rows = []
+    for helper, rel, fn, bind_re, succ in RECEIPTS:
+        clean = clean_of(rel)
+        span = next(((s, e) for s, e, n in func_spans(clean) if n == fn), None)
+        row = {"helper": helper, "file": rel, "function": fn, "successor": succ}
+        if span is None:
+            rows.append({**row, "line": None, "verdict": "receipt-function-missing"})
+            continue
+        s, e = span
+        bm = re.compile(bind_re).search(clean, s, e)
+        if bm is None:
+            rows.append({**row, "line": None, "verdict": "receipt-binding-missing"})
+            continue
+        row["line"] = clean.count("\n", 0, bm.start()) + 1
+        use = re.compile(r"\b" + re.escape(succ) + r"\b").search(clean, bm.end(), e)
+        if use is None:
+            rows.append({**row, "verdict": "receipt-dropped"})
+            continue
+        verdict = "receipt-used-before-witness"
+        for ws, args in witness_calls(clean, bm.end(), e):
+            if ws < use.start() < ws + len("witness") + len(args) + 1:
+                verdict = "clean"
+                break
+        if verdict != "clean":
+            for cm in CALL_RE.finditer(clean, bm.end(), use.start()):
+                open_idx = cm.end() - 1
+                if use.start() < paren_span(clean, open_idx) and \
+                        clean_verdict_at.get((rel, cm.start())) == "clean":
+                    verdict = "clean"
+                    break
+        rows.append({**row, "verdict": verdict})
+    return leaves, rows
+
+
 def check_helpers(repo: Path):
     """Every aggregate helper must be defined somewhere in src/core."""
     blob = ""
@@ -231,6 +457,12 @@ def main() -> int:
     leaves = scan_leaves(repo)
     missing_helpers = check_helpers(repo)
     unresolved = [l for l in leaves if l["class"] is None]
+    leaves, receipts = order_check(repo, leaves)
+    out_of_order = [l for l in leaves
+                    if l["class"] is not None and l.get("order") not in CLEAN_VERDICTS]
+    unreceived = [r for r in receipts if r["verdict"] != "clean"]
+    unowned = sorted({l["function"] for l in leaves
+                      if l.get("order") == "returned" and l["function"] not in RETURNING})
 
     by_class: dict[str, int] = {}
     for leaf in leaves:
@@ -251,13 +483,25 @@ def main() -> int:
             "exempt_rows": EXEMPT_ROWS,
             "request_class": REQUEST_CLASS,
             "unresolved": unresolved,
+            "receipts": receipts,
+            "bootstrap_chain_hand_maintained": BOOTSTRAP_CHAIN,
+            "out_of_order": out_of_order,
         }, indent=2))
     else:
         print(f"driver leaf inventory ({len(leaves)} sites, "
-              f"{len(unresolved)} unresolved):")
+              f"{len(unresolved)} unresolved, {len(out_of_order)} out of order):")
         for leaf in leaves:
             tag = leaf["class"] or leaf["status"]
-            print(f"  {leaf['file']}:{leaf['line']:<5} {leaf['site']:<28} {tag}")
+            print(f"  {leaf['file']}:{leaf['line']:<5} {leaf['site']:<28} {tag:<10} "
+                  f"{leaf.get('order')}  [{leaf.get('function')}]")
+        print()
+        print(f"receipts ({len(receipts)}, {len(unreceived)} red):")
+        for r in receipts:
+            print(f"  {r['file']}:{r['line'] or '?':<5} {r['helper']:<26} "
+                  f"{r['successor']:<20} {r['verdict']}  [{r['function']}]")
+        print("hand-maintained (cross-function; runtime-covered by make world_framed_wire):")
+        for c in BOOTSTRAP_CHAIN:
+            print(f"  - {c}")
         print()
         print("by RequestClass: " + ", ".join(
             f"{k}={by_class.get(k, 0)}" for k in REQUEST_CLASS))
@@ -268,7 +512,13 @@ def main() -> int:
         print(f"exempt ExtPorts fields ({len(EXEMPT_FIELDS)}): "
               + ", ".join(EXEMPT_FIELDS))
         print(f"RequestClass frozen: {', '.join(REQUEST_CLASS)}")
-    fails = list(unresolved) + missing_helpers
+        for l in out_of_order:
+            print(f"FAIL order: {l['file']}:{l['line']} {l['site']} -> {l.get('order')} [{l.get('function')}]")
+        for r in unreceived:
+            print(f"FAIL receipt: {r['file']}:{r['line']} {r['helper']} {r['successor']} -> {r['verdict']} [{r['function']}]")
+        for fn in unowned:
+            print(f"FAIL returning helper not in RETURNING: {fn}")
+    fails = list(unresolved) + missing_helpers + out_of_order + unreceived + unowned
     return 1 if fails else 0
 
 
@@ -297,6 +547,7 @@ def self_test(repo: Path) -> int:
     present = {str(p.relative_to(fixtures)) for p in fixtures.glob("*.ail")}
     for rel in sorted(present - set(expected["fixtures"])):
         fails.append(f"{rel}: fixture present but not declared in expected.json")
+    fails += tree_mutants(repo)
     print(f"\nself-test: {len(fails)} failure(s)")
     for f in fails:
         print(f"  FAIL {f}")
@@ -304,36 +555,89 @@ def self_test(repo: Path) -> int:
 
 
 def classify_fixture(clean: str) -> str:
-    """Classify one fixture's stripped source into the four verdicts.
+    """Classify one fixture's stripped source through the TREE's verdict.
 
-    `advance`/`witness` stub DEFINITIONS (`export func advance(`) are not
-    calls: only call sites count. A call is an occurrence not preceded by
-    `func <name>` on the same line.
+    The fixture's helped leaves are found with the tree's CALL_RE/HELPED and
+    judged by `leaf_verdict` — the function `order_check` applies at the 24
+    production sites — so the four fixtures test the tree check itself, not a
+    fixture-only classifier. A fixture's verdict is its first non-clean leaf's.
     """
-    def call_positions(name: str) -> list[int]:
-        out = []
-        for mm in re.finditer(name + r"\s*\(", clean):
-            line_start = clean.rfind("\n", 0, mm.start()) + 1
-            prefix = clean[line_start:mm.start()]
-            if re.search(r"func\s+" + name + r"\s*$", prefix):
-                continue  # stub definition, not a call
-            out.append(mm.start())
-        return out
+    spans = func_spans(clean)
+    verdicts = []
+    for m in CALL_RE.finditer(clean):
+        if HELPED.get(m.group("recv") + "." + m.group("method")) is None:
+            continue
+        encl = enclosing(spans, m.start())
+        if encl is None:
+            verdicts.append("unlocated")
+            continue
+        verdicts.append(leaf_verdict(clean, m.start(), encl[1], encl[2]))
+    if not verdicts:
+        return "no-helped-leaf"
+    return next((v for v in verdicts if v not in CLEAN_VERDICTS), verdicts[0])
 
-    adv_calls = call_positions("advance")
-    wit_calls = call_positions("witness")
-    m = re.search(r"\{\s*world_state\s*:", clean)
-    has_record = m is not None
-    if not adv_calls:
-        return "un-advanced-and-unwitnessed"
-    if adv_calls and wit_calls and has_record:
-        # order: any witness call after the record literal?
-        if any(w > m.start() for w in wit_calls):
-            return "witnessed-after-construction"
-        return "clean"
-    if adv_calls and not wit_calls:
-        return "advanced-unwitnessed"
-    return "clean"
+
+# In-memory mutants of the REAL tree: each is one same-line textual edit (so
+# line numbers do not move) that must turn the tree check red at a named site.
+# The fixtures prove the verdict function on toy sources; these prove it still
+# bites on session.ail/tool_phase.ail as they stand. A mutant whose anchor text
+# is gone fails the self-test — a stale mutant is not a passing one.
+TREE_MUTANTS = [
+    ("witness moved after the approval record",
+     "src/core/session.ail",
+     "let approved = witness(session_id, trace_with_decision, advance(input.next_state, ToolExec)); "
+     "let post: C2LoopState = { st | world_state: approved.world };",
+     "let post0: C2LoopState = { st | world_state: advance(input.next_state, ToolExec) }; "
+     "let approved = witness(session_id, trace_with_decision, post0.world_state); "
+     "let post: C2LoopState = { st | world_state: approved.world };",
+     ("leaf", "st.provider.approval_read", {"witnessed-after-construction"})),
+    ("tool_exec successor returned un-advanced",
+     "src/core/tool_phase.ail",
+     "next_state: advance(execution.next_state, ToolExec),",
+     "next_state: execution.next_state,",
+     ("leaf", "ports.tool_exec", {"un-advanced-and-unwitnessed", "un-advanced-carry"})),
+    ("dispatch_step's successor not witnessed on receipt",
+     "src/core/session.ail",
+     "exchange.next_state); let trace_after_call = stepped.trace;",
+     "st.world_state); let trace_after_call = stepped.trace;",
+     ("receipt", "exchange.next_state", {"receipt-dropped", "receipt-used-before-witness"})),
+    ("exit-publish read never witnessed",
+     "src/core/session.ail",
+     "let seen = witness(session_id, trace, named_world);",
+     "let seen = { trace: trace, world: named_world };",
+     ("leaf", "ports.env_get@publish_turn_exit_manifest",
+      {"advanced-unwitnessed", "witnessed-after-construction"})),
+]
+
+
+def tree_mutants(repo: Path) -> list[str]:
+    fails = []
+    for name, rel, old, new, (kind, key, want) in TREE_MUTANTS:
+        text = (repo / rel).read_text()
+        if text.count(old) != 1:
+            fails.append(f"mutant '{name}': anchor text occurs {text.count(old)} time(s) in {rel}, expected 1 (stale mutant)")
+            continue
+        leaves, receipts = order_check(repo, scan_leaves(repo), {rel: text.replace(old, new)})
+        if kind == "leaf":
+            site, _, fn = key.partition("@")
+            hits = [l for l in leaves if l["file"] == rel and l["site"] == site
+                    and (not fn or l.get("function") == fn)]
+            got = sorted({l.get("order") for l in hits})
+        else:
+            got = sorted({r["verdict"] for r in receipts if r["successor"] == key})
+        if set(got) & want:
+            print(f"  ok  mutant: {name:<48} [{', '.join(got)}]")
+        else:
+            fails.append(f"mutant '{name}': expected one of {sorted(want)}, got {got} — the tree check did not go red")
+    # and the unmutated tree must be clean, or the mutants prove nothing
+    leaves, receipts = order_check(repo, scan_leaves(repo))
+    dirty = [l for l in leaves if l.get("order") not in CLEAN_VERDICTS] + \
+            [r for r in receipts if r["verdict"] != "clean"]
+    if dirty:
+        fails.append(f"unmutated tree is not clean ({len(dirty)} red) — mutant reds are not attributable")
+    else:
+        print(f"  ok  unmutated tree: {len(leaves)} leaves clean/returned, {len(receipts)} receipts clean")
+    return fails
 
 
 if __name__ == "__main__":

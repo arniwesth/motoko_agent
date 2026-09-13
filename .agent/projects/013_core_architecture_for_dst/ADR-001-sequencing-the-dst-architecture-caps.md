@@ -459,6 +459,24 @@ Six parts.
    with a hand-maintained inventory and this ADR is amended to say the **no-bypass gate is
    missing** and the coverage claim is restricted to the listed sites.
 
+   *Amended at PLAN-001 P2D (2026-09-13) — partial fallback, recorded.* The script
+   (`tools/driver_leaf_inventory/derive.py`) was built and is green, and at P2D its **tree**
+   scan checks order-of-witness, not only the fixtures. That check runs textually, inside one
+   function, at all 24 helped leaves and at 6 receipt bindings in `session.ail`. The four
+   fixtures go through the same verdict function. Four in-memory mutants of the real tree must
+   go red: a witness moved after the approval record, an un-advanced `tool_exec` successor, a
+   dropped `dispatch_step` receipt, and an unwitnessed exit-publish read. The **no-bypass gate
+   is therefore present for in-function order**. The coverage claim is **restricted** in two
+   places:
+   - **Cross-function links are hand-maintained, not derived.** These are policy init and the
+     eight `context_usage` reads reaching the entry's start-clock witness through
+     `{ pp | world: init.next_state }` (the Bootstrap bullet above), and
+     `execute_allowed_tool_call`'s successor threading through
+     `dispatch_tool_entries_with_builtin` to `ToolDispatchDone`/`ToolDispatchPending`. They are
+     listed in the script's `BOOTSTRAP_CHAIN` and covered at runtime only by part 3's frame gate.
+   - **A whole-record drop (`st` for `post`) has no textual shape.** Part 3's repeated-ordinal
+     red is its only instrument.
+
 **What D2 does not touch.** The four WI-D4 sites and their comment. The adapters. Extension-side
 drops. `LedgerEvent` beyond the one new variant. **D2 is D6-gated.**
 
