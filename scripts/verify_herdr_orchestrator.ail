@@ -153,6 +153,13 @@ func is_deny(d: ToolPolicyDecision) -> bool {
   match d { Deny(_) => true, _ => false }
 }
 
+-- Pattern matches, not `==`: `ToolPolicyDecision`'s derived Eq was not in scope
+-- when this ran from the main tree (it was in the worktree), and a match needs
+-- no instance at all.
+func is_noop(d: ToolPolicyDecision) -> bool {
+  match d { NoOpinion => true, _ => false }
+}
+
 func check(label: string, ok: bool, detail: string) -> int ! {IO} {
   if ok then { println("OK: ${label}"); 0 }
   else { println("FAIL: ${label} — ${detail}"); 1 }
@@ -176,7 +183,7 @@ func case_atoms() -> int ! {IO, Process, FS, Clock} {
   check("atoms are registered in canonical order", on == expected, on)
   + check("atoms are registered through the old make_hooks too", kinds(legacy) == expected, kinds(legacy))
   + check("off: the old make_hooks appends no note and has no opinion on an edit",
-          length_of(legacy_patch.append) == 0 && length_of(legacy_patch.prepend) == 0 && legacy_policy == NoOpinion,
+          length_of(legacy_patch.append) == 0 && length_of(legacy_patch.prepend) == 0 && is_noop(legacy_policy),
           show_decision(legacy_policy))
 }
 
@@ -204,10 +211,10 @@ func case_policy() -> int ! {IO, Process, FS, Clock} {
   + check("on: a sed -i into scripts/ is denied",
           is_deny(policy_of(caps, ctx, bash_call("sed -i 's/a/b/' scripts/dst/strict_replay_dst.ail"))), "")
   + check("on: a detached make dst is the orchestrator's own verification",
-          policy_of(caps, ctx, bash_call("nohup env -u AILANG_FS_SANDBOX make dst DST_JOBS=2 > .ailang/dst.out 2>&1 &")) == NoOpinion, "")
-  + check("on: reading source is allowed", policy_of(caps, ctx, read_call("src/core/session.ail")) == NoOpinion, "")
+          is_noop(policy_of(caps, ctx, bash_call("nohup env -u AILANG_FS_SANDBOX make dst DST_JOBS=2 > .ailang/dst.out 2>&1 &"))), "")
+  + check("on: reading source is allowed", is_noop(policy_of(caps, ctx, read_call("src/core/session.ail"))), "")
   + check("on: writing a handoff is allowed",
-          policy_of(caps, ctx, write_call(".agent/projects/013_core_architecture_for_dst/HANDOFF.md")) == NoOpinion, "")
+          is_noop(policy_of(caps, ctx, write_call(".agent/projects/013_core_architecture_for_dst/HANDOFF.md"))), "")
 }
 
 func case_hatch() -> int ! {IO, Process, FS, Clock} {
@@ -225,8 +232,8 @@ func case_hatch() -> int ! {IO, Process, FS, Clock} {
     msg("user", "Now carry on with P3ORD.")
   ]);
   let quoted_by_model = mk_ctx([msg("user", "Carry on."), msg("assistant", "I could use ${direct_marker()}")]);
-  check("the operator's marker lifts the policy", policy_of(caps, lifted, call) == NoOpinion, "")
-  + check("a later guard injection does not re-impose it", policy_of(caps, through_guard, call) == NoOpinion, "")
+  check("the operator's marker lifts the policy", is_noop(policy_of(caps, lifted, call)), "")
+  + check("a later guard injection does not re-impose it", is_noop(policy_of(caps, through_guard, call)), "")
   + check("a later operator message without the marker re-imposes it", is_deny(policy_of(caps, reimposed, call)), "")
   + check("the model cannot lift it by writing the marker itself", is_deny(policy_of(caps, quoted_by_model, call)), "")
 }
