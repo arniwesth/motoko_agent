@@ -87,7 +87,7 @@ import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity, WakeIdentity,
   TimedOutcome, OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
   StreamChunkRecord,
   all_interaction_kinds, interaction_kind, total_advance_ms
@@ -96,7 +96,8 @@ import src/core/dst_interaction (
 import src/core/ports (
   WorldState, empty_world_state, ScriptedStep,
   ToolOutcome, ToolCompleted, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded,
-  encode_tool_outcome, encode_provider_outcome
+  encode_tool_outcome, encode_provider_outcome,
+  WakeInput, Settled, wake_payload
 )
 
 -- ADR-003 v6.1 D4. The fixture runs nothing, so its comparand is the empty
@@ -191,8 +192,9 @@ pure func provider_0() -> Interaction {
 
 -- THE FIXTURE'S INTERACTION LOG.
 --
--- Sixteen interactions: 2 provider, 4 tool, 6 approval, and one each of the
--- four singleton classes. Ordinals are dense and ascending because
+-- Twenty-one interactions: 2 provider, 4 tool, 6 approval, 2 file write, and
+-- one each of the seven singleton classes (environment read, clock advance,
+-- random draw, extension effect, file remove, directory create, wake). Ordinals are dense and ascending because
 -- `record_interaction` assigns them from the log's own length and nothing else
 -- may.
 --
@@ -294,7 +296,19 @@ pure func fixture_log() -> [Interaction] {
    -- row's assertion. `deadline_ms: -1`, because a directory create has no
    -- timeout at the seam — `class_has_deadline` says so and `mk` reads it.
    mk(19, DirMakeIdentity("/w/tmp"),
-      "dir_make path=/w/tmp", -1, ok_out(0, ""))]
+      "dir_make path=/w/tmp", -1, ok_out(0, "")),
+   -- PLAN-002 W4 Part 4's wake read, the eleventh D2 class. APPENDED, for the
+   -- reason written at WI-D17 and WI-D18 above. It is the row `recording_wake`
+   -- records for a SERVED read: `deadline_ms: 0` because `class_has_deadline`
+   -- says a wake has one and none is routed, and the payload is built by
+   -- `ports.wake_payload` itself rather than spelled as a JSON literal, so the
+   -- `wakes_of` decode that `StrictAgainst(fixture_log())` drives reads the
+   -- recorder's own shape and cannot drift from it. `ok_out`, because
+   -- `count_status(log, "missing") == 1` is the approval end-of-input row's.
+   mk(20, WakeIdentity("loop_v2", "sid.r0.0.p0", "h1"),
+      "wake_read request_id=sid.r0.0.p0 step=2 attempt=0 waits=1", 0,
+      ok_out(0, wake_payload({ request_id: "sid.r0.0.p0", wait_id: "h1", outcome: Settled("answer"),
+                               next_state: empty_world_state() }, 0)))]
 }
 
 pure func fixture_advance() -> int { total_advance_ms(fixture_log()) }

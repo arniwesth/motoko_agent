@@ -2287,7 +2287,7 @@ pure func test_rules_are_distinct_across_families() -> bool
   tests [((), true)]
   {
     let vs = sample_violations();
-    List.length(vs) == 39 && rules_distinct(vs, [])
+    List.length(vs) == 40 && rules_distinct(vs, [])
   }
 
 pure func rules_distinct(vs: [Violation], seen: [string]) -> bool {
@@ -2319,7 +2319,8 @@ pure func sample_violations() -> [Violation] {
    ClockBalance(1, 0),
    GeneratorBoundFailure("b", 1, 2), HarnessFailureObserved("k", 0), AmbientRngRead(1),
    ForbiddenEffectSite("s"),
-   JournalFoldDisagrees("history"), JournalPayloadDisagrees("seed.digest")]
+   JournalFoldDisagrees("history"), JournalPayloadDisagrees("seed.digest"),
+   ParkPayloadDisagrees("park_entered.step")]
 }
 
 -- Every sample must map to a family D7 names, and every family must be reached
