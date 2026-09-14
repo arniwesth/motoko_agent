@@ -1147,18 +1147,38 @@ export pure func wake_outcome_of(id: string, detail: string) -> Option[WakeOutco
   else None
 }
 
+-- PLAN-003 P4 Part 2 (ADR-003 v6.1 D7): THE CURSOR READ, factored out of
+-- `scripted_wake`'s head arm so that the LIVE binding can consult it first. The
+-- head of `WorldState.wakes` becomes the reply, `Some`, and the successor is
+-- the queue advanced past it, then ONE `advance` of class `WakeRead` (the port
+-- advances; the `Park` arm owes the witness). An empty queue is `None`, and
+-- the CALLER says what that means: `scripted_wake` falls through to
+-- `wake_read_unbound`, `live_ports`' `wake_read` asks the host. A durable
+-- park's answer arrives through the journal — the resumer (Part 3) seeds this
+-- cursor from the `wake` entry the host wrote (Part 5) — which is why the live
+-- binding reads it before it prints a `wake_request`. The request is taken and
+-- not consulted, exactly as the head arm never consulted it: matching a served
+-- observation against the request is the `Park` arm's (`wake_matches`).
+export pure func cursor_wake(state: WorldState, _req: ParkRequest) -> Option[WakeInput] {
+  match state.wakes {
+    [] => None,
+    w :: rest => Some({ request_id: w.request_id, wait_id: w.wait_id, outcome: w.outcome,
+                        next_state: advance_ordinal({ state | wakes: rest }, WakeRead) })
+  }
+}
+
 -- PLAN-002 W4 Part 4 (ADR-002 D2): THE SCRIPTED WAKE, `scripted_approval`'s
 -- twin. The head of `WorldState.wakes` becomes the reply, and the adapter
 -- builds the successor: the queue advanced past it, then ONE `advance` of
 -- class `WakeRead` (the port advances; the `Park` arm owes the witness). An
 -- EMPTY QUEUE FALLS THROUGH TO `wake_read_unbound`: a `HostError`, never a hang
 -- and never a fabricated wake. A fixture supplies observations, never worlds
--- (§1 row 8).
+-- (§1 row 8). PLAN-003 P4 Part 2 moved the head arm to `cursor_wake` above;
+-- the behaviour is byte-identical.
 export func scripted_wake(state: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
-  match state.wakes {
-    [] => wake_read_unbound(state, req),
-    w :: rest => { request_id: w.request_id, wait_id: w.wait_id, outcome: w.outcome,
-                   next_state: advance_ordinal({ state | wakes: rest }, WakeRead) }
+  match cursor_wake(state, req) {
+    Some(w) => w,
+    None => wake_read_unbound(state, req)
   }
 }
 
@@ -1237,6 +1257,32 @@ func test_wake_read_unbound_leaves_the_cursors_alone() -> bool ! {IO}
                   wakes: [{ request_id: "q", wait_id: "w", outcome: TimedOut }] };
     let r = wake_read_unbound(world, test_park_request());
     List.length(r.next_state.approvals) == 1 && List.length(r.next_state.wakes) == 1
+  }
+
+-- PLAN-003 P4 Part 2 (ADR-003 v6.1 D7): THE RECORDING BINDING, ASSERTED AND
+-- NOT CHANGED. Over a world seeded with the re-issued `<R'>.p0`, `recording_wake`
+-- serves the observation and records exactly ONE
+-- `WakeIdentity("loop_v2", "<R'>.p0", wait_id)` with `OutcomeOk`. The resumer
+-- (Part 3) seeds the cursor and relies on this; if it ever fails, the fault is
+-- W4 Part 4's, not P4's.
+func test_recording_wake_records_the_reissued_request_once_as_ok() -> bool ! {IO}
+  tests [((), true)]
+  {
+    let world = { empty_world_state() |
+                  wakes: [{ request_id: "p4.r1.0.p0", wait_id: "h1", outcome: Settled("the answer") }] };
+    let r = recording_wake(world, { request_id: "p4.r1.0.p0", step: 0, waits: [], attempt: 0 });
+    r.request_id == "p4.r1.0.p0" && r.wait_id == "h1"
+      && (match r.outcome { Settled(d) => d == "the answer", _ => false })
+      && List.length(r.next_state.wakes) == 0
+      && (match r.next_state.log {
+            i :: [] =>
+              (match i.identity.body {
+                 WakeIdentity(o, q, w) => o == "loop_v2" && q == "p4.r1.0.p0" && w == "h1",
+                 _ => false
+               })
+                && (match i.outcome.status { OutcomeOk => true, _ => false }),
+            _ => false
+          })
   }
 
 -- The deterministic clock: serve the world's own value, advance it by one
@@ -2829,7 +2875,11 @@ export func ports_shape_probe(
     tool_exec: world_tool,
     -- WI-D24. The DETERMINISTIC default, exactly as `tool_exec` takes
     -- `world_tool`: a live run reaches it through `live_ports`, which overrides
-    -- neither, and a recording run overrides both in `stub_step`.
+    -- neither, and a recording run overrides both in `stub_step`. Of the
+    -- bindings `live_ports` DOES override, `wake_read` is the one live binding
+    -- that consults a world cursor (`cursor_wake` first, the host second),
+    -- because a durable park's answer arrives through the journal (ADR-003 D7,
+    -- PLAN-003 P4 Part 2).
     ext_effect_exec: world_ext_effect
   }
 }

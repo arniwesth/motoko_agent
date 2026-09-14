@@ -367,6 +367,17 @@ ledger_parity:
 park_wake:
 	./scripts/dst/run_park_wake.sh
 
+# PLAN-003 P4 (ADR-003 v6.1 D7). The park-resume rows. Part 2's row: the live
+# `wake_read` serves a seeded `wakes` cursor without printing a `wake_request`
+# or reading stdin, because a durable park's answer arrives through the journal.
+# The shell runs it with stdin from /dev/null, so a binding that asks the host
+# gets `Aborted`/"eof" and the row is red rather than hung; the shell also
+# counts the `wake_request` lines the returned value cannot show. Part 3 adds
+# the resumer's rows.
+.PHONY: park_resume
+park_resume:
+	./scripts/dst/run_park_resume.sh
+
 .PHONY: world_framed_wire
 world_framed_wire:
 	./scripts/dst/run_world_framed_wire.sh --selftest
@@ -497,7 +508,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
   registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest \
-  herdr_graded journal_resume world_framed_wire park_wake
+  herdr_graded journal_resume world_framed_wire park_wake park_resume
 
 # The graded session for a herdr DST profile (021 step 2's demonstration half).
 #

@@ -1,0 +1,114 @@
+-- scripts/dst/park_resume_dst.ail
+--
+-- PLAN-003 P4 (ADR-003 v6.1 D7): the park-resume gate. A durable park's
+-- answer arrives through the journal: the host writes the `wake` entry as the
+-- `park` entry's child (Part 5), and the resumer (Part 3) folds it and seeds
+-- the `wakes` cursor with the re-issued `<R'>.p0`. For that to work, the LIVE
+-- `wake_read` must read the cursor before it asks the host, which is P4 Part 2
+-- and this file's first row.
+--
+-- Part 2 lands the file with that one row, specified in PLAN-003 §P4 Part 2:
+--   on a world seeded with one `Settled` observation, `live_ports(rt).wake_read`
+--   returns that observation. The Make target runs it with stdin from
+--   `/dev/null`, so at the base revision the live binding prints a
+--   `wake_request`, `readLine` returns "", and the reply is `Aborted` with
+--   `wait_id "eof"` (`stub_step.ail`, `live_wake_await`): red, and it cannot
+--   hang. After Part 2 the cursor is served first, no `wake_request` is
+--   printed and no stdin is read, because the host has already answered.
+-- Part 3 adds the resumer's rows (fold `Parked`, seed `<R'>.p0`, consume it,
+-- open the run at `initial_park_ordinal(true)`), on `park_wake_dst.ail`'s
+-- scripted-runner shape.
+--
+-- What the in-process row cannot see is on stdout, and `run_park_resume.sh`
+-- reads it: the `wake_request` count inside the row's frame, which must be
+-- zero. Frames are `PARK_RESUME_BEGIN <label>` / `PARK_RESUME_END <label>`.
+
+module scripts/dst/park_resume_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import src/core/test/stub_step (live_ports, empty_rt)
+import src/core/ports (WorldState, ParkRequest, WakeObservation, RequestWitness, WakeRead, Settled, empty_world_state, wake_outcome_id, wake_outcome_detail)
+
+-- ---------------------------------------------------------------------------
+-- Reporting
+-- ---------------------------------------------------------------------------
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+pure func all_true(xs: [bool]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => x && all_true(rest)
+  }
+}
+
+pure func wake_read_witnesses(ws: [RequestWitness]) -> int {
+  match ws {
+    [] => 0,
+    w :: rest => (match w.request_class { WakeRead => 1, _ => 0 }) + wake_read_witnesses(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The re-issued request. `<R'>.p0` is `between_turn_request_id(session_id,
+-- profile, resume_count, 0)` (`session.ail`), the id PLAN-002 §8.4 gives the
+-- request that opens a resumed run's waiting; a resumed frame has
+-- `resume_count` 1 and `run_ordinal` 0. Part 3 builds the real one from the
+-- folded journal; this row needs only its shape.
+-- ---------------------------------------------------------------------------
+
+pure func reissued_p0() -> string { "p4.r1.0.p0" }
+
+pure func reissued_request() -> ParkRequest {
+  { request_id: reissued_p0(), step: 0, waits: [], attempt: 0 }
+}
+
+pure func seeded_observation() -> WakeObservation {
+  { request_id: reissued_p0(), wait_id: "h1", outcome: Settled("the answer") }
+}
+
+pure func seeded_world() -> WorldState {
+  { empty_world_state() | wakes: [seeded_observation()] }
+}
+
+-- ---------------------------------------------------------------------------
+-- Part 2's row: the live wake_read reads the cursor first
+-- ---------------------------------------------------------------------------
+
+func row_live_wake_read_serves_the_cursor() -> bool ! {AI, Clock, Env, FS, IO} {
+  let _ = println("live wake_read reads the cursor first (P4 Part 2, ADR-003 D7):");
+  let world = seeded_world();
+  let req = reissued_request();
+  let _ = println("PARK_RESUME_BEGIN live_cursor");
+  let ports = live_ports(empty_rt());
+  let r = ports.wake_read(world, req);
+  let _ = println("PARK_RESUME_END live_cursor");
+  let detail = "request_id=${r.request_id} wait_id=${r.wait_id} outcome=${wake_outcome_id(r.outcome)} detail=${wake_outcome_detail(r.outcome)} wakes_left=${show(List.length(r.next_state.wakes))} ordinal=${show(r.next_state.ordinal)} wake_read_witnesses=${show(wake_read_witnesses(r.next_state.pending))}";
+  all_true([
+    report("live_cursor: the reply is the seeded Settled observation, not the host's",
+      r.request_id == reissued_p0() && r.wait_id == "h1"
+        && (match r.outcome { Settled(d) => d == "the answer", _ => false }),
+      detail),
+    report("live_cursor: the cursor is consumed", List.length(r.next_state.wakes) == 0, detail),
+    report("live_cursor: the world advanced once, class WakeRead",
+      r.next_state.ordinal == world.ordinal + 1 && wake_read_witnesses(r.next_state.pending) == 1,
+      detail)
+  ])
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("=== park_resume_dst (PLAN-003 P4, ADR-003 D7) ===");
+  let results = [
+    row_live_wake_read_serves_the_cursor()
+  ];
+  let _ = println("PARK_RESUME_ROWS ${show(List.length(results))}");
+  if all_true(results) then println("park_resume_dst PASS")
+  else {
+    let _ = println("park_resume_dst FAIL");
+    exit(1)
+  }
+}

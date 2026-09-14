@@ -41,7 +41,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision, ToolHandleDecision,
   ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PassThrough
 )
-import src/core/test/ext_fixture (fixture_hooks) import src/core/world_ordinal (advance) import src/core/ports (ModelStep, WakeRead, ParkRequest, WakeInput, WakeOutcome, OperatorInput, Aborted, wake_outcome_of, advance_ordinal, recording_wake) import std/json (Json, encode, decode, jo, kv, js, jnum, get, asString)  -- PLAN-002 W4 joined the wake names here too; B7; joined the line above so anchors.sh's :203 does not move (PLAN-001 P2 Part 1 joined `advance` here for the same reason)
+import src/core/test/ext_fixture (fixture_hooks) import src/core/world_ordinal (advance) import src/core/ports (ModelStep, WakeRead, ParkRequest, WakeInput, WakeOutcome, OperatorInput, Aborted, wake_outcome_of, advance_ordinal, recording_wake, cursor_wake) import std/json (Json, encode, decode, jo, kv, js, jnum, get, asString)  -- PLAN-002 W4 joined the wake names here too; B7; joined the line above so anchors.sh's :203 does not move (PLAN-001 P2 Part 1 joined `advance` here for the same reason)
 import src/core/types (Msg)
 -- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
 -- `WorldState` can carry it without either the port module or the driver
@@ -205,7 +205,9 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
   -- The live approval channel: the operator's stdin. `eof` is `raw == ""`,
   -- which is exactly the inference the driver used to make inline, so this is
   -- behaviour-preserving. The world is returned unchanged — D1's identity
-  -- transition; a live run's approvals are not a replayable cursor.
+  -- transition; a live run's approvals are not a replayable cursor. `wake_read`
+  -- below is the one live binding that consults a world cursor, because a
+  -- durable park's answer arrives through the journal (ADR-003 D7).
   let approval_read: (WorldState, ApprovalRequest) -> ApprovalInput ! {IO} =
     func(state: WorldState, _req: ApprovalRequest) -> ApprovalInput ! {IO} {
       let raw = readLine();
@@ -215,10 +217,22 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
   -- carrying the `ParkRequest`, then stdin until a matching `wake_reply` or a
   -- command (`live_wake_await`). Like every wake adapter it returns the world
   -- ADVANCED once, class `WakeRead`; the `Park` arm witnesses it.
+  --
+  -- PLAN-003 P4 Part 2 (ADR-003 v6.1 D7): THE CURSOR FIRST. This is the one
+  -- live binding that consults a world cursor, because a durable park's answer
+  -- arrives through the journal: the resumer (Part 3) seeds `wakes` with the
+  -- `wake` entry the host wrote as the `park` entry's child (Part 5), so a wake
+  -- served from the cursor emits NO `wake_request` and reads no stdin — the
+  -- host has already answered it. An empty cursor is W4's protocol, unchanged.
   let wake_read: (WorldState, ParkRequest) -> WakeInput ! {IO} =
     func(state: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
-      let _ = println(encode(wake_request_json(req)));
-      live_wake_await(state, req)
+      match cursor_wake(state, req) {
+        Some(w) => w,
+        None => {
+          let _ = println(encode(wake_request_json(req)));
+          live_wake_await(state, req)
+        }
+      }
     };
   -- The live environment: the process environment, world returned unchanged.
   --
