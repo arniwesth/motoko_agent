@@ -354,6 +354,26 @@ describe("the other journal-class events", () => {
     expect(lines(j).pop()).toMatchObject({ type: "settings", model: "claude-opus-5" });
   });
 
+  // ADR-003 D7 row 6: the wake is the park's CHILD, and it is because D1's `parent_id` is the leaf
+  // and nothing is appended between them — no branch operation exists. `waits` is copied as the
+  // child sent it; the fold decodes each element through `wait_descriptor_from_json`.
+  it("journals a park and its wake, the wake as the park's child", () => {
+    const j = open();
+    j.record({ type: "session_start", run_id: "r0" });
+    const waits = [
+      { id: "h1", delegate_kind: "codex", locator: { pane: "%3" }, answer_path: "/w/a.md", run_key: "k1" },
+      { id: "op" },
+    ];
+    expect(j.record({ type: "park_entered", request_id: "r0.p0", step: 2, waits })).toBe(1);
+    expect(j.record({ type: "wake_received", request_id: "r0.p0", wait_id: "h1", outcome: "settled", detail: "answer" })).toBe(1);
+    const all = lines(j);
+    expect(all.map((l) => l.type)).toEqual(["header", "run_started", "park", "wake"]);
+    const [, , park, wake] = all;
+    expect(park).toMatchObject({ request_id: "r0.p0", step: 2, waits });
+    expect(wake.parent_id).toBe(park.id);
+    expect(wake).toMatchObject({ request_id: "r0.p0", wait_id: "h1", outcome: "settled", detail: "answer" });
+  });
+
   it("ignores an event that is not journal-class", () => {
     const j = open();
     expect(j.record({ type: "thinking_delta", step: 1, text_delta: "x" })).toBe(0);
@@ -478,14 +498,15 @@ describe("the JSONL log's digest substitution", () => {
   });
 
   it("knows exactly which events are journal-class", () => {
-    for (const t of ["history_seeded", "history_appended", "history_replaced", "state_delta", "session_start", "run_summary", "model_change", "run_suspended", "session_resumed"]) {
+    // `park_entered` and `wake_received` are ADR-003 D7's, journal-class since PLAN-003 P4 Part 1:
+    // both have been on the wire since PLAN-002 W4 (`phase_vocab.ail` declares the `LedgerEvent`s,
+    // `runtime-process.ts` the host types), and `journal.ail` now has the `park` and `wake` entry
+    // types that hold them — its fold refuses an unknown `type`, so listing them here and adding
+    // the entry types are one change.
+    for (const t of ["history_seeded", "history_appended", "history_replaced", "state_delta", "session_start", "run_summary", "model_change", "run_suspended", "session_resumed", "park_entered", "wake_received"]) {
       expect(isJournalClass(t)).toBe(true);
     }
-    // `park_entered` and `wake_received` are ADR-003 D7's and DO NOT EXIST — no `LedgerEvent`
-    // declares them and ADR-002 D2 is not activated. Routing them would be worse than omitting
-    // them: `journal.ail` refuses an unknown entry `type` rather than skipping it, so a `park`
-    // entry written today would make every later fold refuse the whole file.
-    for (const t of ["park_entered", "wake_received", "thinking", "done", "error", "obs"]) {
+    for (const t of ["thinking", "done", "error", "obs"]) {
       expect(isJournalClass(t)).toBe(false);
     }
   });

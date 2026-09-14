@@ -57,7 +57,8 @@ import src/core/phase_vocab (
   digest_messages,
   LedgerRecord, WireRecord, LedgerEvent,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
-  SessionStart, RunSummary, RunSuspended,
+  SessionStart, RunSummary, RunSuspended, ParkEntered, WakeReceived,
+  OperatorWait, DelegateWait,
   SessionResumedInfo, system_prefix_digest_for
 )
 import src/core/recovery (count_persist_nudges)
@@ -2736,7 +2737,7 @@ pure func test_the_twin_writes_one_entry_per_message() -> bool
     List.length(lines) == 8
       && join_kinds(kinds) == "header,run_started,history_appended,history_appended,history_appended,history_appended,state_delta,run_finished"
       && journal_leaf(lines) == "0007"
-      && List.length(all_entry_types()) == 10
+      && List.length(all_entry_types()) == 12
   }
 
 pure func line_kind(j: Json) -> string {
@@ -3133,11 +3134,13 @@ pure func test_settings_resumed_and_exit_entries() -> bool
             Ok(_) => false,
             Err(e) => match e { Entry(seq, f) => seq == 8 && f == "pending_tool_calls", _ => false }
           })
-      -- AN UNKNOWN TYPE IS REFUSED, which is what keeps P4's `park` and `wake`
-      -- from being silently skipped by a fold that predates them.
-      && (match t_fold(mutate_field(lines, 6, "type", js("park"))) {
+      -- AN UNKNOWN TYPE IS REFUSED, not skipped. Until PLAN-003 P4 Part 1 the
+      -- unknown type this row used was `park`; `park` is an entry now, so the
+      -- row keeps its refusal on a type nothing will ever write (W3 flip 2's
+      -- pattern: the mutation moves, the rule stays).
+      && (match t_fold(mutate_field(lines, 6, "type", js("not_an_entry"))) {
             Ok(_) => false,
-            Err(e) => match e { Entry(seq, f) => seq == 6 && f == "type=park", _ => false }
+            Err(e) => match e { Entry(seq, f) => seq == 6 && f == "type=not_an_entry", _ => false }
           })
   }
 
@@ -3373,4 +3376,89 @@ pure func test_crash_resume_replacement_folds() -> bool
         }
       }
     }
+  }
+
+-- ---------------------------------------------------------------------------
+-- PLAN-003 P4 Part 1 (ADR-003 D7): the `park` and `wake` entries.
+-- ---------------------------------------------------------------------------
+
+pure func t_park_request() -> string { "sess_1.r0.0.p0" }
+
+-- The waits a park carries: a delegate wait and an operator wait, one of each
+-- shape the descriptor codec (`phase_vocab.wait_descriptor_from_json`) reads.
+pure func t_park_waits_json() -> Json {
+  ja([jo([kv("id", js("h1")), kv("delegate_kind", js("codex")), kv("locator", jo([kv("pane", js("%3"))])),
+          kv("answer_path", js("/w/.motoko/herdr-delegates/answer-h1.md")), kv("run_key", js("k1"))]),
+      jo([kv("id", js("op"))])])
+}
+
+pure func t_park() -> LedgerRecord {
+  WireRecord(ParkEntered({
+    request_id: t_park_request(), step: 2,
+    waits: [DelegateWait({ id: "h1", delegate_kind: "codex", locator: { pane: "%3" },
+                           answer_path: "/w/.motoko/herdr-delegates/answer-h1.md", run_key: "k1" }),
+            OperatorWait({ id: "op" })]
+  }))
+}
+
+pure func t_wake(outcome: string) -> LedgerRecord {
+  WireRecord(WakeReceived({ request_id: t_park_request(), wait_id: "h1", outcome: outcome, detail: "answer" }))
+}
+
+-- `park` and `wake` lines built the way the HOST builds them (`session-journal.ts`
+-- `record`), as `t_exit_line` is. The entry's shape is the host's; a fixture that
+-- only ever went through the twin would let the two producers drift apart.
+pure func t_park_line(seq: int, parent: string) -> Json {
+  jo([kv("id", js(entry_id(seq))), kv("parent_id", js(parent)), kv("seq", jint(seq)), kv("at_ms", jint(seq)),
+      kv("type", js("park")),
+      kv("request_id", js(t_park_request())), kv("step", jint(2)), kv("waits", t_park_waits_json())])
+}
+
+pure func t_wake_line(seq: int, parent: string, outcome: string) -> Json {
+  jo([kv("id", js(entry_id(seq))), kv("parent_id", js(parent)), kv("seq", jint(seq)), kv("at_ms", jint(seq)),
+      kv("type", js("wake")),
+      kv("request_id", js(t_park_request())), kv("wait_id", js("h1")), kv("outcome", js(outcome)), kv("detail", js("answer"))])
+}
+
+pure func line_field(j: Json, key: string) -> string {
+  match getString(j, key) { None => "?", Some(s) => s }
+}
+
+-- A run's journal up to the point it parks: seed, one delta.
+pure func t_run_lines() -> [Json] {
+  journal_lines_of_records(harness_header(t_identity(), "m"), [t_start(), t_seeded(), t_delta()])
+}
+
+pure func with_park(lines: [Json]) -> [Json] {
+  lines ++ [t_park_line(List.length(lines), journal_leaf(lines))]
+}
+
+pure func with_wake(lines: [Json], outcome: string) -> [Json] {
+  lines ++ [t_wake_line(List.length(lines), journal_leaf(lines), outcome)]
+}
+
+-- A JOURNAL THAT ENDS IN A PARK FOLDS TO `parked` (ADR-003 D7; ADR-002 D4's "a
+-- park entry with no wake child is then re-observed on resume"). Red before P4
+-- Part 1: the fold refused the line as an unknown type.
+pure func test_a_journal_ending_in_a_park_folds_to_parked() -> bool
+  tests [((), true)]
+  {
+    let parked = with_park(t_run_lines());
+    match fold_journal(parked, journal_leaf(parked)) {
+      Err(_) => false,
+      Ok(st) => boundary_id(st.last) == "parked"
+    }
+  }
+
+-- THE TWIN WRITES THE PARK AND ITS WAKE: a `park` line, then a `wake` line whose
+-- parent is the park (row 6 — the wake is the park's child because nothing is
+-- appended between them). Red before P4 Part 1: `twin_event` dropped both, so a
+-- parked trace's journal folded blind to the park and `JournalFold` stayed green.
+pure func test_the_twin_writes_park_then_wake() -> bool
+  tests [((), true)]
+  {
+    let lines = journal_lines_of_records(harness_header(t_identity(), "m"), [t_start(), t_seeded(), t_delta(), t_park(), t_wake("settled")]);
+    let n = List.length(lines);
+    join_kinds(List.map(line_kind, lines)) == "header,run_started,history_appended,history_appended,state_delta,park,wake"
+      && line_field(at_idx(lines, n - 1), "parent_id") == line_field(at_idx(lines, n - 2), "id")
   }
