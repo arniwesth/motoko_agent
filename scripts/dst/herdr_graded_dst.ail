@@ -408,7 +408,7 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       synthetic_environment: initial.env,
       files: [],
       clock_epoch: initial.clock_ms,
-      extension_profile: "driver_plus_herdr/1"
+      extension_profile: "driver_plus_herdr/2"
     },
     bounds: {
       max_interactions: 256,
@@ -527,7 +527,7 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 389 }, effect: "Process",
           routed: false, note: "" }]
 }
 
@@ -789,7 +789,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trac
   let rec = scenario_the_record();
   let _ = println("HERDR-GRADED: the profile record loads clean and its clauses bind:  ${show(rec)}");
   if dispatched && succeeded && served && disc && rec then
-    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/1 rests on it")
+    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/2 rests on it")
   else {
     let _ = println("HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world");
     let _ = show_each(tools);
