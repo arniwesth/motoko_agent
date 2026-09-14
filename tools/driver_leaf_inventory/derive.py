@@ -18,8 +18,15 @@ Helped leaf kinds and their RequestClass (frozen here, consumed by P2 Part 1):
   ToolExec   <- tool_exec      (WorldState, ToolInvocation) -> ToolExecution
                approval_read  (WorldState, ApprovalRequest) -> ApprovalInput
                               (maps to ToolExec: the approval gate classes the
-                              tool dispatch it guards; no sixth variant)
+                              tool dispatch it guards; not a variant of its own)
   ModelStep  <- model_step     (WorldState, string, [Message], cb) -> ProviderExchange
+  WakeRead   <- wake_read      (WorldState, ParkRequest) -> WakeInput
+                              (the SIXTH class, PLAN-002 W3 under ADR-002 D2: a
+                              wake is an operator/host observation that is not
+                              the tool dispatch approval guards, so it does not
+                              fold into ToolExec. No driver call site until W4;
+                              the fixture pair form_wake_read_unwitnessed /
+                              control_wake_read_witnessed pins its verdicts)
 
 Structural facts, re-measured (not assumed):
   - `Ports` record: model_step, approval_read, clock_now, env_get, file_read,
@@ -102,6 +109,10 @@ HELPED = {
     "r.env_get": "EnvRead",
     "r.file_read": "FileRead",
     "ports.file_read": "FileRead",
+    # PLAN-002 W3 (ADR-002 D2). No tree site until W4's Park arm; the fixture
+    # pair is what exercises these today.
+    "ports.wake_read": "WakeRead",
+    "st.provider.wake_read": "WakeRead",
 }
 
 # The extension-bridge region (ext_ai_step + ext_ports_of, session.ail
@@ -166,7 +177,7 @@ EXEMPT_ROWS = {
     "env_get": "{Env}",
 }
 
-REQUEST_CLASS = ["EnvRead", "FileRead", "ClockRead", "ToolExec", "ModelStep"]
+REQUEST_CLASS = ["EnvRead", "FileRead", "ClockRead", "ToolExec", "ModelStep", "WakeRead"]
 
 SCAN_FILES = [
     "src/core/session.ail",
@@ -177,7 +188,7 @@ SCAN_FILES = [
 
 CALL_RE = re.compile(
     r"(?P<recv>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
-    r"\.(?P<method>env_get|file_read|clock_now|tool_exec|model_step|approval_read)"
+    r"\.(?P<method>env_get|file_read|clock_now|tool_exec|model_step|approval_read|wake_read)"
     r"\s*\("
 )
 

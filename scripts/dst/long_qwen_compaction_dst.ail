@@ -386,6 +386,9 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
   {
     model_step: base.model_step,
     approval_read: base.approval_read,
+    -- PLAN-002 W3 (ADR-002 D2): the unbound default, from `base` like
+    -- `approval_read`. This fixture never parks, so nothing reaches it.
+    wake_read: base.wake_read,
     clock_now: fixed_clock,
     env_get: fixed_env,
     file_read: fixed_file,
@@ -516,6 +519,9 @@ func strict_ports() -> Ports ! {AI, IO, Trace} {
   {
     model_step: base.model_step,
     approval_read: base.approval_read,
+    -- PLAN-002 W3 (ADR-002 D2): the unbound default, from `base` like
+    -- `approval_read`. This fixture never parks, so nothing reaches it.
+    wake_read: base.wake_read,
     clock_now: fixed_clock,
     env_get: fixed_env,
     file_read: fixed_file,

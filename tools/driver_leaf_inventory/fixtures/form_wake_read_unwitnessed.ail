@@ -1,0 +1,31 @@
+module tools/driver_leaf_inventory/fixtures/form_wake_read_unwitnessed
+
+-- PLAN-002 W3 Part 6 (ADR-002 D2): a helped `wake_read` whose successor is
+-- ADVANCED and put into a record, with NO `witness` anywhere in the function.
+--
+-- `st.provider.wake_read` is in `HELPED`, so the leaf is found and judged by
+-- `leaf_verdict`; the function is not a RETURNING helper, so an advanced
+-- successor that no witness drains is `advanced-unwitnessed`. It is NOT the
+-- `witnessed-after-construction` family (`form_witnessed_after_record.ail`),
+-- which needs a later `witness(`: there is none here.
+--
+-- RED FIRST (recorded in the W3 commit): under the pre-W3 `CALL_RE`, whose
+-- method alternation has no `wake_read`, this fixture has no helped leaf at all
+-- and classifies `no-helped-leaf` — invisible, not non-clean.
+--
+-- `advance` is a local stub standing in for `world_ordinal.advance`: the
+-- fixture's claim is about the missing witness, which the script reads
+-- textually. The tree mutant against the real `Park`-arm call site is W4's.
+
+import src/core/ports (Ports, WorldState, ParkRequest)
+
+export func advance(world: WorldState, cls: string) -> WorldState {
+  world
+}
+
+export func wake_after_park(st: { provider: Ports, world_state: WorldState }, req: ParkRequest) -> string ! {IO} {
+  let got = st.provider.wake_read(st.world_state, req);
+  let w1 = advance(got.next_state, "WakeRead");
+  let next = { st | world_state: w1 };
+  got.wait_id
+}

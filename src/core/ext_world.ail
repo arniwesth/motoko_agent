@@ -38,7 +38,7 @@ import std/result (Ok, Err)
 import std/ai (ToolCall)
 -- WI-D18: `FsNode` is the kinded `WorldState.files` entry — see that field for
 -- the representation argument. The token has to carry the kind explicitly.
-import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state, RequestWitness, EnvRead, ToolExec, ModelStep)
+import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state, RequestWitness, EnvRead, ToolExec, ModelStep, WakeRead, WakeObservation, WakeOutcome, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted)
 -- PLAN-001 P2 Part 1: the class ids have ONE spelling, owned by the writer's
 -- module, so the token and Part 4's wire record cannot disagree on a name.
 import src/core/world_ordinal (advance, request_class_id, request_class_of_id)
@@ -148,6 +148,72 @@ pure func pending_of(xs: [Json]) -> [RequestWitness] {
         witness :: pending_of(rest)
       },
       None => pending_of(rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- PLAN-002 W3 (ADR-002 D2): [WakeObservation] <-> [Json]
+--
+-- An outcome is two keys, `outcome` (the arm's id) and `detail` (its string,
+-- "" for the two arms that carry none). An entry whose arm id this module did
+-- not write is DROPPED, on `pending_of`'s reasoning: there is no catch-all arm,
+-- and defaulting to one would put a wake nobody observed into the cursor.
+-- ---------------------------------------------------------------------------
+
+pure func wake_outcome_id(o: WakeOutcome) -> string {
+  match o {
+    Settled(_) => "settled",
+    Lost(_) => "lost",
+    OperatorInput(_) => "operator_input",
+    TimedOut => "timed_out",
+    HostError(_) => "host_error",
+    Aborted => "aborted"
+  }
+}
+
+pure func wake_outcome_detail(o: WakeOutcome) -> string {
+  match o {
+    Settled(d) => d,
+    Lost(d) => d,
+    OperatorInput(d) => d,
+    TimedOut => "",
+    HostError(d) => d,
+    Aborted => ""
+  }
+}
+
+pure func wake_outcome_of(id: string, detail: string) -> Option[WakeOutcome] {
+  if id == "settled" then Some(Settled(detail))
+  else if id == "lost" then Some(Lost(detail))
+  else if id == "operator_input" then Some(OperatorInput(detail))
+  else if id == "timed_out" then Some(TimedOut)
+  else if id == "host_error" then Some(HostError(detail))
+  else if id == "aborted" then Some(Aborted)
+  else None
+}
+
+pure func wakes_json(ws: [WakeObservation]) -> [Json] {
+  match ws {
+    [] => [],
+    w :: rest =>
+      jo([kv("request_id", js(w.request_id)), kv("wait_id", js(w.wait_id)),
+          kv("outcome", js(wake_outcome_id(w.outcome))),
+          kv("detail", js(wake_outcome_detail(w.outcome)))])
+        :: wakes_json(rest)
+  }
+}
+
+pure func wakes_of(xs: [Json]) -> [WakeObservation] {
+  match xs {
+    [] => [],
+    x :: rest => match wake_outcome_of(str_field(x, "outcome", ""), str_field(x, "detail", "")) {
+      Some(o) => {
+        let wake: WakeObservation = { request_id: str_field(x, "request_id", ""),
+                                      wait_id: str_field(x, "wait_id", ""), outcome: o };
+        wake :: wakes_of(rest)
+      },
+      None => wakes_of(rest)
     }
   }
 }
@@ -552,6 +618,10 @@ export pure func world_json(w: WorldState) -> Json {
     kv("script", ja(scripted_steps_json(w.script))),
     kv("clock_ms", jint(w.clock_ms)),
     kv("approvals", ja(strings_json(w.approvals))),
+    -- PLAN-002 W3. The wake cursor crosses for `ext_effects`' reason: a bridge
+    -- round trip that rebuilt only the enumerated fields would empty it before
+    -- the first park.
+    kv("wakes", ja(wakes_json(w.wakes))),
     kv("env", ja(env_json(w.env))),
     kv("files", ja(files_json(w.files))),
     kv("tools", ja(scripted_tools_json(w.tools))),
@@ -585,6 +655,10 @@ export pure func world_of_json(j: Json) -> WorldState {
   { script: scripted_steps_of(json_array(j, "script")),
     clock_ms: int_field(j, "clock_ms", 0),
     approvals: strings_of(json_array(j, "approvals")),
+    -- Lenient like every list here: a token written before W3 has no `wakes`
+    -- key and decodes to `[]`, which is intended — an old token has no
+    -- outstanding wake.
+    wakes: wakes_of(json_array(j, "wakes")),
     env: env_of(json_array(j, "env")),
     files: files_of(json_array(j, "files")),
     tools: scripted_tools_of(json_array(j, "tools")),
@@ -703,6 +777,17 @@ pure func codec_fixture_world() -> WorldState {
     ],
     clock_ms: 1213,
     approvals: ["yes", "no", ""],
+    -- PLAN-002 W3's wake cursor: ONE OF EACH `WakeOutcome` arm, in declaration
+    -- order, every string distinct from every other in this fixture (S7), so a
+    -- decoder that confuses two arms, drops a detail, or reads `wait_id` out of
+    -- `request_id` is visible. The two detail-less arms sit between carrying
+    -- ones, so a decoder that shifts details along the list is visible too.
+    wakes: [{ request_id: "park-r1", wait_id: "wait-a", outcome: Settled("answer-271") },
+            { request_id: "park-r2", wait_id: "wait-b", outcome: Lost("pane gone-277") },
+            { request_id: "park-r3", wait_id: "wait-c", outcome: OperatorInput("op typed-281") },
+            { request_id: "park-r4", wait_id: "wait-d", outcome: TimedOut },
+            { request_id: "park-r5", wait_id: "wait-e", outcome: HostError("host fell-283") },
+            { request_id: "park-r6", wait_id: "restart", outcome: Aborted }],
     env: [{ key: "MOTOKO_MODE", value: "dst" }],
     -- WI-D3's file table. TWO entries so a decoder that collapses the list is
     -- visible, and the second holds "" content at a path that EXISTS — the one
@@ -808,11 +893,13 @@ pure func test_the_world_token_carries_the_ordinal_and_pending_witnesses() -> bo
 
 -- An unreadable witness is dropped while the ordinal survives, so the token
 -- that lost it still reads AHEAD of its witnesses rather than consistent.
+-- PLAN-002 W3 FLIP 2: the forged id was "wake_read" while that class did not
+-- exist. It is a real class now, so the forgery is an id no class takes.
 pure func test_an_unknown_witness_class_is_dropped_and_the_ordinal_kept() -> bool
   tests [((), true)]
   {
     let forged = jo([kv("ordinal", jnum(7.0)),
-                     kv("pending", ja([jo([kv("ordinal", jnum(6.0)), kv("class", js("wake_read"))]),
+                     kv("pending", ja([jo([kv("ordinal", jnum(6.0)), kv("class", js("not_a_class"))]),
                                        jo([kv("ordinal", jnum(7.0)), kv("class", js("env_read"))])]))]);
     let w = world_of_json(forged);
     w.ordinal == 7
@@ -820,6 +907,73 @@ pure func test_an_unknown_witness_class_is_dropped_and_the_ordinal_kept() -> boo
             only :: [] => only.ordinal == 7 && request_class_id(only.request_class) == "env_read",
             _ => false
           })
+  }
+
+-- PLAN-002 W3: the flip's other half. A `wake_read` witness is no longer
+-- dropped: it crosses the token with its ordinal and class, behind the witness
+-- in front of it, and the next request numbers after it.
+pure func test_a_wake_read_witness_survives_the_token_round_trip() -> bool
+  tests [((), true)]
+  {
+    let w = advance({ empty_world_state() | ordinal: 6, pending: [{ ordinal: 6, request_class: ToolExec }] }, WakeRead);
+    let back = token_to_world(world_to_token(w));
+    back.ordinal == 7
+      && (match back.pending {
+            a :: b :: [] =>
+              a.ordinal == 6 && request_class_id(a.request_class) == "tool_exec"
+                && b.ordinal == 7 && request_class_id(b.request_class) == "wake_read",
+            _ => false
+          })
+  }
+
+pure func eq_wakes(a: [WakeObservation], b: [WakeObservation]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b {
+      [] => false,
+      y :: ys =>
+        x.request_id == y.request_id && x.wait_id == y.wait_id
+          && wake_outcome_id(x.outcome) == wake_outcome_id(y.outcome)
+          && wake_outcome_detail(x.outcome) == wake_outcome_detail(y.outcome)
+          && eq_wakes(xs, ys)
+    }
+  }
+}
+
+-- PLAN-002 W3: THE WAKE CURSOR CROSSES THE TOKEN BY VALUE. Every observation,
+-- in order, arm and detail included — compared against the fixture AND against
+-- the literal arm sequence, so a fixture edit that collapsed two arms would not
+-- keep this green by comparing a broken list to itself.
+pure func test_the_world_token_carries_the_wakes_cursor_by_value() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    List.length(back.wakes) == 6 && eq_wakes(back.wakes, w.wakes)
+      && (match back.wakes {
+            a :: b :: c :: d :: e :: f :: [] =>
+              (match a.outcome { Settled(x) => x == "answer-271", _ => false })
+                && (match b.outcome { Lost(x) => x == "pane gone-277", _ => false })
+                && (match c.outcome { OperatorInput(x) => x == "op typed-281", _ => false })
+                && (match d.outcome { TimedOut => true, _ => false })
+                && (match e.outcome { HostError(x) => x == "host fell-283", _ => false })
+                && (match f.outcome { Aborted => f.wait_id == "restart", _ => false })
+                && a.request_id == "park-r1" && f.request_id == "park-r6" && c.wait_id == "wait-c",
+            _ => false
+          })
+  }
+
+-- PLAN-002 W3: a token with no `wakes` key (written before W3) decodes to an
+-- empty cursor BY INTENT, and an entry with an arm id nobody wrote is dropped.
+pure func test_a_token_without_wakes_decodes_to_no_outstanding_wake() -> bool
+  tests [((), true)]
+  {
+    let old = world_of_json(jo([kv("ordinal", jnum(3.0))]));
+    let forged = world_of_json(jo([kv("wakes", ja([
+      jo([kv("request_id", js("r")), kv("wait_id", js("w")), kv("outcome", js("not_an_arm")), kv("detail", js(""))]),
+      jo([kv("request_id", js("r")), kv("wait_id", js("w")), kv("outcome", js("timed_out")), kv("detail", js(""))])]))]));
+    List.length(old.wakes) == 0 && old.ordinal == 3
+      && (match forged.wakes { only :: [] => wake_outcome_id(only.outcome) == "timed_out", _ => false })
   }
 
 -- WI-D24. The stamp's own row, and it exists because the first implementation

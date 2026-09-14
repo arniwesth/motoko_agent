@@ -11,6 +11,13 @@
 -- `codec_fixture_world`) only construct them, and every other site copies them
 -- through a record update of some other field.
 --
+-- PLAN-002 W3 (ADR-002 D2/D5 step 3): THE BODY MOVED DOWN ONE MODULE, THE
+-- WRITER DID NOT MULTIPLY. `ports.wake_read_unbound` owes `advance(world,
+-- WakeRead)` and lives in `ports`, which this module imports, so it cannot call
+-- back up here (`ailang check`: LDR002 dependency cycle). The one body is now
+-- `ports.advance_ordinal`; `advance` below is its driver-facing name and
+-- forwards to it unchanged, so no call site, scanner regex or anchor moves.
+--
 -- A LEAF MODULE, on `context_limit.ail`'s pattern: it imports `ports` and the
 -- standard library and nothing above them, so `context_usage`, `tool_phase`,
 -- `stub_step` and `session` can all import it without a cycle. It is PURE, so
@@ -22,7 +29,7 @@
 -- is what makes a non-empty `pending` at a frame boundary red.
 module src/core/world_ordinal
 
-import src/core/ports (WorldState, RequestClass, RequestWitness, EnvRead, FileRead, ClockRead, ToolExec, ModelStep, empty_world_state)
+import src/core/ports (WorldState, RequestClass, RequestWitness, EnvRead, FileRead, ClockRead, ToolExec, ModelStep, WakeRead, empty_world_state, advance_ordinal)
 import std/option (Option, Some, None)
 import std/list as List (length)
 
@@ -31,11 +38,10 @@ import std/list as List (length)
 -- and not the head because `witness` drains the queue in request order, and
 -- the wire gate reads that order as strict +1.
 export pure func advance(w: WorldState, c: RequestClass) -> WorldState {
-  let next = w.ordinal + 1;
-  { w | ordinal: next, pending: w.pending ++ [{ ordinal: next, request_class: c }] }
+  advance_ordinal(w, c)
 }
 
--- The wire ids of the five classes. Used by the world token's codec here, and
+-- The wire ids of the six classes (the sixth, `WakeRead`, is ADR-002 D2's). Used by the world token's codec here, and
 -- the id Part 4's `WorldRequest` projection is expected to reuse, so the class
 -- has one spelling on every wire.
 export pure func request_class_id(c: RequestClass) -> string {
@@ -44,7 +50,8 @@ export pure func request_class_id(c: RequestClass) -> string {
     FileRead => "file_read",
     ClockRead => "clock_read",
     ToolExec => "tool_exec",
-    ModelStep => "model_step"
+    ModelStep => "model_step",
+    WakeRead => "wake_read"
   }
 }
 
@@ -57,6 +64,7 @@ export pure func request_class_of_id(id: string) -> Option[RequestClass] {
   else if id == "clock_read" then Some(ClockRead)
   else if id == "tool_exec" then Some(ToolExec)
   else if id == "model_step" then Some(ModelStep)
+  else if id == "wake_read" then Some(WakeRead)
   else None
 }
 
@@ -94,8 +102,10 @@ pure func test_advance_pushes_at_the_tail_in_request_order() -> bool
           })
   }
 
--- Every class's id decodes back to the same id, the five ids are distinct, and
--- an id nobody wrote is `None`.
+-- Every class's id decodes back to the same id, the six ids are distinct, and
+-- an id nobody wrote is `None`. PLAN-002 W3 FLIP 1: `"wake_read"` was the
+-- unwritten id this test forged while the class did not exist; it now decodes
+-- to `WakeRead`, and the unwritten id is one no class will take.
 pure func test_request_class_ids_round_trip_and_are_distinct() -> bool
   tests [((), true)]
   {
@@ -104,10 +114,17 @@ pure func test_request_class_ids_round_trip_and_are_distinct() -> bool
       None => false
     };
     back(EnvRead) && back(FileRead) && back(ClockRead) && back(ToolExec) && back(ModelStep)
+      && back(WakeRead)
       && request_class_id(EnvRead) != request_class_id(FileRead)
       && request_class_id(FileRead) != request_class_id(ClockRead)
       && request_class_id(ClockRead) != request_class_id(ToolExec)
       && request_class_id(ToolExec) != request_class_id(ModelStep)
       && request_class_id(ModelStep) != request_class_id(EnvRead)
-      && (match request_class_of_id("wake_read") { Some(_) => false, None => true })
+      && request_class_id(WakeRead) != request_class_id(EnvRead)
+      && request_class_id(WakeRead) != request_class_id(FileRead)
+      && request_class_id(WakeRead) != request_class_id(ClockRead)
+      && request_class_id(WakeRead) != request_class_id(ToolExec)
+      && request_class_id(WakeRead) != request_class_id(ModelStep)
+      && (match request_class_of_id("wake_read") { Some(WakeRead) => true, _ => false })
+      && (match request_class_of_id("not_a_class") { Some(_) => false, None => true })
   }
