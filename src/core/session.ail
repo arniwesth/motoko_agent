@@ -4730,8 +4730,10 @@ pure func between_turn_request_id(session_id: string, profile: string, resume_co
 -- turn opened there would re-issue the between-turn frame's ordinals — and NOT
 -- the loop's entry `provider.world`, which restarted every turn from the world
 -- the loop was entered with. The initial turn's drop
--- (`run_v2_with_conversation`) and `model_change`'s stay §3's.
-pure func next_turn_world(traced: TracedSessionResult, published: { world: WorldState, trace: LedgerTrace }) -> WorldState {
+-- (`run_v2_with_conversation`) and `model_change`'s stay §3's. It takes no
+-- traced result: the successor does not depend on the arm, so every arm is
+-- covered by construction.
+pure func next_turn_world(published: { world: WorldState, trace: LedgerTrace }) -> WorldState {
   published.world
 }
 
@@ -4923,7 +4925,7 @@ func conversation_loop_v2_with_policy(
         -- last ordinal. The published trace is not kept: this loop holds no
         -- `LedgerTrace`, and the witness has already put the requests on the wire.
         let published = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, session_id, traced.trace, traced.world);
-        let next_provider = { provider | world: next_turn_world(traced, published) };
+        let next_provider = { provider | world: next_turn_world(published) };
         let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
         -- D5's rule: one traced run happened on BOTH arms below, so the ordinal
         -- advances on all three outcomes.
@@ -5834,24 +5836,16 @@ pure func w5_continuation() -> Continuation {
   { history: [], step_idx: 2, cumulative: zero_runtime_status_counts(), telemetry: zero_token_telemetry(), ext_artifacts: jo([]), nudges_used: 0, model: "m", profile: "p", boot: empty_boot() }
 }
 
-pure func w5_traced(result: Result[[Message], AIError], suspended: Option[Continuation], final_ordinal: int) -> TracedSessionResult {
-  { result: result, trace: empty_ledger_trace(), world: w5_world(final_ordinal), emissions: [], suspended: suspended, final: empty_final_state(zero_token_telemetry(), jo([])) }
-}
-
--- W5(c): the next turn starts from the PUBLISHED successor on every arm, never
--- from the turn's own final world.
+-- W5(c): the next turn starts from the PUBLISHED successor, never from the
+-- turn's own final world. `next_turn_world` takes no traced result, so the
+-- `Ok`/`Err`/suspended arms cannot diverge; this pins the successor itself.
 pure func test_w5_next_turn_world_is_the_published_successor_on_every_arm() -> bool
   tests [((), true)]
   {
-    let err: AIError = { code: "X", message: "boom", retryable: false };
+    let final_world = w5_world(7);
     let published = { world: w5_world(8), trace: empty_ledger_trace() };
-    let ok_arm = w5_traced(Ok([]), None, 7);
-    let err_arm = w5_traced(Err(err), None, 7);
-    let suspended_arm = w5_traced(Err(err), Some(w5_continuation()), 7);
-    next_turn_world(ok_arm, published).ordinal == 8
-      && next_turn_world(err_arm, published).ordinal == 8
-      && next_turn_world(suspended_arm, published).ordinal == 8
-      && next_turn_world(suspended_arm, published).ordinal != suspended_arm.world.ordinal
+    next_turn_world(published).ordinal == 8
+      && next_turn_world(published).ordinal != final_world.ordinal
   }
 
 -- W5(a): the frame opens at the previous run's `final`. The manifest is handed
@@ -5860,11 +5854,11 @@ pure func test_w5_next_turn_world_is_the_published_successor_on_every_arm() -> b
 pure func test_w5_between_turn_frame_opens_at_the_previous_final() -> bool
   tests [((), true)]
   {
-    let traced = w5_traced(Ok([]), None, 7);
-    let env_read = advance(traced.world, EnvRead);
+    let final_world = w5_world(7);
+    let env_read = advance(final_world, EnvRead);
     let published = { world: { env_read | pending: [] }, trace: empty_ledger_trace() };
-    (match env_read.pending { r :: [] => r.ordinal == traced.world.ordinal + 1, _ => false })
-      && next_turn_world(traced, published).ordinal == traced.world.ordinal + 1
+    (match env_read.pending { r :: [] => r.ordinal == final_world.ordinal + 1, _ => false })
+      && next_turn_world(published).ordinal == final_world.ordinal + 1
   }
 
 -- W5(b), §8.4 (R9): a run seeded from a consumed between-turn wake starts at
