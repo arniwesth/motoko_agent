@@ -54,7 +54,7 @@
 module scripts/dst/ledger_parity_dst
 
 import std/io (println, exit)
-import std/json (jo, kv, js)
+import std/json (jo, kv, js, jb)
 import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
@@ -74,7 +74,7 @@ import src/core/test/stub_step (
   scripted_world_state, empty_rt,
   prose_step, tool_step, continuing_token_step, chunked_prose_step
 )
-import src/core/ports (ScriptedStep, WorldState, empty_world_state)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state, WakeObservation, Settled)
 import src/core/phase_vocab (LedgerTrace, LedgerRecord, WireRecord)
 import src/core/dst_event_vocabulary (EventRow, event_vocabulary, is_logical)
 import src/core/dst_invariants (d64_gap_register, record_variant, join_str)
@@ -251,6 +251,40 @@ func handled_rt() -> ExtRuntime {
     }
   });
   { registry: { entries: [hooks] }, strict_mode: false, verification: no_verification() }
+}
+
+-- PLAN-002 W4 Part 3: the park. `Delegate` opens one wait with the W1b
+-- producer's `wait` shape, the stop-class candidate parks on it, the scripted
+-- `wakes` queue settles it, and `DelegateCheck` closes it — so `ParkEntered` and
+-- `WakeReceived` are each projected once and appended once, and the frame gate
+-- sees the `wake_read` witness inside this frame at strict +1.
+func parked_rt() -> ExtRuntime {
+  let hooks = fixture_hooks("w4_parked", {
+    base_overrides(\_ctx _call. Allow) |
+    tools: ["Delegate", "DelegateCheck"],
+    provide: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+      if call.tool == "Delegate" then
+        { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "delegated lp-h1", stderr: "",
+            metadata: jo([kv("wait", jo([kv("id", js("lp-h1")), kv("delegate_kind", js("claude")), kv("locator", jo([kv("pane", js("pane-lp"))])),
+                                         kv("answer_path", js("/tmp/lp-h1.md")), kv("run_key", js("rk-lp"))]))]) }),
+          next_state: ctx.world }
+      else
+        { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "answer from lp-h1", stderr: "",
+            metadata: jo([kv("delegate", js("lp-h1")), kv("settled", jb(true))]) }),
+          next_state: ctx.world }
+    }
+  });
+  { registry: { entries: [hooks] }, strict_mode: false, verification: no_verification() }
+}
+
+-- The session id is pinned through the world's env so the queued wake names
+-- this run's first park, `lp.r0.0.p0`.
+pure func parked_world() -> WorldState {
+  let wake: WakeObservation = { request_id: "lp.r0.0.p0", wait_id: "lp-h1", outcome: Settled("answer") };
+  { empty_world_state() |
+    script: [tool_step("Delegate", "{}", "lp-d"), prose_step("waiting on lp-h1"), tool_step("DelegateCheck", "{}", "lp-c"), prose_step("done")],
+    wakes: [wake],
+    env: [{ key: "MOTOKO_SESSION_ID", value: "lp" }] }
 }
 
 -- The DP7 runtime. `enabled` with a command that exits non-zero and prints
@@ -522,6 +556,16 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let f8 = end_frame("delegated", delegated);
   let r8 = check_scenario("delegated", delegated, ["DelegatedToolDeferred"]);
 
+  -- Subject 9 (PLAN-002 W4 Part 3): the park and its wake. See `parked_rt`.
+  let p9 = ScriptedWorld(parked_world());
+  let _ = begin_frame("parked", p9);
+  let parked = Session.run_v2_session_traced(
+    parked_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    [system_msg()], "/tmp", 8, false, 0, zero_rates(), p9
+  );
+  let f9 = end_frame("parked", parked);
+  let r9 = check_scenario("parked", parked, ["ParkEntered", "WakeReceived"]);
+
   -- ORDER, PINNED, because the wire comparison cannot see it. The shell counts
   -- per variant, and a count is green on a log appended as a BLOCK in the wrong
   -- place — after the batch results instead of inside the batch, say. A global
@@ -586,11 +630,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
               count_of("NativeToolDenied", native_vs) == 0,
               "the native subject denied a tool, so it is not isolating the allowed arm");
 
-  let _ = println("LEDGER_SUBJECTS 8");
-  let _ = println("WORLD_RUN_FRAMES 8");
-  let framed = f1 && f2 && f3 && f4 && f5 && f6 && f7 && f8;
+  let _ = println("LEDGER_SUBJECTS 9");
+  let _ = println("WORLD_RUN_FRAMES 9");
+  let framed = f1 && f2 && f3 && f4 && f5 && f6 && f7 && f8 && f9;
 
-  if req_ok && r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && order_ok && disjoint && framed then println("ledger_parity_dst PASS")
+  if req_ok && r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && order_ok && disjoint && framed then println("ledger_parity_dst PASS")
   else {
     let _ = println("ledger_parity_dst FAIL");
     exit(1)

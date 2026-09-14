@@ -15,11 +15,11 @@ module src/core/test/stub_step
 import std/ai (step, stepWithCache, stepWithStream, stepWithStreamRecorded, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk, ContentDelta)
 import std/trace as Trace
 import std/clock (now)
-import std/io (readLine)
+import std/io (readLine, println)
 import std/env (getEnvOr)
-import src/core/phase_vocab (ApprovalRequest)
+import src/core/phase_vocab (ApprovalRequest, wait_descriptors_json)
 import std/list as List (length)
-import std/option (Option, None)
+import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (length as string_length)
 import src/core/tool_catalog (tools_with_extensions)
@@ -41,7 +41,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision, ToolHandleDecision,
   ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PassThrough
 )
-import src/core/test/ext_fixture (fixture_hooks) import src/core/world_ordinal (advance) import src/core/ports (ModelStep)  -- B7; joined the line above so anchors.sh's :203 does not move (PLAN-001 P2 Part 1 joined `advance` here for the same reason)
+import src/core/test/ext_fixture (fixture_hooks) import src/core/world_ordinal (advance) import src/core/ports (ModelStep, WakeRead, ParkRequest, WakeInput, WakeOutcome, OperatorInput, Aborted, wake_outcome_of, advance_ordinal, recording_wake) import std/json (Json, encode, decode, jo, kv, js, jnum, get, asString)  -- PLAN-002 W4 joined the wake names here too; B7; joined the line above so anchors.sh's :203 does not move (PLAN-001 P2 Part 1 joined `advance` here for the same reason)
 import src/core/types (Msg)
 -- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
 -- `WorldState` can carry it without either the port module or the driver
@@ -211,6 +211,15 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
       let raw = readLine();
       { raw: raw, eof: raw == "", next_state: state }
     };
+  -- PLAN-002 W4 Part 5 (ADR-002 D2): THE LIVE WAKE. One `wake_request` line
+  -- carrying the `ParkRequest`, then stdin until a matching `wake_reply` or a
+  -- command (`live_wake_await`). Like every wake adapter it returns the world
+  -- ADVANCED once, class `WakeRead`; the `Park` arm witnesses it.
+  let wake_read: (WorldState, ParkRequest) -> WakeInput ! {IO} =
+    func(state: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
+      let _ = println(encode(wake_request_json(req)));
+      live_wake_await(state, req)
+    };
   -- The live environment: the process environment, world returned unchanged.
   --
   -- WI-D3 moved the body to `ports.ambient_env` and binds the named function
@@ -221,6 +230,7 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
   { ports_shape_probe(model_step) |
     clock_now: clock_now,
     approval_read: approval_read,
+    wake_read: wake_read,
     env_get: ambient_env,
     -- WI-D3's filesystem class, live half. The ONE binding in the whole Ports
     -- surface that performs a filesystem read, which is what the host-env poison
@@ -249,6 +259,63 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
     path_stat: ambient_path_stat,
     dir_list: ambient_dir_list,
     dir_make: ambient_dir_make }
+}
+
+-- PLAN-002 W4 Part 5: the live wake's wire. The request line the host's waiter
+-- reads (`runtime-process.ts`): the `ParkRequest`, waits in the producer's key
+-- order.
+export pure func wake_request_json(req: ParkRequest) -> Json {
+  jo([kv("type", js("wake_request")), kv("request_id", js(req.request_id)),
+      kv("step", jnum(_int_to_float(req.step))), kv("attempt", jnum(_int_to_float(req.attempt))),
+      kv("waits", wait_descriptors_json(req.waits))])
+}
+
+pure func wake_str(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    Some(v) => match asString(v) { Some(x) => x, None => "" },
+    None => ""
+  }
+}
+
+func live_wake_input(state: WorldState, req: ParkRequest, wait_id: string, outcome: WakeOutcome) -> WakeInput {
+  { request_id: req.request_id, wait_id: wait_id, outcome: outcome, next_state: advance_ordinal(state, WakeRead) }
+}
+
+-- The commands a parked run reads, PLAN-002 W4 Part 5's table (§8.7):
+--   wake_reply (this request_id)  its outcome
+--   user_message                  OperatorInput(content)
+--   abort / exit / EOF            Aborted, wait_id "abort" / "exit" / "eof"
+--   restart (profile p)           Aborted, wait_id "restart:<p>"
+--   model_change                  dropped with a `warning`; reading continues
+--   anything else                 reading continues (malformed lines dropped)
+-- A `wake_reply` for another request_id is not this request's reply and
+-- reading continues. `Aborted` names no wait, so the command rides in
+-- `wait_id` (review change 12) and `WakeInput` gains nothing.
+export func live_wake_await(state: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
+  let raw = readLine();
+  if raw == "" then live_wake_input(state, req, "eof", Aborted)
+  else match decode(raw) {
+    Err(_) => live_wake_await(state, req),
+    Ok(obj) => {
+      let t = wake_str(obj, "type");
+      if t == "wake_reply" then {
+        if wake_str(obj, "request_id") != req.request_id then live_wake_await(state, req)
+        else match wake_outcome_of(wake_str(obj, "outcome"), wake_str(obj, "detail")) {
+          Some(outcome) => live_wake_input(state, req, wake_str(obj, "wait_id"), outcome),
+          None => live_wake_await(state, req)
+        }
+      }
+      else if t == "user_message" then live_wake_input(state, req, "", OperatorInput(wake_str(obj, "content")))
+      else if t == "abort" then live_wake_input(state, req, "abort", Aborted)
+      else if t == "exit" then live_wake_input(state, req, "exit", Aborted)
+      else if t == "restart" then live_wake_input(state, req, "restart:${wake_str(obj, "profile")}", Aborted)
+      else if t == "model_change" then {
+        let _ = println(encode(jo([kv("type", js("warning")), kv("message", js("model_change dropped while parked on ${req.request_id}: send it after the wake"))])));
+        live_wake_await(state, req)
+      }
+      else live_wake_await(state, req)
+    }
+  }
 }
 
 -- The scripted adapter, WI-A2's fix for F6.
@@ -555,6 +622,8 @@ export func recording_ports(rt: ExtRuntime) -> Ports ! {Clock, Env, FS, IO, Proc
   { ports_shape_probe(recording_model_step(rt)) |
     clock_now: recording_clock,
     approval_read: recording_approval,
+    -- PLAN-002 W4 Part 4.
+    wake_read: recording_wake,
     env_get: recording_env,
     file_write: recording_file_write,
     file_remove: recording_file_remove,
@@ -649,6 +718,9 @@ export func generating_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO,
   { ports_shape_probe(generating_model_step(rt)) |
     clock_now: recording_clock,
     approval_read: generating_approval,
+    -- PLAN-002 W4 Part 4, and the RECORDING adapter on `dir_make`'s reasoning
+    -- below: the wake queue is a fixture's input, not a generator choice.
+    wake_read: recording_wake,
     env_get: recording_env,
     file_write: recording_file_write,
     file_remove: recording_file_remove,

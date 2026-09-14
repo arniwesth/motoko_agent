@@ -59,7 +59,7 @@ import src/core/fs_node (FsNode, FsFile, FsDir)
 -- `Interaction` was rejected.
 import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
-  ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
+  ToolIdentity, ApprovalIdentity, WakeIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
   FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   -- WI-D24. The eighth recording adapter's class; see `recording_ext_effect`.
   ExtensionEffectIdentity,
@@ -1109,6 +1109,93 @@ export func scripted_approval(state: WorldState, _req: ApprovalRequest) -> Appro
 export func wake_read_unbound(world: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
   { request_id: req.request_id, wait_id: "", outcome: HostError("wake_read unbound"),
     next_state: advance_ordinal(world, WakeRead) }
+}
+
+-- PLAN-002 W3's outcome codec, MOVED here from `ext_world` at W4 so that
+-- `recording_wake` below can write the same ids the world token writes (this
+-- module cannot import `ext_world`, which imports it). One id per arm, `detail`
+-- "" for the two arms that carry none, and an unknown id decodes to `None`.
+export pure func wake_outcome_id(o: WakeOutcome) -> string {
+  match o {
+    Settled(_) => "settled",
+    Lost(_) => "lost",
+    OperatorInput(_) => "operator_input",
+    TimedOut => "timed_out",
+    HostError(_) => "host_error",
+    Aborted => "aborted"
+  }
+}
+
+export pure func wake_outcome_detail(o: WakeOutcome) -> string {
+  match o {
+    Settled(d) => d,
+    Lost(d) => d,
+    OperatorInput(d) => d,
+    TimedOut => "",
+    HostError(d) => d,
+    Aborted => ""
+  }
+}
+
+export pure func wake_outcome_of(id: string, detail: string) -> Option[WakeOutcome] {
+  if id == "settled" then Some(Settled(detail))
+  else if id == "lost" then Some(Lost(detail))
+  else if id == "operator_input" then Some(OperatorInput(detail))
+  else if id == "timed_out" then Some(TimedOut)
+  else if id == "host_error" then Some(HostError(detail))
+  else if id == "aborted" then Some(Aborted)
+  else None
+}
+
+-- PLAN-002 W4 Part 4 (ADR-002 D2): THE SCRIPTED WAKE, `scripted_approval`'s
+-- twin. The head of `WorldState.wakes` becomes the reply, and the adapter
+-- builds the successor: the queue advanced past it, then ONE `advance` of
+-- class `WakeRead` (the port advances; the `Park` arm owes the witness). An
+-- EMPTY QUEUE FALLS THROUGH TO `wake_read_unbound`: a `HostError`, never a hang
+-- and never a fabricated wake. A fixture supplies observations, never worlds
+-- (§1 row 8).
+export func scripted_wake(state: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
+  match state.wakes {
+    [] => wake_read_unbound(state, req),
+    w :: rest => { request_id: w.request_id, wait_id: w.wait_id, outcome: w.outcome,
+                   next_state: advance_ordinal({ state | wakes: rest }, WakeRead) }
+  }
+}
+
+-- The reply as the program records it: every field a replay needs to rebuild
+-- the `WakeObservation`, plus `attempt`, which R2 makes a PAYLOAD field (it is
+-- not part of `WakeIdentity`, whose equality is unchanged).
+export pure func wake_payload(read: WakeInput, attempt: int) -> string {
+  encode(jo([kv("request_id", js(read.request_id)), kv("wait_id", js(read.wait_id)),
+             kv("outcome", js(wake_outcome_id(read.outcome))), kv("detail", js(wake_outcome_detail(read.outcome))),
+             kv("attempt", jnum(_int_to_float(attempt)))]))
+}
+
+-- PLAN-002 W4 Part 4: THE RECORDING WAKE, `recording_approval`'s twin. It
+-- serves through `scripted_wake` and records one `WakeIdentity` interaction per
+-- read. The identity is the REQUEST's `request_id` and the reply's `wait_id`; a
+-- read that found the queue empty and fell through to the unbound default is
+-- recorded `OutcomeMissing`, exactly as an end-of-input approval read is, so a
+-- replay drains at the same position. Deadline 0: no wake deadline is routed
+-- (timeouts are "Not decided", PLAN-002 §4).
+export func recording_wake(state: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
+  let served = match state.wakes { [] => false, _ => true };
+  let read = scripted_wake(state, req);
+  {
+    request_id: read.request_id,
+    wait_id: read.wait_id,
+    outcome: read.outcome,
+    next_state: record_interaction(
+      read.next_state,
+      WakeIdentity("loop_v2", req.request_id, read.wait_id),
+      "wake_read request_id=${req.request_id} step=${show(req.step)} attempt=${show(req.attempt)} waits=${show(List.length(req.waits))}",
+      0,
+      { advance_ms: 0, chunks: [],
+        payload: if served then wake_payload(read, req.attempt) else "",
+        status: if served then OutcomeOk else OutcomeMissing,
+        fault_class_id: "" }
+    )
+  }
 }
 
 pure func test_park_request() -> ParkRequest {
@@ -2726,7 +2813,11 @@ export func ports_shape_probe(
     model_step: model_step,
     approval_read: scripted_approval,
     -- PLAN-002 W3: the unbound default. W4 binds the real adapters.
-    wake_read: wake_read_unbound,
+    -- PLAN-002 W4 Part 4: the deterministic default is the scripted wake,
+    -- as `approval_read` above is the scripted approval. Its empty queue falls
+    -- through to `wake_read_unbound`, so a world with no `wakes` behaves exactly
+    -- as W3's binding did.
+    wake_read: scripted_wake,
     clock_now: virtual_clock,
     env_get: scripted_env,
     file_read: scripted_file,

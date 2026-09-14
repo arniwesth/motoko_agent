@@ -9,6 +9,7 @@ import std/ai (Message, ToolCall)
 import std/json (jo)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
+import std/option (Option, Some, None)
 import src/core/context_limit (ContextLimit, Bounded, Unknown, Catalogue, ProfileKeyAbsent, CatalogueAbsent, raw_window_of)
 import src/core/phase_vocab (
   StepState,
@@ -22,6 +23,11 @@ import src/core/phase_vocab (
   InjectUserMessage,
   AwaitApproval,
   TakeCheckpoint,
+  Park,
+  WaitDescriptor,
+  DelegateWait,
+  OperatorWait,
+  wait_id,
   ToolPlanEntry,
   ToolPlan,
   ExecNative,
@@ -127,6 +133,19 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "", images: [] })
   else if s.last_finish_reason == "persist_nudge"
   then InjectUserMessage(persist_nudge_message(s.nudges_used + 1, pol.persist_retries))
+  -- PLAN-002 W4 Part 1 (ADR-002 D2). THE ARM READS `open_waits`: no stop-class
+  -- reason, blank `stop` included, finalizes while a wait is open, whatever
+  -- stage 3 did. It is also the arm a re-issue re-enters, and it precedes
+  -- `call_model_or_fail`, so it carries that function's step-budget predicate
+  -- and `Fail` record (R1): exhaustion suspends rather than parks.
+  else if List.length(s.open_waits) > 0
+       && (s.last_finish_reason == "await_wake" || s.last_finish_reason == "stop"
+           || s.last_finish_reason == "dp7_approved" || s.last_finish_reason == "dp7_fail_open")
+  then {
+    if pol.step_budget > 0 && s.step_idx >= pol.step_budget
+    then Fail({ code: "StepBudgetExhausted", message: "step budget exhausted", retryable: false })
+    else Park(s.open_waits)
+  }
   else if s.last_finish_reason == "stop" || s.last_finish_reason == "dp7_approved" || s.last_finish_reason == "dp7_fail_open"
   then Finalize({ reason: "model_stop", output: s.last_response_text })
   else if s.last_finish_reason == "stream_error"
@@ -447,4 +466,146 @@ pure func test_enabled_policy_checkpoints_under_pressure() -> bool
       },
       Err(_) => false
     }
+  }
+
+-- ============================================================================
+-- PLAN-002 W4 Part 1: the `Park` arm's cross product (ADR-002 D2). The fifteen
+-- tests above are untouched; every case here adds open waits to a state one of
+-- them already builds.
+-- ============================================================================
+
+pure func w4_wait(id: string) -> WaitDescriptor {
+  DelegateWait({ id: id, delegate_kind: "claude", locator: { pane: "p-${id}" }, answer_path: "/tmp/${id}.md", run_key: "rk-${id}" })
+}
+
+func w4_state(reason: string, response: string, pending: [ToolCall], step_idx: int, waits: [WaitDescriptor]) -> Result[StepState, string] {
+  match mk_state(reason, response, pending, step_idx, 0, 0) {
+    Ok(s) => Ok({ s | open_waits: waits }),
+    Err(e) => Err(e)
+  }
+}
+
+pure func w4_wait_ids(ws: [WaitDescriptor]) -> [string] {
+  match ws {
+    [] => [],
+    w :: rest => wait_id(w) :: w4_wait_ids(rest)
+  }
+}
+
+pure func w4_same_ids(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { y :: ys => x == y && w4_same_ids(xs, ys), [] => false }
+  }
+}
+
+pure func is_park(d: StepDecision, ids: [string]) -> bool {
+  match d {
+    Park(ws) => w4_same_ids(w4_wait_ids(ws), ids),
+    _ => false
+  }
+}
+
+pure func is_any_park(d: StepDecision) -> bool {
+  match d {
+    Park(_) => true,
+    _ => false
+  }
+}
+
+func w4_decides(reason: string, response: string, step_idx: int, waits: [WaitDescriptor], pol: StepPolicy) -> Option[StepDecision] {
+  match w4_state(reason, response, [], step_idx, waits) {
+    Ok(s) => Some(decide(s, pol)),
+    Err(_) => None
+  }
+}
+
+func w4_parks(reason: string, response: string) -> bool {
+  match w4_decides(reason, response, 0, [w4_wait("h1")], mk_policy(fixture_unmeasured())) {
+    Some(d) => is_park(d, ["h1"]),
+    None => false
+  }
+}
+
+-- Each stop-class reason × open waits → Park.
+pure func test_w4_stop_class_with_waits_parks() -> bool
+  tests [((), true)]
+  {
+    w4_parks("stop", "done") && w4_parks("dp7_approved", "done") && w4_parks("dp7_fail_open", "done")
+  }
+
+-- Empty stop (reason `stop`, no text) × waits → Park, never the empty floor.
+pure func test_w4_empty_stop_with_waits_parks() -> bool
+  tests [((), true)]
+  {
+    w4_parks("stop", "")
+  }
+
+-- `await_wake` × waits → Park; `await_wake` × no waits → not Park: it falls
+-- through to `call_model_or_fail`, which a fresh state answers with CallModel.
+pure func test_w4_await_wake_parks_only_with_waits() -> bool
+  tests [((), true)]
+  {
+    let with_waits = w4_parks("await_wake", "");
+    let without = match w4_decides("await_wake", "", 0, [], mk_policy(fixture_unmeasured())) {
+      Some(d) => not is_any_park(d) && is_call_model(d),
+      None => false
+    };
+    with_waits && without
+  }
+
+-- The three inject reasons × waits still inject.
+pure func test_w4_inject_reasons_with_waits_inject() -> bool
+  tests [((), true)]
+  {
+    let injects = \reason. match w4_decides(reason, "text", 0, [w4_wait("h1")], mk_policy(fixture_unmeasured())) {
+      Some(d) => is_inject(d),
+      None => false
+    };
+    injects("dp7_rejected") && injects("solver_feedback") && injects("persist_nudge")
+  }
+
+-- Pending tools × waits → RunTools.
+pure func test_w4_pending_tools_with_waits_run_tools() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc", name: "Delegate", arguments: "{}" };
+    match w4_state("tool_calls", "", [call], 0, [w4_wait("h1")]) {
+      Ok(s) => is_run_tools(decide(s, mk_policy(fixture_unmeasured())), 1),
+      Err(_) => false
+    }
+  }
+
+-- Two open waits → Park carrying both, in registration order.
+pure func test_w4_two_waits_park_both_in_order() -> bool
+  tests [((), true)]
+  {
+    match w4_decides("stop", "done", 0, [w4_wait("h1"), OperatorWait({ id: "op" })], mk_policy(fixture_unmeasured())) {
+      Some(d) => is_park(d, ["h1", "op"]),
+      None => false
+    }
+  }
+
+-- R1, the budget guard: every reason the arm accepts × waits × a finite budget
+-- reached → exactly Fail(StepBudgetExhausted), not Park.
+pure func test_w4_park_arm_budget_guard_fails_at_the_budget() -> bool
+  tests [((), true)]
+  {
+    let exhausted = \reason. match w4_decides(reason, "", 8, [w4_wait("h1")], mk_policy(fixture_unmeasured())) {
+      Some(d) => not is_any_park(d) && is_fail(d, "StepBudgetExhausted") && fail_message(d) == "step budget exhausted",
+      None => false
+    };
+    exhausted("stop") && exhausted("dp7_approved") && exhausted("dp7_fail_open") && exhausted("await_wake")
+  }
+
+-- R1, the same with `step_budget == 0` (unlimited) → Park.
+pure func test_w4_park_arm_unlimited_budget_parks() -> bool
+  tests [((), true)]
+  {
+    let unlimited = { mk_policy(fixture_unmeasured()) | step_budget: 0 };
+    let parks = \reason. match w4_decides(reason, "", 8, [w4_wait("h1")], unlimited) {
+      Some(d) => is_park(d, ["h1"]),
+      None => false
+    };
+    parks("stop") && parks("dp7_approved") && parks("dp7_fail_open") && parks("await_wake")
   }

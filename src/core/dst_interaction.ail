@@ -60,6 +60,10 @@ export type IdentityBody
   = ProviderIdentity(string, int, string)           -- origin, step, model
   | ToolIdentity(string, string, string)            -- origin, call_id, name
   | ApprovalIdentity(string, string, string)        -- origin, call_id, name
+  -- PLAN-002 W4 Part 4 (ADR-002 D2): one `wake_read`, the approval class's twin.
+  -- NOT `WakeRead`, which is the ordinal class. `attempt` is a PAYLOAD field,
+  -- not part of the identity (R2).
+  | WakeIdentity(string, string, string)            -- origin, request_id, wait_id
   | ExtensionEffectIdentity(string, string, string) -- ext_id, class_id, call_id
   | EnvironmentReadIdentity(string)                 -- key
   | RandomDrawIdentity(string)                      -- bounds label
@@ -123,6 +127,7 @@ export pure func identity_kind(b: IdentityBody) -> string {
     ProviderIdentity(_, _, _) => "expect_provider",
     ToolIdentity(_, _, _) => "expect_tool",
     ApprovalIdentity(_, _, _) => "expect_approval",
+    WakeIdentity(_, _, _) => "expect_wake",
     ExtensionEffectIdentity(_, _, _) => "expect_extension_effect",
     EnvironmentReadIdentity(_) => "environment_read",
     RandomDrawIdentity(_) => "runtime_random_draw",
@@ -141,6 +146,7 @@ export pure func all_interaction_kinds() -> [string] {
   [identity_kind(ProviderIdentity("", 0, "")),
    identity_kind(ToolIdentity("", "", "")),
    identity_kind(ApprovalIdentity("", "", "")),
+   identity_kind(WakeIdentity("", "", "")),
    identity_kind(ExtensionEffectIdentity("", "", "")),
    identity_kind(EnvironmentReadIdentity("")),
    identity_kind(RandomDrawIdentity("")),
@@ -158,6 +164,7 @@ export pure func identity_origin(b: IdentityBody) -> string {
     ProviderIdentity(o, _, _) => o,
     ToolIdentity(o, _, _) => o,
     ApprovalIdentity(o, _, _) => o,
+    WakeIdentity(o, _, _) => o,
     ExtensionEffectIdentity(e, _, _) => e,
     EnvironmentReadIdentity(_) => "",
     RandomDrawIdentity(_) => "",
@@ -179,6 +186,8 @@ export pure func identity_body_eq(a: IdentityBody, b: IdentityBody) -> bool {
       match b { ToolIdentity(o2, c2, n2) => o == o2 && c == c2 && n == n2, _ => false },
     ApprovalIdentity(o, c, n) =>
       match b { ApprovalIdentity(o2, c2, n2) => o == o2 && c == c2 && n == n2, _ => false },
+    WakeIdentity(o, r, w) =>
+      match b { WakeIdentity(o2, r2, w2) => o == o2 && r == r2 && w == w2, _ => false },
     ExtensionEffectIdentity(e, k, c) =>
       match b { ExtensionEffectIdentity(e2, k2, c2) => e == e2 && k == k2 && c == c2, _ => false },
     EnvironmentReadIdentity(k) =>
@@ -204,6 +213,7 @@ export pure func identity_body_projection(b: IdentityBody) -> string {
     ProviderIdentity(o, s, m) => "provider origin=${o} step=${s} model=${m}",
     ToolIdentity(o, c, n) => "tool origin=${o} call_id=${c} name=${n}",
     ApprovalIdentity(o, c, n) => "approval origin=${o} call_id=${c} name=${n}",
+    WakeIdentity(o, r, w) => "wake origin=${o} request_id=${r} wait_id=${w}",
     ExtensionEffectIdentity(e, k, c) => "extension_effect ext=${e} class=${k} call_id=${c}",
     EnvironmentReadIdentity(k) => "env_read key=${k}",
     RandomDrawIdentity(l) => "random_draw bounds=${l}",
@@ -301,6 +311,9 @@ export pure func class_has_deadline(b: IdentityBody) -> bool {
   match b {
     ToolIdentity(_, _, _) => true,
     ApprovalIdentity(_, _, _) => true,
+    -- PLAN-002 W4: the approval class's twin, recorded with deadline 0 ("no
+    -- declared deadline") for the approval's reason: no wake deadline is routed.
+    WakeIdentity(_, _, _) => true,
     ExtensionEffectIdentity(_, _, _) => true,
     ProviderIdentity(_, _, _) => false,
     EnvironmentReadIdentity(_) => false,
@@ -419,6 +432,21 @@ export pure func approvals_served(xs: [Interaction]) -> int {
   }
 }
 
+-- PLAN-002 W4 Part 4: how many recorded wake reads were SERVED from the
+-- `wakes` queue, `approvals_served`' twin. An exhausted queue falls through to
+-- the unbound default and is recorded `OutcomeMissing`, which consumed nothing.
+export pure func wakes_served(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (match i.identity.body {
+         WakeIdentity(_, _, _) =>
+           match i.outcome.status { OutcomeMissing => 0, _ => 1 },
+         _ => 0
+       }) + wakes_served(rest)
+  }
+}
+
 -- The env keys the log claims were read, in encounter order and with repeats
 -- preserved. Repeats matter: the driver reads `MOTOKO_TOOL_TIMEOUT_MS` once per
 -- native tool dispatch, so collapsing them would hide a recorder that logs the
@@ -471,11 +499,14 @@ pure func all_distinct(xs: [string], seen: [string]) -> bool {
 -- reaches, produced a log whose every count still balanced, and recorded a
 -- directory create as a file write of zero bytes — a kind disagreeing with its
 -- own payload, which is what design note 1 forbids and what this row measures.
-pure func test_identity_kind_is_injective_across_the_ten_classes() -> bool
+-- PLAN-002 W4 Part 4 took it to eleven with `WakeIdentity`, which is NOT
+-- `ApprovalIdentity` with a request id in the call-id slot: a wake guards no
+-- dispatch, and `expect_wake` is the kind that says so.
+pure func test_identity_kind_is_injective_across_the_eleven_classes() -> bool
   tests [((), true)]
   {
     let ks = all_interaction_kinds();
-    List.length(ks) == 10 && all_distinct(ks, [])
+    List.length(ks) == 11 && all_distinct(ks, [])
   }
 
 -- Identity equality must discriminate on EVERY component D2 names, in both

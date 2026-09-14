@@ -6,7 +6,7 @@
 -- its wire projection as a maintained compatibility surface, and this artifact
 -- carries that obligation.
 --
--- One artifact binds, for every one of the 43 `LedgerEvent` variants:
+-- One artifact binds, for every one of the 45 `LedgerEvent` variants:
 --
 --   the variant itself; its wire name; its payload schema; and its
 --   classification as LOGICAL or DISPLAY-ONLY.
@@ -51,7 +51,7 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Of the 37 Logical rows, **35 reach the returned trace now
+-- that is deliberate. Of the 39 Logical rows, **37 reach the returned trace now
 -- and 2 do not**; the two are `d64_gap_register`'s entries, both of long
 -- standing. ADR-003 D1's `SessionResumed` was the third until PLAN-003 P3 Part 5,
 -- whose resumed traced entry appends it as the first record of the frame. The other four journal-class variants were
@@ -107,7 +107,7 @@ import src/core/phase_vocab (
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
   ToolArgumentsUndecodable,
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
-  NativeToolResults, SessionSuspend, RunSuspended,
+  NativeToolResults, SessionSuspend, RunSuspended, ParkEntered, WakeReceived,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
   ContextLimitResolved, WorldRequest,
   SessionStart, ErrorEvent, TotalsUpdated,
@@ -182,6 +182,8 @@ export pure func event_variant_id(e: LedgerEvent) -> string {
     NativeToolResults(_) => "NativeToolResults",
     SessionSuspend(_) => "SessionSuspend",
     RunSuspended(_) => "RunSuspended",
+    ParkEntered(_) => "ParkEntered",
+    WakeReceived(_) => "WakeReceived",
     HistorySeeded(_) => "HistorySeeded",
     HistoryAppended(_) => "HistoryAppended",
     HistoryReplaced(_) => "HistoryReplaced",
@@ -240,6 +242,8 @@ export pure func event_wire_name(e: LedgerEvent) -> string {
     NativeToolResults(_) => "native_tool_results",
     SessionSuspend(_) => "session_suspend",
     RunSuspended(_) => "run_suspended",
+    ParkEntered(_) => "park_entered",
+    WakeReceived(_) => "wake_received",
     HistorySeeded(_) => "history_seeded",
     HistoryAppended(_) => "history_appended",
     HistoryReplaced(_) => "history_replaced",
@@ -447,6 +451,21 @@ export pure func event_vocabulary() -> [EventRow] {
       -- (`session.c2_suspend`), immediately before the RunSummary, so it is
       -- absent from `d64_gap_register` and `make ledger_parity` compares its
       -- projected count against its appended one like any other closed variant.
+      classification: Logical, reaches_trace_today: true },
+
+    { variant: "ParkEntered", wire_names: ["park_entered"],
+      payload: [req("request_id"), req("step"), req("waits")],
+      -- PLAN-002 W4 Part 3 (ADR-002 D2). LOGICAL (PLAN-001 §2.2): ADR-003 D7's
+      -- durable `park` entry is read from it, and `request_id`/`step`/`waits`
+      -- are what a resumer re-issues. APPENDED where it is emitted (the `Park`
+      -- arm, first issue only), so it is absent from `d64_gap_register`.
+      classification: Logical, reaches_trace_today: true },
+
+    { variant: "WakeReceived", wire_names: ["wake_received"],
+      payload: [req("request_id"), req("wait_id"), req("outcome"), req("detail")],
+      -- LOGICAL: the wake the loop APPLIED (R2), D7's `wake` child of a park.
+      -- A dropped reply appends nothing and emits a `warning` instead. Appended
+      -- where it is emitted, including `Aborted` before a mid-park exit.
       classification: Logical, reaches_trace_today: true },
 
     -- ============================================================================
@@ -841,7 +860,7 @@ pure func has_rule(rs: [VocabularyRejection], rule: string) -> bool {
 pure func test_vocabulary_has_thirty_five_distinct_rows() -> bool
   tests [((), true)]
   {
-    List.length(event_vocabulary()) == 43
+    List.length(event_vocabulary()) == 45
       && no_dups(row_variants(event_vocabulary()), [])
   }
 
@@ -907,7 +926,7 @@ pure func test_classification_partitions_the_vocabulary() -> bool
   tests [((), true)]
   {
     let rows = event_vocabulary();
-    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 43
+    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 45
       && List.length(display_only_variants(rows)) == 6
   }
 

@@ -127,9 +127,9 @@
 
 module src/core/dst_invariants
 
-import std/list as List (length, foldl)
+import std/list as List (length, foldl, map)
 import std/crypto (sha256Hex)
-import std/string as Str (startsWith)
+import std/string as Str (startsWith, contains)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 
@@ -139,7 +139,7 @@ import src/core/phase_vocab (
   LedgerEvent, RunSummary, TotalsUpdated, CostExhausted, DoneEvent, CheckpointTaken,
   StreamDelta,
   -- ADR-003 D1's journal class, read by the payload-equality rows below.
-  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, ParkEntered, WakeReceived, ParkEnteredInfo, OperatorWait, wait_id,
   CheckpointInfo,
   is_run_summary,
   count_run_summaries,
@@ -374,6 +374,9 @@ export type Violation
   -- different input (the entries the twin builds, not the wire records the
   -- driver appended).
   | JournalPayloadDisagrees(string)
+  -- PLAN-002 W4 Part 3: a park/wake record's payload disagrees with itself or
+  -- with the park it answers.
+  | ParkPayloadDisagrees(string)
 
 export pure func violation_family(v: Violation) -> InvariantFamily {
   match v {
@@ -415,7 +418,8 @@ export pure func violation_family(v: Violation) -> InvariantFamily {
     AmbientRngRead(_) => HarnessHygiene,
     ForbiddenEffectSite(_) => HarnessHygiene,
     JournalFoldDisagrees(_) => JournalFold,
-    JournalPayloadDisagrees(_) => EmissionParity
+    JournalPayloadDisagrees(_) => EmissionParity,
+    ParkPayloadDisagrees(_) => EmissionParity
   }
 }
 
@@ -459,7 +463,8 @@ export pure func violation_rule(v: Violation) -> string {
     AmbientRngRead(_) => "ambient-rng-read",
     ForbiddenEffectSite(_) => "forbidden-effect-site",
     JournalFoldDisagrees(_) => "journal-fold-disagrees",
-    JournalPayloadDisagrees(_) => "journal-payload-disagrees"
+    JournalPayloadDisagrees(_) => "journal-payload-disagrees",
+    ParkPayloadDisagrees(_) => "park-payload-disagrees"
   }
 }
 
@@ -541,6 +546,8 @@ export pure func violation_message(v: Violation) -> string {
       "[forbidden-effect-site] the run reached '${site}', which the profile declares forbidden; D5's exclusion is the profile's whole claim and a reached exclusion retires it",
     JournalFoldDisagrees(field) =>
       "[journal-fold-disagrees] a fold of the run's journal-class records disagrees with what the run ended holding at '${field}'; ADR-003 D4 makes resume a PURE FOLD of the journal, so the fold over a run's own trace must reproduce that run's final state exactly — a field that differs is a resume that would open on a different conversation than the one that was suspended, and a 'refusal:' field is the fold declining to read the journal at all",
+    ParkPayloadDisagrees(field) =>
+      "[park-payload-disagrees] a `park_entered` or `wake_received` record's payload disagrees at '${field}'; PLAN-002 W4 Part 3 asks for PAYLOAD assertions and not presence only: a park names a `<run_id>.p<n>` request, a step and at least one wait and is entered once, and a wake answers the open park's `request_id`, carries a known outcome, names one of that park's waits when the outcome settles, loses or times out one, and carries the cancelling command when it aborts",
     JournalPayloadDisagrees(field) =>
       "[journal-payload-disagrees] a journal-class record's payload disagrees with itself or with its neighbours at '${field}'; ADR-003 D2 asks the emission-parity family for PAYLOAD equality and not only presence, and these are the three claims no other reading makes — the seed's `digest` against its own `messages`, a `state_delta`'s `ext_artifacts_digest` against the artifacts it inlined, and one `run_id` across every journal-class record of one run"
   }
@@ -1183,6 +1190,76 @@ export pure func parity_findings(x: ExecutionUnderTest) -> [Violation] {
     ++ display_only_in(trace.records, event_vocabulary(), 0)
     ++ stream_parity_findings(x.emissions, trace)
     ++ journal_payload_findings(trace)
+    ++ park_payload_findings(trace)
+}
+
+-- ============================================================================
+-- PLAN-002 W4 Part 3: the park class's PAYLOAD rows (ADR-002 D2).
+-- ============================================================================
+--
+-- Presence is `make ledger_parity`'s; these are the claims only the payload
+-- makes, read over one returned trace in record order:
+--   park_entered.request_id   non-empty and `<run_id>.p<n>`-shaped
+--   park_entered.step         non-negative
+--   park_entered.waits        at least one wait (`decide` parks only on waits)
+--   park_entered.reentered    a park is entered ONCE: a re-issue of the same
+--                             `request_id` appends no second record (§8.3)
+--   wake_received.request_id  answers the park that is open
+--   wake_received.outcome     one of the six arm ids
+--   wake_received.wait_id     names one of that park's waits for settled /
+--                             lost / timed_out; carries the command for aborted
+-- A wake closes its park, so a second wake for one park is the `request_id`
+-- row's red.
+
+type ParkPayloadAcc = {
+  vs: [Violation],
+  open: [ParkEnteredInfo],
+  entered: [string],
+  pos: int
+}
+
+pure func park_ids_of(i: ParkEnteredInfo) -> [string] {
+  List.map(\w. wait_id(w), i.waits)
+}
+
+pure func park_request_shaped(id: string) -> bool {
+  id != "" && Str.contains(id, ".p")
+}
+
+pure func park_payload_step(acc: ParkPayloadAcc, r: LedgerRecord) -> ParkPayloadAcc {
+  match r {
+    WireRecord(ParkEntered(i)) => {
+      let at = " at record ${show(acc.pos)}";
+      let vs =
+        (if park_request_shaped(i.request_id) then [] else [ParkPayloadDisagrees("park_entered.request_id${at}")])
+        ++ (if i.step >= 0 then [] else [ParkPayloadDisagrees("park_entered.step${at}")])
+        ++ (if List.length(i.waits) > 0 then [] else [ParkPayloadDisagrees("park_entered.waits${at}")])
+        ++ (if contains_str(acc.entered, i.request_id) then [ParkPayloadDisagrees("park_entered.reentered '${i.request_id}'${at}")] else []);
+      { vs: acc.vs ++ vs, open: [i], entered: i.request_id :: acc.entered, pos: acc.pos + 1 }
+    },
+    WireRecord(WakeReceived(i)) => {
+      let at = " at record ${show(acc.pos)}";
+      let known = i.outcome == "settled" || i.outcome == "lost" || i.outcome == "operator_input"
+        || i.outcome == "timed_out" || i.outcome == "host_error" || i.outcome == "aborted";
+      let names_wait = i.outcome == "settled" || i.outcome == "lost" || i.outcome == "timed_out";
+      let vs = match acc.open {
+        [] => [ParkPayloadDisagrees("wake_received.request_id '${i.request_id}' answers no open park${at}")],
+        p :: _ =>
+          (if p.request_id == i.request_id then [] else [ParkPayloadDisagrees("wake_received.request_id '${i.request_id}' against open '${p.request_id}'${at}")])
+          ++ (if names_wait && not contains_str(park_ids_of(p), i.wait_id) then [ParkPayloadDisagrees("wake_received.wait_id '${i.wait_id}'${at}")] else [])
+      };
+      let shape =
+        (if known then [] else [ParkPayloadDisagrees("wake_received.outcome '${i.outcome}'${at}")])
+        ++ (if i.outcome == "aborted" && i.wait_id == "" then [ParkPayloadDisagrees("wake_received.wait_id aborted with no command${at}")] else []);
+      { vs: acc.vs ++ vs ++ shape, open: [], entered: acc.entered, pos: acc.pos + 1 }
+    },
+    _ => { acc | pos: acc.pos + 1 }
+  }
+}
+
+export pure func park_payload_findings(trace: LedgerTrace) -> [Violation] {
+  let acc0: ParkPayloadAcc = { vs: [], open: [], entered: [], pos: 0 };
+  List.foldl(park_payload_step, acc0, trace.records).vs
 }
 
 -- ============================================================================
@@ -2282,3 +2359,31 @@ pure func messages_name_their_rule(vs: [Violation]) -> bool {
 pure func starts_with_bracketed(msg: string, rule: string) -> bool {
   Str.startsWith(msg, "[${rule}] ")
 }
+
+-- PLAN-002 W4 Part 3: the park rows bite. A well-formed park and its wake are
+-- silent; each malformed field is named.
+pure func w4_park(rid: string, ids: [string]) -> LedgerRecord {
+  WireRecord(ParkEntered({ request_id: rid, step: 2, waits: List.map(\i. OperatorWait({ id: i }), ids) }))
+}
+
+pure func w4_wake_rec(rid: string, wid: string, outcome: string) -> LedgerRecord {
+  WireRecord(WakeReceived({ request_id: rid, wait_id: wid, outcome: outcome, detail: "" }))
+}
+
+pure func test_park_payload_findings_accept_a_park_and_name_each_bad_field() -> bool
+  tests [((), true)]
+  {
+    let good = { records: [w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p0", "h1", "settled"),
+                           w4_park("s.r0.0.p1", ["h1"]), w4_wake_rec("s.r0.0.p1", "", "host_error"),
+                           w4_park("s.r0.0.p2", ["h1"]), w4_wake_rec("s.r0.0.p2", "abort", "aborted")] };
+    let rules = \rs. List.length(park_payload_findings({ records: rs }));
+    List.length(park_payload_findings(good)) == 0
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p9", "h1", "settled")]) == 1
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p0", "h2", "settled")]) == 1
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p0", "h1", "bogus")]) == 1
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p0", "", "aborted")]) == 1
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_park("s.r0.0.p0", ["h1"])]) == 1
+      && rules([w4_park("s.r0.0.p0", [])]) == 1
+      && rules([w4_park("", ["h1"])]) == 1
+      && rules([w4_wake_rec("s.r0.0.p0", "h1", "settled")]) == 1
+  }

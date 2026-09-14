@@ -2,7 +2,7 @@
 --
 -- WI-A8 acceptance, under ADR-001 D6.
 --
--- The artifact declares a wire name and a payload schema for each of the 43
+-- The artifact declares a wire name and a payload schema for each of the 45
 -- `LedgerEvent` variants. This script is what makes those declarations mean
 -- something: it builds ONE SAMPLE VALUE PER VARIANT and asserts, against the
 -- LIVE projection `phase_vocab.to_schema_v1`, that
@@ -41,7 +41,7 @@ import src/core/phase_vocab (
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
   ToolArgumentsUndecodable,
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
-  NativeToolResults, SessionSuspend, RunSuspended,
+  NativeToolResults, SessionSuspend, RunSuspended, ParkEntered, WakeReceived, OperatorWait,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
   ContextLimitResolved, WorldRequest,
   SessionStart, ErrorEvent, TotalsUpdated,
@@ -120,6 +120,9 @@ pure func samples() -> [LedgerEvent] {
     NativeToolResults({ request_id: "rq", step: 1, stream_id: "s", payload: jo([]) }),
     SessionSuspend({ session_id: "sid", target_profile: "p" }),
     RunSuspended({ session_id: "sid", run_id: "sid.r0.0", reason: "budget_exhausted", step: 3 }),
+    -- PLAN-002 W4 Part 3.
+    ParkEntered({ request_id: "sid.r0.0.p0", step: 2, waits: [OperatorWait({ id: "op" })] }),
+    WakeReceived({ request_id: "sid.r0.0.p0", wait_id: "op", outcome: "operator_input", detail: "hi" }),
     -- ADR-003 D1's journal class (PLAN-003 P3 Part 1). The two rows with an
     -- OPTIONAL payload key are sampled with the key ABSENT — `first_kept: None`
     -- and `ext_artifacts: None` — because that is the branch the round trip can
@@ -334,7 +337,7 @@ export func main() -> () ! {IO} {
             report_rejections(rs)
           };
 
-  -- 2. THE ROUND TRIP. All 43 variants against the live projection.
+  -- 2. THE ROUND TRIP. All 45 variants against the live projection.
   let c2 = assert_all(ss);
   let _ = if c2 then println("  ✓ all ${show(List.length(ss))} variants round-trip: wire name and payload schema match the live projection")
           else println("  ✗ at least one variant does not round-trip");
@@ -361,7 +364,7 @@ export func main() -> () ! {IO} {
   -- 4. The classification, and the D6.4 gap it makes countable.
   let logical = logical_variants(rows);
   let display = display_only_variants(rows);
-  let c4 = List.length(logical) + List.length(display) == 43;
+  let c4 = List.length(logical) + List.length(display) == 45;
   let _ = if c4 then println("  ✓ every variant classified: ${show(List.length(logical))} logical, ${show(List.length(display))} display-only")
           else println("  ✗ the classification does not partition the vocabulary");
   let _ = print_list("display-only", display);

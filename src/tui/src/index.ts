@@ -23,7 +23,7 @@ import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-p
 import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
-import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
+import { RuntimeProcess, interruptRuntime, journalExitReason, resolveDelegatedExec } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { HeadlessOutcome, formatResumeViewLine } from "./headless-outcome.js";
 import {
@@ -1157,7 +1157,7 @@ async function main(): Promise<void> {
         // restart and a quit look identical. A restart respawns into the same session and the same
         // journal, so its boundary is followed by more entries, which is why more than one `exit`
         // per session is correct and only a CONSECUTIVE second one is suppressed.
-        journal.writeExit(pendingRestart ? "restart" : interrupted ? "abort" : "child_exit");
+        journal.writeExit(journalExitReason(pendingRestart, interrupted));
         if (pendingRestart) {
           // Restart requested — respawn with optional new profile
           if (typeof pendingRestart === "string") {
@@ -1273,14 +1273,19 @@ async function main(): Promise<void> {
     // dead-child guard — leaving no way out of the TUI at all.
     if (runtimeProcess && !runtimeProcess.isDead && !preWarmIdle) {
       abortRequested = true;
-      runtimeProcess.abort();
+      // PLAN-002 W4 Part 5: quitting a parked runtime sends `exit` down stdin; the core cancels the
+      // request (`Aborted`, wait_id "exit") and the child exits with neither `done` nor `error`.
+      if (runtimeProcess.isParked) runtimeProcess.exit();
+      else runtimeProcess.abort();
       return;
     }
     runtimeProcess?.kill();
     ui.stop();
     process.exit(0);
   };
-  ui.onInterrupt = () => { interrupted = true; runtimeProcess?.kill(); };
+  // ESC. During a park (W4 Part 5) it ABORTS over stdin instead of killing, so the run's end is on
+  // the wire as `WakeReceived(Aborted)`; `interrupted` makes the exit handler journal `abort`.
+  ui.onInterrupt = () => { interrupted = true; interruptRuntime(runtimeProcess); };
 
   // Restart handler — respawn the runtime process with optional new profile
   ui.onRestart = (newProfile) => {

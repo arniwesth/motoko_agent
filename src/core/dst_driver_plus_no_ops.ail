@@ -212,7 +212,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- entries) to the extension's OWN list (`registered_atoms_of`, 4 entries in
 -- all). `check_no_op_profile.py` cross-checks each claim against B2's
 -- enumeration, which is what turned v10 red — as B8 §5 said it would.
-export pure func no_ops_version() -> string { "20" }
+export pure func no_ops_version() -> string { "21" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -402,7 +402,12 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +16/+16/+16/+119/+119, pushed by PLAN-002
     -- W2. An anchor re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:2ec1e8dd776def8ce158ffcf3ccfc31dd06500cebcf6af8a306c95147f17009e" }
+    -- PLAN-002 W4: re-recorded with `driver_only`'s, from
+    -- sha256:2ec1e8dd776def8ce158ffcf3ccfc31dd06500cebcf6af8a306c95147f17009e.
+    -- All five session anchors moved +24/+24/+24/+290/+290, pushed by PLAN-002
+    -- W4. An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583" }
 }
 
 -- ---------------------------------------------------------------------------

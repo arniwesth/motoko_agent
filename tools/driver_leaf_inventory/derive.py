@@ -146,7 +146,12 @@ HELPED = {
 # `sed -n '1061,1450p'` of the working tree is EMPTY. The +16 is above the span:
 # `C2LoopState.open_waits` and its comment (ADR-002 D2/D3), declared with the
 # record. No leaf was added, removed or re-routed.
-BRIDGE_SPAN = ("src/core/session.ail", 1061, 1450)
+# RE-PINNED AT PLAN-002 W4, 1061-1450 -> 1085-1474, ALL +24, content UNCHANGED:
+# `diff` of `git show 9430873:src/core/session.ail | sed -n '1061,1450p'` against
+# `sed -n '1085,1474p'` of the working tree is EMPTY. The +24 is above the span:
+# `C2LoopState.park_ordinal`/`park_attempt` and `initial_park_ordinal` (ADR-002
+# D2, PLAN-002 §8.4). No leaf was added, removed or re-routed inside the span.
+BRIDGE_SPAN = ("src/core/session.ail", 1085, 1474)
 
 AGGREGATE_HELPERS = [
     "resolve_context_limit",
@@ -301,6 +306,17 @@ BOOTSTRAP_CHAIN = [
 
 CLEAN_VERDICTS = ("clean", "returned")
 
+# PLAN-002 W4 (ADR-002 D2). A leaf whose PORT returns an already-advanced
+# successor. `wake_read`'s adapters advance inside themselves: W3's unbound
+# default returns `advance(world, WakeRead)` (PLAN-002 §1 row 1), W4's scripted
+# adapter `advance({ w | wakes: rest }, WakeRead)` (W4 Part 4), and the `Park`
+# arm owes only a witness because "the port has advanced the world either way"
+# (W4 Part 2). For these, `B.next_state` IS the advanced successor: the
+# ADVANCED step (1) is satisfied by the port, and steps 2-3 read `B.next_state`
+# as the carried value. A call-site `advance(B.next_state …)` is still read as
+# a carry too, so W3's two fixtures keep their verdicts.
+PORT_ADVANCED_METHODS = ("wake_read",)
+
 FUNC_RE = re.compile(r"^(?:export\s+)?(?:pure\s+)?func\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
 
 
@@ -347,7 +363,7 @@ def witness_calls(clean: str, lo: int, hi: int):
     return out
 
 
-def leaf_verdict(clean: str, call_start: int, fn_end: int, fn_name: str) -> str:
+def leaf_verdict(clean: str, call_start: int, fn_end: int, fn_name: str, port_advanced: bool = False) -> str:
     line_start = clean.rfind("\n", 0, call_start) + 1
     lets = list(re.finditer(r"\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=", clean[line_start:call_start]))
     if not lets:
@@ -361,12 +377,13 @@ def leaf_verdict(clean: str, call_start: int, fn_end: int, fn_name: str) -> str:
         tail_end = fn_end if eol == -1 else min(fn_end, eol)
     t0, tail = call_start, clean[call_start:tail_end]
     adv = r"advance\s*\(\s*" + b + r"\.next_state\b"
-    if not re.search(adv, tail):
-        return "un-advanced-and-unwitnessed"
-    for m in re.finditer(r"\b" + b + r"\.next_state\b", tail):
-        if not re.search(r"advance\s*\(\s*$", tail[:m.start()]):
-            return "un-advanced-carry"
-    cands = [adv]
+    if not port_advanced:
+        if not re.search(adv, tail):
+            return "un-advanced-and-unwitnessed"
+        for m in re.finditer(r"\b" + b + r"\.next_state\b", tail):
+            if not re.search(r"advance\s*\(\s*$", tail[:m.start()]):
+                return "un-advanced-carry"
+    cands = [adv] if not port_advanced else [adv, r"\b" + b + r"\.next_state\b"]
     vm = re.search(r"\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=\s*" + adv, tail)
     if vm:
         cands.append(r"\b" + re.escape(vm.group(1)) + r"\b(?!\s*[:=(])")
@@ -412,7 +429,7 @@ def order_check(repo: Path, leaves, texts: dict | None = None):
             continue
         _, fe, fn = encl
         leaf["function"] = fn
-        leaf["order"] = leaf_verdict(clean, m.start(), fe, fn)
+        leaf["order"] = leaf_verdict(clean, m.start(), fe, fn, m.group("method") in PORT_ADVANCED_METHODS)
         clean_verdict_at[(leaf["file"], m.start())] = leaf["order"]
 
     rows = []
@@ -587,7 +604,7 @@ def classify_fixture(clean: str) -> str:
         if encl is None:
             verdicts.append("unlocated")
             continue
-        verdicts.append(leaf_verdict(clean, m.start(), encl[1], encl[2]))
+        verdicts.append(leaf_verdict(clean, m.start(), encl[1], encl[2], m.group("method") in PORT_ADVANCED_METHODS))
     if not verdicts:
         return "no-helped-leaf"
     return next((v for v in verdicts if v not in CLEAN_VERDICTS), verdicts[0])
@@ -617,6 +634,14 @@ TREE_MUTANTS = [
      "exchange.next_state); let trace_after_call = stepped.trace;",
      "st.world_state); let trace_after_call = stepped.trace;",
      ("receipt", "exchange.next_state", {"receipt-dropped", "receipt-used-before-witness"})),
+    # PLAN-002 W4 gate 4 (W3 Part 6's tree half): the `Park` arm's witness
+    # removed. The port-advanced successor then reaches a record field with no
+    # witness draining it.
+    ("wake_read successor not witnessed",
+     "src/core/session.ail",
+     "let woke = witness(session_id, trace_entered, wake.next_state);",
+     "let woke = { trace: trace_entered, world: wake.next_state };",
+     ("leaf", "st.provider.wake_read", {"advanced-unwitnessed", "witnessed-after-construction"})),
     ("exit-publish read never witnessed",
      "src/core/session.ail",
      "let seen = witness(session_id, trace, named_world);",

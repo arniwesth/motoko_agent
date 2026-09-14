@@ -358,6 +358,15 @@ ledger_parity:
 # different claim over the same run, so a red here names an ordinal, not a
 # parity count. `--selftest` first shows every red class on a synthetic wire,
 # so the green that follows is not a checker that cannot fail.
+# PLAN-002 W4 Parts 6-7 (ADR-002 D2/D3). The park-and-wake fixtures and the
+# 4-call metric, driven through the traced entry with scripted and recording
+# `wakes` queues. The shell reads what the trace cannot: one `warning` per
+# dropped reply, the mid-park `restart`'s `session_suspend`, and the
+# determinism pair's byte-identical wire frames.
+.PHONY: park_wake
+park_wake:
+	./scripts/dst/run_park_wake.sh
+
 .PHONY: world_framed_wire
 world_framed_wire:
 	./scripts/dst/run_world_framed_wire.sh --selftest
@@ -488,7 +497,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
   registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest \
-  herdr_graded journal_resume world_framed_wire
+  herdr_graded journal_resume world_framed_wire park_wake
 
 # The graded session for a herdr DST profile (021 step 2's demonstration half).
 #
@@ -1253,6 +1262,7 @@ program_persistence:
 	for f in scripts/dst/fixtures/execution-program-v1.artifact \
 	         scripts/dst/fixtures/execution-program-v2.artifact \
 	         scripts/dst/fixtures/execution-program-v3.artifact \
+	         scripts/dst/fixtures/execution-program-v4.artifact \
 	         scripts/dst/fixtures/execution-program-v0.artifact; do \
 		if [ ! -s "$$f" ]; then \
 			echo "FAIL: the frozen specimen $$f is missing or empty."; \
@@ -1262,8 +1272,8 @@ program_persistence:
 			exit 1; \
 		fi; \
 	done; \
-	echo "  ✓ all four frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes and $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') of v2, both now predating this build's encoder, plus $$(wc -l < scripts/dst/fixtures/execution-program-v3.artifact | tr -d ' ') lines of v3 bytes carrying the byte-identity assertion at the version this build writes)"; \
-	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v3_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
+	echo "  ✓ all five frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes and $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') of v2 and $$(wc -l < scripts/dst/fixtures/execution-program-v3.artifact | tr -d ' ') of v3, all three now predating this build's encoder, plus $$(wc -l < scripts/dst/fixtures/execution-program-v4.artifact | tr -d ' ') lines of v4 bytes carrying the byte-identity assertion at the version this build writes)"; \
+	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v3_fixture_path\(\)\s*,|v4_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
 	     src scripts --include=*.ail || true); \
 	if [ -n "$$writers" ]; then \
 		echo "FAIL: something in the tree writes to the frozen fixtures:"; \

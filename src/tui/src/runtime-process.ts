@@ -6,6 +6,14 @@ import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
 import { dispatchOhMyPiTool } from "./ohMyPi/dispatcher.js";
 import { sessionStartMs, sessionIdentity, sessionResumeCount } from "./session-identity.js";
 import { exitManifestPath, rememberExitManifestPath } from "./exit-actions.js";
+import {
+  defaultWakeWaiterFactory,
+  type WaitDescriptor,
+  type WakeReply,
+  type WakeRequest,
+  type WakeWaiterFactory,
+  type WakeWaiterHandle,
+} from "./wake-waiter.js";
 
 export interface DelegatedExecReq {
   cmd: string;
@@ -125,7 +133,13 @@ export type AgentEvent =
   | { type: "native_tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
   | { type: "native_tool_results"; request_id: string; results: NativeToolResult[] }
   | { type: "v2_tool_dispatch_start"; step: number; stream_id: string; tool: string; id: string }
-  | { type: "v2_tool_dispatch_complete"; step: number; stream_id: string; id: string };
+  | { type: "v2_tool_dispatch_complete"; step: number; stream_id: string; id: string }
+  // ADR-002 D2 / PLAN-002 W4 Part 5. `wake_request` is the core asking the host which of its open
+  // waits is ready (a protocol line, not a ledger event); `park_entered` and `wake_received` are the
+  // ledger events either side of it. `wake_received` also means the request is resolved.
+  | { type: "wake_request"; request_id: string; step: number; attempt: number; waits: WaitDescriptor[] }
+  | { type: "park_entered"; request_id: string; step: number; waits: WaitDescriptor[] }
+  | { type: "wake_received"; request_id: string; wait_id: string; outcome: string; detail: string };
 
 export function parseAgentEventLine(line: string): AgentEvent | null {
   const trimmed = line.trim();
@@ -160,6 +174,35 @@ export function describeUnexplainedExit(code: number | null, signal: NodeJS.Sign
 
 /** Events after which the child's exit is already explained on the wire (refusal: `rpc.ail` exits 3). */
 const EXIT_EXPLAINING_EVENTS = new Set(["done", "error", "session_resume_refused"]);
+
+/**
+ * Events that end an outstanding park without a matching `wake_received`: the run ended (`done`,
+ * `error`, a suspend on the step budget — the `Park` arm's own guard) or the session suspended for a
+ * restart. `run_suspended` is not in PLAN-002's list; it is here because a re-issue that exhausts
+ * the step budget suspends the run with no wake, and the park would otherwise stay open for ever.
+ */
+const PARK_ENDING_EVENTS = new Set(["done", "error", "session_suspend", "run_suspended"]);
+
+/** What ESC does to the runtime: abort a parked run over stdin (W4 Part 5), kill anything else. */
+export function interruptRuntime(
+  rp: Pick<RuntimeProcess, "isParked" | "abort" | "kill"> | undefined,
+): "abort" | "kill" | "none" {
+  if (!rp) return "none";
+  if (rp.isParked) {
+    rp.abort();
+    return "abort";
+  }
+  rp.kill();
+  return "kill";
+}
+
+/** The journal `exit` entry's reason for a TTY runtime exit (index.ts's exit handler). */
+export function journalExitReason(
+  pendingRestart: string | boolean | undefined,
+  interrupted: boolean,
+): "restart" | "abort" | "child_exit" {
+  return pendingRestart ? "restart" : interrupted ? "abort" : "child_exit";
+}
 
 export function providerSelectionModel(model: string, openaiBaseUrl: string): string {
   const trimmed = model.trim();
@@ -616,9 +659,11 @@ export class RuntimeProcess {
     onEvent: (e: AgentEvent) => void,
     onExit: () => void,
     resume?: ResumeSpawn,
+    wakeWaiterFactory: WakeWaiterFactory = defaultWakeWaiterFactory,
   ) {
     this.workdir = workdir;
     this.onEvent = onEvent;
+    this.wakeWaiterFactory = wakeWaiterFactory;
     const aiModelArg = providerSelectionModel(model, openaiBaseUrl);
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
@@ -689,7 +734,16 @@ export class RuntimeProcess {
       // The LAST event, not any: a TTY runtime says `done` and then serves the next turn, and the
       // 2026-09-12 OOM kill landed 650 steps into such a session.
       this.exitExplained = EXIT_EXPLAINING_EVENTS.has(event.type);
+      if (event.type === "wake_request") {
+        this.onWakeRequest(event as WakeRequest);
+        return;
+      }
+      const resolved =
+        (event.type === "wake_received" && this.parkRequestId !== null && event.request_id === this.parkRequestId) ||
+        (PARK_ENDING_EVENTS.has(event.type) && this.parkRequestId !== null);
+      if (resolved) this.resolvePark();
       this.onEvent(event);
+      if (resolved) this.flushDeferredModel();
       if (event.type === "tool_calls") {
         setImmediate(() => {
           void this.handleToolCalls(event);
@@ -710,10 +764,17 @@ export class RuntimeProcess {
     this.proc.on("exit", (code, signal) => {
       this.dead = true;
       stderrRl.close();
+      // The runtime is gone: its park with it. Losing waiters are cancelled and a queued model change
+      // is dropped (there is no child to send it to).
+      this.resolvePark();
+      this.deferredModel = null;
       // A killed child cannot say it was killed, so the host says it — as an `error`, which is what
       // makes the TTY recover into awaiting a task and the headless loggers exit 1, where a silent
-      // `onExit()` would have exited 0 as if the run had finished.
-      const unexplained = this.exitExplained || this.killRequested ? null : describeUnexplainedExit(code, signal);
+      // `onExit()` would have exited 0 as if the run had finished. A mid-park cancel (R3) ends with
+      // neither `done` nor `error` on the wire, and is an exit the host asked for.
+      const unexplained = this.exitExplained || this.killRequested || this.cancelRequested
+        ? null
+        : describeUnexplainedExit(code, signal);
       if (unexplained) this.onEvent({ type: "error", message: unexplained });
       onExit();
     });
@@ -859,13 +920,30 @@ export class RuntimeProcess {
   }
 
   abort(): void {
+    this.cancelPark();
     this.send({ type: "abort" });
+  }
+
+  /**
+   * Quit a parked session over stdin (W4 Part 5): the core turns `exit` into `Aborted` and ends the
+   * run with neither `done` nor `error`, then the child exits.
+   */
+  exit(): void {
+    if (this.dead) return;
+    this.cancelPark();
+    this.send({ type: "exit" });
   }
 
   /** True while the last wire event (`done`, `error`, a resume refusal) already accounts for an exit. */
   private exitExplained = false;
   /** Set by `kill()`: a death the host asked for (quit, ESC) is not reported as one. */
   private killRequested = false;
+  /**
+   * Set by `abort()`, `exit()` and `restart()` while a park is open (PLAN-002 W4 Part 5, R3). A
+   * cancelled park ends the run with no `done` and no `error`, so without this the child's exit
+   * would be unexplained and a non-zero code would synthesize an `error` the host itself caused.
+   */
+  private cancelRequested = false;
 
   kill(): void {
     if (this.dead) return;
@@ -874,6 +952,97 @@ export class RuntimeProcess {
   }
 
   setModel(model: string): void {
+    // The core drops `model_change` while parked (with a warning), so it waits for the park to resolve.
+    if (this.parkRequestId !== null) {
+      this.deferredModel = model;
+      return;
+    }
+    this.send({ type: "model_change", model });
+  }
+
+  // ------------------------------------------------------------------------------------------------
+  // Park and wake (ADR-002 D2, PLAN-002 W4 Part 5)
+  // ------------------------------------------------------------------------------------------------
+
+  private readonly wakeWaiterFactory: WakeWaiterFactory;
+  /** The request awaiting a host reply; null once a reply is sent or the park ends. */
+  private outstandingWake: WakeRequest | null = null;
+  /** The park not yet resolved by the core (`wake_received`, a run end, or the child's exit). */
+  private parkRequestId: string | null = null;
+  private waiter: WakeWaiterHandle | null = null;
+  private deferredModel: string | null = null;
+
+  /** The outstanding `wake_request`, or null. The TUI's parked input route reads this. */
+  get wakeRequest(): WakeRequest | null {
+    return this.outstandingWake;
+  }
+
+  /** True while a `wake_request` awaits a reply from the host. */
+  get isParked(): boolean {
+    return this.outstandingWake !== null;
+  }
+
+  private onWakeRequest(req: WakeRequest): void {
+    const reissue = this.parkRequestId === req.request_id;
+    this.parkRequestId = req.request_id;
+    if (reissue && this.outstandingWake !== null && this.waiter !== null && !this.waiter.finished) {
+      // Same park, next attempt, observers still running: keep them, track the attempt.
+      this.outstandingWake = req;
+    } else {
+      this.stopWaiter();
+      this.outstandingWake = req;
+      // Waiters report asynchronously, so none can reply before the event below is forwarded.
+      if (!this.dead) this.waiter = this.wakeWaiterFactory(req, (reply) => this.sendWakeReply(reply));
+    }
+    // Forwarded LAST: a consumer that aborts from inside onEvent must find the park already tracked.
+    this.onEvent(req);
+  }
+
+  /**
+   * Send one `wake_reply`. Dropped — never sent — when no request is outstanding or its `request_id`
+   * is not the outstanding one (a late reply). Returns whether it was sent.
+   */
+  sendWakeReply(reply: WakeReply): boolean {
+    if (this.dead) return false;
+    const req = this.outstandingWake;
+    if (req === null || reply.request_id !== req.request_id) return false;
+    this.outstandingWake = null;
+    this.stopWaiter();
+    this.send({
+      type: "wake_reply",
+      request_id: reply.request_id,
+      wait_id: reply.wait_id,
+      outcome: reply.outcome,
+      detail: reply.detail,
+    });
+    return true;
+  }
+
+  private stopWaiter(): void {
+    const w = this.waiter;
+    this.waiter = null;
+    w?.cancel();
+  }
+
+  /** The park ended on the wire or with the child. */
+  private resolvePark(): void {
+    this.outstandingWake = null;
+    this.parkRequestId = null;
+    this.stopWaiter();
+  }
+
+  /** A cancelling command is about to go down stdin. */
+  private cancelPark(): void {
+    if (this.parkRequestId === null && this.outstandingWake === null) return;
+    this.cancelRequested = true;
+    this.outstandingWake = null;
+    this.stopWaiter();
+  }
+
+  private flushDeferredModel(): void {
+    const model = this.deferredModel;
+    if (model === null || this.parkRequestId !== null) return;
+    this.deferredModel = null;
     this.send({ type: "model_change", model });
   }
 
@@ -888,6 +1057,7 @@ export class RuntimeProcess {
    */
   restart(newProfile?: string): void {
     if (this.dead) return;
+    this.cancelPark();
     this.send({ type: "restart", profile: newProfile });
     // Set a flag so the exit handler knows to respawn
     this._restartPending = newProfile ?? true;

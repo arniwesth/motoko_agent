@@ -51,8 +51,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-# The eight subjects of ledger_parity_dst.ail, the same pin as its LEDGER_SUBJECTS.
-EXPECT_FRAMES=8
+# The nine subjects of ledger_parity_dst.ail, the same pin as its LEDGER_SUBJECTS
+# (PLAN-002 W4 added `parked`, whose frame carries the `wake_read` witness).
+EXPECT_FRAMES=9
 
 # check_wire FILE EXPECTED — prints rows, returns 0 on green.
 check_wire() {

@@ -509,7 +509,7 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "31" }
+export pure func driver_only_version() -> string { "32" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -834,7 +834,16 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- against `git show 957c91e:`, thirteen hits, and all five anchored
     -- expressions byte-identical at their new offsets. The tool_phase anchors did
     -- not move.
-    content_hash: "sha256:2ec1e8dd776def8ce158ffcf3ccfc31dd06500cebcf6af8a306c95147f17009e" }
+    -- PLAN-002 W4: re-recorded with both successors', from
+    -- sha256:2ec1e8dd776def8ce158ffcf3ccfc31dd06500cebcf6af8a306c95147f17009e.
+    -- All five session anchors moved — 1447/1706/1818/4012/4233 ->
+    -- 1471/1730/1842/4302/4523 (+24, +24, +24, +290, +290) — pushed by W4's own
+    -- ADR-002 D2 edits (the park counters and `initial_park_ordinal`, the park's
+    -- pure helpers, stage 3's `CandidateAwaitWake` and the `Park` arm). NOT A
+    -- TABLE CORRECTION: `clock_now(` text identical against `git show 9430873:`,
+    -- thirteen hits, and all five anchored expressions byte-identical at their
+    -- new offsets. The tool_phase anchors did not move.
+    content_hash: "sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583" }
 }
 
 -- ---------------------------------------------------------------------------

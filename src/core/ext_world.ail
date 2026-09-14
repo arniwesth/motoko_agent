@@ -38,7 +38,7 @@ import std/result (Ok, Err)
 import std/ai (ToolCall)
 -- WI-D18: `FsNode` is the kinded `WorldState.files` entry — see that field for
 -- the representation argument. The token has to carry the kind explicitly.
-import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state, RequestWitness, EnvRead, ToolExec, ModelStep, WakeRead, WakeObservation, WakeOutcome, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted)
+import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state, RequestWitness, EnvRead, ToolExec, ModelStep, WakeRead, WakeObservation, WakeOutcome, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted, wake_outcome_id, wake_outcome_detail, wake_outcome_of) -- PLAN-002 W4: the outcome codec moved to `ports`, which `recording_wake` needs and which cannot import this module
 -- PLAN-001 P2 Part 1: the class ids have ONE spelling, owned by the writer's
 -- module, so the token and Part 4's wire record cannot disagree on a name.
 import src/core/world_ordinal (advance, request_class_id, request_class_of_id)
@@ -54,7 +54,7 @@ import src/core/dst_interaction (
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity, WakeIdentity,
   -- WI-D17. The identity round trip is asserted with the sum's OWN equality
   -- rather than by re-matching each variant at the assertion site, because a
   -- comparison written here is a second notion of "same identity" that can
@@ -160,38 +160,6 @@ pure func pending_of(xs: [Json]) -> [RequestWitness] {
 -- not write is DROPPED, on `pending_of`'s reasoning: there is no catch-all arm,
 -- and defaulting to one would put a wake nobody observed into the cursor.
 -- ---------------------------------------------------------------------------
-
-pure func wake_outcome_id(o: WakeOutcome) -> string {
-  match o {
-    Settled(_) => "settled",
-    Lost(_) => "lost",
-    OperatorInput(_) => "operator_input",
-    TimedOut => "timed_out",
-    HostError(_) => "host_error",
-    Aborted => "aborted"
-  }
-}
-
-pure func wake_outcome_detail(o: WakeOutcome) -> string {
-  match o {
-    Settled(d) => d,
-    Lost(d) => d,
-    OperatorInput(d) => d,
-    TimedOut => "",
-    HostError(d) => d,
-    Aborted => ""
-  }
-}
-
-pure func wake_outcome_of(id: string, detail: string) -> Option[WakeOutcome] {
-  if id == "settled" then Some(Settled(detail))
-  else if id == "lost" then Some(Lost(detail))
-  else if id == "operator_input" then Some(OperatorInput(detail))
-  else if id == "timed_out" then Some(TimedOut)
-  else if id == "host_error" then Some(HostError(detail))
-  else if id == "aborted" then Some(Aborted)
-  else None
-}
 
 pure func wakes_json(ws: [WakeObservation]) -> [Json] {
   match ws {
@@ -427,7 +395,10 @@ pure func identity_body_json(b: IdentityBody) -> Json {
     FileRemoveIdentity(path) =>
       jo([kv("t", js("file_remove")), kv("a", js(path))]),
     DirMakeIdentity(path) =>
-      jo([kv("t", js("dir_make")), kv("a", js(path))])
+      jo([kv("t", js("dir_make")), kv("a", js(path))]),
+    -- PLAN-002 W4 Part 4.
+    WakeIdentity(origin, request_id, wait_id) =>
+      jo([kv("t", js("wake")), kv("a", js(origin)), kv("b", js(request_id)), kv("c", js(wait_id))])
   }
 }
 
@@ -451,6 +422,8 @@ pure func identity_body_of(j: Json) -> IdentityBody {
     FileRemoveIdentity(str_field(j, "a", ""))
   else if t == "dir_make" then
     DirMakeIdentity(str_field(j, "a", ""))
+  else if t == "wake" then
+    WakeIdentity(str_field(j, "a", ""), str_field(j, "b", ""), str_field(j, "c", ""))
   else
     ClockAdvanceIdentity
 }
@@ -1188,7 +1161,8 @@ pure func every_identity_body() -> [IdentityBody] {
    ClockAdvanceIdentity,
    FileWriteIdentity("/w/tmp/snippet.ail"),
    FileRemoveIdentity("/w/tmp/snippet.ail"),
-   DirMakeIdentity("/w/tmp")]
+   DirMakeIdentity("/w/tmp"),
+   WakeIdentity("loop_v2", "sid.r0.0.p0", "h1")]
 }
 
 pure func log_of_bodies(bs: [IdentityBody], ord: int) -> [Interaction] {

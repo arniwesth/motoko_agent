@@ -591,7 +591,27 @@ check src/core/tool_phase.ail 389 'exec_scratchpad_cell_ws' "the call attributed
 # v20, compose v11 -> v12. `driver_plus_herdr` is NOT re-issued (DST_KNOWN_RED).
 
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1447 1706 1818 4012 4233; do
+# PLAN-002 W4 RE-BASELINED THE FIVE session.ail ANCHORS A TWELFTH TIME --
+# `1447/1706/1818/4012/4233 -> 1471/1730/1842/4302/4523` (+24, +24, +24, +290,
+# +290). The drift is W4's own (ADR-002 D2): `C2LoopState.park_ordinal`/
+# `park_attempt` with their comment and `initial_park_ordinal` above the first
+# three; above the last two, additionally `C2ResumeReset`'s cleared wait state,
+# the park's pure helpers (`park_request_id`, `wake_matches`, `apply_wake`,
+# `wake_message`, `both_open_msgs`), `CandidateAwaitWake` and
+# `c2_await_wake_state`, the `Park` arm, and the two park fields in every loop
+# literal. The tool_phase.ail anchors did NOT move (W4 does not edit that file).
+#
+# THE D4 JUDGEMENT, with the evidence: `grep -o 'clock_now.*'` over
+# `git show 9430873:src/core/session.ail` and over the tree is IDENTICAL
+# (thirteen hits, same text, same order), and all five anchored expressions are
+# byte-identical at their new offsets. No site was added, removed or re-routed.
+#
+# WIDTH: the six-file form again -- this file, `dst_attribution_table.ail`,
+# `attribution_table_dst.ail`, and the three profiles: driver_only v31 -> v32,
+# no_ops v20 -> v21, compose v12 -> v13. `driver_plus_herdr` is NOT re-issued
+# (DST_KNOWN_RED).
+
+for l in 1471 1730 1842 4302 4523; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

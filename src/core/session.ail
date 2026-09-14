@@ -164,7 +164,8 @@ import src/core/phase_vocab (
   TakeCheckpoint,
   Finalize,
   Fail,
-  FailInfo
+  FailInfo,
+  Park, ParkEntered, WakeReceived, OperatorWait, DelegateWait, TimerWait, wait_id
 )
 -- ADR-003 v6.1 D1/D2/D4. THE EDGE THE PLAN SAYS TO ADD, and the direction is
 -- the whole of why `journal.ail` is a leaf: it imports no `session`, so this
@@ -197,7 +198,7 @@ import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
+import src/core/ports (ParkRequest, WakeInput, WakeOutcome, wake_outcome_id, wake_outcome_detail, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted, ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -579,7 +580,27 @@ type C2LoopState = {
   -- `history_digest` it is NOT in `FinalState` or `Continuation`: a run's waits
   -- end with the run (D3's last lifecycle row), and ADR-003's `park` entry, not
   -- this field, carries them across a durable park.
-  open_waits: [WaitDescriptor]
+  open_waits: [WaitDescriptor],
+
+  -- PLAN-002 W4 Part 2 (ADR-002 D2; §1 row 3). The driver's park counters.
+  -- `park_ordinal` names the run's parks: the `ParkRequest.request_id` is
+  -- `<run_id>.p<park_ordinal>`, and it increments only when a MATCHING wake is
+  -- applied. `park_attempt` counts re-issues of that same request after a
+  -- dropped reply (§8.3, R2), and resets to 0 with every ordinal increment.
+  -- Both start at `initial_park_ordinal(false)` / 0 in every constructor,
+  -- `c2_state_from_continuation` included. `StepState` gains neither.
+  park_ordinal: int,
+  park_attempt: int
+}
+
+-- PLAN-002 §8.4 (R9). THE ONE PLACE A RUN'S FIRST PARK ORDINAL IS DECIDED. A
+-- run opened by a consumed between-turn wake (a resumer's, or an in-process
+-- between-turn park's) starts at 1, so its first in-turn park is `<run_id>.p1`
+-- and `<run_id>.p0` stays the between-turn request's. Every other run starts
+-- at 0. No W4 path opens a run from a wake, so every constructor passes
+-- `false`; W5(b) is the first caller of the `true` arm.
+pure func initial_park_ordinal(opened_by_wake: bool) -> int {
+  if opened_by_wake then 1 else 0
 }
 
 pure func zero_totals() -> RuntimeLoopTotals {
@@ -761,7 +782,8 @@ pure func c2_decision_name(d: StepDecision) -> string {
     InjectUserMessage(_) => "InjectUserMessage",
     TakeCheckpoint(_) => "TakeCheckpoint",
     Finalize(_) => "Finalize",
-    Fail(_) => "Fail"
+    Fail(_) => "Fail",
+    Park(_) => "Park"
   }
 }
 
@@ -989,7 +1011,9 @@ func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, 
     -- is coherent from the record's first existence and the entry that emits
     -- `HistorySeeded` reads one derivation rather than repeating it.
     history_digest: c2_seed_digest(history),
-    open_waits: []
+    open_waits: [],
+    park_ordinal: initial_park_ordinal(false),
+    park_attempt: 0
   }
 }
 
@@ -2542,7 +2566,13 @@ type C2ResumeReset = {
   last_response_text: string,
   finalize_source: string,
   trace: LedgerTrace,
-  emissions: [LedgerEvent]
+  emissions: [LedgerEvent],
+  -- PLAN-002 W4 Part 2 (review change 18): D3's "run ends (… suspend) →
+  -- cleared" row, read by `c2_state_from_continuation` from HERE so the shape
+  -- projection below pins it.
+  open_waits: [WaitDescriptor],
+  park_ordinal: int,
+  park_attempt: int
 }
 
 pure func c2_resume_reset() -> C2ResumeReset {
@@ -2559,7 +2589,10 @@ pure func c2_resume_reset() -> C2ResumeReset {
     last_response_text: "",
     finalize_source: "",
     trace: empty_ledger_trace(),
-    emissions: []
+    emissions: [],
+    open_waits: [],
+    park_ordinal: initial_park_ordinal(false),
+    park_attempt: 0
   }
 }
 
@@ -2641,7 +2674,13 @@ pure func c2_state_from_continuation(c: Continuation, provider: PortedProvider, 
     history_digest: c2_seed_digest(c.history),
     -- RESET, and not for want of a field: D3's "run ends → cleared" row.
     -- `Continuation` carries no waits, and a resumed run is its own run.
-    open_waits: []
+    -- PLAN-002 W4 Part 2 (review change 18): the delegate keeps running and
+    -- the resumed run's model is NOT told. A stated limit, not a gap closed
+    -- here; ADR-003 D7's `park` entry is what carries waits across a durable
+    -- park. The park counters reset with the waits.
+    open_waits: reset.open_waits,
+    park_ordinal: reset.park_ordinal,
+    park_attempt: reset.park_attempt
   }
 }
 
@@ -2846,7 +2885,9 @@ func c2_finish_tool_batch(
     trace: trace_with_history,
     emissions: st.emissions,
     history_digest: appended.digest,
-    open_waits: st.open_waits
+    open_waits: st.open_waits,
+    park_ordinal: st.park_ordinal,
+    park_attempt: st.park_attempt
   };
   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
 }
@@ -2898,7 +2939,9 @@ func c2_continue_tool_batch(
         -- ADR-003 D2: this site carries `st.msgs` UNCHANGED and therefore emits
         -- nothing. The digest is carried for the same reason the messages are.
         history_digest: st.history_digest,
-        open_waits: st.open_waits
+        open_waits: st.open_waits,
+        park_ordinal: st.park_ordinal,
+        park_attempt: st.park_attempt
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
     }
@@ -2959,7 +3002,9 @@ func c2_dp7_rejected_state(
     trace: trace_with_delta,
     emissions: emissions,
     history_digest: appended.digest,
-    open_waits: st.open_waits
+    open_waits: st.open_waits,
+    park_ordinal: st.park_ordinal,
+    park_attempt: st.park_attempt
   }
 }
 
@@ -3005,18 +3050,179 @@ func c2_dp7_approved_state(
     trace: trace_with_delta,
     emissions: emissions,
     history_digest: appended.digest,
-    open_waits: st.open_waits
+    open_waits: st.open_waits,
+    park_ordinal: st.park_ordinal,
+    park_attempt: st.park_attempt
   }
+}
+
+-- PLAN-002 W4 Part 1: stage 3's state. The approved candidate's journaling,
+-- with the reason `decide`'s `Park` arm accepts and no finalize source: the
+-- candidate enters the history exactly as an approved one would, and nothing
+-- finalizes it while the waits are open.
+func c2_await_wake_state(
+  session_id: string,
+  identity: RunIdentity,
+  st: C2LoopState,
+  msgs_with_assistant: [Message],
+  totals: RuntimeLoopTotals,
+  ext_artifacts: Json,
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
+  world: WorldState,
+  trace: LedgerTrace,
+  emissions: [LedgerEvent],
+  artifacts_changed: bool,
+  step_idx: int,
+  candidate: string
+) -> C2LoopState ! {IO, Trace} {
+  { c2_dp7_approved_state(session_id, identity, st, msgs_with_assistant, totals, ext_artifacts, telemetry, world, trace, emissions, artifacts_changed, step_idx, candidate, "") |
+    last_finish_reason: "await_wake" }
 }
 
 -- ADR-002 D2, PLAN-002 W2 Part 4: what the no-tool-calls branch decided about
 -- the model's candidate. The events it emitted ride along so the caller appends
 -- exactly what was projected.
+-- ============================================================================
+-- PLAN-002 W4 Parts 1-2 (ADR-002 D2/D3): the park's pure half.
+-- ============================================================================
+
+-- `<run_id>.p<park_ordinal>` (§1 row 3). Unique per run because the ordinal
+-- increments only when a matching wake is applied.
+pure func park_request_id(run_id: string, park_ordinal: int) -> string {
+  "${run_id}.p${show(park_ordinal)}"
+}
+
+pure func wait_ids_of(ws: [WaitDescriptor]) -> [string] {
+  match ws {
+    [] => [],
+    w :: rest => wait_id(w) :: wait_ids_of(rest)
+  }
+}
+
+pure func has_wait_id(ws: [WaitDescriptor], id: string) -> bool {
+  match ws {
+    [] => false,
+    w :: rest => wait_id(w) == id || has_wait_id(rest, id)
+  }
+}
+
+pure func join_wait_ids(ids: [string]) -> string {
+  match ids {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}, ${join_wait_ids(rest)}"
+  }
+}
+
+-- THE MATCH (review change 12). `request_id` always. `wait_id` only for the
+-- three outcomes that name a wait: the unbound default replies `wait_id: ""`
+-- with a `HostError`, and `OperatorInput`/`Aborted` name none (`Aborted`
+-- carries the cancelling command in that free field, §8.7).
+pure func wake_matches(req: ParkRequest, wake: WakeInput) -> bool {
+  wake.request_id == req.request_id
+    && (match wake.outcome {
+          Settled(_) => has_wait_id(req.waits, wake.wait_id),
+          Lost(_) => has_wait_id(req.waits, wake.wait_id),
+          TimedOut => has_wait_id(req.waits, wake.wait_id),
+          _ => true
+        })
+}
+
+pure func remove_wait_id(ws: [WaitDescriptor], id: string) -> [WaitDescriptor] {
+  match ws {
+    [] => [],
+    w :: rest => if wait_id(w) == id then remove_wait_id(rest, id) else w :: remove_wait_id(rest, id)
+  }
+}
+
+pure func remove_timer_id(ws: [WaitDescriptor], id: string) -> [WaitDescriptor] {
+  match ws {
+    [] => [],
+    w :: rest => match w {
+      TimerWait(t) => if t.id == id then remove_timer_id(rest, id) else w :: remove_timer_id(rest, id),
+      _ => w :: remove_timer_id(rest, id)
+    }
+  }
+}
+
+-- ADR-002 D2's outcome table, the wait's column.
+pure func apply_wake(open_waits: [WaitDescriptor], wake: WakeInput) -> [WaitDescriptor] {
+  match wake.outcome {
+    Settled(_) => remove_wait_id(open_waits, wake.wait_id),
+    Lost(_) => remove_wait_id(open_waits, wake.wait_id),
+    OperatorInput(_) => open_waits,
+    TimedOut => remove_timer_id(open_waits, wake.wait_id),
+    HostError(_) => open_waits,
+    -- The abort path: cleared with the run.
+    Aborted => []
+  }
+}
+
+-- The tag every loop-authored message carries, so it is never mistaken for an
+-- operator's message (ADR-002 D2 "After the wake").
+pure func loop_authored_tag() -> string { "[motoko loop]" }
+
+-- ADR-002 D2's outcome table, the message's column. `Settled` directs the model
+-- to `DelegateCheck`, the only settlement path (D3), and does not carry the
+-- answer itself.
+pure func wake_message(wake: WakeInput) -> Message {
+  let tag = loop_authored_tag();
+  let content = match wake.outcome {
+    Settled(_) => "${tag} Wake: delegate wait `${wake.wait_id}` settled: the answer is available; call `DelegateCheck` once.",
+    Lost(reason) => "${tag} Wake: delegate wait `${wake.wait_id}` was lost (${reason}). Call `DelegateCheck` once to settle it.",
+    OperatorInput(text) => "${tag} Wake: the operator wrote while the run was parked; every wait stays open. The operator's message:\n${text}",
+    TimedOut => "${tag} Wake: timer `${wake.wait_id}` expired.",
+    HostError(m) => "${tag} Wake: the host could not observe the open waits (${m}). They stay open.",
+    Aborted => "${tag} Wake: the park was cancelled (${wake.wait_id})."
+  };
+  { role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+-- R2: the dropped reply's `warning`, naming both sides of the mismatch. Not a
+-- `LedgerEvent`: a dropped reply appends nothing.
+pure func park_drop_warning(req: ParkRequest, wake: WakeInput) -> Json {
+  jo([kv("type", js("warning")),
+      kv("message", js("park dropped a wake reply: expected request_id=${req.request_id} wait_id in [${join_wait_ids(wait_ids_of(req.waits))}], received request_id=${wake.request_id} wait_id=${wake.wait_id} outcome=${wake_outcome_id(wake.outcome)} attempt=${show(req.attempt)}"))])
+}
+
+-- ADR-002 D3's re-delegation row, "the model is told both are open" (review
+-- change 18, R5). Applied in the LOOP'S tool fold, where the fold's `open_waits`
+-- is in scope: when this batch registered a new wait and left two or more open,
+-- each `Delegate` result message of the batch gains one loop-authored sentence
+-- naming every open wait. The message was capped and the wait extracted before
+-- this (W2 Part 2); the sentence is appended after both.
+pure func both_open_sentence(open_waits: [WaitDescriptor]) -> string {
+  "\n\n${loop_authored_tag()} ${show(List.length(open_waits))} waits are open: ${join_wait_ids(wait_ids_of(open_waits))}. Each stays open until it is settled or lost."
+}
+
+pure func registered_new_wait(before: [WaitDescriptor], after: [WaitDescriptor]) -> bool {
+  match after {
+    [] => false,
+    w :: rest => not has_wait_id(before, wait_id(w)) || registered_new_wait(before, rest)
+  }
+}
+
+pure func is_delegate_call_id(calls: [ToolCall], id: string) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => (c.id == id && c.name == "Delegate") || is_delegate_call_id(rest, id)
+  }
+}
+
+pure func both_open_msgs(calls: [ToolCall], before: [WaitDescriptor], after: [WaitDescriptor], msgs: [Message]) -> [Message] {
+  if List.length(after) >= 2 && registered_new_wait(before, after)
+  then List.map(\m. if m.role == "tool" && is_delegate_call_id(calls, m.tool_call_id) then { m | content: "${m.content}${both_open_sentence(after)}" } else m, msgs)
+  else msgs
+}
+
 type CandidateClass
   = CandidateRejected({ rejection: Dp7Rejection, world: WorldState })
   | CandidateFeedback({ event: LedgerEvent, feedback: string, world: WorldState })
   | CandidateNudge({ event: LedgerEvent, world: WorldState })
   | CandidateApproved({ output: string, source: string, world: WorldState })
+  -- PLAN-002 W4 Part 1: stage 3. The world is stage 2's rejection world, for
+  -- the same reason: no completion hook ran.
+  | CandidateAwaitWake({ world: WorldState })
 
 -- The candidate's classification, in D2's stage order and no other:
 --
@@ -3025,7 +3231,9 @@ type CandidateClass
 --                   §0.2 rule 6) is verified FIRST; a rejection returns before
 --                   any completion policy runs, so a solver that would have
 --                   bounced the same candidate never sees it.
---   3. waits        INERT in W2 (§1 row 13). `open_waits` is not read here.
+--   3. waits        LIVE from PLAN-002 W4 Part 1: any open wait classifies the
+--                   candidate `await_wake`, whatever it says, blank included,
+--                   before any solver, nudge or blank verification runs.
 --   4. completion   `dispatch_solver_candidate`, then the persist nudge, as at
 --                   HEAD.
 --   5. finalize     a non-blank candidate is approved without a second verifier
@@ -3053,15 +3261,18 @@ func classify_candidate(
   step_idx: int,
   session_id: string,
   persist_retries: int,
-  nudges_used: int
+  nudges_used: int,
+  open_waits: [WaitDescriptor]
 ) -> CandidateClass ! {Process, IO, Clock, Trace} {
   let blank = trim(candidate) == "";
   -- Stage 2.
   let stage2 = if blank then None else dp7_rejection_errors(rt, workdir, step_idx, session_id);
   match stage2 {
     Some(rejection) => CandidateRejected({ rejection: rejection, world: token_to_world(clear_holder(ctx.world)) }),
-    None => {
-      -- Stage 3: inert in W2.
+    None =>
+      -- Stage 3 (PLAN-002 W4 Part 1).
+      if List.length(open_waits) > 0 then CandidateAwaitWake({ world: token_to_world(clear_holder(ctx.world)) })
+      else {
       -- Stage 4. The solver's successor is the world from here on, whichever
       -- decision won (WI-B2b).
       let finalized = dispatch_solver_candidate(rt, ctx, candidate);
@@ -3094,7 +3305,7 @@ func classify_candidate(
           },
         _ => completion
       }
-    }
+      }
   }
 }
 
@@ -3223,7 +3434,9 @@ func c2_loop(
             trace: c2_journal(session_id, trace_with_decision, appended.events),
             emissions: st.emissions,
             history_digest: appended.digest,
-            open_waits: st.open_waits
+            open_waits: st.open_waits,
+            park_ordinal: st.park_ordinal,
+            park_attempt: st.park_attempt
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
         },
@@ -3284,9 +3497,70 @@ func c2_loop(
             trace: trace_with_delta,
             emissions: st.emissions,
             history_digest: { at: digest_messages(cp_msgs), prev: st.history_digest.at },
-            open_waits: st.open_waits
+            open_waits: st.open_waits,
+            park_ordinal: st.park_ordinal,
+            park_attempt: st.park_attempt
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
+        },
+        -- PLAN-002 W4 Part 2 (ADR-002 D2): THE PARK. `decide` returned the open
+        -- waits; the request is built here from `RunIdentity` and the park
+        -- counters (§1 row 3). ONE `wake_read` call site serves the first issue
+        -- and every re-issue (review change 17), so the inventory rises by one.
+        --
+        --   - `ParkEntered` is appended AND emitted before the port is called,
+        --     on the first issue only (`park_attempt == 0`).
+        --   - The successor is WITNESSED for every reply, a dropped one
+        --     included: the port has advanced the world either way.
+        --   - A reply that does not match (`request_id` always; `wait_id` only
+        --     for Settled/Lost/TimedOut, review change 12) is dropped: a
+        --     `warning`, NOTHING appended (R2), and the same request re-issued
+        --     with `step_idx + 1` and `park_attempt + 1` through `decide`, whose
+        --     `Park` arm carries the step budget (R1). `request.step` stays the
+        --     park's original step on every re-issue.
+        --   - A matching reply appends and emits `WakeReceived`. `Aborted` (every
+        --     mid-park cancel command, §8.7) clears the waits and ends the run
+        --     `Fail(ParkCancelled)` through `c2_fail`, the `Fail` arm's own
+        --     terminal, so `RunSummary` is written as for any failure. Every
+        --     other outcome injects `wake_message` as `user_injected` with the
+        --     next ordinal, so the accepted wake reaches `call_model_or_fail`.
+        Park(waits) => {
+          let request: ParkRequest = { request_id: park_request_id(identity.run_id, st.park_ordinal), step: st.step_idx - st.park_attempt, waits: waits, attempt: st.park_attempt };
+          let entered = ParkEntered({ request_id: request.request_id, step: request.step, waits: waits });
+          let trace_entered = if st.park_attempt == 0 then { let _ = ledger_emit(session_id, entered); ledger_append(trace_with_decision, WireRecord(entered)) } else trace_with_decision;
+          let wake = st.provider.wake_read(st.world_state, request);
+          let woke = witness(session_id, trace_entered, wake.next_state);
+          if not wake_matches(request, wake) then {
+            let _ = emit_json(park_drop_warning(request, wake));
+            c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { st | step_idx: st.step_idx + 1, park_attempt: st.park_attempt + 1, world_state: woke.world, trace: woke.trace })
+          } else {
+            let received = WakeReceived({ request_id: wake.request_id, wait_id: wake.wait_id, outcome: wake_outcome_id(wake.outcome), detail: wake_outcome_detail(wake.outcome) });
+            let _ = ledger_emit(session_id, received);
+            let trace_woken = ledger_append(woke.trace, WireRecord(received));
+            match wake.outcome {
+              Aborted => {
+                let cancelled: C2LoopState = { st | world_state: woke.world, open_waits: apply_wake(st.open_waits, wake) };
+                c2_fail(cancelled.provider, cancelled.world_state, session_id, model, cancelled.totals, cancelled.step_idx, max_cost_millicents, started_at_ms, "ParkCancelled", wake.wait_id, false, trace_woken, cancelled.emissions, c2_final_state(cancelled))
+              },
+              _ => {
+                let wake_msg = wake_message(wake);
+                let appended = c2_history_appended(identity.run_id, st.step_idx, st.history_digest, false, [wake_msg]);
+                let next_state: C2LoopState = { st |
+                  msgs: st.msgs ++ [wake_msg],
+                  world_state: woke.world,
+                  last_finish_reason: "user_injected",
+                  last_response_text: "",
+                  finalize_source: "",
+                  trace: c2_journal(session_id, trace_woken, appended.events),
+                  history_digest: appended.digest,
+                  open_waits: apply_wake(st.open_waits, wake),
+                  park_ordinal: st.park_ordinal + 1,
+                  park_attempt: 0
+                };
+                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
+              }
+            }
+          }
         },
         AwaitApproval(_) => {
           match st.pending_approval {
@@ -3416,7 +3690,7 @@ func c2_loop(
             -- provider call, and for the same reason: a block appended in the
             -- wrong place satisfies a count and fails order.
             ToolDispatchDone(done) => { let tooled = witness(session_id, c2_trace_wire_events(trace_with_calls, done.emitted), done.world);
-              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { st | world_state: tooled.world, open_waits: done.open_waits }, tooled.trace, tool_step_idx, stream_id, done.msgs) },
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, { st | world_state: tooled.world, open_waits: done.open_waits }, tooled.trace, tool_step_idx, stream_id, both_open_msgs(calls, st.open_waits, done.open_waits, done.msgs)) },
             ToolDispatchPending(pending) => { let paused = witness(session_id, c2_trace_wire_events(trace_with_calls, pending.emitted), pending.world);
               let next_state: C2LoopState = {
                 msgs: st.msgs,
@@ -3448,7 +3722,9 @@ func c2_loop(
                 -- ADR-003 D2: `st.msgs` unchanged, so nothing is journaled and
                 -- the chain is carried.
                 history_digest: st.history_digest,
-                open_waits: pending.open_waits
+                open_waits: pending.open_waits,
+                park_ordinal: st.park_ordinal,
+                park_attempt: st.park_attempt
               };
               c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
             }
@@ -3634,7 +3910,9 @@ func c2_loop(
                       trace: trace_with_delta,
                       emissions: emissions_after_call,
                       history_digest: st.history_digest,
-                      open_waits: st.open_waits
+                      open_waits: st.open_waits,
+                      park_ordinal: st.park_ordinal,
+                      park_attempt: st.park_attempt
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                   } else {
@@ -3724,7 +4002,9 @@ func c2_loop(
                         trace: trace_with_delta,
                         emissions: emissions_after_call,
                         history_digest: appended.digest,
-                        open_waits: st.open_waits
+                        open_waits: st.open_waits,
+                        park_ordinal: st.park_ordinal,
+                        park_attempt: st.park_attempt
                       };
                       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                     },
@@ -3770,7 +4050,9 @@ func c2_loop(
                           trace: trace_with_delta,
                           emissions: emissions_after_call,
                           history_digest: appended.digest,
-                          open_waits: st.open_waits
+                          open_waits: st.open_waits,
+                          park_ordinal: st.park_ordinal,
+                          park_attempt: st.park_attempt
                         };
                         c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                       } else {
@@ -3832,7 +4114,9 @@ func c2_loop(
                               trace: trace_with_delta,
                               emissions: emissions_after_call,
                               history_digest: appended.digest,
-                              open_waits: st.open_waits
+                              open_waits: st.open_waits,
+                              park_ordinal: st.park_ordinal,
+                              park_attempt: st.park_attempt
                             };
                             c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                           },
@@ -3844,12 +4128,14 @@ func c2_loop(
                             -- PLAN-002 W2 Part 4 (ADR-002 D2). ONE classification, in stage
                             -- order: DP7 before the completion policy for a non-blank
                             -- candidate. See `classify_candidate`.
-                            let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, msgs_with_assistant, workdir, step_idx, session_id, policy.step.persist_retries, st.nudges_used); -- WI-D19
+                            let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, msgs_with_assistant, workdir, step_idx, session_id, policy.step.persist_retries, st.nudges_used, st.open_waits); -- WI-D19
                             match classified {
                               CandidateRejected(rejected) =>
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_dp7_rejected_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, rejected.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, rejected.rejection)),
                               CandidateApproved(approved) =>
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_dp7_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
+                              CandidateAwaitWake(waiting) =>
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_await_wake_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, waiting.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, result.message.content)),
                               CandidateFeedback(fed) => {
                                 let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
                                 let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(fed.event)), appended.events);
@@ -3877,7 +4163,9 @@ func c2_loop(
                                   trace: trace_with_delta,
                                   emissions: emissions_after_call,
                                   history_digest: appended.digest,
-                                  open_waits: st.open_waits
+                                  open_waits: st.open_waits,
+                                  park_ordinal: st.park_ordinal,
+                                  park_attempt: st.park_attempt
                                 };
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                               },
@@ -3908,7 +4196,9 @@ func c2_loop(
                                   trace: trace_with_delta,
                                   emissions: emissions_after_call,
                                   history_digest: appended.digest,
-                                  open_waits: st.open_waits
+                                  open_waits: st.open_waits,
+                                  park_ordinal: st.park_ordinal,
+                                  park_attempt: st.park_attempt
                                 };
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                               }
@@ -4608,7 +4898,11 @@ func conversation_loop_v2_with_policy(
               -- is the exhausted turn's messages plus everything the resumed
               -- run added. That is the repair, observable.
               Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts, None, next_ordinal, task, profile, resume_count),
-              Err(e) => {
+              -- PLAN-002 W4 Part 5 (§8.7): a mid-park cancel is matched BEFORE the
+              -- generic error. The run already recorded `WakeReceived(Aborted)`;
+              -- the loop now takes today's exit for the command that cancelled
+              -- it, and emits no `error`.
+              Err(e) => if e.code == "ParkCancelled" then park_cancelled_exit(session_id, e.message) else {
                 let _ = ledger_emit(session_id, ErrorEvent({
                   source: "agent_loop_v2",
                   code: e.code,
@@ -4623,6 +4917,21 @@ func conversation_loop_v2_with_policy(
     }
   }
   }
+}
+
+-- PLAN-002 W4 Part 5, the table's last column (§8.7). A run ended by a mid-park
+-- cancel carries the command in `e.message` (the `Aborted` wake's `wait_id`):
+-- `abort`, `exit` and EOF (`eof`) return `()`, exactly as the between-turn
+-- `abort`/`exit`/EOF reads do; `restart:<p>` emits `SessionSuspend { p }` and
+-- returns, as the between-turn `restart` does. No `error` event on any row.
+export func park_cancelled_exit(session_id: string, command: string) -> () ! {IO, Trace} {
+  if startsWith(command, "restart:") then {
+    let _ = ledger_emit(session_id, SessionSuspend({
+      session_id: session_id,
+      target_profile: substring(command, 8, Str.length(command))
+    }));
+    ()
+  } else ()
 }
 
 -- ============================================================================
@@ -4877,7 +5186,8 @@ export func run_v2_with_conversation(
     None =>
       match initial_traced.result {
         Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, initial_counts, None, next_ordinal, task, profile, resume_count),
-        Err(e) => {
+        -- PLAN-002 W4 Part 5 (§8.7): as in the loop's `user_message` arm.
+        Err(e) => if e.code == "ParkCancelled" then park_cancelled_exit(session_id, e.message) else {
           let _ = ledger_emit(session_id, ErrorEvent({
             source: "agent_loop_v2",
             code: e.code,
@@ -5206,7 +5516,9 @@ func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Tra
       trace: trace,
       emissions: [],
       history_digest: c2_seed_digest([]),
-      open_waits: []
+      open_waits: [],
+      park_ordinal: initial_park_ordinal(false),
+      park_attempt: 0
     };
     let policy: SessionPolicy = {
       step: {
@@ -5260,7 +5572,9 @@ func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
       trace: { records: [] },
       emissions: [],
       history_digest: c2_seed_digest([]),
-      open_waits: []
+      open_waits: [],
+      park_ordinal: initial_park_ordinal(false),
+      park_attempt: 0
     };
     let policy: SessionPolicy = {
       step: {
@@ -5385,7 +5699,10 @@ type ResumeStateShape = {
   nudges_used: int,
   pending_tool_calls: int,
   trace_len: int,
-  emissions_len: int
+  emissions_len: int,
+  open_waits_len: int,
+  park_ordinal: int,
+  park_attempt: int
 }
 
 -- P1 Part 5: THE PROJECTION, and every reset field below is read from the same
@@ -5410,7 +5727,10 @@ pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_co
     nudges_used: nudges_used,
     pending_tool_calls: List.length(reset.pending_tool_calls),
     trace_len: List.length(reset.trace.records),
-    emissions_len: List.length(reset.emissions)
+    emissions_len: List.length(reset.emissions),
+    open_waits_len: List.length(reset.open_waits),
+    park_ordinal: reset.park_ordinal,
+    park_attempt: reset.park_attempt
   }
 }
 
@@ -5432,4 +5752,116 @@ pure func test_c2_state_from_continuation_resets_and_carries() -> bool
       && st.pending_tool_calls == 0
       && st.trace_len == 0
       && st.emissions_len == 0
+      -- PLAN-002 W4 gate 1: the waits and the park counters clear.
+      && st.open_waits_len == 0
+      && st.park_ordinal == 0
+      && st.park_attempt == 0
+  }
+
+-- PLAN-002 §8.4 (R9): the one exception, named. A wake-opened run starts at
+-- ordinal 1; every constructor in W4 passes `false`.
+pure func test_initial_park_ordinal_is_one_only_for_a_wake_opened_run() -> bool
+  tests [((), true)]
+  {
+    initial_park_ordinal(false) == 0 && initial_park_ordinal(true) == 1
+  }
+
+-- ============================================================================
+-- PLAN-002 W4 Parts 1-2: the park's pure half (gate 1).
+-- ============================================================================
+
+pure func w4_delegate(id: string) -> WaitDescriptor {
+  DelegateWait({ id: id, delegate_kind: "claude", locator: { pane: "p" }, answer_path: "/tmp/a.md", run_key: "rk" })
+}
+
+pure func w4_wake(rid: string, wid: string, outcome: WakeOutcome) -> WakeInput {
+  { request_id: rid, wait_id: wid, outcome: outcome, next_state: empty_world_state() }
+}
+
+pure func w4_req(waits: [WaitDescriptor]) -> ParkRequest {
+  { request_id: park_request_id("sid.r0.0", 0), step: 3, waits: waits, attempt: 0 }
+}
+
+pure func w4_ids(ws: [WaitDescriptor]) -> string {
+  join_wait_ids(wait_ids_of(ws))
+}
+
+-- `<run_id>.p<ordinal>`, the id `ParkRequest` and `park_entered` carry.
+pure func test_park_request_id_is_run_id_dot_p_ordinal() -> bool
+  tests [((), true)]
+  {
+    park_request_id("s.r0.0", 0) == "s.r0.0.p0" && park_request_id("s.r1.2", 7) == "s.r1.2.p7"
+  }
+
+-- Review change 12: `request_id` always, `wait_id` only for Settled/Lost/TimedOut.
+pure func test_wake_matches_request_id_always_and_wait_id_only_where_named() -> bool
+  tests [((), true)]
+  {
+    let req = w4_req([w4_delegate("h1"), TimerWait({ id: "t1", deadline_ms: 5 })]);
+    let rid = req.request_id;
+    wake_matches(req, w4_wake(rid, "h1", Settled("a")))
+      && wake_matches(req, w4_wake(rid, "h1", Lost("gone")))
+      && wake_matches(req, w4_wake(rid, "t1", TimedOut))
+      && not wake_matches(req, w4_wake(rid, "h9", Settled("a")))
+      && not wake_matches(req, w4_wake(rid, "", Lost("gone")))
+      -- the unbound default's own reply names no wait and still matches
+      && wake_matches(req, w4_wake(rid, "", HostError("wake_read unbound")))
+      && wake_matches(req, w4_wake(rid, "", OperatorInput("hi")))
+      && wake_matches(req, w4_wake(rid, "abort", Aborted))
+      && not wake_matches(req, w4_wake("sid.r0.0.p1", "h1", Settled("a")))
+      && not wake_matches(req, w4_wake("other", "", HostError("x")))
+  }
+
+-- ADR-002 D2's outcome table, the wait column, row by row.
+pure func test_apply_wake_follows_the_outcome_table() -> bool
+  tests [((), true)]
+  {
+    let ws = [w4_delegate("h1"), w4_delegate("h2"), TimerWait({ id: "t1", deadline_ms: 5 })];
+    w4_ids(apply_wake(ws, w4_wake("r", "h1", Settled("a")))) == "h2, t1"
+      && w4_ids(apply_wake(ws, w4_wake("r", "h2", Lost("gone")))) == "h1, t1"
+      && w4_ids(apply_wake(ws, w4_wake("r", "", OperatorInput("hi")))) == "h1, h2, t1"
+      && w4_ids(apply_wake(ws, w4_wake("r", "t1", TimedOut))) == "h1, h2"
+      -- TimedOut removes the TIMER only: a delegate id named by it stays
+      && w4_ids(apply_wake(ws, w4_wake("r", "h1", TimedOut))) == "h1, h2, t1"
+      && w4_ids(apply_wake(ws, w4_wake("r", "", HostError("down")))) == "h1, h2, t1"
+      && List.length(apply_wake(ws, w4_wake("r", "abort", Aborted))) == 0
+  }
+
+-- The wake message is loop-authored and `Settled` directs the model to
+-- `DelegateCheck` once.
+pure func test_wake_message_is_loop_authored_and_settled_says_delegate_check_once() -> bool
+  tests [((), true)]
+  {
+    let settled = wake_message(w4_wake("r", "h1", Settled("the answer")));
+    let op = wake_message(w4_wake("r", "", OperatorInput("hello")));
+    settled.role == "user"
+      && startsWith(settled.content, loop_authored_tag())
+      && contains(settled.content, "the answer is available; call `DelegateCheck` once")
+      && not contains(settled.content, "the answer.")
+      && startsWith(op.content, loop_authored_tag())
+      && contains(op.content, "hello")
+      && startsWith(wake_message(w4_wake("r", "", HostError("down"))).content, loop_authored_tag())
+  }
+
+-- ADR-002 D3's re-delegation row: two or more open after a batch that
+-- registered one, and only the `Delegate` result messages gain the sentence.
+pure func test_both_open_sentence_names_every_open_wait_on_the_delegate_result() -> bool
+  tests [((), true)]
+  {
+    let calls: [ToolCall] = [{ id: "c2", name: "Delegate", arguments: "{}" }, { id: "c3", name: "ReadFile", arguments: "{}" }];
+    let msgs: [Message] = [
+      { role: "tool", content: "launched", tool_calls: [], tool_call_id: "c2", images: [] },
+      { role: "tool", content: "file", tool_calls: [], tool_call_id: "c3", images: [] }
+    ];
+    let before = [w4_delegate("h1")];
+    let after = [w4_delegate("h1"), w4_delegate("h2")];
+    let told = both_open_msgs(calls, before, after, msgs);
+    let untouched_one = both_open_msgs(calls, [], [w4_delegate("h1")], msgs);
+    let untouched_no_new = both_open_msgs(calls, after, after, msgs);
+    (match told {
+       d :: f :: [] => contains(d.content, "2 waits are open: h1, h2") && startsWith(d.content, "launched") && f.content == "file",
+       _ => false
+     })
+      && (match untouched_one { d :: _ => d.content == "launched", _ => false })
+      && (match untouched_no_new { d :: _ => d.content == "launched", _ => false })
   }

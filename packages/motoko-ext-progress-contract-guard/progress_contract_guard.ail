@@ -1,7 +1,8 @@
 module sunholo/motoko_ext_progress_contract_guard/progress_contract_guard
 
 import std/string (trim, contains, toLower)
-import std/json (Json, jo, ja)
+import std/json (Json, jo, ja, js, asArray)
+import std/option (Option, Some, None)
 import std/result (Result, Err)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
 
@@ -197,7 +198,19 @@ export pure func declared_work_in_flight(ctx: ExtCtx) -> bool {
 -- one replacing the textual one outright: 7.3 makes the answer reliable when it
 -- is available, and the transcript still answers when it is not.
 export pure func has_open_delegate(ctx: ExtCtx) -> bool {
-  declared_work_in_flight(ctx) || last_delegate_signal(ctx.history_slice, 0) == 1
+  declared_open_waits(ctx) || declared_work_in_flight(ctx) || last_delegate_signal(ctx.history_slice, 0) == 1
+}
+
+-- PLAN-002 W4 Part 1 (ADR-002 D3 "Guard"). ABI 7.4's validated wait state: the
+-- loop's typed `open_waits`, encoded as a Json array, where non-empty means a
+-- wait is open. It is the guard's primary input once D2 is active; the prose
+-- reader above stays as the explicitly limited fallback (it cannot see A when
+-- B was launched and collected after A).
+export pure func declared_open_waits(ctx: ExtCtx) -> bool {
+  match asArray(ctx.open_waits) {
+    Some(xs) => match xs { [] => false, _ => true },
+    None => false
+  }
 }
 
 export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
@@ -210,6 +223,24 @@ export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback
   then ContinueWithFeedback(guard_message())
   else NoDecision
 }
+
+-- PLAN-002 W4 Part 1: the same differential for ABI 7.4. Same candidate, same
+-- empty history, no declared work: one open wait is the whole difference.
+pure func test_open_waits_suppress_the_nudge() -> bool
+  tests [((), true)]
+  {
+    let hist = [user("x ${guard_marker()}")];
+    let base = test_ctx(contract_task(), hist);
+    let nudged = match decide_with_budget(base, failure_candidate(), 2) {
+      ContinueWithFeedback(_) => true,
+      NoDecision => false
+    };
+    let silenced = match decide_with_budget({ base | open_waits: ja([jo([{ key: "id", value: js("h1") }])]) }, failure_candidate(), 2) {
+      ContinueWithFeedback(_) => false,
+      NoDecision => true
+    };
+    nudged && silenced && not declared_open_waits(base)
+  }
 
 -- The point of 7.3, as a differential: same candidate, same EMPTY history — so
 -- the prose reader has nothing to go on — and one declared work item is the

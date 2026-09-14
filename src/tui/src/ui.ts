@@ -24,6 +24,7 @@ import { TUI, Text, Markdown, Editor, type EditorTheme, Box, Image, SelectList, 
 import type { AgentEvent } from "./runtime-process.js";
 import type { DelegatedCall, DelegatedResult, NativeToolResult } from "./runtime-process.js";
 import type { RuntimeProcess } from "./runtime-process.js";
+import type { WakeReply } from "./wake-waiter.js";
 import { resolveDelegatedExec } from "./runtime-process.js";
 import { fetchDynamicModelsFromEnv } from "./models.js";
 import { type SlashCommandHandlerCtx, parseSlashCommand, createCommandAutocompleteProvider } from "./commands.js";
@@ -1803,6 +1804,32 @@ export function shouldLockPlainInput(
   return !awaitingTask && !taskDone && value.length > 0 && !value.startsWith("/");
 }
 
+/**
+ * Where a non-slash line goes. `wake_reply` first (PLAN-002 W4 Part 5's parked input route): while
+ * a `wake_request` is outstanding, plain input answers it as `operator_input` and bypasses
+ * `shouldLockPlainInput`. The other routes are handleCommand's existing branches, in their order.
+ */
+export type PlainInputRoute = "wake_reply" | "initial_task" | "follow_up" | "locked" | "other";
+
+export function plainInputRoute(
+  awaitingTask: boolean,
+  taskDone: boolean,
+  parkedRequestId: string | null,
+  value: string,
+): PlainInputRoute {
+  const plain = value.length > 0 && !value.startsWith("/");
+  if (parkedRequestId !== null && plain) return "wake_reply";
+  if (awaitingTask && plain) return "initial_task";
+  if (taskDone && plain) return "follow_up";
+  if (shouldLockPlainInput(awaitingTask, taskDone, value)) return "locked";
+  return "other";
+}
+
+/** The `wake_reply` an operator's line becomes while parked. */
+export function operatorInputReply(requestId: string, content: string): WakeReply {
+  return { request_id: requestId, wait_id: "", outcome: "operator_input", detail: content };
+}
+
 function initialExtensionsFromEnv(): string {
   const raw = (process.env.CORE_EXT_ORDER ?? "").trim();
   if (raw === "") return "";
@@ -2150,7 +2177,12 @@ export class AgentUI {
       // stand in for it because a runtimeProcess only existed once a task had
       // started; the runtime is now pre-spawned at TUI boot and sits idle waiting
       // for the first prompt, so ESC has to keep falling through to the Editor.
-      if (matchesKey(data, "escape") && this.runtimeProcess && !this.taskDone && this.waitState.state !== "idle") {
+      // A parked runtime (W4 Part 5) is a running task whatever the spinner says; index.ts's
+      // onInterrupt aborts it over stdin rather than killing it.
+      if (
+        matchesKey(data, "escape") && this.runtimeProcess &&
+        (this.runtimeProcess.isParked || (!this.taskDone && this.waitState.state !== "idle"))
+      ) {
         this.appendHistoryStyled("Task interrupted", chalk.yellow);
         this.tui.requestRender();
         this.onInterrupt?.();
@@ -4082,8 +4114,23 @@ export class AgentUI {
       return;
     }
 
+    const route = plainInputRoute(this.awaitingTask, this.taskDone, this.runtimeProcess?.wakeRequest?.request_id ?? null, value);
+
+    // PLAN-002 W4 Part 5: the parked input route. The runtime is blocked on its open waits, and an
+    // operator line is one of the things that wakes it.
+    if (route === "wake_reply") {
+      const req = this.runtimeProcess?.wakeRequest;
+      if (req && this.runtimeProcess?.sendWakeReply(operatorInputReply(req.request_id, value))) {
+        this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+      } else {
+        this.appendHistoryStyled("The park this line answered has already resolved; the line was not sent.", chalk.dim);
+      }
+      this.tui.requestRender();
+      return;
+    }
+
     // Before any task has started, treat the first plain-text submission as the task.
-    if (this.awaitingTask && value && !value.startsWith("/")) {
+    if (route === "initial_task") {
       this.awaitingTask = false;
       // A completed task leaves `taskDone` set, and `/restart` puts the session
       // back into awaitingTask — so this branch IS reachable with it still true.
@@ -4107,7 +4154,7 @@ export class AgentUI {
     }
 
     // After task completion, plain text (not starting with '/') is a follow-up.
-    if (this.taskDone && value && !value.startsWith("/")) {
+    if (route === "follow_up") {
       this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       this.onUserMessage?.(value);
       // Reset taskDone — runtime process is now processing again; next done re-enables it.
@@ -4118,7 +4165,7 @@ export class AgentUI {
       return;
     }
 
-    if (shouldLockPlainInput(this.awaitingTask, this.taskDone, value)) {
+    if (route === "locked") {
       this.appendHistoryStyled("Input locked: task still running. Use /abort to stop.", chalk.dim);
       this.tui.requestRender();
       return;
