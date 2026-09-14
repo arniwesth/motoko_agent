@@ -650,7 +650,11 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # moving the decode off the per-step frame. Drop this entry when the summary
 # reports it PASSED.
 #
-# driver_plus_herdr, herdr_graded -- listed 2026-09-12 on the owner's ruling at
+# driver_plus_herdr, herdr_graded -- REMOVED 2026-09-14: PINDH re-issued the profile
+# (eba309c, driver_plus_herdr/1 -> /2): ABI 7.4 transcribed, attribution re-recorded
+# to the live identity, :318 -> :389 pin. Both targets green from a delegate pane
+# and plain-shell re-runs; drop confirmed by the post-sweep verdict.
+# (Prior entry, kept for history: listed 2026-09-12 on the owner's ruling at
 # PLAN-003 P3G. One cause, two targets (they run the same script and read its two
 # halves): driver_plus_herdr/1 does not load clean, 2 rejections --
 # [attribution-identity-stale], recorded (c0fbf10, sha256:eba3f47…) against live
@@ -664,7 +668,7 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # d72fff1 (2026-09-08 17:13, the merge of the PLAN-003 P1 branch into 013/021) --
 # before any P3 part. Disposition pending the owner's D4 re-issue of the profile
 # against the corrected table. Drop both entries when the summary reports them
-# PASSED.
+# PASSED.)
 DST_KNOWN_RED := depth_canary driver_plus_herdr herdr_graded
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
