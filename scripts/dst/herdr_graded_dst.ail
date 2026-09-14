@@ -37,7 +37,7 @@ import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/test/stub_step (RecordingWorld, prose_step)
-import src/core/ports (ScriptedStep, WorldState, empty_world_state)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state, WakeObservation, Settled)
 import src/core/dst_interaction (
   Interaction,
   ExtensionEffectIdentity,
@@ -198,8 +198,13 @@ func tool_step(tc: ToolCall) -> ScriptedStep {
     advance_ms: 0 }
 }
 
+-- THREE model steps since PLAN-002 W4. The prose after the `Delegate` parks the
+-- loop on herdr's open wait; the seeded wake below settles it, and the accepted
+-- wake is injected as a user turn that reaches the model once more (session.ail's
+-- `Park` arm). That third reply is scripted rather than left to the stub's
+-- empty-script fallback.
 func spike_script() -> [ScriptedStep] {
-  [tool_step(delegate_call()), prose_step("done")]
+  [tool_step(delegate_call()), prose_step("done"), prose_step("woken")]
 }
 
 func msg(role: string, content: string) -> Message {
@@ -215,12 +220,24 @@ func world_env() -> [{ key: string, value: string }] {
    { key: "MOTOKO_HEADLESS", value: "1" }]
 }
 
+-- THE ONE WAKE. From PLAN-002 W4 the graded `Delegate` registers wait
+-- `mot-dlg-100` (its handle is the world clock at the call) and the loop parks
+-- on it. Unseeded, `scripted_wake` fell through to `wake_read_unbound`, whose
+-- `HostError` matches on request_id alone, so every reply was accepted and
+-- re-parked (p0, p1, p2, ...) until the step budget ended the run Err. The
+-- request id is `session_0.r0.0.p0`: no MOTOKO_SESSION_ID is set, so
+-- `derive_session_id` takes the clock-derived `session_0`.
+func graded_wake() -> WakeObservation {
+  { request_id: "session_0.r0.0.p0", wait_id: "mot-dlg-100", outcome: Settled("answer") }
+}
+
 func graded_world() -> WorldState {
   { empty_world_state() |
     script: spike_script(),
     approvals: [],
     env: world_env(),
-    ext_effects: herdr_effects() }
+    ext_effects: herdr_effects(),
+    wakes: [graded_wake()] }
 }
 
 -- The real registration, wholesale. `register_with_config` reads HERDR_ENV,
@@ -339,12 +356,15 @@ func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
 -- `ensure_dagr_pane` contributes NOTHING and that is a configuration fact this
 -- target pins: it early-outs on `cfg.dagr_pane == false` before any call.
 --
+-- provider_calls = 3: the `Delegate` step, the prose that parks, and the reply
+-- to the injected wake (PLAN-002 W4; see `spike_script`).
+--
 -- tool_dispatches = 0. The model emits a native `Delegate`, but a ToolProvider
 -- handles it — the driver's own tool phase is never reached, so no
 -- `ToolIdentity` interaction is written. That zero is the shape of the thing
 -- this profile is about: the dispatch went to an extension.
 func graded_witness(clock_delta: int, resolutions: int) -> DiscoveryWitness {
-  { provider_calls: 2,
+  { provider_calls: 3,
     tool_dispatches: 0,
     approval_reads: 0,
     approvals_consumed: 0,

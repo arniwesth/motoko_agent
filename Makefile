@@ -656,7 +656,11 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # [attribution-identity-stale], recorded (c0fbf10, sha256:eba3f47…) against live
 # (c0fbf10, sha256:2c86584…), and [site-unaccounted] tool_phase.ail:318 (Process).
 # herdr_graded's run clauses are green; its "profile record loads clean" clause
-# is this. Bisected in clean worktrees with HERDR_* unset: green at b48e2f2, red at
+# is this. Those run clauses regressed at PLAN-002 W4 (85ce0c7) for lack of a
+# seeded wake -- the graded Delegate parks the loop and the unbound wake re-parked
+# it to the step budget -- and are re-greened by seeding one Settled wake in
+# graded_world(); the PINDH attribution reasons are unchanged and still
+# operator-owned. Bisected in clean worktrees with HERDR_* unset: green at b48e2f2, red at
 # d72fff1 (2026-09-08 17:13, the merge of the PLAN-003 P1 branch into 013/021) --
 # before any P3 part. Disposition pending the owner's D4 re-issue of the profile
 # against the corrected table. Drop both entries when the summary reports them
