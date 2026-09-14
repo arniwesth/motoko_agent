@@ -37,12 +37,12 @@ export const JOURNAL_SCHEMA_VERSION = 1;
  * The journal-class wire events (ADR-003 D3). These become entries; everything else on the wire is
  * logged and forgotten.
  *
- * `park_entered` and `wake_received` are ADR-003 D7's and are listed by the plan, but they DO NOT
- * EXIST — `phase_vocab.ail` declares no such `LedgerEvent` and ADR-002 D2 is not activated, so
- * nothing can emit one. Listing them here would be worse than leaving them out: `journal.ail`'s
- * `all_entry_types()` has no `park`/`wake`, and its decoder refuses an unknown `type` rather than
- * skipping it, so a `park` entry written today would make every later fold refuse the whole file.
- * They land with P4, together with the entry types that can hold them.
+ * `park_entered` and `wake_received` are ADR-003 D7's, journal-class since PLAN-003 P4 Part 1. Both
+ * have been on the wire since PLAN-002 W4 — `phase_vocab.ail` declares the `LedgerEvent`s and
+ * `runtime-process.ts` the host types — and `journal.ail` holds them as the `park` and `wake`
+ * entries its fold folds to `Parked`. The two halves landed in one change because they had to:
+ * the fold refuses an unknown entry `type` rather than skipping it, so a `park` written before the
+ * entry type existed would have made every later fold refuse the whole file.
  */
 const JOURNAL_CLASS = new Set([
   "history_seeded",
@@ -54,6 +54,8 @@ const JOURNAL_CLASS = new Set([
   "model_change",
   "run_suspended",
   "session_resumed",
+  "park_entered",
+  "wake_received",
 ]);
 
 export function isJournalClass(type: string): boolean {
@@ -523,6 +525,30 @@ export class SessionJournal {
           : 0;
       case "session_resumed":
         return this.recordResumed(event);
+      case "park_entered":
+        // ADR-003 D7 (PLAN-003 P4 Part 1). The payload is `ParkEnteredInfo` as the child sent it:
+        // `waits` are the request's open waits, copied verbatim — the fold decodes each through
+        // `phase_vocab.wait_descriptor_from_json`, and a host that re-shaped them would be a second
+        // owner of the wire shape. `attempt` is always 0 at the one emit site and is not written.
+        return this.append("park", {
+          request_id: str(event.request_id),
+          step: num(event.step),
+          waits: Array.isArray(event.waits) ? event.waits : [],
+        })
+          ? 1
+          : 0;
+      case "wake_received":
+        // The wake is the park's CHILD (D7 row 6) because `parent_id` is the leaf and nothing is
+        // appended between them — no branch operation exists, and the suspended-child branch (Part
+        // 4) writes no `exit`. The fold refuses a wake that answers no open park.
+        return this.append("wake", {
+          request_id: str(event.request_id),
+          wait_id: str(event.wait_id),
+          outcome: str(event.outcome),
+          detail: str(event.detail),
+        })
+          ? 1
+          : 0;
       default:
         return 0;
     }
@@ -894,8 +920,9 @@ export function substituteJournalPayload(event: Json): Json {
     case "state_delta": {
       // `ext_artifacts` is the only bulk field, and its digest is ALREADY a sibling written by the
       // child — so this drops the value and adds nothing. `run_summary`, `session_start`,
-      // `run_suspended`, `session_resumed` and `model_change` carry no bulk payload at all and are
-      // logged unchanged: substituting them would cost a log reader real information for no bytes.
+      // `run_suspended`, `session_resumed`, `model_change`, `park_entered` and `wake_received` carry
+      // no bulk payload at all and are logged unchanged: substituting them would cost a log reader
+      // real information for no bytes.
       if (event.ext_artifacts === undefined) return event;
       const { ext_artifacts: _a, ...rest } = event;
       return { ...rest, journaled: true };

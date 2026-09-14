@@ -492,6 +492,8 @@ describe("the JSONL log's digest substitution", () => {
       { type: "run_suspended", session_id: "s", run_id: "r0", reason: "budget_exhausted", step: 3 },
       { type: "session_resumed", resume_count: 1 },
       { type: "model_change", model: "m" },
+      { type: "park_entered", request_id: "r0.p0", step: 2, waits: [{ id: "op" }] },
+      { type: "wake_received", request_id: "r0.p0", wait_id: "op", outcome: "operator_input", detail: "go" },
     ]) {
       expect(substituteJournalPayload(e)).toBe(e);
     }

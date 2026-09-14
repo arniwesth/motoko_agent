@@ -58,7 +58,8 @@ import src/core/phase_vocab (
   LedgerRecord, WireRecord, LedgerEvent,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
   SessionStart, RunSummary, RunSuspended, ParkEntered, WakeReceived,
-  OperatorWait, DelegateWait,
+  OperatorWait, DelegateWait, WaitDescriptor, wait_descriptor_from_json,
+  wait_descriptors_json, wait_id,
   SessionResumedInfo, system_prefix_digest_for
 )
 import src/core/recovery (count_persist_nudges)
@@ -312,7 +313,7 @@ export pure func chain_digests_json(ds: [string]) -> Json {
 -- same quantity to work at all.
 --
 -- The fold resolves it in the only direction that keeps every digest it reads
--- CHECKABLE: the journal has no `history_seeded` entry type (D1's ten types do
+-- CHECKABLE: the journal has no `history_seeded` entry type (the entry types do
 -- not include one — the host expands a seed into `history_appended` entries),
 -- so the chain is a fold of `chain_digest_after` over the journal's own history
 -- messages, based at `chain_digest_base([])`, and a `history_replaced` re-bases
@@ -636,7 +637,7 @@ export pure func refusal_message(r: Refusal) -> string {
 }
 
 -- ============================================================================
--- D1's ENTRY ENVELOPE, and the ten entry types.
+-- D1's ENTRY ENVELOPE, and the twelve entry types.
 --
 -- `{ id, parent_id, seq, at_ms, type, … }`. `id` is host-assigned and opaque to
 -- the child; `parent_id` is the leaf at the time of the append, and `null` on
@@ -649,11 +650,12 @@ export pure func refusal_message(r: Refusal) -> string {
 -- decoding somewhere this module could not check it. `[Json]` in, `SessionState`
 -- or `Refusal` out.
 --
--- TEN TYPES AND NO `history_seeded`. D1's table lists `history_seeded` as a
+-- TWELVE TYPES AND NO `history_seeded`. D1's table lists `history_seeded` as a
 -- CHILD EVENT with three host arms — expand into N `history_appended` entries,
 -- rewrite as a `history_replaced` after a profile switch, or compare and drop —
--- so it never becomes an entry of its own. `park` and `wake` are D7's and wait
--- for PLAN-003 P4.
+-- so it never becomes an entry of its own. `park` and `wake` are D7's (PLAN-003
+-- P4 Part 1): the park a run entered and the wake that answered it, written by
+-- the host from the two wire events either side of the child's wait.
 -- ============================================================================
 
 export type JournalEntry = {
@@ -1168,12 +1170,90 @@ export pure func exit_of_entry(e: JournalEntry) -> Result[ExitEntry, Refusal] {
   }
 }
 
--- The ten types, as data, so a gate can assert the set rather than read it. The
--- same argument `all_families()` and `all_hook_slots()` make: a hand-written set
--- that validates while incomplete is this project's recurring failure.
+-- ADR-003 D7's two (PLAN-003 P4 Part 1). `park` is `ParkEnteredInfo` as the
+-- host copies it off the wire — `{ request_id, step, waits }`; `attempt` is
+-- always 0 at the one emit site and is not written (ADR row 2) — and `wake` is
+-- `WakeReceivedInfo`. Both are this module's own types rather than the wire
+-- infos re-exported, as every other entry is: the entry's shape is the host's
+-- file and the info's is the child's line, and the fold is what says they agree.
+export type ParkEntry = { request_id: string, step: int, waits: [WaitDescriptor] }
+export type WakeEntry = { request_id: string, wait_id: string, outcome: string, detail: string }
+
+-- The six wake outcomes, as data (`all_entry_types`' argument): the set
+-- `dst_invariants.park_payload_step` checks on the wire and `ports.wake_outcome_of`
+-- converts. The CONVERSION to `WakeOutcome` stays in `session.ail`, which imports
+-- `ports`; this module does not and must not, because `ports` imports the DST
+-- tree and the fold would then be a dependency of everything it judges.
+export pure func all_wake_outcomes() -> [string] {
+  ["settled", "lost", "operator_input", "timed_out", "host_error", "aborted"]
+}
+
+-- Each element through the ONE owner of the wire shape (`phase_vocab`, W2 Part
+-- 1). The codec's message is not carried: the refusal names the entry and the
+-- field, as every field refusal here does, and the shape rule stays owned.
+@allow_empty_ok("the recursion's base case only — a park with no waits is refused at `waits` by `park_of_entry` before the list is walked, so `[]` here is the end of a non-empty list")
+pure func waits_of_json(xs: [Json], seq: int) -> Result[[WaitDescriptor], Refusal] {
+  match xs {
+    [] => Ok([]),
+    j :: rest => match wait_descriptor_from_json(j) {
+      Err(_) => Err(Entry(seq, "waits")),
+      Ok(w) => match waits_of_json(rest, seq) {
+        Err(e) => Err(e),
+        Ok(ws) => Ok(w :: ws)
+      }
+    }
+  }
+}
+
+-- A park with nothing to wait for is not a park (ADR-002 D2: the park IS the
+-- request's open waits, and `dst_invariants` refuses an empty `waits` on the
+-- wire), so an empty list is refused at `waits` like a malformed element.
+export pure func park_of_entry(e: JournalEntry) -> Result[ParkEntry, Refusal] {
+  match at_string(e.raw, "request_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(request_id) => match at_int(e.raw, "step", e.seq) {
+      Err(err) => Err(err),
+      Ok(step) => match at_array(e.raw, "waits", e.seq) {
+        Err(err) => Err(err),
+        Ok(xs) =>
+          if List.length(xs) == 0 then Err(Entry(e.seq, "waits"))
+          else match waits_of_json(xs, e.seq) {
+            Err(err) => Err(err),
+            Ok(waits) => { let p: ParkEntry = { request_id: request_id, step: step, waits: waits }; Ok(p) }
+          }
+      }
+    }
+  }
+}
+
+export pure func wake_of_entry(e: JournalEntry) -> Result[WakeEntry, Refusal] {
+  match at_string(e.raw, "request_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(request_id) => match at_string(e.raw, "wait_id", e.seq) {
+      Err(err) => Err(err),
+      Ok(wid) => match at_string(e.raw, "outcome", e.seq) {
+        Err(err) => Err(err),
+        Ok(outcome) =>
+          if not contains_string(all_wake_outcomes(), outcome) then Err(Entry(e.seq, "outcome"))
+          else match at_string(e.raw, "detail", e.seq) {
+            Err(err) => Err(err),
+            Ok(detail) => {
+              let w: WakeEntry = { request_id: request_id, wait_id: wid, outcome: outcome, detail: detail };
+              Ok(w)
+            }
+          }
+      }
+    }
+  }
+}
+
+-- The twelve types, as data, so a gate can assert the set rather than read it.
+-- The same argument `all_families()` and `all_hook_slots()` make: a hand-written
+-- set that validates while incomplete is this project's recurring failure.
 export pure func all_entry_types() -> [string] {
   ["header", "history_appended", "history_replaced", "state_delta",
-   "run_started", "run_finished", "settings", "suspended", "resumed", "exit"]
+   "run_started", "run_finished", "settings", "suspended", "resumed", "exit",
+   "park", "wake"]
 }
 
 -- ============================================================================
@@ -1218,24 +1298,30 @@ export pure func all_entry_types() -> [string] {
 -- the behaviour the replacement rule was designed to give.
 -- ============================================================================
 
--- D4's `last`, minus `Parked` — PLAN-003 P4's, with its two entry types.
--- `BoundaryOpen` is the case D4's list does not name because a well-formed
--- journal does not usually end there: the last entry is a `history_appended` or
--- a `state_delta`, which is what a journal looks like DURING a run and what a
--- `kill -9` leaves behind. Naming it is what lets D6 step 5 route it (between
--- turns, with the folded history) instead of matching non-exhaustively.
+-- D4's `last`, with D7's `Parked` (PLAN-003 P4 Part 1): the park entry and,
+-- once one has arrived, the wake that answered it. `Parked(p, None)` is a park
+-- the resumer re-observes; `Parked(p, Some(w))` is a wake received and not yet
+-- consumed by the `run_started` of the run it opens (Part 3 reads both off
+-- `plan.last`). `BoundaryOpen` is the case D4's list does not name because a
+-- well-formed journal does not usually end there: the last entry is a
+-- `history_appended` or a `state_delta`, which is what a journal looks like
+-- DURING a run and what a `kill -9` leaves behind. Naming it is what lets D6
+-- step 5 route it (between turns, with the folded history) instead of matching
+-- non-exhaustively.
 export type Boundary
   = BoundaryRunFinished(string, int)
   | BoundarySuspended(string, int)
   | BoundaryExit(string)
   | BoundaryOpen(string)
+  | BoundaryParked(ParkEntry, Option[WakeEntry])
 
 export pure func boundary_id(b: Boundary) -> string {
   match b {
     BoundaryRunFinished(_, _) => "run_finished",
     BoundarySuspended(_, _) => "suspended",
     BoundaryExit(_) => "exit",
-    BoundaryOpen(kind) => "open:${kind}"
+    BoundaryOpen(kind) => "open:${kind}",
+    BoundaryParked(_, _) => "parked"
   }
 }
 
@@ -1489,14 +1575,49 @@ pure func fold_entry(acc: FoldAcc, e: JournalEntry) -> FoldAcc {
         Err(r) => { acc | err: Some(r) },
         Ok(_) => { acc | last: BoundaryOpen("resumed") }
       }
+      -- AN `exit` AFTER A PARK KEEPS THE PARK (P4-Q4: ADR-002 D4 over the literal
+      -- text of ADR-003 D4 rule 6). The host writes `exit` when it quits or dies
+      -- during a durable park, and the park — with its wake, when one arrived and
+      -- no run consumed it — is what the resume re-observes.
       else if e.kind == "exit" then match exit_of_entry(e) {
         Err(r) => { acc | err: Some(r) },
-        Ok(x) => { acc | last: BoundaryExit(x.reason) }
+        Ok(x) => match acc.last {
+          BoundaryParked(_, _) => acc,
+          _ => { acc | last: BoundaryExit(x.reason) }
+        }
+      }
+      -- D7's park (PLAN-003 P4 Part 1). It is the boundary until an entry of the
+      -- running kind follows — `run_started`, a history entry, `state_delta`,
+      -- `run_finished`, `suspended` — and every one of those arms already moves
+      -- `last` off it. That is D7's exactly-once rule inside the fold: a consumed
+      -- wake is followed by the `run_started` of the run it opened, so no later
+      -- fold offers it again.
+      else if e.kind == "park" then match park_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(p) => { acc | last: BoundaryParked(p, None) }
+      }
+      -- A wake answers THE open park and nothing else: no park before it, a park
+      -- already answered, or a park for another request refuse at `request_id`.
+      -- An `aborted` wake CLOSES the park (P4-Q4): the request was cancelled, and
+      -- a resume that opens no run must not re-offer it.
+      else if e.kind == "wake" then match wake_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(w) => match acc.last {
+          BoundaryParked(p, answered) => match answered {
+            Some(_) => { acc | err: Some(Entry(e.seq, "request_id")) },
+            None =>
+              if p.request_id != w.request_id then { acc | err: Some(Entry(e.seq, "request_id")) }
+              else if w.outcome == "aborted" then { acc | last: BoundaryOpen("wake:aborted") }
+              else { acc | last: BoundaryParked(p, Some(w)) }
+          },
+          _ => { acc | err: Some(Entry(e.seq, "request_id")) }
+        }
       }
       else if e.kind == "header" then { acc | err: Some(Header) }
-      -- AN UNKNOWN TYPE IS A REFUSAL, not a skip. `park` and `wake` arrive with
-      -- PLAN-003 P4 and a fold that ignored what it did not recognise would
-      -- resume a parked session as though it had never parked.
+      -- AN UNKNOWN TYPE IS A REFUSAL, not a skip: a fold that ignored what it did
+      -- not recognise would resume a session as though the entry it skipped had
+      -- never been written — which is what the fold before P4 Part 1 would have
+      -- done to a `park`.
       else { acc | err: Some(Entry(e.seq, "type=${e.kind}")) }
   }
 }
@@ -1987,6 +2108,24 @@ pure func twin_event(acc: TwinAcc, e: LedgerEvent) -> TwinAcc {
         kv("finish_reason", js(i.finish_reason))
       ]),
 
+    -- D7's two (PLAN-003 P4 Part 1), as the host writes them: the park's waits
+    -- through the descriptor codec's encoder, so the fold reads back through
+    -- its decoder the bytes the ABI put on the wire; the wake verbatim.
+    ParkEntered(i) =>
+      twin_line(acc, "park", [
+        kv("request_id", js(i.request_id)),
+        kv("step", jint(i.step)),
+        kv("waits", wait_descriptors_json(i.waits))
+      ]),
+
+    WakeReceived(i) =>
+      twin_line(acc, "wake", [
+        kv("request_id", js(i.request_id)),
+        kv("wait_id", js(i.wait_id)),
+        kv("outcome", js(i.outcome)),
+        kv("detail", js(i.detail))
+      ]),
+
     _ => acc
   }
 }
@@ -2153,6 +2292,8 @@ export pure func plan_resume(s: SessionState, inv: ResumeInvocation) -> Result[R
             profile: inv.profile,
             boot: inv.boot
           }),
+          -- `Parked` is NOT a suspension (P4 Part 1): `suspended` stays `None`,
+          -- and the park reaches the resumer on `plan.last` (Part 3's input).
           _ => None
         };
         let plan: ResumePlan = {
@@ -2233,7 +2374,11 @@ export pure func boundary_detail(b: Boundary) -> string {
     BoundaryRunFinished(run_id, _) => "run ${run_id} finished",
     BoundarySuspended(run_id, step) => "run ${run_id} suspended at step ${show(step)}",
     BoundaryExit(reason) => "exit (${reason})",
-    BoundaryOpen(kind) => "the process died mid-run, after a ${kind}"
+    BoundaryOpen(kind) => "the process died mid-run, after a ${kind}",
+    BoundaryParked(p, answered) => match answered {
+      None => "parked on ${p.request_id} at step ${show(p.step)}, awaiting a wake",
+      Some(w) => "parked on ${p.request_id} at step ${show(p.step)}, woke ${w.outcome} on ${w.wait_id}"
+    }
   }
 }
 
@@ -3424,9 +3569,10 @@ pure func line_field(j: Json, key: string) -> string {
   match getString(j, key) { None => "?", Some(s) => s }
 }
 
--- A run's journal up to the point it parks: seed, one delta.
+-- A run's journal up to the point it parks: seed, one delta — on the header a
+-- same-profile resume accepts, so the plan can be taken as well as the fold.
 pure func t_run_lines() -> [Json] {
-  journal_lines_of_records(harness_header(t_identity(), "m"), [t_start(), t_seeded(), t_delta()])
+  journal_lines_of_records(t_crash_header(), [t_start(), t_seeded(), t_delta()])
 }
 
 pure func with_park(lines: [Json]) -> [Json] {
@@ -3437,17 +3583,92 @@ pure func with_wake(lines: [Json], outcome: string) -> [Json] {
   lines ++ [t_wake_line(List.length(lines), journal_leaf(lines), outcome)]
 }
 
+pure func with_run_started(lines: [Json]) -> [Json] {
+  let seq = List.length(lines);
+  lines ++ [jo([kv("id", js(entry_id(seq))), kv("parent_id", js(journal_leaf(lines))), kv("seq", jint(seq)),
+                kv("at_ms", jint(seq)), kv("type", js("run_started")), kv("run_id", js("sess_1.r1.0"))])]
+}
+
+pure func with_exit(lines: [Json]) -> [Json] {
+  lines ++ [t_exit_line(List.length(lines), journal_leaf(lines), "restart", [])]
+}
+
+pure func parked_unanswered(r: Result[SessionState, Refusal]) -> bool {
+  match r {
+    Err(_) => false,
+    Ok(st) => match st.last {
+      BoundaryParked(p, answered) =>
+        p.request_id == t_park_request() && p.step == 2 && List.length(p.waits) == 2
+          && (match answered { None => true, Some(_) => false }),
+      _ => false
+    }
+  }
+}
+
+pure func parked_answered(r: Result[SessionState, Refusal], outcome: string) -> bool {
+  match r {
+    Err(_) => false,
+    Ok(st) => match st.last {
+      BoundaryParked(p, answered) =>
+        p.request_id == t_park_request()
+          && (match answered { None => false, Some(w) => w.request_id == p.request_id && w.wait_id == "h1" && w.outcome == outcome }),
+      _ => false
+    }
+  }
+}
+
+pure func refused_at(r: Result[SessionState, Refusal], seq: int, field: string) -> bool {
+  match r { Ok(_) => false, Err(e) => match e { Entry(s, f) => s == seq && f == field, _ => false } }
+}
+
+pure func wait_ids(ws: [WaitDescriptor]) -> string { join_kinds(List.map(wait_id, ws)) }
+
 -- A JOURNAL THAT ENDS IN A PARK FOLDS TO `parked` (ADR-003 D7; ADR-002 D4's "a
 -- park entry with no wake child is then re-observed on resume"). Red before P4
--- Part 1: the fold refused the line as an unknown type.
+-- Part 1: the fold refused the line as an unknown type. The rows are the Part 1
+-- gate's fixtures, P4-Q4's two decisions among them.
 pure func test_a_journal_ending_in_a_park_folds_to_parked() -> bool
   tests [((), true)]
   {
-    let parked = with_park(t_run_lines());
-    match fold_journal(parked, journal_leaf(parked)) {
-      Err(_) => false,
-      Ok(st) => boundary_id(st.last) == "parked"
-    }
+    let run = t_run_lines();
+    let parked = with_park(run);
+    let woken = with_wake(parked, "settled");
+    -- The park's seq; the wake's is n + 1.
+    let n = List.length(parked) - 1;
+    let bad_wait = ja([jo([kv("id", js("h1")), kv("deadline_ms", js("soon"))])]);
+    -- `park` alone → Parked(p, None), with the waits read back through the codec.
+    (match fold_journal(parked, journal_leaf(parked)) { Err(_) => false, Ok(st) => boundary_id(st.last) == "parked" })
+      && parked_unanswered(t_fold(parked))
+      && (match t_fold(parked) { Err(_) => false, Ok(st) => match st.last { BoundaryParked(p, _) => wait_ids(p.waits) == "h1,op", _ => false } })
+      -- `park, wake` → Parked(p, Some(w)).
+      && parked_answered(t_fold(woken), "settled")
+      -- `park, wake, run_started` → not Parked: the wake was consumed by the run it opened.
+      && (match t_fold(with_run_started(woken)) { Err(_) => false, Ok(st) => boundary_id(st.last) == "open:run_started" })
+      -- `park, exit` → Parked(p, None) (P4-Q4); `park, wake, exit` keeps the wake too.
+      && parked_unanswered(t_fold(with_exit(parked)))
+      && parked_answered(t_fold(with_exit(woken)), "settled")
+      -- `park, wake(aborted)` → Open("wake:aborted") (P4-Q4): a cancelled park is not re-offered.
+      && (match t_fold(with_wake(parked, "aborted")) { Err(_) => false, Ok(st) => boundary_id(st.last) == "open:wake:aborted" })
+      -- A wake for another request, a wake with no park, a second wake: refused at that entry, `request_id`.
+      && refused_at(t_fold(mutate_field(woken, n + 1, "request_id", js("sess_1.r0.0.p1"))), n + 1, "request_id")
+      && refused_at(t_fold(with_wake(run, "settled")), n, "request_id")
+      && refused_at(t_fold(with_wake(woken, "settled")), n + 2, "request_id")
+      -- STRICT PER FIELD: a waits element that is not a descriptor, an empty waits, an outcome
+      -- outside the six, a missing field.
+      && refused_at(t_fold(mutate_field(parked, n, "waits", bad_wait)), n, "waits")
+      && refused_at(t_fold(mutate_field(parked, n, "waits", ja([]))), n, "waits")
+      && refused_at(t_fold(mutate_field(woken, n + 1, "outcome", js("vanished"))), n + 1, "outcome")
+      && refused_at(t_fold(remove_field(parked, n, "step")), n, "step")
+      -- The plan keeps its shape: no suspension, and the park rides `plan.last` to the resumer.
+      && (match t_fold(parked) {
+            Err(_) => false,
+            Ok(st) => match plan_resume(st, t_invocation("dogfood", t_sys(), false)) {
+              Err(_) => false,
+              Ok(p) => (match p.suspended { None => true, Some(_) => false })
+                         && boundary_id(p.last) == "parked"
+                         && (match getString(resume_view_json(p), "boundary") { None => false, Some(b) => b == "parked" })
+            }
+          })
   }
 
 -- THE TWIN WRITES THE PARK AND ITS WAKE: a `park` line, then a `wake` line whose
@@ -3461,4 +3682,8 @@ pure func test_the_twin_writes_park_then_wake() -> bool
     let n = List.length(lines);
     join_kinds(List.map(line_kind, lines)) == "header,run_started,history_appended,history_appended,state_delta,park,wake"
       && line_field(at_idx(lines, n - 1), "parent_id") == line_field(at_idx(lines, n - 2), "id")
+      -- The twin's `waits` are byte-for-byte the host's (`t_park_waits_json`), and
+      -- the twin's journal folds to the answered park.
+      && (match get(at_idx(lines, n - 2), "waits") { None => false, Some(w) => encode(w) == encode(t_park_waits_json()) })
+      && parked_answered(t_fold(lines), "settled")
   }
