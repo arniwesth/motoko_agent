@@ -177,7 +177,7 @@ import src/core/journal (
   BootInputs,
   Continuation,
   FinalState,
-  final_of_continuation,
+  final_of_continuation, empty_final_state, empty_boot,
   continuation_history_ok, continuation_task,
   -- P3 Part 3. THE CHAIN, AND IT IS IMPORTED RATHER THAN RESTATED. ADR-003 D4
   -- makes the fold recompute exactly what the child computed, so the child must
@@ -597,10 +597,10 @@ type C2LoopState = {
 -- run opened by a consumed between-turn wake (a resumer's, or an in-process
 -- between-turn park's) starts at 1, so its first in-turn park is `<run_id>.p1`
 -- and `<run_id>.p0` stays the between-turn request's. Every other run starts
--- at 0. No W4 path opens a run from a wake, so every constructor passes
--- `false`; W5(b) is the first caller of the `true` arm.
-pure func initial_park_ordinal(opened_by_wake: bool) -> int {
-  if opened_by_wake then 1 else 0
+-- at 0. No path opens a run from a wake yet (P4's resumer, §3's park), so every
+-- constructor passes `false`; W5(b) pins the `true` arm in gate 1 only.
+pure func initial_park_ordinal(opened_by_consumed_wake: bool) -> int {
+  if opened_by_consumed_wake then 1 else 0
 }
 
 pure func zero_totals() -> RuntimeLoopTotals {
@@ -4688,6 +4688,53 @@ pure func loop_run_identity(session_id: string, profile: string, resume_count: i
   }
 }
 
+-- ============================================================================
+-- PLAN-002 W5 (ADR-002 D4's framing and identity subset; D5 step 5).
+--
+-- (a) THE BETWEEN-TURN FRAME. Between one `user_message` run and the next, the
+-- loop is not in a run, but it still makes requests: the exit manifest's
+-- witnessed `env_read` (`publish_turn_exit_manifest`) runs AFTER turn N's run
+-- has returned, i.e. after its `RunSummary`. Those requests live in a frame of
+-- their own, and its rules are:
+--   * it OPENS at turn N's `final` (`run_summary.world_ordinal`), because the
+--     manifest is handed `traced.world` — the rule ADR-003 D5 uses for a
+--     resumed frame and P3ORD implements on the resume path
+--     (`BEGIN₂.ordinal₀ == END₁.final`). Its first request carries `final + 1`;
+--   * it is SEPARATE from `done`/`RunSummary`: no record is appended to the
+--     finished run's trace, so `RecordAfterTerminal` is not tripped;
+--   * the cross-turn ordinal, and any between-turn `ParkEntered`/`WakeReceived`
+--     (none today: the blocking read as a park is §3's, unscheduled), live in it;
+--   * it has NO WIRE RECORD. `WORLD_RUN_BEGIN/END` are DST-script printlns; live
+--     stdout shows the frame only as the `world_request`s after turn N's
+--     `run_summary` and before turn N+1's `session_start` (R10's delimiter).
+-- The NEXT turn opens at this frame's LAST ordinal, not at turn N's `final`:
+-- that is (c), `next_turn_world` below.
+
+-- (b) The between-turn request's id (§8.4, review change 21). A frame that is
+-- not a run borrows the identity of the run the operator's input WILL open, so
+-- its park is `<next run_id>.p0`, and a run opened by a consumed between-turn
+-- wake starts at `initial_park_ordinal(true)` (its first in-turn park is `.p1`).
+-- `next_ordinal` is the loop's `run_ordinal` parameter at the blocking read —
+-- the value the `user_message` arm passes to `loop_run_identity` for the run
+-- that input opens. W5 lands the function and gate 1's test ONLY: nothing calls
+-- it until §3's "blocking read as a park". Every site that opens a run from a
+-- consumed wake — P4's resumer and §3's in-process park, neither in W5 — applies
+-- `{ st | park_ordinal: initial_park_ordinal(true) }` before the first decision.
+pure func between_turn_request_id(session_id: string, profile: string, resume_count: int, next_ordinal: int) -> string {
+  "${loop_run_identity(session_id, profile, resume_count, next_ordinal).run_id}.p0"
+}
+
+-- (c) THE WORLD THE NEXT TURN STARTS FROM, given the turn's traced result and
+-- its published exit manifest: the manifest's successor, on every arm (`Ok`,
+-- `Err`, suspended). NOT `traced.world` — that is turn N's `final`, and a next
+-- turn opened there would re-issue the between-turn frame's ordinals — and NOT
+-- the loop's entry `provider.world`, which restarted every turn from the world
+-- the loop was entered with. The initial turn's drop
+-- (`run_v2_with_conversation`) and `model_change`'s stay §3's.
+pure func next_turn_world(traced: TracedSessionResult, published: { world: WorldState, trace: LedgerTrace }) -> WorldState {
+  published.world
+}
+
 -- D6's `model_change` while suspended: the switch rewrites the HELD
 -- continuation's model, so the resume that follows runs under the model the
 -- operator chose rather than the one the exhausted run was using. When nothing
@@ -4869,7 +4916,14 @@ func conversation_loop_v2_with_policy(
           Some(c) => run_v2_from_continuation_traced(rt, policy, workdir, provider, identity, { c | history: c.history ++ [user_msg] }),
           None => run_v2_from_messages_traced_with_identity(rt, content, env_url, hybrid_tools, budget, policy, model, history ++ [user_msg], workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts, Some(identity))
         };
-        let _ = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, session_id, traced.trace, traced.world);
+        -- PLAN-002 W5(a)/(c): the manifest's witnessed `env_read` opens the
+        -- between-turn frame at `traced.world`'s ordinal (turn N's `final`), and
+        -- its successor is KEPT: the next turn starts from it on all three
+        -- recursions below (`next_turn_world`), so turn N+1 opens at the frame's
+        -- last ordinal. The published trace is not kept: this loop holds no
+        -- `LedgerTrace`, and the witness has already put the requests on the wire.
+        let published = publish_turn_exit_manifest(rt, content, model, workdir, env_url, hybrid_tools, budget, provider.ports, session_id, traced.trace, traced.world);
+        let next_provider = { provider | world: next_turn_world(traced, published) };
         let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
         -- D5's rule: one traced run happened on BOTH arms below, so the ordinal
         -- advances on all three outcomes.
@@ -4890,14 +4944,14 @@ func conversation_loop_v2_with_policy(
           -- loop's: while a continuation is held it is the authority on what
           -- the conversation contains, and copying its history back into the
           -- loop's parameter would make two homes for one fact.
-          Some(next_c) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts, Some(next_c), next_ordinal, task, profile, resume_count),
+          Some(next_c) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, next_provider, session_id, next_counts, Some(next_c), next_ordinal, task, profile, resume_count),
           None =>
             match traced.result {
               -- The run completed, so the suspension is CONSUMED and the loop's
               -- history becomes the finished run's — which, on the resume arm,
               -- is the exhausted turn's messages plus everything the resumed
               -- run added. That is the repair, observable.
-              Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts, None, next_ordinal, task, profile, resume_count),
+              Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, next_provider, session_id, next_counts, None, next_ordinal, task, profile, resume_count),
               -- PLAN-002 W4 Part 5 (§8.7): a mid-park cancel is matched BEFORE the
               -- generic error. The run already recorded `WakeReceived(Aborted)`;
               -- the loop now takes today's exit for the command that cancelled
@@ -4908,7 +4962,7 @@ func conversation_loop_v2_with_policy(
                   code: e.code,
                   message: e.message
                 }));
-                conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts, None, next_ordinal, task, profile, resume_count)
+                conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, next_provider, session_id, next_counts, None, next_ordinal, task, profile, resume_count)
               }
             }
         }
@@ -5764,6 +5818,95 @@ pure func test_initial_park_ordinal_is_one_only_for_a_wake_opened_run() -> bool
   tests [((), true)]
   {
     initial_park_ordinal(false) == 0 && initial_park_ordinal(true) == 1
+  }
+
+-- ============================================================================
+-- PLAN-002 W5 gate 1 (ADR-002 D4 subset, D5 step 5): the between-turn frame's
+-- pure half. The loop itself is gated live (`scripts/probe_between_turn_frame.sh`).
+-- ============================================================================
+
+pure func w5_world(ordinal: int) -> WorldState {
+  let w = empty_world_state();
+  { w | ordinal: ordinal }
+}
+
+pure func w5_continuation() -> Continuation {
+  { history: [], step_idx: 2, cumulative: zero_runtime_status_counts(), telemetry: zero_token_telemetry(), ext_artifacts: jo([]), nudges_used: 0, model: "m", profile: "p", boot: empty_boot() }
+}
+
+pure func w5_traced(result: Result[[Message], AIError], suspended: Option[Continuation], final_ordinal: int) -> TracedSessionResult {
+  { result: result, trace: empty_ledger_trace(), world: w5_world(final_ordinal), emissions: [], suspended: suspended, final: empty_final_state(zero_token_telemetry(), jo([])) }
+}
+
+-- W5(c): the next turn starts from the PUBLISHED successor on every arm, never
+-- from the turn's own final world.
+pure func test_w5_next_turn_world_is_the_published_successor_on_every_arm() -> bool
+  tests [((), true)]
+  {
+    let err: AIError = { code: "X", message: "boom", retryable: false };
+    let published = { world: w5_world(8), trace: empty_ledger_trace() };
+    let ok_arm = w5_traced(Ok([]), None, 7);
+    let err_arm = w5_traced(Err(err), None, 7);
+    let suspended_arm = w5_traced(Err(err), Some(w5_continuation()), 7);
+    next_turn_world(ok_arm, published).ordinal == 8
+      && next_turn_world(err_arm, published).ordinal == 8
+      && next_turn_world(suspended_arm, published).ordinal == 8
+      && next_turn_world(suspended_arm, published).ordinal != suspended_arm.world.ordinal
+  }
+
+-- W5(a): the frame opens at the previous run's `final`. The manifest is handed
+-- `traced.world`, so its witnessed `env_read` carries `final + 1`, and the next
+-- turn's world is that successor — the frame's last ordinal, not `final`.
+pure func test_w5_between_turn_frame_opens_at_the_previous_final() -> bool
+  tests [((), true)]
+  {
+    let traced = w5_traced(Ok([]), None, 7);
+    let env_read = advance(traced.world, EnvRead);
+    let published = { world: { env_read | pending: [] }, trace: empty_ledger_trace() };
+    (match env_read.pending { r :: [] => r.ordinal == traced.world.ordinal + 1, _ => false })
+      && next_turn_world(traced, published).ordinal == traced.world.ordinal + 1
+  }
+
+-- W5(b), §8.4 (R9): a run seeded from a consumed between-turn wake starts at
+-- park ordinal 1, so its first in-turn park is `<run_id>.p1`, and `.p0` stays
+-- the between-turn request's.
+pure func test_w5_a_wake_opened_run_first_parks_at_p1() -> bool
+  tests [((), true)]
+  {
+    let identity = loop_run_identity("s", "p", 0, 3);
+    let resumed = c2_state_from_continuation_shape(8, 3, 0);
+    let seeded = { resumed | park_ordinal: initial_park_ordinal(true) };
+    resumed.park_ordinal == 0
+      && seeded.park_ordinal == 1
+      && park_request_id(identity.run_id, seeded.park_ordinal) == "s.r0.3.p1"
+      && park_request_id(identity.run_id, resumed.park_ordinal) == between_turn_request_id("s", "p", 0, 3)
+  }
+
+-- W5(b): the REAL constructors, not the projection. `scripted_ports` is
+-- effectful, so this test is too (as `test_runtime_status_includes_prior_conversation_counts`).
+func test_w5_constructors_start_at_zero_and_a_seeded_state_parks_at_p1() -> bool ! {IO, Trace}
+  tests [((), true)]
+  {
+    let provider: PortedProvider = { ports: scripted_ports(), world: empty_world_state() };
+    let fresh = c2_initial_state_with_counts([], provider, provider.world, zero_runtime_status_counts());
+    let resumed = c2_state_from_continuation(w5_continuation(), provider, provider.world);
+    let seeded = { resumed | park_ordinal: initial_park_ordinal(true) };
+    let identity = loop_run_identity("s", "p", 0, 3);
+    fresh.park_ordinal == 0
+      && resumed.park_ordinal == 0
+      && seeded.park_ordinal == 1
+      && park_request_id(identity.run_id, seeded.park_ordinal) == "s.r0.3.p1"
+  }
+
+-- W5(b), review change 21: `<next run_id>.p0`, built from the arguments the
+-- `user_message` arm passes to `loop_run_identity`.
+pure func test_w5_between_turn_request_id_is_the_next_run_id_dot_p0() -> bool
+  tests [((), true)]
+  {
+    between_turn_request_id("s", "p", 0, 3) == "s.r0.3.p0"
+      && between_turn_request_id("session_42", "prof", 2, 7) == "${loop_run_identity("session_42", "prof", 2, 7).run_id}.p0"
+      && between_turn_request_id("s", "", 1, 0) == "${loop_run_identity("s", "", 1, 0).run_id}.p0"
+      && between_turn_request_id("s", "p", 0, 3) != loop_run_identity("s", "p", 0, 3).run_id
   }
 
 -- ============================================================================

@@ -1,0 +1,20 @@
+probe: model=openrouter/anthropic/claude-haiku-4.5 workdir=/tmp/motoko-probe-btf.6R1Fs6 (MOTOKO_HEADLESS unset)
+probe: child 'main' (3 turns, exit) rc=0, 82 stdout lines
+probe: child 'eof' (2 turns, eof) rc=0, 63 stdout lines
+probe: captures copied to .ailang/w5a3-probe-w5tree
+probe: runs (session_start with run_id) = 3 at stdout records [2, 31, 60]
+probe: run_summary records = [28, 57, 76]
+probe: turn 1  run_id=probe_btf_1142412_main.r0.0  first_req=1  last_req=15  requests=15  run_summary.world_ordinal=15  between-turn after it=[16]
+probe: turn 2  run_id=probe_btf_1142412_main.r0.1  first_req=1  last_req=15  requests=15  run_summary.world_ordinal=15  between-turn after it=[16]
+probe: turn 3  run_id=probe_btf_1142412_main.r0.2  first_req=17  last_req=21  requests=5  run_summary.world_ordinal=21  between-turn after it=[22]
+probe: INFO turn1->turn2 (not asserted, §3 initial-turn drop): last between-turn=16 turn2 first=1
+
+  PASS B1 first world_request after run_summary2 == world_ordinal2 + 1 — first between-turn ordinal=16, run_summary2.world_ordinal=15
+  PASS B2 every between-turn world_request lies after run_summary2 and before session_start3 — between-turn records=[59] ordinals=[16] (run_summary2 @57, session_start3 @60), frame ordinals after session_start3=[]
+  PASS B3 turn 3 first world_request == last between-turn ordinal + 1 — turn3 first=17, last between-turn=16, run_summary2.world_ordinal=15
+  PASS B4 contiguous turn2-first .. run_summary3.world_ordinal, no gap/repeat — sequence 1..21 (21 requests), breaks=[], run_summary3.world_ordinal=21
+  PASS C1 exit control: rc 0, three runs, no error event — rc=0 runs=3 error events=0
+  PASS C2 EOF control: rc 0, two runs, no error event — rc=0 runs=2 error events=0
+
+probe: 6/6 assertions green
+probe: run directory kept at /tmp/motoko-probe-btf.6R1Fs6
