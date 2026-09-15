@@ -47,7 +47,10 @@ describe("run-state mapping", () => {
   it("maps every Motoko run state to a herdr state", () => {
     // Exhaustive by construction: the array is typed as the full union, so adding a RunState
     // member without extending mapRunState fails to compile here as well as at the ui.ts call site.
-    const all: MotokoRunState[] = ["idle", "thinking", "tools_wait", "tools_run", "error", "suspended", "done"];
+    const all: MotokoRunState[] = [
+      "idle", "thinking", "tools_wait", "tools_run", "error", "suspended", "done",
+      "parked", "suspended_child", "resuming",
+    ];
     expect(all.map((s) => mapRunState(s).state)).toEqual([
       "idle",
       "working",
@@ -56,13 +59,21 @@ describe("run-state mapping", () => {
       "blocked",
       "blocked",
       "idle",
+      "blocked",
+      "blocked",
+      "working",
     ]);
   });
 
   it("carries a message only for the blocked states and done", () => {
     expect(mapRunState("error").message).toMatch(/error/);
     expect(mapRunState("suspended").message).toMatch(/continue/);
-    for (const s of ["idle", "thinking", "tools_wait", "tools_run"] as MotokoRunState[]) {
+    // ADR-003 D7 / PLAN-003 P4 Part 6: both parks are blocked with a message that says "parked";
+    // only the dead-child one says the runtime exited.
+    expect(mapRunState("parked").message).toMatch(/^parked/);
+    expect(mapRunState("suspended_child").message).toMatch(/^parked, runtime exited/);
+    expect(mapRunState("parked").message).not.toEqual(mapRunState("suspended_child").message);
+    for (const s of ["idle", "thinking", "tools_wait", "tools_run", "resuming"] as MotokoRunState[]) {
       expect(mapRunState(s).message).toBeUndefined();
     }
   });

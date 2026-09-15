@@ -796,7 +796,15 @@ function formatTimestamp(now: Date = new Date()): string {
  * (ADR-003's whole point is that the budget is no longer a failure), and it is not an
  * `isWaitingState` — nothing is running, so there is no spinner and nothing for ESC to abort.
  */
-export type RunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended" | "done";
+/**
+ * PLAN-003 P4 Part 6 (ADR-003 D7) adds the durable park's three named states, from the table in
+ * `runtime-process.ts` (`abortSuspendedChild`'s header): `parked` — the live child is blocked on its
+ * open waits; `suspended_child` — the child exited on that park under `--park-exits` and the host
+ * holds it (the plan's `suspended-child`); `resuming` — the `wake` is written and the `--resume`
+ * respawn is up, until its `session_resumed`. They are distinct from `suspended` (ADR-003 D2's step
+ * budget): a parked run holds nothing exhausted, and its next line answers the park, not the run.
+ */
+export type RunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended" | "done" | "parked" | "suspended_child" | "resuming";
 type HintPhase = "thinking" | "tools";
 type ToolRowStatus = "queued" | "running" | "done" | "failed";
 type PlannedToolStatus = "planned" | "running" | "done" | "error" | "planned_unexecuted" | "runtime_only" | "filtered";
@@ -1793,7 +1801,8 @@ interface ThinkBlock {
 }
 
 function isWaitingState(state: RunState): boolean {
-  return state === "thinking" || state === "tools_wait" || state === "tools_run";
+  // `resuming` spins: a respawned child is folding the journal. A park does not: nothing runs here.
+  return state === "thinking" || state === "tools_wait" || state === "tools_run" || state === "resuming";
 }
 
 export function shouldLockPlainInput(
@@ -2184,10 +2193,13 @@ export class AgentUI {
       // started; the runtime is now pre-spawned at TUI boot and sits idle waiting
       // for the first prompt, so ESC has to keep falling through to the Editor.
       // A parked runtime (W4 Part 5) is a running task whatever the spinner says; index.ts's
-      // onInterrupt aborts it over stdin rather than killing it.
+      // onInterrupt aborts it over stdin rather than killing it. A suspended-child (PLAN-003 P4
+      // Part 6, the ESC row) has no runtime at all, and ESC cancels its park in the journal.
       if (
-        matchesKey(data, "escape") && this.runtimeProcess &&
-        (this.runtimeProcess.isParked || (!this.taskDone && this.waitState.state !== "idle"))
+        matchesKey(data, "escape") &&
+        (this.suspendedChild !== undefined ||
+          (this.runtimeProcess &&
+            (this.runtimeProcess.isParked || (!this.taskDone && this.waitState.state !== "idle"))))
       ) {
         this.appendHistoryStyled("Task interrupted", chalk.yellow);
         this.tui.requestRender();
@@ -2836,6 +2848,9 @@ export class AgentUI {
       case "session_resumed":
         this.resumePending = true;
         this.resumeSeedMessages = null;
+        // PLAN-003 P4 Part 6: `resuming` is left on the resumed child's `session_resumed`. The child
+        // is about to consume the wake as its next step (Part 3) and its events drive the state on.
+        if (this.waitState.state === "resuming") this.setRunState("thinking");
         break;
       case "history_seeded":
         if (this.resumePending && this.resumeSeedMessages === null) {
@@ -2870,6 +2885,19 @@ export class AgentUI {
         );
         this.taskDone = true;
         this.tui.setFocus(this.cmdInput);
+        this.updateStatus();
+        break;
+      // PLAN-003 P4 Part 6: `parked` is entered on `wake_request` while the child is alive, and left
+      // on `wake_received` (the run continues on the wake's message), on a park-ending event (each has
+      // its own arm above) or on the child's exit (`showSuspendedChild`, or the exit handler's other
+      // branches). An `aborted` wake ends the run with neither `done` nor `error`, and the child's
+      // exit follows it; the exit handler decides the state then.
+      case "wake_request":
+        this.setRunState("parked");
+        this.updateStatus();
+        break;
+      case "wake_received":
+        if (event.outcome !== "aborted") this.setRunState("thinking");
         this.updateStatus();
         break;
       case "tool_calls":
@@ -4116,6 +4144,9 @@ export class AgentUI {
    */
   showSuspendedChild(suspended: SuspendedChild): void {
     this.suspendedChild = suspended;
+    // PLAN-003 P4 Part 6: the second named state. Left on a waiter reply or a typed line
+    // (`showResuming`), on ESC or `restart` (`setAwaitingTask`), or with the process (quit, a signal).
+    this.setRunState("suspended_child");
     const n = suspended.request.waits.length;
     this.appendHistoryStyled(
       `Parked (${suspended.request.request_id}) on ${n} open wait${n === 1 ? "" : "s"}: the runtime exited and the park ` +
@@ -4123,6 +4154,17 @@ export class AgentUI {
       chalk.cyan,
     );
     this.tui.setFocus(this.cmdInput);
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
+  /**
+   * PLAN-003 P4 Part 6: the third named state. The suspended-child's `wake` is written and the host
+   * is respawning with `--resume`; the resumed child's `session_resumed` leaves it (`handleEvent`).
+   */
+  showResuming(): void {
+    this.suspendedChild = undefined;
+    this.setRunState("resuming");
     this.updateStatus();
     this.tui.requestRender();
   }
@@ -4394,6 +4436,10 @@ export class AgentUI {
       // The fall-through below is the IDLE green, which would show a run holding an unfinished
       // turn in the same colour as one holding nothing.
       this.waitState.state === "suspended" ? chalk.yellow :
+      // A park, live or with its child gone, is the same "waiting on someone else" yellow; the
+      // resume in between is the cyan the resume marker line uses.
+      (this.waitState.state === "parked" || this.waitState.state === "suspended_child") ? chalk.yellow :
+      this.waitState.state === "resuming" ? chalk.cyan :
       ((s: string) => chalk.greenBright.bold(s));
     let line2 = stateColor(line2Base);
     if (this.latestContextUsage) {

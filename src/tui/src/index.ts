@@ -23,7 +23,7 @@ import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-p
 import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
-import { RuntimeProcess, installSuspendedWake, interruptRuntime, journalExitReason, resolveDelegatedExec, type SuspendedChild } from "./runtime-process.js";
+import { RuntimeProcess, abortSuspendedChild, installSuspendedWake, interruptRuntime, journalExitReason, resolveDelegatedExec, type SuspendedChild } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { HeadlessOutcome, formatResumeViewLine } from "./headless-outcome.js";
 import {
@@ -1189,6 +1189,8 @@ async function main(): Promise<void> {
                   : `Woke on ${who}, but the wake could not be journaled; resuming the session, which re-observes the park.`,
                 written ? "cyan" : "red",
               );
+              // PLAN-003 P4 Part 6: `resuming`, until the resumed child's `session_resumed`.
+              ui.showResuming();
             },
           });
           return;
@@ -1340,16 +1342,69 @@ async function main(): Promise<void> {
       else runtimeProcess.abort();
       return;
     }
+    // PLAN-003 P4 Part 6, the quit row (P4-Q5): quitting during suspended-child writes NO `wake` —
+    // unlike `exit` sent to a live parked child, which is an `Aborted` cancel. The park stays the
+    // journal's leaf, the lease hook writes `exit(host_exit)` on the way out, the exit actions run,
+    // and a later resume re-observes the park (row 5), waking `lost` if the delegates were reaped.
+    // Only the waiter is ended here, so no herdr poll outlives this process.
+    suspendedChild?.close();
     runtimeProcess?.kill();
     ui.stop();
     process.exit(0);
   };
   // ESC. During a park (W4 Part 5) it ABORTS over stdin instead of killing, so the run's end is on
   // the wire as `WakeReceived(Aborted)`; `interrupted` makes the exit handler journal `abort`.
-  ui.onInterrupt = () => { interrupted = true; interruptRuntime(runtimeProcess); };
+  //
+  // PLAN-003 P4 Part 6, the ESC row: during SUSPENDED-CHILD there is no child to send `abort` to, so
+  // the host writes the `wake(aborted)` itself (`wait_id "abort"`, the park's child) and respawns
+  // NOTHING — the TUI goes back to awaiting a task, and the next prompt resumes the session through
+  // `onInitialTask` (`--resume`), where the child folds `Open("wake:aborted")` and reads it as the
+  // next turn. `interrupted` is NOT set: no child exits on this row, and the flag would mislabel the
+  // next real exit. The owner is cleared FIRST, so Part 5's consumer is no longer current and the
+  // parked input route is closed (a typed line is now the task, not an answer to the park).
+  ui.onInterrupt = () => {
+    const owner = suspendedChild;
+    if (owner !== null) {
+      suspendedChild = null;
+      ui.suspendedChild = undefined;
+      const action = interruptRuntime(runtimeProcess, { owner, journal });
+      ui.addHistoryText(
+        action === "wake_aborted"
+          ? "Park cancelled: the abort is in the journal. Your next prompt resumes this session from it."
+          : "Park cancelled, but the abort could not be journaled; your next prompt resumes this session, which re-observes the park.",
+        action === "wake_aborted" ? "cyan" : "red",
+      );
+      ui.setAwaitingTask(true);
+      return;
+    }
+    interrupted = true;
+    interruptRuntime(runtimeProcess);
+  };
 
   // Restart handler — respawn the runtime process with optional new profile
   ui.onRestart = (newProfile) => {
+    // PLAN-003 P4 Part 6, the `restart` row: a restart during SUSPENDED-CHILD is a cancel, as it is
+    // during a live park (W4 Part 5: `Aborted`, `wait_id "restart:<p>"`), and here the host writes
+    // that wake itself, as the park's child. Then the respawn `/restart` always makes — `--resume`
+    // on the new profile — where the child folds `Open("wake:aborted")`, opens no run, and idles on
+    // stdin: so the TUI awaits a task, as the live restart's exit branch leaves it.
+    const owner = suspendedChild;
+    if (owner !== null) {
+      suspendedChild = null;
+      ui.suspendedChild = undefined;
+      if (typeof newProfile === "string") {
+        profile = newProfile;
+        ui.setProfile(profile);
+      }
+      const written = abortSuspendedChild(owner, journal, `restart:${profile}`);
+      if (!written) ui.addHistoryText("The park's cancel could not be journaled; the resumed session re-observes the park.", "red");
+      interrupted = false;
+      errorOccurred = false;
+      ui.setAwaitingTask(true);
+      preWarmIdle = true;
+      respawnForRestart();
+      return;
+    }
     if (runtimeProcess) {
       runtimeProcess.restart(newProfile);
     } else {

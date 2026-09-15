@@ -183,10 +183,24 @@ const EXIT_EXPLAINING_EVENTS = new Set(["done", "error", "session_resume_refused
  */
 const PARK_ENDING_EVENTS = new Set(["done", "error", "session_suspend", "run_suspended"]);
 
-/** What ESC does to the runtime: abort a parked run over stdin (W4 Part 5), kill anything else. */
+/**
+ * What ESC does to the runtime: abort a parked run over stdin (W4 Part 5); cancel a suspended-child's
+ * park in the journal (PLAN-003 P4 Part 6, the ESC row); kill anything else.
+ *
+ * The suspended-child row comes FIRST because it is the only one with no live child: the owner
+ * holds the park after the child's exit, so ESC writes the `wake(aborted)` the live child would have
+ * emitted (`wait_id "abort"`, W4 Part 5's table) and respawns NOTHING — the TUI goes back to awaiting
+ * a task, and the next prompt resumes the session through `onInitialTask` (`--resume`), where the
+ * child folds `Open("wake:aborted")` and reads that prompt as its next turn. `"wake_aborted"` says the
+ * wake is on disk; `"none"` that the park was already answered or closed, so nothing was written.
+ */
 export function interruptRuntime(
   rp: Pick<RuntimeProcess, "isParked" | "abort" | "kill"> | undefined,
-): "abort" | "kill" | "none" {
+  suspended: { owner: SuspendedChild; journal: WakeJournal } | null = null,
+): "abort" | "kill" | "none" | "wake_aborted" {
+  if (suspended !== null) {
+    return abortSuspendedChild(suspended.owner, suspended.journal, "abort") ? "wake_aborted" : "none";
+  }
   if (!rp) return "none";
   if (rp.isParked) {
     rp.abort();
@@ -657,6 +671,7 @@ export function buildSupervisorArgs(
 export class SuspendedChild {
   private held: WakeReply | null = null;
   private consumer: ((reply: WakeReply) => void) | null = null;
+  private closed = false;
 
   constructor(
     /** The request whose `park` entry is the journal's leaf. */
@@ -670,11 +685,34 @@ export class SuspendedChild {
     return this.held;
   }
 
-  /** Accept one reply for this request. A reply for another request, or a second one, is dropped. */
+  /**
+   * Accept one reply for this request. A reply for another request, or a second one, is dropped —
+   * and so is any reply after `close()`: the park was cancelled from the host's side.
+   */
   deliver(reply: WakeReply): boolean {
-    if (this.held !== null || reply.request_id !== this.request.request_id) return false;
+    if (this.closed || this.held !== null || reply.request_id !== this.request.request_id) return false;
     this.held = reply;
     this.consumer?.(reply);
+    return true;
+  }
+
+  /** True once `close()` cancelled the park: no reply is accepted after it. */
+  get isClosed(): boolean {
+    return this.closed;
+  }
+
+  /**
+   * PLAN-003 P4 Part 6: END THE PARK FROM THE HOST'S SIDE — the ESC, `restart`, quit and host-death
+   * rows. Stops the waiter (the delegates are no longer observed for this request; a resumed run
+   * parks on them again with a waiter of its own) and refuses every later reply. Returns false, and
+   * does nothing, when the owner already accepted a reply — the park is answered, and Part 5's
+   * consumer owns what follows — or was already closed. Cancelling a waiter twice is harmless
+   * (`startWakeWaiter`'s cancel is idempotent), so the returned value is about the PARK, not the waiter.
+   */
+  close(): boolean {
+    if (this.closed || this.held !== null) return false;
+    this.closed = true;
+    this.waiter.cancel();
     return true;
   }
 
@@ -755,6 +793,71 @@ export function installSuspendedWake(owner: SuspendedChild, deps: SuspendedWakeD
     deps.notify?.(reply, written);
     deps.respawn();
   });
+}
+
+/**
+ * PLAN-003 P4 Part 6 (ADR-003 D7, row 4): THE NAMED STATES OF A DURABLE PARK, AND THEIR EXITS.
+ *
+ * v4.1's D7 named these states and is not in the tree; this table is transcribed from its reviews
+ * (REVIEW-adr003-verdicts-fable.md §8, REVIEW-adr003-v3-verdicts-fable.md:94–96) and from W4 Part 5's
+ * command table (PLAN-002 §8.7), and signed off as P4-Q5. The TUI shows the same three names in its
+ * footer (`RunState`: `parked`, `suspended_child`, `resuming`; ui.ts) and reports them to herdr.
+ *
+ * | state             | entered on                                        | left on                                                            | journal            | then       |
+ * |-------------------|---------------------------------------------------|--------------------------------------------------------------------|--------------------|------------|
+ * | `parked`          | `wake_request` while the child is alive           | `wake_received`; a park-ending event (`PARK_ENDING_EVENTS`); exit  | the child's events | —          |
+ * | `suspended-child` | the exit handler's first branch (Part 4)          | a waiter reply; operator input; ESC; `restart`; quit; host death   | nothing on entry   | per row    |
+ * | `resuming`        | a `wake` entry is written (Part 5)                | the resumed child's `session_resumed`                              | `wake`             | `--resume` |
+ *
+ * While `suspended-child` (P4-Q5, the dead-child column of W4 Part 5's table):
+ *
+ * | command                                                  | wake written                          | then                                                                                    |
+ * |----------------------------------------------------------|---------------------------------------|-----------------------------------------------------------------------------------------|
+ * | the waiter replies `settled`/`lost`/`timed_out`/`host_error` | that outcome (`installSuspendedWake`) | respawn with `--resume` (Part 5)                                                    |
+ * | operator input, the parked input route                   | `operator_input(content)`             | respawn (Part 5)                                                                        |
+ * | ESC (`interruptRuntime`)                                 | `aborted`, `wait_id "abort"`          | NO respawn; the TUI awaits a task; the next prompt resumes through `onInitialTask` into `Open("wake:aborted")` |
+ * | `restart` (profile p)                                    | `aborted`, `wait_id "restart:<p>"`    | respawn with the new profile (`--resume`); the child opens no run and idles on stdin    |
+ * | quit (Ctrl+C)                                            | NONE                                  | the lease hook writes `exit(host_exit)`; the exit actions run; a later resume re-observes the park, and wakes `lost` if the delegates were reaped |
+ * | host death (SIGINT / SIGTERM)                            | NONE                                  | the lease hook writes `exit(abort)` / `exit(host_exit)`; as quit                       |
+ *
+ * The two typed-input rows differ by entry condition alone: a line at the parked prompt answers the
+ * park (`operator_input`, then respawn); ESC cancels it (`aborted`, no respawn). And the dead-child
+ * quit differs from the live-child one: `exit` sent to a LIVE parked child is an `Aborted` cancel
+ * (W4 Part 5), while quitting during suspended-child writes no wake at all — the park stays open in
+ * the journal for the resume to re-observe (row 5), which is what lets a delegate that answered
+ * meanwhile still be collected.
+ */
+export type SuspendedChildAbort = "abort" | `restart:${string}`;
+
+/**
+ * The suspended-child's CANCELLING exits — the ESC row (`wait_id "abort"`) and the `restart` row
+ * (`wait_id "restart:<p>"`). Sent to a LIVE parked child these commands come back on the wire as
+ * `WakeReceived(Aborted)` with the command in the wake's free `wait_id`; here the child is gone, so
+ * the host writes that same wake itself, as the park's child (row 6: the leaf is still the `park`).
+ * The fold closes the park on it — `park, wake(aborted)` → `Open("wake:aborted")` (P4-Q4) — and the
+ * resumed child opens no run: it is idle, between turns, reading stdin.
+ *
+ * Nothing is respawned HERE. The ESC row leaves the session for the operator's next prompt, which
+ * `onInitialTask` turns into a `--resume` respawn; the `restart` row's caller respawns on the new
+ * profile at once. Both first END the owner (`close()`: the waiter stopped, later replies refused),
+ * and the caller clears its `suspendedChild` so Part 5's consumer is no longer current.
+ *
+ * Returns whether the `wake(aborted)` is on disk: false when the owner had already accepted a
+ * reply or was already closed (nothing written), or when the append failed (`onError` said so).
+ * Quit and host death take neither of these rows: they write NO wake (P4-Q5) — the lease hook
+ * writes the `exit`, and the park is re-observed on the next resume (row 5).
+ */
+export function abortSuspendedChild(owner: SuspendedChild, journal: WakeJournal, waitId: SuspendedChildAbort): boolean {
+  if (!owner.close()) return false;
+  return (
+    journal.record({
+      type: "wake_received",
+      request_id: owner.request.request_id,
+      wait_id: waitId,
+      outcome: "aborted",
+      detail: "",
+    }) === 1
+  );
 }
 
 export class RuntimeProcess {

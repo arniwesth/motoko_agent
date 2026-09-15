@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { installSuspendedWake, interruptRuntime, journalExitReason, RuntimeProcess, type AgentEvent, type SuspendedChild } from "./runtime-process.js";
+import { abortSuspendedChild, installSuspendedWake, interruptRuntime, journalExitReason, RuntimeProcess, type AgentEvent, type SuspendedChild } from "./runtime-process.js";
 import { isJournalClass, SessionJournal } from "./session-journal.js";
-import type { WakeReply, WakeRequest, WakeWaiterFactory } from "./wake-waiter.js";
+import { acquireLease, registerLeaseHooks, type SessionLease, type SignalTarget } from "./session-lease.js";
+import type { WakeOutcomeName, WakeReply, WakeRequest, WakeWaiterFactory } from "./wake-waiter.js";
 
 // PLAN-002 W4 gate 6, host protocol: `wake_request` / `wake_reply` over a real child (a shell script
 // standing in for the AILANG runtime, as `runtime-process.unexplained-exit.test.ts` does).
@@ -411,6 +412,100 @@ describe("RuntimeProcess park and wake", () => {
       expect(r.entries[r.entries.length - 1].reason).toBe("child_exit");
     });
   });
+  // The harness Parts 5 and 6 share: a session parked and suspended under `--park-exits`, and
+  // index.ts's `respawnForRestart` as far as a test can hold it.
+  const H1 = { id: "h1", delegate_kind: "claude", locator: { pane: "p1" }, answer_path: "/tmp/answer.md", run_key: "k1" };
+  const parkEntered = JSON.stringify({ type: "park_entered", request_id: RID, step: 3, waits: [H1] });
+  const settled = (detail: string): WakeReply => ({ request_id: RID, wait_id: "h1", outcome: "settled", detail });
+  const typed = (detail: string): WakeReply => ({ request_id: RID, wait_id: "", outcome: "operator_input", detail });
+  /** The child, blocked on the reply it will never get: only `kill()` ends this script. */
+  const parkedChild = [emit(parkEntered), emit(wakeRequest([H1])), READ()].join("\n");
+  const types = (entries: Record<string, unknown>[]) => entries.map((e) => e.type);
+
+  interface Suspended {
+    journal: SessionJournal;
+    owner: SuspendedChild;
+    rec: ReturnType<typeof recordingFactory>;
+    entries: () => Record<string, unknown>[];
+    /** The dead `RuntimeProcess` the owner came from — what index.ts still holds in `runtimeProcess`. */
+    rp: RuntimeProcess;
+  }
+
+  /**
+   * A session parked and suspended under `--park-exits`, on Part 4's harness. The journal is
+   * SEEDED — an empty seed is enough for `canResume`, which is what `respawnForRestart` reads —
+   * journal-class events are routed as `SessionLogger.log` does, the child exits on its first
+   * issue, the mirrored exit callback writes no `exit`, and the owner holds the request and the
+   * running waiter. Part 4's tests pin all of that; this harness only reaches the owner. Part 6's
+   * tests suspend more than once per test: the journal adopts an existing file, so each gets its own id.
+   */
+  function suspend(sessionId = "sess-p5"): Promise<Suspended> {
+    const journal = new SessionJournal(workdir, sessionId, { now: () => 1, onError: (m) => { throw new Error(m); } });
+    journal.writeHeader({ sessionId, workdir, profile: "p", model: "m" });
+    journal.record({ type: "history_seeded", run_id: `${sessionId}.r0.0`, messages: [], digest: "", digests: [] });
+    expect(journal.canResume).toBe(true);
+    const bin = path.join(workdir, "fake-ailang.sh");
+    fs.writeFileSync(bin, `#!/bin/sh\n${parkedChild}\n`, { mode: 0o755 });
+    process.env.AILANG_BIN = bin;
+    const rec = recordingFactory();
+    const entries = () =>
+      fs.readFileSync(journal.filePath, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
+    return new Promise((resolve) => {
+      let rp: RuntimeProcess;
+      // eslint-disable-next-line prefer-const
+      rp = new RuntimeProcess(
+        "task", "http://127.0.0.1:1", "test-model", workdir, "default", 1, "", "", "",
+        (e) => { if (isJournalClass(e.type)) journal.record(e as unknown as Record<string, unknown>); },
+        () => {
+          const owner = rp.suspendedChild;
+          if (owner === null) journal.writeExit(journalExitReason(rp.restartPending, false));
+          expect(owner).not.toBeNull();
+          resolve({ journal, owner: owner!, rec, entries, rp });
+        },
+        undefined,
+        rec.factory,
+        true,
+      );
+    });
+  }
+
+  /**
+   * index.ts's `respawnForRestart`, as far as a test can hold it: it records that `canResume` held
+   * and what was on disk when it was called, and spawns a REAL second `RuntimeProcess` with
+   * `{ journalPath }` — whose child is a script that writes the argv it was handed, so the
+   * `--resume` assertion is on the argv the child received (harness-dst.test.ts's shape, on a
+   * live spawn rather than on `buildSupervisorArgs` alone). `profile` is what `respawnForRestart`
+   * reads from the host's `profile` — the `restart` row (Part 6) sets it before respawning.
+   */
+  function resumeRespawn(journal: SessionJournal, profile = "default") {
+    const argvLog = path.join(workdir, "argv.log");
+    const bin = path.join(workdir, "fake-resume.sh");
+    fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argvLog}'\n`, { mode: 0o755 });
+    const calls: { canResume: boolean; onDisk: unknown[] }[] = [];
+    let exited: Promise<void> = Promise.resolve();
+    const respawn = (): void => {
+      const onDisk = fs.readFileSync(journal.filePath, "utf8").split("\n").filter(Boolean)
+        .map((l) => (JSON.parse(l) as Record<string, unknown>).type);
+      calls.push({ canResume: journal.canResume, onDisk });
+      process.env.AILANG_BIN = bin;
+      exited = new Promise((resolve) => {
+        new RuntimeProcess(
+          "", "http://127.0.0.1:1", "test-model", workdir, profile, 1, "", "", "",
+          () => {},
+          () => resolve(),
+          { journalPath: journal.filePath },
+        );
+      });
+    };
+    /** The argv the resumed child received; the last element is the (empty) task. */
+    const argv = (): string[] => {
+      const lines = fs.readFileSync(argvLog, "utf8").split("\n");
+      lines.pop(); // the trailing newline
+      return lines;
+    };
+    return { respawn, calls, argv, exited: () => exited };
+  }
+
   // ------------------------------------------------------------------------------------------------
   // PLAN-003 P4 Part 5 (ADR-003 D7, row 6): THE WAKE ENTRY AS THE PARK'S CHILD, AND THE RESPAWN. On
   // the owner's reply the host records `wake_received` — Part 1's routing appends a `wake` whose
@@ -420,94 +515,6 @@ describe("RuntimeProcess park and wake", () => {
   // exists; the owner holds the reply and nothing else happens.
   // ------------------------------------------------------------------------------------------------
   describe("the wake entry and the respawn (PLAN-003 P4 Part 5)", () => {
-    const H1 = { id: "h1", delegate_kind: "claude", locator: { pane: "p1" }, answer_path: "/tmp/answer.md", run_key: "k1" };
-    const parkEntered = JSON.stringify({ type: "park_entered", request_id: RID, step: 3, waits: [H1] });
-    const settled = (detail: string): WakeReply => ({ request_id: RID, wait_id: "h1", outcome: "settled", detail });
-    const typed = (detail: string): WakeReply => ({ request_id: RID, wait_id: "", outcome: "operator_input", detail });
-    /** The child, blocked on the reply it will never get: only `kill()` ends this script. */
-    const parkedChild = [emit(parkEntered), emit(wakeRequest([H1])), READ()].join("\n");
-    const types = (entries: Record<string, unknown>[]) => entries.map((e) => e.type);
-
-    interface Suspended {
-      journal: SessionJournal;
-      owner: SuspendedChild;
-      rec: ReturnType<typeof recordingFactory>;
-      entries: () => Record<string, unknown>[];
-    }
-
-    /**
-     * A session parked and suspended under `--park-exits`, on Part 4's harness. The journal is
-     * SEEDED — an empty seed is enough for `canResume`, which is what `respawnForRestart` reads —
-     * journal-class events are routed as `SessionLogger.log` does, the child exits on its first
-     * issue, the mirrored exit callback writes no `exit`, and the owner holds the request and the
-     * running waiter. Part 4's tests pin all of that; this harness only reaches the owner.
-     */
-    function suspend(): Promise<Suspended> {
-      const journal = new SessionJournal(workdir, "sess-p5", { now: () => 1, onError: (m) => { throw new Error(m); } });
-      journal.writeHeader({ sessionId: "sess-p5", workdir, profile: "p", model: "m" });
-      journal.record({ type: "history_seeded", run_id: "sess-p5.r0.0", messages: [], digest: "", digests: [] });
-      expect(journal.canResume).toBe(true);
-      const bin = path.join(workdir, "fake-ailang.sh");
-      fs.writeFileSync(bin, `#!/bin/sh\n${parkedChild}\n`, { mode: 0o755 });
-      process.env.AILANG_BIN = bin;
-      const rec = recordingFactory();
-      const entries = () =>
-        fs.readFileSync(journal.filePath, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
-      return new Promise((resolve) => {
-        let rp: RuntimeProcess;
-        // eslint-disable-next-line prefer-const
-        rp = new RuntimeProcess(
-          "task", "http://127.0.0.1:1", "test-model", workdir, "default", 1, "", "", "",
-          (e) => { if (isJournalClass(e.type)) journal.record(e as unknown as Record<string, unknown>); },
-          () => {
-            const owner = rp.suspendedChild;
-            if (owner === null) journal.writeExit(journalExitReason(rp.restartPending, false));
-            expect(owner).not.toBeNull();
-            resolve({ journal, owner: owner!, rec, entries });
-          },
-          undefined,
-          rec.factory,
-          true,
-        );
-      });
-    }
-
-    /**
-     * index.ts's `respawnForRestart`, as far as a test can hold it: it records that `canResume` held
-     * and what was on disk when it was called, and spawns a REAL second `RuntimeProcess` with
-     * `{ journalPath }` — whose child is a script that writes the argv it was handed, so the
-     * `--resume` assertion is on the argv the child received (harness-dst.test.ts's shape, on a
-     * live spawn rather than on `buildSupervisorArgs` alone).
-     */
-    function resumeRespawn(journal: SessionJournal) {
-      const argvLog = path.join(workdir, "argv.log");
-      const bin = path.join(workdir, "fake-resume.sh");
-      fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argvLog}'\n`, { mode: 0o755 });
-      const calls: { canResume: boolean; onDisk: unknown[] }[] = [];
-      let exited: Promise<void> = Promise.resolve();
-      const respawn = (): void => {
-        const onDisk = fs.readFileSync(journal.filePath, "utf8").split("\n").filter(Boolean)
-          .map((l) => (JSON.parse(l) as Record<string, unknown>).type);
-        calls.push({ canResume: journal.canResume, onDisk });
-        process.env.AILANG_BIN = bin;
-        exited = new Promise((resolve) => {
-          new RuntimeProcess(
-            "", "http://127.0.0.1:1", "test-model", workdir, "default", 1, "", "", "",
-            () => {},
-            () => resolve(),
-            { journalPath: journal.filePath },
-          );
-        });
-      };
-      /** The argv the resumed child received; the last element is the (empty) task. */
-      const argv = (): string[] => {
-        const lines = fs.readFileSync(argvLog, "utf8").split("\n");
-        lines.pop(); // the trailing newline
-        return lines;
-      };
-      return { respawn, calls, argv, exited: () => exited };
-    }
-
     it("the waiter's reply: exactly one `wake`, the park's child; the waiter stopped; the respawn carries --resume <journal>", async () => {
       const s = await suspend();
       expect(types(s.entries())).toEqual(["header", "park"]);
@@ -610,6 +617,224 @@ describe("RuntimeProcess park and wake", () => {
       expect(s.owner.reply).toEqual(settled("late"));
       expect(types(s.entries())).toEqual(["header", "park"]);
       expect(r.calls).toHaveLength(0);
+    });
+  });
+
+  // ------------------------------------------------------------------------------------------------
+  // PLAN-003 P4 Part 6 (ADR-003 D7, row 4; P4-Q5): THE NAMED STATES AND THEIR EXITS. One host test
+  // per row of the suspended-child command table, each on the shared harness (a fake child, a
+  // recording waiter) with Part 5's consumer installed as index.ts installs it — guarded on the
+  // owner being the host's current `suspendedChild`, which the host clears BEFORE it cancels a park
+  // (ESC, `restart`) and which a spawn clears. Red at ab9c47e: `abortSuspendedChild`,
+  // `SuspendedChild.close`/`isClosed` and `interruptRuntime`'s second parameter do not exist, so the
+  // suite does not compile; in the harness shape (the surface present but inert: `close()` returns
+  // true and ends nothing, `abortSuspendedChild` writes nothing) rows 3, 4 and 5 are red — ESC
+  // returns "none" not "wake_aborted", the restart's abort returns false, quit's cancel count is 0 —
+  // and rows 1, 2 and 6 are green, since they pin what Part 5's consumer and the lease hook already do.
+  // ------------------------------------------------------------------------------------------------
+  describe("the named states and their exits (PLAN-003 P4 Part 6)", () => {
+    /** index.ts's installation of Part 5's consumer: the owner is current until the host clears it. */
+    function installAsHost(s: Suspended, r: ReturnType<typeof resumeRespawn>) {
+      const host = { current: s.owner as SuspendedChild | null };
+      installSuspendedWake(s.owner, { stillCurrent: () => host.current === s.owner, journal: s.journal, respawn: r.respawn });
+      return host;
+    }
+    const reply = (outcome: WakeOutcomeName, wait_id: string, detail: string): WakeReply => ({ request_id: RID, wait_id, outcome, detail });
+
+    /** `registerLeaseHooks`'s emitter, as session-lease.test.ts fakes it: `on`, and `fire` by name. */
+    class FakeProc implements SignalTarget {
+      private readonly handlers = new Map<string, Array<(...a: unknown[]) => void>>();
+      on(event: string, listener: (...args: unknown[]) => void): this {
+        const list = this.handlers.get(event) ?? [];
+        list.push(listener);
+        this.handlers.set(event, list);
+        return this;
+      }
+      fire(event: string): void {
+        for (const h of this.handlers.get(event) ?? []) h();
+      }
+    }
+
+    /** index.ts at boot: the lease taken on the session directory, its hooks writing the journal's `exit`. */
+    function leaseHooks(s: Suspended, sessionId: string): FakeProc {
+      const out = acquireLease(s.journal.dir, sessionId, { pid: process.pid });
+      if (out.kind !== "acquired") throw new Error("expected the lease");
+      const lease: SessionLease = out.lease;
+      const proc = new FakeProc();
+      registerLeaseHooks(proc, lease, (reason) => s.journal.writeExit(reason));
+      return proc;
+    }
+
+    it("row 1 — the waiter replies settled / lost / timed_out / host_error: a wake with that outcome, the park's child, then the respawn", async () => {
+      const rows: [WakeOutcomeName, string, string][] = [
+        ["settled", "h1", "answer"],
+        ["lost", "h1", "pane gone"],
+        ["timed_out", "h1", ""],
+        ["host_error", "", "wake_read: herdr failed"],
+      ];
+      for (const [outcome, wait_id, detail] of rows) {
+        const s = await suspend(`sess-p6-${outcome}`);
+        const r = resumeRespawn(s.journal);
+        installAsHost(s, r);
+        s.rec.onReadys[0](reply(outcome, wait_id, detail));
+        await r.exited();
+        const entries = s.entries();
+        expect(types(entries)).toEqual(["header", "park", "wake"]);
+        expect(entries[2]).toMatchObject({ request_id: RID, wait_id, outcome, detail, parent_id: entries[1].id });
+        expect(r.calls).toEqual([{ canResume: true, onDisk: ["header", "park", "wake"] }]);
+        expect(r.argv()[r.argv().indexOf("--resume") + 1]).toBe(s.journal.filePath);
+        expect(s.rec.cancels()).toBe(1);
+        // Answered, not cancelled: ESC after this has no park to cancel and writes nothing.
+        expect(s.owner.isClosed).toBe(false);
+        expect(abortSuspendedChild(s.owner, s.journal, "abort")).toBe(false);
+        expect(types(s.entries())).toEqual(["header", "park", "wake"]);
+      }
+    });
+
+    it("row 2 — a line at the parked prompt: wake(operator_input), then the respawn; ESC after it cancels nothing", async () => {
+      const s = await suspend("sess-p6-op");
+      const r = resumeRespawn(s.journal);
+      const host = installAsHost(s, r);
+      // ui.ts's parked input route delivers to the owner when no child holds the request (Part 4).
+      expect(s.owner.deliver(typed("go on"))).toBe(true);
+      host.current = null; // the respawn's spawn cleared the host's `suspendedChild`
+      await r.exited();
+      const entries = s.entries();
+      expect(types(entries)).toEqual(["header", "park", "wake"]);
+      expect(entries[2]).toMatchObject({ request_id: RID, wait_id: "", outcome: "operator_input", detail: "go on", parent_id: entries[1].id });
+      expect(r.calls).toHaveLength(1);
+      expect(s.rec.cancels()).toBe(1);
+      // The two typed-input rows differ by entry condition alone: this park is answered, so an ESC
+      // reaching the owner now (it cannot, index.ts cleared it — the control is on the function)
+      // finds nothing to cancel.
+      expect(interruptRuntime(s.rp, { owner: s.owner, journal: s.journal })).toBe("none");
+      expect(s.owner.isClosed).toBe(false);
+      expect(types(s.entries())).toEqual(["header", "park", "wake"]);
+      expect(r.calls).toHaveLength(1);
+    });
+
+    it("row 3 — ESC: exactly one wake(aborted, \"abort\") as the park's child; the waiter stopped; NO respawn; later replies dropped; the next prompt resumes", async () => {
+      const s = await suspend("sess-p6-esc");
+      const r = resumeRespawn(s.journal);
+      const host = installAsHost(s, r);
+      // index.ts's onInterrupt: the owner is cleared FIRST, then ESC goes through interruptRuntime
+      // with it; `interrupted` is not set (no child exits on this row).
+      host.current = null;
+      expect(interruptRuntime(s.rp, { owner: s.owner, journal: s.journal })).toBe("wake_aborted");
+      const entries = s.entries();
+      expect(types(entries)).toEqual(["header", "park", "wake"]);
+      const park = entries[1];
+      const wake = entries[2];
+      expect(wake.parent_id).toBe(park.id);
+      expect(wake).toMatchObject({ request_id: RID, wait_id: "abort", outcome: "aborted", detail: "" });
+      expect(s.journal.currentLeaf).toBe(wake.id);
+      // The park is closed on the host's side: the waiter is stopped, the owner accepts nothing more.
+      expect(s.owner.isClosed).toBe(true);
+      expect(s.rec.cancels()).toBe(1);
+      expect(s.owner.waiter.finished).toBe(true);
+      // NO respawn — not Part 5's consumer's (its owner is no longer current), not anyone's.
+      expect(r.calls).toHaveLength(0);
+      // A second ESC, the waiter's late reply and a typed line: all dropped, nothing written.
+      expect(interruptRuntime(s.rp, { owner: s.owner, journal: s.journal })).toBe("none");
+      s.rec.onReadys[0](settled("late"));
+      expect(s.owner.deliver(typed("late line"))).toBe(false);
+      expect(s.owner.reply).toBeNull();
+      expect(types(s.entries())).toEqual(["header", "park", "wake"]);
+      expect(s.journal.currentLeaf).toBe(wake.id);
+      expect(r.calls).toHaveLength(0);
+      // ESC without an owner is HEAD's ESC: a kill, which a dead child ignores. Nothing written.
+      expect(interruptRuntime(s.rp)).toBe("kill");
+      expect(types(s.entries())).toEqual(["header", "park", "wake"]);
+      // The session stays resumable, and the next prompt's `onInitialTask` respawns through
+      // `respawnForRestart` with `--resume <journal>`: the child folds `park, wake(aborted)` to
+      // `Open("wake:aborted")` (P4-Q4; the fold gate below) and reads the prompt as its next turn.
+      expect(s.journal.canResume).toBe(true);
+      r.respawn();
+      await r.exited();
+      expect(r.calls).toEqual([{ canResume: true, onDisk: ["header", "park", "wake"] }]);
+      expect(r.argv()[r.argv().indexOf("--resume") + 1]).toBe(s.journal.filePath);
+      // The fold gate (Part 5's script) on this file prints `NOT PARKED last=open:wake:aborted`:
+      //   MOTOKO_P4_JOURNAL_OUT_ESC=/tmp/p4-part6-esc.jsonl bun node_modules/.bin/jest src/runtime-process.wake.test.ts
+      //   ailang run --caps IO,FS,Env --entry main scripts/fold_parked_journal.ail -- /tmp/p4-part6-esc.jsonl
+      const out = process.env.MOTOKO_P4_JOURNAL_OUT_ESC;
+      if (out) fs.copyFileSync(s.journal.filePath, out);
+    });
+
+    it("row 4 — restart to profile q: wake(aborted, \"restart:q\") as the park's child; the waiter stopped; then the respawn on the new profile with --resume", async () => {
+      const s = await suspend("sess-p6-restart");
+      const r5 = resumeRespawn(s.journal); // Part 5's consumer's respawn: must not fire on this row
+      const host = installAsHost(s, r5);
+      // index.ts's onRestart: the owner cleared, the profile set, the cancel written, then
+      // `respawnForRestart` on the new profile.
+      host.current = null;
+      expect(abortSuspendedChild(s.owner, s.journal, "restart:q")).toBe(true);
+      const entries = s.entries();
+      expect(types(entries)).toEqual(["header", "park", "wake"]);
+      expect(entries[2]).toMatchObject({ request_id: RID, wait_id: "restart:q", outcome: "aborted", detail: "", parent_id: entries[1].id });
+      expect(s.owner.isClosed).toBe(true);
+      expect(s.rec.cancels()).toBe(1);
+      expect(r5.calls).toHaveLength(0);
+      const r6 = resumeRespawn(s.journal, "q");
+      r6.respawn();
+      await r6.exited();
+      expect(r6.calls).toEqual([{ canResume: true, onDisk: ["header", "park", "wake"] }]);
+      const argv = r6.argv();
+      expect(argv[argv.indexOf("--profile") + 1]).toBe("q");
+      expect(argv[argv.indexOf("--resume") + 1]).toBe(s.journal.filePath);
+      expect(argv.indexOf("--resume-force")).toBe(-1);
+      // The delegate settling afterwards is late: dropped by the closed owner, nothing written,
+      // and Part 5's consumer still never respawned.
+      s.rec.onReadys[0](settled("too late"));
+      expect(types(s.entries())).toEqual(["header", "park", "wake"]);
+      expect(r5.calls).toHaveLength(0);
+    });
+
+    it("row 5 — quit: NO wake; the waiter ended; the lease hook writes exit(host_exit) after the park; the session stays resumable", async () => {
+      const s = await suspend("sess-p6-quit");
+      const r = resumeRespawn(s.journal);
+      installAsHost(s, r);
+      const proc = leaseHooks(s, "sess-p6-quit");
+      // index.ts's onAbort with a dead runtime: end the owner's waiter, stop the UI, process.exit(0)
+      // — whose `exit` listener is the lease hook's, registered at boot with the journal's writeExit.
+      expect(s.owner.close()).toBe(true);
+      expect(s.rec.cancels()).toBe(1);
+      expect(types(s.entries())).toEqual(["header", "park"]);
+      proc.fire("exit");
+      const entries = s.entries();
+      expect(types(entries)).toEqual(["header", "park", "exit"]);
+      expect(entries[2]).toMatchObject({ reason: "host_exit", parent_id: entries[1].id });
+      expect(r.calls).toHaveLength(0);
+      // Row 5: `park → exit` folds to `Parked(req, None)` and is re-observed on resume — so the
+      // journal still resumes, and it is the RESUMED child's waiter that wakes `lost` if the
+      // delegates were reaped meanwhile. This host writes nothing after its exit.
+      expect(s.journal.canResume).toBe(true);
+      s.rec.onReadys[0](settled("never"));
+      expect(s.owner.deliver(typed("never"))).toBe(false);
+      expect(types(s.entries())).toEqual(["header", "park", "exit"]);
+      expect(r.calls).toHaveLength(0);
+      // The fold gate on this file prints `PARKED(p, None) -- no wake: re-observed on resume`:
+      //   MOTOKO_P4_JOURNAL_OUT_QUIT=/tmp/p4-part6-quit.jsonl bun node_modules/.bin/jest src/runtime-process.wake.test.ts
+      const out = process.env.MOTOKO_P4_JOURNAL_OUT_QUIT;
+      if (out) fs.copyFileSync(s.journal.filePath, out);
+    });
+
+    it("row 6 — host death: SIGINT writes exit(abort), SIGTERM exit(host_exit); no wake; as quit", async () => {
+      for (const [signal, reason] of [["SIGINT", "abort"], ["SIGTERM", "host_exit"]] as const) {
+        const id = `sess-p6-${signal.toLowerCase()}`;
+        const s = await suspend(id);
+        const r = resumeRespawn(s.journal);
+        installAsHost(s, r);
+        const proc = leaseHooks(s, id);
+        proc.fire(signal);
+        // ui.ts also routes SIGINT to onAbort, which ends in process.exit(0): a second, consecutive
+        // `exit` is suppressed by the journal, so the boundary carries the SIGNAL's reason.
+        proc.fire("exit");
+        const entries = s.entries();
+        expect(types(entries)).toEqual(["header", "park", "exit"]);
+        expect(entries[2]).toMatchObject({ reason, parent_id: entries[1].id });
+        expect(r.calls).toHaveLength(0);
+        expect(s.journal.canResume).toBe(true);
+      }
     });
   });
 });

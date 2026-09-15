@@ -40,7 +40,9 @@ import { spawn, spawnSync } from "child_process";
  * passes it a `RunState`, so a new `RunState` member that is absent here fails to typecheck at the
  * call site rather than silently reporting nothing.
  */
-export type MotokoRunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended" | "done";
+export type MotokoRunState =
+  | "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended" | "done"
+  | "parked" | "suspended_child" | "resuming";
 
 /** The four states herdr's `pane report-agent --state` accepts. */
 export type HerdrState = "idle" | "working" | "blocked" | "unknown";
@@ -91,6 +93,13 @@ export interface HerdrReport {
  * finished, where plain `idle` also means "started and has not begun". Whether herdr SHOWS an idle
  * row's message is W1a's probe: herdr 0.8.2 accepts it and no CLI or socket read returns it, so
  * outside Motoko's own status line the two still read alike until the answer/exit protocol is used.
+ *
+ * `parked` and `suspended_child` (ADR-003 D7, PLAN-003 P4 Part 6) are `blocked` for the reason
+ * `suspended` is: the run is stopped and waiting on something outside this process — its delegates,
+ * or a line at the parked prompt — and no model call is in flight, so `working` would be a lie and
+ * `idle` would say nothing is held. The messages differ in the one fact herdr cannot see, whether
+ * the runtime child is still alive. `resuming` is `working`: a respawned child is folding the journal
+ * and will run the wake's turn.
  */
 export function mapRunState(state: MotokoRunState): HerdrReport {
   switch (state) {
@@ -106,6 +115,12 @@ export function mapRunState(state: MotokoRunState): HerdrReport {
       return { state: "blocked", message: "the run ended in an error — see the pane" };
     case "suspended":
       return { state: "blocked", message: "suspended: step budget — send continue" };
+    case "parked":
+      return { state: "blocked", message: "parked: waiting on its delegates or a line at the prompt" };
+    case "suspended_child":
+      return { state: "blocked", message: "parked, runtime exited: waiting on its delegates or a line at the prompt" };
+    case "resuming":
+      return { state: "working" };
   }
 }
 
