@@ -640,6 +640,51 @@ export function buildSupervisorArgs(
   return supervisorArgs;
 }
 
+/**
+ * PLAN-003 P4 Part 4 (ADR-003 D7): the host-lifetime owner of a park whose child has exited.
+ *
+ * Under `--park-exits` the child is ended on its first `wake_request`, once the `park` entry is on
+ * disk (P4-Q3). The park outlives the child: the exit handler hands the outstanding request and the
+ * RUNNING waiter here instead of cancelling them, and the TTY exit callback writes no `exit` entry,
+ * so the journal's leaf stays the `park` — which is what lets the `wake` be written as its child
+ * (row 6: `parent_id` is the leaf, and no operation moves it).
+ *
+ * The owner outlives the `RuntimeProcess` that made it. It holds ONE reply, by `request_id` —
+ * `sendWakeReply`'s late-and-duplicate rule, moved here with the request — and hands it to the
+ * consumer Part 5 installs (the `wake` entry, the `--resume` respawn). Until then the reply is
+ * held, not lost.
+ */
+export class SuspendedChild {
+  private held: WakeReply | null = null;
+  private consumer: ((reply: WakeReply) => void) | null = null;
+
+  constructor(
+    /** The request whose `park` entry is the journal's leaf. */
+    readonly request: WakeRequest,
+    /** The waiter, still running: its reply is one of the things that wakes the session. */
+    readonly waiter: WakeWaiterHandle,
+  ) {}
+
+  /** The reply accepted so far, or null. */
+  get reply(): WakeReply | null {
+    return this.held;
+  }
+
+  /** Accept one reply for this request. A reply for another request, or a second one, is dropped. */
+  deliver(reply: WakeReply): boolean {
+    if (this.held !== null || reply.request_id !== this.request.request_id) return false;
+    this.held = reply;
+    this.consumer?.(reply);
+    return true;
+  }
+
+  /** Install the consumer (Part 5). A reply held before it was installed is handed over at once. */
+  onReply(consumer: (reply: WakeReply) => void): void {
+    this.consumer = consumer;
+    if (this.held !== null) consumer(this.held);
+  }
+}
+
 export class RuntimeProcess {
   private proc: ChildProcess;
   private dead = false;
@@ -660,10 +705,12 @@ export class RuntimeProcess {
     onExit: () => void,
     resume?: ResumeSpawn,
     wakeWaiterFactory: WakeWaiterFactory = defaultWakeWaiterFactory,
+    parkExits = false,
   ) {
     this.workdir = workdir;
     this.onEvent = onEvent;
     this.wakeWaiterFactory = wakeWaiterFactory;
+    this.parkExits = parkExits;
     const aiModelArg = providerSelectionModel(model, openaiBaseUrl);
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
@@ -764,9 +811,23 @@ export class RuntimeProcess {
     this.proc.on("exit", (code, signal) => {
       this.dead = true;
       stderrRl.close();
-      // The runtime is gone: its park with it. Losing waiters are cancelled and a queued model change
-      // is dropped (there is no child to send it to).
-      this.resolvePark();
+      if (this.suspending !== null && this.waiter !== null) {
+        // PLAN-003 P4 Part 4 (ADR-003 D7): SUSPENDED-CHILD, the branch BEFORE `restartPending`. The
+        // child was ended by `onWakeRequest` under `--park-exits`; its `park` entry is the journal's
+        // leaf, and the park did NOT die with it. The request and the waiter — still running, not
+        // cancelled — move to the host-lifetime owner the TTY exit callback takes (`suspendedChild`)
+        // and on which it writes no `exit` (row 6: the `wake` must be the `park`'s child). What the
+        // owner receives from here on is Part 5's.
+        this._suspendedChild = new SuspendedChild(this.suspending, this.waiter);
+        this.suspending = null;
+        this.waiter = null;
+        this.outstandingWake = null;
+        this.parkRequestId = null;
+      } else {
+        // The runtime is gone: its park with it. Losing waiters are cancelled and a queued model
+        // change is dropped (there is no child to send it to).
+        this.resolvePark();
+      }
       this.deferredModel = null;
       // A killed child cannot say it was killed, so the host says it — as an `error`, which is what
       // makes the TTY recover into awaiting a task and the headless loggers exit 1, where a silent
@@ -971,6 +1032,27 @@ export class RuntimeProcess {
   private parkRequestId: string | null = null;
   private waiter: WakeWaiterHandle | null = null;
   private deferredModel: string | null = null;
+  /**
+   * PLAN-003 P4 Part 4: `--park-exits`. Off by default; on, a FIRST issue of a `wake_request` ends
+   * the child (P4-Q3: `kill()` once the `park` entry is on disk; every first-issue park; TTY only —
+   * the non-TTY spawn never passes it). With it off nothing in this part runs.
+   */
+  private readonly parkExits: boolean;
+  /**
+   * The request the child is dying on: set by `onWakeRequest` between its `kill()` and the exit.
+   * A reply in that window is DROPPED (R5): it writes no `wake` and starts no respawn — the request
+   * died with the child, and the park is re-observed on the next resume (row 5).
+   */
+  private suspending: WakeRequest | null = null;
+  private _suspendedChild: SuspendedChild | null = null;
+
+  /**
+   * What the exit handler handed over, or null. The TTY exit callback reads this FIRST, above
+   * `restartPending`: on it the callback writes no `exit` entry and keeps the session open.
+   */
+  get suspendedChild(): SuspendedChild | null {
+    return this._suspendedChild;
+  }
 
   /** The outstanding `wake_request`, or null. The TUI's parked input route reads this. */
   get wakeRequest(): WakeRequest | null {
@@ -992,10 +1074,30 @@ export class RuntimeProcess {
       this.stopWaiter();
       this.outstandingWake = req;
       // Waiters report asynchronously, so none can reply before the event below is forwarded.
-      if (!this.dead) this.waiter = this.wakeWaiterFactory(req, (reply) => this.sendWakeReply(reply));
+      if (!this.dead) this.waiter = this.wakeWaiterFactory(req, (reply) => this.onWaiterReply(reply));
     }
     // Forwarded LAST: a consumer that aborts from inside onEvent must find the park already tracked.
     this.onEvent(req);
+    // PLAN-003 P4 Part 4 (P4-Q3): a first issue under `--park-exits` ends the child. The `park`
+    // entry is already on disk — the child emits `park_entered` before `wake_request`
+    // (`session.ail:3530`, then `stub_step.ail:220`) and the host appended it synchronously from the
+    // line before this one. `kill()` sets `killRequested`, so the exit is not reported as an
+    // `error`. Guarded on the park still being tracked: a consumer that aborted from inside onEvent
+    // above has already cancelled it, and that exit is the ordinary one.
+    if (this.parkExits && !reissue && this.outstandingWake === req && this.waiter !== null && !this.dead) {
+      this.suspending = req;
+      this.kill();
+    }
+  }
+
+  /** The waiter's reply: down stdin while the child lives; to the owner after the exit; dropped between (R5). */
+  private onWaiterReply(reply: WakeReply): void {
+    if (this._suspendedChild !== null) {
+      this._suspendedChild.deliver(reply);
+      return;
+    }
+    if (this.suspending !== null) return;
+    this.sendWakeReply(reply);
   }
 
   /**
@@ -1004,6 +1106,9 @@ export class RuntimeProcess {
    */
   sendWakeReply(reply: WakeReply): boolean {
     if (this.dead) return false;
+    // P4 Part 4, R5: between `kill()` and the exit the request is dying with the child. Nothing is
+    // sent and nothing is written; the owner (`suspendedChild`) receives replies only after the exit.
+    if (this.suspending !== null) return false;
     const req = this.outstandingWake;
     if (req === null || reply.request_id !== req.request_id) return false;
     this.outstandingWake = null;

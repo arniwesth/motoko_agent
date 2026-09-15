@@ -23,7 +23,7 @@ import chalk from "chalk";
 import { TUI, Text, Markdown, Editor, type EditorTheme, Box, Image, SelectList, ProcessTerminal, type OverlayHandle, type SelectItem, type MarkdownTheme, matchesKey } from "@mariozechner/pi-tui";
 import type { AgentEvent } from "./runtime-process.js";
 import type { DelegatedCall, DelegatedResult, NativeToolResult } from "./runtime-process.js";
-import type { RuntimeProcess } from "./runtime-process.js";
+import type { RuntimeProcess, SuspendedChild } from "./runtime-process.js";
 import type { WakeReply } from "./wake-waiter.js";
 import { resolveDelegatedExec } from "./runtime-process.js";
 import { fetchDynamicModelsFromEnv } from "./models.js";
@@ -2079,6 +2079,12 @@ export class AgentUI {
 
   /** The AILANG runtime process, or undefined once it has exited. */
   runtimeProcess: RuntimeProcess | undefined;
+  /**
+   * PLAN-003 P4 Part 4: the park whose child has exited under `--park-exits`, while the session
+   * waits for its wake with no child alive. Set by index.ts's exit callback, cleared by the next
+   * spawn. It is what keeps the parked input route open after the exit.
+   */
+  suspendedChild: SuspendedChild | undefined;
 
   /** True when waiting for the user to type the initial task via cmdInput. */
   private awaitingTask = false;
@@ -4102,6 +4108,25 @@ export class AgentUI {
     this.updateStatus();
   }
 
+  /**
+   * PLAN-003 P4 Part 4: the child exited on its park under `--park-exits`. The run state is left
+   * where the park left it — a live park shows the same, and `awaitingTask` is NOT set, so a plain
+   * line is not a new task — and the parked input route stays open through `suspendedChild`, so a
+   * plain line still answers the park as operator input.
+   */
+  showSuspendedChild(suspended: SuspendedChild): void {
+    this.suspendedChild = suspended;
+    const n = suspended.request.waits.length;
+    this.appendHistoryStyled(
+      `Parked (${suspended.request.request_id}) on ${n} open wait${n === 1 ? "" : "s"}: the runtime exited and the park ` +
+        "is in the journal. The session resumes on the wake; a line typed here answers the park as operator input.",
+      chalk.cyan,
+    );
+    this.tui.setFocus(this.cmdInput);
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
   // ---------------------------------------------------------------------------
   // Command parsing
   // ---------------------------------------------------------------------------
@@ -4114,13 +4139,21 @@ export class AgentUI {
       return;
     }
 
-    const route = plainInputRoute(this.awaitingTask, this.taskDone, this.runtimeProcess?.wakeRequest?.request_id ?? null, value);
+    // The park a plain line answers: the live child's outstanding request, or — after the child
+    // exited on it under `--park-exits` (PLAN-003 P4 Part 4) — the one the suspended-child owner holds.
+    const parkedRequestId = this.runtimeProcess?.wakeRequest?.request_id ?? this.suspendedChild?.request.request_id ?? null;
+    const route = plainInputRoute(this.awaitingTask, this.taskDone, parkedRequestId, value);
 
     // PLAN-002 W4 Part 5: the parked input route. The runtime is blocked on its open waits, and an
     // operator line is one of the things that wakes it.
     if (route === "wake_reply") {
       const req = this.runtimeProcess?.wakeRequest;
+      const suspended = this.suspendedChild;
       if (req && this.runtimeProcess?.sendWakeReply(operatorInputReply(req.request_id, value))) {
+        this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+      } else if (suspended && suspended.deliver(operatorInputReply(suspended.request.request_id, value))) {
+        // P4 Part 4: no child to send it to. The owner holds the line as the park's one reply; what
+        // it does with a reply is Part 5's (the `wake` entry, the `--resume` respawn).
         this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       } else {
         this.appendHistoryStyled("The park this line answered has already resolved; the line was not sent.", chalk.dim);

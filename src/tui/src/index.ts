@@ -23,7 +23,7 @@ import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-p
 import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
-import { RuntimeProcess, interruptRuntime, journalExitReason, resolveDelegatedExec } from "./runtime-process.js";
+import { RuntimeProcess, interruptRuntime, journalExitReason, resolveDelegatedExec, type SuspendedChild } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { HeadlessOutcome, formatResumeViewLine } from "./headless-outcome.js";
 import {
@@ -631,6 +631,8 @@ class JsonlLogger {
 // specific CLI flags before treating argv[2] as task text.
 //   --headless       — force MOTOKO_HEADLESS=1 (more discoverable than env var)
 //   --oneshot        — interactive one-shot: TTY display, exit after the first task's `done`
+//   --park-exits     — TTY only: a run's first park ends the child; the session waits for the
+//                      wake with no child alive (ADR-003 D7, PLAN-003 P4 Part 4). Default off.
 //   --answer-file P  — publish the final answer to P (ADR-002 D1.2); see answer-file.ts
 //   --version, -v    — print structured version info to stdout and exit 0
 // Recognized flags are removed from process.argv so downstream argv[2] reads
@@ -639,6 +641,7 @@ class JsonlLogger {
 function parseMotokoFlags(): {
   headless: boolean;
   oneshot: boolean;
+  parkExits: boolean;
   answerFile: string | null;
   printVersion: boolean;
   systemPrompt: string | null;
@@ -646,10 +649,11 @@ function parseMotokoFlags(): {
   const flags: {
     headless: boolean;
     oneshot: boolean;
+    parkExits: boolean;
     answerFile: string | null;
     printVersion: boolean;
     systemPrompt: string | null;
-  } = { headless: false, oneshot: false, answerFile: null, printVersion: false, systemPrompt: null };
+  } = { headless: false, oneshot: false, parkExits: false, answerFile: null, printVersion: false, systemPrompt: null };
   const remaining: string[] = [process.argv[0], process.argv[1]];
   for (let i = 2; i < process.argv.length; i++) {
     const arg = process.argv[i];
@@ -659,6 +663,12 @@ function parseMotokoFlags(): {
       // ADR-002 D1.3. `--headless` is the plain/JSONL one-shot and already exits on `done`; this is
       // the same one task with the TUI kept, which is what a delegate in a herdr pane wants.
       flags.oneshot = true;
+    } else if (arg === "--park-exits") {
+      // PLAN-003 P4 Part 4 (ADR-003 D7, P4-Q3). A bare TTY flag, default OFF: a run's first park
+      // ends the child once its `park` entry is on disk, and the session waits for the wake with no
+      // child alive. Ignored outside a TTY. It stays off in every default until P4 Part 7's live
+      // gate is recorded in PLAN-003 §5; turning it on is an owner act.
+      flags.parkExits = true;
     } else if (arg === "--answer-file") {
       flags.answerFile = process.argv[i + 1] ?? "";
       i++; // consume the value
@@ -878,6 +888,12 @@ async function main(): Promise<void> {
   // no prompt has been submitted against it yet. Its exit must not be treated as
   // "the session ended".
   let preWarmIdle = false;
+  /**
+   * PLAN-003 P4 Part 4: the park whose child has exited under `--park-exits` — its request and its
+   * running waiter — held for the session's lifetime. Set by the TTY exit callback's first branch,
+   * cleared by the next spawn. What it receives is Part 5's (the `wake` entry, the `--resume` respawn).
+   */
+  let suspendedChild: SuspendedChild | null = null;
 
   // Announce Motoko to herdr, if this process was launched in a herdr pane. Everything about this
   // is a no-op outside one — see herdr-agent-state.ts — so it is unconditional here rather than
@@ -962,6 +978,8 @@ async function main(): Promise<void> {
   initHerdrReporter();
 
   if (!isTTY) {
+    // PLAN-003 P4 Part 4, P4-Q3: `--park-exits` is TTY only, and the non-TTY exit callback is unchanged.
+    if (motokoFlags.parkExits) process.stderr.write("--park-exits is ignored outside a TTY session.\n");
     // Non-TTY: prompt for task first, then run with PlainLogger.
     const task =
       process.argv[2] ??
@@ -1079,6 +1097,9 @@ async function main(): Promise<void> {
 
   function spawnRuntimeProcess(task: string, logPrompt: boolean, resume?: ResumeSpawn): void {
     errorOccurred = false;
+    // A spawn ends a suspended-child (P4 Part 4): Part 5's respawn on the wake, or a prompt or restart.
+    suspendedChild = null;
+    ui.suspendedChild = undefined;
     const logger = new SessionLogger(projectRoot, pkgVersion, journal);
     sessionLogger = logger;
     reportSessionPath(logger.filePath);
@@ -1135,6 +1156,21 @@ async function main(): Promise<void> {
         const closing = logger.close();
         sessionLogger = undefined;
         ui.runtimeProcess = undefined;
+        // PLAN-003 P4 Part 4 (ADR-003 D7, row 6): SUSPENDED-CHILD, the first branch, ABOVE
+        // `restartPending` — a restart during a park is a cancel, and this exit is neither that
+        // nor the one-shot's end, which is why the one-shot branch below is skipped too. The child
+        // was ended on its park under `--park-exits`; the `park` entry is the journal's leaf and
+        // the waiter is still running in the owner. NO `exit` entry is written: `parent_id` is the
+        // leaf and nothing moves it, so the `wake` (Part 5) is the park's child only if nothing is
+        // appended between them. The lease stays held; a host that dies here writes its `exit`
+        // through the lease hook, and the park is re-observed on resume (row 5). Input stays open:
+        // the parked input route now answers the owner.
+        const suspended = runtimeProcess?.suspendedChild ?? null;
+        if (suspended !== null) {
+          suspendedChild = suspended;
+          ui.showSuspendedChild(suspended);
+          return;
+        }
         const pendingRestart = runtimeProcess?.restartPending;
         // A one-shot whose runtime exited with no `done`/`error` to finish on (an ESC interrupt, a
         // kill, a crash) ends here too — non-zero, and never into awaiting another task. A `done` or
@@ -1223,6 +1259,9 @@ async function main(): Promise<void> {
         }
       },
       resume,
+      undefined,
+      // PLAN-003 P4 Part 4: TTY only (P4-Q3). The non-TTY spawn above never passes it.
+      motokoFlags.parkExits,
     );
     ui.runtimeProcess = runtimeProcess;
   }

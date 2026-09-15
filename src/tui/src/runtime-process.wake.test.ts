@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { interruptRuntime, journalExitReason, RuntimeProcess, type AgentEvent } from "./runtime-process.js";
+import { interruptRuntime, journalExitReason, RuntimeProcess, type AgentEvent, type SuspendedChild } from "./runtime-process.js";
+import { isJournalClass, SessionJournal } from "./session-journal.js";
 import type { WakeReply, WakeRequest, WakeWaiterFactory } from "./wake-waiter.js";
 
 // PLAN-002 W4 gate 6, host protocol: `wake_request` / `wake_reply` over a real child (a shell script
@@ -238,5 +239,176 @@ describe("RuntimeProcess park and wake", () => {
     expect(interruptRuntime(undefined)).toBe("none");
     expect(calls).toEqual(["kill", "abort"]);
     expect(journalExitReason(undefined, false)).toBe("child_exit");
+  });
+  // ------------------------------------------------------------------------------------------------
+  // PLAN-003 P4 Part 4 (ADR-003 D7, P4-Q3): SUSPENDED-CHILD under `--park-exits`. A first issue of a
+  // `wake_request` ends the child with `kill()` once the `park` entry is on disk; the park outlives
+  // the child. Red at 2c0fa52: the exit handler cancelled the waiter (`resolvePark`), and index.ts
+  // wrote an `exit` entry after the park.
+  // ------------------------------------------------------------------------------------------------
+  describe("suspended-child under --park-exits (PLAN-003 P4 Part 4)", () => {
+    const H1 = { id: "h1", delegate_kind: "claude", locator: { pane: "p1" }, answer_path: "/tmp/answer.md", run_key: "k1" };
+    const parkEntered = JSON.stringify({ type: "park_entered", request_id: RID, step: 3, waits: [H1] });
+    const settled = (detail: string): WakeReply => ({ request_id: RID, wait_id: "h1", outcome: "settled", detail });
+    /** The child, blocked on the reply it will never get: only `kill()` ends this script. */
+    const parkedChild = [emit(parkEntered), emit(wakeRequest([H1])), READ()].join("\n");
+
+    interface HostRun {
+      events: AgentEvent[];
+      stdin: Record<string, unknown>[];
+      rp: RuntimeProcess;
+      suspended: SuspendedChild | null;
+      entries: Record<string, unknown>[];
+      leaf: string;
+    }
+
+    /**
+     * The TTY host's side of the harness. Journal-class events are routed as `SessionLogger.log`
+     * does (the `park` is appended synchronously, before the `wake_request` line is read), and the
+     * exit callback is index.ts's: its FIRST branch, above `restartPending`, is the suspended-child
+     * one and writes NO `exit` entry (row 6); every other exit writes `journalExitReason`'s.
+     */
+    function runHost(
+      script: string,
+      onEvent: (rp: RuntimeProcess, e: AgentEvent) => void,
+      factory: WakeWaiterFactory,
+      parkExits: boolean,
+    ): Promise<HostRun> {
+      const journal = new SessionJournal(workdir, "sess-p4", { now: () => 1, onError: (m) => { throw new Error(m); } });
+      journal.writeHeader({ sessionId: "sess-p4", workdir, profile: "p", model: "m" });
+      const bin = path.join(workdir, "fake-ailang.sh");
+      fs.writeFileSync(bin, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+      process.env.AILANG_BIN = bin;
+      const events: AgentEvent[] = [];
+      return new Promise((resolve) => {
+        let rp: RuntimeProcess;
+        // eslint-disable-next-line prefer-const
+        rp = new RuntimeProcess(
+          "task", "http://127.0.0.1:1", "test-model", workdir, "default", 1, "", "", "",
+          (e) => {
+            events.push(e);
+            if (isJournalClass(e.type)) journal.record(e as unknown as Record<string, unknown>);
+            onEvent(rp, e);
+          },
+          () => {
+            const suspended = rp.suspendedChild;
+            if (suspended === null) journal.writeExit(journalExitReason(rp.restartPending, false));
+            const entries = fs.readFileSync(journal.filePath, "utf8").split("\n").filter(Boolean)
+              .map((l) => JSON.parse(l) as Record<string, unknown>);
+            const stdin = fs.existsSync(stdinLog)
+              ? fs.readFileSync(stdinLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>)
+              : [];
+            resolve({ events, stdin, rp, suspended, entries, leaf: journal.currentLeaf });
+          },
+          undefined,
+          factory,
+          parkExits,
+        );
+      });
+    }
+
+    const types = (entries: Record<string, unknown>[]) => entries.map((e) => e.type);
+
+    it("a first issue ends the child; the request and the RUNNING waiter go to the owner; no error; the journal's leaf is the park", async () => {
+      const rec = recordingFactory();
+      const parkedInside: boolean[] = [];
+      const r = await runHost(parkedChild, (rp, e) => { if (e.type === "wake_request") parkedInside.push(rp.isParked); }, rec.factory, true);
+      expect(r.events.map((e) => e.type)).toEqual(["park_entered", "wake_request"]);
+      expect(errors(r.events)).toHaveLength(0);
+      // Forwarded before the kill: a consumer sees the park tracked, on a live child.
+      expect(parkedInside).toEqual([true]);
+      // Killed while blocked on its reply: the child read nothing.
+      expect(r.stdin).toEqual([]);
+      // The waiter is STILL RUNNING. At the base the exit handler cancelled it (`resolvePark`).
+      expect(rec.started).toHaveLength(1);
+      expect(rec.cancels()).toBe(0);
+      expect(r.suspended).not.toBeNull();
+      expect(r.suspended!.request.request_id).toBe(RID);
+      expect(r.suspended!.waiter.finished).toBe(false);
+      expect(r.suspended!.reply).toBeNull();
+      // The process no longer holds the park; the owner does. Nothing asked for a respawn.
+      expect(r.rp.wakeRequest).toBeNull();
+      expect(r.rp.isParked).toBe(false);
+      expect(r.rp.restartPending).toBeUndefined();
+      // The leaf IS the park entry: no `exit` after it (row 6), and no `wake` — that is Part 5's.
+      expect(types(r.entries)).toEqual(["header", "park"]);
+      const park = r.entries[r.entries.length - 1];
+      expect(park.request_id).toBe(RID);
+      expect(park.id).toBe(r.leaf);
+    });
+
+    it("kill-then-reply writes nothing: a reply between kill() and the exit is dropped, the leaf stays the park, no respawn", async () => {
+      const rec = recordingFactory();
+      const sent: boolean[] = [];
+      const deadAtReply: boolean[] = [];
+      const r = await runHost(
+        parkedChild,
+        (rp, e) => {
+          if (e.type !== "wake_request") return;
+          // After onWakeRequest has returned — after its kill() — and before the child's exit event.
+          queueMicrotask(() => {
+            deadAtReply.push(rp.isDead);
+            rec.onReadys[0](settled("early answer"));
+            sent.push(rp.sendWakeReply(settled("typed early")));
+          });
+        },
+        rec.factory,
+        true,
+      );
+      expect(deadAtReply).toEqual([false]);
+      // The request died with the child: nothing down stdin, nothing in the journal, nothing to respawn.
+      expect(sent).toEqual([false]);
+      expect(r.stdin).toEqual([]);
+      expect(errors(r.events)).toHaveLength(0);
+      expect(types(r.entries)).toEqual(["header", "park"]);
+      expect(r.suspended).not.toBeNull();
+      expect(r.suspended!.reply).toBeNull();
+      expect(r.rp.restartPending).toBeUndefined();
+      expect(rec.cancels()).toBe(0);
+    });
+
+    it("a reply the owner receives after the exit is held once, by request_id, for Part 5's consumer", async () => {
+      const rec = recordingFactory();
+      const r = await runHost(parkedChild, () => {}, rec.factory, true);
+      const owner = r.suspended!;
+      expect(owner.deliver({ request_id: "s.r0.1.p0", wait_id: "", outcome: "operator_input", detail: "stale park" })).toBe(false);
+      // The waiter's reply now reaches the owner, not a dead stdin.
+      rec.onReadys[0](settled("answer"));
+      expect(owner.reply).toEqual(settled("answer"));
+      expect(owner.deliver(settled("twice"))).toBe(false);
+      expect(r.rp.sendWakeReply(settled("dead"))).toBe(false);
+      // A consumer installed after the reply was held gets it at once: Part 5 installs after the branch.
+      const got: WakeReply[] = [];
+      owner.onReply((reply) => got.push(reply));
+      expect(got).toEqual([settled("answer")]);
+      // Part 4 writes nothing on it: no `wake` (Part 5's), no `exit` (row 6).
+      expect(types(r.entries)).toEqual(["header", "park"]);
+    });
+
+    it("a consumer that aborts from inside onEvent cancels the park; the flag does not then kill", async () => {
+      const rec = recordingFactory();
+      const r = await runHost(
+        [emit(parkEntered), emit(wakeRequest([H1])), READ(), "exit 0"].join("\n"),
+        (rp, e) => { if (e.type === "wake_request") interruptRuntime(rp); },
+        rec.factory,
+        true,
+      );
+      // The child read the abort and exited by itself: an ordinary exit, with its `exit` entry.
+      expect(r.stdin).toEqual([{ type: "abort" }]);
+      expect(errors(r.events)).toHaveLength(0);
+      expect(rec.cancels()).toBe(1);
+      expect(r.suspended).toBeNull();
+      expect(types(r.entries)).toEqual(["header", "park", "exit"]);
+    });
+
+    it("control: with --park-exits off nothing here runs — the exit cancels the waiter and `exit` follows the park", async () => {
+      const rec = recordingFactory();
+      const r = await runHost([emit(parkEntered), emit(wakeRequest([H1])), "exit 0"].join("\n"), () => {}, rec.factory, false);
+      expect(errors(r.events)).toHaveLength(0);
+      expect(rec.cancels()).toBe(1);
+      expect(r.suspended).toBeNull();
+      expect(types(r.entries)).toEqual(["header", "park", "exit"]);
+      expect(r.entries[r.entries.length - 1].reason).toBe("child_exit");
+    });
   });
 });
