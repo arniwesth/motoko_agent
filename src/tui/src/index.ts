@@ -23,7 +23,7 @@ import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-p
 import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
-import { RuntimeProcess, interruptRuntime, journalExitReason, resolveDelegatedExec, type SuspendedChild } from "./runtime-process.js";
+import { RuntimeProcess, installSuspendedWake, interruptRuntime, journalExitReason, resolveDelegatedExec, type SuspendedChild } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { HeadlessOutcome, formatResumeViewLine } from "./headless-outcome.js";
 import {
@@ -1169,6 +1169,28 @@ async function main(): Promise<void> {
         if (suspended !== null) {
           suspendedChild = suspended;
           ui.showSuspendedChild(suspended);
+          // PLAN-003 P4 Part 5 (row 6): on the owner's one reply — the waiter's outcome or the line
+          // typed at the parked prompt — the host records `wake_received`, whose `wake` entry is the
+          // park's child, then respawns through `respawnForRestart` (`--resume <journal>`); the
+          // resumed child folds `Parked(p, Some(w))` and consumes the wake as `<R'>.p0` (Part 3).
+          // Late and duplicate replies are dropped by `request_id` in the owner. `stillCurrent`
+          // ends this consumer at the next spawn, which clears `suspendedChild` above: a reply
+          // after that is late, and a `wake` written then would answer no open park. Nothing here
+          // sets `awaitingTask`: the resumed child runs the wake's turn, and its events drive the UI.
+          installSuspendedWake(suspended, {
+            stillCurrent: () => suspendedChild === suspended,
+            journal,
+            respawn: respawnForRestart,
+            notify: (reply, written) => {
+              const who = reply.outcome === "operator_input" ? "the operator's line" : `${reply.wait_id} (${reply.outcome})`;
+              ui.addHistoryText(
+                written
+                  ? `Woke on ${who}: the wake is in the journal; resuming the session from it.`
+                  : `Woke on ${who}, but the wake could not be journaled; resuming the session, which re-observes the park.`,
+                written ? "cyan" : "red",
+              );
+            },
+          });
           return;
         }
         const pendingRestart = runtimeProcess?.restartPending;

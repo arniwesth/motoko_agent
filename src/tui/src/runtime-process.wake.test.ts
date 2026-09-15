@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { interruptRuntime, journalExitReason, RuntimeProcess, type AgentEvent, type SuspendedChild } from "./runtime-process.js";
+import { installSuspendedWake, interruptRuntime, journalExitReason, RuntimeProcess, type AgentEvent, type SuspendedChild } from "./runtime-process.js";
 import { isJournalClass, SessionJournal } from "./session-journal.js";
 import type { WakeReply, WakeRequest, WakeWaiterFactory } from "./wake-waiter.js";
 
@@ -409,6 +409,207 @@ describe("RuntimeProcess park and wake", () => {
       expect(r.suspended).toBeNull();
       expect(types(r.entries)).toEqual(["header", "park", "exit"]);
       expect(r.entries[r.entries.length - 1].reason).toBe("child_exit");
+    });
+  });
+  // ------------------------------------------------------------------------------------------------
+  // PLAN-003 P4 Part 5 (ADR-003 D7, row 6): THE WAKE ENTRY AS THE PARK'S CHILD, AND THE RESPAWN. On
+  // the owner's reply the host records `wake_received` — Part 1's routing appends a `wake` whose
+  // `parent_id` is the leaf, i.e. the `park` — and respawns through `respawnForRestart`, which
+  // passes `--resume <journal>`. Late and duplicate replies are dropped by `request_id`
+  // (`sendWakeReply`'s rule, moved with the request to the owner). Red at b660b55: no consumer
+  // exists; the owner holds the reply and nothing else happens.
+  // ------------------------------------------------------------------------------------------------
+  describe("the wake entry and the respawn (PLAN-003 P4 Part 5)", () => {
+    const H1 = { id: "h1", delegate_kind: "claude", locator: { pane: "p1" }, answer_path: "/tmp/answer.md", run_key: "k1" };
+    const parkEntered = JSON.stringify({ type: "park_entered", request_id: RID, step: 3, waits: [H1] });
+    const settled = (detail: string): WakeReply => ({ request_id: RID, wait_id: "h1", outcome: "settled", detail });
+    const typed = (detail: string): WakeReply => ({ request_id: RID, wait_id: "", outcome: "operator_input", detail });
+    /** The child, blocked on the reply it will never get: only `kill()` ends this script. */
+    const parkedChild = [emit(parkEntered), emit(wakeRequest([H1])), READ()].join("\n");
+    const types = (entries: Record<string, unknown>[]) => entries.map((e) => e.type);
+
+    interface Suspended {
+      journal: SessionJournal;
+      owner: SuspendedChild;
+      rec: ReturnType<typeof recordingFactory>;
+      entries: () => Record<string, unknown>[];
+    }
+
+    /**
+     * A session parked and suspended under `--park-exits`, on Part 4's harness. The journal is
+     * SEEDED — an empty seed is enough for `canResume`, which is what `respawnForRestart` reads —
+     * journal-class events are routed as `SessionLogger.log` does, the child exits on its first
+     * issue, the mirrored exit callback writes no `exit`, and the owner holds the request and the
+     * running waiter. Part 4's tests pin all of that; this harness only reaches the owner.
+     */
+    function suspend(): Promise<Suspended> {
+      const journal = new SessionJournal(workdir, "sess-p5", { now: () => 1, onError: (m) => { throw new Error(m); } });
+      journal.writeHeader({ sessionId: "sess-p5", workdir, profile: "p", model: "m" });
+      journal.record({ type: "history_seeded", run_id: "sess-p5.r0.0", messages: [], digest: "", digests: [] });
+      expect(journal.canResume).toBe(true);
+      const bin = path.join(workdir, "fake-ailang.sh");
+      fs.writeFileSync(bin, `#!/bin/sh\n${parkedChild}\n`, { mode: 0o755 });
+      process.env.AILANG_BIN = bin;
+      const rec = recordingFactory();
+      const entries = () =>
+        fs.readFileSync(journal.filePath, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
+      return new Promise((resolve) => {
+        let rp: RuntimeProcess;
+        // eslint-disable-next-line prefer-const
+        rp = new RuntimeProcess(
+          "task", "http://127.0.0.1:1", "test-model", workdir, "default", 1, "", "", "",
+          (e) => { if (isJournalClass(e.type)) journal.record(e as unknown as Record<string, unknown>); },
+          () => {
+            const owner = rp.suspendedChild;
+            if (owner === null) journal.writeExit(journalExitReason(rp.restartPending, false));
+            expect(owner).not.toBeNull();
+            resolve({ journal, owner: owner!, rec, entries });
+          },
+          undefined,
+          rec.factory,
+          true,
+        );
+      });
+    }
+
+    /**
+     * index.ts's `respawnForRestart`, as far as a test can hold it: it records that `canResume` held
+     * and what was on disk when it was called, and spawns a REAL second `RuntimeProcess` with
+     * `{ journalPath }` — whose child is a script that writes the argv it was handed, so the
+     * `--resume` assertion is on the argv the child received (harness-dst.test.ts's shape, on a
+     * live spawn rather than on `buildSupervisorArgs` alone).
+     */
+    function resumeRespawn(journal: SessionJournal) {
+      const argvLog = path.join(workdir, "argv.log");
+      const bin = path.join(workdir, "fake-resume.sh");
+      fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argvLog}'\n`, { mode: 0o755 });
+      const calls: { canResume: boolean; onDisk: unknown[] }[] = [];
+      let exited: Promise<void> = Promise.resolve();
+      const respawn = (): void => {
+        const onDisk = fs.readFileSync(journal.filePath, "utf8").split("\n").filter(Boolean)
+          .map((l) => (JSON.parse(l) as Record<string, unknown>).type);
+        calls.push({ canResume: journal.canResume, onDisk });
+        process.env.AILANG_BIN = bin;
+        exited = new Promise((resolve) => {
+          new RuntimeProcess(
+            "", "http://127.0.0.1:1", "test-model", workdir, "default", 1, "", "", "",
+            () => {},
+            () => resolve(),
+            { journalPath: journal.filePath },
+          );
+        });
+      };
+      /** The argv the resumed child received; the last element is the (empty) task. */
+      const argv = (): string[] => {
+        const lines = fs.readFileSync(argvLog, "utf8").split("\n");
+        lines.pop(); // the trailing newline
+        return lines;
+      };
+      return { respawn, calls, argv, exited: () => exited };
+    }
+
+    it("the waiter's reply: exactly one `wake`, the park's child; the waiter stopped; the respawn carries --resume <journal>", async () => {
+      const s = await suspend();
+      expect(types(s.entries())).toEqual(["header", "park"]);
+      const r = resumeRespawn(s.journal);
+      const notified: [WakeReply, boolean][] = [];
+      installSuspendedWake(s.owner, {
+        stillCurrent: () => true,
+        journal: s.journal,
+        respawn: r.respawn,
+        notify: (reply, written) => notified.push([reply, written]),
+      });
+      // Installing the consumer writes nothing: no reply is held yet.
+      expect(types(s.entries())).toEqual(["header", "park"]);
+      expect(r.calls).toHaveLength(0);
+      // The waiter replies, to the owner (Part 4).
+      s.rec.onReadys[0](settled("answer"));
+      await r.exited();
+      const entries = s.entries();
+      expect(types(entries)).toEqual(["header", "park", "wake"]);
+      const park = entries[1];
+      const wake = entries[2];
+      // Row 6: the wake is the park's CHILD — `parent_id` is the leaf, and nothing was appended between.
+      expect(wake.parent_id).toBe(park.id);
+      expect(wake).toMatchObject({ request_id: RID, wait_id: "h1", outcome: "settled", detail: "answer" });
+      expect(s.journal.currentLeaf).toBe(wake.id);
+      expect(notified).toEqual([[settled("answer"), true]]);
+      // The park is answered: the waiter is stopped, as `sendWakeReply` stops it on a live child.
+      expect(s.rec.cancels()).toBe(1);
+      expect(s.owner.waiter.finished).toBe(true);
+      // The respawn: once, AFTER the wake was on disk, while `canResume` held.
+      expect(r.calls).toEqual([{ canResume: true, onDisk: ["header", "park", "wake"] }]);
+      // Its argv carries `--resume <journal>` (harness-dst.test.ts:132–145's assertion), unforced, task last.
+      const argv = r.argv();
+      const i = argv.indexOf("--resume");
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(argv[i + 1]).toBe(s.journal.filePath);
+      expect(argv.indexOf("--resume-force")).toBe(-1);
+      expect(argv[argv.length - 1]).toBe("");
+      // A second reply — the waiter's again, or a typed line — writes nothing and respawns nothing.
+      expect(s.owner.deliver(settled("twice"))).toBe(false);
+      s.rec.onReadys[0](settled("again"));
+      expect(s.owner.deliver(typed("late line"))).toBe(false);
+      expect(types(s.entries())).toEqual(["header", "park", "wake"]);
+      expect(s.journal.currentLeaf).toBe(wake.id);
+      expect(r.calls).toHaveLength(1);
+      // The fold gate (a small AILANG script, P3 Part 4's shape) reads the file this test wrote:
+      //   MOTOKO_P4_JOURNAL_OUT=/tmp/p4-part5.jsonl bun node_modules/.bin/jest src/runtime-process.wake.test.ts
+      //   ailang run --caps IO,FS,Env --entry main scripts/fold_parked_journal.ail -- /tmp/p4-part5.jsonl
+      const out = process.env.MOTOKO_P4_JOURNAL_OUT;
+      if (out) fs.copyFileSync(s.journal.filePath, out);
+    });
+
+    it("the operator's line: a `wake(operator_input)` as the park's child, then the respawn", async () => {
+      const s = await suspend();
+      const r = resumeRespawn(s.journal);
+      installSuspendedWake(s.owner, { stillCurrent: () => true, journal: s.journal, respawn: r.respawn });
+      // The parked input route delivers to the owner when no child holds the request (Part 4, ui.ts).
+      expect(s.owner.deliver(typed("go on"))).toBe(true);
+      await r.exited();
+      const entries = s.entries();
+      expect(types(entries)).toEqual(["header", "park", "wake"]);
+      expect(entries[2].parent_id).toBe(entries[1].id);
+      expect(entries[2]).toMatchObject({ request_id: RID, wait_id: "", outcome: "operator_input", detail: "go on" });
+      // The delegate's waiter is stopped: the resumed run re-parks on its delegates with a waiter of its own.
+      expect(s.rec.cancels()).toBe(1);
+      expect(r.calls).toHaveLength(1);
+      expect(r.argv().indexOf("--resume")).toBeGreaterThanOrEqual(0);
+      // The delegate settling afterwards is a late reply: dropped by the owner, nothing written.
+      s.rec.onReadys[0](settled("too late"));
+      expect(types(s.entries())).toEqual(["header", "park", "wake"]);
+      expect(r.calls).toHaveLength(1);
+    });
+
+    it("a reply held before the consumer is installed is consumed once, at install", async () => {
+      const s = await suspend();
+      s.rec.onReadys[0](settled("early"));
+      expect(s.owner.reply).toEqual(settled("early"));
+      // Held, not written: Part 4 writes nothing on it.
+      expect(types(s.entries())).toEqual(["header", "park"]);
+      const r = resumeRespawn(s.journal);
+      installSuspendedWake(s.owner, { stillCurrent: () => true, journal: s.journal, respawn: r.respawn });
+      await r.exited();
+      const entries = s.entries();
+      expect(types(entries)).toEqual(["header", "park", "wake"]);
+      expect(entries[2].parent_id).toBe(entries[1].id);
+      expect(entries[2]).toMatchObject({ outcome: "settled", detail: "early" });
+      expect(r.calls).toHaveLength(1);
+      expect(r.argv()[r.argv().indexOf("--resume") + 1]).toBe(s.journal.filePath);
+    });
+
+    it("a reply after a later spawn ended the suspended-child is late: nothing written, no respawn", async () => {
+      const s = await suspend();
+      const r = resumeRespawn(s.journal);
+      // index.ts's guard: the owner is no longer the session's `suspendedChild` (a spawn cleared it).
+      // A `wake` written now would follow the new child's entries — a wake answering no open park,
+      // which the fold refuses — so the reply is dropped instead.
+      installSuspendedWake(s.owner, { stillCurrent: () => false, journal: s.journal, respawn: r.respawn });
+      s.rec.onReadys[0](settled("late"));
+      await r.exited();
+      expect(s.owner.reply).toEqual(settled("late"));
+      expect(types(s.entries())).toEqual(["header", "park"]);
+      expect(r.calls).toHaveLength(0);
     });
   });
 });

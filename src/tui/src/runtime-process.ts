@@ -685,6 +685,78 @@ export class SuspendedChild {
   }
 }
 
+/**
+ * What the suspended-child wake writes through: `SessionJournal.record`, narrowed to its shape.
+ * `record` routes a `wake_received` to Part 1's `wake` entry and returns the number of entries it
+ * appended — one, or zero when the append failed and `onError` has already said so.
+ */
+export interface WakeJournal {
+  record(event: Record<string, unknown>): number;
+}
+
+/** PLAN-003 P4 Part 5: what the consumer of a suspended-child's reply needs from the host. */
+export interface SuspendedWakeDeps {
+  /**
+   * True while the owner is still the session's suspended-child. A later spawn ends that (index.ts
+   * clears `suspendedChild` on every spawn), and a reply that arrives after it is LATE: a `wake`
+   * written then would follow the new child's entries — a wake answering no open park, which the
+   * fold refuses at `request_id` — so nothing is written and nothing respawned.
+   */
+  stillCurrent: () => boolean;
+  journal: WakeJournal;
+  /**
+   * index.ts's `respawnForRestart` (PLAN-003 P3 Part 5): it checks `canResume`, bumps the resume
+   * count, and spawns with `--resume <journal>`. Called AFTER the `wake` is on disk, so the child
+   * folds `Parked(p, Some(w))` and the resumer (Part 3) consumes the wake as `<R'>.p0`.
+   */
+  respawn: () => void;
+  /** Told the reply and whether its `wake` entry was written, before the respawn. */
+  notify?: (reply: WakeReply, written: boolean) => void;
+}
+
+/**
+ * PLAN-003 P4 Part 5 (ADR-003 D7, row 6): THE WAKE ENTRY AS THE PARK'S CHILD, AND THE RESPAWN.
+ *
+ * Installs the owner's consumer (the attachment point Part 4 left, `SuspendedChild.onReply`). On
+ * the one reply the owner accepts — the waiter's outcome, or the operator's line from the parked
+ * input route — the host:
+ *
+ *   1. records `{ type: "wake_received", request_id, wait_id, outcome, detail }`. Part 1's routing
+ *      appends a `wake` whose `parent_id` is the journal's leaf, and the leaf IS the `park`: the
+ *      suspended-child branch wrote no `exit` after it (row 6), and no operation moves the leaf;
+ *   2. respawns through `respawnForRestart`, which passes `--resume <journal>`.
+ *
+ * Late and duplicate replies are dropped by `request_id`. That is `sendWakeReply`'s rule, and it
+ * moved with the request to the owner: `SuspendedChild.deliver` accepts one reply for its request
+ * and no other, so this consumer runs at most once. A reply held before the consumer was installed
+ * is handed over at install, and consumed the same way.
+ *
+ * The waiter is stopped on consumption, as `sendWakeReply` stops it on a live child: the park is
+ * answered, and the resumed run parks on its delegates again — `.p1` onward — with a waiter of its
+ * own. Cancel is idempotent on a waiter that has already delivered (`startWakeWaiter`'s `flush`
+ * cancels before `onReady`).
+ *
+ * A `wake` the journal could not append (`record` returned 0; `onError` reported it) still
+ * respawns: the resumed child then folds `Parked(p, None)` and re-observes the park (row 5) — the
+ * reply is lost, the session is not.
+ */
+export function installSuspendedWake(owner: SuspendedChild, deps: SuspendedWakeDeps): void {
+  owner.onReply((reply) => {
+    if (!deps.stillCurrent()) return;
+    owner.waiter.cancel();
+    const written =
+      deps.journal.record({
+        type: "wake_received",
+        request_id: reply.request_id,
+        wait_id: reply.wait_id,
+        outcome: reply.outcome,
+        detail: reply.detail,
+      }) === 1;
+    deps.notify?.(reply, written);
+    deps.respawn();
+  });
+}
+
 export class RuntimeProcess {
   private proc: ChildProcess;
   private dead = false;
