@@ -190,7 +190,7 @@ import src/core/journal (
   -- PREFIX chain, which the TypeScript host must write into N entries the fold
   -- checks one by one and cannot recompute without a second frame function.
   chain_digest_after, chain_digests_over, chain_digests_json,
-  chain_empty_base, message_json, messages_json, ResumePlan, resume_view_json
+  chain_empty_base, message_json, messages_json, ResumePlan, resume_view_json, BoundaryParked, ParkEntry, WakeEntry
 )
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
@@ -198,7 +198,7 @@ import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ParkRequest, WakeInput, WakeOutcome, wake_outcome_id, wake_outcome_detail, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted, ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
+import src/core/ports (ParkRequest, WakeInput, WakeOutcome, wake_outcome_id, wake_outcome_detail, wake_outcome_of, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted, ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -597,8 +597,8 @@ type C2LoopState = {
 -- run opened by a consumed between-turn wake (a resumer's, or an in-process
 -- between-turn park's) starts at 1, so its first in-turn park is `<run_id>.p1`
 -- and `<run_id>.p0` stays the between-turn request's. Every other run starts
--- at 0. No path opens a run from a wake yet (P4's resumer, §3's park), so every
--- constructor passes `false`; W5(b) pins the `true` arm in gate 1 only.
+-- at 0. PLAN-003 P4 Part 3's resumer (`c2_state_from_parked`) is the one `true`
+-- caller; §3's in-process park is the other site named. Every other constructor passes `false`.
 pure func initial_park_ordinal(opened_by_consumed_wake: bool) -> int {
   if opened_by_consumed_wake then 1 else 0
 }
@@ -4268,7 +4268,7 @@ type C2MessageSeed = {
   prior_counts: RuntimeStatusCounts
 }
 
-type C2Seed = SeedMessages(C2MessageSeed) | SeedContinuation(Continuation)
+type C2Seed = SeedMessages(C2MessageSeed) | SeedContinuation(Continuation) | SeedParked({ continuation: Continuation, open_waits: [WaitDescriptor] }) -- SeedParked: PLAN-003 P4 Part 3, `c2_state_from_parked` below the resume block
 
 -- EVERYTHING AFTER THE CONSTRUCTOR, shared by both traced entries, and the
 -- sharing is not tidiness: the prelude below holds one of this file's routed
@@ -4308,7 +4308,7 @@ func run_v2_traced_from_seed(
   };
   let seeded = match seed {
     SeedMessages(m) => c2_initial_state_with_counts(m.history, provider, started_world, m.prior_counts),
-    SeedContinuation(c) => c2_state_from_continuation(c, provider, started_world)
+    SeedContinuation(c) => c2_state_from_continuation(c, provider, started_world), SeedParked(s) => c2_state_from_parked(s, provider, started_world)
   };
   -- ADR-003 v6.1 D2: `HistorySeeded`, ONCE PER TRACED RUN, HERE — after the
   -- constructor and before `c2_loop`, so it is the FIRST journal-class record of
@@ -5329,7 +5329,55 @@ export func run_v2_resume_with_conversation(
   -- number crossing the process boundary: the held continuation carries it as
   -- its own `cumulative` too, and the between-turns arm seeds the next run's
   -- `prior_counts` with it, so the step count continues either way.
-  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, plan.model, plan.history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, plan.cumulative, plan.suspended, initial_ordinal, plan.boot.task, profile, resume_count)
+  match plan.last {
+    -- ADR-003 v6.1 D7 (PLAN-003 P4 Part 3, P4-Q2 option (a)): a journal that
+    -- ends in a park is consumed FIRST, in this frame, before any run — the
+    -- block below the harness entry says how. The seed above already carried
+    -- the folded history; the wake message and the run's own seed follow it on
+    -- the operator message's pattern.
+    BoundaryParked(p, answered) => {
+      let consumed = consume_parked_wake(session_id, profile, resume_count, initial_ordinal, started_provider.ports, started_provider.world, p, answered, empty_ledger_trace());
+      let woken = { started_provider | world: consumed.world };
+      match consumed.wake {
+        -- A dropped reply: between turns with the folded history, the re-issued
+        -- park journaled and open for the next resume to re-observe. No
+        -- re-issue loop — no step budget exists outside a run to bound one.
+        None => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, plan.model, plan.history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, woken, session_id, plan.cumulative, None, initial_ordinal, plan.boot.task, profile, resume_count),
+        Some(wake) => match wake.outcome {
+          -- `Aborted` opens no run: the park was cancelled, the journal closed
+          -- it (`open:wake:aborted`), and the host is idle between turns. No
+          -- traced run happened, so the ordinal does not advance (D5).
+          Aborted => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, plan.model, plan.history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, woken, session_id, plan.cumulative, None, initial_ordinal, plan.boot.task, profile, resume_count),
+          -- Every other outcome opens the run, and what follows it is the
+          -- `user_message` arm's tail: the exit manifest, the next world, the
+          -- counts, the ordinal, and `suspended` matched before `result`.
+          _ => {
+            let traced = run_v2_from_parked_traced(rt, init.policy, workdir, woken, identity, plan, p.waits, wake, consumed.trace, consumed.emissions);
+            let published = publish_turn_exit_manifest(rt, plan.boot.task, plan.model, workdir, env_url, hybrid_tools, budget, woken.ports, session_id, traced.trace, traced.world);
+            let next_provider = { woken | world: next_turn_world(published) };
+            let next_counts = runtime_status_counts_add(plan.cumulative, runtime_status_counts(traced.trace));
+            let next_ordinal = next_run_ordinal(initial_ordinal);
+            match traced.suspended {
+              Some(c) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, plan.model, plan.history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, next_provider, session_id, next_counts, Some(c), next_ordinal, plan.boot.task, profile, resume_count),
+              None =>
+                match traced.result {
+                  Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, plan.model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, next_provider, session_id, next_counts, None, next_ordinal, plan.boot.task, profile, resume_count),
+                  Err(e) => if e.code == "ParkCancelled" then park_cancelled_exit(session_id, e.message) else {
+                    let _ = ledger_emit(session_id, ErrorEvent({
+                      source: "agent_loop_v2",
+                      code: e.code,
+                      message: e.message
+                    }));
+                    conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, plan.model, plan.history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, next_provider, session_id, next_counts, None, next_ordinal, plan.boot.task, profile, resume_count)
+                  }
+                }
+            }
+          }
+        }
+      }
+    },
+    _ => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, plan.model, plan.history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, started_provider, session_id, plan.cumulative, plan.suspended, initial_ordinal, plan.boot.task, profile, resume_count)
+  }
 }
 
 -- THE HARNESS ENTRY, for `scripts/dst/journal_resume_dst.ail`: one traced run
@@ -5358,6 +5406,232 @@ export func run_v2_session_resumed_traced(
   let _ = ledger_emit(identity.session_id, opening);
   let r = run_v2_from_continuation_traced(rt, init.policy, workdir, { pp | world: init.next_state }, identity, c);
   { r | trace: { records: WireRecord(opening) :: r.trace.records }, emissions: opening :: r.emissions }
+}
+
+-- ============================================================================
+-- ADR-003 v6.1 D7, THE RESUMER (PLAN-003 P4 Part 3; P4-Q2 option (a)).
+--
+-- A journal whose fold ends in `Parked(p, wake?)` is resumed by consuming the
+-- park BEFORE any run opens, in the resumed frame — PLAN-002 §8.4, R9 and
+-- W5(b), the site those rules were written for:
+--
+--   1. THE RE-ISSUED REQUEST `<R'>.p0`: `between_turn_request_id(session_id,
+--      profile, resume_count, run_ordinal)`, which is the identity the resumed
+--      frame's first run WILL carry plus `.p0` (`loop_run_identity` over the
+--      same four inputs, W5's test pins the pairing), so the request and the run
+--      it opens are one construction. `step` 0, `attempt` 0, the park's own
+--      `waits`.
+--   2. THE CURSOR. With a `wake` child, ONE observation goes to the head of
+--      `WorldState.wakes`: the child's `wait_id` and outcome, its `request_id`
+--      rewritten to `<R'>.p0` and nothing else. Without one, nothing is seeded:
+--      the live read (Part 2) asks the host, whose waiter performs ADR-002 D2's
+--      initial read — the re-observation — and a gone pane wakes `Lost`. In DST
+--      the world's own cursor plays the host, and an empty one falls through to
+--      `wake_read_unbound`'s `HostError`, waits kept.
+--   3. THE CONSUMPTION: `ParkEntered(req)` — the RESUMED frame's; the prior
+--      frame journaled its own `park` — then the one `.wake_read(` call outside
+--      `c2_loop`, its successor witnessed into this frame, and `wake_matches`
+--      exactly as the `Park` arm checks it. A dropped reply is
+--      `park_drop_warning` and the loop is entered between turns with the
+--      folded history; there is no re-issue loop here, because no step budget
+--      exists outside a run to bound one. A match is `WakeReceived`.
+--   4. THE RUN. `Aborted` opens none: the host is idle, between turns. Any other
+--      outcome opens one from the folded history plus `wake_message`, emitted
+--      as `HistoryAppended` on the operator message's pattern, with
+--      `SessionStart(R')` FIRST — so `run_started` follows the consumed wake in
+--      the journal, which is D7's exactly-once order: the fold offers no wake
+--      that a `run_started` follows. The run's state is
+--      `c2_state_from_continuation`'s plus the three fields W5(b) names:
+--      `open_waits: apply_wake(p.waits, wake)`, `park_ordinal:
+--      initial_park_ordinal(true)` — its own parks begin at `.p1` — and
+--      `last_finish_reason: "user_injected"`, the `Park` arm's own route to the
+--      model call.
+--
+-- Two callers share every step: the live entry above and the harness entry
+-- `run_v2_session_park_resumed_traced`, which is where the frame reaches a
+-- returned trace (§0.6) — the live path holds no `LedgerTrace`, as its operator
+-- `HistoryAppended` does not, and discards the one it threads.
+-- ============================================================================
+
+-- What consuming `<R'>.p0` produced, before any run opens. `wake` is `None`
+-- when the reply was dropped; `trace` holds the resumed frame's `ParkEntered`,
+-- the witness and (on a match) `WakeReceived`, appended in emit order, over the
+-- trace the caller handed in; `emissions` are the same events for
+-- `TracedSessionResult.emissions`, on `run_v2_session_resumed_traced`'s pattern.
+type ParkedConsumed = {
+  request: ParkRequest,
+  wake: Option[WakeInput],
+  trace: LedgerTrace,
+  emissions: [LedgerEvent],
+  world: WorldState
+}
+
+-- Step 2. The rewritten observation goes at the HEAD of the cursor: a live
+-- world's cursor is empty, so there this is `{ world | wakes: [obs] }` as the
+-- plan writes it, and a DST world keeps the observations it holds for the
+-- resumed run's own parks. `wake_outcome_of` is total over the six ids the fold
+-- accepted (`journal.wake_of_entry` refuses any other at `outcome`), so its
+-- `None` arm is unreachable past the fold; it seeds nothing — the
+-- re-observation path — never a fabricated outcome.
+pure func parked_cursor(world: WorldState, request_id: string, answered: Option[WakeEntry]) -> WorldState {
+  match answered {
+    None => world,
+    Some(w) => match wake_outcome_of(w.outcome, w.detail) {
+      None => world,
+      Some(outcome) => {
+        let seeded: WakeObservation = { request_id: request_id, wait_id: w.wait_id, outcome: outcome };
+        { world | wakes: seeded :: world.wakes }
+      }
+    }
+  }
+}
+
+-- Steps 1 and 3. The request is built from the four identity inputs, and the
+-- run that consumes it is stamped with `loop_run_identity` over the same four,
+-- which is what keeps `<R'>.p0` and `R'` one construction (W5(b)).
+--
+-- THE SECOND WITNESSED `.wake_read(` SITE (P4-Q2's accepted cost): the port
+-- advances the world (`cursor_wake` / `wake_read_unbound` / the live await),
+-- the caller owes the witness, and the successor enters no record before it —
+-- `make driver_leaf_inventory` reads this leaf as `ports.wake_read`, clean, and
+-- its self-test's tree mutant removes the witness on the line below.
+func consume_parked_wake(
+  session_id: string,
+  profile: string,
+  resume_count: int,
+  run_ordinal: int,
+  ports: Ports,
+  world: WorldState,
+  p: ParkEntry,
+  answered: Option[WakeEntry],
+  trace: LedgerTrace
+) -> ParkedConsumed ! {IO, Trace} {
+  let req: ParkRequest = { request_id: between_turn_request_id(session_id, profile, resume_count, run_ordinal), step: 0, waits: p.waits, attempt: 0 };
+  let seeded = parked_cursor(world, req.request_id, answered);
+  let entered = ParkEntered({ request_id: req.request_id, step: req.step, waits: req.waits });
+  let _ = ledger_emit(session_id, entered);
+  let trace_entered = ledger_append(trace, WireRecord(entered));
+  let reply = ports.wake_read(seeded, req);
+  let observed = witness(session_id, trace_entered, reply.next_state);
+  if not wake_matches(req, reply) then {
+    let _ = emit_json(park_drop_warning(req, reply));
+    { request: req, wake: None, trace: observed.trace, emissions: [entered], world: observed.world }
+  } else {
+    let received = WakeReceived({ request_id: reply.request_id, wait_id: reply.wait_id, outcome: wake_outcome_id(reply.outcome), detail: wake_outcome_detail(reply.outcome) });
+    let _ = ledger_emit(session_id, received);
+    { request: req, wake: Some(reply), trace: ledger_append(observed.trace, WireRecord(received)), emissions: [entered, received], world: observed.world }
+  }
+}
+
+-- Step 4's constructor: `c2_state_from_continuation` plus the three fields
+-- W5(b) names for a run opened by a consumed between-turn wake. A seed of its
+-- own because `Continuation` carries no waits (ADR-003 D1), and applied HERE —
+-- inside `run_v2_traced_from_seed`, before `c2_loop`'s first decision — which is
+-- where §8.4 says the resumer applies it.
+pure func c2_state_from_parked(seed: { continuation: Continuation, open_waits: [WaitDescriptor] }, provider: PortedProvider, world: WorldState) -> C2LoopState {
+  { c2_state_from_continuation(seed.continuation, provider, world) |
+    open_waits: seed.open_waits,
+    park_ordinal: initial_park_ordinal(true),
+    last_finish_reason: "user_injected" }
+}
+
+-- The traced sibling of `run_v2_from_continuation_traced` for a run opened by
+-- a consumed wake (step 4). `provider.world` is the witnessed successor of the
+-- wake read. Before the run: `SessionStart(R')` — the `run_started` that the
+-- `user_message` arm emits for every other run of the conversation loop and
+-- nothing else would emit here — then the wake message as `HistoryAppended`,
+-- chained from the folded history. Both are appended AND emitted, so the
+-- returned trace's journal is the host's: `…, park, wake, run_started,
+-- history_appended, …`. The run's own `HistorySeeded` then carries the same
+-- history and meets D1's third arm at the host (compare and drop).
+func run_v2_from_parked_traced(
+  rt: ExtRuntime,
+  policy: SessionPolicy,
+  workdir: string,
+  provider: PortedProvider,
+  identity: RunIdentity,
+  plan: ResumePlan,
+  waits: [WaitDescriptor],
+  wake: WakeInput,
+  trace: LedgerTrace,
+  emissions: [LedgerEvent]
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let wake_msg = wake_message(wake);
+  let started = SessionStart({ task: plan.boot.task, model: plan.model, mode: "v2", run_id: identity.run_id });
+  let _ = ledger_emit(identity.session_id, started);
+  let appended = c2_history_appended(identity.run_id, 0, c2_seed_digest(plan.history), false, [wake_msg]);
+  let prefix = c2_journal(identity.session_id, ledger_append(trace, WireRecord(started)), appended.events);
+  let c: Continuation = {
+    history: plan.history ++ [wake_msg],
+    step_idx: 0,
+    cumulative: plan.cumulative,
+    telemetry: plan.telemetry,
+    ext_artifacts: plan.ext_artifacts,
+    -- RE-DERIVED, as `plan_resume` re-derives it for a suspended boundary: the
+    -- journal carries no nudge count.
+    nudges_used: count_persist_nudges(plan.history),
+    model: plan.model,
+    profile: plan.profile,
+    boot: plan.boot
+  };
+  let r = run_v2_traced_from_seed(rt, continuation_task(c), c.boot.env_url, c.boot.hybrid_tools, c.boot.budget, policy, c.model, workdir, c.boot.ohmy_pi, c.boot.max_cost_millicents, c.boot.cost_rates, provider, Some(identity), SeedParked({ continuation: c, open_waits: apply_wake(waits, wake) }));
+  { r | trace: { records: prefix.records ++ r.trace.records }, emissions: (emissions ++ (started :: appended.events)) ++ r.emissions }
+}
+
+-- The no-run result: the resumed frame alone — `Ok` on the folded history, no
+-- continuation, `final` the folded state — which is what "between turns with
+-- the folded history" is as a returned value.
+pure func parked_frame_only(plan: ResumePlan, trace: LedgerTrace, emissions: [LedgerEvent], world: WorldState) -> TracedSessionResult {
+  {
+    result: Ok(plan.history),
+    trace: trace,
+    world: world,
+    emissions: emissions,
+    suspended: None,
+    final: { history: plan.history, cumulative: plan.cumulative, telemetry: plan.telemetry, ext_artifacts: plan.ext_artifacts }
+  }
+}
+
+-- THE HARNESS ENTRY (§0.7, a new export), for `scripts/dst/park_resume_dst.ail`:
+-- steps 1–4 over a `ResumePlan`, with `SessionResumed` first (D5) and the
+-- frame's records — `ParkEntered`, the witness, `WakeReceived`, then
+-- `SessionStart(R')` and the wake message when a run opens — prepended to the
+-- run's trace. Beside `run_v2_session_resumed_traced` and on its pattern, with
+-- one difference stated: it takes the SESSION ID and not a `RunIdentity`,
+-- because `<R'>.p0` and the run's `run_id` must be one construction (W5(b)),
+-- so both are built here from `(session_id, plan.profile,
+-- plan.info.resume_count, 0)`. A `last` that is not `Parked` is the frame alone,
+-- as the live entry enters the loop between turns for it.
+export func run_v2_session_park_resumed_traced(
+  rt: ExtRuntime,
+  workdir: string,
+  step_budget: int,
+  provider: StepProvider,
+  session_id: string,
+  plan: ResumePlan
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let pp = ported_provider(rt, provider);
+  let init = session_policy_init(pp.ports, pp.world, plan.model, step_budget, plan.boot.max_cost_millicents, plan.boot.cost_rates);
+  let started: PortedProvider = { pp | world: init.next_state };
+  let initial_ordinal = 0;
+  let identity = loop_run_identity(session_id, plan.profile, plan.info.resume_count, initial_ordinal);
+  let opening = SessionResumed(plan.info);
+  let _ = ledger_emit(session_id, opening);
+  let trace0 = ledger_append(empty_ledger_trace(), WireRecord(opening));
+  match plan.last {
+    BoundaryParked(p, answered) => {
+      let consumed = consume_parked_wake(session_id, plan.profile, plan.info.resume_count, initial_ordinal, started.ports, started.world, p, answered, trace0);
+      let woken: PortedProvider = { started | world: consumed.world };
+      match consumed.wake {
+        None => parked_frame_only(plan, consumed.trace, opening :: consumed.emissions, consumed.world),
+        Some(wake) => match wake.outcome {
+          Aborted => parked_frame_only(plan, consumed.trace, opening :: consumed.emissions, consumed.world),
+          _ => run_v2_from_parked_traced(rt, init.policy, workdir, woken, identity, plan, p.waits, wake, consumed.trace, opening :: consumed.emissions)
+        }
+      }
+    },
+    _ => parked_frame_only(plan, trace0, [opening], started.world)
+  }
 }
 
 -- Run loop_v2 with a scripted provider. No real LLM call made.
@@ -6001,4 +6275,46 @@ pure func test_both_open_sentence_names_every_open_wait_on_the_delegate_result()
      })
       && (match untouched_one { d :: _ => d.content == "launched", _ => false })
       && (match untouched_no_new { d :: _ => d.content == "launched", _ => false })
+  }
+
+-- PLAN-003 P4 Part 3 (ADR-003 v6.1 D7): the resumer's cursor seed rewrites ONLY
+-- the request id, goes to the HEAD of the cursor, leaves the world's ordinal
+-- alone, and seeds nothing without a wake child (the re-observation path).
+pure func test_p4_parked_cursor_rewrites_only_the_request_id_at_the_head() -> bool
+  tests [((), true)]
+  {
+    let later: WakeObservation = { request_id: "s.r1.0.p1", wait_id: "h2", outcome: Settled("a2") };
+    let world = { empty_world_state() | wakes: [later] };
+    let child: WakeEntry = { request_id: "s.r0.0.p0", wait_id: "h1", outcome: "settled", detail: "the answer" };
+    let seeded = parked_cursor(world, "s.r1.0.p0", Some(child));
+    let unseeded = parked_cursor(world, "s.r1.0.p0", None);
+    (match seeded.wakes {
+       w :: rest => w.request_id == "s.r1.0.p0" && w.wait_id == "h1"
+         && (match w.outcome { Settled(d) => d == "the answer", _ => false })
+         && (match rest { r :: [] => r.request_id == "s.r1.0.p1", _ => false }),
+       [] => false
+     })
+      && List.length(unseeded.wakes) == 1
+      && seeded.ordinal == world.ordinal
+  }
+
+-- W5(b) at the resumer, on the REAL constructors: the parked seed is the
+-- continuation's state with the wake applied to the park's waits, the first
+-- in-turn park at `<R'>.p1` while `<R'>.p0` stays the between-turn request's,
+-- and the wake message routed as `user_injected`.
+func test_p4_state_from_parked_applies_the_wake_and_parks_at_p1() -> bool ! {IO, Trace}
+  tests [((), true)]
+  {
+    let provider: PortedProvider = { ports: scripted_ports(), world: empty_world_state() };
+    let waits = [w4_delegate("h1"), w4_delegate("h2")];
+    let wake = w4_wake("s.r1.0.p0", "h1", Settled("a1"));
+    let st = c2_state_from_parked({ continuation: w5_continuation(), open_waits: apply_wake(waits, wake) }, provider, provider.world);
+    let plain = c2_state_from_continuation(w5_continuation(), provider, provider.world);
+    let identity = loop_run_identity("s", "p", 1, 0);
+    st.park_ordinal == initial_park_ordinal(true) && plain.park_ordinal == 0
+      && w4_ids(st.open_waits) == "h2" && List.length(plain.open_waits) == 0
+      && st.last_finish_reason == "user_injected" && plain.last_finish_reason == ""
+      && park_request_id(identity.run_id, st.park_ordinal) == "s.r1.0.p1"
+      && between_turn_request_id("s", "p", 1, 0) == "s.r1.0.p0"
+      && List.length(st.msgs) == List.length(plain.msgs)
   }

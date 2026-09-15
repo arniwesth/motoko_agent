@@ -7,31 +7,87 @@
 -- `wake_read` must read the cursor before it asks the host, which is P4 Part 2
 -- and this file's first row.
 --
--- Part 2 lands the file with that one row, specified in PLAN-003 §P4 Part 2:
---   on a world seeded with one `Settled` observation, `live_ports(rt).wake_read`
---   returns that observation. The Make target runs it with stdin from
---   `/dev/null`, so at the base revision the live binding prints a
---   `wake_request`, `readLine` returns "", and the reply is `Aborted` with
---   `wait_id "eof"` (`stub_step.ail`, `live_wake_await`): red, and it cannot
---   hang. After Part 2 the cursor is served first, no `wake_request` is
---   printed and no stdin is read, because the host has already answered.
--- Part 3 adds the resumer's rows (fold `Parked`, seed `<R'>.p0`, consume it,
--- open the run at `initial_park_ordinal(true)`), on `park_wake_dst.ail`'s
--- scripted-runner shape.
+-- Part 2's row (PLAN-003 §P4 Part 2): on a world seeded with one `Settled`
+-- observation, `live_ports(rt).wake_read` returns that observation. The Make
+-- target runs it with stdin from `/dev/null`, so a binding that asks the host
+-- prints a `wake_request`, `readLine` returns "", and the reply is `Aborted`
+-- with `wait_id "eof"` (`stub_step.ail`, `live_wake_await`): red, and it
+-- cannot hang.
 --
--- What the in-process row cannot see is on stdout, and `run_park_resume.sh`
--- reads it: the `wake_request` count inside the row's frame, which must be
--- zero. Frames are `PARK_RESUME_BEGIN <label>` / `PARK_RESUME_END <label>`.
+-- Part 3's rows (PLAN-003 §P4 Part 3, P4-Q2 option (a)), on
+-- `park_wake_dst.ail`'s scripted-runner shape. ONE delegate run parks
+-- (`first_run`, W4's success fixture); its journal is built from its own
+-- records with `journal_lines_of_records`, the twin of the host's writer, and
+-- truncated three ways — after `park_entered`, after `wake_received`, and
+-- after `park_entered` with a host-shaped `exit` appended. Each is folded,
+-- planned (`plan_resume`, the decision the live `--resume` child makes) and
+-- resumed through the harness entry `run_v2_session_park_resumed_traced`:
+--
+--   resume_after_wake   the `wake` child is seeded as `<R'>.p0` and served from
+--                       the cursor (recording ports: ONE `WakeIdentity` for
+--                       `<R'>.p0`, `OutcomeOk`); the run opens at
+--                       `initial_park_ordinal(true)`, so its own park is
+--                       `<R'>.p1`; the two-frame journal has `run_started(R')`
+--                       AFTER the `wake` for `<R'>.p0` and refolds to a `last`
+--                       that is not `Parked` — D7's exactly-once.
+--   resume_after_park   no `wake` child: nothing is seeded and the read is the
+--                       re-observation, which the DST world's own cursor answers
+--                       in the host's place.
+--   resume_park_exit    `park, exit`, no `wake` child, an EMPTY cursor: the
+--                       re-observation falls through to `wake_read_unbound`,
+--                       `HostError("wake_read unbound")`, and the waits are
+--                       KEPT into the resumed run's next park (T2; `Lost` is
+--                       only visible live, Part 7).
+--   resume_aborted      the re-observation answers `Aborted`: `WakeReceived`,
+--                       NO run, and the two-frame journal folds to
+--                       `open:wake:aborted` (P4-Q4's closure).
+--   resume_dropped      the re-observation answers for another request: the
+--                       reply is dropped with one `warning`, nothing appended,
+--                       no run, no re-issue loop; the re-issued park stays for
+--                       the next resume to re-observe.
+--   untruncated         the control: the whole run's journal folds to
+--                       `run_finished`, not `Parked`.
+--
+-- What the in-process rows cannot see is on stdout, and `run_park_resume.sh`
+-- reads it: the `wake_request` count inside the live row's frame (zero), the
+-- dropped-reply `warning` count against `PARK_DROPS` (R2: nothing appended),
+-- and the exactly-once ORDER on the wire — the resumed frame's `wake_received`
+-- for `<R'>.p0` precedes the `session_start` that names `R'`. Frames are
+-- `PARK_RESUME_BEGIN <label>` / `PARK_RESUME_END <label>`.
 
 module scripts/dst/park_resume_dst
 
 import std/io (println, exit)
-import std/list as List (length)
-import src/core/test/stub_step (live_ports, empty_rt)
-import src/core/ports (WorldState, ParkRequest, WakeObservation, RequestWitness, WakeRead, Settled, empty_world_state, wake_outcome_id, wake_outcome_detail)
+import std/json (Json, jo, ja, kv, js, jnum, jb, jint, get, asString, getString)
+import std/list as List (length, map)
+import std/string (contains)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/ai (Message, ToolCall)
+import src/core/config (CostRates)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan, ExtRuntime, ExtCtx, VerificationConfig,
+  ToolCallEnvelope, ToolPolicyDecision, Allow,
+  ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, PreStepOutcome,
+  PromptPatch, BudgetPatch, Msg, Delegate, Handled, NoIntercept, NoDecision, PassThrough
+)
+import src/core/test/ext_fixture (fixture_hooks)
+import src/core/session (TracedSessionResult)
+import src/core/session as Session
+import src/core/test/stub_step (live_ports, empty_rt, ScriptedWorld, RecordingWorld, prose_step, tool_step)
+import src/core/ports (ScriptedStep, WorldState, ParkRequest, WakeObservation, WakeOutcome, RequestWitness, WakeRead, Settled, Aborted, empty_world_state, wake_outcome_id, wake_outcome_detail)
+import src/core/phase_vocab (LedgerRecord, WireRecord, LedgerEvent, ParkEntered, WakeReceived, WorldRequest, DoneEvent, wait_id, system_prefix_digest_for)
+import src/core/dst_event_vocabulary (event_variant_id)
+import src/core/dst_interaction (Interaction, WakeIdentity, outcome_status_id)
+import src/core/journal (
+  journal_lines_of_records, journal_leaf, fold_journal, plan_resume,
+  ResumeInvocation, ResumePlan, HeaderEntry, BootInputs, SessionState,
+  BoundaryParked, boundary_id, refusal_id
+)
+import src/core/ext/runtime (ext_set_digest)
 
 -- ---------------------------------------------------------------------------
--- Reporting
+-- Reporting and trace readers (park_wake_dst.ail's)
 -- ---------------------------------------------------------------------------
 
 func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
@@ -46,64 +102,637 @@ pure func all_true(xs: [bool]) -> bool {
   }
 }
 
-pure func wake_read_witnesses(ws: [RequestWitness]) -> int {
-  match ws {
+pure func count_of(t: string, xs: [string]) -> int {
+  match xs {
     [] => 0,
-    w :: rest => (match w.request_class { WakeRead => 1, _ => 0 }) + wake_read_witnesses(rest)
+    x :: rest => (if x == t then 1 else 0) + count_of(t, rest)
+  }
+}
+
+pure func join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}, ${join(rest)}"
+  }
+}
+
+pure func pipe(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => "${x}|${pipe(rest)}"
+  }
+}
+
+pure func variants(rs: [LedgerRecord]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(e) => event_variant_id(e) :: variants(rest),
+      _ => variants(rest)
+    }
+  }
+}
+
+type ParkRow = { request_id: string, step: int, ids: string }
+type WakeRow = { request_id: string, wait_id: string, outcome: string, detail: string }
+
+pure func park_rows(rs: [LedgerRecord]) -> [ParkRow] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(ParkEntered(i)) => {
+        let row: ParkRow = { request_id: i.request_id, step: i.step, ids: join(List.map(\w. wait_id(w), i.waits)) };
+        row :: park_rows(rest)
+      },
+      _ => park_rows(rest)
+    }
+  }
+}
+
+pure func wake_rows(rs: [LedgerRecord]) -> [WakeRow] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(WakeReceived(i)) => {
+        let row: WakeRow = { request_id: i.request_id, wait_id: i.wait_id, outcome: i.outcome, detail: i.detail };
+        row :: wake_rows(rest)
+      },
+      _ => wake_rows(rest)
+    }
+  }
+}
+
+pure func park_at(ps: [ParkRow], n: int) -> ParkRow {
+  match ps {
+    [] => { request_id: "<none>", step: -1, ids: "<none>" },
+    p :: rest => if n == 0 then p else park_at(rest, n - 1)
+  }
+}
+
+pure func wake_at(ws: [WakeRow], n: int) -> WakeRow {
+  match ws {
+    [] => { request_id: "<none>", wait_id: "<none>", outcome: "<none>", detail: "<none>" },
+    w :: rest => if n == 0 then w else wake_at(rest, n - 1)
+  }
+}
+
+pure func parks_str(ps: [ParkRow]) -> string {
+  join(List.map(\p. "${p.request_id}@${show(p.step)}[${p.ids}]", ps))
+}
+
+pure func wakes_str(ws: [WakeRow]) -> string {
+  join(List.map(\w. "${w.request_id}/${w.wait_id}/${w.outcome}/${w.detail}", ws))
+}
+
+pure func wake_read_witnesses(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest => (match r { WireRecord(WorldRequest(i)) => if i.request_class == "wake_read" then 1 else 0, _ => 0 }) + wake_read_witnesses(rest)
+  }
+}
+
+pure func done_output(rs: [LedgerRecord]) -> string {
+  match rs {
+    [] => "",
+    r :: rest => match r {
+      WireRecord(DoneEvent(i)) => i.output,
+      _ => done_output(rest)
+    }
+  }
+}
+
+pure func any_content(ms: [Message], needle: string) -> bool {
+  match ms {
+    [] => false,
+    m :: rest => contains(m.content, needle) || any_content(rest, needle)
+  }
+}
+
+pure func result_ok(t: TracedSessionResult) -> bool {
+  match t.result { Ok(_) => true, Err(_) => false }
+}
+
+pure func result_code(t: TracedSessionResult) -> string {
+  match t.result { Ok(_) => "ok", Err(e) => e.code }
+}
+
+pure func is_suspended(t: TracedSessionResult) -> bool {
+  match t.suspended { Some(_) => true, None => false }
+}
+
+pure func message_equal(a: Message, b: Message) -> bool {
+  a.role == b.role && a.content == b.content && a.tool_call_id == b.tool_call_id
+    && List.length(a.tool_calls) == List.length(b.tool_calls)
+}
+
+pure func messages_equal(a: [Message], b: [Message]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { y :: ys => message_equal(x, y) && messages_equal(xs, ys), [] => false }
+  }
+}
+
+-- The recorded wake reads: `WakeIdentity(origin, request_id, wait_id)` with the
+-- outcome's status (`ok` served from the cursor, `missing` fell through).
+type WakeSeen = { request_id: string, wait_id: string, status: string }
+
+pure func wakes_seen(log: [Interaction]) -> [WakeSeen] {
+  match log {
+    [] => [],
+    i :: rest => match i.identity.body {
+      WakeIdentity(_, r, w) => {
+        let seen: WakeSeen = { request_id: r, wait_id: w, status: outcome_status_id(i.outcome.status) };
+        seen :: wakes_seen(rest)
+      },
+      _ => wakes_seen(rest)
+    }
+  }
+}
+
+pure func seen_str(ws: [WakeSeen]) -> string {
+  join(List.map(\w. "${w.request_id}/${w.wait_id}/${w.status}", ws))
+}
+
+pure func seen_at(ws: [WakeSeen], n: int) -> WakeSeen {
+  match ws {
+    [] => { request_id: "<none>", wait_id: "<none>", status: "<none>" },
+    w :: rest => if n == 0 then w else seen_at(rest, n - 1)
   }
 }
 
 -- ---------------------------------------------------------------------------
--- The re-issued request. `<R'>.p0` is `between_turn_request_id(session_id,
--- profile, resume_count, 0)` (`session.ail`), the id PLAN-002 §8.4 gives the
--- request that opens a resumed run's waiting; a resumed frame has
--- `resume_count` 1 and `run_ordinal` 0. Part 3 builds the real one from the
--- folded journal; this row needs only its shape.
+-- The fixture extension: `Delegate` opens a wait, `DelegateCheck` settles it
+-- (park_wake_dst.ail's, the W1b producer's shapes)
 -- ---------------------------------------------------------------------------
 
-pure func reissued_p0() -> string { "p4.r1.0.p0" }
-
-pure func reissued_request() -> ParkRequest {
-  { request_id: reissued_p0(), step: 0, waits: [], attempt: 0 }
+pure func arg_str(args: Json, key: string) -> string {
+  match get(args, key) {
+    Some(v) => match asString(v) { Some(s) => s, None => "" },
+    None => ""
+  }
 }
 
-pure func seeded_observation() -> WakeObservation {
-  { request_id: reissued_p0(), wait_id: "h1", outcome: Settled("the answer") }
+pure func wait_json(args: Json) -> Json {
+  let id = arg_str(args, "id");
+  jo([kv("id", js(id)), kv("delegate_kind", js("claude")), kv("locator", jo([kv("pane", js("pane-${id}"))])),
+      kv("answer_path", js("/tmp/w4-${id}.md")), kv("run_key", js("rk-${id}"))])
 }
 
-pure func seeded_world() -> WorldState {
-  { empty_world_state() | wakes: [seeded_observation()] }
+func w4_provide(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let id = arg_str(call.arguments, "id");
+  if call.tool == "Delegate" then
+    { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "delegated ${id}", stderr: "",
+                          metadata: jo([kv("wait", wait_json(call.arguments))]) }), next_state: ctx.world }
+  else if call.tool == "DelegateCheck" then
+    { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "answer from ${id}", stderr: "",
+                          metadata: jo([kv("delegate", js(id)), kv("settled", jb(true))]) }), next_state: ctx.world }
+  else { decision: Delegate, next_state: ctx.world }
+}
+
+func w4_rt() -> ExtRuntime {
+  let hooks = fixture_hooks("w4_park", {
+    tools: ["Delegate", "DelegateCheck"],
+    describe: \_ . [],
+    prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+      { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+      { decision: PassThrough, next_state: ctx.world }
+    },
+    policy: \_ctx _call. Allow,
+    provide: w4_provide,
+    intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+      { decision: NoIntercept, next_state: ctx.world }
+    },
+    judge: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process} {
+      { decision: NoDecision, next_state: ctx.world }
+    }
+  });
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Worlds, scripts, runs
+-- ---------------------------------------------------------------------------
+
+pure func system_msg() -> Message {
+  { role: "system", content: "park and wake fixture system prefix", tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func zero_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+pure func mk_budget() -> BudgetPlan {
+  { total: 10, solver: 10, verifier: 0 }
+}
+
+pure func model() -> string { "phase-c-model" }
+pure func workdir() -> string { "/tmp" }
+
+-- The session id is pinned through the world's environment: the first run is
+-- `w4.r0.0` (the traced entry's default identity) and the resumed frame's first
+-- run is `w4.r1.0` (`resume_count` 1, ordinal 0).
+pure func w4_world(script: [ScriptedStep], wakes: [WakeObservation]) -> WorldState {
+  { empty_world_state() | script: script, wakes: wakes, env: [{ key: "MOTOKO_SESSION_ID", value: "w4" }] }
+}
+
+pure func session_id() -> string { "w4" }
+pure func rid(n: int) -> string { "w4.r0.0.p${show(n)}" }
+pure func resumed_run_id() -> string { "w4.r1.0" }
+-- `<R'>.p0`: `between_turn_request_id("w4", "dst", 1, 0)` (`session.ail`), the
+-- id PLAN-002 §8.4 gives the request that opens a resumed run's waiting.
+pure func rp(n: int) -> string { "${resumed_run_id()}.p${show(n)}" }
+
+pure func obs(request_id: string, wid: string, outcome: WakeOutcome) -> WakeObservation {
+  { request_id: request_id, wait_id: wid, outcome: outcome }
+}
+
+pure func delegate_call(id: string) -> ToolCall { { id: "cd-${id}", name: "Delegate", arguments: "{\"id\":\"${id}\"}" } }
+pure func check_call(id: string) -> ToolCall { { id: "cc-${id}", name: "DelegateCheck", arguments: "{\"id\":\"${id}\"}" } }
+
+pure func calls_step(calls: [ToolCall]) -> ScriptedStep {
+  { tool_step("Delegate", "{}", "unused") | tool_calls: calls }
+}
+
+pure func delegate_step(id: string) -> ScriptedStep { calls_step([delegate_call(id)]) }
+pure func check_step(id: string) -> ScriptedStep { calls_step([check_call(id)]) }
+
+func run_scripted(label: string, rt: ExtRuntime, w: WorldState, steps: int) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("PARK_RESUME_BEGIN ${label}");
+  let t = Session.run_v2_session_traced(rt, "task", "", false, mk_budget(), model(),
+    [system_msg()], workdir(), steps, false, 0, zero_rates(), ScriptedWorld(w));
+  let _ = println("PARK_RESUME_END ${label}");
+  t
+}
+
+-- The resumed frame, through the harness entry (PLAN-003 §P4 Part 3 step 5).
+func resume_scripted(label: string, rt: ExtRuntime, w: WorldState, plan: ResumePlan, steps: int) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("PARK_RESUME_BEGIN ${label}");
+  let t = Session.run_v2_session_park_resumed_traced(rt, workdir(), steps, ScriptedWorld(w), session_id(), plan);
+  let _ = println("PARK_RESUME_END ${label}");
+  t
+}
+
+func resume_recorded(label: string, rt: ExtRuntime, w: WorldState, plan: ResumePlan, steps: int) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("PARK_RESUME_BEGIN ${label}");
+  let t = Session.run_v2_session_park_resumed_traced(rt, workdir(), steps, RecordingWorld(w), session_id(), plan);
+  let _ = println("PARK_RESUME_END ${label}");
+  t
+}
+
+-- W4's success fixture: Delegate h1, park on it, Settled, DelegateCheck, done.
+pure func first_script() -> [ScriptedStep] {
+  [delegate_step("h1"), prose_step("delegated h1; waiting"), check_step("h1"), prose_step("final answer")]
+}
+
+pure func first_wakes() -> [WakeObservation] {
+  [obs(rid(0), "h1", Settled("the answer"))]
+}
+
+-- The resumed run's script after a `Settled` wake on h1: the DelegateCheck the
+-- wake message asks for, then a SECOND delegate and a second park (`<R'>.p1`),
+-- served by the world's own cursor, then the final answer.
+pure func resumed_script() -> [ScriptedStep] {
+  [check_step("h1"), delegate_step("h2"), prose_step("waiting on h2"), check_step("h2"), prose_step("final answer")]
+}
+
+pure func resumed_second_park() -> [WakeObservation] {
+  [obs(rp(1), "h2", Settled("a2"))]
+}
+
+-- ---------------------------------------------------------------------------
+-- The journal: the twin, the truncations, the host-shaped `exit`, fold + plan
+-- ---------------------------------------------------------------------------
+
+pure func boot() -> BootInputs {
+  {
+    task: "task", env_url: "", hybrid_tools: false, budget: mk_budget(), step_budget: 12,
+    ohmy_pi: false, max_cost_millicents: 0, cost_rates: zero_rates()
+  }
+}
+
+-- The header a live host would have completed for this session (as
+-- `journal_resume_dst.ail` builds it): the workdir the run used, the profile,
+-- and the two digests the child reports.
+pure func header(rt: ExtRuntime) -> HeaderEntry {
+  {
+    schema_version: 1, session_id: session_id(), workdir: workdir(), profile: "dst",
+    ext_set_digest: ext_set_digest(rt), model: model(),
+    system_prefix_digest: system_prefix_digest_for([system_msg()]), boot: boot()
+  }
+}
+
+pure func invocation(rt: ExtRuntime, from_id: string, resume_count: int) -> ResumeInvocation {
+  {
+    workdir: workdir(), ext_set_digest: ext_set_digest(rt), profile: "dst", system: system_msg(),
+    boot: boot(), model: model(), resume_count: resume_count, from_id: from_id, leased: false, force: false
+  }
+}
+
+-- The records up to and including the FIRST record of the named variant: the
+-- journal a host that died right after writing that entry leaves behind.
+pure func records_through(rs: [LedgerRecord], variant: string) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(e) => if event_variant_id(e) == variant then [r] else r :: records_through(rest, variant),
+      _ => r :: records_through(rest, variant)
+    }
+  }
+}
+
+-- `journal.entry_id`'s four-digit form, so an appended line sits in the twin's
+-- id space.
+pure func entry_id(n: int) -> string {
+  if n < 10 then "000${show(n)}"
+  else if n < 100 then "00${show(n)}"
+  else if n < 1000 then "0${show(n)}"
+  else show(n)
+}
+
+-- The `exit` entry the way the HOST builds it (`journal.ail`'s `t_exit_line`):
+-- the child never writes one. `child_exit` is the non-TTY callback's reason.
+pure func with_exit(lines: [Json]) -> [Json] {
+  let seq = List.length(lines);
+  lines ++ [jo([kv("id", js(entry_id(seq))), kv("parent_id", js(journal_leaf(lines))), kv("seq", jint(seq)),
+                kv("at_ms", jint(seq)), kv("type", js("exit")), kv("reason", js("child_exit")),
+                kv("pending_tool_calls", ja([]))])]
+}
+
+type Folded = { ok: bool, why: string, state: Option[SessionState], plan: Option[ResumePlan], last: string }
+
+pure func fold_and_plan(rt: ExtRuntime, lines: [Json], resume_count: int) -> Folded {
+  let leaf = journal_leaf(lines);
+  match fold_journal(lines, leaf) {
+    Err(r) => { ok: false, why: "fold refused: ${refusal_id(r)}", state: None, plan: None, last: "<refused>" },
+    Ok(s) => match plan_resume(s, invocation(rt, leaf, resume_count)) {
+      Err(r) => { ok: false, why: "plan refused: ${refusal_id(r)}", state: Some(s), plan: None, last: boundary_id(s.last) },
+      Ok(p) => { ok: true, why: "", state: Some(s), plan: Some(p), last: boundary_id(p.last) }
+    }
+  }
+}
+
+-- `plan.last` is `Parked(p, wake?)` on the FIRST run's `.p0`, on [h1], and the
+-- wake child is present or absent as the row expects.
+pure func plan_parked(f: Folded, answered: bool) -> bool {
+  match f.plan {
+    None => false,
+    Some(p) => match p.last {
+      BoundaryParked(park, wake) =>
+        park.request_id == rid(0) && join(List.map(\w. wait_id(w), park.waits)) == "h1"
+          && (match wake { Some(_) => answered, None => not answered }),
+      _ => false
+    }
+  }
+}
+
+-- Journal line readers.
+pure func line_str(j: Json, key: string) -> string {
+  match getString(j, key) { None => "", Some(s) => s }
+}
+
+pure func kinds(lines: [Json]) -> [string] { List.map(\j. line_str(j, "type"), lines) }
+
+pure func index_where(lines: [Json], kind: string, key: string, value: string, i: int) -> int {
+  match lines {
+    [] => -1,
+    j :: rest => if line_str(j, "type") == kind && line_str(j, key) == value then i else index_where(rest, kind, key, value, i + 1)
+  }
+}
+
+-- The two-frame journal the host would hold after the resumed frame: frame 1
+-- as truncated, then every record the resumed frame returned.
+pure func two_frame_lines(rt: ExtRuntime, frame1: [LedgerRecord], resumed: TracedSessionResult) -> [Json] {
+  journal_lines_of_records(header(rt), frame1 ++ resumed.trace.records)
+}
+
+pure func fold_last(lines: [Json]) -> string {
+  match fold_journal(lines, journal_leaf(lines)) { Err(r) => "refused:${refusal_id(r)}", Ok(s) => boundary_id(s.last) }
+}
+
+pure func fold_history_equals(lines: [Json], ms: [Message]) -> bool {
+  match fold_journal(lines, journal_leaf(lines)) { Err(_) => false, Ok(s) => messages_equal(s.history, ms) }
 }
 
 -- ---------------------------------------------------------------------------
 -- Part 2's row: the live wake_read reads the cursor first
 -- ---------------------------------------------------------------------------
 
+pure func live_seed_witnesses(ws: [RequestWitness]) -> int {
+  match ws {
+    [] => 0,
+    w :: rest => (match w.request_class { WakeRead => 1, _ => 0 }) + live_seed_witnesses(rest)
+  }
+}
+
 func row_live_wake_read_serves_the_cursor() -> bool ! {AI, Clock, Env, FS, IO} {
   let _ = println("live wake_read reads the cursor first (P4 Part 2, ADR-003 D7):");
-  let world = seeded_world();
-  let req = reissued_request();
+  let seeded: WakeObservation = { request_id: "p4.r1.0.p0", wait_id: "h1", outcome: Settled("the answer") };
+  let world = { empty_world_state() | wakes: [seeded] };
+  let req: ParkRequest = { request_id: "p4.r1.0.p0", step: 0, waits: [], attempt: 0 };
   let _ = println("PARK_RESUME_BEGIN live_cursor");
   let ports = live_ports(empty_rt());
   let r = ports.wake_read(world, req);
   let _ = println("PARK_RESUME_END live_cursor");
-  let detail = "request_id=${r.request_id} wait_id=${r.wait_id} outcome=${wake_outcome_id(r.outcome)} detail=${wake_outcome_detail(r.outcome)} wakes_left=${show(List.length(r.next_state.wakes))} ordinal=${show(r.next_state.ordinal)} wake_read_witnesses=${show(wake_read_witnesses(r.next_state.pending))}";
+  let detail = "request_id=${r.request_id} wait_id=${r.wait_id} outcome=${wake_outcome_id(r.outcome)} detail=${wake_outcome_detail(r.outcome)} wakes_left=${show(List.length(r.next_state.wakes))} ordinal=${show(r.next_state.ordinal)} wake_read_witnesses=${show(live_seed_witnesses(r.next_state.pending))}";
   all_true([
     report("live_cursor: the reply is the seeded Settled observation, not the host's",
-      r.request_id == reissued_p0() && r.wait_id == "h1"
+      r.request_id == "p4.r1.0.p0" && r.wait_id == "h1"
         && (match r.outcome { Settled(d) => d == "the answer", _ => false }),
       detail),
     report("live_cursor: the cursor is consumed", List.length(r.next_state.wakes) == 0, detail),
     report("live_cursor: the world advanced once, class WakeRead",
-      r.next_state.ordinal == world.ordinal + 1 && wake_read_witnesses(r.next_state.pending) == 1,
+      r.next_state.ordinal == world.ordinal + 1 && live_seed_witnesses(r.next_state.pending) == 1,
       detail)
   ])
 }
 
+-- ---------------------------------------------------------------------------
+-- Part 3's rows: the resumer
+-- ---------------------------------------------------------------------------
+
+type Frames = {
+  rt: ExtRuntime,
+  first: TracedSessionResult,
+  after_park: [LedgerRecord],
+  after_wake: [LedgerRecord],
+  lines_after_park: [Json],
+  lines_after_wake: [Json],
+  lines_park_exit: [Json],
+  lines_all: [Json]
+}
+
+func frames() -> Frames ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let rt = w4_rt();
+  let first = run_scripted("first_run", rt, w4_world(first_script(), first_wakes()), 12);
+  let after_park = records_through(first.trace.records, "ParkEntered");
+  let after_wake = records_through(first.trace.records, "WakeReceived");
+  let lines_after_park = journal_lines_of_records(header(rt), after_park);
+  {
+    rt: rt,
+    first: first,
+    after_park: after_park,
+    after_wake: after_wake,
+    lines_after_park: lines_after_park,
+    lines_after_wake: journal_lines_of_records(header(rt), after_wake),
+    lines_park_exit: with_exit(lines_after_park),
+    lines_all: journal_lines_of_records(header(rt), first.trace.records)
+  }
+}
+
+func row_first_run_and_folds(f: Frames) -> bool ! {IO} {
+  let _ = println("the delegate run parks, and its journal folds three ways to Parked (P4 Part 3):");
+  let ps = park_rows(f.first.trace.records);
+  let ws = wake_rows(f.first.trace.records);
+  let a = fold_and_plan(f.rt, f.lines_after_park, 1);
+  let b = fold_and_plan(f.rt, f.lines_after_wake, 1);
+  let c = fold_and_plan(f.rt, f.lines_park_exit, 1);
+  let d = fold_and_plan(f.rt, f.lines_all, 1);
+  all_true([
+    report("first_run: the run parks once on `${rid(0)}` [h1], wakes settled, ends Ok", result_ok(f.first) && List.length(ps) == 1 && park_at(ps, 0).request_id == rid(0) && park_at(ps, 0).ids == "h1" && wake_at(ws, 0).outcome == "settled", "parks=${parks_str(ps)} wakes=${wakes_str(ws)} result=${result_code(f.first)}"),
+    report("after park_entered: the journal ends in `park` and plans to Parked(p, None)", a.ok && plan_parked(a, false) && a.last == "parked", "kinds=${pipe(kinds(f.lines_after_park))} ${a.why} last=${a.last}"),
+    report("after wake_received: the journal ends in `wake` and plans to Parked(p, Some(w))", b.ok && plan_parked(b, true) && b.last == "parked", "kinds=${pipe(kinds(f.lines_after_wake))} ${b.why} last=${b.last}"),
+    report("park, exit: the host's exit keeps the park (P4-Q4) and plans to Parked(p, None)", c.ok && plan_parked(c, false) && c.last == "parked", "kinds=${pipe(kinds(f.lines_park_exit))} ${c.why} last=${c.last}"),
+    report("untruncated: the whole run folds to run_finished, not Parked", d.ok && d.last == "run_finished", "${d.why} last=${d.last}")
+  ])
+}
+
+-- THE ROW. The `wake` child is seeded as `<R'>.p0` and consumed in the resumed
+-- frame, before the run; the run opens at `initial_park_ordinal(true)`.
+func row_resume_after_wake(f: Frames) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("resume after wake_received: <R'>.p0 seeded from the wake child, served from the cursor, run opened at p1:");
+  match fold_and_plan(f.rt, f.lines_after_wake, 1).plan {
+    None => report("resume_after_wake: the journal plans", false, "no plan"),
+    Some(plan) => {
+      let t = resume_recorded("resume_after_wake", f.rt, w4_world(resumed_script(), resumed_second_park()), plan, 12);
+      let rs = t.trace.records;
+      let vs = variants(rs);
+      let ps = park_rows(rs);
+      let ws = wake_rows(rs);
+      let seen = wakes_seen(t.world.log);
+      let two = two_frame_lines(f.rt, f.after_wake, t);
+      let ks = kinds(two);
+      let wake_idx = index_where(two, "wake", "request_id", rp(0), 0);
+      let started_idx = index_where(two, "run_started", "run_id", resumed_run_id(), 0);
+      let refold = fold_and_plan(f.rt, two, 2);
+      all_true([
+        report("resume_after_wake: SessionResumed is the first record, exactly once", count_of("SessionResumed", vs) == 1 && (match vs { v :: _ => v == "SessionResumed", [] => false }), "order=${pipe(vs)}"),
+        report("resume_after_wake: the resumed frame's ParkEntered is `${rp(0)}` at step 0 on [h1], before any run", park_at(ps, 0).request_id == rp(0) && park_at(ps, 0).step == 0 && park_at(ps, 0).ids == "h1", "parks=${parks_str(ps)}"),
+        report("resume_after_wake: exactly one WakeReceived for `${rp(0)}`, settled on h1 with the child's detail", List.length(List.map(\w. w.request_id, ws)) >= 1 && count_of(rp(0), List.map(\w. w.request_id, ws)) == 1 && wake_at(ws, 0).request_id == rp(0) && wake_at(ws, 0).outcome == "settled" && wake_at(ws, 0).wait_id == "h1" && wake_at(ws, 0).detail == "the answer", "wakes=${wakes_str(ws)}"),
+        report("resume_after_wake: WakeIdentity names `${rp(0)}`, served from the cursor (ok), then `${rp(1)}`", List.length(seen) == 2 && seen_at(seen, 0).request_id == rp(0) && seen_at(seen, 0).status == "ok" && seen_at(seen, 0).wait_id == "h1" && seen_at(seen, 1).request_id == rp(1), "seen=${seen_str(seen)}"),
+        report("resume_after_wake: the resumed run's own park is `${rp(1)}` on [h2] (initial_park_ordinal(true))", List.length(ps) == 2 && park_at(ps, 1).request_id == rp(1) && park_at(ps, 1).ids == "h2", "parks=${parks_str(ps)}"),
+        report("resume_after_wake: the wake message told the model to call DelegateCheck once; the run ends Ok with the final answer", result_ok(t) && done_output(rs) == "final answer" && any_content(t.final.history, "call `DelegateCheck` once"), "result=${result_code(t)} done=${done_output(rs)}"),
+        report("resume_after_wake: SessionStart(R') follows WakeReceived in the trace; the wake read is witnessed once per park", count_of("SessionStart", vs) == 1 && wake_read_witnesses(rs) == 2 && (match vs { _ => true }), "order=${pipe(vs)}"),
+        report("exactly once: in the two-frame journal `run_started(R')` comes AFTER the `wake` for `${rp(0)}`", wake_idx >= 0 && started_idx > wake_idx, "wake@${show(wake_idx)} run_started@${show(started_idx)} kinds=${pipe(ks)}"),
+        report("exactly once: the two-frame journal refolds to a `last` that is not Parked, and plans", refold.ok && refold.last != "parked", "${refold.why} last=${refold.last}"),
+        report("exactly once: the two-frame journal's history is the resumed run's final history", fold_history_equals(two, t.final.history), "fold history != final history (${show(List.length(t.final.history))} messages)")
+      ])
+    }
+  }
+}
+
+-- No `wake` child: nothing is seeded; the DST world's cursor answers the
+-- re-observation in the host's place.
+func row_resume_after_park(f: Frames) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("resume after park_entered: no wake child, the re-observation is answered by the world's cursor:");
+  match fold_and_plan(f.rt, f.lines_after_park, 1).plan {
+    None => report("resume_after_park: the journal plans", false, "no plan"),
+    Some(plan) => {
+      let t = resume_scripted("resume_after_park", f.rt, w4_world(resumed_script(), [obs(rp(0), "h1", Settled("late answer"))] ++ resumed_second_park()), plan, 12);
+      let rs = t.trace.records;
+      let ps = park_rows(rs);
+      let ws = wake_rows(rs);
+      let two = two_frame_lines(f.rt, f.after_park, t);
+      all_true([
+        report("resume_after_park: ParkEntered `${rp(0)}` on [h1], then WakeReceived settled from the RE-OBSERVATION", park_at(ps, 0).request_id == rp(0) && wake_at(ws, 0).request_id == rp(0) && wake_at(ws, 0).outcome == "settled" && wake_at(ws, 0).detail == "late answer", "parks=${parks_str(ps)} wakes=${wakes_str(ws)}"),
+        report("resume_after_park: the run opens and its own park is `${rp(1)}`; it ends Ok", result_ok(t) && List.length(ps) == 2 && park_at(ps, 1).request_id == rp(1), "parks=${parks_str(ps)} result=${result_code(t)}"),
+        report("resume_after_park: the two-frame journal refolds to not Parked", fold_last(two) != "parked", "last=${fold_last(two)}")
+      ])
+    }
+  }
+}
+
+-- `park, exit`, no `wake` child, an EMPTY cursor: T2's re-observation is the
+-- unbound fall-through, and the waits are kept.
+func row_resume_park_exit(f: Frames) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("resume park, exit: re-observation at T2 is HostError(wake_read unbound), waits kept:");
+  match fold_and_plan(f.rt, f.lines_park_exit, 1).plan {
+    None => report("resume_park_exit: the journal plans", false, "no plan"),
+    Some(plan) => {
+      let t = resume_scripted("resume_park_exit", f.rt, w4_world([prose_step("still waiting on h1")], []), plan, 4);
+      let rs = t.trace.records;
+      let ps = park_rows(rs);
+      let ws = wake_rows(rs);
+      let two = two_frame_lines(f.rt, f.after_park, t);
+      all_true([
+        report("resume_park_exit: WakeReceived for `${rp(0)}` is HostError(\"wake_read unbound\"), wait_id \"\"", wake_at(ws, 0).request_id == rp(0) && wake_at(ws, 0).outcome == "host_error" && wake_at(ws, 0).detail == "wake_read unbound" && wake_at(ws, 0).wait_id == "", "wakes=${wakes_str(ws)}"),
+        report("resume_park_exit: the waits are KEPT — the resumed run's next park `${rp(1)}` still waits on [h1]", List.length(ps) >= 2 && park_at(ps, 0).ids == "h1" && park_at(ps, 1).request_id == rp(1) && park_at(ps, 1).ids == "h1", "parks=${parks_str(ps)}"),
+        report("resume_park_exit: the model was told the host could not observe the waits", any_content(t.final.history, "could not observe the open waits (wake_read unbound)"), "no HostError wake message"),
+        report("resume_park_exit: the two-frame journal refolds to not Parked", fold_last(two) != "parked", "last=${fold_last(two)}")
+      ])
+    }
+  }
+}
+
+-- The re-observation answers `Aborted`: no run, and the journal closes the park.
+func row_resume_aborted(f: Frames) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("resume with Aborted: WakeReceived, no run, folds to open:wake:aborted:");
+  match fold_and_plan(f.rt, f.lines_after_park, 1).plan {
+    None => report("resume_aborted: the journal plans", false, "no plan"),
+    Some(plan) => {
+      let t = resume_scripted("resume_aborted", f.rt, w4_world(resumed_script(), [obs(rp(0), "abort", Aborted)]), plan, 12);
+      let rs = t.trace.records;
+      let vs = variants(rs);
+      let ws = wake_rows(rs);
+      let two = two_frame_lines(f.rt, f.after_park, t);
+      all_true([
+        report("resume_aborted: WakeReceived(aborted) for `${rp(0)}` carries the command", List.length(ws) == 1 && wake_at(ws, 0).request_id == rp(0) && wake_at(ws, 0).outcome == "aborted" && wake_at(ws, 0).wait_id == "abort", "wakes=${wakes_str(ws)}"),
+        report("resume_aborted: NO run opens — no SessionStart, no HistorySeeded, no ProviderCallPrepared, no RunSummary", count_of("SessionStart", vs) == 0 && count_of("HistorySeeded", vs) == 0 && count_of("ProviderCallPrepared", vs) == 0 && count_of("RunSummary", vs) == 0 && wake_read_witnesses(rs) == 1, "order=${pipe(vs)}"),
+        report("resume_aborted: the frame returns the folded history, between turns, not suspended", result_ok(t) && not is_suspended(t) && messages_equal(t.final.history, plan.history), "result=${result_code(t)} history=${show(List.length(t.final.history))} plan=${show(List.length(plan.history))}"),
+        report("resume_aborted: the two-frame journal folds to open:wake:aborted", fold_last(two) == "open:wake:aborted", "last=${fold_last(two)} kinds=${pipe(kinds(two))}")
+      ])
+    }
+  }
+}
+
+-- The re-observation answers for another request: dropped, one warning, no run.
+func row_resume_dropped(f: Frames) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("resume with a mismatched reply: dropped with one warning, nothing appended, no run, no re-issue loop:");
+  match fold_and_plan(f.rt, f.lines_after_park, 1).plan {
+    None => report("resume_dropped: the journal plans", false, "no plan"),
+    Some(plan) => {
+      let t = resume_scripted("resume_dropped", f.rt, w4_world(resumed_script(), [obs("w4.r0.0.p9", "h1", Settled("not yours"))]), plan, 12);
+      let rs = t.trace.records;
+      let vs = variants(rs);
+      let ps = park_rows(rs);
+      let two = two_frame_lines(f.rt, f.after_park, t);
+      let _ = println("PARK_DROPS resume_dropped 1");
+      all_true([
+        report("resume_dropped: one ParkEntered `${rp(0)}` on [h1] and NO WakeReceived", List.length(ps) == 1 && park_at(ps, 0).request_id == rp(0) && count_of("WakeReceived", vs) == 0, "parks=${parks_str(ps)} order=${pipe(vs)}"),
+        report("resume_dropped: no run opens and the cursor element was consumed by the dropped read", count_of("SessionStart", vs) == 0 && count_of("ProviderCallPrepared", vs) == 0 && List.length(t.world.wakes) == 0 && wake_read_witnesses(rs) == 1, "order=${pipe(vs)} wakes_left=${show(List.length(t.world.wakes))}"),
+        report("resume_dropped: the frame returns the folded history, between turns", result_ok(t) && not is_suspended(t) && messages_equal(t.final.history, plan.history), "result=${result_code(t)}"),
+        report("resume_dropped: the two-frame journal keeps the re-issued park `${rp(0)}` open for the next resume", (match fold_journal(two, journal_leaf(two)) { Err(_) => false, Ok(s) => match s.last { BoundaryParked(p, w) => p.request_id == rp(0) && (match w { None => true, Some(_) => false }), _ => false } }), "last=${fold_last(two)} kinds=${pipe(kinds(two))}")
+      ])
+    }
+  }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("=== park_resume_dst (PLAN-003 P4, ADR-003 D7) ===");
+  let live = row_live_wake_read_serves_the_cursor();
+  let f = frames();
   let results = [
-    row_live_wake_read_serves_the_cursor()
+    live,
+    row_first_run_and_folds(f),
+    row_resume_after_wake(f),
+    row_resume_after_park(f),
+    row_resume_park_exit(f),
+    row_resume_aborted(f),
+    row_resume_dropped(f)
   ];
   let _ = println("PARK_RESUME_ROWS ${show(List.length(results))}");
   if all_true(results) then println("park_resume_dst PASS")

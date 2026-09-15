@@ -642,6 +642,16 @@ TREE_MUTANTS = [
      "let woke = witness(session_id, trace_entered, wake.next_state);",
      "let woke = { trace: trace_entered, world: wake.next_state };",
      ("leaf", "st.provider.wake_read", {"advanced-unwitnessed", "witnessed-after-construction"})),
+    # PLAN-003 P4 Part 3 (ADR-003 D7; P4-Q2 option (a)'s accepted cost): the
+    # resumer's witness removed. The SECOND `.wake_read(` site in the tree, the
+    # one outside `c2_loop`: `consume_parked_wake` consumes the re-issued
+    # `<R'>.p0` in the resumed frame before any run opens, and owes the witness
+    # exactly as the `Park` arm does.
+    ("resumer wake_read successor not witnessed",
+     "src/core/session.ail",
+     "let observed = witness(session_id, trace_entered, reply.next_state);",
+     "let observed = { trace: trace_entered, world: reply.next_state };",
+     ("leaf", "ports.wake_read@consume_parked_wake", {"advanced-unwitnessed", "witnessed-after-construction"})),
     ("exit-publish read never witnessed",
      "src/core/session.ail",
      "let seen = witness(session_id, trace, named_world);",

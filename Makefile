@@ -372,8 +372,15 @@ park_wake:
 # or reading stdin, because a durable park's answer arrives through the journal.
 # The shell runs it with stdin from /dev/null, so a binding that asks the host
 # gets `Aborted`/"eof" and the row is red rather than hung; the shell also
-# counts the `wake_request` lines the returned value cannot show. Part 3 adds
-# the resumer's rows.
+# counts the `wake_request` lines the returned value cannot show. Part 3's rows:
+# one delegate run parks, its journal (the twin) is truncated after `park`,
+# after `wake`, and after `park` with a host `exit`; each is folded, planned and
+# resumed through `run_v2_session_park_resumed_traced` — `<R'>.p0` seeded from
+# the wake child and served from the cursor, the run opened at
+# `initial_park_ordinal(true)`, `run_started(R')` after the `wake` (exactly
+# once), the re-observation at T2 (`HostError`, waits kept), `Aborted` (no run,
+# `open:wake:aborted`) and a dropped reply (one warning, no run). The shell
+# counts the warning and checks the wire ORDER of `wake_received`/`session_start`.
 .PHONY: park_resume
 park_resume:
 	./scripts/dst/run_park_resume.sh
