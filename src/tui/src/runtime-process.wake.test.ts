@@ -837,4 +837,61 @@ describe("RuntimeProcess park and wake", () => {
       }
     });
   });
+
+  // ------------------------------------------------------------------------------------------------
+  // PLAN-003 P4 Part 7 (ADR-003 D7): NO WAKE FILE, NO GENERATION. T0 — after Part 5's flow, run
+  // under the lease the host takes (`acquireLease(journal.dir, sessionId)`, index.ts), the session
+  // directory holds `journal.jsonl` and `lease` and nothing else, at every point: parked and
+  // suspended, after the wake, after the `--resume` respawn, and after the lease is released. The
+  // wake travels as the `park`'s child entry; the resumed child folds it once, because the
+  // `run_started` that follows it closes the park (the `park_resume` target's second-resume rows).
+  // The other half of T0 is the shell check the plan names and §5 records: a case-insensitive
+  // `git grep` over `src/core` and `src/tui/src` for the generation type's name, its field's name
+  // and the name of a file that would hold a wake finds nothing. (None is spelled here, so this file is not
+  // the grep's one hit.)
+  // ------------------------------------------------------------------------------------------------
+  describe("no wake file, no generation (PLAN-003 P4 Part 7, T0)", () => {
+    /** Every name under `dir`, recursively, relative to it. */
+    function walk(dir: string, prefix = ""): string[] {
+      const out: string[] = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const rel = path.join(prefix, entry.name);
+        out.push(rel);
+        if (entry.isDirectory()) out.push(...walk(path.join(dir, entry.name), rel));
+      }
+      return out.sort();
+    }
+
+    it("the session directory is journal.jsonl + lease — parked, woken, respawned, released", async () => {
+      const id = "sess-p7";
+      const s = await suspend(id);
+      const dir = s.journal.dir;
+      const listing = () => fs.readdirSync(dir).sort();
+      // Suspended-child, before the host's lease: the journal alone (the harness takes none).
+      expect(listing()).toEqual(["journal.jsonl"]);
+      const outcome = acquireLease(dir, id);
+      expect(outcome.kind).toBe("acquired");
+      const lease = (outcome as { kind: "acquired"; lease: SessionLease }).lease;
+      expect(listing()).toEqual(["journal.jsonl", "lease"]);
+      // Part 5's flow: the reply, the wake as the park's child, the `--resume` respawn.
+      const r = resumeRespawn(s.journal);
+      installSuspendedWake(s.owner, { stillCurrent: () => true, journal: s.journal, respawn: r.respawn, notify: () => {} });
+      expect(listing()).toEqual(["journal.jsonl", "lease"]);
+      s.rec.onReadys[0](settled("answer"));
+      await r.exited();
+      expect(types(s.entries())).toEqual(["header", "park", "wake"]);
+      expect(r.calls).toEqual([{ canResume: true, onDisk: ["header", "park", "wake"] }]);
+      expect(listing()).toEqual(["journal.jsonl", "lease"]);
+      // The whole sessions tree: this session, and no name that says wake or generation.
+      const sessions = path.join(workdir, ".motoko", "sessions");
+      expect(fs.readdirSync(sessions)).toEqual([id]);
+      const names = walk(sessions);
+      expect(names).toEqual([id, path.join(id, "journal.jsonl"), path.join(id, "lease")]);
+      expect(names.filter((n) => /wake|generation/i.test(n))).toEqual([]);
+      // The lease goes with the host; the journal is what the next `--resume` reads.
+      lease.release();
+      expect(listing()).toEqual(["journal.jsonl"]);
+      expect(s.journal.canResume).toBe(true);
+    });
+  });
 });

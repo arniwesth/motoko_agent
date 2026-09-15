@@ -48,11 +48,40 @@
 --   untruncated         the control: the whole run's journal folds to
 --                       `run_finished`, not `Parked`.
 --
+-- Part 7's rows (PLAN-003 §P4 Part 7, T2): EXACTLY ONCE ACROSS TWO RESUMES.
+-- The resumed journal — frame 1 cut after `wake_received`, then a resumed
+-- frame shaped exactly as `resume_after_wake`'s (`resume_twice_base`) — is
+-- resumed a SECOND time, cut three ways. The consumed wake (`w4.r0.0.p0`'s
+-- child, re-issued and consumed as `w4.r1.0.p0`) is followed in the journal by
+-- `run_started(w4.r1.0)`, so the fold offers it ONCE: no second resume seeds
+-- the cursor from it and none records a `WakeIdentity` for it. There is no
+-- wake file and no generation to check (ADR-003 D7).
+--
+--   resume_twice_started   cut right after `run_started(w4.r1.0)` — the child
+--                          died the instant the run opened: `last` is
+--                          `open:run_started`, not Parked; the second frame is
+--                          `SessionResumed` alone — no park, no wake, no run,
+--                          no `WakeIdentity`; a decoy cursor element is left
+--                          where it was.
+--   resume_twice_finished  the whole two-frame journal: `last` is
+--                          `run_finished`; the same second frame.
+--   resume_twice_parked    cut after the resumed run's OWN park `w4.r1.0.p1`
+--                          on [h2]: the second resume re-issues `w4.r2.0.p0`
+--                          on [h2], and the ONLY `WakeIdentity` names it,
+--                          served by the world's cursor (h2, "a2") and never by
+--                          the first wake (h1, "the answer"); the three-frame
+--                          journal has `run_started(w4.r2.0)` after
+--                          `wake(w4.r2.0.p0)`, holds each consumed wake's line
+--                          exactly once, and refolds to not Parked.
+--
 -- What the in-process rows cannot see is on stdout, and `run_park_resume.sh`
 -- reads it: the `wake_request` count inside the live row's frame (zero), the
 -- dropped-reply `warning` count against `PARK_DROPS` (R2: nothing appended),
 -- and the exactly-once ORDER on the wire — the resumed frame's `wake_received`
--- for `<R'>.p0` precedes the `session_start` that names `R'`. Frames are
+-- for `<R'>.p0` precedes the `session_start` that names `R'`; and for Part 7,
+-- that the two no-run second resumes put NOTHING park-shaped on the wire, and
+-- the re-parked one puts exactly one `wake_received`, for `w4.r2.0.p0`, before
+-- its `session_start`, and none for `w4.r1.0.p0`. Frames are
 -- `PARK_RESUME_BEGIN <label>` / `PARK_RESUME_END <label>`.
 
 module scripts/dst/park_resume_dst
@@ -346,6 +375,10 @@ pure func resumed_run_id() -> string { "w4.r1.0" }
 -- `<R'>.p0`: `between_turn_request_id("w4", "dst", 1, 0)` (`session.ail`), the
 -- id PLAN-002 §8.4 gives the request that opens a resumed run's waiting.
 pure func rp(n: int) -> string { "${resumed_run_id()}.p${show(n)}" }
+
+-- The SECOND resume's identity (Part 7): resume_count 2, ordinal 0.
+pure func twice_run_id() -> string { "w4.r2.0" }
+pure func rp2(n: int) -> string { "${twice_run_id()}.p${show(n)}" }
 
 pure func obs(request_id: string, wid: string, outcome: WakeOutcome) -> WakeObservation {
   { request_id: request_id, wait_id: wid, outcome: outcome }
@@ -721,6 +754,155 @@ func row_resume_dropped(f: Frames) -> bool ! {AI, Clock, Env, FS, IO, Net, Proce
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- Part 7's rows: exactly once across two resumes
+-- ---------------------------------------------------------------------------
+
+-- The records up to and including the N-th record of the named variant.
+pure func records_through_nth(rs: [LedgerRecord], variant: string, n: int) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(e) =>
+        if event_variant_id(e) == variant
+        then (if n <= 1 then [r] else r :: records_through_nth(rest, variant, n - 1))
+        else r :: records_through_nth(rest, variant, n),
+      _ => r :: records_through_nth(rest, variant, n)
+    }
+  }
+}
+
+pure func count_lines(lines: [Json], kind: string, key: string, value: string) -> int {
+  match lines {
+    [] => 0,
+    j :: rest => (if line_str(j, "type") == kind && line_str(j, key) == value then 1 else 0) + count_lines(rest, kind, key, value)
+  }
+}
+
+-- The resumed run's script after a `Settled` wake on h2: the DelegateCheck the
+-- wake message asks for, then the final answer. No further park.
+pure func twice_script() -> [ScriptedStep] {
+  [check_step("h2"), prose_step("final answer")]
+}
+
+type Twice = {
+  rt: ExtRuntime,
+  frame1: [LedgerRecord],
+  base: TracedSessionResult,
+  cut_started: [LedgerRecord],
+  cut_finished: [LedgerRecord],
+  cut_parked: [LedgerRecord],
+  lines_started: [Json],
+  lines_finished: [Json],
+  lines_parked: [Json]
+}
+
+-- The resumed journal, as the host would hold it after `resume_after_wake`'s
+-- frame: frame 1 cut after `wake_received`, then the resumed frame. The frame
+-- is re-run under its own label so Part 3's row stays what it is.
+func twice(f: Frames) -> Option[Twice] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fold_and_plan(f.rt, f.lines_after_wake, 1).plan {
+    None => None,
+    Some(plan) => {
+      let base = resume_recorded("resume_twice_base", f.rt, w4_world(resumed_script(), resumed_second_park()), plan, 12);
+      let rs = base.trace.records;
+      let cut_started = records_through(rs, "SessionStart");
+      let cut_parked = records_through_nth(rs, "ParkEntered", 2);
+      Some({
+        rt: f.rt,
+        frame1: f.after_wake,
+        base: base,
+        cut_started: cut_started,
+        cut_finished: rs,
+        cut_parked: cut_parked,
+        lines_started: journal_lines_of_records(header(f.rt), f.after_wake ++ cut_started),
+        lines_finished: journal_lines_of_records(header(f.rt), f.after_wake ++ rs),
+        lines_parked: journal_lines_of_records(header(f.rt), f.after_wake ++ cut_parked)
+      })
+    }
+  }
+}
+
+-- The base frame is Part 3's `resume_after_wake`, and the claims the cuts rest
+-- on hold in it: `w4.r1.0.p0` consumed once, `run_started(w4.r1.0)` after it.
+func row_resume_twice_base(tw: Twice) -> bool ! {IO} {
+  let _ = println("the resumed journal (Part 7's input): w4.r1.0.p0 consumed once, run_started(w4.r1.0) after it:");
+  let ws = wake_rows(tw.base.trace.records);
+  let ks = kinds(tw.lines_finished);
+  let wake_idx = index_where(tw.lines_finished, "wake", "request_id", rp(0), 0);
+  let started_idx = index_where(tw.lines_finished, "run_started", "run_id", resumed_run_id(), 0);
+  all_true([
+    report("resume_twice_base: one WakeReceived for `${rp(0)}`, settled on h1 with the first wake's detail; the run ends Ok", result_ok(tw.base) && count_of(rp(0), List.map(\w. w.request_id, ws)) == 1 && wake_at(ws, 0).request_id == rp(0) && wake_at(ws, 0).detail == "the answer", "wakes=${wakes_str(ws)} result=${result_code(tw.base)}"),
+    report("resume_twice_base: the two-frame journal has `run_started(${resumed_run_id()})` after the `wake` for `${rp(0)}`, and each consumed wake's line once", wake_idx >= 0 && started_idx > wake_idx && count_lines(tw.lines_finished, "wake", "request_id", rid(0)) == 1 && count_lines(tw.lines_finished, "wake", "request_id", rp(0)) == 1, "wake@${show(wake_idx)} run_started@${show(started_idx)} kinds=${pipe(ks)}")
+  ])
+}
+
+-- A second resume that opens NO run: the journal's last entry is not a park,
+-- so nothing is seeded, nothing is read, and nothing is written but `resumed`.
+func row_resume_twice_no_run(label: string, tw: Twice, cut: [LedgerRecord], lines: [Json], expected_last: string) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("${label}: the second resume re-offers nothing — no cursor seeded, no WakeIdentity, no run:");
+  let folded = fold_and_plan(tw.rt, lines, 2);
+  match folded.plan {
+    None => report("${label}: the resumed journal plans", false, "${folded.why} last=${folded.last}"),
+    Some(plan) => {
+      let decoy = obs(rp2(0), "h1", Settled("stale"));
+      let t = resume_recorded(label, tw.rt, w4_world(twice_script(), [decoy]), plan, 12);
+      let rs = t.trace.records;
+      let vs = variants(rs);
+      let seen = wakes_seen(t.world.log);
+      let three = journal_lines_of_records(header(tw.rt), tw.frame1 ++ cut ++ rs);
+      all_true([
+        report("${label}: the resumed journal's last entry is `${expected_last}`, not Parked", folded.last == expected_last, "last=${folded.last} kinds=${pipe(kinds(lines))}"),
+        report("${label}: the second frame is SessionResumed alone — no ParkEntered, no WakeReceived, no SessionStart, no ProviderCallPrepared", List.length(vs) == 1 && count_of("SessionResumed", vs) == 1, "order=${pipe(vs)}"),
+        report("${label}: no WakeIdentity is recorded and no wake_read is witnessed", List.length(seen) == 0 && wake_read_witnesses(rs) == 0, "seen=${seen_str(seen)} witnesses=${show(wake_read_witnesses(rs))}"),
+        report("${label}: the world's cursor is untouched — the decoy is still its head, nothing seeded ahead of it", List.length(t.world.wakes) == 1 && (match t.world.wakes { w :: _ => w.request_id == rp2(0) && w.wait_id == "h1", [] => false }), "wakes_left=${show(List.length(t.world.wakes))}"),
+        report("${label}: the frame returns the folded history, between turns, not suspended", result_ok(t) && not is_suspended(t) && messages_equal(t.final.history, plan.history), "result=${result_code(t)} history=${show(List.length(t.final.history))} plan=${show(List.length(plan.history))}"),
+        report("${label}: the three-frame journal refolds to not Parked and holds each consumed wake's line exactly once", fold_last(three) != "parked" && count_lines(three, "wake", "request_id", rid(0)) == 1 && count_lines(three, "wake", "request_id", rp(0)) == 1 && count_lines(three, "wake", "request_id", rp2(0)) == 0, "last=${fold_last(three)} kinds=${pipe(kinds(three))}")
+      ])
+    }
+  }
+}
+
+func row_resume_twice_started(tw: Twice) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  row_resume_twice_no_run("resume_twice_started", tw, tw.cut_started, tw.lines_started, "open:run_started")
+}
+
+func row_resume_twice_finished(tw: Twice) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  row_resume_twice_no_run("resume_twice_finished", tw, tw.cut_finished, tw.lines_finished, "run_finished")
+}
+
+-- A second resume that IS a park resume: the resumed run's own park, on [h2],
+-- with no wake child. The re-issue is `w4.r2.0.p0`, and the first wake is not
+-- what answers it.
+func row_resume_twice_parked(tw: Twice) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("resume_twice_parked: the resumed run's own park is re-issued as w4.r2.0.p0; the first wake is not re-offered:");
+  let folded = fold_and_plan(tw.rt, tw.lines_parked, 2);
+  match folded.plan {
+    None => report("resume_twice_parked: the resumed journal plans", false, "${folded.why} last=${folded.last}"),
+    Some(plan) => {
+      let t = resume_recorded("resume_twice_parked", tw.rt, w4_world(twice_script(), [obs(rp2(0), "h2", Settled("a2"))]), plan, 12);
+      let rs = t.trace.records;
+      let vs = variants(rs);
+      let ps = park_rows(rs);
+      let ws = wake_rows(rs);
+      let seen = wakes_seen(t.world.log);
+      let three = journal_lines_of_records(header(tw.rt), tw.frame1 ++ tw.cut_parked ++ rs);
+      let wake_idx = index_where(three, "wake", "request_id", rp2(0), 0);
+      let started_idx = index_where(three, "run_started", "run_id", twice_run_id(), 0);
+      let refold = fold_and_plan(tw.rt, three, 3);
+      all_true([
+        report("resume_twice_parked: the resumed journal ends in the run's own `park` `${rp(1)}` on [h2], no wake child", folded.last == "parked" && (match plan.last { BoundaryParked(p, w) => p.request_id == rp(1) && join(List.map(\w. wait_id(w), p.waits)) == "h2" && (match w { None => true, Some(_) => false }), _ => false }), "last=${folded.last} kinds=${pipe(kinds(tw.lines_parked))}"),
+        report("resume_twice_parked: the re-issued park is `${rp2(0)}` at step 0 on [h2], before any run", List.length(ps) == 1 && park_at(ps, 0).request_id == rp2(0) && park_at(ps, 0).step == 0 && park_at(ps, 0).ids == "h2", "parks=${parks_str(ps)}"),
+        report("resume_twice_parked: exactly one WakeReceived, for `${rp2(0)}`, settled on h2 with the world's detail — none for `${rp(0)}`, none with the first wake's detail", List.length(ws) == 1 && wake_at(ws, 0).request_id == rp2(0) && wake_at(ws, 0).wait_id == "h2" && wake_at(ws, 0).outcome == "settled" && wake_at(ws, 0).detail == "a2" && count_of(rp(0), List.map(\w. w.request_id, ws)) == 0, "wakes=${wakes_str(ws)}"),
+        report("resume_twice_parked: the only WakeIdentity names `${rp2(0)}` on h2 (the re-observation), none names `${rp(0)}`", List.length(seen) == 1 && seen_at(seen, 0).request_id == rp2(0) && seen_at(seen, 0).wait_id == "h2", "seen=${seen_str(seen)}"),
+        report("resume_twice_parked: the run opens once (`${twice_run_id()}`) and ends Ok with the final answer", result_ok(t) && count_of("SessionStart", vs) == 1 && done_output(rs) == "final answer" && wake_read_witnesses(rs) == 1, "result=${result_code(t)} done=${done_output(rs)} order=${pipe(vs)}"),
+        report("exactly once, twice: the three-frame journal has `run_started(${twice_run_id()})` after the `wake` for `${rp2(0)}`, and each consumed wake's line once", wake_idx >= 0 && started_idx > wake_idx && count_lines(three, "wake", "request_id", rid(0)) == 1 && count_lines(three, "wake", "request_id", rp(0)) == 1 && count_lines(three, "wake", "request_id", rp2(0)) == 1, "wake@${show(wake_idx)} run_started@${show(started_idx)} kinds=${pipe(kinds(three))}"),
+        report("exactly once, twice: the three-frame journal refolds to not Parked, plans, and its history is the run's final history", refold.ok && refold.last != "parked" && fold_history_equals(three, t.final.history), "${refold.why} last=${refold.last}")
+      ])
+    }
+  }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("=== park_resume_dst (PLAN-003 P4, ADR-003 D7) ===");
   let live = row_live_wake_read_serves_the_cursor();
@@ -734,8 +916,19 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     row_resume_aborted(f),
     row_resume_dropped(f)
   ];
-  let _ = println("PARK_RESUME_ROWS ${show(List.length(results))}");
-  if all_true(results) then println("park_resume_dst PASS")
+  -- Part 7: the resumed journal, resumed again.
+  let twice_results = match twice(f) {
+    None => [report("resume_twice_base: the journal after wake_received plans", false, "no plan")],
+    Some(tw) => [
+      row_resume_twice_base(tw),
+      row_resume_twice_started(tw),
+      row_resume_twice_finished(tw),
+      row_resume_twice_parked(tw)
+    ]
+  };
+  let all_rows = results ++ twice_results;
+  let _ = println("PARK_RESUME_ROWS ${show(List.length(all_rows))}");
+  if all_true(all_rows) then println("park_resume_dst PASS")
   else {
     let _ = println("park_resume_dst FAIL");
     exit(1)

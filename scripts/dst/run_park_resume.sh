@@ -9,6 +9,15 @@
 #   `WakeInput` cannot show, so this script counts `"type":"wake_request"`
 #   lines inside the row's PARK_RESUME_BEGIN/END frame: zero.
 #
+#   Part 7 (PLAN-003 §P4 Part 7, T2): exactly once ACROSS TWO RESUMES. The two
+#   second resumes that open no run (`resume_twice_started`,
+#   `resume_twice_finished`) put nothing park-shaped on the wire: no
+#   `wake_request`, no `wake_received`, no `session_start`, no `park_entered`.
+#   The one that is itself a park resume (`resume_twice_parked`) puts exactly
+#   one `wake_received` on it, for `w4.r2.0.p0`, before the `session_start`
+#   that names `w4.r2.0` — and none for `w4.r1.0.p0`, the wake the first resume
+#   consumed.
+#
 #   Part 3: (a) R2 — a DROPPED reply appends nothing and emits one `warning`;
 #   the trace cannot show a warning, so the `resume_dropped` frame prints
 #   `PARK_DROPS resume_dropped <n>` and this script counts the `park dropped a
@@ -60,9 +69,10 @@ first_line_in() {  # first_line_in LABEL REGEX -> 1-based line index inside the 
 
 check "the in-process rows passed (exit ${rc})" "$([ "$rc" -eq 0 ] && echo 1 || echo 0)"
 rows="$(sed -n 's/^PARK_RESUME_ROWS \([0-9]*\)$/\1/p' "$out" | tail -1)"
-check "all 7 rows reported" "$([ "${rows:-0}" -eq 7 ] && echo 1 || echo 0)" "PARK_RESUME_ROWS=${rows:-none}"
+check "all 11 rows reported" "$([ "${rows:-0}" -eq 11 ] && echo 1 || echo 0)" "PARK_RESUME_ROWS=${rows:-none}"
 
-for label in live_cursor first_run resume_after_wake resume_after_park resume_park_exit resume_aborted resume_dropped; do
+for label in live_cursor first_run resume_after_wake resume_after_park resume_park_exit resume_aborted resume_dropped \
+             resume_twice_base resume_twice_started resume_twice_finished resume_twice_parked; do
   b="$(grep -cx "PARK_RESUME_BEGIN ${label}" "$out" || true)"; e="$(grep -cx "PARK_RESUME_END ${label}" "$out" || true)"
   check "frame ${label} is printed once, closed" "$([ "$b" -eq 1 ] && [ "$e" -eq 1 ] && echo 1 || echo 0)" "begin=${b} end=${e}"
 done
@@ -91,6 +101,23 @@ check "resume_after_wake: exactly once, on the wire — wake_received(w4.r1.0.p0
 check "resume_aborted: no session_start on the wire (no run opens)" "$([ "$(count_in resume_aborted '"type":"session_start"')" -eq 0 ] && echo 1 || echo 0)"
 check "abort/dropped: no error event in either frame" \
   "$([ "$(count_in resume_aborted '"type":"error"')" -eq 0 ] && [ "$(count_in resume_dropped '"type":"error"')" -eq 0 ] && echo 1 || echo 0)"
+
+# Part 7: exactly once across two resumes, on the wire.
+for label in resume_twice_started resume_twice_finished; do
+  check "${label}: nothing park-shaped on the wire — no wake_request, wake_received, park_entered or session_start" \
+    "$([ "$(count_in "$label" '"type":"wake_request"')" -eq 0 ] && [ "$(count_in "$label" '"type":"wake_received"')" -eq 0 ] && [ "$(count_in "$label" '"type":"park_entered"')" -eq 0 ] && [ "$(count_in "$label" '"type":"session_start"')" -eq 0 ] && echo 1 || echo 0)" \
+    "wake_request=$(count_in "$label" '"type":"wake_request"') wake_received=$(count_in "$label" '"type":"wake_received"') park_entered=$(count_in "$label" '"type":"park_entered"') session_start=$(count_in "$label" '"type":"session_start"')"
+  check "${label}: exactly one session_resumed on the wire, and no error" \
+    "$([ "$(count_in "$label" '"type":"session_resumed"')" -eq 1 ] && [ "$(count_in "$label" '"type":"error"')" -eq 0 ] && echo 1 || echo 0)" \
+    "session_resumed=$(count_in "$label" '"type":"session_resumed"') error=$(count_in "$label" '"type":"error"')"
+done
+twice_wake="$(first_line_in resume_twice_parked '"type":"wake_received".*"request_id":"w4\.r2\.0\.p0"')"
+twice_started="$(first_line_in resume_twice_parked '"type":"session_start".*"run_id":"w4\.r2\.0"')"
+check "resume_twice_parked: exactly one wake_received, for w4.r2.0.p0 on h2, and one session_start for w4.r2.0; none for w4.r1.0.p0; no wake_request" \
+  "$([ "$(count_in resume_twice_parked '"request_id":"w4.r2.0.p0","wait_id":"h2","outcome":"settled"')" -eq 1 ] && [ "$(count_in resume_twice_parked '"type":"wake_received"')" -eq 1 ] && [ "$(count_in resume_twice_parked '"type":"wake_received","request_id":"w4.r1.0.p0"')" -eq 0 ] && [ "$(count_in resume_twice_parked '"type":"session_start"')" -eq 1 ] && [ "$(count_in resume_twice_parked '"type":"wake_request"')" -eq 0 ] && echo 1 || echo 0)" \
+  "wake_received(r2.p0)=$(count_in resume_twice_parked '"request_id":"w4.r2.0.p0","wait_id":"h2","outcome":"settled"') wake_received=$(count_in resume_twice_parked '"type":"wake_received"') wake_received(r1.p0)=$(count_in resume_twice_parked '"type":"wake_received","request_id":"w4.r1.0.p0"') session_start=$(count_in resume_twice_parked '"type":"session_start"') wake_request=$(count_in resume_twice_parked '"type":"wake_request"')"
+check "resume_twice_parked: exactly once, on the wire — wake_received(w4.r2.0.p0) precedes session_start(w4.r2.0); no error" \
+  "$([ -n "$twice_wake" ] && [ -n "$twice_started" ] && [ "$twice_wake" -lt "$twice_started" ] && [ "$(count_in resume_twice_parked '"type":"error"')" -eq 0 ] && echo 1 || echo 0)" "wake_received@${twice_wake:-none} session_start@${twice_started:-none}"
 
 if [ "$fail" -ne 0 ]; then echo "park_resume gate FAIL"; exit 1; fi
 echo "park_resume gate PASS"
