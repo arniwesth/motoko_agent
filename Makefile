@@ -658,15 +658,22 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # and a `stale_skip_record`) was dropped once it passed, per the summary's
 # reverse check.
 #
-# depth_canary -- listed 2026-09-07, PLAN-003 §5: tier 1, seed 23 exceeds its
-# ceiling of 90 (seeds 7 and 11 and tier 0 pass). Bisected to 8980ba6 (PLAN-001
-# live-run fix 1), which added a per-call `decode` of tool arguments before
-# dispatch: the canary header's SECOND case, a per-step frame-cost change on the
-# tool-phase path, not a new O(|trace|) traversal. Disposition pending the
-# owner's re-measure of seed 23's floor (run_depth_canary.sh header, tolerance-1
-# bisection with the fix in place) and a pin bump with the reason recorded, or
-# moving the decode off the per-step frame. Drop this entry when the summary
-# reports it PASSED.
+# depth_canary -- REMOVED 2026-09-15: pins re-measured and bumped with the
+# reason recorded in run_depth_canary.sh's header (floors 63/92/105, ceilings
+# 76/110/126, records 123/191/217; fault-present re-measured at HEAD, 150/237/265;
+# lever sweep flat in records). The seed 23 red was the right commit and the wrong
+# mechanism: 8980ba6's refusal of undecodable tool arguments changes seed 23's
+# stub TRAJECTORY (8 -> 11 provider calls, 96 -> 139 records, floor 76 -> 101),
+# and the decode itself costs no frames -- seeds 7 and 11 are unmoved across it.
+# The later journal, WorldRequest and ADR-002 W2 records shifted all three floors
+# by +3/+4/+4. Green from a plain-shell run of the script and `make depth_canary`.
+# (Prior entry, kept for history: listed 2026-09-07, PLAN-003 §5: tier 1, seed
+# 23 exceeds its ceiling of 90 (seeds 7 and 11 and tier 0 pass). Bisected to
+# 8980ba6 (PLAN-001 live-run fix 1), which added a per-call `decode` of tool
+# arguments before dispatch: the canary header's SECOND case, a per-step
+# frame-cost change on the tool-phase path, not a new O(|trace|) traversal.
+# Disposition pending the owner's re-measure of seed 23's floor and a pin bump
+# with the reason recorded, or moving the decode off the per-step frame.)
 #
 # driver_plus_herdr, herdr_graded -- REMOVED 2026-09-14: PINDH re-issued the profile
 # (eba309c, driver_plus_herdr/1 -> /2): ABI 7.4 transcribed, attribution re-recorded
@@ -687,7 +694,7 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # before any P3 part. Disposition pending the owner's D4 re-issue of the profile
 # against the corrected table. Drop both entries when the summary reports them
 # PASSED.)
-DST_KNOWN_RED := depth_canary driver_plus_herdr herdr_graded
+DST_KNOWN_RED := driver_plus_herdr herdr_graded
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
