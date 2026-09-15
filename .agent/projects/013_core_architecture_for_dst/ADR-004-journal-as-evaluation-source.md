@@ -16,7 +16,9 @@ Code coordinates are at HEAD **`3920814`**, re-read for v5, unless marked *(revi
 by a review at `d5edebf`, not re-read here. Four cited modules moved between `d5edebf` and
 `3920814` (`git diff --stat`): `session.ail` +316 lines, all after `:5097`; `ports.ail` +46 at
 every cited site from `:1259` on; `test/stub_step.ail` +14 from `:321` on; `journal.ail` +2, +80
-and +122 at its three cited definitions. Every coordinate in those four is re-pinned below; every
+and +122 at its three cited definitions. Every coordinate in those four is re-pinned below. Five
+cited modules changed between `d5edebf` and `3920814`: the four above and
+`tools/driver_leaf_inventory/derive.py` (+10 at `:642–654`, no cited coordinate affected); every
 other cited module is byte-identical between the two commits and keeps its coordinate.
 This ADR still changes nothing in ADR-003: the journal format, writer, fold and resume are
 untouched. It changes one thing in the DST harness: one `StepProvider` variant (D2).
@@ -342,7 +344,7 @@ it and the contract or test it implies (PLAN-004's M-rows):
    is `ProgramExhausted` at its position; `Diverged` carries an integer position; manifest provenance
    is filled from the same sources `discovered_manifest` does."*
    - Both seams' empty arms now write a complete `TimedOutcome`: the provider marker is the harness's
-     own exhausted record (`stub_step.ail:483–505`), the tool record mirrors `tool_outcome_record`'s
+     own exhausted record (`stub_step.ail:488–505`), the tool record mirrors `tool_outcome_record`'s
      `ToolFailed` arm (`ports.ail:2133–2145`) with the exported class literal
      (`dst_fault_catalogue.ail:61`) (D2).
    - `ProgramExhausted` is emitted only when the expected log is exhausted (`dst_replay.ail:374–379`);
@@ -367,9 +369,12 @@ it and the contract or test it implies (PLAN-004's M-rows):
    identity (D5). Contract: M7, M13.
 7. *"The control runs at `a6abda4` plus a patch limited to the sum, the two arms and the imports,
    and K0–K7 pass."* The historical `recording_ports` lacks HEAD's `wake_read: recording_wake`
-   binding (`a6abda4:src/core/test/stub_step.ail:554–576` against `stub_step.ail:635–658`; SHA-256
+   binding (`a6abda4:src/core/test/stub_step.ail:554–575` against `stub_step.ail:635–658`; SHA-256
    `e6df6f20…` against `495d3c8f…`, review §3.8), a difference outside that patch, so it fails A's
-   pins at K0 — and a K0 refusal is not the budget rejection D8 needs. v5 makes a **same-basis
+   pins at K0 — and a K0 refusal is not the budget rejection D8 needs. The two digests are the
+   SHA-256 of the definition text from `export func recording_ports(` through its closing brace and
+   newline (the v4 review's `audit_v4.py`; historical lines 554–575, current 635–658); a `sed`
+   line-range hash differs. v5 makes a **same-basis
    regression control** primary: a candidate diff on A reverting `de4b4f5`'s change to
    `canonical_messages` — that commit touched only `src/core/phase_vocab.ail` (10+/7−) and is an
    ancestor of `3920814` — which must pass review as resource-only, the protected check, and K1–K7
@@ -694,7 +699,7 @@ source or its association is unusable for this selector.
 |---|---|
 | `Completed(finish_reason)` | `run_finished` on the path: the genuine end |
 | `Suspended`, `Resumed`, `SettingsChange`, `RunStarted`, `Exit`, `EofWithoutRunFinished` | run boundary or state change |
-| `Parked` | a `park` entry inside the run (`journal.ail:1179`, `park_of_entry :1211`). The loop reached `Park`, which needs an open wait that only the extension `Handled` lifecycle opens (`tool_phase.ail:438–449`) — unreachable at T0 (empty registry, `wakes: []`). Cut **before the last assistant turn preceding the park entry** (the turn whose handled tool opened the wait; `park.step` is the index of the call that would have followed, `session.ail:3527–3529`). Whatever follows the park inside the run — the `wake` child and the wake message the loop injects as a `user_injected` history append (`:3546–3551`) — is inside the cut. A park is a boundary of the loop's *state*, not necessarily of the run: an in-process wake continues the same run; a process death while parked makes the resumer open a new one (`:5338`, `:5414–5424`) |
+| `Parked` | a `park` entry inside the run (`journal.ail:1179`, `park_of_entry :1211`). The loop reached `Park`, which needs an open wait that only the extension `Handled` lifecycle opens (`tool_phase.ail:438–449`) — unreachable at T0 (empty registry, `wakes: []`). Cut **before the last assistant turn preceding the park entry**: the turn preceding a park is the call-free stop-class call k whose classification found an open wait (`step_machine.ail:141–148`; `session.ail:3274`); the wait was opened by a `Handled` tool on an earlier turn (`tool_phase.ail:439–447`). The segment ends at call k−1 with `EndSuspended(k−1)`; call k is dropped rather than kept as `StopBeforeEnd` because the live run classified it `await_wake`, not approved. `park.step` = k (`session.ail:3528`, attempt 0). Whatever follows the park inside the run — the `wake` child and the wake message the loop injects as a `user_injected` history append (`:3546–3551`) — is inside the cut. A park is a boundary of the loop's *state*, not necessarily of the run: an in-process wake continues the same run; a process death while parked makes the resumer open a new one (`:5338`, `:5414–5424`) |
 | `ProviderRetry` | a `stream_error_retry` consumes a provider position with no assistant message (`session.ail:3862–3921` *(review)*) |
 | `UserMessage` | an in-run user entry: operator input **or** runtime-injected feedback (`:3409–3441` *(review)*; the evidence log has two `ext_solver_feedback` events); role alone cannot tell them apart |
 | `HistoryReplaced` | any reason, including `resume` |
@@ -790,16 +795,17 @@ or a helped request; nothing that runs today changes adapters. **The commit is l
 as `stub_step.ail:44` and `tool_phase.ail:484` already do to keep anchors still (PLAN-004 P1.1
 verified the five joins at `3920814`).
 
-**The ports.** `{ recording_ports(rt) | model_step: eval_model_step(base), tool_exec:
-eval_tool_exec(base) }` where `base = recording_ports(rt)` (`stub_step.ail:635–658`) — the
+**The ports.** `{ base | model_step: eval_model_step(base), tool_exec: eval_tool_exec(base) }` where
+`base = recording_ports(rt)` (`stub_step.ail:635–658`) — the
 harness's recording adapters with two evaluator-owned seams by **guarded delegation**:
 
 - **`eval_model_step(base)`.** If `state.script` is empty, the seam does **not** delegate: the
   harness's own empty arm returns `Ok(terminal_step())`, a fabricated assistant turn
-  (`stub_step.ail:483–505`, `terminal_step :95`) — the prototype's terminator, one layer down.
+  (`stub_step.ail:488–505`, `terminal_step :95`) — the prototype's terminator, one layer down.
   Instead it records the marker through `record_interaction` (`ports.ail:1827–1843`) with
-  `ProviderIdentity("loop_v2", k, api_model)` (k = `provider_calls_in(state.log, 0)`, the
-  harness's own count, `stub_step.ail:561`), the projection
+  `ProviderIdentity("loop_v2", k, api_model)` — k = the number of `ProviderIdentity` records in
+  `state.log`, computed by the evaluator (the quantity the private `provider_calls_in`,
+  `stub_step.ail:561`, computes) — the projection
   `"model_step model=… msg_count=… replay=exhausted"`, deadline `-1`, and **exactly the record the
   harness's exhausted arm writes**: `{ advance_ms: 0, chunks: [], payload:
   encode_exhausted_provider_outcome(), status: OutcomeOk, fault_class_id: "" }` (`ports.ail:2522–2524`,
@@ -808,7 +814,7 @@ harness's recording adapters with two evaluator-owned seams by **guarded delegat
   carries no serialised `AIError`; the `Err` is constructed, not decoded. Otherwise delegate
   to `base.model_step` — `recording_model_step` serves the step and records the interaction
   with the whole `StepResult` as outcome (`stub_step.ail:478–542`) — assert that the log is the old
-  log plus **exactly one** interaction (the prefix byte-equal), and **replace that interaction's
+  log plus **exactly one** interaction (a structurally equal prefix), and **replace that interaction's
   `request_projection`** with `"model_step model=… msg_count=… payload=<D> system=<S> raw=<R>"`:
   `D` the private canonical payload digest, `S` the private system-prefix digest over the leading
   system messages (`system_prefix_digest_for`, `phase_vocab.ail:369–370`), `R` a private **raw frame
@@ -834,7 +840,7 @@ harness's recording adapters with two evaluator-owned seams by **guarded delegat
   correlation guard returns `ToolCorrelationMismatch({ expected_id, got_id })` on an id mismatch,
   `:1775–1777`; every scripted outcome — completion, mismatch, deadline, failure — returns normally
   after cursor and clock advancement and is classified by `tool_outcome_record`), assert one
-  appended interaction with the prefix byte-equal, and replace its projection with the same
+  appended interaction with a structurally equal prefix, and replace its projection with the same
   string without `replay=unrecorded`.
 
 No private helper is used and no export is added. The core recorder's projections are not
@@ -1128,7 +1134,8 @@ No adversarial guarantee is claimed; stronger isolation is Not decided.
 also hold what the seams delegate to and what those delegates serve through. The entry pins, by
 hash of the original bytes of each declaration at A, the **dependency closure of
 `recording_ports`' bindings and of the two seams' delegates**, read at A and reviewed with the
-manifest (PLAN-004 P1.4b generates it by symbol from `git show A:<path>`):
+manifest, generated by P1.4b by symbol from `git show A:<path>`; the members below are the
+reviewed starting set:
 - in `ports.ail`: `record_interaction` (`:1827`); the provider codec — `encode_provider_outcome`,
   `decode_provider_outcome`, `encode_exhausted_provider_outcome` (`:2507–2553`); the tool codec —
   `encode_tool_outcome` (`:2577`), `decode_tool_outcome` (`:2608`); `world_tool` (`:1723`),
@@ -1138,7 +1145,14 @@ manifest (PLAN-004 P1.4b generates it by symbol from `git show A:<path>`):
   `scripted_env`, `lookup_env`, `env_has_key` (`:1851–1895`, `:1311–1320`); `ports_shape_probe`
   (`:2855`), `scripted_file`, `lookup_file` (`:1335`, `:1356`); the bound approval and wake
   defaults `scripted_approval`, `recording_approval`, `scripted_wake`, `recording_wake` (`:1086`,
-  `:2020`, `:1178`, `:1201`) and the bound mutation and effect recorders; the types `ToolInvocation`,
+  `:2020`, `:1178`, `:1201`) and the bound mutation and effect recorders — the four `recording_ports`
+  binds, `recording_file_write`, `recording_file_remove`, `recording_dir_make`, `recording_ext_effect`
+  (`:1931`, `:1957`, `:1993`, `:2107`; bound at `stub_step.ail:642–658`), and `ports_shape_probe`'s
+  `scripted_file_write`, `scripted_file_remove`, `scripted_dir_make`, `scripted_path_stat`,
+  `scripted_dir_list`, `world_ext_effect` (`:2870–2874`, `:2883`); the transitive members review §3.8
+  names — the codec helpers `tool_calls_json`, `tool_calls_of` and the JSON field readers `bool_field`,
+  `str_field`, `int_field`, `json_array` (`:2514`, `:2543–2550`), `live_tool_outcome` (`:1744`),
+  `cursor_wake` (`:1179`); the types `ToolInvocation`,
   `ToolCallEnvelope`, `ToolOutcome`, `ToolExecution`, `TimedOutcome`, `OutcomeStatus`, `ScriptedStep`,
   `ScriptedTool`, `WorldState` and `Ports`;
 - in `stub_step.ail`: `recording_ports` (`:635`), `recording_model_step` (`:478`),
@@ -1147,7 +1161,8 @@ manifest (PLAN-004 P1.4b generates it by symbol from `git show A:<path>`):
   `dispatch_step` (`:791`), the `StepProvider` sum (`:69`);
 - in `session.ail`: `provider_api_model` (`:272–293`, the live conversion the evaluator's copy is
   compared with), `ported_provider` (`:1532–1547`), and `dispatch_step`'s call site (`:3824`);
-- in `dst_fault_catalogue.ail` (path-refused anyway): the class literals (`:61–63`, `:82–85`);
+- in `dst_fault_catalogue.ail` (path-refused anyway): the class literals (`:61–63`, `:82–85`) and
+  `provider_error_is_retryable` (`:152`, review §3.8);
 - in each of the three files, the **imports region** (every import statement, as one span per
   contiguous run) and every type declaration a listed function names.
 
@@ -1166,7 +1181,9 @@ missing member, reported to the next revision (D8's M15 row for `ProtectedRegion
 extended through a following `deriving (…)`; a non-braced union to the last non-blank line before
 the next column-0 declaration, a heuristic cross-checked by type-checking a copy with the span
 removed; one aggregate imports span per contiguous run of import statements, statements parsed
-across lines and several per line (`stub_step.ail:28–33`, `:44`; `ports.ail:60–67`). No whitespace
+across lines and several per line (`stub_step.ail:28–33`, `:44`; `ports.ail:60–67`). Braces and
+parentheses are counted outside string literals (with `${…}` interpolation) and `--` comments; an
+unterminated literal or unbalanced brace is a hard error (P1.4b's lexer). No whitespace
 normalisation: `check.py`'s `normalize` collapses whitespace for ADR prose
 (`tools/predicate-anchors/check.py:62–73`) and would erase a semantic change inside an AILANG
 projection string; `derive.py`'s `strip_noise` and `func_spans` (`tools/driver_leaf_inventory/derive.py:63–86`,
@@ -1231,8 +1248,11 @@ construction.
 
 **The control basis.** The regression control D8 requires must pass K1–K7 on the entry and fail
 only the budget. The historical `a6abda4` cannot do so on A's pins: its `recording_ports` lacks the
-`wake_read` binding (`a6abda4:src/core/test/stub_step.ail:554–576`, SHA-256 `e6df6f20…`, against
-`stub_step.ail:635–658`, `495d3c8f…`), and a K0 refusal is not a rejection by allocation. So the
+`wake_read` binding (`a6abda4:src/core/test/stub_step.ail:554–575`, SHA-256 `e6df6f20…`, against
+`stub_step.ail:635–658`, `495d3c8f…` — each the SHA-256 of the definition text from
+`export func recording_ports(` through its closing brace and newline, the v4 review's `audit_v4.py`;
+historical lines 554–575, current 635–658; a `sed` line-range hash differs), and a K0 refusal is
+not a rejection by allocation. So the
 **primary control is same-basis**: a candidate diff on A that reverts `de4b4f5` — "Build
 `canonical_messages` with one concat instead of right-nested interpolation", `src/core/phase_vocab.ail`
 only, an ancestor of `3920814` — run through the candidate runner like any candidate. Its
@@ -1580,4 +1600,4 @@ anchor; everything else lands at E.
 - Code as cited by the reviews and not re-read for v5: `session.ail:3409–3441`, `:3862–3921`;
   `phase_vocab.ail:275–300`, `:321–358`, `:1362–1374`; `model_phase.ail:17–25`;
   `tool_dispatch_adapter.ail:46–56`; `dst_persistence.ail:211–239`; the historical
-  `a6abda4:src/core/test/stub_step.ail:554–576`.
+  `a6abda4:src/core/test/stub_step.ail:554–575`.
