@@ -1,0 +1,134 @@
+-- src/eval/journal/source_checks_run.ail
+--
+-- ADR-004 v5 D3, PLAN-004 §3 P1.7a: the run-bearing half of the source
+-- checks, and the admission verdict over a whole entry. The checks are
+-- `source_checks.ail` (pure; see its header for why the two are split).
+--
+--   transcript_observation(run)                     -> TranscriptObservation (A2)
+--   run_source_findings(lines, jw, run, log)        -> [AdmissionFinding]    (A1..A4)
+--   admit_source(label, entry, kind, ids, cmp, lines, jw, epoch, workdir, scan)
+--                                                   -> AdmissionOutcome
+--   admit_entry(label, entry, kind, ids, cmp, journal, log, sel, env, epoch, workdir, scan)
+--                                                   -> AdmissionOutcome
+--
+-- `admit_source` is P1.6's `admit_with_evidence` (admission_run.ail) with the
+-- run kept, so A1–A4 can read it: the same preflight (nothing runs on a
+-- finding), the same frame markers on stdout, the same `admission_run`,
+-- program and A5–A9 (`admission_findings`, which includes P1.7b's A7/A8).
+-- The findings of every check are then ordered and mapped by
+-- `admission_verdict`. `admit_entry` reads the journal world first; a D1
+-- refusal is `Refused(Refusal(r))` and nothing runs.
+--
+-- WHAT EACH CHECK READS FROM THE RUN:
+--   A1  nothing: the snapshot's lines and the reader's seed and segment.
+--   A2  `run.final.history`; the trace's `HistorySeeded.digest` values and
+--       `HistoryAppended.{digest_after, replaces_previous}` records.
+--   A3  the program's provider interactions (`world.log`: identity model and
+--       the seam's projection).
+--   A4  the program's tool interactions (identity, `args=`), and the tool
+--       calls of `run.final.history`'s post-seed assistant messages — what
+--       the loop dispatched.
+--
+-- Privacy (§0.6): synthetic fixtures only.
+
+module src/eval/journal/source_checks_run
+
+import std/io (println)
+import std/json (Json)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/dst_interaction (Interaction)
+import src/core/phase_vocab (LedgerRecord, WireRecord, HistorySeeded, HistoryAppended)
+import src/core/session (TracedSessionResult)
+import src/core/dst_persistence (encode_body, program_digest)
+import src/eval/journal/reader (RunSelector)
+import src/eval/journal/configuration (RecordedEnv)
+import src/eval/journal/stopping (JournalWorld, read_journal_world, end_id, end_value)
+import src/eval/journal/world (journal_world_state)
+import src/eval/journal/admission (
+  AdmissionFinding, AdmissionReport, EntryKind, Identities, Comparators,
+  begin_line, observed_end, preflight, a9b_unchecked, manifest_of, admission_program, refused_report
+)
+import src/eval/journal/admission_run (admission_run, frame_observation, end_observation, admission_findings)
+import src/eval/journal/bridge (a8_of_run)
+import src/eval/journal/source_checks (
+  Admission, TranscriptObservation, AppendedRecord,
+  source_chain, check_a1, transcript_expectation, check_a2,
+  request_expectations, request_observations, check_a3,
+  invocation_expectations, invocation_observations, dispatched_calls, check_a4,
+  admission_verdict, refused_at_source, ordered_findings
+)
+
+pure func sr_seeded(r: LedgerRecord) -> [string] {
+  match r { WireRecord(HistorySeeded(i)) => [i.digest], _ => [] }
+}
+
+pure func sr_appended(r: LedgerRecord) -> [AppendedRecord] {
+  match r { WireRecord(HistoryAppended(i)) => [{ digest_after: i.digest_after, replaces_previous: i.replaces_previous }], _ => [] }
+}
+
+export pure func transcript_observation(run: TracedSessionResult) -> TranscriptObservation {
+  {
+    final_history: run.final.history,
+    seeded: List.foldl(\acc r. acc ++ sr_seeded(r), [], run.trace.records),
+    appended: List.foldl(\acc r. acc ++ sr_appended(r), [], run.trace.records)
+  }
+}
+
+-- A1..A4 in check order. `log` is the program's interactions (the run's
+-- `world.log` at admission; a test may pass a mutated one).
+export pure func run_source_findings(lines: [Json], jw: JournalWorld, run: TracedSessionResult, log: [Interaction]) -> [AdmissionFinding] {
+  let chain = source_chain(lines, jw);
+  let dispatched = dispatched_calls(run.final.history, List.length(jw.seed));
+  check_a1(chain)
+    ++ check_a2(transcript_expectation(chain), transcript_observation(run))
+    ++ check_a3(request_expectations(jw), request_observations(log))
+    ++ check_a4(invocation_expectations(jw), invocation_observations(log, dispatched))
+}
+
+export type AdmissionOutcome = {
+  report: AdmissionReport,
+  source: [AdmissionFinding],
+  findings: [AdmissionFinding],
+  admission: Admission
+}
+
+export func admit_source(label: string, entry: string, kind: EntryKind, ids: Identities, cmp: Comparators, lines: [Json], jw: JournalWorld, epoch: int, workdir: string, scan: [string]) -> AdmissionOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let pre = preflight(kind, ids, cmp);
+  let unchecked = a9b_unchecked(kind, cmp);
+  match pre {
+    _ :: _ => {
+      let r = refused_report(label, jw, pre, unchecked);
+      { report: r, source: [], findings: pre, admission: admission_verdict(entry, jw, scan, pre, false, unchecked) }
+    },
+    [] => {
+      let w0 = journal_world_state(jw, epoch);
+      let _ = println(begin_line(label, w0.ordinal));
+      let run = admission_run(jw, w0, workdir);
+      let frame = frame_observation(label, w0.ordinal, run);
+      let _ = println(frame.end_line);
+      let p = admission_program(jw, w0, run.world.log, manifest_of(ids), ids.generator_version);
+      let m = manifest_of(ids);
+      let a8 = a8_of_run(run, w0, jw, m, epoch);
+      let p16 = admission_findings(frame, jw, run, w0, p, a8);
+      let src = run_source_findings(lines, jw, run, run.world.log);
+      let all = ordered_findings(src ++ p16);
+      let report = {
+        label: label, preflight: [], ran: true, calls: List.length(jw.calls),
+        expected_end: "${end_id(jw.end.expected)}(${end_value(jw.end.expected)})",
+        observed_end: observed_end(end_observation(run)),
+        findings: p16, program: Some(p), program_digest: "sha256:${program_digest(encode_body(p))}",
+        interactions: List.length(run.world.log), unchecked: unchecked
+      };
+      { report: report, source: src, findings: all, admission: admission_verdict(entry, jw, scan, all, true, unchecked) }
+    }
+  }
+}
+
+export func admit_entry(label: string, entry: string, kind: EntryKind, ids: Identities, cmp: Comparators, lines: [Json], log: [string], sel: RunSelector, env: RecordedEnv, epoch: int, workdir: string, scan: [string]) -> Result[AdmissionOutcome, Admission] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match read_journal_world(lines, log, sel, env) {
+    Err(r) => Err(refused_at_source(r)),
+    Ok(jw) => Ok(admit_source(label, entry, kind, ids, cmp, lines, jw, epoch, workdir, scan))
+  }
+}

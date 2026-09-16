@@ -38,9 +38,9 @@ M1.reader.gen	src/eval/journal/reader.ail:test_reader_equals_generator	pass	-	ag
 M1.fold.at_a	src/eval/journal/reader_at_a_test.ail:test_fold_copy_equals_fold_journal_at_a	pass	-	aggregate:reader
 M1.fold.at_a.every_leaf	src/eval/journal/reader_at_a_test.ail:test_fold_copy_equals_fold_journal_at_every_leaf	pass	-	aggregate:reader
 M15.ChainBreak.passes_M1	src/eval/journal/reader.ail:test_m15_near_miss_chain_break_passes_m1	pass	-	aggregate:reader
-M15.ChainBreak	pending:P1.7a-v2 (fixture near_miss_chain_break)	refused	AdmissionCheck(A3)	call:2
+M15.ChainBreak	src/eval/journal/source_checks_live_test.ail:m15_chain_break	refused	AdmissionCheck(A3)	call:2
 M15.MalformedEntry.passes_M1	src/eval/journal/reader.ail:test_m15_near_miss_malformed_entry_passes_m1	pass	-	aggregate:reader
-M15.MalformedEntry	pending:P1.7a-v2 (fixture near_miss_malformed_entry)	refused	AdmissionCheck(A3)	call:2
+M15.MalformedEntry	src/eval/journal/source_checks_live_test.ail:m15_malformed_entry	refused	AdmissionCheck(A3)	call:2
 M15.UnknownEntryType	-	inapplicable	reason: the nearest decodable input is a known type, and a known type in-segment is a cutoff (M3) or a content change (M15.MalformedEntry)	-
 M15.UnknownSchema	-	inapplicable	reason: an entry under an undecodable schema cannot be read	-
 M15.park_wake	-	inapplicable	reason: v5 D1/D8 - Parked is a cutoff (M3); a wake-opened start is ContinuationStart (M2); a stray wake is MalformedEntry (M1.MalformedEntry.stray_wake.*)	-
@@ -110,13 +110,13 @@ M2.excerpt.thinking_usage	src/eval/journal/excerpt.ail:test_excerpt_thinking_usa
 M2.excerpt.rpc_banner_and_retry	src/eval/journal/excerpt.ail:test_excerpt_rpc_banner_and_retry	pass	-	aggregate:excerpt
 M2.excerpt.refusals_located	src/eval/journal/excerpt.ail:test_excerpt_refusals_are_located	pass	-	aggregate:excerpt
 M15.UnexpectedToolResult.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_unexpected_tool_result_passes_m2	pass	-	aggregate:association
-M15.UnexpectedToolResult	pending:P1.7a-v2 (fixture m15_unexpected_tool_result)	refused	AdmissionCheck(A3)	call:2
+M15.UnexpectedToolResult	src/eval/journal/source_checks_live_test.ail:m15_unexpected_tool_result	refused	AdmissionCheck(A3)	call:2
 M15.MalformedToolArguments.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_malformed_tool_arguments_passes_m2	pass	-	aggregate:association
-M15.MalformedToolArguments	pending:P1.7a-v2 (fixture m15_malformed_tool_arguments)	refused	AdmissionCheck(A3)	call:2
+M15.MalformedToolArguments	src/eval/journal/source_checks_live_test.ail:m15_malformed_tool_arguments	refused	AdmissionCheck(A3)	call:2
 M15.DuplicateOrAmbiguousCallId.association_accepts	src/eval/journal/association.ail:test_m15_near_miss_duplicate_call_id_swap_is_accepted	pass	-	aggregate:association
-M15.DuplicateOrAmbiguousCallId	pending:P1.7a-v2 (fixture m15_duplicate_call_id_swap; the seam's first ToolCorrelationMismatch)	refused	AdmissionCheck(A2)	entry:14
+M15.DuplicateOrAmbiguousCallId	src/eval/journal/source_checks_live_test.ail:m15_duplicate_call_id_swap	refused	AdmissionCheck(A2)	snapshot:14
 M15.Association.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_association_passes_m2	pass	-	aggregate:association
-M15.Association	pending:P1.7a-v2 (fixture m15_association)	refused	AdmissionCheck(A3)	call:1
+M15.Association	src/eval/journal/source_checks_live_test.ail:m15_association	refused	AdmissionCheck(A3)	call:1
 M15.ContinuationStart	-	inapplicable	reason: no evaluated call exists - a T0 refusal of the run's start	-
 M15.EmptySegment	-	inapplicable	reason: no evaluated call exists	-
 M3.SelectorEnd	src/eval/journal/stopping.ail:test_m3_selector_end	admitted	cut:SelectorEnd;sel=EndAt(e20);N=3;end=EndSuspended(3);genuine	selector
@@ -263,6 +263,66 @@ M9.A9b.synthetic_before_p1g	src/eval/journal/admission.ail:test_m9_a9b_real_entr
 M9.A9b.real_dev_generator_pinned	src/eval/journal/admission.ail:test_m9_a9b_real_entry_refused_before_p1g	refused	A9b:DevGeneratorRealEntry	aggregate:provenance:generator_version
 M9.A9b.live.real_before_p1g	src/eval/journal/admission_live_test.ail:m9_preflight_refuses_real_entry_without_running	refused	A9b:ToolchainUnpinned	aggregate:provenance:toolchain
 M9.A9b.configuration.generator	src/eval/journal/admission.ail:test_m9_normalized_configuration_equals_generator	pass	-	aggregate:provenance:normalized_configuration
+M10.A1.clean	src/eval/journal/source_checks.ail:test_m10_source_chain_equals_generator	pass	-	aggregate:source_chain
+M10.A1.seed_digest_tamper.recorded	src/eval/journal/source_checks.ail:test_m10_a1_seed_digest_tamper	refused	A1:SeedDigestDiffers	snapshot:12
+M10.A1.seed_digest_tamper.folded	src/eval/journal/source_checks.ail:test_m10_a1_seed_digest_tamper	refused	A1:SeedDigestDiffers	snapshot:12
+M10.A1.segment_tamper	src/eval/journal/source_checks.ail:test_m10_a1_seed_digest_tamper	refused	A1:ChainDiffers	snapshot:17
+M10.A1.replaces_previous	src/eval/journal/source_checks.ail:test_m10_a1_seed_digest_tamper	pass	-	aggregate:source_chain
+M10.A1.live.seed_digest_tamper	src/eval/journal/source_checks_live_test.ail:m10_a1_seed_digest_tamper	refused	A1:SeedDigestDiffers	snapshot:12
+M10.A2.clean	src/eval/journal/source_checks.ail:test_m10_a2_transcript	pass	-	aggregate:transcript
+M10.A2.one_byte_append.history	src/eval/journal/source_checks.ail:test_m10_a2_transcript	refused	A2:MessageDiffers	snapshot:14
+M10.A2.one_byte_append.record	src/eval/journal/source_checks.ail:test_m10_a2_transcript	refused	A2:ChainDiffers	snapshot:14
+M10.A2.count.short	src/eval/journal/source_checks.ail:test_m10_a2_transcript	refused	A2:HistoryShort	snapshot:16
+M10.A2.count.long	src/eval/journal/source_checks.ail:test_m10_a2_transcript	refused	A2:AppendCountDiffers	aggregate:transcript
+M10.A2.seeded_twice	src/eval/journal/source_checks.ail:test_m10_a2_transcript	refused	A2:SeededRecordCount	snapshot:12
+M10.A2.seed_digest	src/eval/journal/source_checks.ail:test_m10_a2_transcript	refused	A2:SeedDigestDiffers	snapshot:12
+M10.A2.seed_message	src/eval/journal/source_checks.ail:test_m10_a2_transcript	refused	A2:SeedMessageDiffers	snapshot:12
+M10.A2.replaces_previous	src/eval/journal/source_checks.ail:test_m10_a2_transcript	refused	A2:ReplacesPrevious	snapshot:16
+M10.A2.live.one_byte_append.history	src/eval/journal/source_checks_live_test.ail:m10_a2_one_byte_append_change	refused	A2:MessageDiffers	snapshot:14
+M10.A2.live.one_byte_append.record	src/eval/journal/source_checks_live_test.ail:m10_a2_one_byte_append_change	refused	A2:ChainDiffers	snapshot:14
+M10.A3.clean	src/eval/journal/source_checks.ail:test_m10_a3_requests	pass	-	aggregate:requests
+M10.A3.payload	src/eval/journal/source_checks.ail:test_m10_a3_requests	refused	A3:PayloadDiffers	call:2
+M10.A3.system	src/eval/journal/source_checks.ail:test_m10_a3_requests	refused	A3:SystemDiffers	call:1
+M10.A3.model_conversion	src/eval/journal/source_checks.ail:test_m10_a3_requests	refused	A3:ModelDiffers	call:1
+M10.A3.model_projection	src/eval/journal/source_checks.ail:test_m10_a3_requests	refused	A3:ModelDiffers	call:2
+M10.A3.msg_count	src/eval/journal/source_checks.ail:test_m10_a3_requests	refused	A3:MsgCountDiffers	call:2
+M10.A3.count.short	src/eval/journal/source_checks.ail:test_m10_a3_requests	refused	A3:CallCountDiffers	call:2
+M10.A3.count.long	src/eval/journal/source_checks.ail:test_m10_a3_requests	refused	A3:CallCountDiffers	call:2
+M10.A3.exhausted_record	src/eval/journal/source_checks.ail:test_m10_a3_requests	refused	A3:PayloadDiffers	call:2
+M10.A3.expectations	src/eval/journal/source_checks.ail:test_m10_expectations_from_world	pass	-	aggregate:requests
+M10.A3.live.payload	src/eval/journal/source_checks_live_test.ail:m10_a3_payload_digest	refused	A3:PayloadDiffers	call:2
+M10.A3.live.model_conversion.clean	src/eval/journal/source_checks_live_test.ail:m10_a3_model_conversion	pass	-	aggregate:requests
+M10.A3.live.model_conversion	src/eval/journal/source_checks_live_test.ail:m10_a3_model_conversion	refused	A3:ModelDiffers	call:1
+M10.A3.live.msg_count	src/eval/journal/source_checks_live_test.ail:m10_a3_msg_count_and_count	refused	A3:MsgCountDiffers	call:3
+M10.A3.live.count	src/eval/journal/source_checks_live_test.ail:m10_a3_msg_count_and_count	refused	A3:CallCountDiffers	call:3
+M10.A4.clean	src/eval/journal/source_checks.ail:test_m10_a4_invocations	pass	-	aggregate:invocations
+M10.A4.json_equal_reorder	src/eval/journal/source_checks.ail:test_m10_a4_invocations	pass	-	aggregate:invocations
+M10.A4.json_inequal	src/eval/journal/source_checks.ail:test_m10_a4_invocations	refused	A4:ArgumentsDiffer	snapshot:13
+M10.A4.json_inequal.later_call	src/eval/journal/source_checks.ail:test_m10_a4_invocations	refused	A4:ArgumentsDiffer	snapshot:17
+M10.A4.program_digest	src/eval/journal/source_checks.ail:test_m10_a4_invocations	refused	A4:ArgumentsDigestDiffers	snapshot:17
+M10.A4.identity	src/eval/journal/source_checks.ail:test_m10_a4_invocations	refused	A4:InvocationDiffers	snapshot:13
+M10.A4.count.short	src/eval/journal/source_checks.ail:test_m10_a4_invocations	refused	A4:InvocationCountDiffers	snapshot:17
+M10.A4.count.long	src/eval/journal/source_checks.ail:test_m10_a4_invocations	refused	A4:InvocationCountDiffers	interaction:15
+M10.A4.unobserved	src/eval/journal/source_checks.ail:test_m10_a4_invocations	refused	A4:ArgumentsUnobserved	snapshot:13
+M10.A4.live.json_inequal	src/eval/journal/source_checks_live_test.ail:m10_a4_json_inequal	refused	A4:ArgumentsDiffer	snapshot:13
+M10.A4.live.json_equal	src/eval/journal/source_checks_live_test.ail:m10_a4_json_inequal	pass	-	aggregate:invocations
+M10.A4.live.program_digest_first	src/eval/journal/source_checks_live_test.ail:m10_a4_json_inequal	refused	A4:ArgumentsDigestDiffers	snapshot:13
+M10.A4.live.count.short	src/eval/journal/source_checks_live_test.ail:m10_a4_count	refused	A4:InvocationCountDiffers	snapshot:20
+M10.A4.live.count.long	src/eval/journal/source_checks_live_test.ail:m10_a4_count	refused	A4:InvocationCountDiffers	interaction:23
+M10.verdict.faithful	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	admitted	-	-
+M10.verdict.check_order	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	AdmissionCheck(A2)	snapshot:14
+M10.verdict.stable_within_check	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	AdmissionCheck(A3)	call:2
+M10.verdict.interaction	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	AdmissionCheck(A4)	interaction:15
+M10.verdict.scan	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	ScanRefusal	aggregate:scan
+M10.verdict.preflight	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	AdmissionCheck(A9b)	aggregate:provenance:toolchain
+M10.verdict.refusal	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	HybridPredicate	entry:9
+M10.verdict.not_run	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	AdmissionCheck(A5)	aggregate:frame
+P17a.SourceFaithful.EndSuspended3	src/eval/journal/source_checks_live_test.ail:p17a_clean_suspended	admitted	-	-
+P17a.SourceFaithful.EndFinalize	src/eval/journal/source_checks_live_test.ail:p17a_clean_finalize	admitted	-	-
+P17a.Refused.Refusal	src/eval/journal/source_checks_live_test.ail:p17a_source_refusal	refused	HybridPredicate	entry:9
+P17a.Refused.Preflight	src/eval/journal/source_checks_live_test.ail:p17a_preflight_refusal	refused	AdmissionCheck(A9b)	aggregate:provenance:toolchain
+M15.clean.base	src/eval/journal/source_checks_live_test.ail:m15_clean_base	admitted	-	-
+M15.clean.m2	src/eval/journal/source_checks_live_test.ail:m15_clean_m2	admitted	-	-
 M11.env_table.columns	src/eval/journal/witness.ail:test_m11_env_table_columns	pass	-	aggregate:witness
 M11.witness.built	src/eval/journal/witness.ail:test_m11_witness_built_not_read	pass	-	aggregate:witness
 M11.witness.clean	src/eval/journal/witness.ail:test_m11_witness_balance	pass	-	aggregate:witness
