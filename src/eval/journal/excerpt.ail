@@ -1,0 +1,462 @@
+-- src/eval/journal/excerpt.ail
+--
+-- ADR-004 D1, PLAN-004 §3 P1.2b (graph id P1.2b-v2): the host-log excerpt.
+--
+--   read_excerpt(log_lines) -> Result[Excerpt, ExcerptError]
+--
+-- The input is the host log `.motoko/logfile/<session>.jsonl` as lines, in file
+-- order (the SessionLogger writes one JSON object per line, `JSON.stringify` of
+-- the child's event, `src/tui/src/session-logger.ts:405–416`). The excerpt is
+-- D1's five event types only, each with its SOURCE POSITION — the 0-based line
+-- index in that file, labelled `event:<i>`:
+--
+--   session_start          two shapes, told apart by their keys:
+--     ledger banner        `run_id`, `mode`, `model`       (phase_vocab.ail:1512)
+--     rpc banner           `model`, `config_profile`,      (rpc.ail:284–294)
+--                          `loaded_extensions`
+--     A line with `run_id` AND (`config_profile` or `loaded_extensions`), or
+--     with neither, is refused at `session_start.shape`.
+--   provider_call_prepared `step`, `msg_count`, `payload_digest`,
+--                          `system_prefix_digest`, `model`  (phase_vocab.ail:1472)
+--   thinking               `step`, `finish_reason`, `input_tokens`,
+--                          `output_tokens`, `tool_calls` (a count), and the two
+--                          cache counts, each present only when positive
+--                          (`thinking_usage_kvs`, phase_vocab.ail:1362–1374):
+--                          absent reads 0; a present value <= 0 is refused
+--   context_limit_resolved `run_id`, `context_limit`, and the five strings of
+--                          `context_limit_source` (phase_vocab.ail:1460–1468, 1510)
+--   stream_error_retry     `step`                           (phase_vocab.ail:1489)
+--
+-- WHAT IS KEPT. Counts, digests, identities and positions — never content: the
+-- banner's `task`, the thinking `text` and the retry's `error` are not read.
+--
+-- STRICTNESS. Every line must decode as a JSON object with a string `type`
+-- (`json` / `type` at that line); lines of any other type are skipped; an event
+-- of the five types with a missing or mistyped field is refused at
+-- `<type>.<field>`. An integer field must be an integral JSON number. A
+-- truncated last line (a `kill -9` mid-write) is therefore a refusal here; the
+-- corpus entry's excerpt extraction (P1.6/P1.8) decides whether to trim it
+-- before it is pinned — this reader does not guess.
+--
+-- The caller (`association.ail`) reports an `ExcerptError` as D1's
+-- `Refused(Association)` at `event:<i>`: an excerpt that cannot be read cannot
+-- agree with the journal on the run's calls.
+--
+-- Nothing here imports `src/core`; nothing here is a copy of a candidate
+-- declaration (the event shapes are the wire's, read from the positions above).
+
+module src/eval/journal/excerpt
+
+import std/json (Json, decode, get, has, asString, asArray, asObject, asNumber, getString)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/eval/journal/testdata/association_fixtures (RunFixture, fxr_all, fxr_m2_clean, fxr_m2_continuation_suspended_resumed, fxr_m2_retry_cut, fxr_m2_excerpt_missing_field, fxr_m2_excerpt_session_start_shape, fxr_m2_excerpt_zero_cache, fxr_m2_excerpt_type_not_string, fxr_m2_excerpt_not_json_line)
+
+-- ============================================================================
+-- The excerpt.
+-- ============================================================================
+
+export type LedgerStart = { index: int, run_id: string, mode: string, model: string }
+
+export type RpcStart = { index: int, model: string, config_profile: string, loaded_extensions: [string] }
+
+export type Prepared = {
+  index: int, step: int, msg_count: int,
+  payload_digest: string, system_prefix_digest: string, model: string
+}
+
+export type Thinking = {
+  index: int, step: int, finish_reason: string,
+  input_tokens: int, output_tokens: int, tool_calls: int,
+  cache_read: int, cache_creation: int
+}
+
+export type ContextLimit = {
+  index: int, run_id: string, context_limit: int,
+  arm: string, origin: string, profile_miss: string, catalogue_miss: string, model: string
+}
+
+export type Retry = { index: int, step: int }
+
+export type ExcerptEvent
+  = XLedgerStart(LedgerStart)
+  | XRpcStart(RpcStart)
+  | XPrepared(Prepared)
+  | XThinking(Thinking)
+  | XContextLimit(ContextLimit)
+  | XRetry(Retry)
+
+export type Excerpt = { events: [ExcerptEvent], lines: int }
+
+-- A line index and the field: `json`, `type`, or `<event type>.<field>`.
+export type ExcerptError = { index: int, field: string }
+
+export pure func event_index(e: ExcerptEvent) -> int {
+  match e {
+    XLedgerStart(x) => x.index, XRpcStart(x) => x.index, XPrepared(x) => x.index,
+    XThinking(x) => x.index, XContextLimit(x) => x.index, XRetry(x) => x.index
+  }
+}
+
+export pure func event_kind(e: ExcerptEvent) -> string {
+  match e {
+    XLedgerStart(_) => "ledger_start", XRpcStart(_) => "rpc_start", XPrepared(_) => "prepared",
+    XThinking(_) => "thinking", XContextLimit(_) => "context_limit", XRetry(_) => "retry"
+  }
+}
+
+-- ============================================================================
+-- Field readers: an `Err` is the field's label.
+-- ============================================================================
+
+pure func req_string(o: Json, key: string, where: string) -> Result[string, string] {
+  match getString(o, key) { None => Err("${where}.${key}"), Some(s) => Ok(s) }
+}
+
+pure func integral(v: Json) -> Option[int] {
+  match asNumber(v) {
+    None => None,
+    Some(f) => {
+      let n = floatToInt(f);
+      if _int_to_float(n) == f then Some(n) else None
+    }
+  }
+}
+
+pure func req_int(o: Json, key: string, where: string) -> Result[int, string] {
+  match get(o, key) {
+    None => Err("${where}.${key}"),
+    Some(v) => match integral(v) { None => Err("${where}.${key}"), Some(n) => Ok(n) }
+  }
+}
+
+-- Absent reads 0; present must be a positive integer.
+pure func opt_positive(o: Json, key: string, where: string) -> Result[int, string] {
+  if not has(o, key) then Ok(0)
+  else match req_int(o, key, where) {
+    Err(e) => Err(e),
+    Ok(n) => if n > 0 then Ok(n) else Err("${where}.${key}")
+  }
+}
+
+type StrsAcc = { ok: bool, out: [string] }
+
+pure func req_strings(o: Json, key: string, where: string) -> Result[[string], string] {
+  match get(o, key) {
+    None => Err("${where}.${key}"),
+    Some(v) => match asArray(v) {
+      None => Err("${where}.${key}"),
+      Some(xs) => {
+        let acc = List.foldl(\a x. match asString(x) {
+          None => { a | ok: false },
+          Some(s) => { a | out: a.out ++ [s] }
+        }, { ok: true, out: [] }, xs);
+        if acc.ok then Ok(acc.out) else Err("${where}.${key}")
+      }
+    }
+  }
+}
+
+pure func req_object(o: Json, key: string, where: string) -> Result[Json, string] {
+  match get(o, key) {
+    None => Err("${where}.${key}"),
+    Some(v) => match asObject(v) { None => Err("${where}.${key}"), Some(_) => Ok(v) }
+  }
+}
+
+-- ============================================================================
+-- One decoded event per type.
+-- ============================================================================
+
+pure func ledger_start(i: int, o: Json) -> Result[ExcerptEvent, string] {
+  let w = "session_start";
+  match req_string(o, "run_id", w) {
+    Err(e) => Err(e),
+    Ok(run_id) => match req_string(o, "mode", w) {
+      Err(e) => Err(e),
+      Ok(mode) => match req_string(o, "model", w) {
+        Err(e) => Err(e),
+        Ok(model) => Ok(XLedgerStart({ index: i, run_id: run_id, mode: mode, model: model }))
+      }
+    }
+  }
+}
+
+pure func rpc_start(i: int, o: Json) -> Result[ExcerptEvent, string] {
+  let w = "session_start";
+  match req_string(o, "model", w) {
+    Err(e) => Err(e),
+    Ok(model) => match req_string(o, "config_profile", w) {
+      Err(e) => Err(e),
+      Ok(profile) => match req_strings(o, "loaded_extensions", w) {
+        Err(e) => Err(e),
+        Ok(exts) => Ok(XRpcStart({ index: i, model: model, config_profile: profile, loaded_extensions: exts }))
+      }
+    }
+  }
+}
+
+pure func session_start(i: int, o: Json) -> Result[ExcerptEvent, string] {
+  let ledger = has(o, "run_id");
+  let rpc = has(o, "config_profile") || has(o, "loaded_extensions");
+  if ledger == rpc then Err("session_start.shape")
+  else if ledger then ledger_start(i, o)
+  else rpc_start(i, o)
+}
+
+pure func prepared(i: int, o: Json) -> Result[ExcerptEvent, string] {
+  let w = "provider_call_prepared";
+  match req_int(o, "step", w) {
+    Err(e) => Err(e),
+    Ok(step) => match req_int(o, "msg_count", w) {
+      Err(e) => Err(e),
+      Ok(n) => match req_string(o, "payload_digest", w) {
+        Err(e) => Err(e),
+        Ok(pd) => match req_string(o, "system_prefix_digest", w) {
+          Err(e) => Err(e),
+          Ok(sd) => match req_string(o, "model", w) {
+            Err(e) => Err(e),
+            Ok(model) => Ok(XPrepared({
+              index: i, step: step, msg_count: n,
+              payload_digest: pd, system_prefix_digest: sd, model: model
+            }))
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func thinking(i: int, o: Json) -> Result[ExcerptEvent, string] {
+  let w = "thinking";
+  match req_int(o, "step", w) {
+    Err(e) => Err(e),
+    Ok(step) => match req_string(o, "finish_reason", w) {
+      Err(e) => Err(e),
+      Ok(fr) => match req_int(o, "input_tokens", w) {
+        Err(e) => Err(e),
+        Ok(inp) => match req_int(o, "output_tokens", w) {
+          Err(e) => Err(e),
+          Ok(out) => match req_int(o, "tool_calls", w) {
+            Err(e) => Err(e),
+            Ok(tc) => match opt_positive(o, "cache_read_input_tokens", w) {
+              Err(e) => Err(e),
+              Ok(cr) => match opt_positive(o, "cache_creation_input_tokens", w) {
+                Err(e) => Err(e),
+                Ok(cc) => Ok(XThinking({
+                  index: i, step: step, finish_reason: fr,
+                  input_tokens: inp, output_tokens: out, tool_calls: tc,
+                  cache_read: cr, cache_creation: cc
+                }))
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func context_limit(i: int, o: Json) -> Result[ExcerptEvent, string] {
+  let w = "context_limit_resolved";
+  let ws = "context_limit_resolved.context_limit_source";
+  match req_string(o, "run_id", w) {
+    Err(e) => Err(e),
+    Ok(run_id) => match req_int(o, "context_limit", w) {
+      Err(e) => Err(e),
+      Ok(n) => match req_object(o, "context_limit_source", w) {
+        Err(e) => Err(e),
+        Ok(src) => match req_string(src, "arm", ws) {
+          Err(e) => Err(e),
+          Ok(arm) => match req_string(src, "origin", ws) {
+            Err(e) => Err(e),
+            Ok(origin) => match req_string(src, "profile_miss", ws) {
+              Err(e) => Err(e),
+              Ok(pm) => match req_string(src, "catalogue_miss", ws) {
+                Err(e) => Err(e),
+                Ok(cm) => match req_string(src, "model", ws) {
+                  Err(e) => Err(e),
+                  Ok(model) => Ok(XContextLimit({
+                    index: i, run_id: run_id, context_limit: n,
+                    arm: arm, origin: origin, profile_miss: pm, catalogue_miss: cm, model: model
+                  }))
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func retry(i: int, o: Json) -> Result[ExcerptEvent, string] {
+  match req_int(o, "step", "stream_error_retry") {
+    Err(e) => Err(e),
+    Ok(step) => Ok(XRetry({ index: i, step: step }))
+  }
+}
+
+-- None: a line of another type, skipped.
+pure func event_of_line(i: int, text: string) -> Result[Option[ExcerptEvent], string] {
+  match decode(text) {
+    Err(_) => Err("json"),
+    Ok(o) => match asObject(o) {
+      None => Err("type"),
+      Some(_) => match getString(o, "type") {
+        None => Err("type"),
+        Some(t) =>
+          if t == "session_start" then wrap(session_start(i, o))
+          else if t == "provider_call_prepared" then wrap(prepared(i, o))
+          else if t == "thinking" then wrap(thinking(i, o))
+          else if t == "context_limit_resolved" then wrap(context_limit(i, o))
+          else if t == "stream_error_retry" then wrap(retry(i, o))
+          else Ok(None)
+      }
+    }
+  }
+}
+
+pure func wrap(r: Result[ExcerptEvent, string]) -> Result[Option[ExcerptEvent], string] {
+  match r { Err(e) => Err(e), Ok(x) => Ok(Some(x)) }
+}
+
+-- ============================================================================
+-- The reader.
+-- ============================================================================
+
+type ReadAcc = { i: int, bad: Option[ExcerptError], out: [ExcerptEvent] }
+
+pure func read_step(a: ReadAcc, text: string) -> ReadAcc {
+  match a.bad {
+    Some(_) => a,
+    None => match event_of_line(a.i, text) {
+      Err(f) => { a | bad: Some({ index: a.i, field: f }) },
+      Ok(None) => { a | i: a.i + 1 },
+      Ok(Some(e)) => { i: a.i + 1, bad: None, out: e :: a.out }
+    }
+  }
+}
+
+export pure func read_excerpt(lines: [string]) -> Result[Excerpt, ExcerptError] {
+  let acc = List.foldl(read_step, { i: 0, bad: None, out: [] }, lines);
+  match acc.bad {
+    Some(e) => Err(e),
+    None => Ok({ events: List.foldl(\xs x. x :: xs, [], acc.out), lines: List.length(lines) })
+  }
+}
+
+-- ============================================================================
+-- Tests (M2's excerpt part). Every fixture log is synthetic, built from a
+-- synthetic journal by `testdata/gen_fixtures.py`, whose own excerpt reader
+-- computed the kinds and positions asserted against here.
+-- ============================================================================
+
+pure func xs_strings_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && xs_strings_eq(xs, ys) }
+  }
+}
+
+pure func xs_ints_eq(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && xs_ints_eq(xs, ys) }
+  }
+}
+
+-- Only fixtures the generator accepted carry the excerpt's kinds and positions.
+pure func excerpt_agrees(f: RunFixture) -> bool {
+  if not f.ok then true
+  else match read_excerpt(f.log) {
+    Err(_) => false,
+    Ok(x) => xs_strings_eq(List.map(event_kind, x.events), f.excerpt_kinds)
+               && xs_ints_eq(List.map(event_index, x.events), f.excerpt_events)
+  }
+}
+
+pure func excerpt_refused_at(f: RunFixture, index: int, field: string) -> bool {
+  match read_excerpt(f.log) {
+    Ok(_) => false,
+    Err(e) => e.index == index && e.field == field
+  }
+}
+
+pure func find_thinking(x: Excerpt, index: int) -> Option[Thinking] {
+  List.foldl(\acc e. match e { XThinking(t) => if t.index == index then Some(t) else acc, _ => acc }, None, x.events)
+}
+
+pure func test_excerpt_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fxr_all()) == 32 && List.foldl(\acc f. acc && excerpt_agrees(f), true, fxr_all())
+  }
+
+-- Both `session_start` shapes, the four other types with positions, other
+-- types skipped, and nothing but the wire's fields.
+pure func test_excerpt_both_session_start_shapes() -> bool
+  tests [((), true)]
+  {
+    match read_excerpt(fxr_m2_clean().log) {
+      Err(_) => false,
+      Ok(x) =>
+        x.lines == 35
+          && List.length(x.events) == 19
+          && (match x.events {
+                XRpcStart(r) :: XLedgerStart(l) :: XContextLimit(c) :: XPrepared(p) :: _ =>
+                  r.index == 0 && r.config_profile == "fx-profile" && List.length(r.loaded_extensions) == 0
+                    && l.index == 1 && l.run_id == "sess_fx.r0.0" && l.mode == "v2" && l.model == "fx/model-a"
+                    && c.index == 2 && c.context_limit == 4096 && c.arm == "bounded" && c.origin == "profile"
+                    && p.index == 4 && p.step == 1 && p.msg_count == 2 && p.model == "fx/model-a",
+                _ => false
+              })
+    }
+  }
+
+-- The cache counts: present-and-positive is read, absent is zero.
+pure func test_excerpt_thinking_usage() -> bool
+  tests [((), true)]
+  {
+    match read_excerpt(fxr_m2_clean().log) {
+      Err(_) => false,
+      Ok(x) => match find_thinking(x, 18) {
+        None => false,
+        Some(t1) => match find_thinking(x, 23) {
+          None => false,
+          Some(t2) => match find_thinking(x, 28) {
+            None => false,
+            Some(t3) =>
+              t1.step == 1 && t1.tool_calls == 2 && t1.cache_read == 4 && t1.cache_creation == 0
+                && t1.input_tokens == 100 && t1.output_tokens == 10 && t1.finish_reason == "tool_calls"
+                && t2.cache_read == 0 && t2.cache_creation == 3
+                && t3.cache_read == 0 && t3.cache_creation == 0
+          }
+        }
+      }
+    }
+  }
+
+-- A cross-process resume's second rpc banner, and the retry type.
+pure func test_excerpt_rpc_banner_and_retry() -> bool
+  tests [((), true)]
+  {
+    (match read_excerpt(fxr_m2_continuation_suspended_resumed().log) {
+      Err(_) => false,
+      Ok(x) => List.foldl(\acc e. match e { XRpcStart(r) => if r.index == 8 then List.length(r.loaded_extensions) == 1 else acc, _ => acc }, false, x.events)
+    }) && (match read_excerpt(fxr_m2_retry_cut().log) {
+      Err(_) => false,
+      Ok(x) => List.foldl(\acc e. match e { XRetry(r) => acc || (r.index == 23 && r.step == 2), _ => acc }, false, x.events)
+    })
+  }
+
+pure func test_excerpt_refusals_are_located() -> bool
+  tests [((), true)]
+  {
+    excerpt_refused_at(fxr_m2_excerpt_missing_field(), 21, "provider_call_prepared.payload_digest")
+      && excerpt_refused_at(fxr_m2_excerpt_session_start_shape(), 0, "session_start.shape")
+      && excerpt_refused_at(fxr_m2_excerpt_zero_cache(), 28, "thinking.cache_read_input_tokens")
+      && excerpt_refused_at(fxr_m2_excerpt_type_not_string(), 12, "type")
+      && excerpt_refused_at(fxr_m2_excerpt_not_json_line(), 12, "json")
+  }

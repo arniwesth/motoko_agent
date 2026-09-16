@@ -77,3 +77,45 @@ M7.crosscheck_detects_short_span	tools/eval_protected/selftest.py:crosscheck_det
 M7.pins_at_a	tools/eval_protected/selftest.py:pins_at_a	allowed	-	aggregate:protected
 M7.pins_at_a_with_reader	tools/eval_protected/selftest.py:pins_at_a_with_reader	allowed	-	aggregate:protected
 M7.pins_corrupted	tools/eval_protected/selftest.py:pins_corrupted	refused	BAD	aggregate:protected
+M2.DuplicateOrAmbiguousCallId.call_ids	src/eval/journal/association.ail:test_m2_duplicate_call_id_in_one_assistant	refused	DuplicateOrAmbiguousCallId	entry:13
+M2.DuplicateOrAmbiguousCallId.result	src/eval/journal/association.ail:test_m2_duplicate_result	refused	DuplicateOrAmbiguousCallId	entry:16
+M2.UnexpectedToolResult.pairing	src/eval/journal/association.ail:test_m2_unexpected_tool_result_pairing	refused	UnexpectedToolResult	entry:14
+M2.UnexpectedToolResult.m1_pairing_fixture	src/eval/journal/association.ail:test_m2_unexpected_tool_result_m1_fixture	refused	UnexpectedToolResult	entry:14
+M2.UnexpectedToolResult.stale	src/eval/journal/association.ail:test_m2_unexpected_tool_result_stale	refused	UnexpectedToolResult	entry:18
+M2.MalformedToolArguments	src/eval/journal/association.ail:test_m2_malformed_tool_arguments	refused	MalformedToolArguments	entry:13
+M2.Association.extra_prepared.same_step	src/eval/journal/association.ail:test_m2_association_extra_prepared_same_step	refused	Association	event:17
+M2.Association.extra_prepared.other_step	src/eval/journal/association.ail:test_m2_association_extra_prepared_other_step	refused	Association	event:20
+M2.Association.extra_assistant	src/eval/journal/association.ail:test_m2_association_extra_assistant	refused	Association	entry:20
+M2.Association.tool_calls_count	src/eval/journal/association.ail:test_m2_association_tool_calls_count	refused	Association	event:18
+M2.Association.second_thinking	src/eval/journal/association.ail:test_m2_association_second_thinking	refused	Association	event:24
+M2.Association.two_runs	src/eval/journal/association.ail:test_m2_association_two_runs	refused	Association	event:30
+M2.Association.no_run	src/eval/journal/association.ail:test_m2_association_no_run	refused	Association	excerpt
+M2.Association.unreadable_event	src/eval/journal/association.ail:test_m2_association_unreadable_event	refused	Association	event:21
+M2.ContinuationStart.suspended	src/eval/journal/association.ail:test_m2_continuation_start_suspended	refused	ContinuationStart	entry:9
+M2.ContinuationStart.suspended_resumed	src/eval/journal/association.ail:test_m2_continuation_start_suspended_resumed	refused	ContinuationStart	entry:10
+M2.ContinuationStart.wake	src/eval/journal/association.ail:test_m2_continuation_start_wake	refused	ContinuationStart	entry:24
+M2.EmptySegment	src/eval/journal/association.ail:test_m2_empty_segment	refused	EmptySegment	entry:13
+M2.MalformedEntry.pairing_at_assistant	src/eval/journal/association.ail:test_m2_pairing_at_assistant_stays_malformed_entry	refused	MalformedEntry	entry:13
+M2.source.passthrough	src/eval/journal/association.ail:test_m2_source_refusal_passes_through	refused	MalformedEntry	entry:17
+M2.clean	src/eval/journal/association.ail:test_m2_clean_twin_associates	pass	-	aggregate:association
+M2.clean.cutoff_before	src/eval/journal/association.ail:test_m2_clean_twin_cutoff_before	pass	-	aggregate:association
+M2.clean.ContinuationStart	src/eval/journal/association.ail:test_m2_continuation_start_twins	pass	-	aggregate:association
+M2.retry.cut	src/eval/journal/association.ail:test_m2_retry_is_a_cut	pass	-	aggregate:association
+M2.replacement.not_counted	src/eval/journal/association.ail:test_m2_replacement_is_not_counted	pass	-	aggregate:association
+M2.arguments.json_equality	src/eval/journal/association.ail:test_arguments_json_equality	pass	-	aggregate:association
+M2.run.gen	src/eval/journal/association.ail:test_run_equals_generator	pass	-	aggregate:association
+M2.excerpt.gen	src/eval/journal/excerpt.ail:test_excerpt_equals_generator	pass	-	aggregate:excerpt
+M2.excerpt.session_start_shapes	src/eval/journal/excerpt.ail:test_excerpt_both_session_start_shapes	pass	-	aggregate:excerpt
+M2.excerpt.thinking_usage	src/eval/journal/excerpt.ail:test_excerpt_thinking_usage	pass	-	aggregate:excerpt
+M2.excerpt.rpc_banner_and_retry	src/eval/journal/excerpt.ail:test_excerpt_rpc_banner_and_retry	pass	-	aggregate:excerpt
+M2.excerpt.refusals_located	src/eval/journal/excerpt.ail:test_excerpt_refusals_are_located	pass	-	aggregate:excerpt
+M15.UnexpectedToolResult.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_unexpected_tool_result_passes_m2	pass	-	aggregate:association
+M15.UnexpectedToolResult	pending:P1.7a-v2 (fixture m15_unexpected_tool_result)	refused	AdmissionCheck(A3)	call:2
+M15.MalformedToolArguments.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_malformed_tool_arguments_passes_m2	pass	-	aggregate:association
+M15.MalformedToolArguments	pending:P1.7a-v2 (fixture m15_malformed_tool_arguments)	refused	AdmissionCheck(A3)	call:2
+M15.DuplicateOrAmbiguousCallId.association_accepts	src/eval/journal/association.ail:test_m15_near_miss_duplicate_call_id_swap_is_accepted	pass	-	aggregate:association
+M15.DuplicateOrAmbiguousCallId	pending:P1.7a-v2 (fixture m15_duplicate_call_id_swap; the seam's first ToolCorrelationMismatch)	refused	AdmissionCheck(A2)	entry:14
+M15.Association.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_association_passes_m2	pass	-	aggregate:association
+M15.Association	pending:P1.7a-v2 (fixture m15_association)	refused	AdmissionCheck(A3)	call:1
+M15.ContinuationStart	-	inapplicable	reason: no evaluated call exists - a T0 refusal of the run's start	-
+M15.EmptySegment	-	inapplicable	reason: no evaluated call exists	-

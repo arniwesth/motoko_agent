@@ -447,7 +447,15 @@ def decode_entry(e):
         return {"request_id": rid, "outcome": outcome}
     if kind == "header":
         raise Refused("header")
-    if kind in ("history_replaced", "resumed", "exit"):
+    if kind == "resumed":
+        # P1.2b: a cross-process resume between a suspension and the run it
+        # continues (ContinuationStart). journal.ail's `resumed_of_entry`.
+        for k, t in [("resume_count", "int"), ("from_id", "str"), ("from_ordinal", "int"),
+                     ("profile_from", "str"), ("profile_to", "str"), ("prompt_digest_from", "str"),
+                     ("prompt_digest_to", "str"), ("forced", "bool")]:
+            req(e, k, t, seq)
+        return {}
+    if kind in ("history_replaced", "exit"):
         raise NotImplementedError(f"the generator's fold does not model `{kind}`; no fixture uses it")
     raise Refused("entry", seq, f"type={kind}")
 
@@ -496,14 +504,17 @@ def fold(lines, leaf):
         d = decode_entry(e)
         kind, seq = e["type"], e["seq"]
         if kind == "history_appended":
+            # journal.ail `fold_append`: a replacement drops the last message
+            # and chains from the digest before it (P1.2b's counting fixture).
+            base = prev if d["replaces_previous"] else digest
             if d["replaces_previous"]:
-                raise NotImplementedError("replaces_previous")
-            expected = sha(digest + "m{" + message_body(d["message"], d["message"]["content"])
+                hist = hist[:-1]
+            expected = sha(base + "m{" + message_body(d["message"], d["message"]["content"])
                            + images_form(d["message"]["images"]) + "}")
             if d["digest_after"] != expected:
                 raise Refused("digest", seq)
             hist.append((seq, d["message"]))
-            prev, digest = digest, expected
+            prev, digest = base, expected
             last = ("open", "history_appended")
         elif kind == "state_delta":
             last = ("open", "state_delta")
@@ -519,6 +530,8 @@ def fold(lines, leaf):
                 last = ("run_finished", d["run_id"])
         elif kind == "suspended":
             last = ("suspended", d["run_id"])
+        elif kind == "resumed":
+            last = ("open", "resumed")
         elif kind == "park":
             last = ("parked", d["request_id"], False)
         elif kind == "wake":
@@ -673,6 +686,9 @@ def read(lines, sel):
         "opened_by_wake": opened,
         "start_seq": s["seq"],
         "run_started_seq": path[ri]["seq"],
+        "path": path,
+        "ri": ri,
+        "segment": segment,
     }
 
 
@@ -775,6 +791,7 @@ def park_wake_bodies():
 def chain(bodies, parents=None):
     """Envelope and digest every body; `parents` overrides parent ids by index."""
     lines, digest = [], payload_digest([])
+    prev = digest
     for i, b in enumerate(bodies):
         e = {"id": f"e{i}", "parent_id": None if i == 0 else f"e{i - 1}", "seq": i, "at_ms": 1000 + i}
         e.update(b)
@@ -782,7 +799,8 @@ def chain(bodies, parents=None):
             e["parent_id"] = parents[i]
         if e["type"] == "history_appended":
             m = e["message"]
-            digest = sha(digest + "m{" + message_body(m, m["content"]) + images_form(m["images"]) + "}")
+            base = prev if e["replaces_previous"] else digest
+            prev, digest = base, sha(base + "m{" + message_body(m, m["content"]) + images_form(m["images"]) + "}")
             e["digest_after"] = digest
         lines.append(e)
     return lines
@@ -984,9 +1002,555 @@ def render_journal():
     lines += ["export pure func fxj_all() -> [JournalFixture] {",
               f"  {ail_list([f'fxj_{n}()' for n in names], 2)}", "}", ""]
     return "\n".join(lines)
+# ---------------------------------------------------------------------------
+# M2 (P1.2b): an independent excerpt reader, attribution, argument decoding,
+# ordered association and the ContinuationStart / EmptySegment refusals
+# (ADR-004 D1), over synthetic journals and synthetic host logs.
+# ---------------------------------------------------------------------------
+
+ASSOC_OUT = Path(__file__).with_name("association_fixtures.ail")
+
+EXCERPT_TYPES = ("session_start", "provider_call_prepared", "thinking", "context_limit_resolved",
+                 "stream_error_retry")
+
+
+class RunRefused(Exception):
+    """A D1 refusal at P1.2b's layer: family, position label, field."""
+
+    def __init__(self, family, position, field=""):
+        super().__init__(family, position, field)
+        self.family, self.position, self.field = family, position, field
+
+
+def _x_int(v):
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and float(v).is_integer())
+
+
+def _x_req(o, key, typ, i, where):
+    v = o.get(key)
+    ok = {"str": isinstance(v, str), "int": _x_int(v), "obj": isinstance(v, dict),
+          "strs": isinstance(v, list) and all(isinstance(x, str) for x in v)}[typ]
+    if not ok:
+        raise RunRefused("Association", f"event:{i}", f"{where}.{key}")
+    return int(v) if typ == "int" else v
+
+
+def read_excerpt(log):
+    """The host log's lines -> D1's five event types, in file order, each with
+    its line index. Every line must be a JSON object with a string `type`."""
+    out = []
+    for i, text in enumerate(log):
+        try:
+            o = json.loads(text)
+        except ValueError:
+            raise RunRefused("Association", f"event:{i}", "json")
+        if not isinstance(o, dict) or not isinstance(o.get("type"), str):
+            raise RunRefused("Association", f"event:{i}", "type")
+        t = o["type"]
+        if t not in EXCERPT_TYPES:
+            continue
+        if t == "session_start":
+            ledger = "run_id" in o
+            rpc = "config_profile" in o or "loaded_extensions" in o
+            if ledger == rpc:
+                raise RunRefused("Association", f"event:{i}", "session_start.shape")
+            if ledger:
+                ev = {"kind": "ledger_start", "run_id": _x_req(o, "run_id", "str", i, t),
+                      "mode": _x_req(o, "mode", "str", i, t), "model": _x_req(o, "model", "str", i, t)}
+            else:
+                ev = {"kind": "rpc_start", "model": _x_req(o, "model", "str", i, t),
+                      "config_profile": _x_req(o, "config_profile", "str", i, t),
+                      "loaded_extensions": _x_req(o, "loaded_extensions", "strs", i, t)}
+        elif t == "provider_call_prepared":
+            ev = {"kind": "prepared", "step": _x_req(o, "step", "int", i, t),
+                  "msg_count": _x_req(o, "msg_count", "int", i, t),
+                  "payload_digest": _x_req(o, "payload_digest", "str", i, t),
+                  "system_prefix_digest": _x_req(o, "system_prefix_digest", "str", i, t),
+                  "model": _x_req(o, "model", "str", i, t)}
+        elif t == "thinking":
+            ev = {"kind": "thinking", "step": _x_req(o, "step", "int", i, t),
+                  "finish_reason": _x_req(o, "finish_reason", "str", i, t),
+                  "input_tokens": _x_req(o, "input_tokens", "int", i, t),
+                  "output_tokens": _x_req(o, "output_tokens", "int", i, t),
+                  "tool_calls": _x_req(o, "tool_calls", "int", i, t)}
+            for k in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+                if k in o:
+                    n = _x_req(o, k, "int", i, t)
+                    if n <= 0:
+                        raise RunRefused("Association", f"event:{i}", f"{t}.{k}")
+                    ev[k] = n
+                else:
+                    ev[k] = 0
+        elif t == "context_limit_resolved":
+            src = _x_req(o, "context_limit_source", "obj", i, t)
+            ev = {"kind": "context_limit", "run_id": _x_req(o, "run_id", "str", i, t),
+                  "context_limit": _x_req(o, "context_limit", "int", i, t),
+                  "source": [_x_req(src, k, "str", i, f"{t}.context_limit_source")
+                             for k in ("arm", "origin", "profile_miss", "catalogue_miss", "model")]}
+        else:
+            ev = {"kind": "retry", "step": _x_req(o, "step", "int", i, t)}
+        ev["index"] = i
+        out.append(ev)
+    return out
+
+
+def attribute(segment):
+    """Every tool result is attributed to the most recent assistant's calls, in
+    source order; every call's arguments decode. Returns, per assistant seq,
+    the recorded tools [(seq, call_id, canonical arguments)]."""
+    cur, answered, tools = None, [], {}
+    for e in segment:
+        if e["type"] != "history_appended":
+            continue
+        m, seq = e["message"], e["seq"]
+        if m["role"] == "assistant":
+            ids = [c["id"] for c in m["tool_calls"]]
+            if len(set(ids)) != len(ids):
+                raise RunRefused("DuplicateOrAmbiguousCallId", f"entry:{seq}", "tool_calls.id")
+            for n, c in enumerate(m["tool_calls"]):
+                try:
+                    canonical_arguments(c["arguments"])
+                except ValueError:
+                    raise RunRefused("MalformedToolArguments", f"entry:{seq}", f"tool_calls[{n}].arguments")
+            cur, answered = e, []
+            tools[seq] = []
+        elif m["role"] == "tool":
+            tid = m["tool_call_id"]
+            calls = {c["id"]: c for c in cur["message"]["tool_calls"]} if cur else {}
+            if tid not in calls:
+                raise RunRefused("UnexpectedToolResult", f"entry:{seq}", "tool_call_id")
+            if tid in answered:
+                raise RunRefused("DuplicateOrAmbiguousCallId", f"entry:{seq}", "tool_call_id")
+            answered.append(tid)
+            tools[cur["seq"]].append((seq, tid, canonical_arguments(calls[tid]["arguments"])))
+    return tools
+
+
+def continuation_start(lines, r):
+    rs = r["path"][r["ri"]]
+    if r["opened_by_wake"]:
+        raise RunRefused("ContinuationStart", f"entry:{rs['seq']}", "wake")
+    j = r["ri"] - 1
+    while j > 0 and r["path"][j]["type"] in ("resumed", "settings", "history_replaced"):
+        j -= 1
+    if fold(lines, r["path"][j]["id"])["boundary"] == "suspended":
+        raise RunRefused("ContinuationStart", f"entry:{rs['seq']}", "suspended")
+
+
+def associate(events, run_id, segment):
+    starts = [j for j, e in enumerate(events) if e["kind"] == "ledger_start" and e["run_id"] == run_id]
+    if not starts:
+        raise RunRefused("Association", "excerpt", "session_start.run_id")
+    if len(starts) > 1:
+        raise RunRefused("Association", f"event:{events[starts[1]]['index']}", "session_start.run_id")
+    j0 = starts[0]
+    end = next((j for j in range(j0 + 1, len(events)) if events[j]["kind"] in ("ledger_start", "rpc_start")),
+               len(events))
+    profile = [e["index"] for e in events[:j0] if e["kind"] == "rpc_start"]
+    span = events[j0 + 1:end]
+    counted = [e for e in segment if e["type"] == "history_appended" and e["message"]["role"] == "assistant"
+               and not e["replaces_previous"]]
+    calls, cut, cur = [], None, 0
+    for k, a in enumerate(counted, 1):
+        p = next((x for x in range(cur, len(span)) if span[x]["kind"] == "prepared"), None)
+        if p is None:
+            raise RunRefused("Association", f"entry:{a['seq']}", "provider_call_prepared")
+        P = span[p]
+        nxt = next((x for x in range(p + 1, len(span)) if span[x]["kind"] == "prepared"), len(span))
+        window = [x for x in span[p + 1:nxt] if x["kind"] in ("thinking", "retry") and x["step"] == P["step"]]
+        if window and window[0]["kind"] == "retry":
+            cut = ("ProviderRetry", k, window[0]["index"])
+            break
+        thinks = [x for x in window if x["kind"] == "thinking"]
+        if not thinks:
+            if nxt < len(span) and span[nxt]["step"] == P["step"]:
+                raise RunRefused("Association", f"event:{span[nxt]['index']}", "provider_call_prepared")
+            raise RunRefused("Association", f"event:{P['index']}", "thinking")
+        if len(thinks) > 1:
+            raise RunRefused("Association", f"event:{thinks[1]['index']}", "thinking")
+        T = thinks[0]
+        if T["tool_calls"] != len(a["message"]["tool_calls"]):
+            raise RunRefused("Association", f"event:{T['index']}", "tool_calls")
+        calls.append({"k": k, "seq": a["seq"], "prepared": P["index"], "thinking": T["index"]})
+        cur = nxt
+    if not calls:
+        pos = f"entry:{counted[0]['seq']}"
+        raise RunRefused("EmptySegment", pos, cut[0] if cut else "")
+    return {"run_event": events[j0]["index"], "profile_event": profile[-1] if profile else -1,
+            "calls": calls, "cut": cut,
+            "replacing": [e["seq"] for e in segment if e["type"] == "history_appended"
+                          and e["message"]["role"] == "assistant" and e["replaces_previous"]]}
+
+
+def read_run(lines, log, s):
+    """P1.2b's reader: P1.2a's, then ContinuationStart, attribution and
+    arguments, the excerpt, the association, EmptySegment."""
+    try:
+        r = read(lines, s)
+    except ReaderRefused as err:
+        if err.family == "MalformedEntry" and err.field == "pairing":
+            seq = int(err.position.split(":")[1])
+            e = next(x for x in lines if x["seq"] == seq)
+            if e["type"] == "history_appended" and e["message"]["role"] == "tool":
+                raise RunRefused("UnexpectedToolResult", err.position, "tool_call_id")
+        raise RunRefused(err.family, err.position, err.field)
+    continuation_start(lines, r)
+    tools = attribute(r["segment"])
+    events = read_excerpt(log)
+    a = associate(events, s["run_id"], r["segment"])
+    seg = r["segment"]
+    for c in a["calls"]:
+        i = next(n for n, e in enumerate(seg) if e["seq"] == c["seq"])
+        c["tools"] = tools[c["seq"]]
+        deltas = []
+        for e in seg[i + 1:]:
+            if e["type"] == "history_appended" and e["message"]["role"] == "assistant":
+                break
+            if e["type"] == "state_delta":
+                deltas.append(e["seq"])
+        c["deltas"] = deltas
+        asst = seg[i]["message"]
+        c["arguments"] = [f"{t['id']}={canonical_arguments(t['arguments'])}" for t in asst["tool_calls"]]
+    a["events"] = events
+    return a
+
+
+# -- the synthetic host log ----------------------------------------------------
+
+def m2_bodies():
+    """The base journal with a two-call first turn in run B (e13: c2a, c2b)."""
+    b = base_bodies()[:13]
+    b[12] = app(RUN_B, 0, msg("user", "now count the lines"))
+    return b + [
+        app(RUN_B, 1, asst("", "c2a", "c2b")),                           # e13  start, call 1
+        app(RUN_B, 1, tool("c2a", "2 a.txt")),                           # e14
+        app(RUN_B, 1, tool("c2b", "5 b.txt")),                           # e15
+        delta(RUN_B, 1, 3),                                              # e16
+        app(RUN_B, 2, asst("", "c3")),                                   # e17  call 2
+        app(RUN_B, 2, tool("c3", "7 total")),                            # e18
+        delta(RUN_B, 2, 4),                                              # e19
+        app(RUN_B, 3, asst("", "c4")),                                   # e20  call 3 (EndAt)
+        app(RUN_B, 3, tool("c4", "done")),                               # e21
+        delta(RUN_B, 3, 5),                                              # e22
+        {"type": "suspended", "run_id": RUN_B, "reason": "max_steps", "step": 3},   # e23
+        {"type": "run_finished", "run_id": RUN_B, "cumulative": counts(5),
+         "world_ordinal": 9, "finish_reason": "max_steps"},              # e24
+    ]
+
+
+def resumed_body():
+    return {"type": "resumed", "resume_count": 1, "from_id": "e8", "from_ordinal": 3,
+            "profile_from": "fx-profile", "profile_to": "fx-profile",
+            "prompt_digest_from": "sha256:fx-sys", "prompt_digest_to": "sha256:fx-sys", "forced": False}
+
+
+def continuation_bodies(suspend, resume):
+    """Run A ends (suspended or not), optionally a cross-process `resumed`,
+    then run B's message start: user, one call."""
+    b = base_bodies()[:7]                                                # e0..e6
+    if suspend:
+        b.append({"type": "suspended", "run_id": RUN_A, "reason": "max_steps", "step": 1})
+    b.append({"type": "run_finished", "run_id": RUN_A, "cumulative": counts(1),
+              "world_ordinal": 2, "finish_reason": "max_steps" if suspend else "stop"})
+    if resume:
+        b.append(resumed_body())
+    return b + [
+        {"type": "run_started", "run_id": RUN_B},
+        app(RUN_B, 0, msg("user", "go on")),
+        app(RUN_B, 1, asst("", "c2")),
+        app(RUN_B, 1, tool("c2", "ok")),
+        delta(RUN_B, 1, 2),
+    ]
+
+
+def rpc_banner(profile, exts):
+    return {"type": "session_start", "task": "fx task", "model": "fx/model-a", "brainVersion": "fx",
+            "ailangBuilt": "fx", "config_profile": profile, "config_dir": "/fx/cfg", "backend_mode": "fx",
+            "loaded_extensions": exts}
+
+
+def ledger_banner(run_id, model):
+    return {"type": "session_start", "task": "fx task", "model": model, "mode": "v2", "run_id": run_id}
+
+
+def limit_event(run_id):
+    return {"type": "context_limit_resolved", "run_id": run_id, "context_limit": 4096,
+            "context_limit_source": {"arm": "bounded", "origin": "profile", "profile_miss": "",
+                                     "catalogue_miss": "", "model": ""}}
+
+
+def build_log(lines, leaf):
+    """A host log for every run on the leaf's path, derived from the journal:
+    per counted assistant a `provider_call_prepared` over the request the
+    journal implies (the fold before it) and a `thinking` with its call
+    count, among events of other types; then a later spawn's run."""
+    path = lenient_path(lines, leaf)
+    out = [rpc_banner("fx-profile", [])]
+    run, k = None, 0
+    for n, e in enumerate(path):
+        if e["type"] == "resumed":
+            out.append(rpc_banner("fx-profile", ["fx-ext"]))
+        if e["type"] == "run_started":
+            if run is not None:
+                out.append({"type": "run_summary", "run_id": run})
+            run, k = e["run_id"], 0
+            out.append(ledger_banner(run, fold(lines, e["parent_id"])["model"]))
+            out.append(limit_event(run))
+        if (e["type"] == "history_appended" and e["message"]["role"] == "assistant"
+                and not e["replaces_previous"]):
+            k += 1
+            before = fold(lines, e["parent_id"])
+            req_msgs = before["history"]
+            step = e["step"]
+            ncalls = len(e["message"]["tool_calls"])
+            think = {"type": "thinking", "step": step, "text": "fx", "finish_reason": "tool_calls" if ncalls else "stop",
+                     "input_tokens": 100 * k, "output_tokens": 10 * k, "tool_calls": ncalls, "cost_usd": 0}
+            if run == RUN_B and k == 1:
+                think["cache_read_input_tokens"] = 4
+            if run == RUN_B and k == 2:
+                think["cache_creation_input_tokens"] = 3
+            out += [
+                {"type": "thinking_stream_start", "step": step, "stream_id": f"step-{step}", "model": before["model"]},
+                {"type": "provider_call_prepared", "step": step, "msg_count": len(req_msgs),
+                 "estimated_input_tokens": 7 * len(req_msgs), "system_prefix_count": len(system_prefix(req_msgs)),
+                 "system_prefix_chars": 0, "system_prefix_digest": system_prefix_digest(req_msgs),
+                 "payload_digest": payload_digest(req_msgs), "model": before["model"]},
+                {"type": "thinking_delta", "step": step, "stream_id": f"step-{step}", "seq": 0, "text_delta": "fx"},
+                think,
+            ]
+            if ncalls:
+                out.append({"type": "tool_execution_start", "step": step})
+    out.append({"type": "run_summary", "run_id": run})
+    out += [rpc_banner("fx-profile-2", ["fx-ext"]), ledger_banner("sess_fx.r1.0", "fx/model-b"),
+            {"type": "provider_call_prepared", "step": 1, "msg_count": 1, "estimated_input_tokens": 7,
+             "system_prefix_count": 0, "system_prefix_chars": 0, "system_prefix_digest": "sha256:fx-other",
+             "payload_digest": "sha256:fx-other", "model": "fx/model-b"},
+            {"type": "thinking", "step": 1, "text": "fx", "finish_reason": "stop", "input_tokens": 1,
+             "output_tokens": 1, "tool_calls": 0, "cost_usd": 0}]
+    return out
+
+
+def log_text(events):
+    return [e if isinstance(e, str) else json.dumps(e, ensure_ascii=False, separators=(",", ":")) for e in events]
+
+
+def lx_insert(events, i, ev):
+    return events[:i] + [ev] + events[i:]
+
+
+def lx_drop(events, *idx):
+    return [e for n, e in enumerate(events) if n not in idx]
+
+
+def lx_set(events, i, **fields):
+    out = list(events)
+    out[i] = dict(out[i], **fields)
+    return out
+
+
+def lx_del(events, i, key):
+    out = list(events)
+    out[i] = {k: v for k, v in out[i].items() if k != key}
+    return out
+
+
+def insert_body(bodies, i, body):
+    return bodies[:i] + [body] + bodies[i:]
+
+
+def swap_bodies(bodies, i, j):
+    out = list(bodies)
+    out[i], out[j] = out[j], out[i]
+    return out
+
+
+M2_SEL = sel("e24", "e13", ("EndAt", "e20"))
+
+# In the clean M2 log: run B's banner is line 13; call k's prepared is
+# 16/21/26 and its thinking 18/23/28 (see `build_log`).
+
+
+def run_fixtures():
+    m2 = chain(m2_bodies())
+    log = build_log(m2, "e24")
+    stale = insert_body(insert_body(m2_bodies()[:17], 17, app(RUN_B, 2, asst("Checking."))), 18,
+                        app(RUN_B, 2, tool("c2b", "late")))
+    stale_j = chain(stale + [delta(RUN_B, 2, 4), app(RUN_B, 3, asst("", "c4")), app(RUN_B, 3, tool("c4", "done")),
+                             delta(RUN_B, 3, 5)])
+    dup_result = chain(insert_body(m2_bodies(), 16, app(RUN_B, 1, tool("c2a", "again"))))
+    dup_ids = chain(with_message(with_message(m2_bodies(), 13, tool_calls=[
+        call("c2a", "BashExec", "{\"command\":\"ls c2a\"}"), call("c2a", "BashExec", "{\"command\":\"ls c2b\"}")]),
+        15, tool_call_id="c2a"))
+    bad_args = chain(with_message(m2_bodies(), 13, tool_calls=[
+        call("c2a", "BashExec", "{\"command\":\"ls c2a\"}"), call("c2b", "BashExec", "{bad")]))
+    pairing = chain(with_message(m2_bodies(), 14, tool_call_id="c_other"))
+    cont_s = chain(continuation_bodies(True, False))
+    cont_r = chain(continuation_bodies(True, True))
+    cont_t = chain(continuation_bodies(False, True))
+    pw = chain(park_wake_bodies())
+    retry2 = lx_insert(lx_drop(log, 23), 23, {"type": "stream_error_retry", "step": 2, "error": "fx"})
+    retry2 = lx_insert(retry2, 24, dict(log[21], step=4))
+    retry2 = lx_insert(retry2, 25, dict(log[23], step=4))
+    retry1 = lx_insert(lx_drop(log, 18), 18, {"type": "stream_error_retry", "step": 1, "error": "fx"})
+    retry1 = lx_insert(retry1, 19, dict(log[16], step=9))
+    retry1 = lx_insert(retry1, 20, dict(log[18], step=9))
+    nm_args = chain(with_message(m2_bodies(), 13, tool_calls=[
+        call("c2a", "BashExec", "{\"command\":\"ls c2A\"}"), call("c2b", "BashExec", "{\"command\":\"ls c2b\"}")]))
+    nm_args_log = build_log(nm_args, "e24")
+    nm_result = chain(with_content(m2_bodies(), 14, "2 a.tXt"))
+    nm_swap = chain(swap_bodies(m2_bodies(), 14, 15))
+    replaced_b = m2_bodies()[:17] + [app(RUN_B, 2, asst("draft")),
+                                     dict(app(RUN_B, 2, asst("final")), replaces_previous=True)] + m2_bodies()[19:]
+    replaced = chain(replaced_b)
+    return [
+        # clean
+        ("m2_clean", m2, log, M2_SEL, None),
+        ("m2_clean_cutoff_before", m2, log, sel("e24", "e13", ("CutoffBefore", "e20")), None),
+        ("m2_message_start_after_resume", cont_t, build_log(cont_t, "e13"),
+         sel("e13", "e11", ("EndAt", "e11")), None),
+        ("m2_retry_cut", m2, retry2, M2_SEL, None),
+        ("m2_replacement_not_counted", replaced, build_log(replaced, "e24"), M2_SEL, None),
+        # M15 near-misses: pass M2's refusals
+        ("m15_unexpected_tool_result", nm_result, build_log(nm_result, "e24"), M2_SEL, None),
+        ("m15_malformed_tool_arguments", nm_args, nm_args_log, M2_SEL, None),
+        ("m15_duplicate_call_id_swap", nm_swap, build_log(nm_swap, "e24"), M2_SEL, None),
+        ("m15_association", m2, lx_set(log, 16, payload_digest="sha256:fx-altered"), M2_SEL, None),
+        # M2 refusals
+        ("m2_duplicate_call_id", dup_ids, build_log(dup_ids, "e24"), M2_SEL,
+         ("DuplicateOrAmbiguousCallId", "entry:13", "tool_calls.id")),
+        ("m2_duplicate_result", dup_result, build_log(dup_result, "e25"),
+         sel("e25", "e13", ("EndAt", "e21")),
+         ("DuplicateOrAmbiguousCallId", "entry:16", "tool_call_id")),
+        ("m2_unexpected_result_pairing", pairing, log, M2_SEL,
+         ("UnexpectedToolResult", "entry:14", "tool_call_id")),
+        ("m2_unexpected_result_stale", stale_j, build_log(stale_j, "e22"),
+         sel("e22", "e13", ("EndAt", "e20")),
+         ("UnexpectedToolResult", "entry:18", "tool_call_id")),
+        ("m2_malformed_tool_arguments", bad_args, build_log(m2, "e24"), M2_SEL,
+         ("MalformedToolArguments", "entry:13", "tool_calls[1].arguments")),
+        ("m2_association_extra_prepared", m2, lx_insert(log, 17, log[16]), M2_SEL,
+         ("Association", "event:17", "provider_call_prepared")),
+        ("m2_association_extra_prepared_step", m2, lx_insert(log, 20, dict(log[21], step=7)), M2_SEL,
+         ("Association", "event:20", "thinking")),
+        ("m2_association_extra_assistant", m2, lx_drop(log, 25, 26, 27, 28, 29), M2_SEL,
+         ("Association", "entry:20", "provider_call_prepared")),
+        ("m2_association_tool_calls", m2, lx_set(log, 18, tool_calls=1), M2_SEL,
+         ("Association", "event:18", "tool_calls")),
+        ("m2_association_second_thinking", m2, lx_insert(log, 24, log[23]), M2_SEL,
+         ("Association", "event:24", "thinking")),
+        ("m2_association_no_run", m2, lx_set(log, 13, run_id="sess_fx.r9.9"), M2_SEL,
+         ("Association", "excerpt", "session_start.run_id")),
+        ("m2_association_two_runs", m2, lx_insert(log, 30, log[13]), M2_SEL,
+         ("Association", "event:30", "session_start.run_id")),
+        ("m2_excerpt_missing_field", m2, lx_del(log, 21, "payload_digest"), M2_SEL,
+         ("Association", "event:21", "provider_call_prepared.payload_digest")),
+        ("m2_excerpt_session_start_shape", m2, lx_set(log, 0, run_id=RUN_A), M2_SEL,
+         ("Association", "event:0", "session_start.shape")),
+        ("m2_excerpt_zero_cache", m2, lx_set(log, 28, cache_read_input_tokens=0), M2_SEL,
+         ("Association", "event:28", "thinking.cache_read_input_tokens")),
+        ("m2_excerpt_type_not_string", m2, lx_set(log, 12, type=7), M2_SEL,
+         ("Association", "event:12", "type")),
+        ("m2_excerpt_not_json_line", m2, lx_insert(log, 12, "{truncated"), M2_SEL,
+         ("Association", "event:12", "json")),
+        ("m2_continuation_suspended", cont_s, build_log(cont_s, "e13"),
+         sel("e13", "e11", ("EndAt", "e11")),
+         ("ContinuationStart", "entry:9", "suspended")),
+        ("m2_continuation_suspended_resumed", cont_r, build_log(cont_r, "e14"),
+         sel("e14", "e12", ("EndAt", "e12")),
+         ("ContinuationStart", "entry:10", "suspended")),
+        ("m2_continuation_wake", pw, build_log(pw, "e27"),
+         sel("e27", "e26", ("EndAt", "e26"), run=RUN_C),
+         ("ContinuationStart", "entry:24", "wake")),
+        ("m2_empty_segment", m2, retry1, M2_SEL,
+         ("EmptySegment", "entry:13", "ProviderRetry")),
+        # P1.2a's refusals pass through unchanged, the pairing refusal at an
+        # assistant (a call left open) included
+        ("m2_source_refusal", post(m2, 17, drop_key("step")), log, M2_SEL,
+         ("MalformedEntry", "entry:17", "step")),
+        ("m2_source_pairing_at_assistant", chain(m2_bodies()[:15] + m2_bodies()[16:]), log,
+         sel("e23", "e13", ("EndAt", "e19")),
+         ("MalformedEntry", "entry:13", "pairing")),
+    ]
+
+
+def check_run_fixture(name, lines, log, s, expected):
+    try:
+        a = read_run(lines, log_text(log), s)
+    except RunRefused as err:
+        got = (err.family, err.position, err.field)
+        if got != expected:
+            raise AssertionError(f"{name}: read_run refused {got}, fixture declares {expected}")
+        return None
+    if expected is not None:
+        raise AssertionError(f"{name}: read_run accepted, fixture declares {expected}")
+    return a
+
+
+def render_association():
+    lines = [
+        "-- GENERATED by src/eval/journal/testdata/gen_fixtures.py -- do not edit.",
+        "-- Regenerate with `python3 src/eval/journal/testdata/gen_fixtures.py`;",
+        "-- `--check` fails when this file is stale.",
+        "--",
+        "-- Synthetic journals and synthetic host logs (PLAN-004 M2, and M15's M2",
+        "-- near-misses). Every expectation here was computed by the Python",
+        "-- generator's own excerpt reader, attribution and association,",
+        "-- independent of `src/eval/journal/{excerpt,association}.ail` and of",
+        "-- `src/core`. No session content: the logs are built from the synthetic",
+        "-- journals.",
+        "",
+        "module src/eval/journal/testdata/association_fixtures",
+        "",
+        "export type RunFixture = {",
+        "  name: string, journal: [string], log: [string],",
+        "  leaf: string, run_id: string, start: string, end_kind: string, end_id: string,",
+        "  ok: bool, family: string, position: string, field: string,",
+        "  excerpt_kinds: [string], excerpt_events: [int],",
+        "  run_event: int, profile_event: int,",
+        "  call_seqs: [int], prepared_events: [int], thinking_events: [int],",
+        "  tool_seqs: [int], tool_ids: [string], tool_arguments: [string], call_arguments: [string],",
+        "  deltas: [int], cut_reason: string, cut_call: int, cut_event: int, replacing: [int]",
+        "}",
+        "",
+    ]
+    names = []
+    for name, jl, log, s, expected in run_fixtures():
+        a = check_run_fixture(name, jl, log, s, expected)
+        names.append(name)
+        journal = [json.dumps(e, ensure_ascii=False, separators=(",", ":")) for e in jl]
+        calls = a["calls"] if a else []
+        tools = [t for c in calls for t in c["tools"]]
+        cut = a["cut"] if a else None
+        fields = [
+            f"name: {lit(name)}",
+            f"journal: {ail_list([lit(t) for t in journal], 6)}",
+            f"log: {ail_list([lit(t) for t in log_text(log)], 6)}",
+            f"leaf: {lit(s['leaf'])}, run_id: {lit(s['run_id'])}, start: {lit(s['start'])}, "
+            f"end_kind: {lit(s['end'][0])}, end_id: {lit(s['end'][1])}",
+            f"ok: {'true' if a else 'false'}, family: {lit(expected[0] if expected else '')}, "
+            f"position: {lit(expected[1] if expected else '')}, field: {lit(expected[2] if expected else '')}",
+            f"excerpt_kinds: {ail_strings([e['kind'] for e in a['events']] if a else [])}, "
+            f"excerpt_events: {ail_ints([e['index'] for e in a['events']] if a else [])}",
+            f"run_event: {a['run_event'] if a else -1}, profile_event: {a['profile_event'] if a else -1}",
+            f"call_seqs: {ail_ints([c['seq'] for c in calls])}, "
+            f"prepared_events: {ail_ints([c['prepared'] for c in calls])}, "
+            f"thinking_events: {ail_ints([c['thinking'] for c in calls])}",
+            f"tool_seqs: {ail_ints([t[0] for t in tools])}, tool_ids: {ail_strings([t[1] for t in tools])}, "
+            f"tool_arguments: {ail_strings([t[2] for t in tools])}, "
+            f"call_arguments: {ail_strings([x for c in calls for x in c['arguments']])}",
+            f"deltas: {ail_ints([d for c in calls for d in c['deltas']])}, "
+            f"cut_reason: {lit(cut[0] if cut else '')}, cut_call: {cut[1] if cut else 0}, "
+            f"cut_event: {cut[2] if cut else -1}, replacing: {ail_ints(a['replacing'] if a else [])}",
+        ]
+        lines += [f"export pure func fxr_{name}() -> RunFixture {{", "  { " + ",\n      ".join(fields) + " }", "}", ""]
+    lines += ["export pure func fxr_all() -> [RunFixture] {",
+              f"  {ail_list([f'fxr_{n}()' for n in names], 2)}", "}", ""]
+    return "\n".join(lines)
+
 
 def main(argv):
-    outputs = [(OUT, render()), (JOURNAL_OUT, render_journal())]
+    outputs = [(OUT, render()), (JOURNAL_OUT, render_journal()), (ASSOC_OUT, render_association())]
     if "--check" in argv:
         stale = [str(path) for path, text in outputs
                  if not path.exists() or path.read_text(encoding="utf-8") != text]

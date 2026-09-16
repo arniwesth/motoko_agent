@@ -1,0 +1,1051 @@
+-- src/eval/journal/association.ail
+--
+-- ADR-004 D1, PLAN-004 §3 P1.2b (graph id P1.2b-v2): reader II — attribution,
+-- canonical arguments, the ordered association with the host-log excerpt, and
+-- the refusals `DuplicateOrAmbiguousCallId`, `UnexpectedToolResult`,
+-- `MalformedToolArguments`, `Association`, `ContinuationStart`, `EmptySegment`.
+--
+--   read_run(journal_lines, log_lines, selector) -> Result[RunRead, RunRefusal]
+--
+-- It builds on P1.2a (`reader.ail`, imported, not copied) and on the excerpt
+-- reader (`excerpt.ail`). In this order, each step's refusal the first found:
+--
+--   1. SOURCE. `read_source` (P1.2a): path, strict decoding, the whole-path
+--      fold, selector, seed, typed segment. Its refusals pass through as
+--      `SourceRefused`, with ONE remap, decided here (P1.2a review note 1):
+--      the fold's `Pairing(seq)` names a TOOL RESULT when the result's id is
+--      not a call of the open batch (journal.ail `pair_step`, first arm) — a
+--      result that cannot be attributed, which D1's table calls
+--      `UnexpectedToolResult`; that is what this layer reports, at the same
+--      entry, field `tool_call_id`. A `Pairing(seq)` that names an ASSISTANT
+--      (its calls left open when something else arrived) is D4's structure,
+--      not attribution, and stays `MalformedEntry(entry:seq, "pairing")`.
+--      `read_source` itself is unchanged, so M1's row
+--      `M1.MalformedEntry.pairing` still describes layer I; M2's
+--      `M2.UnexpectedToolResult.pairing` is the verdict for that input.
+--   2. START. T0 admits message-only starts only. The run is refused
+--      `ContinuationStart` at its `run_started` entry when
+--        * it was opened by a consumed wake (`SeedParked`, session.ail:4271,
+--          :5531–5536, :5577): P1.2a's `opened_by_wake` — field `wake`; or
+--        * it continues a suspended run (session.ail:4918, `:2664`;
+--          `run_v2_session_resumed_traced :5394`): the fold of the path up to
+--          the run's boundary is `suspended` — field `suspended`. The boundary
+--          is the entry before `run_started`, skipping a cross-process
+--          resume's `resumed`, `settings` and `history_replaced` entries
+--          (`plan_resume` holds the continuation exactly when that fold's
+--          boundary is `BoundarySuspended`, journal.ail:2281–2294).
+--   3. ATTRIBUTION AND ARGUMENTS, over the segment in entry order. Every tool
+--      result is attributed to the most recent assistant append: its
+--      `tool_call_id` must name one of that assistant's calls
+--      (`UnexpectedToolResult`), at most once (`DuplicateOrAmbiguousCallId`,
+--      at the second result); an assistant's call ids are distinct
+--      (`DuplicateOrAmbiguousCallId`, at the assistant, `tool_calls.id`); every
+--      call's argument string decodes as JSON (`MalformedToolArguments`, at
+--      the assistant, `tool_calls[<i>].arguments`). The fold accepts a second
+--      result for an answered call, and a result after a call-free assistant
+--      that names the batch before it; attribution does not. An id reused by a
+--      LATER turn is attributable by order and is not refused. Results keep
+--      their JOURNAL order (a swapped pair is accepted: the program's tool
+--      queue is in that order, and the seam's correlation guard is what sees
+--      it — M15's `DuplicateOrAmbiguousCallId` row).
+--   4. EXCERPT. `read_excerpt`; an unreadable line or event is
+--      `Association(event:<i>, <field>)`.
+--   5. ASSOCIATION, from the banners. The selected run is the ONE ledger
+--      `session_start` whose `run_id` is the selector's (none:
+--      `Association(excerpt, …)`; two: at the second); its span ends at the
+--      next `session_start` of either shape (an rpc banner opens a spawn
+--      profile; the profile is the last rpc banner before the run). Within the
+--      span, the k-th `provider_call_prepared` is call k and its journal
+--      counterpart the k-th assistant append of the segment not counting
+--      `replaces_previous` replacements (cutoffs, P1.3; `start` is the run's
+--      first assistant, so the segment's count is the run's). Call k's
+--      `thinking` is the next `thinking` with the same `step`, searched up to
+--      the next `provider_call_prepared`:
+--        * none, and the next prepared has the same step -> an extra prepared
+--          call, `Association(event:<that prepared>, provider_call_prepared)`;
+--        * none otherwise -> `Association(event:<P_k>, thinking)`;
+--        * two -> `Association(event:<the second>, thinking)`;
+--        * `thinking.tool_calls` != the assistant's call count ->
+--          `Association(event:<T_k>, tool_calls)`;
+--        * no k-th prepared in the span (an extra assistant) ->
+--          `Association(entry:<assistant>, provider_call_prepared)`.
+--      A `stream_error_retry` with P_k's step before its thinking is D1's
+--      `ProviderRetry`: the provider position has no assistant message, so the
+--      association STOPS there and reports the cut (`cut`, before call k);
+--      every call from k on is past that cutoff and is not associated.
+--      "Assistant entries are never counted to find calls": calls come from
+--      the prepared events; the assistants are their counterparts.
+--   6. EMPTY. No associated call: `EmptySegment` at the first counted
+--      assistant (the first entry the cut drops), field the cut's reason.
+--      P1.3 applies the rest of D1's cutoff table and re-applies this
+--      refusal after it.
+--
+-- CANONICAL ARGUMENTS. `eval_canonical_arguments` (P1.4a's pinned copy:
+-- compact, keys in source order); equality between two argument values is
+-- JSON equality (`arguments_equal`): a key reorder is equal, a value change is
+-- not, 1 and 1.0 are equal.
+--
+-- Privacy (PLAN-004 §0.6): positions, counts, digests and identities only; no
+-- refusal carries content. Nothing here imports `src/core`.
+
+module src/eval/journal/association
+
+import std/ai (Message, ToolCall)
+import std/json (Json, JNull, JBool, JNumber, JString, JArray, JObject, decode, encode, get, getString, getInt)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/eval/journal/digests (eval_canonical_arguments)
+import src/eval/journal/reader (read_source, parse_lines, RunSelector, EndAt, CutoffBefore, ReaderSource, SourceRefusal, SourcePosition, AtEntry, MalformedEntry, position_label, source_refusal_family, source_refusal_position, source_refusal_field, SegmentEntry, SegAppended, SegStateDelta, EvAppendedEntry, eval_fold_journal, eval_boundary_id)
+import src/eval/journal/excerpt (read_excerpt, Excerpt, ExcerptEvent, XLedgerStart, XRpcStart, XPrepared, XThinking, XContextLimit, XRetry, LedgerStart, RpcStart, Prepared, Thinking, ContextLimit, event_index)
+import src/eval/journal/testdata/journal_fixtures (JournalFixture, fxj_malformed_pairing)
+import src/eval/journal/testdata/association_fixtures (RunFixture, fxr_all, fxr_m2_clean, fxr_m2_clean_cutoff_before, fxr_m2_message_start_after_resume, fxr_m2_retry_cut, fxr_m2_replacement_not_counted, fxr_m15_unexpected_tool_result, fxr_m15_malformed_tool_arguments, fxr_m15_duplicate_call_id_swap, fxr_m15_association, fxr_m2_duplicate_call_id, fxr_m2_duplicate_result, fxr_m2_unexpected_result_pairing, fxr_m2_unexpected_result_stale, fxr_m2_malformed_tool_arguments, fxr_m2_association_extra_prepared, fxr_m2_association_extra_prepared_step, fxr_m2_association_extra_assistant, fxr_m2_association_tool_calls, fxr_m2_association_second_thinking, fxr_m2_association_no_run, fxr_m2_association_two_runs, fxr_m2_excerpt_missing_field, fxr_m2_continuation_suspended, fxr_m2_continuation_suspended_resumed, fxr_m2_continuation_wake, fxr_m2_empty_segment, fxr_m2_source_refusal, fxr_m2_source_pairing_at_assistant)
+
+-- ============================================================================
+-- Refusals and output.
+-- ============================================================================
+
+-- A journal position (P1.2a's), an excerpt line, or the excerpt as a whole.
+export type RunPosition = InJournal(SourcePosition) | InExcerpt(int) | WholeExcerpt
+
+export type RunRefusal
+  = SourceRefused(SourceRefusal)
+  | DuplicateOrAmbiguousCallId(RunPosition, string)
+  | UnexpectedToolResult(RunPosition, string)
+  | MalformedToolArguments(RunPosition, string)
+  | Association(RunPosition, string)
+  | ContinuationStart(RunPosition, string)
+  | EmptySegment(RunPosition, string)
+
+export pure func run_position_label(p: RunPosition) -> string {
+  match p {
+    InJournal(s) => position_label(s),
+    InExcerpt(i) => "event:${show(i)}",
+    WholeExcerpt => "excerpt"
+  }
+}
+
+export pure func run_refusal_family(r: RunRefusal) -> string {
+  match r {
+    SourceRefused(s) => source_refusal_family(s),
+    DuplicateOrAmbiguousCallId(_, _) => "DuplicateOrAmbiguousCallId",
+    UnexpectedToolResult(_, _) => "UnexpectedToolResult",
+    MalformedToolArguments(_, _) => "MalformedToolArguments",
+    Association(_, _) => "Association",
+    ContinuationStart(_, _) => "ContinuationStart",
+    EmptySegment(_, _) => "EmptySegment"
+  }
+}
+
+export pure func run_refusal_position(r: RunRefusal) -> string {
+  match r {
+    SourceRefused(s) => source_refusal_position(s),
+    DuplicateOrAmbiguousCallId(p, _) => run_position_label(p),
+    UnexpectedToolResult(p, _) => run_position_label(p),
+    MalformedToolArguments(p, _) => run_position_label(p),
+    Association(p, _) => run_position_label(p),
+    ContinuationStart(p, _) => run_position_label(p),
+    EmptySegment(p, _) => run_position_label(p)
+  }
+}
+
+-- The field, the detail or the cut's reason — never content.
+export pure func run_refusal_field(r: RunRefusal) -> string {
+  match r {
+    SourceRefused(s) => source_refusal_field(s),
+    DuplicateOrAmbiguousCallId(_, f) => f,
+    UnexpectedToolResult(_, f) => f,
+    MalformedToolArguments(_, f) => f,
+    Association(_, f) => f,
+    ContinuationStart(_, f) => f,
+    EmptySegment(_, f) => f
+  }
+}
+
+-- One call of an assistant, arguments decoded.
+export type CallArguments = { call_id: string, name: string, arguments: Json, canonical: string }
+
+-- D1's `RecordedTool`, with its entry: a result, attributed. Exit status is
+-- not recorded.
+export type RecordedTool = { seq: int, call_id: string, name: string, arguments: Json, canonical: string, content: string }
+
+-- Call k: the prepared event, its thinking, the assistant append and what
+-- follows it up to the next assistant (its results, in journal order, and the
+-- `state_delta`s carrying its telemetry).
+export type AssociatedCall = {
+  k: int,
+  assistant_seq: int,
+  step: int,
+  assistant: Message,
+  calls: [CallArguments],
+  tools: [RecordedTool],
+  unanswered: [string],
+  deltas: [int],
+  prepared: Prepared,
+  thinking: Thinking
+}
+
+-- Where the association stopped: before call `call`, at excerpt line `event`.
+export type AssociationCut = { reason: string, call: int, event: int }
+
+export type RunRead = {
+  source: ReaderSource,
+  excerpt: Excerpt,
+  run: LedgerStart,
+  profile: Option[RpcStart],
+  context_limits: [ContextLimit],
+  calls: [AssociatedCall],
+  cut: Option[AssociationCut],
+  -- the `seq` of every `replaces_previous` assistant in the segment (not
+  -- counted; P1.3's `ReplacesPrevious` cutoff input)
+  replacing: [int]
+}
+
+-- ============================================================================
+-- JSON equality and canonical arguments.
+-- ============================================================================
+
+pure func arrays_equal(xs: [Json], ys: [Json]) -> bool {
+  match xs {
+    [] => (match ys { [] => true, _ => false }),
+    x :: xt => match ys { [] => false, y :: yt => arguments_equal(x, y) && arrays_equal(xt, yt) }
+  }
+}
+
+pure func field_in(f: {key: string, value: Json}, ys: [{key: string, value: Json}]) -> bool {
+  List.foldl(\acc y. acc || (y.key == f.key && arguments_equal(f.value, y.value)), false, ys)
+}
+
+pure func fields_covered(xs: [{key: string, value: Json}], ys: [{key: string, value: Json}]) -> bool {
+  List.foldl(\acc x. acc && field_in(x, ys), true, xs)
+}
+
+-- JSON equality: objects compare as sets of members (key order ignored; with
+-- duplicate keys, each member of either side must have an equal member on the
+-- other and the member counts must agree), arrays in order, numbers by value.
+export pure func arguments_equal(a: Json, b: Json) -> bool {
+  match a {
+    JNull => (match b { JNull => true, _ => false }),
+    JBool(x) => (match b { JBool(y) => x == y, _ => false }),
+    JNumber(x) => (match b { JNumber(y) => x == y, _ => false }),
+    JString(x) => (match b { JString(y) => x == y, _ => false }),
+    JArray(xs) => (match b { JArray(ys) => arrays_equal(xs, ys), _ => false }),
+    JObject(xs) => (match b {
+      JObject(ys) => List.length(xs) == List.length(ys) && fields_covered(xs, ys) && fields_covered(ys, xs),
+      _ => false
+    })
+  }
+}
+
+export pure func decode_arguments(source: string) -> Result[CallArguments, string] {
+  match decode(source) {
+    Err(e) => Err(e),
+    Ok(j) => match eval_canonical_arguments(source) {
+      Err(e) => Err(e),
+      Ok(c) => Ok({ call_id: "", name: "", arguments: j, canonical: c })
+    }
+  }
+}
+
+-- ============================================================================
+-- Step 1: the source, with the pairing remap.
+-- ============================================================================
+
+pure func line_int(j: Json, key: string) -> int {
+  match getInt(j, key) { Some(n) => n, None => -1 }
+}
+
+pure func line_string(j: Json, key: string) -> string {
+  match getString(j, key) { Some(s) => s, None => "" }
+}
+
+pure func entry_by_seq(lines: [Json], seq: int) -> Option[Json] {
+  List.foldl(\acc j. match acc { Some(_) => acc, None => if line_int(j, "seq") == seq then Some(j) else None }, None, lines)
+}
+
+pure func entry_by_id(lines: [Json], id: string) -> Option[Json] {
+  List.foldl(\acc j. match acc { Some(_) => acc, None => if line_string(j, "id") == id then Some(j) else None }, None, lines)
+}
+
+pure func is_tool_result(lines: [Json], seq: int) -> bool {
+  match entry_by_seq(lines, seq) {
+    None => false,
+    Some(e) =>
+      line_string(e, "type") == "history_appended"
+        && (match get(e, "message") { None => false, Some(m) => line_string(m, "role") == "tool" })
+  }
+}
+
+pure func source_refusal(lines: [Json], r: SourceRefusal) -> RunRefusal {
+  match r {
+    MalformedEntry(AtEntry(seq), f) =>
+      if f == "pairing" && is_tool_result(lines, seq)
+      then UnexpectedToolResult(InJournal(AtEntry(seq)), "tool_call_id")
+      else SourceRefused(r),
+    _ => SourceRefused(r)
+  }
+}
+
+-- ============================================================================
+-- Step 2: the start.
+-- ============================================================================
+
+pure func is_resume_block(kind: string) -> bool {
+  kind == "resumed" || kind == "settings" || kind == "history_replaced"
+}
+
+-- The id of the entry whose fold is the run's boundary: `run_started`'s parent,
+-- walked back over a resume block.
+pure func boundary_entry(lines: [Json], id: string) -> string {
+  match entry_by_id(lines, id) {
+    None => id,
+    Some(e) =>
+      if is_resume_block(line_string(e, "type")) && line_string(e, "parent_id") != ""
+      then boundary_entry(lines, line_string(e, "parent_id"))
+      else id
+  }
+}
+
+-- `read_source` folded the whole path, so every prefix folds; an `Err` here is
+-- unreachable and reads as "not suspended".
+pure func continues_suspension(lines: [Json], run_started_seq: int) -> bool {
+  match entry_by_seq(lines, run_started_seq) {
+    None => false,
+    Some(rs) => match eval_fold_journal(lines, boundary_entry(lines, line_string(rs, "parent_id"))) {
+      Err(_) => false,
+      Ok(st) => eval_boundary_id(st.last) == "suspended"
+    }
+  }
+}
+
+pure func start_refusal(lines: [Json], src: ReaderSource) -> Option[RunRefusal] {
+  let at = InJournal(AtEntry(src.run_started_seq));
+  if src.opened_by_wake then Some(ContinuationStart(at, "wake"))
+  else if continues_suspension(lines, src.run_started_seq) then Some(ContinuationStart(at, "suspended"))
+  else None
+}
+
+-- ============================================================================
+-- Step 3: attribution and arguments.
+-- ============================================================================
+
+type Turn = {
+  seq: int, step: int, message: Message, replaces: bool,
+  calls: [CallArguments], tools: [RecordedTool], answered: [string], deltas: [int]
+}
+
+type AttrAcc = { bad: Option[RunRefusal], cur: Option[Turn], done: [Turn] }
+
+pure func has_string(xs: [string], x: string) -> bool {
+  List.foldl(\acc y. acc || y == x, false, xs)
+}
+
+type DupAcc = { seen: [string], dup: bool }
+
+pure func ids_distinct(cs: [ToolCall]) -> bool {
+  let acc = List.foldl(\a c. if has_string(a.seen, c.id) then { a | dup: true } else { a | seen: c.id :: a.seen }, { seen: [], dup: false }, cs);
+  not acc.dup
+}
+
+type ArgAcc = { i: int, bad: int, out: [CallArguments] }
+
+pure func decode_calls(cs: [ToolCall]) -> Result[[CallArguments], int] {
+  let acc = List.foldl(\a c.
+    if a.bad >= 0 then a
+    else match decode_arguments(c.arguments) {
+      Err(_) => { a | bad: a.i },
+      Ok(x) => { i: a.i + 1, bad: -1, out: a.out ++ [{ x | call_id: c.id, name: c.name }] }
+    }, { i: 0, bad: -1, out: [] }, cs);
+  if acc.bad >= 0 then Err(acc.bad) else Ok(acc.out)
+}
+
+pure func find_call(cs: [CallArguments], id: string) -> Option[CallArguments] {
+  List.foldl(\acc c. match acc { Some(_) => acc, None => if c.call_id == id then Some(c) else None }, None, cs)
+}
+
+pure func close_turn(a: AttrAcc) -> [Turn] {
+  match a.cur { None => a.done, Some(t) => t :: a.done }
+}
+
+pure func attr_assistant(a: AttrAcc, seq: int, e: EvAppendedEntry) -> AttrAcc {
+  if ids_distinct(e.message.tool_calls) == false
+  then { a | bad: Some(DuplicateOrAmbiguousCallId(InJournal(AtEntry(seq)), "tool_calls.id")) }
+  else match decode_calls(e.message.tool_calls) {
+    Err(i) => { a | bad: Some(MalformedToolArguments(InJournal(AtEntry(seq)), "tool_calls[${show(i)}].arguments")) },
+    Ok(calls) => {
+      bad: None,
+      cur: Some({ seq: seq, step: e.step, message: e.message, replaces: e.replaces_previous,
+                  calls: calls, tools: [], answered: [], deltas: [] }),
+      done: close_turn(a)
+    }
+  }
+}
+
+pure func attr_tool(a: AttrAcc, seq: int, m: Message) -> AttrAcc {
+  let id = m.tool_call_id;
+  let unexpected = { a | bad: Some(UnexpectedToolResult(InJournal(AtEntry(seq)), "tool_call_id")) };
+  match a.cur {
+    None => unexpected,
+    Some(t) => match find_call(t.calls, id) {
+      None => unexpected,
+      Some(c) =>
+        if has_string(t.answered, id)
+        then { a | bad: Some(DuplicateOrAmbiguousCallId(InJournal(AtEntry(seq)), "tool_call_id")) }
+        else {
+          let tool: RecordedTool = { seq: seq, call_id: id, name: c.name, arguments: c.arguments, canonical: c.canonical, content: m.content };
+          { a | cur: Some({ t | tools: t.tools ++ [tool], answered: t.answered ++ [id] }) }
+        }
+    }
+  }
+}
+
+pure func attr_step(a: AttrAcc, x: SegmentEntry) -> AttrAcc {
+  match a.bad {
+    Some(_) => a,
+    None => match x {
+      SegAppended(seq, e) =>
+        if e.message.role == "assistant" then attr_assistant(a, seq, e)
+        else if e.message.role == "tool" then attr_tool(a, seq, e.message)
+        else a,
+      SegStateDelta(seq, _) => (match a.cur {
+        None => a,
+        Some(t) => { a | cur: Some({ t | deltas: t.deltas ++ [seq] }) }
+      }),
+      _ => a
+    }
+  }
+}
+
+pure func attribute(seg: [SegmentEntry]) -> Result[[Turn], RunRefusal] {
+  let acc = List.foldl(attr_step, { bad: None, cur: None, done: [] }, seg);
+  match acc.bad {
+    Some(r) => Err(r),
+    None => Ok(List.foldl(\xs t. t :: xs, [], close_turn(acc)))
+  }
+}
+
+-- ============================================================================
+-- Step 5: the association.
+-- ============================================================================
+
+pure func is_banner(e: ExcerptEvent) -> bool {
+  match e { XLedgerStart(_) => true, XRpcStart(_) => true, _ => false }
+}
+
+type SpanAcc = {
+  found: [LedgerStart],
+  profile: Option[RpcStart],
+  run_profile: Option[RpcStart],
+  state: int,              -- 0 before the run, 1 inside its span, 2 after
+  span: [ExcerptEvent]
+}
+
+pure func span_step(run_id: string, a: SpanAcc, e: ExcerptEvent) -> SpanAcc {
+  let a1 = if a.state == 1 && is_banner(e) then { a | state: 2 } else a;
+  let a2 = if a1.state == 1 then { a1 | span: a1.span ++ [e] } else a1;
+  match e {
+    XRpcStart(r) => { a2 | profile: Some(r) },
+    XLedgerStart(l) =>
+      if l.run_id != run_id then a2
+      else if a2.state == 0 then { a2 | found: [l], run_profile: a2.profile, state: 1 }
+      else { a2 | found: a2.found ++ [l] },
+    _ => a2
+  }
+}
+
+type Span = { run: LedgerStart, profile: Option[RpcStart], events: [ExcerptEvent] }
+
+pure func run_span(x: Excerpt, run_id: string) -> Result[Span, RunRefusal] {
+  let acc = List.foldl(\a e. span_step(run_id, a, e), { found: [], profile: None, run_profile: None, state: 0, span: [] }, x.events);
+  match acc.found {
+    [] => Err(Association(WholeExcerpt, "session_start.run_id")),
+    l :: rest => match rest {
+      [] => Ok({ run: l, profile: acc.run_profile, events: acc.span }),
+      second :: _ => Err(Association(InExcerpt(second.index), "session_start.run_id"))
+    }
+  }
+}
+
+-- The events from the first prepared on.
+pure func from_prepared(xs: [ExcerptEvent]) -> [ExcerptEvent] {
+  match xs {
+    [] => [],
+    e :: rest => match e { XPrepared(_) => xs, _ => from_prepared(rest) }
+  }
+}
+
+-- The events before the first prepared.
+pure func before_prepared(xs: [ExcerptEvent]) -> [ExcerptEvent] {
+  match xs {
+    [] => [],
+    e :: rest => match e { XPrepared(_) => [], _ => e :: before_prepared(rest) }
+  }
+}
+
+pure func same_step(step: int, e: ExcerptEvent) -> bool {
+  match e {
+    XThinking(t) => t.step == step,
+    XRetry(r) => r.step == step,
+    _ => false
+  }
+}
+
+pure func thinkings(xs: [ExcerptEvent]) -> [Thinking] {
+  List.foldl(\acc e. match e { XThinking(t) => acc ++ [t], _ => acc }, [], xs)
+}
+
+type Assoc = { calls: [AssociatedCall], cut: Option[AssociationCut] }
+
+pure func unanswered_of(t: Turn) -> [string] {
+  List.foldl(\acc c. if has_string(t.answered, c.call_id) then acc else acc ++ [c.call_id], [], t.calls)
+}
+
+pure func associated(k: int, t: Turn, p: Prepared, th: Thinking) -> AssociatedCall {
+  {
+    k: k, assistant_seq: t.seq, step: t.step, assistant: t.message,
+    calls: t.calls, tools: t.tools, unanswered: unanswered_of(t), deltas: t.deltas,
+    prepared: p, thinking: th
+  }
+}
+
+pure func associate(span: [ExcerptEvent], turns: [Turn], k: int, acc: [AssociatedCall]) -> Result[Assoc, RunRefusal] {
+  match turns {
+    [] => Ok({ calls: acc, cut: None }),
+    t :: rest => match from_prepared(span) {
+      [] => Err(Association(InJournal(AtEntry(t.seq)), "provider_call_prepared")),
+      pe :: after => match pe {
+        XPrepared(p) => {
+          let window = List.foldl(\ws e. if same_step(p.step, e) then ws ++ [e] else ws, [], before_prepared(after));
+          let tail = from_prepared(after);
+          match window {
+            XRetry(r) :: _ => Ok({ calls: acc, cut: Some({ reason: "ProviderRetry", call: k, event: r.index }) }),
+            _ => match thinkings(window) {
+              [] => match tail {
+                XPrepared(q) :: _ =>
+                  if q.step == p.step then Err(Association(InExcerpt(q.index), "provider_call_prepared"))
+                  else Err(Association(InExcerpt(p.index), "thinking")),
+                _ => Err(Association(InExcerpt(p.index), "thinking"))
+              },
+              th :: more => match more {
+                second :: _ => Err(Association(InExcerpt(second.index), "thinking")),
+                [] =>
+                  if th.tool_calls != List.length(t.message.tool_calls)
+                  then Err(Association(InExcerpt(th.index), "tool_calls"))
+                  else associate(tail, rest, k + 1, acc ++ [associated(k, t, p, th)])
+              }
+            }
+          }
+        },
+        _ => Err(Association(InJournal(AtEntry(t.seq)), "provider_call_prepared"))
+      }
+    }
+  }
+}
+
+pure func counted(turns: [Turn]) -> [Turn] {
+  List.foldl(\acc t. if t.replaces then acc else acc ++ [t], [], turns)
+}
+
+pure func replacing(turns: [Turn]) -> [int] {
+  List.foldl(\acc t. if t.replaces then acc ++ [t.seq] else acc, [], turns)
+}
+
+pure func limits_of(span: Span) -> [ContextLimit] {
+  List.foldl(\acc e. match e {
+    XContextLimit(c) => if c.run_id == span.run.run_id then acc ++ [c] else acc,
+    _ => acc
+  }, [], span.events)
+}
+
+-- ============================================================================
+-- Step 6 and the reader.
+-- ============================================================================
+
+pure func empty_refusal(turns: [Turn], cut: Option[AssociationCut]) -> RunRefusal {
+  let reason = match cut { None => "", Some(c) => c.reason };
+  match turns {
+    [] => EmptySegment(InJournal(AtEntry(-1)), reason),
+    t :: _ => EmptySegment(InJournal(AtEntry(t.seq)), reason)
+  }
+}
+
+pure func after_start(lines: [Json], log: [string], src: ReaderSource) -> Result[RunRead, RunRefusal] {
+  match attribute(src.segment) {
+    Err(r) => Err(r),
+    Ok(turns) => match read_excerpt(log) {
+      Err(e) => Err(Association(InExcerpt(e.index), e.field)),
+      Ok(x) => match run_span(x, src.selector.run_id) {
+        Err(r) => Err(r),
+        Ok(span) => {
+          let ts = counted(turns);
+          match associate(span.events, ts, 1, []) {
+            Err(r) => Err(r),
+            Ok(a) => match a.calls {
+              [] => Err(empty_refusal(ts, a.cut)),
+              _ => Ok({
+                source: src,
+                excerpt: x,
+                run: span.run,
+                profile: span.profile,
+                context_limits: limits_of(span),
+                calls: a.calls,
+                cut: a.cut,
+                replacing: replacing(turns)
+              })
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export pure func read_run(lines: [Json], log: [string], sel: RunSelector) -> Result[RunRead, RunRefusal] {
+  match read_source(lines, sel) {
+    Err(r) => Err(source_refusal(lines, r)),
+    Ok(src) => match start_refusal(lines, src) {
+      Some(r) => Err(r),
+      None => after_start(lines, log, src)
+    }
+  }
+}
+
+-- ============================================================================
+-- Tests (M2, and M15's M2 near-misses: the family's half).
+--
+-- Every journal and log is synthetic and generated (`testdata/gen_fixtures.py`);
+-- each expectation below is asserted literally in the test and against the
+-- generator's independent excerpt reader, attribution and association.
+-- ============================================================================
+
+pure func as_strings_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && as_strings_eq(xs, ys) }
+  }
+}
+
+pure func as_ints_eq(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && as_ints_eq(xs, ys) }
+  }
+}
+
+pure func concat_ints(xss: [[int]]) -> [int] { List.foldl(\acc xs. acc ++ xs, [], xss) }
+
+pure func concat_strings(xss: [[string]]) -> [string] { List.foldl(\acc xs. acc ++ xs, [], xss) }
+
+pure func rf_selector(f: RunFixture) -> RunSelector {
+  let end = if f.end_kind == "EndAt" then EndAt(f.end_id) else CutoffBefore(f.end_id);
+  { leaf: f.leaf, run_id: f.run_id, start: f.start, end: end }
+}
+
+pure func rf_lines(f: RunFixture) -> [Json] {
+  match parse_lines(f.journal) { Ok(ls) => ls, Err(_) => [] }
+}
+
+pure func fx_run(f: RunFixture) -> Result[RunRead, RunRefusal] {
+  read_run(rf_lines(f), f.log, rf_selector(f))
+}
+
+pure func tool_ids(c: AssociatedCall) -> [string] { List.map(\t. t.call_id, c.tools) }
+
+pure func tool_seqs(c: AssociatedCall) -> [int] { List.map(\t. t.seq, c.tools) }
+
+pure func tool_canonicals(c: AssociatedCall) -> [string] { List.map(\t. t.canonical, c.tools) }
+
+pure func call_canonicals(c: AssociatedCall) -> [string] { List.map(\a. "${a.call_id}=${a.canonical}", c.calls) }
+
+pure func profile_index(p: Option[RpcStart]) -> int {
+  match p { None => -1, Some(r) => r.index }
+}
+
+-- The reader against the generator, field for field.
+pure func run_agrees(f: RunFixture) -> bool {
+  List.length(rf_lines(f)) == List.length(f.journal) && (match fx_run(f) {
+    Err(r) =>
+      not f.ok
+        && run_refusal_family(r) == f.family
+        && run_refusal_position(r) == f.position
+        && run_refusal_field(r) == f.field,
+    Ok(rr) =>
+      f.ok
+        && rr.run.index == f.run_event
+        && profile_index(rr.profile) == f.profile_event
+        && as_ints_eq(List.map(\c. c.assistant_seq, rr.calls), f.call_seqs)
+        && as_ints_eq(List.map(\c. c.prepared.index, rr.calls), f.prepared_events)
+        && as_ints_eq(List.map(\c. c.thinking.index, rr.calls), f.thinking_events)
+        && as_ints_eq(concat_ints(List.map(tool_seqs, rr.calls)), f.tool_seqs)
+        && as_strings_eq(concat_strings(List.map(tool_ids, rr.calls)), f.tool_ids)
+        && as_strings_eq(concat_strings(List.map(tool_canonicals, rr.calls)), f.tool_arguments)
+        && as_strings_eq(concat_strings(List.map(call_canonicals, rr.calls)), f.call_arguments)
+        && as_ints_eq(concat_ints(List.map(\c. c.deltas, rr.calls)), f.deltas)
+        && as_ints_eq(rr.replacing, f.replacing)
+        && (match rr.cut {
+              None => f.cut_reason == "" && f.cut_call == 0 && f.cut_event == -1,
+              Some(c) => c.reason == f.cut_reason && c.call == f.cut_call && c.event == f.cut_event
+            })
+  })
+}
+
+pure func run_refused_as(f: RunFixture, family: string, position: string, field: string) -> bool {
+  run_agrees(f) && (match fx_run(f) {
+    Ok(_) => false,
+    Err(r) =>
+      run_refusal_family(r) == family
+        && run_refusal_position(r) == position
+        && run_refusal_field(r) == field
+  })
+}
+
+pure func run_reads(f: RunFixture) -> bool {
+  run_agrees(f) && (match fx_run(f) { Ok(_) => true, Err(_) => false })
+}
+
+pure func call_counts(rr: RunRead) -> [int] {
+  List.map(\c. List.length(c.assistant.tool_calls), rr.calls)
+}
+
+pure func test_run_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fxr_all()) == 32 && List.foldl(\acc f. acc && run_agrees(f), true, fxr_all())
+  }
+
+-- ---- the clean twins --------------------------------------------------------
+
+-- Three calls of run B associated in order: call k = the k-th prepared of the
+-- run's span, its thinking, the k-th assistant; results in journal order with
+-- canonical arguments; the profile is the rpc banner before the run; the other
+-- run's and the later spawn's events are outside the span.
+pure func test_m2_clean_twin_associates() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m2_clean()) && (match fx_run(fxr_m2_clean()) {
+      Err(_) => false,
+      Ok(rr) =>
+        rr.run.index == 13 && rr.run.run_id == "sess_fx.r0.1" && profile_index(rr.profile) == 0
+          && List.length(rr.context_limits) == 1
+          && as_ints_eq(List.map(\c. c.k, rr.calls), [1, 2, 3])
+          && as_ints_eq(List.map(\c. c.assistant_seq, rr.calls), [13, 17, 20])
+          && as_ints_eq(List.map(\c. c.prepared.index, rr.calls), [16, 21, 26])
+          && as_ints_eq(List.map(\c. c.thinking.index, rr.calls), [18, 23, 28])
+          && as_ints_eq(List.map(\c. c.thinking.tool_calls, rr.calls), [2, 1, 1])
+          && as_ints_eq(call_counts(rr), [2, 1, 1])
+          && as_ints_eq(List.map(\c. List.length(c.unanswered), rr.calls), [0, 0, 0])
+          && as_ints_eq(List.map(\c. c.prepared.msg_count, rr.calls), [6, 9, 11])
+          && List.foldl(\acc c. acc && c.prepared.model == "fx/model-b", true, rr.calls)
+          && as_strings_eq(concat_strings(List.map(tool_ids, rr.calls)), ["c2a", "c2b", "c3", "c4"])
+          && as_ints_eq(concat_ints(List.map(\c. c.deltas, rr.calls)), [16, 19, 22])
+          && (match rr.cut { None => true, Some(_) => false })
+    })
+  }
+
+-- `CutoffBefore` the third call: two associated, the third prepared unused.
+pure func test_m2_clean_twin_cutoff_before() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m2_clean_cutoff_before()) && (match fx_run(fxr_m2_clean_cutoff_before()) {
+      Err(_) => false,
+      Ok(rr) => as_ints_eq(List.map(\c. c.assistant_seq, rr.calls), [13, 17])
+    })
+  }
+
+-- A retried provider position is D1's ProviderRetry cutoff, not an
+-- association refusal: the association stops before call 2.
+pure func test_m2_retry_is_a_cut() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m2_retry_cut()) && (match fx_run(fxr_m2_retry_cut()) {
+      Err(_) => false,
+      Ok(rr) =>
+        List.length(rr.calls) == 1
+          && (match rr.cut { None => false, Some(c) => c.reason == "ProviderRetry" && c.call == 2 && c.event == 23 })
+    })
+  }
+
+-- A `replaces_previous` assistant is not a call: call 3 is still the third
+-- prepared event, and the replacement is reported (P1.3's cutoff input).
+pure func test_m2_replacement_is_not_counted() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m2_replacement_not_counted()) && (match fx_run(fxr_m2_replacement_not_counted()) {
+      Err(_) => false,
+      Ok(rr) =>
+        as_ints_eq(List.map(\c. c.assistant_seq, rr.calls), [13, 17, 20])
+          && as_ints_eq(List.map(\c. c.prepared.index, rr.calls), [16, 21, 25])
+          && as_ints_eq(rr.replacing, [18])
+    })
+  }
+
+-- ---- M2: DuplicateOrAmbiguousCallId ------------------------------------------
+
+pure func test_m2_duplicate_call_id_in_one_assistant() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_duplicate_call_id(), "DuplicateOrAmbiguousCallId", "entry:13", "tool_calls.id") }
+
+-- The fold accepts a second result for an answered call; attribution does not.
+pure func test_m2_duplicate_result() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_duplicate_result(), "DuplicateOrAmbiguousCallId", "entry:16", "tool_call_id") }
+
+-- ---- M2: UnexpectedToolResult --------------------------------------------------
+
+-- The fold's pairing refusal at a TOOL result is D1's UnexpectedToolResult at
+-- this layer; P1.2a's layer still reports MalformedEntry(pairing) for it.
+pure func test_m2_unexpected_tool_result_pairing() -> bool
+  tests [((), true)]
+  {
+    run_refused_as(fxr_m2_unexpected_result_pairing(), "UnexpectedToolResult", "entry:14", "tool_call_id")
+      && (match read_source(rf_lines(fxr_m2_unexpected_result_pairing()), rf_selector(fxr_m2_unexpected_result_pairing())) {
+            Ok(_) => false,
+            Err(r) => source_refusal_family(r) == "MalformedEntry" && source_refusal_position(r) == "entry:14" && source_refusal_field(r) == "pairing"
+          })
+  }
+
+-- M1's own pairing fixture (P1.2a) gets the same family here.
+pure func test_m2_unexpected_tool_result_m1_fixture() -> bool
+  tests [((), true)]
+  {
+    let f = fxj_malformed_pairing();
+    let sel = { leaf: f.leaf, run_id: f.run_id, start: f.start, end: EndAt(f.end_id) };
+    f.end_kind == "EndAt" && (match parse_lines(f.lines) {
+      Err(_) => false,
+      Ok(ls) => match read_run(ls, fxr_m2_clean().log, sel) {
+        Ok(_) => false,
+        Err(r) => run_refusal_family(r) == "UnexpectedToolResult" && run_refusal_position(r) == "entry:14"
+      }
+    })
+  }
+
+-- A result after a call-free assistant naming the batch before it: the fold
+-- accepts it, attribution does not.
+pure func test_m2_unexpected_tool_result_stale() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_unexpected_result_stale(), "UnexpectedToolResult", "entry:18", "tool_call_id") }
+
+-- A pairing refusal at an ASSISTANT is not attribution: it stays P1.2a's.
+pure func test_m2_pairing_at_assistant_stays_malformed_entry() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_source_pairing_at_assistant(), "MalformedEntry", "entry:13", "pairing") }
+
+-- Every other P1.2a refusal passes through unchanged.
+pure func test_m2_source_refusal_passes_through() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_source_refusal(), "MalformedEntry", "entry:17", "step") }
+
+-- ---- M2: MalformedToolArguments -----------------------------------------------
+
+pure func test_m2_malformed_tool_arguments() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_malformed_tool_arguments(), "MalformedToolArguments", "entry:13", "tool_calls[1].arguments") }
+
+pure func test_arguments_json_equality() -> bool
+  tests [((), true)]
+  {
+    match decode_arguments("{ \"b\" : 1, \"a\" : [1, 2.5], \"c\": {\"z\": null, \"y\": true} }") {
+      Err(_) => false,
+      Ok(x) => match decode_arguments("{\"c\":{\"y\":true,\"z\":null},\"a\":[1.0,2.5],\"b\":1}") {
+        Err(_) => false,
+        Ok(reordered) => match decode_arguments("{\"b\":1,\"a\":[2.5,1],\"c\":{\"z\":null,\"y\":true}}") {
+          Err(_) => false,
+          Ok(swapped) => match decode_arguments("{\"b\":2,\"a\":[1,2.5],\"c\":{\"z\":null,\"y\":true}}") {
+            Err(_) => false,
+            Ok(changed) =>
+              arguments_equal(x.arguments, reordered.arguments)
+                && x.canonical != reordered.canonical
+                && x.canonical == "{\"b\":1,\"a\":[1,2.5],\"c\":{\"z\":null,\"y\":true}}"
+                && not arguments_equal(x.arguments, swapped.arguments)
+                && not arguments_equal(x.arguments, changed.arguments)
+                && (match decode_arguments("{bad") { Err(_) => true, Ok(_) => false })
+          }
+        }
+      }
+    }
+  }
+
+-- ---- M2: Association -------------------------------------------------------
+
+-- An extra prepared call: a second prepared for call 1's step before its
+-- thinking, refused at the extra one.
+pure func test_m2_association_extra_prepared_same_step() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_association_extra_prepared(), "Association", "event:17", "provider_call_prepared") }
+
+-- An extra prepared call for a step that has no thinking: it takes call 2's
+-- place and is refused at itself, `thinking`.
+pure func test_m2_association_extra_prepared_other_step() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_association_extra_prepared_step(), "Association", "event:20", "thinking") }
+
+-- An extra assistant: the journal's third call has no prepared event in the run.
+pure func test_m2_association_extra_assistant() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_association_extra_assistant(), "Association", "entry:20", "provider_call_prepared") }
+
+-- `thinking.tool_calls` != the assistant's call count.
+pure func test_m2_association_tool_calls_count() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_association_tool_calls(), "Association", "event:18", "tool_calls") }
+
+-- Ambiguous: two thinkings for one call.
+pure func test_m2_association_second_thinking() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_association_second_thinking(), "Association", "event:24", "thinking") }
+
+-- Ambiguous: two ledger banners for the selected run.
+pure func test_m2_association_two_runs() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_association_two_runs(), "Association", "event:30", "session_start.run_id") }
+
+-- Missing: no ledger banner for the selected run.
+pure func test_m2_association_no_run() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_association_no_run(), "Association", "excerpt", "session_start.run_id") }
+
+-- An unreadable excerpt event cannot be associated.
+pure func test_m2_association_unreadable_event() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_excerpt_missing_field(), "Association", "event:21", "provider_call_prepared.payload_digest") }
+
+-- ---- M2: ContinuationStart ---------------------------------------------------
+
+-- A suspended run's continuation in the same process.
+pure func test_m2_continuation_start_suspended() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_continuation_suspended(), "ContinuationStart", "entry:9", "suspended") }
+
+-- The same continuation after a cross-process resume (`resumed` skipped).
+pure func test_m2_continuation_start_suspended_resumed() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_continuation_suspended_resumed(), "ContinuationStart", "entry:10", "suspended") }
+
+-- A run opened by a consumed wake (`SeedParked`).
+pure func test_m2_continuation_start_wake() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_continuation_wake(), "ContinuationStart", "entry:24", "wake") }
+
+-- The twins: a message start after a finished run (m2_clean), and after a
+-- finished run and a cross-process resume.
+pure func test_m2_continuation_start_twins() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m2_clean()) && run_reads(fxr_m2_message_start_after_resume())
+      && (match fx_run(fxr_m2_message_start_after_resume()) {
+            Err(_) => false,
+            Ok(rr) => rr.run.index == 10 && profile_index(rr.profile) == 8 && List.length(rr.calls) == 1
+          })
+  }
+
+-- ---- M2: EmptySegment ----------------------------------------------------------
+
+-- The retry at call 1 leaves no evaluated call.
+pure func test_m2_empty_segment() -> bool
+  tests [((), true)]
+  { run_refused_as(fxr_m2_empty_segment(), "EmptySegment", "entry:13", "ProviderRetry") }
+
+-- ---- M15: the near-misses pass M2's refusals ---------------------------------
+
+pure func nth_call(rr: RunRead, k: int) -> Option[AssociatedCall] {
+  List.foldl(\acc c. if c.k == k then Some(c) else acc, None, rr.calls)
+}
+
+pure func first_tool_content(c: Option[AssociatedCall]) -> string {
+  match c {
+    None => "",
+    Some(x) => match x.tools { [] => "", t :: _ => t.content }
+  }
+}
+
+pure func both(f: RunFixture) -> Option[{ nm: RunRead, clean: RunRead }] {
+  match fx_run(f) {
+    Err(_) => None,
+    Ok(nm) => match fx_run(fxr_m2_clean()) {
+      Err(_) => None,
+      Ok(clean) => Some({ nm: nm, clean: clean })
+    }
+  }
+}
+
+-- A correctly attributed result at call 1 with one content byte changed; call
+-- 2 exists. The catching check's half — AdmissionCheck(A3) at Call(2) — is
+-- P1.7a-v2's.
+pure func test_m15_near_miss_unexpected_tool_result_passes_m2() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m15_unexpected_tool_result()) && (match both(fxr_m15_unexpected_tool_result()) {
+      None => false,
+      Some(p) =>
+        first_tool_content(nth_call(p.nm, 1)) != first_tool_content(nth_call(p.clean, 1))
+          && first_tool_content(nth_call(p.nm, 2)) == first_tool_content(nth_call(p.clean, 2))
+          && List.length(p.nm.calls) == 3
+          && as_strings_eq(concat_strings(List.map(tool_ids, p.nm.calls)), concat_strings(List.map(tool_ids, p.clean.calls)))
+    })
+  }
+
+-- Decodable arguments at call 1 with one value changed (JSON-inequal); call 2
+-- exists. P1.7a-v2: AdmissionCheck(A3) at Call(2).
+pure func test_m15_near_miss_malformed_tool_arguments_passes_m2() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m15_malformed_tool_arguments()) && (match both(fxr_m15_malformed_tool_arguments()) {
+      None => false,
+      Some(p) => match nth_call(p.nm, 1) {
+        None => false,
+        Some(c1) => match nth_call(p.clean, 1) {
+          None => false,
+          Some(d1) => match c1.calls {
+            [] => false,
+            a :: _ => match d1.calls {
+              [] => false,
+              b :: _ =>
+                not arguments_equal(a.arguments, b.arguments) && a.call_id == b.call_id
+                  && List.length(p.nm.calls) == 3
+          }
+          }
+        }
+      }
+    })
+  }
+
+-- Unique ids with call 1's two results swapped. What D1's ordered association
+-- does with it, asserted first: it ACCEPTS, attributing each result by id and
+-- keeping the journal order (c2b before c2a) — so the M15 row is applicable:
+-- P1.7a-v2 pins the seam's ToolCorrelationMismatch as AdmissionCheck(A2) at the
+-- first swapped result (entry:14).
+pure func test_m15_near_miss_duplicate_call_id_swap_is_accepted() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m15_duplicate_call_id_swap()) && (match fx_run(fxr_m15_duplicate_call_id_swap()) {
+      Err(_) => false,
+      Ok(rr) => match nth_call(rr, 1) {
+        None => false,
+        Some(c) =>
+          as_strings_eq(tool_ids(c), ["c2b", "c2a"]) && as_ints_eq(tool_seqs(c), [14, 15])
+            && as_strings_eq(List.map(\a. a.call_id, c.calls), ["c2a", "c2b"])
+            && List.length(c.unanswered) == 0
+      }
+    })
+  }
+
+-- A same-run, correctly associated excerpt whose `payload_digest` at call 1 is
+-- altered. P1.7a-v2: AdmissionCheck(A3) at Call(1).
+pure func test_m15_near_miss_association_passes_m2() -> bool
+  tests [((), true)]
+  {
+    run_reads(fxr_m15_association()) && (match both(fxr_m15_association()) {
+      None => false,
+      Some(p) => match nth_call(p.nm, 1) {
+        None => false,
+        Some(c1) => match nth_call(p.clean, 1) {
+          None => false,
+          Some(d1) =>
+            c1.prepared.payload_digest != d1.prepared.payload_digest
+              && c1.prepared.payload_digest == "sha256:fx-altered"
+              && c1.prepared.index == d1.prepared.index
+              && as_ints_eq(List.map(\c. c.assistant_seq, p.nm.calls), [13, 17, 20])
+        }
+      }
+    })
+  }
