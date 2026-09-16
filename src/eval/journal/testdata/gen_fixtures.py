@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synthetic fixtures for the ADR-004 evaluator (PLAN-004 §3, matrix rows M6 and M1).
+"""Synthetic fixtures for the ADR-004 evaluator (PLAN-004 §3, matrix rows M1–M6).
 
 The THIRD implementation of the digest forms, written from ADR-003/ADR-004's
 definitions in Python `hashlib`, so a fixture's expected digest never comes
@@ -455,8 +455,32 @@ def decode_entry(e):
                      ("prompt_digest_to", "str"), ("forced", "bool")]:
             req(e, k, t, seq)
         return {}
-    if kind in ("history_replaced", "exit"):
-        raise NotImplementedError(f"the generator's fold does not model `{kind}`; no fixture uses it")
+    if kind == "exit":
+        # P1.3 (M3's `Exit` cutoff). journal.ail's `exit_of_entry`.
+        reason = req(e, "reason", "str", seq)
+        for x in req(e, "pending_tool_calls", "list", seq):
+            if not isinstance(x, str):
+                raise Refused("entry", seq, "pending_tool_calls")
+        return {"reason": reason}
+    if kind == "history_replaced":
+        # P1.3 (M3's `HistoryReplaced` cutoff). journal.ail's `replaced_of_entry`;
+        # only the whole-history replacement (`resume`, `profile_switch`) is
+        # modelled — no fixture writes a compaction replacement.
+        run_id = req(e, "run_id", "str", seq)
+        req(e, "step", "int", seq)
+        reason = req(e, "reason", "str", seq)
+        if "first_kept" in e and not _is_int(e["first_kept"]):
+            raise Refused("entry", seq, "first_kept")
+        ms = []
+        for n, mj in enumerate(req(e, "messages", "list", seq)):
+            try:
+                ms.append(decode_message(mj, f"messages[{n}]"))
+            except ValueError as err:
+                raise Refused("entry", seq, str(err))
+        d = req(e, "digest_after", "str", seq)
+        if reason not in ("resume", "profile_switch"):
+            raise NotImplementedError("the generator's fold models only whole-history replacements")
+        return {"run_id": run_id, "messages": ms, "digest_after": d}
     raise Refused("entry", seq, f"type={kind}")
 
 
@@ -532,6 +556,16 @@ def fold(lines, leaf):
             last = ("suspended", d["run_id"])
         elif kind == "resumed":
             last = ("open", "resumed")
+        elif kind == "history_replaced":
+            expected = raw_frame_digest(d["messages"])
+            if d["digest_after"] != expected:
+                raise Refused("digest", seq)
+            hist = [(seq, m) for m in d["messages"]]
+            prev, digest = digest, expected
+            last = ("open", "history_replaced")
+        elif kind == "exit":
+            if last[0] != "parked":
+                last = ("exit", d["reason"])
         elif kind == "park":
             last = ("parked", d["request_id"], False)
         elif kind == "wake":
@@ -564,7 +598,8 @@ def fold(lines, leaf):
         if (m["role"] == "tool" and m["tool_call_id"] == "") or any(c["id"] == "" for c in m["tool_calls"]):
             raise Refused("transcript")
     boundary = {"open": lambda: f"open:{last[1]}", "run_finished": lambda: "run_finished",
-                "suspended": lambda: "suspended", "parked": lambda: "parked"}[last[0]]()
+                "suspended": lambda: "suspended", "parked": lambda: "parked",
+                "exit": lambda: "exit"}[last[0]]()
     return {"history": msgs, "dangling": open_ids, "model": model, "profile": profile,
             "boundary": boundary, "world_ordinal": ordinal,
             "wake_answered": last[0] == "parked" and last[2]}
@@ -801,6 +836,9 @@ def chain(bodies, parents=None):
             m = e["message"]
             base = prev if e["replaces_previous"] else digest
             prev, digest = base, sha(base + "m{" + message_body(m, m["content"]) + images_form(m["images"]) + "}")
+            e["digest_after"] = digest
+        if e["type"] == "history_replaced":
+            prev, digest = digest, raw_frame_digest(e["messages"])
             e["digest_after"] = digest
         lines.append(e)
     return lines
@@ -1549,9 +1587,596 @@ def render_association():
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# M3/M4/M5 (P1.3): an independent stopping contract, cutoff table and T0
+# configuration (ADR-004 D1), over the P1.2b reader above. The AILANG side is
+# `src/eval/journal/{stopping,configuration}.ail`; nothing here reads it.
+# ---------------------------------------------------------------------------
+
+WORLD_OUT = Path(__file__).with_name("world_fixtures.ail")
+CONFIG_AIL = Path(__file__).resolve().parent.parent / "configuration.ail"
+REPO = Path(__file__).resolve().parents[4]
+A_COMMIT = "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc"
+
+EVAL_PROFILE_DIR = ".motoko/eval-profile"
+PROFILE_CONFIG = EVAL_PROFILE_DIR + "/config.json"
+RUNTIME_STATUS = "MotokoRuntimeStatus"
+HYBRID_PREFIX = "hybrid-step-"
+T0_OMISSIONS = ["streaming", "conversation_loop", "extensions_and_compaction",
+                "model_parameters_tool_schemas_encoding", "real_tools_and_exit_status",
+                "cache_usage", "prior_counts", "runtime_status_tool", "context_limit_source",
+                "live_gc_timing"]
+STRUCTURAL = {"run_finished": "Completed", "suspended": "Suspended", "resumed": "Resumed",
+              "settings": "SettingsChange", "run_started": "RunStarted", "exit": "Exit",
+              "history_replaced": "HistoryReplaced"}
+
+
+def api_model(model, base_url):
+    """session.ail's `provider_api_model`, written from its specification: keep
+    `openrouter/auto`; strip one of four routing prefixes; not idempotent."""
+    if model == "openrouter/auto":
+        return model
+    for prefix in ("openrouter/", "openai/", "anthropic/", "google/"):
+        if model.startswith(prefix):
+            return model[len(prefix):]
+    return model
+
+
+def native_call_emitted(msgs):
+    return any(m["role"] == "assistant" and any(not c["id"].startswith(HYBRID_PREFIX) for c in m["tool_calls"])
+               for m in msgs)
+
+
+class WorldRefused(Exception):
+    def __init__(self, family, position, field=""):
+        super().__init__(family, position, field)
+        self.family, self.position, self.field = family, position, field
+
+
+def is_tail(e):
+    return e["type"] == "state_delta" or (e["type"] == "history_appended" and e["message"]["role"] == "tool")
+
+
+def scan_cutoffs(seg):
+    """Pass 1 over the typed segment: the first journal-only cutoff (index,
+    kind, detail, the seq that caused it), the first call-free assistant, and
+    every counted assistant's index."""
+    cut, first_cf, last_asst, assistants = None, None, None, []
+    for i, e in enumerate(seg):
+        t = e["type"]
+        if is_tail(e):
+            continue
+        if t == "history_appended":
+            m = e["message"]
+            if m["role"] != "assistant":
+                cut = (i, "UserMessage", m["role"], e["seq"])
+                break
+            if e["replaces_previous"]:
+                cut = (last_asst, "ReplacesPrevious", "", e["seq"])
+                break
+            j = i + 1
+            results = []
+            while j < len(seg) and is_tail(seg[j]):
+                if seg[j]["type"] == "history_appended":
+                    results.append(seg[j]["message"]["tool_call_id"])
+                j += 1
+            ids = [c["id"] for c in m["tool_calls"]]
+            if ids and any(x not in results for x in ids):
+                cut = (i, "IncompleteToolBatch", "", e["seq"])
+                break
+            if any(x.startswith(HYBRID_PREFIX) for x in results):
+                cut = (i, "HybridExtraction", "", e["seq"])
+                break
+            if any(c["name"] == RUNTIME_STATUS for c in m["tool_calls"]):
+                cut = (i, "RuntimeStatusCall", "", e["seq"])
+                break
+            if not ids and first_cf is None:
+                first_cf = i
+            last_asst = i
+            assistants.append(i)
+        elif t == "park":
+            cut = (last_asst, "Parked", "", e["seq"])
+            break
+        elif t == "wake":
+            cut = (i, "Parked", "", e["seq"])
+            break
+        else:
+            detail = e["finish_reason"] if t == "run_finished" else ""
+            cut = (i, STRUCTURAL[t], detail, e["seq"])
+            break
+    return cut, first_cf, assistants
+
+
+def with_end(s, kind, end_id):
+    return dict(s, end=(kind, end_id))
+
+
+def next_on_path(path, entry_id):
+    ids = [e["id"] for e in path]
+    i = ids.index(entry_id)
+    return path[i + 1] if i + 1 < len(path) else None
+
+
+def kept_segment(lines, s):
+    return read(lines, s)["segment"]
+
+
+def context_encoding(events, run_id):
+    limits = [e for e in events if e["kind"] == "context_limit" and e["run_id"] == run_id]
+    if not limits:
+        return ("EncMissed", "no_event", '{"agent":{}}')
+    arm, n = limits[0]["source"][0], limits[0]["context_limit"]
+    if arm == "bounded" and n > 0:
+        return ("EncWindow", str(n), '{"agent":{"context_limit":%d}}' % n)
+    if arm == "disabled":
+        return ("EncDisabled", "", '{"agent":{"context_limit":"disabled"}}')
+    if arm == "bounded":
+        return ("EncMissed", "non_positive", '{"agent":{}}')
+    return ("EncMissed", arm, '{"agent":{}}')
+
+
+def read_world(lines, log, s, env):
+    """ADR-004 D1 (P1.3): cutoffs, the six shapes, the ends, HybridPredicate,
+    the logical model and the T0 settings. Raises WorldRefused."""
+    text = log_text(log)
+
+    def run(sx):
+        try:
+            return read_run(lines, text, sx)
+        except RunRefused as err:
+            raise WorldRefused(err.family, err.position, err.field)
+
+    try:
+        r = read(lines, s)
+    except ReaderRefused:
+        run(s)
+        raise AssertionError("read_run accepted a selector read refused")
+    path, seg = r["path"], r["segment"]
+    start = seg[0]
+    cut, first_cf, assistants = scan_cutoffs(seg)
+    after_start = next_on_path(path, start["id"])
+    start_only = (with_end(s, "CutoffBefore", after_start["id"]) if after_start
+                  else with_end(s, "EndAt", start["id"]))
+    empty_reason = None
+    if cut is not None and (first_cf is None or cut[0] <= first_cf):
+        s1 = start_only if cut[0] == 0 else with_end(s, "CutoffBefore", seg[cut[0]]["id"])
+        if cut[0] == 0:
+            empty_reason = cut[1]
+        via_cf = False
+    elif first_cf is not None:
+        nxt = next_on_path(path, seg[first_cf]["id"])
+        s1 = (with_end(s, "CutoffBefore", nxt["id"]) if nxt else with_end(s, "EndAt", seg[first_cf]["id"]))
+        via_cf = True
+    else:
+        s1, via_cf = s, False
+    a1 = run(s1)
+    if empty_reason:
+        raise WorldRefused("EmptySegment", f"entry:{start['seq']}", empty_reason)
+    events = a1["events"]
+    final_cut = None      # (kind, detail, position)
+    s2 = None
+    stop_call = False
+    if a1["cut"]:
+        reason, k, ev = a1["cut"]
+        asst_seq = [e["seq"] for e in seg if e["type"] == "history_appended"
+                    and e["message"]["role"] == "assistant" and not e["replaces_previous"]][k - 1]
+        s2 = with_end(s, "CutoffBefore", next(e["id"] for e in seg if e["seq"] == asst_seq))
+        final_cut = (reason, "", f"event:{ev}")
+    elif via_cf:
+        f = seg[first_cf]
+        last = a1["calls"][-1]
+        assert last["seq"] == f["seq"]
+        think = next(e for e in events if e["index"] == last["thinking"])
+        kind = None
+        if think["finish_reason"] == "tool_calls":
+            kind = "CallFreeToolCallsFinish"
+        elif f["message"]["content"].strip() == "":
+            kind = "BlankStop"
+        if kind:
+            if first_cf == 0:
+                raise WorldRefused("EmptySegment", f"entry:{f['seq']}", kind)
+            s2 = with_end(s, "CutoffBefore", f["id"])
+            final_cut = (kind, "", f"entry:{f['seq']}")
+        else:
+            stop_call = True
+            limit = cut[0] if cut else len(seg)
+            cut_at_assistant = bool(cut and cut[0] > first_cf and seg[cut[0]]["type"] == "history_appended"
+                                    and seg[cut[0]]["message"]["role"] == "assistant")
+            if any(first_cf < i < limit for i in assistants) or cut_at_assistant:
+                s2 = with_end(s, "EndAt", f["id"])
+                final_cut = ("StopBeforeEnd", "", f"entry:{f['seq']}")
+            elif cut:
+                s2 = with_end(s, "CutoffBefore", seg[cut[0]]["id"])
+                final_cut = (cut[1], cut[2], f"entry:{cut[3]}")
+            else:
+                s2 = s
+    elif cut:
+        s2 = s1
+        final_cut = (cut[1], cut[2], f"entry:{cut[3]}")
+    else:
+        s2 = s
+    a = run(s2) if s2 != s1 else a1
+    kept = kept_segment(lines, s2)
+    nxt = next_on_path(path, kept[-1]["id"])
+    if final_cut is None:
+        final_cut = ("SelectorEnd", "", "selector") if nxt else ("EofWithoutRunFinished", "", "eof")
+    calls = a["calls"]
+    n = len(calls)
+    by_seq = {e["seq"]: e for e in kept}
+    run_id = s["run_id"]
+    # the logical model: `settings` on the path, falling back to the header
+    logical = r["seed"]["model"]
+    for c in calls:
+        p = next(e for e in events if e["index"] == c["prepared"])
+        if p["model"] != logical:
+            raise WorldRefused("Association", f"event:{p['index']}", "provider_call_prepared.model")
+    header = path[0]
+    boot = header["boot"]
+    seed_msgs = r["seed"]["history"]
+    if stop_call:
+        before = [by_seq[c["seq"]]["message"] for c in calls[:-1]]
+        end = ("EndFinalize", "model_stop")
+        genuine = bool(nxt and nxt["type"] == "run_finished" and nxt["run_id"] == run_id
+                       and nxt["finish_reason"] == "stop")
+    else:
+        before = [by_seq[c["seq"]]["message"] for c in calls]
+        end = ("EndSuspended", str(n))
+        genuine = bool(nxt and nxt["type"] == "suspended" and nxt["run_id"] == run_id)
+    predicate = native_call_emitted(seed_msgs + before)
+    if stop_call and boot["hybrid_tools"] and not predicate:
+        raise WorldRefused("HybridPredicate", f"entry:{calls[-1]['seq']}", "session_emitted_native_tool_call")
+    enc = context_encoding(events, run_id)
+    limits = [e for e in events if e["kind"] == "context_limit" and e["run_id"] == run_id]
+    served = [("MOTOKO_PERSIST_RETRIES", "0"), ("MOTOKO_RETRY_STREAM_ERROR", env["retry"]),
+              ("OPENAI_BASE_URL", env["base_url"]), ("MOTOKO_HEADLESS", env["headless"]),
+              ("MOTOKO_PROFILE_DIR", EVAL_PROFILE_DIR), ("MOTOKO_SESSION_ID", header["session_id"]),
+              ("MOTOKO_TOOL_TIMEOUT_MS", env["timeout"] if env["timeout"] is not None else "0"),
+              ("MOTOKO_EXIT_MANIFEST", ""), ("MOTOKO_CAPTURE_FAILED_PAYLOAD", "")]
+    omissions = list(T0_OMISSIONS)
+    if boot["max_cost_millicents"] != 0:
+        omissions.append("max_cost_millicents_served_zero")
+    tool_keys, tools = [], []
+    for c in calls:
+        m = by_seq[c["seq"]]["message"]
+        tool_keys += [f"{x['id']}|{x['name']}|{sha(canonical_arguments(x['arguments']))}" for x in m["tool_calls"]]
+        tools += [t[1] for t in c["tools"]]
+    return {
+        "selector": s2, "cut": final_cut, "n": n, "end": end, "genuine": genuine,
+        "decisions": 2 * n + 1 if end[0] == "EndSuspended" else 2 * n,
+        "call_seqs": [c["seq"] for c in calls],
+        "finish": [next(e for e in events if e["index"] == c["thinking"])["finish_reason"] for c in calls],
+        "chain": [e["digest_after"] for e in kept if e["type"] == "history_appended"],
+        "payload": [next(e for e in events if e["index"] == c["prepared"])["payload_digest"] for c in calls],
+        "logical": logical, "api": api_model(logical, env["base_url"]),
+        "tool_keys": tool_keys, "tool_ids": tools,
+        "predicate": predicate, "hybrid_tools": boot["hybrid_tools"],
+        "encoding": enc, "limit_source": (f"{limits[0]['source'][0]}:{limits[0]['source'][1]}" if limits else ""),
+        "env": served, "omissions": omissions,
+        "seed_payload": payload_digest(seed_msgs),
+    }
+
+
+# -- the P1.3 journals ---------------------------------------------------------
+
+def m3_tail(asst_body, more_calls=True):
+    """m2's first two calls (e13, e17) and their turns, then `asst_body` at e20
+    with a delta (e21); then, when `more_calls`, a continuation call c5 (e22,
+    e23, e24); then the run suspends and finishes."""
+    b = m2_bodies()[:20] + [asst_body, delta(RUN_B, 3, 5)]
+    if more_calls:
+        b += [app(RUN_B, 4, asst("", "c5")), app(RUN_B, 4, tool("c5", "ok")), delta(RUN_B, 4, 6)]
+    return b + [{"type": "suspended", "run_id": RUN_B, "reason": "budget_exhausted", "step": 4},
+                {"type": "run_finished", "run_id": RUN_B, "cumulative": counts(6),
+                 "world_ordinal": 11, "finish_reason": "max_steps"}]
+
+
+def with_call(bodies, i, call_id, name):
+    return with_message(bodies, i, tool_calls=[call(call_id, name, "{}")])
+
+
+def set_boot(key, value):
+    def f(e):
+        e["boot"] = dict(e["boot"], **{key: value})
+    return f
+
+
+def plain_bodies():
+    """A session with no native call anywhere: run A answers in prose; run B's
+    first call is a stop call."""
+    return [
+        header_body(),                                                   # e0
+        {"type": "run_started", "run_id": RUN_A},                        # e1
+        app(RUN_A, 0, msg("system", "You are a synthetic fixture.")),    # e2
+        app(RUN_A, 0, msg("user", "say hello")),                         # e3
+        app(RUN_A, 1, asst("Hello.")),                                   # e4
+        delta(RUN_A, 1, 1),                                              # e5
+        {"type": "run_finished", "run_id": RUN_A, "cumulative": counts(1),
+         "world_ordinal": 2, "finish_reason": "stop"},                   # e6
+        {"type": "run_started", "run_id": RUN_B},                        # e7
+        app(RUN_B, 0, msg("user", "and goodbye")),                       # e8
+        app(RUN_B, 1, asst("Goodbye.")),                                 # e9  start, a stop call
+        delta(RUN_B, 1, 2),                                              # e10
+        {"type": "run_finished", "run_id": RUN_B, "cumulative": counts(2),
+         "world_ordinal": 4, "finish_reason": "stop"},                   # e11
+        {"type": "run_started", "run_id": RUN_C},                        # e12
+    ]
+
+
+def thinking_line(log, k_step, run_banner_index):
+    """The index of the `thinking` event with step `k_step` after the banner."""
+    return next(n for n, e in enumerate(log) if n > run_banner_index and isinstance(e, dict)
+                and e.get("type") == "thinking" and e.get("step") == k_step)
+
+
+def limit_line(log, run_id):
+    return next(n for n, e in enumerate(log) if isinstance(e, dict) and e.get("type") == "context_limit_resolved"
+                and e.get("run_id") == run_id)
+
+
+ENV_DEFAULT = {"headless": "1", "base_url": "", "retry": "1", "timeout": None}
+ENV_TIMEOUT = {"headless": "", "base_url": "http://127.0.0.1:8000/v1", "retry": "0", "timeout": "30000"}
+
+
+def world_fixtures():
+    m2 = chain(m2_bodies())
+    log = build_log(m2, "e24")
+    ins = lambda body: chain(insert_body(m2_bodies(), 17, body))
+    out = []
+
+    def add(name, jl, lg, s, expected, env=ENV_DEFAULT):
+        out.append((name, jl, lg, s, expected, env))
+
+    # M3 — every cutoff, and the selector's own end
+    add("m3_selector_end", m2, log, M2_SEL, None)
+    add("m3_suspended", m2, log, sel("e24", "e13", ("CutoffBefore", "e24")), None)
+    stop_end = chain(m2_bodies()[:23] + [app(RUN_B, 3, asst("All seven lines counted.")), delta(RUN_B, 3, 5),
+                                         {"type": "run_finished", "run_id": RUN_B, "cumulative": counts(5),
+                                          "world_ordinal": 9, "finish_reason": "stop"},
+                                         {"type": "run_started", "run_id": RUN_C}])
+    add("m3_completed", stop_end, build_log(stop_end, "e26"), sel("e26", "e13", ("CutoffBefore", "e26")), None)
+    res = ins(resumed_body())
+    add("m3_resumed", res, build_log(res, "e25"), sel("e25", "e13", ("EndAt", "e21")), None)
+    st = ins({"type": "settings", "model": "fx/model-c"})
+    add("m3_settings_change", st, build_log(st, "e25"), sel("e25", "e13", ("EndAt", "e21")), None)
+    rs = ins({"type": "run_started", "run_id": RUN_C})
+    add("m3_run_started", rs, build_log(rs, "e25"), sel("e25", "e13", ("EndAt", "e21")), None)
+    ex = ins({"type": "exit", "reason": "host_quit", "pending_tool_calls": []})
+    add("m3_exit", ex, build_log(ex, "e25"), sel("e25", "e13", ("EndAt", "e21")), None)
+    eof = chain(m2_bodies()[:23])
+    add("m3_eof_without_run_finished", eof, build_log(eof, "e22"), sel("e22", "e13", ("EndAt", "e20")), None)
+    parked_b = m2_bodies()[:20] + [app(RUN_B, 3, asst("Waiting for the delegate.")), delta(RUN_B, 3, 5),
+                                   dict(park("sess_fx.r0.1.p0"), step=3), wake("sess_fx.r0.1.p0"),
+                                   app(RUN_B, 3, msg("user", "the wait settled")),
+                                   app(RUN_B, 4, asst("", "c5")), app(RUN_B, 4, tool("c5", "ok")),
+                                   delta(RUN_B, 4, 6)]
+    parked = chain(parked_b)
+    add("m3_parked", parked, build_log(parked, "e27"), sel("e27", "e13", ("EndAt", "e25")), None)
+    retry2 = lx_insert(lx_drop(log, 23), 23, {"type": "stream_error_retry", "step": 2, "error": "fx"})
+    retry2 = lx_insert(retry2, 24, dict(log[21], step=4))
+    retry2 = lx_insert(retry2, 25, dict(log[23], step=4))
+    add("m3_provider_retry", m2, retry2, M2_SEL, None)
+    um = ins(app(RUN_B, 1, msg("user", "also count the words")))
+    add("m3_user_message", um, build_log(um, "e25"), sel("e25", "e13", ("EndAt", "e21")), None)
+    hr_b = m2_bodies()[:23] + [{"type": "history_replaced", "run_id": RUN_B, "step": 3, "reason": "resume",
+                                "messages": [msg("system", "You are a synthetic fixture."),
+                                             msg("user", "resume from here")]},
+                               {"type": "suspended", "run_id": RUN_B, "reason": "budget_exhausted", "step": 3}]
+    hr = chain(hr_b)
+    add("m3_history_replaced", hr, build_log(hr, "e24"), sel("e24", "e13", ("CutoffBefore", "e24")), None)
+    rp_b = m2_bodies()[:17] + [app(RUN_B, 2, asst("draft")),
+                               dict(app(RUN_B, 2, asst("final")), replaces_previous=True)] + m2_bodies()[19:]
+    rp = chain(rp_b)
+    add("m3_replaces_previous", rp, build_log(rp, "e24"), M2_SEL, None)
+    ib = chain(m2_bodies()[:21])
+    add("m3_incomplete_tool_batch", ib, build_log(ib, "e20"), sel("e20", "e13", ("EndAt", "e20")), None)
+    cf = chain(m3_tail(app(RUN_B, 3, asst("Continuing."))))
+    cf_log = build_log(cf, "e26")
+    cf_log = lx_set(cf_log, thinking_line(cf_log, 3, 13), finish_reason="tool_calls")
+    add("m3_call_free_tool_calls_finish", cf, cf_log, sel("e26", "e13", ("EndAt", "e22")), None)
+    bl = chain(m3_tail(app(RUN_B, 3, asst("  \n\t "))))
+    add("m3_blank_stop", bl, build_log(bl, "e26"), sel("e26", "e13", ("EndAt", "e22")), None)
+    hy_b = m2_bodies()[:20] + [app(RUN_B, 3, asst("", "hybrid-step-3")),
+                               app(RUN_B, 3, tool("hybrid-step-3", "7 total")), delta(RUN_B, 3, 5),
+                               {"type": "suspended", "run_id": RUN_B, "reason": "budget_exhausted", "step": 3}]
+    hy = chain(hy_b)
+    add("m3_hybrid_extraction", hy, build_log(hy, "e23"), sel("e23", "e13", ("EndAt", "e20")), None)
+    rt_b = m2_bodies()[:20] + [app(RUN_B, 3, msg("assistant", "", [call("c4", RUNTIME_STATUS, "{}")])),
+                               app(RUN_B, 3, tool("c4", "{\"status\":\"fx\"}")), delta(RUN_B, 3, 5),
+                               {"type": "suspended", "run_id": RUN_B, "reason": "budget_exhausted", "step": 3}]
+    rt = chain(rt_b)
+    add("m3_runtime_status_call", rt, build_log(rt, "e23"), sel("e23", "e13", ("EndAt", "e20")), None)
+    sb = chain(m3_tail(app(RUN_B, 3, asst("Done: seven lines."))))
+    add("m3_stop_before_end", sb, build_log(sb, "e26"), sel("e26", "e13", ("EndAt", "e22")), None)
+    su_b = m2_bodies()[:20] + [app(RUN_B, 3, asst("Done: seven lines.")), delta(RUN_B, 3, 5),
+                               app(RUN_B, 3, msg("user", "thanks")), app(RUN_B, 4, asst("", "c5")),
+                               app(RUN_B, 4, tool("c5", "ok")), delta(RUN_B, 4, 6)]
+    su = chain(su_b)
+    add("m3_stop_then_user_message", su, build_log(su, "e25"), sel("e25", "e13", ("EndAt", "e23")), None)
+    # a stop call followed by a turn that is itself cut (at an assistant): the
+    # source continued past the stop call, so StopBeforeEnd, not that cutoff
+    sr_b = m2_bodies()[:20] + [app(RUN_B, 3, asst("Done: seven lines.")), delta(RUN_B, 3, 5),
+                               app(RUN_B, 4, msg("assistant", "", [call("c5", RUNTIME_STATUS, "{}")])),
+                               app(RUN_B, 4, tool("c5", "{}")), delta(RUN_B, 4, 6)]
+    sr = chain(sr_b)
+    add("m3_stop_then_runtime_status", sr, build_log(sr, "e24"), sel("e24", "e13", ("EndAt", "e22")), None)
+    # a cut at `start` leaves nothing: EmptySegment, after the cutoff
+    es_b = m2_bodies()[:13] + [app(RUN_B, 1, asst("")), delta(RUN_B, 1, 3),
+                               app(RUN_B, 2, asst("", "c3")), app(RUN_B, 2, tool("c3", "7 total")),
+                               delta(RUN_B, 2, 4)]
+    es = chain(es_b)
+    add("m3_empty_after_cut", es, build_log(es, "e17"), sel("e17", "e13", ("EndAt", "e15")),
+        ("EmptySegment", "entry:13", "BlankStop"))
+    # a cut does not hide what precedes it: a start refusal still wins
+    cont_s = chain(continuation_bodies(True, False) + [{"type": "exit", "reason": "host_quit",
+                                                        "pending_tool_calls": []}])
+    add("m3_continuation_before_cut", cont_s, build_log(cont_s, "e14"), sel("e14", "e11", ("CutoffBefore", "e14")),
+        ("ContinuationStart", "entry:9", "suspended"))
+    # the open question: a stale result after a stop call is inside its kept turn
+    stale_b = m2_bodies()[:20] + [app(RUN_B, 3, asst("Checking.")), app(RUN_B, 3, tool("c3", "late")),
+                                  delta(RUN_B, 3, 5), app(RUN_B, 4, asst("", "c5")),
+                                  app(RUN_B, 4, tool("c5", "ok")), delta(RUN_B, 4, 6)]
+    stale = chain(stale_b)
+    add("m3_stale_result_after_stop", stale, build_log(stale, "e25"), sel("e25", "e13", ("EndAt", "e23")),
+        ("UnexpectedToolResult", "entry:21", "tool_call_id"))
+    stale_cf_log = build_log(stale, "e25")
+    stale_cf_log = lx_set(stale_cf_log, thinking_line(stale_cf_log, 3, 13), finish_reason="tool_calls")
+    add("m3_stale_result_after_cut", stale, stale_cf_log, sel("e25", "e13", ("EndAt", "e23")), None)
+    # M4 — the six shapes and the predicate
+    add("m4_stop_call_last", sb, build_log(sb, "e26"), sel("e26", "e13", ("EndAt", "e20")), None)
+    pl = chain(plain_bodies())
+    add("m4_hybrid_predicate_false", pl, build_log(pl, "e12"), sel("e12", "e9", ("CutoffBefore", "e11")),
+        ("HybridPredicate", "entry:9", "session_emitted_native_tool_call"))
+    pl_off = post(pl, 0, set_boot("hybrid_tools", False))
+    add("m4_hybrid_predicate_off", pl_off, build_log(pl_off, "e12"), sel("e12", "e9", ("CutoffBefore", "e11")),
+        None)
+    seed_native = chain(m2_bodies()[:13] + [app(RUN_B, 1, asst("Nothing to count.")), delta(RUN_B, 1, 3),
+                                            {"type": "run_finished", "run_id": RUN_B, "cumulative": counts(3),
+                                             "world_ordinal": 5, "finish_reason": "stop"}])
+    add("m4_hybrid_predicate_seed", seed_native, build_log(seed_native, "e15"),
+        sel("e15", "e13", ("CutoffBefore", "e15")), None)
+    # M5 — configuration
+    cfg_b = [dict(b) for b in m2_bodies()]
+    cfg_b[10] = {"type": "settings", "model": "openrouter/openai/fx-model"}
+    cfg = post(chain(cfg_b), 0, set_boot("max_cost_millicents", 500))
+    cfg_log = build_log(cfg, "e24")
+    add("m5_config_window", cfg, cfg_log, M2_SEL, None, ENV_TIMEOUT)
+    li = limit_line(cfg_log, RUN_B)
+    add("m5_config_disabled", cfg, lx_set(cfg_log, li, context_limit=0, context_limit_source={
+        "arm": "disabled", "origin": "", "profile_miss": "", "catalogue_miss": "", "model": ""}), M2_SEL, None)
+    add("m5_config_catalogue", cfg, lx_set(cfg_log, li, context_limit=200000, context_limit_source={
+        "arm": "bounded", "origin": "catalogue", "profile_miss": "profile_config_absent",
+        "catalogue_miss": "", "model": ""}), M2_SEL, None)
+    add("m5_config_missed_unknown", cfg, lx_set(cfg_log, li, context_limit=0, context_limit_source={
+        "arm": "unknown", "origin": "", "profile_miss": "profile_key_absent",
+        "catalogue_miss": "model_not_in_catalogue", "model": "openrouter/openai/fx-model"}), M2_SEL, None)
+    add("m5_config_missed_non_positive", cfg, lx_set(cfg_log, li, context_limit=-5), M2_SEL, None)
+    add("m5_config_missed_no_event", cfg, lx_drop(cfg_log, li), M2_SEL, None)
+    add("m5_model_mismatch", cfg, lx_set(cfg_log, 21, model="openai/fx-model"), M2_SEL,
+        ("Association", "event:21", "provider_call_prepared.model"))
+    return out
+
+
+def check_world_fixture(name, jl, lg, s, expected, env):
+    try:
+        w = read_world(jl, lg, s, env)
+    except WorldRefused as err:
+        got = (err.family, err.position, err.field)
+        if got != expected:
+            raise AssertionError(f"{name}: read_world refused {got}, fixture declares {expected}")
+        return None
+    if expected is not None:
+        raise AssertionError(f"{name}: read_world accepted, fixture declares {expected}")
+    return w
+
+
+def ail_bool(b):
+    return "true" if b else "false"
+
+
+def render_world():
+    lines = [
+        "-- GENERATED by src/eval/journal/testdata/gen_fixtures.py -- do not edit.",
+        "-- Regenerate with `python3 src/eval/journal/testdata/gen_fixtures.py`;",
+        "-- `--check` fails when this file is stale.",
+        "--",
+        "-- Synthetic journals and synthetic host logs (PLAN-004 M3, M4, M5). Every",
+        "-- expectation here was computed by the Python generator's own stopping",
+        "-- contract, cutoff table and T0 configuration, independent of",
+        "-- `src/eval/journal/{stopping,configuration}.ail` and of `src/core`.",
+        "-- Tool keys are `<call_id>|<name>|<arguments digest>`; env pairs are",
+        "-- `<key>=<value>` in the served order.",
+        "",
+        "module src/eval/journal/testdata/world_fixtures",
+        "",
+        "export type WorldFixture = {",
+        "  name: string, journal: [string], log: [string],",
+        "  leaf: string, run_id: string, start: string, end_kind: string, end_id: string,",
+        "  env_headless: string, env_base_url: string, env_retry: string, env_has_timeout: bool, env_timeout: string,",
+        "  ok: bool, family: string, position: string, field: string,",
+        "  sel_end_kind: string, sel_end_id: string,",
+        "  cut_kind: string, cut_detail: string, cut_position: string,",
+        "  n: int, end_kind_out: string, end_value: string, genuine: bool, decisions: int,",
+        "  call_seqs: [int], finish_reasons: [string], chain: [string], payload: [string],",
+        "  logical_model: string, api_model: string, tool_keys: [string], tool_ids: [string],",
+        "  hybrid_tools: bool, hybrid_predicate: bool,",
+        "  encoding: string, encoding_detail: string, profile_config: string, limit_source: string,",
+        "  served_env: [string], omissions: [string], seed_payload: string",
+        "}",
+        "",
+    ]
+    names = []
+    for name, jl, lg, s, expected, env in world_fixtures():
+        w = check_world_fixture(name, jl, lg, s, expected, env)
+        names.append(name)
+        journal = [json.dumps(e, ensure_ascii=False, separators=(",", ":")) for e in jl]
+        fields = [
+            f"name: {lit(name)}",
+            f"journal: {ail_list([lit(t) for t in journal], 6)}",
+            f"log: {ail_list([lit(t) for t in log_text(lg)], 6)}",
+            f"leaf: {lit(s['leaf'])}, run_id: {lit(s['run_id'])}, start: {lit(s['start'])}, "
+            f"end_kind: {lit(s['end'][0])}, end_id: {lit(s['end'][1])}",
+            f"env_headless: {lit(env['headless'])}, env_base_url: {lit(env['base_url'])}, "
+            f"env_retry: {lit(env['retry'])}, env_has_timeout: {ail_bool(env['timeout'] is not None)}, "
+            f"env_timeout: {lit(env['timeout'] or '')}",
+            f"ok: {ail_bool(w)}, family: {lit(expected[0] if expected else '')}, "
+            f"position: {lit(expected[1] if expected else '')}, field: {lit(expected[2] if expected else '')}",
+            f"sel_end_kind: {lit(w['selector']['end'][0] if w else '')}, "
+            f"sel_end_id: {lit(w['selector']['end'][1] if w else '')}",
+            f"cut_kind: {lit(w['cut'][0] if w else '')}, cut_detail: {lit(w['cut'][1] if w else '')}, "
+            f"cut_position: {lit(w['cut'][2] if w else '')}",
+            f"n: {w['n'] if w else 0}, end_kind_out: {lit(w['end'][0] if w else '')}, "
+            f"end_value: {lit(w['end'][1] if w else '')}, genuine: {ail_bool(w and w['genuine'])}, "
+            f"decisions: {w['decisions'] if w else 0}",
+            f"call_seqs: {ail_ints(w['call_seqs'] if w else [])}, "
+            f"finish_reasons: {ail_strings(w['finish'] if w else [])}, "
+            f"chain: {ail_strings(w['chain'] if w else [])}, payload: {ail_strings(w['payload'] if w else [])}",
+            f"logical_model: {lit(w['logical'] if w else '')}, api_model: {lit(w['api'] if w else '')}, "
+            f"tool_keys: {ail_strings(w['tool_keys'] if w else [])}, "
+            f"tool_ids: {ail_strings(w['tool_ids'] if w else [])}",
+            f"hybrid_tools: {ail_bool(w and w['hybrid_tools'])}, hybrid_predicate: {ail_bool(w and w['predicate'])}",
+            f"encoding: {lit(w['encoding'][0] if w else '')}, encoding_detail: {lit(w['encoding'][1] if w else '')}, "
+            f"profile_config: {lit(w['encoding'][2] if w else '')}, "
+            f"limit_source: {lit(w['limit_source'] if w else '')}",
+            f"served_env: {ail_strings([f'{k}={v}' for k, v in w['env']] if w else [])}, "
+            f"omissions: {ail_strings(w['omissions'] if w else [])}, "
+            f"seed_payload: {lit(w['seed_payload'] if w else '')}",
+        ]
+        lines += [f"export pure func fxw_{name}() -> WorldFixture {{", "  { " + ",\n      ".join(fields) + " }",
+                  "}", ""]
+    lines += ["export pure func fxw_all() -> [WorldFixture] {",
+              f"  {ail_list([f'fxw_{n}()' for n in names], 2)}", "}", ""]
+    return "\n".join(lines)
+
+
+def check_api_model_copy():
+    """`configuration.ail`'s copy of `provider_api_model` is A's span with the
+    one rename (`provider_api_model` -> `ev_provider_api_model`) and nothing
+    else; the pin's byte range is read with `git show A:<file>`."""
+    import re
+    import subprocess
+    text = CONFIG_AIL.read_bytes()
+    m = re.search(rb"^-- SOURCE src/core/session\.ail L\d+-\d+ B(\d+)-(\d+) sha256:([0-9a-f]{64}) "
+                  rb"symbol=provider_api_model\n", text, re.M)
+    if not m:
+        return "configuration.ail: no provider_api_model pin"
+    src = subprocess.check_output(["git", "-C", str(REPO), "show", f"{A_COMMIT}:src/core/session.ail"])
+    span = src[int(m.group(1)):int(m.group(2))]
+    if hashlib.sha256(span).hexdigest() != m.group(3).decode():
+        return "provider_api_model pin: hash differs at A"
+    want = span.replace(b"provider_api_model(", b"ev_provider_api_model(")
+    got = text[m.end():m.end() + len(want)]
+    if got != want:
+        return "configuration.ail: the provider_api_model copy is not A's span renamed"
+    return None
+
 def main(argv):
-    outputs = [(OUT, render()), (JOURNAL_OUT, render_journal()), (ASSOC_OUT, render_association())]
+    outputs = [(OUT, render()), (JOURNAL_OUT, render_journal()), (ASSOC_OUT, render_association()),
+               (WORLD_OUT, render_world())]
     if "--check" in argv:
+        copy_error = check_api_model_copy()
+        if copy_error:
+            print(copy_error, file=sys.stderr)
+            return 1
         stale = [str(path) for path, text in outputs
                  if not path.exists() or path.read_text(encoding="utf-8") != text]
         for path in stale:

@@ -119,3 +119,56 @@ M15.Association.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_as
 M15.Association	pending:P1.7a-v2 (fixture m15_association)	refused	AdmissionCheck(A3)	call:1
 M15.ContinuationStart	-	inapplicable	reason: no evaluated call exists - a T0 refusal of the run's start	-
 M15.EmptySegment	-	inapplicable	reason: no evaluated call exists	-
+M3.SelectorEnd	src/eval/journal/stopping.ail:test_m3_selector_end	admitted	cut:SelectorEnd;sel=EndAt(e20);N=3;end=EndSuspended(3);genuine	selector
+M3.Completed	src/eval/journal/stopping.ail:test_m3_completed	admitted	cut:Completed(stop);sel=CutoffBefore(e25);N=4;end=EndFinalize(model_stop);genuine	entry:25
+M3.Suspended	src/eval/journal/stopping.ail:test_m3_suspended	admitted	cut:Suspended;sel=CutoffBefore(e23);N=3;end=EndSuspended(3);genuine	entry:23
+M3.Resumed	src/eval/journal/stopping.ail:test_m3_resumed	admitted	cut:Resumed;sel=CutoffBefore(e17);N=1;end=EndSuspended(1);synthetic	entry:17
+M3.SettingsChange	src/eval/journal/stopping.ail:test_m3_settings_change	admitted	cut:SettingsChange;sel=CutoffBefore(e17);N=1;end=EndSuspended(1);synthetic	entry:17
+M3.RunStarted	src/eval/journal/stopping.ail:test_m3_run_started	admitted	cut:RunStarted;sel=CutoffBefore(e17);N=1;end=EndSuspended(1);synthetic	entry:17
+M3.Exit	src/eval/journal/stopping.ail:test_m3_exit	admitted	cut:Exit;sel=CutoffBefore(e17);N=1;end=EndSuspended(1);synthetic	entry:17
+M3.EofWithoutRunFinished	src/eval/journal/stopping.ail:test_m3_eof_without_run_finished	admitted	cut:EofWithoutRunFinished;sel=EndAt(e20);N=3;end=EndSuspended(3);synthetic	eof
+M3.Parked	src/eval/journal/stopping.ail:test_m3_parked	admitted	cut:Parked;sel=CutoffBefore(e20);N=2;end=EndSuspended(2);synthetic	entry:22
+M3.ProviderRetry	src/eval/journal/stopping.ail:test_m3_provider_retry	admitted	cut:ProviderRetry;sel=CutoffBefore(e17);N=1;end=EndSuspended(1);synthetic	event:23
+M3.UserMessage	src/eval/journal/stopping.ail:test_m3_user_message	admitted	cut:UserMessage(user);sel=CutoffBefore(e17);N=1;end=EndSuspended(1);synthetic	entry:17
+M3.HistoryReplaced	src/eval/journal/stopping.ail:test_m3_history_replaced	admitted	cut:HistoryReplaced;sel=CutoffBefore(e23);N=3;end=EndSuspended(3);synthetic	entry:23
+M3.ReplacesPrevious	src/eval/journal/stopping.ail:test_m3_replaces_previous	admitted	cut:ReplacesPrevious;sel=CutoffBefore(e17);N=1;end=EndSuspended(1);synthetic	entry:18
+M3.IncompleteToolBatch	src/eval/journal/stopping.ail:test_m3_incomplete_tool_batch	admitted	cut:IncompleteToolBatch;sel=CutoffBefore(e20);N=2;end=EndSuspended(2);synthetic	entry:20
+M3.CallFreeToolCallsFinish	src/eval/journal/stopping.ail:test_m3_call_free_tool_calls_finish	admitted	cut:CallFreeToolCallsFinish;sel=CutoffBefore(e20);N=2;end=EndSuspended(2);synthetic	entry:20
+M3.BlankStop	src/eval/journal/stopping.ail:test_m3_blank_stop	admitted	cut:BlankStop;sel=CutoffBefore(e20);N=2;end=EndSuspended(2);synthetic	entry:20
+M3.HybridExtraction	src/eval/journal/stopping.ail:test_m3_hybrid_extraction	admitted	cut:HybridExtraction;sel=CutoffBefore(e20);N=2;end=EndSuspended(2);synthetic	entry:20
+M3.RuntimeStatusCall	src/eval/journal/stopping.ail:test_m3_runtime_status_call	admitted	cut:RuntimeStatusCall;sel=CutoffBefore(e20);N=2;end=EndSuspended(2);synthetic	entry:20
+M3.StopBeforeEnd	src/eval/journal/stopping.ail:test_m3_stop_before_end	admitted	cut:StopBeforeEnd;sel=EndAt(e20);N=3;end=EndFinalize(model_stop);synthetic	entry:20
+M3.StopThenUserMessage	src/eval/journal/stopping.ail:test_m3_stop_then_user_message	admitted	cut:UserMessage(user);sel=CutoffBefore(e22);N=3;end=EndFinalize(model_stop);synthetic	entry:22
+M3.StaleResultAfterCut	src/eval/journal/stopping.ail:test_m3_stale_result_after_cut_is_outside	admitted	cut:CallFreeToolCallsFinish;sel=CutoffBefore(e20);N=2;end=EndSuspended(2);synthetic	entry:20
+M4.StopCall	src/eval/journal/stopping.ail:test_m4_stop_call_is_the_end	admitted	cut:SelectorEnd;sel=EndAt(e20);N=3;end=EndFinalize(model_stop);synthetic	selector
+M4.HybridPredicate.off	src/eval/journal/stopping.ail:test_m4_hybrid_predicate_off_admits	admitted	cut:SelectorEnd;sel=CutoffBefore(e11);N=1;end=EndFinalize(model_stop);genuine	selector
+M4.HybridPredicate.true	src/eval/journal/stopping.ail:test_m4_hybrid_predicate_true_admits	admitted	cut:SelectorEnd;sel=CutoffBefore(e15);N=1;end=EndFinalize(model_stop);genuine	selector
+M3.gen	src/eval/journal/stopping.ail:test_world_equals_generator	pass	-	aggregate:stopping
+M3.EmptySegment.after_cut	src/eval/journal/stopping.ail:test_m3_empty_after_cut	refused	EmptySegment	entry:13
+M3.ContinuationStart.before_cut	src/eval/journal/stopping.ail:test_m3_continuation_start_before_cut	refused	ContinuationStart	entry:9
+M3.UnexpectedToolResult.after_stop	src/eval/journal/stopping.ail:test_m3_stale_result_after_stop_is_refused	refused	UnexpectedToolResult	entry:21
+M4.continuation	src/eval/journal/stopping.ail:test_m4_continuation	pass	-	aggregate:stopping
+M4.cut_shapes	src/eval/journal/stopping.ail:test_m4_cut_shapes	pass	-	aggregate:stopping
+M4.HybridPredicate	src/eval/journal/stopping.ail:test_m4_hybrid_predicate_false_is_refused	refused	HybridPredicate	entry:9
+M4.HybridPredicate.hybrid_ids	src/eval/journal/stopping.ail:test_m4_predicate_ignores_hybrid_calls	pass	-	aggregate:stopping
+M5.served	src/eval/journal/stopping.ail:test_m5_served_configuration	pass	-	aggregate:configuration
+M5.served.defaults	src/eval/journal/stopping.ail:test_m5_served_defaults	pass	-	aggregate:configuration
+M5.context.window	src/eval/journal/stopping.ail:test_m5_context_limit_window	pass	-	aggregate:configuration
+M5.context.catalogue_declared	src/eval/journal/stopping.ail:test_m5_context_limit_catalogue_declared	pass	-	aggregate:configuration
+M5.context.disabled	src/eval/journal/stopping.ail:test_m5_context_limit_disabled	pass	-	aggregate:configuration
+M5.context.missed_encoded	src/eval/journal/stopping.ail:test_m5_context_limit_missed_is_encoded	pass	-	aggregate:configuration
+M5.ProfileMissed.witness	pending:P1.7b-v2 (fixtures m5_config_missed_*; the witness refuses the MOTOKO_MODELS_FILE read)	refused	AdmissionCheck(A7)	aggregate:witness
+M5.logical_model	src/eval/journal/stopping.ail:test_m5_logical_model_mismatch_is_refused	refused	Association	event:21
+M5.unreproduced	src/eval/journal/stopping.ail:test_m5_unreproduced	pass	-	aggregate:configuration
+M5.api_model.live_vectors	src/eval/journal/configuration.ail:test_api_model_copy_live_vectors	pass	-	aggregate:configuration
+M5.api_model.not_idempotent	src/eval/journal/configuration.ail:test_api_model_copy_is_not_idempotent	pass	-	aggregate:configuration
+M5.api_model.copy_bytes	src/eval/journal/testdata/gen_fixtures.py:--check (check_api_model_copy)	pass	-	aggregate:configuration
+M5.context.encoding	src/eval/journal/configuration.ail:test_context_encoding	pass	-	aggregate:configuration
+M5.context.contents	src/eval/journal/configuration.ail:test_profile_config_contents	pass	-	aggregate:configuration
+M5.settings	src/eval/journal/configuration.ail:test_t0_settings_served_values	pass	-	aggregate:configuration
+M5.at_a.window	src/eval/journal/configuration_at_a_test.ail:test_window_resolves_from_the_profile_at_a	pass	-	aggregate:configuration
+M5.at_a.disabled	src/eval/journal/configuration_at_a_test.ail:test_disabled_is_declared_at_a	pass	-	aggregate:configuration
+M5.at_a.missed	src/eval/journal/configuration_at_a_test.ail:test_missed_reaches_the_catalogue_at_a	pass	-	aggregate:configuration
+M5.at_a.profile_dir	src/eval/journal/configuration_at_a_test.ail:test_the_served_profile_dir_selects_the_file_at_a	pass	-	aggregate:configuration
+M15.HybridPredicate	-	inapplicable	reason: the predicate is asserted once at admission and no later check depends on it; hybrid-step- results are cut (M3.HybridExtraction)	-
+M3.StopBeforeEnd.cut_turn	src/eval/journal/stopping.ail:test_m3_stop_then_cut_turn	admitted	cut:StopBeforeEnd;sel=EndAt(e20);N=3;end=EndFinalize(model_stop);synthetic	entry:20
