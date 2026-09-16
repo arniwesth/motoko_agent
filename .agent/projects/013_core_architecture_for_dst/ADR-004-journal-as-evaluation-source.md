@@ -1,7 +1,7 @@
 # ADR-004: A session journal is an evaluation source — an execution program recorded from its replay at admission, strict-replayed by every candidate, graded by an evaluator the candidate does not own
 
 Date: 2026-09-13 (v1, v2), 2026-09-14 (v3, v4), 2026-09-15 (v5)
-Status: **Accepted (v5 — folds the v4 Codex review's nine required changes and answers PLAN-004's ⟨v5⟩ questions; reviewed by `V5R·a1`, claude, `REVIEW-adr004-v5-verdicts-claude.md` sha256 `b53604f8…`: ACCEPT WITH CORRECTIONS, C1–C6 and the cosmetic item applied in `988a863`; accepted by the operator at PLAN-004 `V5G`, 2026-09-16; implemented by PLAN-004 v2).**
+Status: **Accepted (v5 — folds the v4 Codex review's nine required changes and answers PLAN-004's ⟨v5⟩ questions; reviewed by `V5R·a1`, claude, `REVIEW-adr004-v5-verdicts-claude.md` sha256 `b53604f8…`: ACCEPT WITH CORRECTIONS, C1–C6 and the cosmetic item applied in `988a863`; accepted by the operator at PLAN-004 `V5G`, 2026-09-16; to be implemented by PLAN-004 v2).**
 v4 was reviewed by Codex (`REVIEW-adr004-v4-verdicts-codex.md`, HEAD `d5edebf`): *return for v5;
 retain O7* — D1, D3 and D5 returned; D2, D4, D6, D7 and D8 accepted with corrections. It found the
 central integration sound — guarded delegation records ordinary harness outcomes and replaces only

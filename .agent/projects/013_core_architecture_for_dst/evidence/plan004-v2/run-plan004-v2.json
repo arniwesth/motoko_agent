@@ -289,7 +289,7 @@
     }
    ],
    "note": "Settled in run-plan004-v01 (V5\u00b7a1); one summary attempt here, no history copied. PLAN-004 v1.2 \u00a72 V5.",
-   "criteria": "Nine required changes as decision text + contract/test; PLAN-004 \u00a75 v1.2's v5 questions answered (\u00a75) incl. D8's per-refusal-family wording (confirm M15 or revise); review \u00a74 citations repaired. Author task: settles done only by an accepting V5R verdict. Two commits by explicit path (8 named v4 files, then v5)."
+   "criteria": "Nine required changes as decision text + contract/test; PLAN-004 \u00a75 v1.2's v5 questions answered (\u00a75) incl. D8's per-refusal-family wording (confirm M15 or revise); review \u00a74 citations repaired. Author task: settles done only by an accepting V5R verdict. Three commits by explicit path (8 named v4 files, then v5, then the corrections)."
   },
   {
    "id": "V5R",
@@ -374,7 +374,7 @@
       "type": "initial"
      },
      "actor": "claude",
-     "model": "fable",
+     "model": "opus5",
      "state": "queued"
     }
    ],
@@ -524,7 +524,7 @@
     "PLAN2G"
    ],
    "attempts": [],
-   "criteria": "Matrix M1 (ChainBreak, MalformedEntry incl. a stray wake, UnknownEntryType, UnknownSchema; entry positions; clean twins) + M15 rows for M1 (near-miss or inapplicable with its reason); leading-user seed (r2.1-shaped); decoders and fold are hashed evaluator COPIES of journal.ail's at A (v5 D5), fold equality vs journal.ail fold_journal and vs gen_fixtures.py; source-span SHA-256 on every copy; red-first or mutation record.",
+   "criteria": "Matrix M1 (ChainBreak, MalformedEntry incl. a stray wake, UnknownEntryType, UnknownSchema; entry positions; clean twins) + M15 rows for M1 (near-miss or inapplicable with its reason): this part lands the fixture, its MATRIX.expected.tsv row and the passes-M1-refusal assertion; the first-finding-and-location assertion is P1.7a-v2's; leading-user seed (r2.1-shaped); decoders and fold are hashed evaluator COPIES of journal.ail's at A (v5 D5), fold equality vs journal.ail fold_journal and vs gen_fixtures.py; source-span SHA-256 on every copy; red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.2a (graph id P1.2a-v2). Supersedes v1.2's P1.2a: park/wake refusal row left M1 for M3 (Parked is a cutoff); stray-wake MalformedEntry case added; decoders and fold are copies, not imports (v5 D1, D5).",
    "supersedes": "P1.2a"
   },
@@ -539,7 +539,7 @@
     "P1.2a-v2"
    ],
    "attempts": [],
-   "criteria": "Matrix M2 (DuplicateOrAmbiguousCallId, UnexpectedToolResult, MalformedToolArguments, Association x3, ContinuationStart for a suspended continuation AND a wake-opened run, EmptySegment; positions; clean twins) + M15 rows for M2; both session_start shapes; canonical JSON arguments (compact, source order); red-first or mutation record.",
+   "criteria": "Matrix M2 (DuplicateOrAmbiguousCallId, UnexpectedToolResult, MalformedToolArguments, Association x3, ContinuationStart for a suspended continuation AND a wake-opened run, EmptySegment; positions; clean twins) + M15 rows for M2: this part lands the fixture, its MATRIX.expected.tsv row and the passes-M2-refusal assertion; the first-finding-and-location assertion is P1.7a-v2's; both session_start shapes; canonical JSON arguments (compact, source order); red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.2b (graph id P1.2b-v2). Supersedes v1.2's P1.2b: wake-opened ContinuationStart case added (v5 D1, SeedParked).",
    "supersedes": "P1.2b"
   },
@@ -554,7 +554,7 @@
     "P1.2b-v2"
    ],
    "attempts": [],
-   "criteria": "Matrix M3 (every D1 cutoff incl. Parked, CallFreeToolCallsFinish, BlankStop, HybridExtraction, RuntimeStatusCall and the post-turn StopBeforeEnd \u2014 each asserts selector, N, expected end, genuine/synthetic), M4 (the six shapes; hybrid predicate true admits, false \u2192 Refused(HybridPredicate)), M5 (v5 D1's settings table: MOTOKO_EXIT_MANIFEST and MOTOKO_CAPTURE_FAILED_PAYLOAD \"\", MOTOKO_PERSIST_RETRIES \"0\", explicit MOTOKO_PROFILE_DIR + FsFile config, context limit n>0 / \"disabled\" / ProfileMissed \u2192 refused by the witness; provider_api_model copy incl. non-idempotence); expected.decisions = 2N+1 / 2N; red-first or mutation record.",
+   "criteria": "Matrix M3 (every D1 cutoff incl. Parked, CallFreeToolCallsFinish, BlankStop, HybridExtraction, RuntimeStatusCall and the post-turn StopBeforeEnd \u2014 each asserts selector, N, expected end, genuine/synthetic), M4 (the six shapes; hybrid predicate true admits, false \u2192 Refused(HybridPredicate)), M5 (v5 D1's settings table: MOTOKO_EXIT_MANIFEST and MOTOKO_CAPTURE_FAILED_PAYLOAD \"\", MOTOKO_PERSIST_RETRIES \"0\", explicit MOTOKO_PROFILE_DIR + FsFile config, context limit n>0 / \"disabled\" / ProfileMissed encoded (its witness refusal asserted by P1.7b-v2, M11); provider_api_model copy incl. non-idempotence); expected.decisions = 2N+1 / 2N; red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.3 (graph id P1.3-v2). Supersedes v1.2's P1.3: six-shape stopping procedure; cutoffs Parked, CallFreeToolCallsFinish, BlankStop, HybridExtraction and the HybridPredicate refusal added; T0 settings values pinned; expected.decisions 2N+1/2N (v5 D1, D3).",
    "supersedes": "P1.3"
   },
@@ -569,7 +569,7 @@
     "PLAN2G"
    ],
    "attempts": [],
-   "criteria": "Matrix M6: each copy equals the candidate function at A on fixtures incl. image + make[N]; source-span SHA-256 recorded.",
+   "criteria": "Matrix M6: each copy equals the candidate function at A on fixtures incl. image + make[N]; source-span SHA-256 recorded. Red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.4a (id unchanged; v5 D2/D5 confirm the four private digests)."
   },
   {
@@ -583,7 +583,7 @@
     "PLAN2G"
    ],
    "attempts": [],
-   "criteria": "make eval_protected_selftest on mutated scratch copies with an independently generated manifest: one aggregate import span per contiguous run (no nesting); as-alias, name inside multi-line import, joined import, deriving clause, in-span comment, multi-line non-braced type, moved and renamed symbols detected; move within file allowed; out-of-span not; parser cross-check on every non-braced span; unterminated/unbalanced/missing/duplicate/overlap of different declarations exit 2. check at C decides.",
+   "criteria": "make eval_protected_selftest on mutated scratch copies with an independently generated manifest: one aggregate import span per contiguous run (no nesting); as-alias, name inside multi-line import, joined import, deriving clause, in-span comment, multi-line non-braced type, moved and renamed symbols detected; move within file allowed; out-of-span not; parser cross-check on every non-braced span; unterminated/unbalanced/missing/duplicate/overlap of different declarations exit 2. check at C decides. Red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.4b (id unchanged: the tool's contract is v1.2's, adopted by v5 D5 incl. the literal-aware lexer, C6). Symbol list = v5 D5's reviewed starting set incl. the v5 review \u00a73.8 transitive names (C5); the manifest is the closure the entry pins, reviewed at P1R-v2/P1G."
   },
   {
@@ -600,7 +600,7 @@
     "P1.4b"
    ],
    "attempts": [],
-   "criteria": "Matrix M8: complete fail-closed records on both empty arms exactly as v5 D2 writes them (provider: the harness's exhausted record, non-retryable Err; tool: tool_outcome_record's ToolFailed arm field for field, fault_class_tool_failed(), code replay_unrecorded_invocation); k = the seam's own ProviderIdentity count; no live effect (sentinel absent); correlation mismatch; old log + exactly one interaction (structurally equal prefix), projection-only replacement; world_state_of rebuilds script + tools.",
+   "criteria": "Matrix M8: complete fail-closed records on both empty arms exactly as v5 D2 writes them (provider: the harness's exhausted record, non-retryable Err; tool: tool_outcome_record's ToolFailed arm field for field, fault_class_tool_failed(), code replay_unrecorded_invocation) and its returned { outcome: o, next_state } (code replay_unrecorded_invocation, clock unadvanced); k = the seam's own ProviderIdentity count; no live effect (sentinel absent); correlation mismatch; old log + exactly one interaction (structurally equal prefix), projection-only replacement; world_state_of rebuilds script + tools. Red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.5 (id unchanged: contract confirmed, values pinned by v5 D2 \u2014 the harness's exhausted record, the ToolFailed arm mirror, k = the seam's own ProviderIdentity count (C2), { base | ... }, structurally equal prefix; world env/files as D2 builds them)."
   },
   {
@@ -614,7 +614,7 @@
     "P1.5"
    ],
    "attempts": [],
-   "criteria": "Matrix M9; EndSuspended(3) with RunSuspended; stop \u2192 EndFinalize(model_stop); identities.json from journal_replay.sh (python3 tools/ext_call_inventory/derive.py --json) checked per \u00a73's table against its comparator \u2014 a different path where one exists, the reviewed profile_definition_dst.ail record for classifier sets, like-for-like scan roots, consistency only for profile/rule versions; -dev generator refuses real admission; synthetic only.",
+   "criteria": "Matrix M9 incl. an A9 known-failing round-trip case (validate_program / world_state_of / reconstitution_balance) with its pinned Location; EndSuspended(3) with RunSuspended; stop \u2192 EndFinalize(model_stop); identities.json from journal_replay.sh (python3 tools/ext_call_inventory/derive.py --json) checked per \u00a73's table against its comparator \u2014 a different path where one exists, the reviewed profile_definition_dst.ail record for classifier sets, like-for-like scan roots, consistency only for profile/rule versions; -dev generator refuses real admission; synthetic only. Red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.6 (id unchanged; v5 A9b adopts the identities table by reference; no fresh interface_hash recomputation \u2014 the lock's recorded value is compared with the entry's pin at K0)."
   },
   {
@@ -628,7 +628,7 @@
     "P1.6"
    ],
    "attempts": [],
-   "criteria": "Matrix M10 + M15 admission rows; A1 against the snapshot's recorded digest_after values; every finding carries v5 D3's typed Location (Interaction(ordinal) | Call(k) | Source{snapshot|excerpt, position} | Aggregate(name)), AdmissionCheck(Ak, A9b, location); A2 function reused unchanged as K7.",
+   "criteria": "Matrix M10 (incl. an A3 msg_count/count mismatch and an A4 count mismatch) + for M15's A-rows the first-finding-and-location assertion (fixtures and expected rows landed by the family's part); A1 against the snapshot's recorded digest_after values; every finding carries v5 D3's typed Location (Interaction(ordinal) | Call(k) | Source{snapshot|excerpt, position} | Aggregate(name)), AdmissionCheck(Ak, A9b, location); A2 function reused unchanged as K7. Red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.7a (graph id P1.7a-v2). Supersedes v1.2's P1.7a: two-shape location proposal became v5 D3's four-variant Location; AdmissionCheck carries A9b and the location.",
    "supersedes": "P1.7a"
   },
@@ -643,7 +643,7 @@
     "P1.6"
    ],
    "attempts": [],
-   "criteria": "Matrix M11: witness under/over-count; a fault-path env read (MOTOKO_CAPTURE_FAILED_PAYLOAD) in its own column; wrong obligation (NoReplay at admission) or metadata (replay_metadata_of(manifest)); decision count asserted = 2N+1 (EndSuspended) / 2N (stop) and used as decision_budget, retry_budget 0; every row of v5 D3's census table asserted zero by name on the T0 fixture with a non-zero twin; family_evidence recorded unchanged with CheckpointHistory evaluated-but-vacuous.",
+   "criteria": "Matrix M11: witness under/over-count; the ProfileMissed configuration's MOTOKO_MODELS_FILE read refused by the witness; a fault-path env read (MOTOKO_CAPTURE_FAILED_PAYLOAD) in its own column; wrong obligation (NoReplay at admission) or metadata (replay_metadata_of(manifest)); decision count asserted = 2N+1 (EndSuspended) / 2N (stop) and used as decision_budget, retry_budget 0; every row of v5 D3's census table asserted zero by name on the T0 fixture with a non-zero twin; family_evidence recorded unchanged with CheckpointHistory evaluated-but-vacuous. Red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.7b (graph id P1.7b-v2). Supersedes v1.2's P1.7b: obligation NoReplay, replay_metadata_of(manifest), derived decision budget, retry 0, decision-count assertion and the thirteen-row census decided (v5 D3).",
    "supersedes": "P1.7b"
   },
@@ -658,7 +658,7 @@
     "P1.6"
    ],
    "attempts": [],
-   "criteria": "Matrix M12; artifact \u2192 load_program \u2192 same digest; permission failure refuses without a partial entry; no second codec; dst_secrets.ail untouched.",
+   "criteria": "Matrix M12; artifact \u2192 load_program \u2192 same digest; permission failure refuses without a partial entry; no second codec; dst_secrets.ail untouched. Red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.8 (id unchanged; v5 D6 confirms the contextual policy verbatim)."
   },
   {
@@ -673,7 +673,7 @@
     "P1.8"
    ],
    "attempts": [],
-   "criteria": "Matrix M13; fresh empty AILANG_CACHE_DIR, AILANG_NO_CACHE unset, -debug-compile: summary present, 0 hits, MISS set = compile/manifest.json entries; runner-resolved selected paths (project root / -trace-loader stdlib search / embedded / effective lock) all hashed and inside allowed roots; statement import closure = compiled set minus listed prelude; evaluator-pinned assembly-only effective lock (only path fields rewritten, packages copied from A); residual gap in the envelope.",
+   "criteria": "Matrix M13; as the family's part, M15's candidate-row fixtures, expected rows and passes-own-refusal assertions; fresh empty AILANG_CACHE_DIR, AILANG_NO_CACHE unset, -debug-compile: summary present, 0 hits, MISS set = compile/manifest.json entries; runner-resolved selected paths (project root / -trace-loader stdlib search / embedded / effective lock) all hashed and inside allowed roots; statement import closure = compiled set minus listed prelude; evaluator-pinned assembly-only effective lock (only path fields rewritten, packages copied from A); residual gap in the envelope. Red-first or mutation record.",
    "note": "PLAN-004 v2 \u00a73 P1.9a (id unchanged; v5 D5 'Execution provenance' adopts this part's contract by reference; ailang.lock/ailang.toml/packages/** refusal confirmed by D3/D5)."
   },
   {
@@ -689,7 +689,7 @@
     "P1.7b-v2"
    ],
    "attempts": [],
-   "criteria": "Matrix M14 + M15 candidate rows (first finding + typed Location; direct log-length mutations; the exhausted-marker case's ACTUAL first finding with the marker's position in the envelope); K3: witness_C built from C's own trace/queues/worlds, THEN C's three runtime counts vs the entry; K4: family_evidence and the census recomputed from C equal the entry's; comparands are the entry, never the admission manifest; C=P \u2192 Reproduced; no score after any K failure.",
+   "criteria": "Matrix M14 + for M15's K-rows (candidate rows) the first-finding-and-location assertion on the fixtures and expected rows the family's part (P1.9a) landed (first finding + typed Location; direct log-length mutations; the exhausted-marker case's ACTUAL first finding with the marker's position in the envelope); K3: witness_C built from C's own trace/queues/worlds, THEN C's three runtime counts vs the entry; K4: family_evidence and the census recomputed from C equal the entry's; comparands are the entry, never the admission manifest; C=P \u2192 Reproduced; no score after any K failure.",
    "note": "PLAN-004 v2 \u00a73 P1.9b (graph id P1.9b-v2). Supersedes v1.2's P1.9b: K3 two-step comparison (witness_C from C's run, then the three counts), K4 census comparand, typed Location verdict (v5 D3).",
    "supersedes": "P1.9b"
   },
@@ -890,7 +890,7 @@
   {
    "at": "2026-09-16T07:27:24Z",
    "type": "note",
-   "detail": "v2 graph written by PSYNC from PLAN-004 v2 (HEAD 988a863; ADR-004 v5 Accepted at V5G 2026-09-16T06:30:00Z; QRET ruled). Supersedes run-plan004-v01 for everything from PLAN2G on; v01 keeps the settled history through PLAN2G. Nine parts under new ids (v2 \u2190 v1.2): P1.2a-v2 \u2190 P1.2a, P1.2b-v2 \u2190 P1.2b, P1.3-v2 \u2190 P1.3, P1.7a-v2 \u2190 P1.7a, P1.7b-v2 \u2190 P1.7b, P1.9b-v2 \u2190 P1.9b, P1R-v2 \u2190 P1R, P3.2-v2 \u2190 P3.2, P3.3-v2 \u2190 P3.3. Terminal tasks (QRET, PLANW, REV1, REV2, PLAN1G, V5, V5R, V5G, P2.1) carry one summary attempt each; PSYNC is in review with PSYNC\u00b7a1 queued pending PREV; PLAN2G is settled here by the operator on the fresh-session receipt. run.orchestrator.pane is v01's until the operator's planning session sets the fresh session's pane."
+   "detail": "v2 graph written by PSYNC from PLAN-004 v2 (HEAD 988a863; ADR-004 v5 Accepted at V5G 2026-09-16T06:30:00Z; QRET ruled). Supersedes run-plan004-v01 for everything from PLAN2G on; v01 keeps the settled history up to PLAN2G. Nine parts under new ids (v2 \u2190 v1.2): P1.2a-v2 \u2190 P1.2a, P1.2b-v2 \u2190 P1.2b, P1.3-v2 \u2190 P1.3, P1.7a-v2 \u2190 P1.7a, P1.7b-v2 \u2190 P1.7b, P1.9b-v2 \u2190 P1.9b, P1R-v2 \u2190 P1R, P3.2-v2 \u2190 P3.2, P3.3-v2 \u2190 P3.3. Terminal tasks (QRET, PLANW, REV1, REV2, PLAN1G, V5, V5R, V5G, P2.1) carry one summary attempt each; PSYNC is in review with PSYNC\u00b7a1 queued pending PREV; PLAN2G is settled here by the operator on the fresh-session receipt. run.orchestrator.pane is v01's until the operator's planning session sets the fresh session's pane."
   }
  ]
 }

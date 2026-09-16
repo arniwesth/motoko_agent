@@ -1,7 +1,8 @@
 # PLAN-004: implement ADR-004 — a session journal as an evaluation source
 
-Date: 2026-09-15 (v1–v1.2), 2026-09-16 (v2). Status: **proposed v2 — re-grounded on ADR-004 v5, which the
-operator accepted at `V5G`; awaiting `PREV` → `PLAN2G`.** Review history: v1 → `REVIEW-plan004-v1-verdicts-codex.md`,
+Date: 2026-09-15 (v1–v1.2), 2026-09-16 (v2, v2.1). Status: **proposed v2.1 — re-grounded on ADR-004 v5, which the
+operator accepted at `V5G`; `PREV` (`REVIEW-plan004-v2-verdicts-claude.md`) ACCEPT WITH CORRECTIONS, its eight
+changes applied (§9); awaiting `PLAN2G`.** Review history: v1 → `REVIEW-plan004-v1-verdicts-codex.md`,
 **RETURN** (eight changes; the early split accepted as provisional work); v1.1 →
 `REVIEW-plan004-v1.1-delta-verdicts-codex.md`, **RETURN** (five changes); v1.2 → `REV2·a2`,
 `REVIEW-plan004-v1.2-delta-verdicts-codex.md`, **ACCEPT WITH CORRECTIONS** (six corrections, applied, §9), on
@@ -23,7 +24,7 @@ reasoned); ADR-004 v5's status flipped to Accepted in this plan's commit.
 **Where v1.2 stood and where v2 starts.** v1.2 split the work into provisional parts that needed no v5 answer
 and everything else, which waited for `V5G` → `PSYNC` → `PREV` → `PLAN2G`. That split is now history:
 `QRET`, `PLAN1G`, `V5`, `V5R`, `V5G` and `P2.1` are done (their settlements are in `run-plan004.json`, the
-v1.2 graph, which stays the record through `PLAN2G`); `SWEEP` was in progress in that session when v2 was
+v1.2 graph, which stays the record up to `PLAN2G`); `SWEEP` was in progress in that session when v2 was
 written; `PRESERVE` and `SCAN0` remain ready. The running session ends at `PLAN2G` with a handoff, and a
 **fresh** session starts on the v2 graph (§8); `SWEEP`, `P1.1` and P0 do not wait for `PLAN2G`, every other
 P1 part does.
@@ -34,7 +35,7 @@ ADR-004 v5, the review documents and P2.1's `scripts/eval/mem_guard.py` + `test_
 code coordinate below holds at HEAD. ADR-004 v5 is itself re-pinned to `3920814`; §0.9 keeps the
 `d5edebf` → `3920814` drift table for readers of the v4 review. Operator plan graph:
 **`.dagr/run-plan004-v2.json`** (run id `run-plan004-v02`; the v1.2 file `run-plan004.json`, run
-`run-plan004-v01`, holds the settled history through `PLAN2G`). `dagr check --strict` clean proves the
+`run-plan004-v01`, holds the settled history up to `PLAN2G`). `dagr check --strict` clean proves the
 document is well-formed — not that a review accepted anything; §0.10's transaction and the gates'
 dependencies do that.
 
@@ -312,11 +313,12 @@ stand as reasoned; status Accepted (the one-line flip is in `PSYNC`'s commit). T
 - **`PSYNC`** (1 day, docs, author task; deps `V5G`, `PLAN1G`) — **this document.** Every v1.2 marker
   replaced by v5's decision; P1–P3 re-checked against v5 at HEAD; deltas and the id map in §9; the v2
   **operator** graph written to the **new file** `.dagr/run-plan004-v2.json` (run id `run-plan004-v02`),
-  never by editing `run-plan004.json`: a part whose scope, deps or criteria changed got a **new id**
-  (`<id>-v2`), and the file's `supersedes` object, its opening `note` event and each renamed task's `note`
+  never by editing `run-plan004.json`: a part got a **new id** (`<id>-v2`) when v5 changed what it must
+  build or test; a criteria string that only pins values keeps the id (§9); the file's `supersedes` object, its opening `note` event and each renamed task's `note`
   name the v1.2 id it supersedes. Settled history stays in `run-plan004-v01`; v2 carries **one summary
   attempt** per terminal task (id `<task>·a1`, evidence `reported`, receipt naming the v01 attempts and their
-  evidence) and no event, policy or attempt copied from v01 — the shape a producer seeding from it would build
+  evidence) and no event, policy or attempt copied from v01 for the nine terminal tasks; the `PSYNC` and
+  `P1.1` author policies and the open `PSYNC·a1` attempt are carried (§0.10 (a)1) — the shape a producer seeding from it would build
   (`dagr.ail:223–246`). `dagr check --strict --json` → `[]` (§6). **Commit:** `PLAN-004 v2: re-grounded on
   ADR-004 v5` — this file, ADR-004's status line, `BRIEF-adr004-v5-review.md`,
   `REVIEW-adr004-v5-verdicts-claude.md`, and the graph copied to `evidence/plan004-v2/run-plan004-v2.json`
@@ -383,17 +385,17 @@ into the snapshot.
 | M2 | D1 attribution/association | `DuplicateOrAmbiguousCallId`, `UnexpectedToolResult`, `MalformedToolArguments`, `Association` (extra prepared call; extra assistant; `thinking.tool_calls` ≠ call count), `ContinuationStart` (a suspended continuation **and** a wake-opened run, `SeedParked`), `EmptySegment` — each with position | P1.2b |
 | M3 | Cutoffs (D1's table) | `Completed`, `Suspended`, `Resumed`, `SettingsChange`, `RunStarted`, `Exit`, `EofWithoutRunFinished`, `Parked` (before the call-free stop-class call k preceding the park, `EndSuspended(k−1)`; the wake child and the injected wake message inside the cut), `ProviderRetry`, `UserMessage`, `HistoryReplaced`, `ReplacesPrevious`, `IncompleteToolBatch`, `CallFreeToolCallsFinish`, `BlankStop`, `HybridExtraction`, `RuntimeStatusCall`, `StopBeforeEnd` (the one post-turn cutoff: keeps call k, N = k, `EndFinalize(model_stop)`) — each asserts the resulting selector, N, expected end, genuine or synthetic | P1.3 |
 | M4 | Call shapes (D1's six-shape procedure) | continuation; incomplete batch; call-free `finish_reason = tool_calls` → `CallFreeToolCallsFinish`; blank stop → `BlankStop`; stop call → `EndFinalize(model_stop)`; a `hybrid-step-` result → `HybridExtraction`; the native-call predicate asserted once over seed + appends before the first stop call when `hybrid_tools` is recorded true — true admits, false → `Refused(HybridPredicate)` | P1.3 |
-| M5 | Configuration (D1's settings table) | every served value incl. `MOTOKO_EXIT_MANIFEST` and `MOTOKO_CAPTURE_FAILED_PAYLOAD` `""`, `MOTOKO_PERSIST_RETRIES` `"0"`, explicit `MOTOKO_PROFILE_DIR = .motoko/eval-profile` with the `FsFile` at exactly `.motoko/eval-profile/config.json`; context limit `n > 0` → `ProfileWindow(n)`, `"disabled"` → `ProfileDisabledDeclared`, missing or non-positive → `ProfileMissed` and a `MOTOKO_MODELS_FILE` read the witness refuses; the `provider_api_model` copy equal to the live function incl. non-idempotence; the excerpt's logical model equal to the recorded one | P1.3 |
+| M5 | Configuration (D1's settings table) | every served value incl. `MOTOKO_EXIT_MANIFEST` and `MOTOKO_CAPTURE_FAILED_PAYLOAD` `""`, `MOTOKO_PERSIST_RETRIES` `"0"`, explicit `MOTOKO_PROFILE_DIR = .motoko/eval-profile` with the `FsFile` at exactly `.motoko/eval-profile/config.json`; context limit `n > 0` → `ProfileWindow(n)`, `"disabled"` → `ProfileDisabledDeclared`, missing or non-positive → `ProfileMissed` encoded (the witness's refusal of its `MOTOKO_MODELS_FILE` read is asserted in M11); the `provider_api_model` copy equal to the live function incl. non-idempotence; the excerpt's logical model equal to the recorded one | P1.3 |
 | M6 | Digests | each copy equals the candidate function at A on fixtures, incl. an image and `make[N]`, and equals `gen_fixtures.py`'s digest | P1.4a |
 | M7 | Protected checker | P1.4b's self-test list | P1.4b |
-| M8 | Seams fail-closed (v5 D2) | provider empty script: the harness's exhausted record (payload `{ "served": false }`, `OutcomeOk`, class `""`, chunks `[]`, advance 0, deadline −1) and a non-retryable `Err`; tool empty queue: `tool_outcome_record`'s `ToolFailed` arm field for field (`OutcomeFault`, `fault_class_tool_failed()`, code `replay_unrecorded_invocation`) and **no live effect** (a sentinel file the live arm would create is absent); correlation mismatch; exactly-one-append (structurally equal prefix + one) on each seam | P1.5 |
-| M9 | Admission A5/A6/A9/A9b | malformed frame; wrong end (budget vs stop; exhausted marker present); each A9b identity class false-but-nonblank → finding; blank field → `validate_manifest` | P1.6 |
-| M10 | Admission A1–A4 + locations | A1 seed-digest tamper against the snapshot's recorded digests; A2 one-byte append change; A3 payload digest and model conversion; A4 JSON-inequal argument change (JSON-equal reorder passes); each finding's typed `Location` (first position or aggregate) | P1.7a |
-| M11 | Admission A7/A8 + census (v5 D3) | witness under- and over-count; a fault-path env read (`MOTOKO_CAPTURE_FAILED_PAYLOAD` on a non-retryable failure) counted in its own column; wrong obligation (`NoReplay` at admission) or metadata (`replay_metadata_of(manifest)`); the **decision count** asserted equal to `2N + 1` (`EndSuspended(N)`) / `2N` (stop at N) and used as `decision_budget`, `retry_budget` 0; every census row of D3's table asserted **zero by name** on the T0 fixture with a non-zero twin per row; `family_evidence` recorded unchanged with `CheckpointHistory` evaluated-but-vacuous | P1.7b |
+| M8 | Seams fail-closed (v5 D2) | provider empty script: the harness's exhausted record (payload `{ "served": false }`, `OutcomeOk`, class `""`, chunks `[]`, advance 0, deadline −1) and a non-retryable `Err`; tool empty queue: `tool_outcome_record`'s `ToolFailed` arm field for field (`OutcomeFault`, `fault_class_tool_failed()`, code `replay_unrecorded_invocation`), the returned `{ outcome: o, next_state }` (code `replay_unrecorded_invocation`, clock unadvanced) and **no live effect** (a sentinel file the live arm would create is absent); correlation mismatch; exactly-one-append (structurally equal prefix + one) on each seam | P1.5 |
+| M9 | Admission A5/A6/A9/A9b | malformed frame; wrong end (budget vs stop; exhausted marker present); each A9b identity class false-but-nonblank → finding; blank field → `validate_manifest`; an A9 known-failing round trip (`validate_program`, `world_state_of` or `reconstitution_balance`) with its pinned `Location` | P1.6 |
+| M10 | Admission A1–A4 + locations | A1 seed-digest tamper against the snapshot's recorded digests; A2 one-byte append change; A3 payload digest and model conversion; A3 `msg_count`/count mismatch; A4 JSON-inequal argument change (JSON-equal reorder passes); A4 count mismatch; each finding's typed `Location` (first position or aggregate) | P1.7a |
+| M11 | Admission A7/A8 + census (v5 D3) | witness under- and over-count; the `ProfileMissed` configuration's `MOTOKO_MODELS_FILE` read refused by the witness; a fault-path env read (`MOTOKO_CAPTURE_FAILED_PAYLOAD` on a non-retryable failure) counted in its own column; wrong obligation (`NoReplay` at admission) or metadata (`replay_metadata_of(manifest)`); the **decision count** asserted equal to `2N + 1` (`EndSuspended(N)`) / `2N` (stop at N) and used as `decision_budget`, `retry_budget` 0; every census row of D3's table asserted **zero by name** on the T0 fixture with a non-zero twin per row; `family_evidence` recorded unchanged with `CheckpointHistory` evaluated-but-vacuous | P1.7b |
 | M12 | Scan (v5 D6) | `PrivateKeyBlock`, `JsonWebToken`, `UrlUserinfo`; body-16 on a **later** occurrence; 6-character body reported; `CredentialBearingName` report-only; one hit per component (snapshot, excerpt, program identity/projection/payload/chunks, env, files, metadata, derived output → refused); report contains no body | P1.8 |
 | M13 | Candidate refusals | `InadmissibleCandidate` by path and by intent; `EvaluatorTouched`; `ProtectedRegionTouched` (span hash, missing, duplicate, moved symbol, protected import statement); `PreflightMismatch` per identity class (incl. a project module resolving outside the assembled root, a `pkg/` path outside the pinned package root, a warm cache); `GuardTripped`; `ProgramUndecodable` | P1.9a |
 | M14 | Divergence families | `WrongKind`, `WrongOrigin`, `UnsafeIdentity`, `ProjectionDiffers`, `OutcomeDiffers`; `ProgramExhausted` and `UnusedInteraction` by **direct log-length mutation**; the exhausted-marker case asserting its **actual** first finding (`ProgramExhausted` only past the expected log's end, else the projection/outcome mismatch at that position, an earlier mismatch first) with the marker's position in the envelope; `ReconstitutionFinding` (K1); `DiscoveryFinding` incl. prepared ≠ recorded (K3); `Violation` (K4) and census mismatch; `FrameMismatch` (K5); `EndMismatch` (K6); `ChainMismatch` (K7) — **each with its first finding and typed `Location`**; no score after any K failure | P1.9b |
-| M15 | **Near-misses per refusal family** (ruled by v5 D8 and `V5G`: satisfied as the per-check known-failing cases, not owed per family) | see the table below | the family's part |
+| M15 | **Near-misses per refusal family** (ruled by v5 D8 and `V5G`: satisfied as the per-check known-failing cases, not owed per family) | see the table below | split: the family's part (P1.2a-v2, P1.2b-v2, P1.9a, …) lands the fixture, its `MATRIX.expected.tsv` row and the passes-its-own-refusal assertion; the catching check's part (P1.7a-v2 for A-rows, P1.9b-v2 for K-rows) lands the first-finding-and-location assertion |
 
 **M15 — ruled.** v4's sentence "one known-divergent and one known-refused case per refusal family" is
 **revised** in v5 D8 ("The P1 test contract"): per refusal family one refused case at a pinned location plus a
@@ -410,7 +412,12 @@ family**, so every row marked inapplicable is **satisfied by its recorded reason
 is retained as the closure's regression test. At admission a near-miss's finding is
 `Refused(AdmissionCheck(Ak, location))`, a refusal, not the candidate's `Diverged` constructor.
 
-| Family | Near-miss (passes the family's refusal and all earlier checks) | Expected first finding |
+**Who lands a row (v2.1).** Each near-miss row is split between two parts: the **family's part** (P1.2a-v2,
+P1.2b-v2, P1.9a, …) lands the fixture, its `MATRIX.expected.tsv` row and the assertion that the input passes
+its own family's refusal; the **catching check's part** (P1.7a-v2 for A-rows, P1.9b-v2 for K-rows) lands the
+first-finding-and-location assertion.
+
+| Family | Near-miss (passes the family's refusal and all earlier checks; family's part) | Expected first finding (catching check's part) |
 |---|---|---|
 | `ChainBreak` | a consistently re-chained snapshot whose tool result at call k is altered, where **call k+1 exists and is an evaluated continuation** (never the terminal call) | A1, A2, A4 pass; `AdmissionCheck(A3)` at `Call(k+1)` (request digest against the live excerpt) |
 | `UnexpectedToolResult` | a correctly attributed result at call k with one content byte changed; call k+1 exists | `AdmissionCheck(A3)` at `Call(k+1)` |
@@ -443,8 +450,9 @@ closure, excluding exactly the fold and decoder changes D3's class admits); each
 the source span it copies, checked by P1.4b's tool so that drift is **reported**, not refused. `park` and
 `wake` decode (twelve entry types, `journal.ail:1253–1256`); the reader treats a `park` as the `Parked`
 cutoff (P1.3's), a wake-opened start as `ContinuationStart` (P1.2b's) and a stray `wake` as
-`MalformedEntry` (the fold's refusal at `request_id`, `:1603–1614`). Tests: M1, M15's rows for M1, an
-r2.1-shaped leading-user seed, and fold equality against `journal.ail`'s `fold_journal` (`:1679`) and
+`MalformedEntry` (the fold's refusal at `request_id`, `:1603–1614`). Tests: M1; for M15's rows for M1 the
+fixture, its `MATRIX.expected.tsv` row and the passes-M1's-refusal assertion (the first-finding-and-location
+assertion is P1.7a-v2's); an r2.1-shaped leading-user seed; and fold equality against `journal.ail`'s `fold_journal` (`:1679`) and
 against `gen_fixtures.py`. **Commit:** `ADR-004 D1: the reader — path, strict decoding, seed`.
 **v2:** supersedes v1.2's `P1.2a` — the park/wake refusal row left M1 for M3, the stray-wake case was
 added, and copies-not-imports was decided (§9).
@@ -456,8 +464,9 @@ shapes); ordered association from the banners (the k-th `provider_call_prepared`
 the next with the same `step`, its journal counterpart the k-th assistant `history_appended` not counting
 `replaces_previous`; `thinking.tool_calls` = the assistant's call count); canonical JSON arguments (compact,
 keys in source order; JSON equality). `ContinuationStart` covers both a suspended continuation and a run
-opened by a consumed wake (`SeedParked`, `session.ail:4271`, `:5531–5536`, `:5577`). Tests: M2 and M15's
-rows for M2. **Commit:** `ADR-004 D1: the excerpt and ordered association`. **v2:** supersedes v1.2's
+opened by a consumed wake (`SeedParked`, `session.ail:4271`, `:5531–5536`, `:5577`). Tests: M2; for M15's
+rows for M2 the fixture, its `MATRIX.expected.tsv` row and the passes-M2's-refusal assertion (the
+first-finding-and-location assertion is P1.7a-v2's). **Commit:** `ADR-004 D1: the excerpt and ordered association`. **v2:** supersedes v1.2's
 `P1.2b` — the wake-opened `ContinuationStart` case was added (§9).
 
 ### P1.3 — reader III: stopping contract, cutoffs, configuration (1½ days, D1) — graph id `P1.3-v2`
@@ -470,7 +479,8 @@ the two expected ends `EndSuspended(N)` / `EndFinalize(model_stop)`; the full cu
 `HybridExtraction`, `RuntimeStatusCall` and the post-turn `StopBeforeEnd`; the refusal `HybridPredicate`;
 the logical model from `settings` entries, `BootInputs`, and **the T0 settings table as v5 pins it** — both
 ambient keys `""`, `MOTOKO_PERSIST_RETRIES` `"0"`, explicit `MOTOKO_PROFILE_DIR` with the profile `FsFile`,
-the context-limit encoding (`n > 0` / `"disabled"`; `ProfileMissed` refused by the witness),
+the context-limit encoding (`n > 0` / `"disabled"`; `ProfileMissed` encoded here — its refusal by the
+witness is asserted by P1.7b-v2, M11),
 `checkpoint_enabled` false, `max_cost_millicents` 0; an evaluator copy of `provider_api_model`
 (`session.ail:272–293`) pinned by hash; `expected.decisions` = `2N + 1` / `2N`; `unreproduced` and
 `omissions`. Tests: M3, M4, M5. **Commit:** `ADR-004 D1: the stopping contract, cutoffs and T0
@@ -583,8 +593,8 @@ None of those is used as a truth source.
 | `source_revision`, `scan_root_commit` | `git -C <A> rev-parse HEAD`; refused if `git status --porcelain` shows tracked changes outside the corpus (at `3920814`, `ailang.lock` is modified: it must be committed first) | `git -C <A> cat-file -e <rev>^{commit}` and the tree hash of the assembled A equal to `git rev-parse <rev>^{tree}` |
 | `toolchain` | `ailang --version`, `sha256sum "$(readlink -f "$(command -v ailang)")"` | the binary SHA-256 pinned in E's record at `P1G`; before `P1G`, real admission is refused |
 | `abi_version` | `version` in `packages/motoko-ext-abi/ailang.toml` (`:1–3`) | `version` of `sunholo/motoko_ext_abi` in `ailang.lock` (`:71–77`), a different file written by `ailang lock`. The lock's `interface_hash` is **not** a version: it is recorded as the package's interface identity and compared with the entry's pinned value at K0; no fresh interface recomputation — v5 D5 adopts P1.9a's contract, and `ailang lock` in v0.33.0 only regenerates the lock; it has no verify mode |
-| `classifier_2_set`, `unrouted_fields` | `python3 tools/ext_call_inventory/derive.py --json` at A (the `make ext_call_inventory` target, `Makefile:3080–3082`, runs it **without** `--json`) | **not a second extractor**: `tools/profile_definition/check_fixtures.py`'s `derive()` runs the same script (`:35–37`). The comparator is the **reviewed pinned record** — the `classifier_2_set` and `unrouted_fields` literals in `scripts/dst/profile_definition_dst.ail` at A (`check_fixtures.py:25`), whose agreement `make profile_definition` enforces. The claim is narrowed to agreement with a reviewed record |
-| `scan_roots` | the inventory's `--roots` default at A (`tools/ext_call_inventory/derive.py:480`: `src,packages`) | the profile's `scan_roots` (`src/core/dst_driver_only.ail:1065`), root for root; and every leaf in `SCAN_FILES` (`tools/driver_leaf_inventory/derive.py:187–192`) checked to lie inside those roots |
+| `classifier_2_set`, `unrouted_fields` | `python3 tools/ext_call_inventory/derive.py --json` at A (the `make ext_call_inventory` target, `Makefile:3080–3082`, runs it **without** `--json`) | **not a second extractor**: `tools/profile_definition/check_fixtures.py`'s `derive()` runs the same script (`:54–59`). The comparator is the **reviewed pinned record** — the `classifier_2_set` and `unrouted_fields` literals in `scripts/dst/profile_definition_dst.ail` at A (`check_fixtures.py:44`, `FIXTURE`), whose agreement `make profile_definition` enforces. The claim is narrowed to agreement with a reviewed record |
+| `scan_roots` | the inventory's `--roots` default at A (`tools/ext_call_inventory/derive.py:481`: `src,packages`) | the profile's `scan_roots` (`src/core/dst_driver_only.ail:1065`), root for root; and every leaf in `SCAN_FILES` (`tools/driver_leaf_inventory/derive.py:187–192`) checked to lie inside those roots |
 | `pkg/` packages | every `ailang.lock` entry (name, `source`, `path`, `version`, `interface_hash`) and the lock's SHA-256 | the entry's pinned package inputs and the effective-lock rule of P1.9a; a lock `path` is never itself an identity |
 | `normalized_configuration` | canonical JSON of the reader's `RecordedConfig ++ T0Settings` | re-derived by `gen_fixtures.py`'s config reader from the snapshot's `settings` entries and the entry's T0 table |
 | `profile_id`/`profile_version`, rule versions, `event_vocabulary_version` | the build's functions at A (`dst_driver_only.ail:1097–1123` derives these) | **consistency only, not independent truth**: `validate_manifest` compares them with the same `driver_only()` builder (`dst_profile.ail:1535–1573`) and `make profile_definition` checks the fixtures; the claim is narrowed to that |
@@ -594,7 +604,7 @@ None of those is used as a truth source.
 The program: schema `/4`, `generator_id: "journal_admission"`, `initial_world` as D2, observed `bounds` as
 data, `interactions` = `world.log`. Checks landed: **A5** framing, **A6** expected end with no exhausted
 marker, **A9** round trip (`validate_program`, `validate_manifest`, `world_state_of`,
-`reconstitution_balance`) and **A9b** provenance. Synthetic only. Tests: M9 plus three continuations →
+`reconstitution_balance`) and **A9b** provenance. Synthetic only. Tests: M9 (incl. the A9 known-failing round-trip case with its pinned `Location`) plus three continuations →
 `EndSuspended(3)` with `RunSuspended` and `suspended: Some`; a stop call → `EndFinalize(model_stop)`.
 **Commit:** `ADR-004 D2/D3: the admission run, the program and its provenance`.
 
@@ -609,8 +619,9 @@ program position), `Call(k)` (A3, A6), `Source { source: Snapshot | Excerpt, pos
 `Aggregate(name)` (A5 frame totals, A7, A8) — never a sentinel where a tagged location exists. The mapping
 onto `Admission = SourceFaithful { entry, calls: N, end, envelope } | Refused { Refusal |
 AdmissionCheck(A1..A9, A9b, location) | ScanRefusal }`. **Comparands:** at admission, the parent's run
-against the source; A2's function is reused unchanged as K7 in P1.9b against the entry. Tests: M10 and
-M15's admission rows (`AdmissionCheck(A3)` at `Call(k+1)` and the like). **Commit:** `ADR-004 D3: source
+against the source; A2's function is reused unchanged as K7 in P1.9b against the entry. Tests: M10; for
+M15's A-rows (`AdmissionCheck(A3)` at `Call(k+1)` and the like) the first-finding-and-location assertion, on
+the fixtures and expected rows the family's part landed. **Commit:** `ADR-004 D3: source
 checks and the admission verdict`. **v2:** supersedes v1.2's `P1.7a` — the two-shape location proposal
 became v5's four-variant `Location`, and `AdmissionCheck` carries A9b and the location (§9).
 
@@ -655,7 +666,8 @@ Deps `P1.4b`, `P1.8`. Graph id `P1.9a`, unchanged: v5 D5 ("Execution provenance"
 - **Ownership.** The runner creates the assembly worktree under `runs/<run-id>/tree` from C, owns and
   removes it; `candidate.json` (declared intent, parent, the reviewer who accepted the intent) is supplied by
   the operator or orchestrator, never generated by the runner.
-- **Refusals before running** (M13): D3's path list; declared intent; `EvaluatorTouched` (C's diff against P
+- **Refusals before running** (M13; and, as the family's part, M15's candidate-row fixtures, expected rows and
+  passes-its-own-refusal assertions): D3's path list; declared intent; `EvaluatorTouched` (C's diff against P
   touches §0.5 paths); `ProtectedRegionTouched` (`tools/eval_protected check` at C); guard record;
   undecodable program.
 - **Assembly.** Evaluator paths copied from E over the tree; E, corpus and protected hashes checked before
@@ -729,7 +741,8 @@ EvaluatorTouched | ProtectedRegionTouched | PreflightMismatch | GuardTripped | P
 printed with the envelope every time; **any K failure forbids a score**, and the first K finding at its own
 `Location` is the verdict's (K2's when K2 and K4's replay family both report); `regression_replay_findings` is
 diagnostic only. The marker check reports *not applicable* for observation-preserving candidates, and the
-verdict names what it rests on (the execution-provenance record). Tests: M14, M15's candidate rows, and C = P →
+verdict names what it rests on (the execution-provenance record). Tests: M14; for M15's K-rows (the candidate rows) the first-finding-and-location assertion, on the fixtures
+and expected rows the family's part (P1.9a) landed; and C = P →
 `Reproduced`. **Commit:** `ADR-004 D3: K1–K7 and the candidate verdict`. **v2:** supersedes v1.2's `P1.9b`
 — K3's two-step comparison, K4's census comparand and the typed `Location` verdict were decided by v5 (§9).
 
@@ -967,7 +980,7 @@ updates a task it already has** (`seed_tasks`, `dagr.ail:252–263`; `plan_task_
 
 | file | writer | authoritative for |
 |---|---|---|
-| operator plan graph (`run-plan004-v2.json`; `run-plan004.json` is v01, the record through `PLAN2G`) | one writer at a time: the running Motoko session (settlements only) or, between sessions, the operator's planning session (structure) | operator decisions, gates, directives, review verdicts, settlements and their receipts |
+| operator plan graph (`run-plan004-v2.json`; `run-plan004.json` is v01, the record up to `PLAN2G`) | one writer at a time: the running Motoko session (settlements only) or, between sessions, the operator's planning session (structure) | operator decisions, gates, directives, review verdicts, settlements and their receipts |
 | producer run file | the extension only | observed delegate attempts: panes, liveness, delegate answers, lost/failed runtime outcomes |
 
 - **Settlements only while a session runs.** The Motoko session may append attempts and events, set states,
@@ -1079,6 +1092,25 @@ BUDGET
 
 ## 9. What changed, by version
 
+**v2 → v2.1** (2026-09-16), the eight "Required changes for v2.1" of `REVIEW-plan004-v2-verdicts-claude.md`
+(`PREV·a1`, claude, sha256 `61a79635…`, ACCEPT WITH CORRECTIONS); none changes a mechanism, a dependency, a
+gate or a part's scope:
+
+1. *P1.6 coordinates.* `check_fixtures.py:35–37` → `:54–59` (`derive()`), `:25` → `:44` (`FIXTURE`),
+   `tools/ext_call_inventory/derive.py:480` → `:481` (`--roots`), in P1.6's table and the cross-references.
+2. *`PSYNC·a1`'s model* in the v2 graph set to v01's record (`opus5`); v01 unchanged.
+3. *§2 `PSYNC`'s id sentence* now states the rule this section applies.
+4. *What v2 carries from v01:* nothing for the nine terminal tasks; the `PSYNC`/`P1.1` author policies and the
+   open `PSYNC·a1` are carried; v01 is the record **up to** `PLAN2G` (header, §8, the graph's note).
+5. *M15's split:* the family's part lands fixture, expected row and passes-own-refusal assertion; the catching
+   check's part (P1.7a-v2, P1.9b-v2) the first finding and location; `ProfileMissed`'s witness refusal is
+   P1.7b-v2's (M11), P1.3-v2 only encodes it.
+6. *Matrix rows:* an A9 known-failing round trip (M9); M8's tool arm returned value; A3 `msg_count`/count and A4
+   count mismatches (M10); mirrored in the graph criteria of `P1.5`, `P1.6`, `P1.7a-v2`.
+7. *§0.7:* the v1, v1.1, v1.2 and v2 review documents and the four PLAN-004 briefs committed with v2.1.
+8. *Cosmetic:* `V5`'s graph criteria say three commits; the kept P1 parts' graph criteria name the red-first or
+   mutation record; ADR-004's status line says "to be implemented by".
+
 **v1.2 → v2** (`PSYNC`, 2026-09-16, against ADR-004 v5 at `988a863`, `V5G` accepted). Every v1.2 marker
 "⟨v5⟩" — thirty lines: the header, §0.9's park row, §2 `V5` and `PSYNC`, M1 and M15's park row, P1.2a, P1.3
 (two), P1.4b, P1.5 (two), P1.6's `abi_version` row, P1.7a, P1.7b, P1.8, P1.9a, P1.9b, P3.2, and §5's heading
@@ -1137,7 +1169,8 @@ Unchanged ids: `QRET`, `PRESERVE`, `SWEEP`, `SCAN0`, `PLANW`, `REV1`, `REV2`, `P
 `P1.9a`, `P1G`, `P2.1`, `P2.2`, `P3.1`, `P3G`, `P4`, `P5`, `P6` (canceled). Terminal tasks (`QRET`,
 `PLANW`, `REV1`, `REV2`, `PLAN1G`, `V5`, `V5R`, `V5G`, `P2.1`) carry one summary attempt `<task>·a1`
 (`reported`, receipt naming the v01 attempts and their evidence); `PSYNC` is in `review` with `PSYNC·a1`
-queued; no v01 attempt, event or policy is copied; author policies stay on `PSYNC` and `P1.1`. Deps that
+queued; no event, policy or attempt is copied from v01 for the nine terminal tasks; the `PSYNC` and `P1.1`
+author policies and the open `PSYNC·a1` attempt are carried. Deps that
 named a renamed part name its v2 id (`P1.5` ← `P1.3-v2`; `P1.9b-v2` ← `P1.7a-v2`, `P1.7b-v2`; `P1R-v2` ←
 `P1.9b-v2`; `P1G` ← every P1 part; `P3.3-v2` ← `P3.2-v2`; `P3G` ← `P3.2-v2`, `P3.3-v2`).
 
@@ -1207,7 +1240,8 @@ and four obligations; estimates, commit exceptions, citations, P6 canceled, owne
 - This plan's reviews: `REVIEW-plan004-v1-verdicts-codex.md` (v1, RETURN), `REVIEW-plan004-v1.1-delta-verdicts-
   codex.md` (v1.1, RETURN); briefs `BRIEF-plan004-v1-review.md`, `BRIEF-plan004-v1.1-review.md`,
   `BRIEF-plan004-v1.2-review.md`; `REVIEW-plan004-v1.2-delta-verdicts-codex.md` (v1.2, ACCEPT WITH CORRECTIONS);
-  `REVIEW-plan004-v2-verdicts-*.md` (`PREV`, pending).
+  `REVIEW-plan004-v2-verdicts-claude.md` (`PREV`, claude — Codex unavailable; ACCEPT WITH CORRECTIONS, eight
+  changes applied in v2.1); `BRIEF-plan004-v2-review.md`.
 - dagr: `dagr --skill` (append-only attempts/events, send-back, policy materialisation);
   `.claude/skills/dagr-producer/examples/03-send-back.json`, `05a-`/`05b-policy-*.json`.
 - PLAN-003 (§0, P4 layout, §5 records) and `.dagr/run-plan003.json`;
@@ -1215,8 +1249,8 @@ and four obligations; estimates, commit exceptions, citations, P6 canceled, owne
 - `021_herdr_delegation/DESIGN-dagr-as-delegation-view.md` §10.2, §10.5–10.6;
   `packages/motoko-ext-herdr/dagr.ail:215–335`, `:395–397`; `packages/motoko-ext-herdr/herdr.ail:585–599`.
 - AILANG v0.33.0 (`ae36986`) — the **installed** source at `/home/motoko/.local/share/ailang` (the repo's `ailang/` checkout is `de5a141` and is not the executing source): `internal/pipeline/cache_store.go:61–105`; `internal/pipeline/pipeline_module.go:136`, `:215–220`, `:267–287`, `:405–408`, `:506`; `internal/loader/loader.go:145–185`, `:292`, `:320`, `:468–475`;
-  `internal/loader/stdlib_resolver.go:187`, `:274`; `internal/pkg/loader.go:44`, `:126–136`; `cmd/ailang/main_run_exec.go:239–240`; `ailang.lock:71–77`; `packages/motoko-ext-abi/ailang.toml:1–3`; `tools/ext_call_inventory/derive.py:480`; `scripts/dst/profile_definition_dst.ail`;
-  `tools/profile_definition/check_fixtures.py:25`, `:35–37`; `Makefile:3080–3082`.
+  `internal/loader/stdlib_resolver.go:187`, `:274`; `internal/pkg/loader.go:44`, `:126–136`; `cmd/ailang/main_run_exec.go:239–240`; `ailang.lock:71–77`; `packages/motoko-ext-abi/ailang.toml:1–3`; `tools/ext_call_inventory/derive.py:481`; `scripts/dst/profile_definition_dst.ail`;
+  `tools/profile_definition/check_fixtures.py:44`, `:54–59`; `Makefile:3080–3082`.
 - `HANDOFF-2026-09-13-plan001-p2d-sweep-pending.md` (the 12 GiB rule; `de4b4f5`).
 - ADR-001 D2, D6; ADR-003 D2, D4, D7; PLAN-003 §0.6.
 - Code at `3920814`: `stub_step.ail:28–44`, `:69`, `:203`, `:478`, `:635`; `ports.ail:60–81`, `:1723`, `:1827`,
