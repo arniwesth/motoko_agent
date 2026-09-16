@@ -10,3 +10,37 @@ M6.D.at_a	src/eval/journal/digests_at_a_test.ail:test_payload_copy_equals_candid
 M6.S.at_a	src/eval/journal/digests_at_a_test.ail:test_system_prefix_copy_equals_candidate_at_a	pass	-	aggregate:digests
 M6.R.at_a	src/eval/journal/digests_at_a_test.ail:test_raw_frame_copy_equals_candidate_at_a	pass	-	aggregate:digests
 M6.A.at_a	src/eval/journal/digests_at_a_test.ail:test_arguments_copy_equals_candidate_at_a	pass	-	aggregate:digests
+M1.ChainBreak.digest	src/eval/journal/reader.ail:test_m1_chain_break_digest	refused	ChainBreak	entry:17
+M1.ChainBreak.parent	src/eval/journal/reader.ail:test_m1_chain_break_parent	refused	ChainBreak	entry:15
+M1.ChainBreak.cycle	src/eval/journal/reader.ail:test_m1_chain_break_cycle	refused	ChainBreak	entry:2
+M1.ChainBreak.root	src/eval/journal/reader.ail:test_m1_chain_break_root	refused	ChainBreak	entry:1
+M1.MalformedEntry.field	src/eval/journal/reader.ail:test_m1_malformed_entry_field	refused	MalformedEntry	entry:16
+M1.MalformedEntry.message	src/eval/journal/reader.ail:test_m1_malformed_entry_message	refused	MalformedEntry	entry:14
+M1.MalformedEntry.envelope	src/eval/journal/reader.ail:test_m1_malformed_entry_envelope	refused	MalformedEntry	entry:18
+M1.MalformedEntry.no_seq	src/eval/journal/reader.ail:test_m1_malformed_entry_no_seq_located_by_line	refused	MalformedEntry	line:18
+M1.MalformedEntry.pairing	src/eval/journal/reader.ail:test_m1_malformed_entry_pairing	refused	MalformedEntry	entry:14
+M1.MalformedEntry.stray_wake.no_park	src/eval/journal/reader.ail:test_m1_stray_wake_no_open_park	refused	MalformedEntry	entry:22
+M1.MalformedEntry.stray_wake.answered	src/eval/journal/reader.ail:test_m1_stray_wake_answered_park	refused	MalformedEntry	entry:24
+M1.MalformedEntry.stray_wake.other_request	src/eval/journal/reader.ail:test_m1_stray_wake_other_request	refused	MalformedEntry	entry:23
+M1.UnknownEntryType	src/eval/journal/reader.ail:test_m1_unknown_entry_type	refused	UnknownEntryType	entry:15
+M1.UnknownSchema	src/eval/journal/reader.ail:test_m1_unknown_schema	refused	UnknownSchema	entry:0
+M1.clean	src/eval/journal/reader.ail:test_m1_clean_twin_reads	pass	-	aggregate:reader
+M1.clean.park_wake	src/eval/journal/reader.ail:test_m1_clean_twin_park_and_wake	pass	-	aggregate:reader
+M1.entry_types	src/eval/journal/reader.ail:test_m1_twelve_entry_types_decode	pass	-	aggregate:reader
+M1.seed.r21	src/eval/journal/reader.ail:test_seed_r21_leading_user	pass	-	aggregate:reader
+M1.segment.ends	src/eval/journal/reader.ail:test_segment_end_forms	pass	-	aggregate:reader
+M1.seed.repair_only	src/eval/journal/reader.ail:test_repair_is_the_seeds_only	pass	-	aggregate:reader
+M1.park.reported	src/eval/journal/reader.ail:test_park_in_segment_is_reported	pass	-	aggregate:reader
+M1.wake_opened.flagged	src/eval/journal/reader.ail:test_wake_opened_run_is_flagged	pass	-	aggregate:reader
+M1.selector	src/eval/journal/reader.ail:test_bad_selector_is_the_readers_precondition	pass	-	aggregate:reader
+M1.fold.gen	src/eval/journal/reader.ail:test_fold_equals_generator	pass	-	aggregate:reader
+M1.reader.gen	src/eval/journal/reader.ail:test_reader_equals_generator	pass	-	aggregate:reader
+M1.fold.at_a	src/eval/journal/reader_at_a_test.ail:test_fold_copy_equals_fold_journal_at_a	pass	-	aggregate:reader
+M1.fold.at_a.every_leaf	src/eval/journal/reader_at_a_test.ail:test_fold_copy_equals_fold_journal_at_every_leaf	pass	-	aggregate:reader
+M15.ChainBreak.passes_M1	src/eval/journal/reader.ail:test_m15_near_miss_chain_break_passes_m1	pass	-	aggregate:reader
+M15.ChainBreak	pending:P1.7a-v2 (fixture near_miss_chain_break)	refused	AdmissionCheck(A3)	call:2
+M15.MalformedEntry.passes_M1	src/eval/journal/reader.ail:test_m15_near_miss_malformed_entry_passes_m1	pass	-	aggregate:reader
+M15.MalformedEntry	pending:P1.7a-v2 (fixture near_miss_malformed_entry)	refused	AdmissionCheck(A3)	call:2
+M15.UnknownEntryType	-	inapplicable	reason: the nearest decodable input is a known type, and a known type in-segment is a cutoff (M3) or a content change (M15.MalformedEntry)	-
+M15.UnknownSchema	-	inapplicable	reason: an entry under an undecodable schema cannot be read	-
+M15.park_wake	-	inapplicable	reason: v5 D1/D8 - Parked is a cutoff (M3); a wake-opened start is ContinuationStart (M2); a stray wake is MalformedEntry (M1.MalformedEntry.stray_wake.*)	-

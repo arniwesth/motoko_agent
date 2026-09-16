@@ -193,6 +193,25 @@ export pure func eval_raw_frame_digest(payload: [Message]) -> string {
   ev_chain_digest_over(ev_chain_empty_base(), payload)
 }
 
+-- The chain steps themselves, for the reader's fold copy (P1.2a,
+-- `reader.ail`), which imports them from here rather than copying them again.
+-- Each is the pinned copy above under its exported name.
+export pure func eval_chain_digest_base(seed: [Message]) -> string {
+  ev_chain_digest_base(seed)
+}
+
+export pure func eval_chain_digest_after(previous: string, m: Message) -> string {
+  ev_chain_digest_after(previous, m)
+}
+
+export pure func eval_chain_digest_over(base: string, ms: [Message]) -> string {
+  ev_chain_digest_over(base, ms)
+}
+
+export pure func eval_chain_empty_base() -> string {
+  ev_chain_empty_base()
+}
+
 -- ============================================================================
 -- A — canonical-JSON arguments.
 -- ============================================================================
