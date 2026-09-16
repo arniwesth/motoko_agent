@@ -3099,6 +3099,17 @@ driver_leaf_inventory_selftest:
 	@python3 tools/driver_leaf_inventory/derive.py --self-test
 
 # ---------------------------------------------------------------------------
+# PLAN-004 v2 §3 P1.4b (ADR-004 D5): the protected-source checker's self-test,
+# matrix row M7. Mutated scratch copies of A's tree checked against a manifest
+# generated independently from the commit (`gen --at A` reads `git show`), the
+# parser cross-check on every non-braced span (runs `ailang check`, ~2-3 min,
+# light on memory), and P1.4a's SOURCE pins verified against A.
+# ---------------------------------------------------------------------------
+.PHONY: eval_protected_selftest
+eval_protected_selftest:
+	@python3 tools/eval_protected/selftest.py
+
+# ---------------------------------------------------------------------------
 # ADR-001 Amendment A, WI-D12: CLASSIFIER 3 -- the extension-closure
 # ambient-source inventory. The fourth deferred gate mechanism, admitted
 # 2026-08-06 by both acceptance reviewers.

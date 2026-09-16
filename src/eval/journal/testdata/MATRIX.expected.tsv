@@ -44,3 +44,36 @@ M15.MalformedEntry	pending:P1.7a-v2 (fixture near_miss_malformed_entry)	refused	
 M15.UnknownEntryType	-	inapplicable	reason: the nearest decodable input is a known type, and a known type in-segment is a cutoff (M3) or a content change (M15.MalformedEntry)	-
 M15.UnknownSchema	-	inapplicable	reason: an entry under an undecodable schema cannot be read	-
 M15.park_wake	-	inapplicable	reason: v5 D1/D8 - Parked is a cutoff (M3); a wake-opened start is ContinuationStart (M2); a stray wake is MalformedEntry (M1.MalformedEntry.stray_wake.*)	-
+M7.clean	tools/eval_protected/selftest.py:clean	allowed	-	aggregate:protected
+M7.ws_in_literal	tools/eval_protected/selftest.py:ws_in_literal	refused	changed:encode_tool_outcome	aggregate:protected
+M7.ws_doubled_in_literal	tools/eval_protected/selftest.py:ws_doubled_in_literal	refused	changed:decode_tool_outcome	aggregate:protected
+M7.token_tool_outcome_record	tools/eval_protected/selftest.py:token_tool_outcome_record	refused	changed:tool_outcome_record	aggregate:protected
+M7.import_paren_name	tools/eval_protected/selftest.py:import_paren_name	refused	changed:<imports:1>	aggregate:protected
+M7.import_joined	tools/eval_protected/selftest.py:import_joined	refused	changed:<imports:1>	aggregate:protected
+M7.import_alias	tools/eval_protected/selftest.py:import_alias	refused	changed:<imports:1>	aggregate:protected
+M7.comment_in_span	tools/eval_protected/selftest.py:comment_in_span	refused	changed:recording_tool	aggregate:protected
+M7.unbraced_last_line	tools/eval_protected/selftest.py:unbraced_last_line	refused	changed:ToolOutcome	aggregate:protected
+M7.deriving	tools/eval_protected/selftest.py:deriving	refused	changed:ToolCallEnvelope	aggregate:protected
+M7.moved_other_file	tools/eval_protected/selftest.py:moved_other_file	refused	moved:scripted_step_faults	aggregate:protected
+M7.renamed_missing	tools/eval_protected/selftest.py:renamed_missing	refused	missing:recording_tool	aggregate:protected
+M7.renamed_readded	tools/eval_protected/selftest.py:renamed_readded	allowed	-	aggregate:protected
+M7.moved_within_file	tools/eval_protected/selftest.py:moved_within_file	allowed	-	aggregate:protected
+M7.outside_every_span	tools/eval_protected/selftest.py:outside_every_span	allowed	-	aggregate:protected
+M7.interp_brace	tools/eval_protected/selftest.py:interp_brace	allowed	-	aggregate:protected
+M7.new_decl_dup_name	tools/eval_protected/selftest.py:new_decl_dup_name	refused	duplicate:tool_calls_json	aggregate:protected
+M7.dup_in_other_protected_file	tools/eval_protected/selftest.py:dup_in_other_protected_file	refused	duplicate:bool_field	aggregate:protected
+M7.call_site_changed	tools/eval_protected/selftest.py:call_site_changed	refused	changed:dispatch_step@call	aggregate:protected
+M7.call_site_duplicated	tools/eval_protected/selftest.py:call_site_duplicated	refused	duplicate:dispatch_step@call	aggregate:protected
+M7.unterminated_string	tools/eval_protected/selftest.py:unterminated_string	hard_error	SpanError	aggregate:protected
+M7.unbalanced_paren	tools/eval_protected/selftest.py:unbalanced_paren	hard_error	SpanError	aggregate:protected
+M7.pin_drift_reported	tools/eval_protected/selftest.py:pin_drift_reported	allowed	-	aggregate:protected
+M7.diff_names_only	tools/eval_protected/selftest.py:diff_names_only	allowed	encode_tool_outcome	aggregate:protected
+M7.gen_missing_symbol	tools/eval_protected/selftest.py:gen_missing_symbol	hard_error	protected symbol zz_no_such_symbol is missing	aggregate:protected
+M7.gen_overlap	tools/eval_protected/selftest.py:gen_overlap	hard_error	spans overlap	aggregate:protected
+M7.gen_duplicate_symbol	tools/eval_protected/selftest.py:gen_duplicate_symbol	hard_error	protected symbol recording_tool is declared 2 times	aggregate:protected
+M7.overlap_two_declarations	tools/eval_protected/selftest.py:overlap_two_declarations	hard_error	spans overlap	aggregate:protected
+M7.crosscheck_every_nonbraced_span	tools/eval_protected/selftest.py:crosscheck_every_nonbraced_span	pass	-	aggregate:protected
+M7.crosscheck_detects_short_span	tools/eval_protected/selftest.py:crosscheck_detects_short_span	fail	crosscheck:ToolOutcome	aggregate:protected
+M7.pins_at_a	tools/eval_protected/selftest.py:pins_at_a	allowed	-	aggregate:protected
+M7.pins_at_a_with_reader	tools/eval_protected/selftest.py:pins_at_a_with_reader	allowed	-	aggregate:protected
+M7.pins_corrupted	tools/eval_protected/selftest.py:pins_corrupted	refused	BAD	aggregate:protected
