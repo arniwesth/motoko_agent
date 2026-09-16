@@ -172,3 +172,17 @@ M5.at_a.missed	src/eval/journal/configuration_at_a_test.ail:test_missed_reaches_
 M5.at_a.profile_dir	src/eval/journal/configuration_at_a_test.ail:test_the_served_profile_dir_selects_the_file_at_a	pass	-	aggregate:configuration
 M15.HybridPredicate	-	inapplicable	reason: the predicate is asserted once at admission and no later check depends on it; hybrid-step- results are cut (M3.HybridExtraction)	-
 M3.StopBeforeEnd.cut_turn	src/eval/journal/stopping.ail:test_m3_stop_then_cut_turn	admitted	cut:StopBeforeEnd;sel=EndAt(e20);N=3;end=EndFinalize(model_stop);synthetic	entry:20
+M8.provider.empty_script	src/eval/journal/seams.ail:test_m8_provider_empty_script	pass	replay_exhausted	interaction:2
+M8.provider.one_append	src/eval/journal/seams.ail:test_m8_provider_one_append	pass	-	interaction:2
+M8.provider.fault_one_append	src/eval/journal/seams.ail:test_m8_provider_fault_one_append	pass	-	interaction:2
+M8.tool.empty_queue	src/eval/journal/seams_live_test.ail:m8_tool_empty_queue_no_live_effect	pass	replay_unrecorded_invocation	interaction:2
+M8.tool.one_append	src/eval/journal/seams.ail:test_m8_tool_one_append	pass	-	interaction:2
+M8.tool.correlation_mismatch	src/eval/journal/seams.ail:test_m8_tool_correlation_mismatch	pass	ToolCorrelationMismatch	interaction:2
+M8.guard.exactly_one_append	src/eval/journal/seams.ail:test_m8_exactly_one_append_guard	pass	eval_seam_cardinality	aggregate:seams
+M8.world.generator	src/eval/journal/world.ail:test_world_equals_generator	pass	-	aggregate:world
+M8.world.m2_literal	src/eval/journal/world.ail:test_world_m2_literal	pass	-	aggregate:world
+M8.world.stop_and_config	src/eval/journal/world.ail:test_world_stop_and_config_files	pass	-	aggregate:world
+M8.C2.uses_w	src/eval/journal/seams_live_test.ail:c2_ported_world_run_uses_w	pass	-	aggregate:c2
+M8.C2.uses_p	src/eval/journal/seams_live_test.ail:c2_ported_world_run_uses_p	pass	-	aggregate:c2
+M8.C2.rebuilds_script_and_queue	src/eval/journal/seams_live_test.ail:c2_recorded_log_rebuilds_script_and_queue	pass	-	aggregate:c2
+M8.C2.join5	-	inapplicable	reason: frame_ordinal0's PortedWorld arm (ledger_parity_dst.ail:435) is reached only when ledger_parity_dst frames its own providers; accepted-untested (P1.1R C2)	-

@@ -1836,10 +1836,20 @@ def read_world(lines, log, s, env):
     if boot["max_cost_millicents"] != 0:
         omissions.append("max_cost_millicents_served_zero")
     tool_keys, tools = [], []
+    # P1.5: the world's script and tool queue (v5 D2), independently: per call
+    # `<sha(prose)>|<finish>|<input>|<output>|<call ids>`; per result, in
+    # journal order, `<call_id>|<sha(content)>`.
+    script, queue = [], []
+    entry_by_seq = {e["seq"]: e for e in lines}
     for c in calls:
         m = by_seq[c["seq"]]["message"]
         tool_keys += [f"{x['id']}|{x['name']}|{sha(canonical_arguments(x['arguments']))}" for x in m["tool_calls"]]
         tools += [t[1] for t in c["tools"]]
+        think = next(e for e in events if e["index"] == c["thinking"])
+        script.append(f"{sha(m['content'])}|{think['finish_reason']}|{think['input_tokens']}|"
+                      f"{think['output_tokens']}|{','.join(x['id'] for x in m['tool_calls'])}")
+        queue += [f"{t[1]}|{sha(entry_by_seq[t[0]]['message']['content'])}"
+                  for t in sorted(c["tools"], key=lambda t: t[0])]
     return {
         "selector": s2, "cut": final_cut, "n": n, "end": end, "genuine": genuine,
         "decisions": 2 * n + 1 if end[0] == "EndSuspended" else 2 * n,
@@ -1853,6 +1863,7 @@ def read_world(lines, log, s, env):
         "encoding": enc, "limit_source": (f"{limits[0]['source'][0]}:{limits[0]['source'][1]}" if limits else ""),
         "env": served, "omissions": omissions,
         "seed_payload": payload_digest(seed_msgs),
+        "script": script, "tool_queue": queue,
     }
 
 
@@ -2084,7 +2095,9 @@ def render_world():
         "-- contract, cutoff table and T0 configuration, independent of",
         "-- `src/eval/journal/{stopping,configuration}.ail` and of `src/core`.",
         "-- Tool keys are `<call_id>|<name>|<arguments digest>`; env pairs are",
-        "-- `<key>=<value>` in the served order.",
+        "-- `<key>=<value>` in the served order. Script steps (P1.5) are",
+        "-- `<sha(prose)>|<finish>|<input>|<output>|<call ids>`; the tool queue is",
+        "-- `<call_id>|<sha(content)>` in journal order.",
         "",
         "module src/eval/journal/testdata/world_fixtures",
         "",
@@ -2100,7 +2113,8 @@ def render_world():
         "  logical_model: string, api_model: string, tool_keys: [string], tool_ids: [string],",
         "  hybrid_tools: bool, hybrid_predicate: bool,",
         "  encoding: string, encoding_detail: string, profile_config: string, limit_source: string,",
-        "  served_env: [string], omissions: [string], seed_payload: string",
+        "  served_env: [string], omissions: [string], seed_payload: string,",
+        "  script_steps: [string], tool_queue: [string]",
         "}",
         "",
     ]
@@ -2140,6 +2154,8 @@ def render_world():
             f"served_env: {ail_strings([f'{k}={v}' for k, v in w['env']] if w else [])}, "
             f"omissions: {ail_strings(w['omissions'] if w else [])}, "
             f"seed_payload: {lit(w['seed_payload'] if w else '')}",
+            f"script_steps: {ail_strings(w['script'] if w else [])}, "
+            f"tool_queue: {ail_strings(w['tool_queue'] if w else [])}",
         ]
         lines += [f"export pure func fxw_{name}() -> WorldFixture {{", "  { " + ",\n      ".join(fields) + " }",
                   "}", ""]

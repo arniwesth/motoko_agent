@@ -1,0 +1,223 @@
+-- src/eval/journal/seams_live_test.ail
+--
+-- PLAN-004 M8, the two checks that need real capabilities, and P1.1R's C2
+-- obligation. `ailang test` grants no FS/Process/SharedMem, so this is a
+-- runner:
+--
+--   ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main src/eval/journal/seams_live_test.ail < /dev/null
+--
+-- It prints one `PASS <check>` / `FAIL <check>` line per check and exits 1 on
+-- any failure.
+--
+--   m8_tool_empty_queue_no_live_effect
+--     An empty tool queue with an invocation that WOULD create a sentinel file
+--     if the live arm ran (`BashExec` `touch <sentinel>`; Process is granted
+--     here, so a delegating seam really creates it — the mutation record
+--     shows the file present): `tool_outcome_record`'s ToolFailed arm field
+--     for field, the returned { outcome, next_state } with the clock
+--     unadvanced, and the sentinel absent afterwards.
+--   c2_ported_world_run_uses_w_and_p
+--     `run_v2_session_traced` (a caller of `ported_provider`) over
+--     `PortedWorld(journal_ports(rt), w)` with w the clean M2 journal world
+--     (N = 3). `w` is used: its script and queue are consumed with no
+--     exhausted or unrecorded marker, the clock starts at its epoch, the run
+--     suspends at the budget and the history grows by the seven kept
+--     messages. `p` is used: every provider and tool record carries the SEAMS'
+--     projection (`payload=` / `args=`), which `recording_ports` alone never
+--     writes, and the provider identity's model is the API model. A wrong
+--     `ported_provider` arm (`world: empty_world_state()`) serves the
+--     exhausted marker at call 0; a wrong `ports:` writes the recorder's
+--     projections.
+--   c2_recorded_log_rebuilds_script_and_queue
+--     `world_state_of` over that run's log (as a program) rebuilds exactly the
+--     journal world's script (labels as the generator's) and its tool queue
+--     (content, exit code -1, duration 0, order; the rebuilt ids are blank by
+--     the codec, see `lt_rebuilt`), and `reconstitution_balance` is empty.
+--
+-- `ledger_parity_dst.frame_ordinal0`'s PortedWorld arm (join 5) stays
+-- accepted-untested (P1.1R C2): nothing here frames a ledger-parity provider.
+-- Synthetic fixtures only (§0.6).
+
+module src/eval/journal/seams_live_test
+
+import std/io (println, exit)
+import std/fs (fileExists, removeFileResult)
+import std/json (jo, kv, js, ja)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (contains)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/ports (WorldState, ToolInvocation, ToolFailed, empty_world_state, encode_tool_outcome)
+import src/core/dst_interaction (Interaction, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity, OutcomeOk, OutcomeFault)
+import src/core/dst_fault_catalogue (fault_class_tool_failed, required_class_ids)
+import src/core/test/stub_step (recording_ports, empty_rt)
+import src/core/config (CostRates)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/dst_program (ExecutionProgram, program_schema_version)
+import src/core/dst_replay (world_state_of, reconstitution_balance, refusal_message)
+import src/core/dst_driver_only (driver_only_manifest, driver_only_version)
+import src/eval/journal/digests (eval_arguments_digest_json)
+import src/eval/journal/stopping (JournalWorld)
+import src/eval/journal/world (journal_world_state, fixture_journal_world, step_label, tool_label)
+import src/eval/journal/seams (eval_ports, journal_provider, one_appended)
+import src/eval/journal/testdata/world_fixtures (fxw_m3_selector_end)
+
+func lt_report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = println("${if ok then "PASS" else "FAIL"} ${name}");
+  ok
+}
+
+pure func lt_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && lt_strs_eq(xs, ys) }
+  }
+}
+
+pure func lt_prior_log() -> [Interaction] {
+  [ { identity: { ordinal: 0, body: ProviderIdentity("loop_v2", 0, "fx-api") },
+      request_projection: "model_step model=fx-api msg_count=2 payload=x system=y raw=z",
+      deadline_ms: -1,
+      outcome: { advance_ms: 0, chunks: [], payload: "{}", status: OutcomeOk, fault_class_id: "" } },
+    { identity: { ordinal: 1, body: EnvironmentReadIdentity("MOTOKO_HEADLESS") },
+      request_projection: "env_get key=MOTOKO_HEADLESS",
+      deadline_ms: -1,
+      outcome: { advance_ms: 0, chunks: [], payload: "1", status: OutcomeOk, fault_class_id: "" } } ]
+}
+
+pure func lt_sentinel() -> string { "/tmp/motoko-eval-p15-seam-sentinel" }
+
+func m8_tool_empty_queue_no_live_effect() -> bool ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  let _ = removeFileResult(lt_sentinel());
+  let absent_before = not fileExists(lt_sentinel());
+  let w = { empty_world_state() | log: lt_prior_log(), clock_ms: 500, ordinal: 4 };
+  let inv: ToolInvocation = {
+    call: { id: "c9", tool: "BashExec", arguments: jo([kv("cmd", js("touch")), kv("args", ja([js(lt_sentinel())]))]) },
+    workdir: ".", timeout_ms: 30000, started_at_ms: 500
+  };
+  let ex = eval_ports(recording_ports(empty_rt())).tool_exec(w, inv);
+  let absent_after = not fileExists(lt_sentinel());
+  let expected_payload = encode_tool_outcome(ToolFailed({ tool_call_id: "c9", code: "replay_unrecorded_invocation", message: "replay: no recorded result for tool call c9" }));
+  let outcome_ok = match ex.outcome {
+    ToolFailed(f) => f.tool_call_id == "c9" && f.code == "replay_unrecorded_invocation",
+    _ => false
+  };
+  let rec_ok = match one_appended(w.log, ex.next_state.log) {
+    None => false,
+    Some(i) =>
+      i.identity.ordinal == 2
+        && (match i.identity.body { ToolIdentity(o, c, n) => o == "loop_v2" && c == "c9" && n == "BashExec", _ => false })
+        && i.request_projection == "tool_exec call_id=c9 tool=BashExec args=${eval_arguments_digest_json(inv.call.arguments)} workdir=. timeout_ms=30000 started_at_ms=500 replay=unrecorded"
+        && i.deadline_ms == 30000
+        && i.outcome.advance_ms == 0
+        && List.length(i.outcome.chunks) == 0
+        && i.outcome.payload == expected_payload
+        && contains(i.outcome.payload, "\"code\":\"replay_unrecorded_invocation\"")
+        && (match i.outcome.status { OutcomeFault => true, _ => false })
+        && i.outcome.fault_class_id == fault_class_tool_failed()
+        && i.outcome.fault_class_id == "ToolFailed"
+  };
+  let _ = if absent_after then () else { let _ = removeFileResult(lt_sentinel()); () };
+  absent_before && absent_after && outcome_ok && rec_ok
+    && ex.next_state.clock_ms == 500
+    && List.length(ex.next_state.tools) == 0
+    && ex.next_state.ordinal == 4
+}
+
+pure func lt_budget() -> BudgetPlan { { total: 12, solver: 12, verifier: 0 } }
+pure func lt_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+pure func lt_is_provider(i: Interaction) -> bool { match i.identity.body { ProviderIdentity(_, _, _) => true, _ => false } }
+pure func lt_is_tool(i: Interaction) -> bool { match i.identity.body { ToolIdentity(_, _, _) => true, _ => false } }
+
+pure func lt_program(log: [Interaction], w: WorldState) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    generator_id: "journal_admission_test",
+    generator_version: "P1.5",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{\"fixture\":\"m3_selector_end\"}",
+      synthetic_environment: w.env,
+      files: w.files,
+      clock_epoch: w.clock_ms,
+      extension_profile: "driver_only/${driver_only_version()}"
+    },
+    bounds: { max_interactions: 256, max_chunks_per_interaction: 16, max_payload_bytes: 4096,
+              max_resource_size: 4096, max_clock_advance_ms: 60000, chunk_draw_hi: 0 },
+    manifest: driver_only_manifest("HEAD", "ailang 0.33.0", "7.4", "{}",
+                                   ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD"),
+    interactions: log
+  }
+}
+
+func lt_c2_run(jw: JournalWorld, w: WorldState) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let rt = empty_rt();
+  Session.run_v2_session_traced(
+    rt, jw.config.boot.task, "", jw.config.boot.hybrid_tools, lt_budget(),
+    jw.config.logical_model, jw.seed, ".", List.length(jw.calls), false, 0, lt_rates(),
+    journal_provider(rt, w))
+}
+
+-- The rebuilt queue's ids are BLANK: a completed outcome's payload carries no
+-- call id (`encode_tool_outcome`), so `world_state_of` rebuilds id-less
+-- entries that answer whatever is asked (ports.ail's correlation guard fires
+-- only when both ids are non-blank). The queue is compared by content, exit
+-- code, duration and order, and the blank ids are asserted, not assumed.
+func lt_rebuilt(log: [Interaction], w: WorldState, rw: WorldState) -> bool ! {IO} {
+  let balance = List.length(reconstitution_balance(lt_program(log, w), rw));
+  let _ = println("c2: rebuilt script=${show(List.length(rw.script))} tools=${show(List.length(rw.tools))} balance=${show(balance)}");
+  lt_strs_eq(List.map(step_label, rw.script), List.map(step_label, w.script))
+    && List.length(rw.script) == 3
+    && lt_strs_eq(List.map(\t. tool_label({ t | tool_call_id: "" }), rw.tools), List.map(\t. tool_label({ t | tool_call_id: "" }), w.tools))
+    && List.length(rw.tools) == 4
+    && List.foldl(\acc t. acc && t.tool_call_id == "" && t.exit_code == -1 && t.duration_ms == 0 && t.code == "", true, rw.tools)
+    && balance == 0
+}
+
+func lt_epoch() -> int { 1789000000000 }
+
+func c2_checks() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(fxw_m3_selector_end()) {
+    Err(_) => lt_report("c2_fixture_reads", false),
+    Ok(jw) => {
+      let w = journal_world_state(jw, lt_epoch());
+      let run = lt_c2_run(jw, w);
+      let log = run.world.log;
+      let providers = List.foldl(\acc i. if lt_is_provider(i) then acc ++ [i] else acc, [], log);
+      let tools = List.foldl(\acc i. if lt_is_tool(i) then acc ++ [i] else acc, [], log);
+      let _ = println("c2: log=${show(List.length(log))} providers=${show(List.length(providers))} tools=${show(List.length(tools))} script_left=${show(List.length(run.world.script))} tools_left=${show(List.length(run.world.tools))} history=${show(List.length(run.final.history))} seed=${show(List.length(jw.seed))} clock=${show(run.world.clock_ms)}");
+      let used_w =
+        List.length(run.world.script) == 0 && List.length(run.world.tools) == 0
+          && List.length(providers) == 3 && List.length(tools) == 4
+          && List.foldl(\acc i. acc && not contains(i.request_projection, "replay="), true, log)
+          && run.world.clock_ms >= lt_epoch()
+          && (match run.suspended { Some(_) => true, None => false })
+          && List.length(run.final.history) == List.length(jw.seed) + 7;
+      let used_p =
+        List.length(providers) == 3
+          && List.foldl(\acc i. acc && contains(i.request_projection, " payload=sha256:")
+                               && (match i.identity.body { ProviderIdentity(o, _, m) => o == "loop_v2" && m == jw.config.api_model, _ => false }), true, providers)
+          && List.length(tools) == 4
+          && List.foldl(\acc i. acc && contains(i.request_projection, " args=sha256:"), true, tools);
+      let rebuilt = match world_state_of(lt_program(log, w), required_class_ids()) {
+        Err(r) => lt_report("c2_world_state_of (${refusal_message(r)})", false),
+        Ok(rw) => lt_rebuilt(log, w, rw)
+      };
+      let a = lt_report("c2_ported_world_run_uses_w", used_w);
+      let b = lt_report("c2_ported_world_run_uses_p", used_p);
+      let c = lt_report("c2_recorded_log_rebuilds_script_and_queue", rebuilt);
+      a && b && c
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let t = lt_report("m8_tool_empty_queue_no_live_effect", m8_tool_empty_queue_no_live_effect());
+  let c = c2_checks();
+  if t && c then println("seams_live_test: all checks passed")
+  else { let _ = println("seams_live_test: FAILED"); exit(1) }
+}
