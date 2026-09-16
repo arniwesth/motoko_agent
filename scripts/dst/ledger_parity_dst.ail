@@ -70,7 +70,7 @@ import src/core/test/ext_fixture (fixture_hooks, FixtureHooks, FixtureOverrides)
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
 import src/core/test/stub_step (
-  StepProvider, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, LiveAI, Ported,
+  StepProvider, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, LiveAI, Ported, PortedWorld,
   scripted_world_state, empty_rt,
   prose_step, tool_step, continuing_token_step, chunked_prose_step
 )
@@ -432,7 +432,7 @@ pure func frame_ordinal0(p: StepProvider) -> int {
     RecordingWorld(w) => w.ordinal,
     GeneratedWorld(w) => w.ordinal,
     LiveAI => empty_world_state().ordinal,
-    Ported(_) => empty_world_state().ordinal
+    Ported(_) => empty_world_state().ordinal, PortedWorld(_, w) => w.ordinal
   }
 }
 

@@ -66,7 +66,7 @@ import src/core/types (Msg)
 -- world so that every existing target keeps the exact adapters it had. Nothing
 -- that runs today changes behaviour; the interaction log is empty in every
 -- world but this one.
-export type StepProvider = LiveAI | Scripted([ScriptedStep]) | ScriptedWorld(WorldState) | RecordingWorld(WorldState) | GeneratedWorld(WorldState) | Ported(Ports) -- GeneratedWorld: WI-A13 stage 4, explained at `generating_ports` below
+export type StepProvider = LiveAI | Scripted([ScriptedStep]) | ScriptedWorld(WorldState) | RecordingWorld(WorldState) | GeneratedWorld(WorldState) | Ported(Ports) | PortedWorld(Ports, WorldState) -- GeneratedWorld: WI-A13 stage 4, explained at `generating_ports` below
 
 -- Convert a ScriptedStep to the StepResult shape loop_v2 expects.
 export pure func scripted_to_step_result(s: ScriptedStep) -> StepResult {
