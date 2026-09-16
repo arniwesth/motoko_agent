@@ -1,0 +1,296 @@
+-- src/eval/journal/digests.ail
+--
+-- ADR-004 D2/D5, PLAN-004 §3 P1.4a: the evaluator's PRIVATE digests.
+--
+--   D  canonical payload digest     `eval_payload_digest`
+--   S  system-prefix digest         `eval_system_prefix_digest` (over the leading system messages)
+--   R  raw frame digest             `eval_raw_frame_digest`
+--   A  canonical-JSON arguments     `eval_canonical_arguments`, `eval_arguments_digest`
+--
+-- WHY COPIES AND NOT IMPORTS. `phase_vocab.ail` and `journal.ail` are candidate
+-- files that D5 leaves unfrozen on purpose (`de4b4f5` changed
+-- `canonical_messages`, and that class of change must stay admissible). The
+-- seams put these digests into the request projections K2 compares, so the
+-- projection function must be the evaluator's, fixed at E, not whatever the
+-- candidate's tree defines. Importing them would make a candidate able to
+-- rewrite the comparand it is judged by.
+--
+-- THE PINS. Every copied declaration carries a `SOURCE` comment: file, line
+-- span and byte span (half-open, 0-based) at A, and the SHA-256 of those
+-- original bytes (first byte of the first line through the newline after the
+-- closing brace), read with `git show A:<file>`. A is P1.1's commit
+-- 65003110ff5a15e2ae5b1f0e205e0ffa705d18dc (the D5 basis). P1.4b's tool reads
+-- these lines and REPORTS drift between a copy and the candidate's source; it
+-- does not refuse on it. The copies' bodies are the source bodies with names
+-- prefixed `ev_` (`eval_` on the exported entry points) and nothing else
+-- changed, except the arguments copy, whose deviation is stated at it.
+--
+-- WHAT EACH COVERS (ADR-004 D2, D3 "What the raw frame covers"):
+--   * D normalises `make[1]`..`make[20]` to `make[0]` and omits images — the
+--     canonical projection A3 compares with the live excerpt.
+--   * S is the raw canonical form (no normalisation, no images) of the leading
+--     system messages, as `system_prefix_digest_for(split.pinned)` is called.
+--   * R is the append-chain frame (raw content, tool calls, images) chained
+--     message by message from the empty history's digest — exactly
+--     `journal.chain_digest_over(journal.chain_empty_base(), msgs)` at A — so
+--     D's blind spots (`make[N]`, images) are seen against the parent.
+--   * A decodes an argument string and re-serialises it compact with keys in
+--     source order (`std/json`). A string that does not decode is an `Err`
+--     (D1's `Refused(MalformedToolArguments)`); the live adapter degrades the
+--     same input to `{}`, so the copy agrees with it on well-formed input only.
+--     Keys are NOT sorted: a key reorder changes A's digest.
+--
+-- The equality of each copy with the candidate function at A is tested in
+-- `digests_at_a_test.ail` (the only evaluator module that imports src/core);
+-- the equality with the independent Python generator is tested here.
+
+module src/eval/journal/digests
+
+import std/ai (Message, ToolCall, ImagePart)
+import std/crypto (sha256Hex)
+import std/json (Json, decode, encode)
+import std/list as List (length, map, foldl)
+import std/result (Result, Ok, Err)
+import std/string (replaceMany, concat)
+import std/string as Str (length)
+import src/eval/journal/testdata/digest_fixtures (MessageFixture, ArgumentFixture, fx_message_fixtures, fx_argument_fixtures, fx_malformed_arguments, fx_msgs_make_n, fx_msgs_make_n_renumbered, fx_msgs_image, fx_msgs_image_swapped)
+
+-- ============================================================================
+-- Shared form.
+-- ============================================================================
+
+-- SOURCE src/core/phase_vocab.ail L271-273 B10851-10961 sha256:8782a39bc5628b71defaad50c77c7447c8754f7e601d33f9b3546136ed1fd6fb symbol=frame
+pure func ev_frame(label: string, value: string) -> string {
+  "${label}:${show(Str.length(value))}:${value};"
+}
+
+-- SOURCE src/core/phase_vocab.ail L284-290 B11551-11787 sha256:b5fcd795658e4d10ac3abdeab822af4594509f26903c82d3666791e0a3fbee6b symbol=canonical_tool_calls
+pure func ev_canonical_tool_calls(calls: [ToolCall]) -> string {
+  match calls {
+    [] => "tc-end;"
+    c :: rest =>
+      "tc{${ev_frame("id", c.id)}${ev_frame("name", c.name)}${ev_frame("args", c.arguments)}}${ev_canonical_tool_calls(rest)}"
+  }
+}
+
+-- ============================================================================
+-- D — the canonical payload digest.
+-- ============================================================================
+
+-- SOURCE src/core/phase_vocab.ail L275-282 B10962-11550 sha256:623683fc6f87c4aa51cedfbd47c0eda59f4ecca40685a823f946f3dbc746d374 symbol=digest_content
+pure func ev_digest_content(value: string) -> string {
+  replaceMany(value, [
+    ("make[20]", "make[0]"), ("make[19]", "make[0]"), ("make[18]", "make[0]"), ("make[17]", "make[0]"), ("make[16]", "make[0]"),
+    ("make[15]", "make[0]"), ("make[14]", "make[0]"), ("make[13]", "make[0]"), ("make[12]", "make[0]"), ("make[11]", "make[0]"),
+    ("make[10]", "make[0]"), ("make[9]", "make[0]"), ("make[8]", "make[0]"), ("make[7]", "make[0]"), ("make[6]", "make[0]"),
+    ("make[5]", "make[0]"), ("make[4]", "make[0]"), ("make[3]", "make[0]"), ("make[2]", "make[0]"), ("make[1]", "make[0]")
+  ])
+}
+
+-- SOURCE src/core/phase_vocab.ail L292-294 B11788-12056 sha256:8ed2b83cf9680c09cb5c699c6ba9ee5a01443cfe66f476b3811a0a1ab501e502 symbol=canonical_message
+pure func ev_canonical_message(m: Message) -> string {
+  "m{${ev_frame("role", m.role)}${ev_frame("content", ev_digest_content(m.content))}${ev_frame("tool_call_id", m.tool_call_id)}${ev_frame("tool_calls_len", show(List.length(m.tool_calls)))}${ev_canonical_tool_calls(m.tool_calls)}}"
+}
+
+-- SOURCE src/core/phase_vocab.ail L299-301 B12294-12412 sha256:e3ddd8a876153b6436a2cf90f314f093c8de2ad1bb72920ebd8cfa6b4da46263 symbol=canonical_messages
+pure func ev_canonical_messages(msgs: [Message]) -> string {
+  concat(List.map(ev_canonical_message, msgs) ++ ["m-end;"])
+}
+
+-- SOURCE src/core/phase_vocab.ail L361-363 B15515-15629 sha256:7435fd09c205e96604a7848b22503eefe3d17d6ae91b69502cbc4618a211d51a symbol=digest_messages
+pure func ev_digest_messages(msgs: [Message]) -> string {
+  "sha256:${sha256Hex(ev_canonical_messages(msgs))}"
+}
+
+-- SOURCE src/core/phase_vocab.ail L365-367 B15630-15717 sha256:841c270ee1fc689a88dc6ed4588a1d26b40c0f3d1cd19ce63de2d13871f3216b symbol=payload_digest
+export pure func eval_payload_digest(msgs: [Message]) -> string {
+  ev_digest_messages(msgs)
+}
+
+-- ============================================================================
+-- S — the system-prefix digest.
+-- ============================================================================
+
+-- SOURCE src/core/phase_vocab.ail L321-323 B13356-13610 sha256:5a140c4f9b230b21486b209994a407307c1619c33405f5473731dbbf1a3f683a symbol=canonical_message_body
+pure func ev_canonical_message_body(m: Message) -> string {
+  "${ev_frame("role", m.role)}${ev_frame("content", m.content)}${ev_frame("tool_call_id", m.tool_call_id)}${ev_frame("tool_calls_len", show(List.length(m.tool_calls)))}${ev_canonical_tool_calls(m.tool_calls)}"
+}
+
+-- SOURCE src/core/phase_vocab.ail L309-315 B12859-13056 sha256:670c799bbf65c9eb24122ad9ec4c1bc569427b25f003e5378930f4e1f6949a8c symbol=canonical_messages_raw
+pure func ev_canonical_messages_raw(msgs: [Message]) -> string {
+  match msgs {
+    [] => "m-end;"
+    m :: rest =>
+      "m{${ev_canonical_message_body(m)}}${ev_canonical_messages_raw(rest)}"
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L369-371 B15718-15845 sha256:6e4937a2fd794f5cfe11a747a20fd5b2c8730d969ac7fe22bce359f3f6951046 symbol=system_prefix_digest_for
+export pure func eval_system_prefix_digest_for(msgs: [Message]) -> string {
+  "sha256:${sha256Hex(ev_canonical_messages_raw(msgs))}"
+}
+
+-- SOURCE src/core/phase_vocab.ail L94-99 B3790-3975 sha256:57a85ce27bf9ab474c7df8c72f7cbaa3c4814733bc9a189a943b7f0c815351e8 symbol=take_system_prefix
+pure func ev_take_system_prefix(msgs: [Message]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "system" then m :: ev_take_system_prefix(rest) else []
+  }
+}
+
+-- S over a whole transient payload: the seam holds the payload, the live call
+-- site (`session.ail`, `system_prefix_digest_for(split.pinned)`) holds its
+-- pinned prefix; this composes the two copies above.
+export pure func eval_system_prefix_digest(payload: [Message]) -> string {
+  eval_system_prefix_digest_for(ev_take_system_prefix(payload))
+}
+
+-- ============================================================================
+-- R — the raw frame digest.
+-- ============================================================================
+
+-- SOURCE src/core/phase_vocab.ail L325-331 B13611-13821 sha256:eb0218ad2e0972cf3b35c4eaeead3094f00720e73614dcf919474ecb6d62b793 symbol=canonical_images
+pure func ev_canonical_images(images: [ImagePart]) -> string {
+  match images {
+    [] => "im-end;"
+    i :: rest =>
+      "im{${ev_frame("source", i.source)}${ev_frame("mime", i.mime)}}${ev_canonical_images(rest)}"
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L357-359 B15382-15514 sha256:1b15e3972a51bebb4f7b8cfe2550bbd0b06764b5bec0992fd8d6bc97c4ce6add symbol=canonical_message_frame
+pure func ev_canonical_message_frame(m: Message) -> string {
+  "m{${ev_canonical_message_body(m)}${ev_canonical_images(m.images)}}"
+}
+
+-- SOURCE src/core/journal.ail L244-246 B11063-11153 sha256:8d9c6702f1293257ecce81ba254241392ff39eff6e59f8cc6865086bf9130a53 symbol=chain_digest_base
+pure func ev_chain_digest_base(seed: [Message]) -> string {
+  ev_digest_messages(seed)
+}
+
+-- SOURCE src/core/journal.ail L255-257 B11645-11793 sha256:332e752c448b23c5e7c11dd1352c08c1813b41a8ecdadc3f80fb346841a73d90 symbol=chain_digest_after
+pure func ev_chain_digest_after(previous: string, m: Message) -> string {
+  "sha256:${sha256Hex("${previous}${ev_canonical_message_frame(m)}")}"
+}
+
+-- SOURCE src/core/journal.ail L262-264 B12031-12130 sha256:9493befb2368c5907a8cf3b659b64c100265248217cc39a1b40c3b59a43e2f1d symbol=chain_step
+pure func ev_chain_step(previous: string, m: Message) -> string {
+  ev_chain_digest_after(previous, m)
+}
+
+-- SOURCE src/core/journal.ail L266-268 B12131-12244 sha256:3198f8c1a3da83c8a121bd60597fdf8b7f69adfb7213a8f82738af752ff6c363 symbol=chain_digest_over
+pure func ev_chain_digest_over(base: string, ms: [Message]) -> string {
+  List.foldl(ev_chain_step, base, ms)
+}
+
+-- SOURCE src/core/journal.ail L324-326 B15405-15479 sha256:d56437bac7fab26561ab3427cdce7a25129f081f12b04e845f44141afbc49676 symbol=chain_empty_base
+pure func ev_chain_empty_base() -> string {
+  ev_chain_digest_base([])
+}
+
+-- R over a whole transient payload: the append chain from the empty history.
+export pure func eval_raw_frame_digest(payload: [Message]) -> string {
+  ev_chain_digest_over(ev_chain_empty_base(), payload)
+}
+
+-- ============================================================================
+-- A — canonical-JSON arguments.
+-- ============================================================================
+
+-- SOURCE src/core/tool_dispatch_adapter.ail L46-56 B2379-2686 sha256:fbd12a3b5f147d06a3d47b5a9467bdb64212dae369f4093346ad833187e2cf3f symbol=tool_call_to_envelope
+-- Only the decode is copied; the adapter's malformed arm (`jo([])`) is
+-- replaced by an `Err`, which is D1's refusal, not a degraded value.
+export pure func eval_canonical_arguments(source: string) -> Result[string, string] {
+  match decode(source) {
+    Ok(j) => Ok(encode(j)),
+    Err(e) => Err(e)
+  }
+}
+
+-- The digest the tool projection carries, over arguments the seam already
+-- holds as `Json` (`ToolInvocation.call.arguments`).
+export pure func eval_arguments_digest_json(j: Json) -> string {
+  "sha256:${sha256Hex(encode(j))}"
+}
+
+-- The same digest from a journal argument string.
+export pure func eval_arguments_digest(source: string) -> Result[string, string] {
+  match decode(source) {
+    Ok(j) => Ok(eval_arguments_digest_json(j)),
+    Err(e) => Err(e)
+  }
+}
+
+-- ============================================================================
+-- Tests (M6): each copy equals `gen_fixtures.py`'s digest.
+-- ============================================================================
+
+pure func fx_payload_ok(f: MessageFixture) -> bool {
+  eval_payload_digest(f.msgs) == f.payload
+}
+
+pure func fx_system_ok(f: MessageFixture) -> bool {
+  eval_system_prefix_digest(f.msgs) == f.system
+}
+
+pure func fx_raw_ok(f: MessageFixture) -> bool {
+  eval_raw_frame_digest(f.msgs) == f.raw
+}
+
+pure func fx_args_ok(f: ArgumentFixture) -> bool {
+  (match eval_canonical_arguments(f.source) { Ok(c) => c == f.canonical, Err(_) => false })
+    && (match eval_arguments_digest(f.source) { Ok(d) => d == f.digest, Err(_) => false })
+}
+
+pure func is_err(r: Result[string, string]) -> bool {
+  match r { Ok(_) => false, Err(_) => true }
+}
+
+pure func test_payload_digest_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fx_message_fixtures()) == 10 && List.foldl(\acc f. acc && fx_payload_ok(f), true, fx_message_fixtures())
+  }
+
+pure func test_system_prefix_digest_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fx_message_fixtures()) == 10 && List.foldl(\acc f. acc && fx_system_ok(f), true, fx_message_fixtures())
+  }
+
+pure func test_raw_frame_digest_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fx_message_fixtures()) == 10 && List.foldl(\acc f. acc && fx_raw_ok(f), true, fx_message_fixtures())
+  }
+
+pure func test_arguments_digest_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fx_argument_fixtures()) == 6 && List.foldl(\acc f. acc && fx_args_ok(f), true, fx_argument_fixtures())
+  }
+
+pure func test_malformed_arguments_are_errors() -> bool
+  tests [((), true)]
+  {
+    List.length(fx_malformed_arguments()) == 4
+      && List.foldl(\acc s. acc && is_err(eval_canonical_arguments(s)) && is_err(eval_arguments_digest(s)), true, fx_malformed_arguments())
+  }
+
+-- The blind spot R exists for: renumbered `make[N]` lines are one canonical
+-- payload and two raw frames.
+pure func test_make_n_is_payload_blind_and_raw_visible() -> bool
+  tests [((), true)]
+  {
+    eval_payload_digest(fx_msgs_make_n()) == eval_payload_digest(fx_msgs_make_n_renumbered())
+      && eval_raw_frame_digest(fx_msgs_make_n()) != eval_raw_frame_digest(fx_msgs_make_n_renumbered())
+  }
+
+-- The other one: a swapped image source.
+pure func test_image_is_payload_blind_and_raw_visible() -> bool
+  tests [((), true)]
+  {
+    eval_payload_digest(fx_msgs_image()) == eval_payload_digest(fx_msgs_image_swapped())
+      && eval_system_prefix_digest(fx_msgs_image()) == eval_system_prefix_digest(fx_msgs_image_swapped())
+      && eval_raw_frame_digest(fx_msgs_image()) != eval_raw_frame_digest(fx_msgs_image_swapped())
+  }
