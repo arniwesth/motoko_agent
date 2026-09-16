@@ -33,6 +33,14 @@ src/tui/dist/
 # read. It is per-session runtime state, its directory is created 0700, and
 # committing one would publish a transcript.
 .motoko/sessions/
+# ADR-004 D6's evaluation corpus (PLAN-004 PRESERVE, D8 P0). Private, local-only,
+# directories 0700 and files 0600: the archive of the memory prototypes and their
+# evidence, the SCAN0 output, and every admitted entry with its snapshot, excerpt,
+# program and derived runs. Retention is PLAN-004 §0.11's ruling, not git. Only
+# the tracked MANIFEST.sha256 files under
+# .agent/projects/013_core_architecture_for_dst/evidence/ name what is here —
+# digests and paths, never content.
+.motoko/eval-corpus/
 .motoko-store/
 .omp
 
