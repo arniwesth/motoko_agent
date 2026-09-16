@@ -17,6 +17,21 @@
 --                         nothing was found.
 --   EVAL_MODE=a9b         A9b alone over EVAL_IDENTITIES (the shell's
 --                         after-run collection) and EVAL_COMPARATORS.
+--   EVAL_MODE=candidate   P1.9a's in-process half, run by `candidate.py`
+--                         inside the assembled tree: load EVAL_PROGRAM (the
+--                         entry's program.artifact) with the harness's
+--                         `load_program`, then `validate_program` and
+--                         `world_state_of`; an unloadable program prints
+--                         `CANDIDATE refused ProgramUndecodable <refusal>`
+--                         and exits 1. Otherwise prints `K0BUILD {...}` (the
+--                         build's identities, EVAL_FIXTURE's normalized
+--                         configuration when set) and `PROGRAM {...}` for K0,
+--                         then `CANDIDATE loaded`. K1–K7 are P1.9b's.
+--   EVAL_MODE=synthetic_artifact
+--                         write the synthetic candidate program's artifact
+--                         (`candidate.ail`'s `synthetic_program_for`) to
+--                         EVAL_OUT, its manifest naming EVAL_TOOLCHAIN: the
+--                         program a synthetic candidate entry pins.
 --
 --   EVAL_FIXTURE=<name>   a synthetic entry: a world fixture from
 --                         `src/eval/journal/testdata/world_fixtures.ail`
@@ -28,14 +43,15 @@
 --   EVAL_WORKDIR          the throwaway workdir handed to the run
 --   EVAL_LABEL            the frame label (default `admission`)
 --
--- P1.7a/P1.7b add A1–A4, A7, A8 and the verdict; P1.9b the candidate mode.
+-- P1.7a/P1.7b add A1–A4, A7, A8 and the verdict; P1.9a the candidate mode's
+-- preflight half; P1.9b its K1–K7.
 -- Synthetic only at P1.6 (§0.6): nothing here reads corpus content.
 
 module scripts/eval/journal_replay
 
 import std/io (println, exit)
 import std/env (getEnvOr)
-import std/fs (readFileResult)
+import std/fs (readFileResult, writeFileResult)
 import std/list as List (length, map, foldl)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
@@ -48,6 +64,8 @@ import src/eval/journal/admission (
   normalized_configuration, build_identities_json, preflight
 )
 import src/eval/journal/admission_run (admit)
+import src/eval/journal/candidate (load_entry_program, program_line, k0_build_line, replay_refusal_label, synthetic_program_for)
+import src/eval/journal/scan (program_artifact)
 import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_all)
 
 pure func jr_fixture(name: string) -> Option[WorldFixture] {
@@ -157,10 +175,41 @@ func mode_admit() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stre
   }
 }
 
+func mode_candidate() -> () ! {Env, FS, IO} {
+  let path = getEnvOr("EVAL_PROGRAM", "");
+  if path == "" then jr_fail("EVAL_PROGRAM is not set")
+  else match load_entry_program(path) {
+    Err(x) => {
+      let _ = println("CANDIDATE refused ProgramUndecodable ${replay_refusal_label(x)}");
+      exit(1)
+    },
+    Ok(p) => {
+      let nc = if getEnvOr("EVAL_FIXTURE", "") == "" then "" else match jr_world() {
+        Ok(jw) => normalized_configuration(jw),
+        Err(_) => ""
+      };
+      let _ = println("K0BUILD ${k0_build_line(nc)}");
+      let _ = println("PROGRAM ${program_line(p)}");
+      println("CANDIDATE loaded interactions=${show(List.length(p.interactions))} k1_k7=not-landed")
+    }
+  }
+}
+
+func mode_synthetic_artifact() -> () ! {Env, FS, IO} {
+  let out = getEnvOr("EVAL_OUT", "");
+  if out == "" then jr_fail("EVAL_OUT is not set")
+  else match writeFileResult(out, program_artifact(synthetic_program_for(getEnvOr("EVAL_TOOLCHAIN", "AILANG fx")))) {
+    Ok(_) => println("SYNTHETIC_ARTIFACT ${out}"),
+    Err(e) => jr_fail("EVAL_OUT: ${e}")
+  }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let mode = getEnvOr("EVAL_MODE", "");
   if mode == "identities" then mode_identities()
   else if mode == "admit" then mode_admit()
   else if mode == "a9b" then mode_a9b()
-  else jr_fail("EVAL_MODE must be identities, admit or a9b (got '${mode}')")
+  else if mode == "candidate" then mode_candidate()
+  else if mode == "synthetic_artifact" then mode_synthetic_artifact()
+  else jr_fail("EVAL_MODE must be identities, admit, a9b, candidate or synthetic_artifact (got '${mode}')")
 }

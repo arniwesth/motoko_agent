@@ -7,6 +7,13 @@
 #   journal_replay.sh admit --fixture <world fixture> [--at <A>] [--out <dir>] [--e-record <file>]
 #   journal_replay.sh admit --entry <path>            [--at <A>] [--out <dir>] [--e-record <file>]
 #   journal_replay.sh collect (--fixture <name> | --entry <path>) [--at <A>] [--out <dir>] [--e-record <file>]
+#   journal_replay.sh candidate --entry <dir> --parent <P> --candidate <C> --record <candidate.json>
+#                     --evaluator <E rev|dir> --peak-bytes <n> --peak-source <text> [candidate.py run options]
+#   journal_replay.sh pin --at <A> --lock-root <dir> --entry <dir> [--out <file>]
+#
+# `candidate` and `pin` are P1.9a's (ADR-004 D3/D5): refusals before running,
+# the assembly under <entry>/runs/<run-id>/, the execution-provenance records
+# and K0, all in scripts/eval/candidate.py (its docstring is the contract).
 #
 # `--at` is the assembled tree A (default: this checkout). `--out` receives
 # identities.json, comparators.json, the run's wire, identities.after.json and
@@ -67,9 +74,13 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 CAPS="IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand"
 
-usage() { sed -n '5,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '5,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 mode="${1:-}"; [ -n "$mode" ] || usage; shift
+case "$mode" in
+  candidate) exec python3 "$REPO/scripts/eval/candidate.py" run --repo "$REPO" "$@" ;;
+  pin) exec python3 "$REPO/scripts/eval/candidate.py" pin --repo "$REPO" "$@" ;;
+esac
 fixture=""; entry=""; at="$REPO"; out=""; e_record=""
 while [ $# -gt 0 ]; do
   case "$1" in
