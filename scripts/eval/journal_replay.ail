@@ -1,0 +1,166 @@
+-- scripts/eval/journal_replay.ail
+--
+-- The evaluator's runner (PLAN-004 §0.5). Driven by `journal_replay.sh`, which
+-- gathers the identities first; configured through the environment because
+-- the shell owns the files:
+--
+--   EVAL_MODE=identities  print the build-derived identities as one JSON line
+--                         (`IDENTITIES {...}`): the build's profile, rule and
+--                         vocabulary versions, the empty extension set, and the
+--                         reader's normalized configuration of the entry.
+--   EVAL_MODE=admit       P1.6's admission: read EVAL_IDENTITIES and
+--                         EVAL_COMPARATORS, preflight (A9 manifest shape, A9b),
+--                         then the framed run, A5/A6/A9, the program. Prints
+--                         WORLD_RUN_BEGIN/END, `WORLD_RUN_FRAMES 1` after a run,
+--                         one `FINDING` line per finding and one
+--                         `ADMISSION <status> ...` line. Exit 0 only when
+--                         nothing was found.
+--   EVAL_MODE=a9b         A9b alone over EVAL_IDENTITIES (the shell's
+--                         after-run collection) and EVAL_COMPARATORS.
+--
+--   EVAL_FIXTURE=<name>   a synthetic entry: a world fixture from
+--                         `src/eval/journal/testdata/world_fixtures.ail`
+--   EVAL_ENTRY=<path>     a REAL entry. Before P1G there is no E record, so
+--                         it is refused at preflight; its content is never
+--                         read here (no normalized configuration is derived,
+--                         so the preflight also reports the blank field).
+--   EVAL_EPOCH            the declared clock epoch (default 1789000000000)
+--   EVAL_WORKDIR          the throwaway workdir handed to the run
+--   EVAL_LABEL            the frame label (default `admission`)
+--
+-- P1.7a/P1.7b add A1–A4, A7, A8 and the verdict; P1.9b the candidate mode.
+-- Synthetic only at P1.6 (§0.6): nothing here reads corpus content.
+
+module scripts/eval/journal_replay
+
+import std/io (println, exit)
+import std/env (getEnvOr)
+import std/fs (readFileResult)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join, stringToInt)
+import src/eval/journal/stopping (JournalWorld)
+import src/eval/journal/world (fixture_journal_world)
+import src/eval/journal/admission (
+  AdmissionFinding, AdmissionReport, EntryKind, SyntheticEntry, RealEntry, Identities, Comparators,
+  finding_label, report_ok, check_a9b, a9b_unchecked, decode_identities, decode_comparators,
+  normalized_configuration, build_identities_json, preflight
+)
+import src/eval/journal/admission_run (admit)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_all)
+
+pure func jr_fixture(name: string) -> Option[WorldFixture] {
+  List.foldl(\acc f. match acc { Some(_) => acc, None => if f.name == name then Some(f) else None }, None, fxw_all())
+}
+
+func jr_fail(msg: string) -> () ! {IO} {
+  let _ = println("ADMISSION error ${msg}");
+  exit(2)
+}
+
+func jr_findings(tag: string, fs: [AdmissionFinding]) -> () ! {IO} {
+  let _ = List.foldl(\acc f. { let _ = println("FINDING ${tag} ${finding_label(f)} ${f.detail}"); acc }, (), fs);
+  ()
+}
+
+func jr_read(var: string) -> Result[string, string] ! {Env, FS} {
+  let path = getEnvOr(var, "");
+  if path == "" then Err("${var} is not set")
+  else match readFileResult(path) { Ok(t) => Ok(t), Err(e) => Err("${var}: ${e}") }
+}
+
+func jr_inputs() -> Result[{ ids: Identities, cmp: Comparators }, string] ! {Env, FS} {
+  match jr_read("EVAL_IDENTITIES") {
+    Err(e) => Err(e),
+    Ok(it) => match jr_read("EVAL_COMPARATORS") {
+      Err(e) => Err(e),
+      Ok(ct) => match decode_identities(it) {
+        Err(e) => Err(e),
+        Ok(ids) => match decode_comparators(ct) {
+          Err(e) => Err(e),
+          Ok(cmp) => Ok({ ids: ids, cmp: cmp })
+        }
+      }
+    }
+  }
+}
+
+func jr_kind() -> EntryKind ! {Env} {
+  if getEnvOr("EVAL_ENTRY", "") != "" then RealEntry else SyntheticEntry
+}
+
+func jr_world() -> Result[JournalWorld, string] ! {Env} {
+  let name = getEnvOr("EVAL_FIXTURE", "");
+  if name == "" then Err("EVAL_FIXTURE is not set")
+  else match jr_fixture(name) {
+    None => Err("no world fixture named ${name}"),
+    Some(f) => match fixture_journal_world(f) {
+      Ok(jw) => Ok(jw),
+      Err(_) => Err("world fixture ${name} is refused by the reader")
+    }
+  }
+}
+
+func mode_identities() -> () ! {Env, IO} {
+  if getEnvOr("EVAL_ENTRY", "") != "" then println("IDENTITIES ${build_identities_json("")}")
+  else match jr_world() {
+    Err(e) => jr_fail(e),
+    Ok(jw) => println("IDENTITIES ${build_identities_json(normalized_configuration(jw))}")
+  }
+}
+
+func mode_a9b() -> () ! {Env, FS, IO} {
+  match jr_inputs() {
+    Err(e) => jr_fail(e),
+    Ok(inp) => {
+      let fs = check_a9b(jr_kind(), inp.ids, inp.cmp);
+      let _ = jr_findings("after", fs);
+      let _ = println("A9B ${if List.length(fs) == 0 then "clean" else "findings"} count=${show(List.length(fs))} unchecked=[${join(",", a9b_unchecked(jr_kind(), inp.cmp))}]");
+      if List.length(fs) == 0 then () else exit(1)
+    }
+  }
+}
+
+func jr_epoch() -> int ! {Env} {
+  match stringToInt(getEnvOr("EVAL_EPOCH", "")) { Some(n) => n, None => 1789000000000 }
+}
+
+func jr_real_refused(inp: { ids: Identities, cmp: Comparators }) -> () ! {IO} {
+  -- A real entry is not read: the preflight alone decides, and before P1G it
+  -- cannot pass.
+  let fs = preflight(RealEntry, inp.ids, inp.cmp);
+  let _ = jr_findings("preflight", fs);
+  let _ = println("ADMISSION refused ran=false preflight=${show(List.length(fs))} kind=real");
+  exit(1)
+}
+
+func mode_admit() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match jr_inputs() {
+    Err(e) => jr_fail(e),
+    Ok(inp) => match jr_kind() {
+      RealEntry => jr_real_refused(inp),
+      SyntheticEntry => match jr_world() {
+        Err(e) => jr_fail(e),
+        Ok(jw) => {
+          let label = getEnvOr("EVAL_LABEL", "admission");
+          let r = admit(label, SyntheticEntry, inp.ids, inp.cmp, jw, jr_epoch(), getEnvOr("EVAL_WORKDIR", ".motoko/eval-admission-workdir"));
+          let _ = if r.ran then println("WORLD_RUN_FRAMES 1") else ();
+          let _ = jr_findings("preflight", r.preflight);
+          let _ = jr_findings("run", r.findings);
+          let status = if report_ok(r) then "checked" else "refused";
+          let _ = println("ADMISSION ${status} ran=${if r.ran then "true" else "false"} calls=${show(r.calls)} expected=${r.expected_end} observed=${r.observed_end} interactions=${show(r.interactions)} program=${r.program_digest} preflight=${show(List.length(r.preflight))} findings=${show(List.length(r.findings))} unchecked=[${join(",", r.unchecked)}] checks=A5,A6,A9,A9b");
+          if report_ok(r) then () else exit(1)
+        }
+      }
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let mode = getEnvOr("EVAL_MODE", "");
+  if mode == "identities" then mode_identities()
+  else if mode == "admit" then mode_admit()
+  else if mode == "a9b" then mode_a9b()
+  else jr_fail("EVAL_MODE must be identities, admit or a9b (got '${mode}')")
+}
