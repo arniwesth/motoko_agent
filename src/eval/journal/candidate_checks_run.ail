@@ -1,0 +1,332 @@
+-- src/eval/journal/candidate_checks_run.ail
+--
+-- ADR-004 v5 D3 "Candidate checks"; PLAN-004 v2 §3 P1.9b: the run-bearing
+-- half of K1–K7. The checks and the verdict are `candidate_checks.ail`.
+--
+--   entry_of_admission(name, lines, jw, program, witness, a8) -> CandidateEntry
+--   candidate_world(entry)                        -> Result[WorldState, ReplayRefusal]
+--   candidate_execution(run, entry)               -> ExecutionUnderTest   (K4's bridge)
+--   k_run_of(label, entry, w0, run)               -> KRun
+--   evaluate_candidate(label, entry, jw, workdir, provenance) -> CandidateOutcome
+--   entry_json(entry) / decode_entry(text, program, lines, jw)
+--
+-- C'S RUN. The same call as the admission run (`admission_run`, P1.6): the
+-- entry's recorded `BootInputs`, logical model, seed and `step_budget = N`
+-- (read by the evaluator's reader from the entry's snapshot), an empty
+-- registry, verification disabled, `PortedWorld(journal_ports(rt), w0)` —
+-- but `w0 = world_state_of(entry.program)`: the candidate is served the
+-- PROGRAM, not the journal world. The code that runs is whatever the
+-- assembled tree compiled (C's `src/core`); the evaluator paths are E's.
+-- Framed like the admission run: `WORLD_RUN_BEGIN <label> <ordinal0>`
+-- before, `WORLD_RUN_END`/`WORLD_RUN_REFUSED` after. If `world_state_of`
+-- refuses, nothing runs and the verdict is `Refused(ProgramUndecodable)`.
+--
+-- K4'S BRIDGE. `execution_of(run, entry.epoch,
+-- StrictAgainst(entry.program.interactions), entry.decision_budget,
+-- entry.retry_budget, 0, [], entry.metadata)` — the entry's values, never
+-- recomputed from C's run.
+--
+-- THE ENTRY RECORD. `entry_json` writes the comparands K1–K7 read that are
+-- not the program or the snapshot (those have their own files: the program
+-- artifact through `load_program`, P1.8; the snapshot through the reader):
+-- end, calls, the witness, the budgets, the metadata, the epoch, the family
+-- record, the census and the omissions. The transcript expectation is
+-- re-derived from the snapshot by P1.7a's `source_chain`, which reads the
+-- RECORDED digests. The decoder refuses a missing or mistyped field.
+-- (P1.8's entry stores `witness.json`/`census.txt` as opaque text and
+-- renders none of them; this is the rendering K1–K7 read.)
+--
+-- Privacy (§0.6): synthetic fixtures only; the record holds counts, keys,
+-- family names and version strings.
+
+module src/eval/journal/candidate_checks_run
+
+import std/io (println)
+import std/json (Json, jo, ja, kv, js, jb, jint, encode, decode, get, getString, getInt, getBool, getArray, asString)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/string (stringToInt)
+import std/result (Result, Ok, Err)
+import src/core/ports (WorldState)
+import src/core/session (TracedSessionResult)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_result (ReplayMetadata)
+import src/core/dst_execution (execution_of)
+import src/core/dst_invariants (ExecutionUnderTest, FamilyEvidence, StrictAgainst)
+import src/core/dst_profile (replay_metadata_of)
+import src/core/dst_discovery (DiscoveryWitness, EnvExpectation)
+import src/core/dst_replay (world_state_of, ReplayRefusal)
+import src/core/dst_fault_catalogue (required_class_ids)
+import src/eval/journal/stopping (JournalWorld, ExpectedEnd, EndSuspended, EndFinalize, end_id, end_value)
+import src/eval/journal/admission (begin_line)
+import src/eval/journal/admission_run (admission_run, frame_observation, end_observation)
+import src/eval/journal/bridge (A8Result)
+import src/eval/journal/witness (CensusRow, CensusCount, census_of)
+import src/eval/journal/source_checks (source_chain, transcript_expectation)
+import src/eval/journal/source_checks_run (transcript_observation)
+import src/eval/journal/candidate_checks (
+  CandidateEntry, KRun, Candidate, candidate_verdict, unstartable_candidate, envelope_lines, candidate_label
+)
+
+-- ============================================================================
+-- The entry.
+-- ============================================================================
+
+export pure func entry_of_admission(name: string, lines: [Json], jw: JournalWorld, p: ExecutionProgram, w: DiscoveryWitness, a8: A8Result) -> CandidateEntry {
+  {
+    name: name,
+    program: p,
+    end: jw.end.expected,
+    calls: List.length(jw.calls),
+    transcript: transcript_expectation(source_chain(lines, jw)),
+    witness: w,
+    decision_budget: jw.expected.decisions,
+    retry_budget: 0,
+    metadata: replay_metadata_of(p.manifest),
+    epoch: p.initial_world.clock_epoch,
+    family_evidence: a8.family_evidence,
+    census: a8.census,
+    omissions: jw.omissions
+  }
+}
+
+-- ============================================================================
+-- C's run.
+-- ============================================================================
+
+export pure func candidate_world(e: CandidateEntry) -> Result[WorldState, ReplayRefusal] {
+  world_state_of(e.program, required_class_ids())
+}
+
+export pure func candidate_execution(run: TracedSessionResult, e: CandidateEntry) -> ExecutionUnderTest {
+  execution_of(run, e.epoch, StrictAgainst(e.program.interactions), e.decision_budget, e.retry_budget, 0, [], e.metadata)
+}
+
+export pure func k_run_of(label: string, e: CandidateEntry, w0: WorldState, run: TracedSessionResult) -> KRun {
+  {
+    w0: w0,
+    w1: run.world,
+    log: run.world.log,
+    trace: run.trace,
+    frame: frame_observation(label, w0.ordinal, run),
+    end: end_observation(run),
+    transcript: transcript_observation(run),
+    execution: candidate_execution(run, e),
+    census: census_of(e.end, e.calls, run.trace, run.world.log, w0, run.world)
+  }
+}
+
+export type CandidateOutcome = { verdict: Candidate, run: Option[KRun] }
+
+export func candidate_run(jw: JournalWorld, w0: WorldState, workdir: string) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  admission_run(jw, w0, workdir)
+}
+
+export func evaluate_candidate(label: string, e: CandidateEntry, jw: JournalWorld, workdir: string, provenance: string) -> CandidateOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match candidate_world(e) {
+    Err(x) => { verdict: unstartable_candidate(e, x, provenance), run: None },
+    Ok(w0) => {
+      let _ = println(begin_line(label, w0.ordinal));
+      let run = candidate_run(jw, w0, workdir);
+      let r = k_run_of(label, e, w0, run);
+      let _ = println(r.frame.end_line);
+      { verdict: candidate_verdict(e, r, provenance), run: Some(r) }
+    }
+  }
+}
+
+func cr_print_all(ls: [string]) -> () ! {IO} {
+  match ls {
+    [] => (),
+    l :: rest => { let _ = println(l); cr_print_all(rest) }
+  }
+}
+
+export func print_verdict(c: Candidate) -> () ! {IO} {
+  let _ = println("CANDIDATE ${candidate_label(c)}");
+  cr_print_all(envelope_lines(c))
+}
+
+-- ============================================================================
+-- The entry record (JSON).
+-- ============================================================================
+
+pure func cr_end_json(e: ExpectedEnd) -> Json {
+  jo([kv("kind", js(end_id(e))), kv("value", js(end_value(e)))])
+}
+
+pure func cr_witness_json(w: DiscoveryWitness) -> Json {
+  jo([
+    kv("provider_calls", jint(w.provider_calls)),
+    kv("tool_dispatches", jint(w.tool_dispatches)),
+    kv("approval_reads", jint(w.approval_reads)),
+    kv("approvals_consumed", jint(w.approvals_consumed)),
+    kv("clock_delta_ms", jint(w.clock_delta_ms)),
+    kv("file_writes", jint(w.file_writes)),
+    kv("file_removes", jint(w.file_removes)),
+    kv("dir_makes", jint(w.dir_makes)),
+    kv("extension_effects", jint(w.extension_effects)),
+    kv("expected_env_reads", ja(List.map(\x. jo([kv("key", js(x.key)), kv("count", jint(x.count))]), w.expected_env_reads)))
+  ])
+}
+
+pure func cr_metadata_json(m: ReplayMetadata) -> Json {
+  jo([
+    kv("source_revision", js(m.source_revision)),
+    kv("toolchain_version", js(m.toolchain_version)),
+    kv("profile_id", js(m.profile_id)),
+    kv("profile_version", js(m.profile_version)),
+    kv("event_vocabulary_version", js(m.event_vocabulary_version))
+  ])
+}
+
+pure func cr_census_json(rows: [CensusRow]) -> Json {
+  ja(List.map(\r. jo([
+    kv("row", js(r.row)),
+    kv("route", js(r.route)),
+    kv("counts", ja(List.map(\c. jo([kv("name", js(c.name)), kv("observed", jint(c.observed)), kv("expected", jint(c.expected))]), r.counts))),
+    kv("unobserved", ja(List.map(js, r.unobserved)))
+  ]), rows))
+}
+
+export pure func entry_json(e: CandidateEntry) -> string {
+  encode(jo([
+    kv("name", js(e.name)),
+    kv("end", cr_end_json(e.end)),
+    kv("calls", jint(e.calls)),
+    kv("witness", cr_witness_json(e.witness)),
+    kv("decision_budget", jint(e.decision_budget)),
+    kv("retry_budget", jint(e.retry_budget)),
+    kv("metadata", cr_metadata_json(e.metadata)),
+    kv("epoch", jint(e.epoch)),
+    kv("family_evidence", ja(List.map(\f. jo([kv("family", js(f.family)), kv("evaluated", jb(f.evaluated)), kv("inputs", jint(f.inputs))]), e.family_evidence))),
+    kv("census", cr_census_json(e.census)),
+    kv("omissions", ja(List.map(js, e.omissions)))
+  ]))
+}
+
+-- Decoding: every field required.
+
+pure func cr_all[a](xs: [Json], f: Json -> Option[a]) -> Option[[a]] {
+  List.foldl(\acc x. match acc {
+    None => None,
+    Some(ys) => match f(x) { Some(y) => Some(ys ++ [y]), None => None }
+  }, Some([]), xs)
+}
+
+pure func cr_int(j: Json, k: string) -> Result[int, string] {
+  match getInt(j, k) { Some(n) => Ok(n), None => Err(k) }
+}
+
+pure func cr_str(j: Json, k: string) -> Result[string, string] {
+  match getString(j, k) { Some(s) => Ok(s), None => Err(k) }
+}
+
+pure func cr_obj(j: Json, k: string) -> Result[Json, string] {
+  match get(j, k) { Some(o) => Ok(o), None => Err(k) }
+}
+
+pure func cr_list[a](j: Json, k: string, f: Json -> Option[a]) -> Result[[a], string] {
+  match getArray(j, k) {
+    None => Err(k),
+    Some(xs) => match cr_all(xs, f) { Some(ys) => Ok(ys), None => Err(k) }
+  }
+}
+
+pure func cr_end(j: Json) -> Result[ExpectedEnd, string] {
+  match (getString(j, "kind"), getString(j, "value")) {
+    (Some(k), Some(v)) =>
+      if k == "EndFinalize" then Ok(EndFinalize(v))
+      else if k == "EndSuspended" then (match stringToInt(v) { Some(n) => Ok(EndSuspended(n)), None => Err("end.value") })
+      else Err("end.kind"),
+    _ => Err("end")
+  }
+}
+
+pure func cr_env(j: Json) -> Option[EnvExpectation] {
+  match (getString(j, "key"), getInt(j, "count")) {
+    (Some(k), Some(c)) => Some({ key: k, count: c }),
+    _ => None
+  }
+}
+
+pure func cr_witness(j: Json) -> Result[DiscoveryWitness, string] {
+  match (cr_int(j, "provider_calls"), cr_int(j, "tool_dispatches"), cr_int(j, "approval_reads"),
+         cr_int(j, "approvals_consumed"), cr_int(j, "clock_delta_ms"), cr_int(j, "file_writes")) {
+    (Ok(pc), Ok(td), Ok(ar), Ok(ac), Ok(cd), Ok(fw)) =>
+      match (cr_int(j, "file_removes"), cr_int(j, "dir_makes"), cr_int(j, "extension_effects"),
+             cr_list(j, "expected_env_reads", cr_env)) {
+        (Ok(fr), Ok(dm), Ok(ee), Ok(env)) => Ok({
+          provider_calls: pc, tool_dispatches: td, approval_reads: ar, approvals_consumed: ac,
+          clock_delta_ms: cd, file_writes: fw, file_removes: fr, dir_makes: dm, extension_effects: ee,
+          expected_env_reads: env }),
+        _ => Err("witness")
+      },
+    _ => Err("witness")
+  }
+}
+
+pure func cr_metadata(j: Json) -> Result[ReplayMetadata, string] {
+  match (cr_str(j, "source_revision"), cr_str(j, "toolchain_version"), cr_str(j, "profile_id"),
+         cr_str(j, "profile_version"), cr_str(j, "event_vocabulary_version")) {
+    (Ok(a), Ok(b), Ok(c), Ok(d), Ok(e)) =>
+      Ok({ source_revision: a, toolchain_version: b, profile_id: c, profile_version: d, event_vocabulary_version: e }),
+    _ => Err("metadata")
+  }
+}
+
+pure func cr_family(j: Json) -> Option[FamilyEvidence] {
+  match (getString(j, "family"), getBool(j, "evaluated"), getInt(j, "inputs")) {
+    (Some(f), Some(e), Some(i)) => Some({ family: f, evaluated: e, inputs: i }),
+    _ => None
+  }
+}
+
+pure func cr_count(j: Json) -> Option[CensusCount] {
+  match (getString(j, "name"), getInt(j, "observed"), getInt(j, "expected")) {
+    (Some(n), Some(o), Some(e)) => Some({ name: n, observed: o, expected: e }),
+    _ => None
+  }
+}
+
+pure func cr_row(j: Json) -> Option[CensusRow] {
+  match (getString(j, "row"), getString(j, "route"), cr_list(j, "counts", cr_count), cr_list(j, "unobserved", asString)) {
+    (Some(r), Some(route), Ok(cs), Ok(us)) => Some({ row: r, route: route, counts: cs, unobserved: us }),
+    _ => None
+  }
+}
+
+export pure func decode_entry(text: string, p: ExecutionProgram, lines: [Json], jw: JournalWorld) -> Result[CandidateEntry, string] {
+  match decode(text) {
+    Err(e) => Err("entry: ${e}"),
+    Ok(j) => match (cr_str(j, "name"), cr_obj(j, "end"), cr_int(j, "calls"), cr_obj(j, "witness"),
+                    cr_int(j, "decision_budget"), cr_int(j, "retry_budget")) {
+      (Ok(name), Ok(ej), Ok(calls), Ok(wj), Ok(db), Ok(rb)) =>
+        match (cr_end(ej), cr_witness(wj), cr_obj(j, "metadata"), cr_int(j, "epoch"),
+               cr_list(j, "family_evidence", cr_family), cr_list(j, "census", cr_row)) {
+          (Ok(end), Ok(w), Ok(mj), Ok(epoch), Ok(fe), Ok(census)) =>
+            match (cr_metadata(mj), cr_list(j, "omissions", asString)) {
+              (Ok(m), Ok(om)) => Ok({
+                name: name, program: p, end: end, calls: calls,
+                transcript: transcript_expectation(source_chain(lines, jw)),
+                witness: w, decision_budget: db, retry_budget: rb, metadata: m, epoch: epoch,
+                family_evidence: fe, census: census, omissions: om }),
+              (Err(k), _) => Err("entry: ${k}"),
+              (_, Err(k)) => Err("entry: ${k}")
+            },
+          (Err(k), _, _, _, _, _) => Err("entry: ${k}"),
+          (_, Err(k), _, _, _, _) => Err("entry: ${k}"),
+          (_, _, Err(k), _, _, _) => Err("entry: ${k}"),
+          (_, _, _, Err(k), _, _) => Err("entry: ${k}"),
+          (_, _, _, _, Err(k), _) => Err("entry: ${k}"),
+          (_, _, _, _, _, Err(k)) => Err("entry: ${k}")
+        },
+      (Err(k), _, _, _, _, _) => Err("entry: ${k}"),
+      (_, Err(k), _, _, _, _) => Err("entry: ${k}"),
+      (_, _, Err(k), _, _, _) => Err("entry: ${k}"),
+      (_, _, _, Err(k), _, _) => Err("entry: ${k}"),
+      (_, _, _, _, Err(k), _) => Err("entry: ${k}"),
+      (_, _, _, _, _, Err(k)) => Err("entry: ${k}")
+    }
+  }
+}
