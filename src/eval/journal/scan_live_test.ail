@@ -1,0 +1,260 @@
+-- src/eval/journal/scan_live_test.ail
+--
+-- PLAN-004 M12, the FS/Process half, and P1.8's artifact and entry cases.
+-- `ailang test` grants no FS/Process, and under it this module's closure
+-- cannot call dst_persistence's decoder (see scan.ail), so this is a runner:
+--
+--   TMPDIR=<scratch> ailang run --caps IO,FS,Process --entry main \
+--     src/eval/journal/scan_live_test.ail
+--
+-- One `PASS <check>` / `FAIL <check>` line per check; exit 1 on any failure.
+-- Everything is written under a fresh `mktemp -d` directory, removed at the
+-- end. Synthetic fixtures only (§0.6); no real entry is created.
+--
+--   m12_artifact_load_program
+--     program_artifact(p) is encode_artifact(p)'s bytes; written to a file,
+--     load_program gives a program with the same digest and the same bytes;
+--     one changed body byte → LoadRefused (digest mismatch).
+--   m12_copies_agree_with_dst_secrets
+--     drift probe: on the fixtures the evaluator's shape copies give what
+--     dst_secrets.scan_text gives (per rule), and scan_text names only the
+--     FIRST prefix of a string with two (the limitation body-16 enumeration
+--     replaces).
+--   m12_entry_written
+--     write_entry on the clean fixture: every D6 file present, 0600; the
+--     entry and runs/ 0700; runs/ empty; `sha256sum -c sources.sha256`
+--     passes; load_program(program.artifact) has the program's digest; the
+--     staging directory is gone.
+--   m12_entry_permission_failure
+--     root 0500: EntryRefused(EntryIo("mkdir")); no entry, no staging.
+--   m12_entry_partial_write_failure
+--     write_layout with a file in a missing subdirectory, after others were
+--     written: EntryIo("write:…"); no entry, no staging.
+--   m12_entry_exists
+--     a second write of the same name: EntryExists; the first is untouched.
+--   m12_entry_scan_refused
+--     each poisoned fixture: ScanRefusal, nothing created.
+--   m12_entry_name_invalid
+--     "../x": EntryNameInvalid, nothing created.
+
+module src/eval/journal/scan_live_test
+
+import std/bytes (toString)
+import std/fs as FS (fileExists, isDir, writeFileResult, readFileResult, listDir)
+import std/io (println, exit)
+import std/list as List (length, map, foldl, filter)
+import std/process (exec)
+import std/result (Result, Ok, Err)
+import std/string (join, split, trim, replace, contains)
+import src/core/dst_persistence (
+  encode_artifact, Encoded, EncodeRefused, load_program, Loaded, LoadRefused, LoadIoError, has_decode_rule
+)
+import src/core/dst_secrets (scan_text, EnvKeySite, secret_rule)
+import src/eval/journal/scan (
+  EntryInputs, EntryOutcome, EntryWritten, EntryRefused, EntryRefusal, NamedText,
+  program_artifact, artifact_digest, write_entry, write_layout, refusal_label,
+  entry_file_names, fixture_entry, fixture_poisoned_entry, CMetadata, ScanSite, policy_text, reason_id
+)
+import src/eval/journal/admission (Aggregate)
+import src/eval/journal/testdata/scan_fixtures (
+  fxs_program, fxs_clean_parts, fxs_pem, fxs_jwt, fxs_url, fxs_body6, fxs_later_prefix_body16, fxs_sk
+)
+
+func lt_report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = println("${if ok then "PASS" else "FAIL"} ${name}");
+  ok
+}
+
+func sh(cmd: string, args: [string]) -> Result[string, string] ! {Process} {
+  match exec(cmd, args) {
+    Err(_) => Err("exec failed: ${cmd}"),
+    Ok(o) => if o.exitCode == 0 then Ok(toString(o.stdout)) else Err("${cmd} exit ${show(o.exitCode)}")
+  }
+}
+
+func sh_out(cmd: string, args: [string]) -> string ! {Process} {
+  match sh(cmd, args) { Ok(s) => trim(s), Err(e) => "<${e}>" }
+}
+
+func path_there(p: string) -> bool ! {FS} { FS.fileExists(p) || FS.isDir(p) }
+
+pure func lt_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && lt_strs_eq(xs, ys) }
+  }
+}
+
+func refused_label(o: EntryOutcome) -> string {
+  match o { EntryWritten(_) => "written", EntryRefused(r) => refusal_label(r) }
+}
+
+-- ---------------------------------------------------------------------------
+
+func m12_artifact_load_program(tmp: string) -> bool ! {IO, FS} {
+  let p = fxs_program(fxs_clean_parts());
+  let a = program_artifact(p);
+  let same = match encode_artifact(p) { Encoded(b) => b == a, EncodeRefused(_) => false };
+  let path = "${tmp}/program.artifact";
+  let _ = FS.writeFileResult(path, a);
+  let loaded = match load_program(path) {
+    Loaded(q) => artifact_digest(q) == artifact_digest(p) && program_artifact(q) == a,
+    LoadRefused(_) => false,
+    LoadIoError(_) => false
+  };
+  let bad = "${tmp}/tampered.artifact";
+  let _ = FS.writeFileResult(bad, replace(a, "journal_admission", "journal_admissioN"));
+  let tampered = match load_program(bad) {
+    Loaded(_) => false,
+    LoadRefused(rs) => has_decode_rule(rs, "artifact-digest-mismatch"),
+    LoadIoError(_) => false
+  };
+  let _ = println("  artifact digest=${artifact_digest(p)} same_bytes=${show(same)} loaded=${show(loaded)} tampered_refused=${show(tampered)}");
+  lt_report("m12_artifact_load_program", same && loaded && tampered)
+}
+
+pure func st_site() -> ScanSite { { component: CMetadata, location: Aggregate("fx"), field: "text" } }
+
+-- The evaluator's shape rules, in dst_secrets's rule names.
+pure func eval_shapes(s: string) -> [string] {
+  List.filter(\r. r != "",
+    List.map(\f. match reason_id(f.reason) {
+      "UrlUserinfo" => "secret-url-userinfo",
+      "PrivateKeyBlock" => "secret-private-key-block",
+      "JsonWebToken" => "secret-json-web-token",
+      "OpaqueHighEntropy" => "secret-opaque-high-entropy",
+      _ => ""
+    }, policy_text(st_site(), s)))
+}
+
+pure func core_shapes(s: string) -> [string] {
+  List.filter(\r. r != "secret-provider-token-literal",
+    List.map(secret_rule, scan_text(EnvKeySite(""), s)))
+}
+
+func m12_copies_agree_with_dst_secrets() -> bool ! {IO} {
+  let probes = [fxs_pem(), fxs_jwt(), fxs_url(), "token ${fxs_jwt()}", fxs_body6(),
+                "{\"auth\":\"v1.${fxs_jwt()}\"}", "aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3z",
+                "0123456789abcdef0123456789abcdef0123456789abcdef", "plain"];
+  let agree = List.foldl(\acc s. acc && lt_strs_eq(eval_shapes(s), core_shapes(s)), true, probes);
+  let first_only = List.map(secret_rule, scan_text(EnvKeySite(""), fxs_later_prefix_body16()));
+  let ok = agree && lt_strs_eq(first_only, ["secret-provider-token-literal"])
+    && List.length(List.filter(\f. contains(reason_id(f.reason), "ProviderTokenLiteral"), policy_text(st_site(), fxs_later_prefix_body16()))) == 2;
+  lt_report("m12_copies_agree_with_dst_secrets", ok)
+}
+
+func m12_entry_written(tmp: string) -> bool ! {IO, FS, Process} {
+  let root = "${tmp}/corpus-ok";
+  let _ = sh("install", ["-d", "-m", "0700", root]);
+  let e = fixture_entry("fx-entry", fxs_program(fxs_clean_parts()));
+  let o = write_entry(root, e);
+  let dir = "${root}/fx-entry";
+  match o {
+    EntryRefused(r) => {
+      let _ = println("  refused: ${refusal_label(r)}");
+      lt_report("m12_entry_written", false)
+    },
+    EntryWritten(rc) => {
+      let file_modes = List.map(\n. sh_out("stat", ["-c", "%a", "${dir}/${n}"]), entry_file_names());
+      let dir_modes = [sh_out("stat", ["-c", "%a", dir]), sh_out("stat", ["-c", "%a", "${dir}/runs"])];
+      let sorted = sh_out("sh", ["-c", "find \"$1\" -mindepth 1 -printf '%P\\n' | LC_ALL=C sort", "-", dir]);
+      let want_sorted = sh_out("sh", ["-c", "printf '%s\\n' \"$@\" | LC_ALL=C sort", "-", "runs", "snapshot.jsonl", "excerpt.jsonl", "sources.sha256", "selector.txt", "expectations.json", "t0_settings.json", "expected_end.txt", "program.artifact", "witness.json", "census.txt", "envelope.json", "identities.json", "scan_report.tsv", "exposure.jsonl"]);
+      let sums = match sh("sh", ["-c", "cd \"$1\" && sha256sum -c --quiet sources.sha256", "-", dir]) { Ok(_) => true, Err(_) => false };
+      let loaded = match load_program("${dir}/program.artifact") {
+        Loaded(q) => artifact_digest(q) == artifact_digest(e.program),
+        _ => false
+      };
+      let ok = List.foldl(\acc m. acc && m == "600", true, file_modes)
+        && lt_strs_eq(dir_modes, ["700", "700"])
+        && sorted == want_sorted
+        && List.length(FS.listDir("${dir}/runs")) == 0
+        && sums && loaded
+        && rc.files == 14 && rc.path == dir && rc.findings == 0
+        && not path_there("${root}/.staging-fx-entry");
+      let _ = println("  entry files=${show(rc.files)} findings=${show(rc.findings)} modes=${join(",", file_modes)} dirs=${join(",", dir_modes)} sums=${show(sums)} loaded=${show(loaded)} digest=${rc.artifact_digest}");
+      lt_report("m12_entry_written", ok)
+    }
+  }
+}
+
+func m12_entry_permission_failure(tmp: string) -> bool ! {IO, FS, Process} {
+  let root = "${tmp}/corpus-ro";
+  let _ = sh("install", ["-d", "-m", "0500", root]);
+  let o = write_entry(root, fixture_entry("fx-entry", fxs_program(fxs_clean_parts())));
+  let label = refused_label(o);
+  let left = sh_out("find", [root, "-mindepth", "1"]);
+  let _ = println("  permission: ${label} left=[${left}]");
+  let _ = sh("chmod", ["0700", root]);
+  lt_report("m12_entry_permission_failure", label == "Entry:Io:mkdir" && left == "")
+}
+
+func m12_entry_partial_write_failure(tmp: string) -> bool ! {IO, FS, Process} {
+  let root = "${tmp}/corpus-partial";
+  let _ = sh("install", ["-d", "-m", "0700", root]);
+  let files = [{ name: "snapshot.jsonl", text: "{}\n" }, { name: "excerpt.jsonl", text: "{}\n" },
+               { name: "missing/x", text: "x" }, { name: "scan_report.tsv", text: "" }];
+  let r = write_layout(root, "fx-partial", ["runs"], files);
+  let label = match r { Ok(_) => "written", Err(x) => refusal_label(x) };
+  let left = sh_out("find", [root, "-mindepth", "1"]);
+  let _ = println("  partial: ${label} left=[${left}]");
+  lt_report("m12_entry_partial_write_failure", label == "Entry:Io:write:missing/x" && left == "")
+}
+
+func m12_entry_exists(tmp: string) -> bool ! {IO, FS, Process} {
+  let root = "${tmp}/corpus-ok";
+  let dir = "${root}/fx-entry";
+  let before = sh_out("sh", ["-c", "cd \"$1\" && find . -type f -exec sha256sum {} + | LC_ALL=C sort | sha256sum", "-", dir]);
+  let o = write_entry(root, fixture_entry("fx-entry", fxs_program(fxs_clean_parts())));
+  let after = sh_out("sh", ["-c", "cd \"$1\" && find . -type f -exec sha256sum {} + | LC_ALL=C sort | sha256sum", "-", dir]);
+  let label = refused_label(o);
+  let _ = println("  exists: ${label} unchanged=${show(before == after)}");
+  lt_report("m12_entry_exists", label == "Entry:Exists:fx-entry" && before == after && not path_there("${root}/.staging-fx-entry"))
+}
+
+func m12_entry_scan_refused(tmp: string) -> bool ! {IO, FS, Process} {
+  let root = "${tmp}/corpus-scan";
+  let _ = sh("install", ["-d", "-m", "0700", root]);
+  let cases = ["snapshot", "excerpt", "identity", "projection", "payload", "chunks", "env", "files", "metadata", "record"];
+  let labels = List.map(\c. refused_label(write_entry(root, fixture_poisoned_entry(c))), cases);
+  let sk = fxs_sk();
+  let want = ["ScanRefusal:PrivateKeyBlock", "ScanRefusal:UrlUserinfo", "ScanRefusal:ProviderTokenLiteral:${sk}",
+              "ScanRefusal:UrlUserinfo", "ScanRefusal:ProviderTokenLiteral:${sk}", "ScanRefusal:PrivateKeyBlock",
+              "ScanRefusal:UrlUserinfo", "ScanRefusal:JsonWebToken", "ScanRefusal:ProviderTokenLiteral:${sk}",
+              "ScanRefusal:PrivateKeyBlock"];
+  let left = sh_out("find", [root, "-mindepth", "1"]);
+  let _ = println("  scan: ${join(",", labels)} left=[${left}]");
+  lt_report("m12_entry_scan_refused", lt_strs_eq(labels, want) && left == "")
+}
+
+func m12_entry_name_invalid(tmp: string) -> bool ! {IO, FS, Process} {
+  let root = "${tmp}/corpus-name";
+  let _ = sh("install", ["-d", "-m", "0700", root]);
+  let o = write_entry(root, fixture_entry("../x", fxs_program(fxs_clean_parts())));
+  let left = sh_out("find", [tmp, "-maxdepth", "1", "-name", "x"]);
+  let empty = sh_out("find", [root, "-mindepth", "1"]);
+  lt_report("m12_entry_name_invalid", refused_label(o) == "Entry:NameInvalid" && left == "" && empty == "")
+}
+
+export func main() -> () ! {IO, FS, Process} {
+  match sh("mktemp", ["-d"]) {
+    Err(e) => { let _ = println("FAIL mktemp: ${e}"); exit(1) },
+    Ok(t) => {
+      let tmp = trim(t);
+      let results = [
+        m12_artifact_load_program(tmp),
+        m12_copies_agree_with_dst_secrets(),
+        m12_entry_written(tmp),
+        m12_entry_permission_failure(tmp),
+        m12_entry_partial_write_failure(tmp),
+        m12_entry_exists(tmp),
+        m12_entry_scan_refused(tmp),
+        m12_entry_name_invalid(tmp)
+      ];
+      let _ = sh("chmod", ["-R", "u+rwx", tmp]);
+      let _ = sh("rm", ["-rf", "--", tmp]);
+      let failed = List.length(List.filter(\r. not r, results));
+      let _ = println("${show(List.length(results) - failed)}/${show(List.length(results))} passed");
+      if failed > 0 then exit(1) else ()
+    }
+  }
+}

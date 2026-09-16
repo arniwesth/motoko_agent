@@ -382,3 +382,42 @@ M11.live.budget.n	src/eval/journal/witness_live_test.ail:m11_decision_budget	ref
 M11.live.budget.retry	src/eval/journal/witness_live_test.ail:m11_decision_budget	refused	A8:RetryBudgetNonZero	aggregate:bridge:retry_budget
 M11.live.budget.decision_dropped	src/eval/journal/witness_live_test.ail:m11_decision_budget	refused	A8:DecisionCountMismatch	aggregate:census:decisions
 M11.live.census_twins	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:<each count>
+M12.PrivateKeyBlock	src/eval/journal/scan.ail:test_m12_shape_refusals	refused	ScanRefusal:PrivateKeyBlock	metadata:aggregate:fx
+M12.JsonWebToken	src/eval/journal/scan.ail:test_m12_shape_refusals	refused	ScanRefusal:JsonWebToken	metadata:aggregate:fx
+M12.UrlUserinfo	src/eval/journal/scan.ail:test_m12_shape_refusals	refused	ScanRefusal:UrlUserinfo	metadata:aggregate:fx
+M12.shapes.clean	src/eval/journal/scan.ail:test_m12_shape_refusals	pass	-	aggregate:scan
+M12.JsonWebToken.false_negative	src/eval/journal/scan.ail:test_m12_shape_refusals	pass	-	metadata:aggregate:fx
+M12.body16.later_occurrence	src/eval/journal/scan.ail:test_m12_body16_later_occurrence	refused	ScanRefusal:ProviderTokenLiteral:sk-	metadata:aggregate:fx
+M12.body16.later_prefix	src/eval/journal/scan.ail:test_m12_body16_later_occurrence	refused	ScanRefusal:ProviderTokenLiteral:npm_	metadata:aggregate:fx
+M12.body16.boundary	src/eval/journal/scan.ail:test_m12_body16_later_occurrence	refused	ScanRefusal:ProviderTokenLiteral:sk-	metadata:aggregate:fx
+M12.body6.reported	src/eval/journal/scan.ail:test_m12_short_body_reported	pass	-	metadata:aggregate:fx
+M12.body15.reported	src/eval/journal/scan.ail:test_m12_short_body_reported	pass	-	metadata:aggregate:fx
+M12.CredentialBearingName.env_key	src/eval/journal/scan.ail:test_m12_credential_bearing_name_report_only	pass	-	environment:aggregate:env:0
+M12.CredentialBearingName.env_read	src/eval/journal/scan.ail:test_m12_credential_bearing_name_report_only	pass	-	program.identity:interaction:4
+M12.component.clean	src/eval/journal/scan.ail:test_m12_one_hit_per_component	pass	-	aggregate:scan
+M12.component.snapshot	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:PrivateKeyBlock	snapshot:snapshot:1
+M12.component.excerpt	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:UrlUserinfo	excerpt:excerpt:0
+M12.component.program_identity	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:ProviderTokenLiteral:sk-	program.identity:interaction:3
+M12.component.program_projection	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:UrlUserinfo	program.projection:interaction:2
+M12.component.program_payload	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:ProviderTokenLiteral:sk-	program.payload:interaction:2
+M12.component.program_chunks	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:PrivateKeyBlock	program.chunks:interaction:2
+M12.component.env	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:UrlUserinfo	environment:aggregate:env:0
+M12.component.files	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:JsonWebToken	files:aggregate:file:0
+M12.component.metadata	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:ProviderTokenLiteral:sk-	metadata:aggregate:program
+M12.component.metadata_record	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:PrivateKeyBlock	metadata:aggregate:envelope.json
+M12.component.derived	src/eval/journal/scan.ail:test_m12_one_hit_per_component	refused	ScanRefusal:ProviderTokenLiteral:sk-	derived:aggregate:runs/r1/out.txt
+M12.report.no_body	src/eval/journal/scan.ail:test_m12_report_contains_no_body	pass	-	aggregate:scan_report
+M12.artifact.frame	src/eval/journal/scan.ail:test_m12_artifact_frame	pass	-	aggregate:artifact
+M12.artifact.load_program	src/eval/journal/scan_live_test.ail:m12_artifact_load_program	pass	-	aggregate:artifact
+M12.artifact.tampered	src/eval/journal/scan_live_test.ail:m12_artifact_load_program	refused	artifact-digest-mismatch	aggregate:artifact
+M12.copies.drift_probe	src/eval/journal/scan_live_test.ail:m12_copies_agree_with_dst_secrets	pass	-	aggregate:scan
+M12.entry.layout	src/eval/journal/scan.ail:test_m12_entry_layout	pass	-	aggregate:entry
+M12.entry.exposure_row_undecodable	src/eval/journal/scan.ail:test_m12_entry_layout	refused	Entry:ExposureRowUndecodable:1	aggregate:entry
+M12.entry.name	src/eval/journal/scan.ail:test_m12_entry_name	pass	-	aggregate:entry
+M12.entry.written	src/eval/journal/scan_live_test.ail:m12_entry_written	pass	-	aggregate:entry
+M12.entry.permission_failure	src/eval/journal/scan_live_test.ail:m12_entry_permission_failure	refused	Entry:Io:mkdir	aggregate:entry
+M12.entry.partial_write_failure	src/eval/journal/scan_live_test.ail:m12_entry_partial_write_failure	refused	Entry:Io:write:missing/x	aggregate:entry
+M12.entry.exists	src/eval/journal/scan_live_test.ail:m12_entry_exists	refused	Entry:Exists:fx-entry	aggregate:entry
+M12.entry.scan_refused	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:<per component, as M12.component.*>	aggregate:entry
+M12.entry.name_invalid	src/eval/journal/scan_live_test.ail:m12_entry_name_invalid	refused	Entry:NameInvalid	aggregate:entry
+M15.ScanRefusal	-	inapplicable	reason: a 15-character body is reported and admitted (M12.body15.reported); the scan does not affect the replay, so there is no divergence to catch (V5G)	-
