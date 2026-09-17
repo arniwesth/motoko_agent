@@ -1,7 +1,7 @@
 {
  "schema": "eval-protected-manifest/1",
  "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
- "symbols_file_sha256": "c4b074b4f1bdae1f53d8d16ae2ad50b93e11e247eaaa4c94d36e0f4de89dcfb7",
+ "symbols_file_sha256": "ff633df0cfbd270d17b6763245b3e943e78607e01f8c16fae01052f34a26841f",
  "protected_files": [
   {
    "file": "src/core/dst_fault_catalogue.ail",
@@ -26,6 +26,10 @@
   {
    "file": "src/core/tool_contract.ail",
    "sha256": "5f883a2fc591237ee31d3631194ca54ac8cef78e605f05fe19e590d3019c5173"
+  },
+  {
+   "file": "src/core/world_ordinal.ail",
+   "sha256": "4175e7fc7d484d30520aba79d7c425617f24edb0181ecb84a6663d5b4b674ae9"
   }
  ],
  "spans": [
@@ -573,6 +577,23 @@
   },
   {
    "file": "src/core/ports.ail",
+   "symbol": "advance_ordinal",
+   "kind": "func",
+   "sha256": "f94240600e58da6c4cd38ddee3fff3dedb500e976a5f9a0c3302ec16f64b1d3d",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    536,
+    539
+   ],
+   "bytes": [
+    32072,
+    32267
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
    "symbol": "ScriptedTool",
    "kind": "type_braced",
    "sha256": "b13be533ac81f01656d341507f1dd4484daa6f51f6150a665703c49c146eb640",
@@ -716,7 +737,7 @@
     "PathDir"
    ],
    "declared_in_other_protected_files": [],
-   "member_of": "type_closure:PathStat"
+   "member_of": "type_closure:world_path_kind"
   },
   {
    "file": "src/core/ports.ail",
@@ -784,7 +805,7 @@
     44830
    ],
    "declared_in_other_protected_files": [],
-   "member_of": "type_closure:Ports"
+   "member_of": "type_closure:wake_read_unbound"
   },
   {
    "file": "src/core/ports.ail",
@@ -809,7 +830,7 @@
     "Aborted"
    ],
    "declared_in_other_protected_files": [],
-   "member_of": "type_closure:WakeInput"
+   "member_of": "type_closure:wake_outcome_id"
   },
   {
    "file": "src/core/ports.ail",
@@ -843,7 +864,7 @@
     45523
    ],
    "declared_in_other_protected_files": [],
-   "member_of": "type_closure:Ports"
+   "member_of": "type_closure:wake_read_unbound"
   },
   {
    "file": "src/core/ports.ail",
@@ -878,6 +899,23 @@
    ],
    "declared_in_other_protected_files": [],
    "member_of": "type_closure:ported_provider"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "empty_world_state",
+   "kind": "func",
+   "sha256": "2a3fbcf26779e8d09b956cd0e0e96486a0b89d23ce3f4482c6b77290620b707a",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    825,
+    829
+   ],
+   "bytes": [
+    46328,
+    46568
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
   },
   {
    "file": "src/core/ports.ail",
@@ -932,6 +970,57 @@
   },
   {
    "file": "src/core/ports.ail",
+   "symbol": "wake_read_unbound",
+   "kind": "func",
+   "sha256": "b11da342eb2907b6655c7c53de465767404a1a6067780b068214a549a22ef0d4",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1109,
+    1112
+   ],
+   "bytes": [
+    63829,
+    64056
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "wake_outcome_id",
+   "kind": "func",
+   "sha256": "f5b46ad46732016a69e2ec74c4895bf898a91749faed13d9d75bdd6e986aef39",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1118,
+    1127
+   ],
+   "bytes": [
+    64368,
+    64628
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "wake_outcome_detail",
+   "kind": "func",
+   "sha256": "a3b544f310063664819eca7c1f03d80549921ebaf9efdaf40719e110eb0ddfb5",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1129,
+    1138
+   ],
+   "bytes": [
+    64630,
+    64839
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
    "symbol": "cursor_wake",
    "kind": "func",
    "sha256": "68ff8e8e33a883b9753bd18a0a2dbc4744e11e7cf7eb8ca342a886b5b970cc89",
@@ -960,6 +1049,23 @@
    "bytes": [
     67076,
     67260
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "wake_payload",
+   "kind": "func",
+   "sha256": "9998a00806c78150434d41d481ac97992cadb3181bdf52d2732f87e2728e965f",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1188,
+    1192
+   ],
+   "bytes": [
+    67481,
+    67816
    ],
    "declared_in_other_protected_files": [],
    "member_of": "starting_set"
@@ -1068,6 +1174,23 @@
   },
   {
    "file": "src/core/ports.ail",
+   "symbol": "lookup_node",
+   "kind": "func",
+   "sha256": "954f4478c3806ed0004b928489c11df5036d9acdb315eabf9d149bb7c17dcf47",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1369,
+    1374
+   ],
+   "bytes": [
+    76627,
+    76847
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
    "symbol": "scripted_file_write",
    "kind": "func",
    "sha256": "8801d8f2308977279c666f83ca4721a01f2c0e20b0f2ba0aaf2ae57cb8f2ce32",
@@ -1096,6 +1219,125 @@
    "bytes": [
     82602,
     82919
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "remove_path",
+   "kind": "func",
+   "sha256": "cb648fd73aaa2b040798121e21d805963c8c614c8c2fc40fad2ea725a3094251",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1482,
+    1487
+   ],
+   "bytes": [
+    83143,
+    83395
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "is_beneath",
+   "kind": "func",
+   "sha256": "3b48509fa784ccdc986805d21eef667b8fa716691f6f72009fcbc86c74e7da94",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1503,
+    1506
+   ],
+   "bytes": [
+    84239,
+    84404
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "segment_below",
+   "kind": "func",
+   "sha256": "83aa572aea3227aee27970283f6696466f10df4c5ae07538aacd99a37b8fcdfb",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1511,
+    1516
+   ],
+   "bytes": [
+    84598,
+    84846
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "names_below",
+   "kind": "func",
+   "sha256": "872667f59cf852df3fd334e6e4d7332ad982ae63bbdd58163cd4628970757046",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1518,
+    1525
+   ],
+   "bytes": [
+    84848,
+    85119
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "has_children",
+   "kind": "func",
+   "sha256": "0a1c5ae05a1b718bb3af7d9a9eda2261dd231d46934fa8527378bfc9be84043c",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1527,
+    1532
+   ],
+   "bytes": [
+    85121,
+    85333
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "world_path_kind",
+   "kind": "func",
+   "sha256": "d27fd518e9a2adc90b731c742a1f6fb9ff7e2bccd8af883a2bd5a9333f294c50",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1545,
+    1552
+   ],
+   "bytes": [
+    85997,
+    86319
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "sort_names",
+   "kind": "func",
+   "sha256": "e7d92a73958a22d128429e076bcde7d2ae9dd306b8ab3814bd03ee6bbe47c222",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1563,
+    1565
+   ],
+   "bytes": [
+    86828,
+    86921
    ],
    "declared_in_other_protected_files": [],
    "member_of": "starting_set"
@@ -1215,6 +1457,23 @@
    "bytes": [
     100000,
     100397
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "envelope_to_call",
+   "kind": "func",
+   "sha256": "2461d5da244eaabf5baa639830aceb1e1dc2b14d1039b0128c54b59889a719e1",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    1810,
+    1812
+   ],
+   "bytes": [
+    100399,
+    100523
    ],
    "declared_in_other_protected_files": [],
    "member_of": "starting_set"
@@ -1493,6 +1752,23 @@
   },
   {
    "file": "src/core/ports.ail",
+   "symbol": "opt_int_field",
+   "kind": "func",
+   "sha256": "0a543eac5d0f6c00d9743f749c7cccb64d45210280f9fd9251ded935cc5a43ba",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    2444,
+    2449
+   ],
+   "bytes": [
+    133355,
+    133552
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
    "symbol": "bool_field",
    "kind": "func",
    "sha256": "905f1a9735f5eaf6de4ea6be8cdc334c65d67fb323a2b4e3c30777ae83d99ec0",
@@ -1529,6 +1805,23 @@
   },
   {
    "file": "src/core/ports.ail",
+   "symbol": "has_key",
+   "kind": "func",
+   "sha256": "f73e9088ef17cd4aaf1a7a533e95bd6ab0dc91455f88405ae30d3f3dead02456",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    2465,
+    2467
+   ],
+   "bytes": [
+    133911,
+    134021
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/ports.ail",
    "symbol": "ProviderOutcome",
    "kind": "type_unbraced",
    "sha256": "1a7eea395a0908153140f73a2231dd33e5912cda32d4b82f186ed4e4251acaa9",
@@ -1548,6 +1841,23 @@
    ],
    "declared_in_other_protected_files": [],
    "member_of": "type_closure:decode_provider_outcome"
+  },
+  {
+   "file": "src/core/ports.ail",
+   "symbol": "tool_call_json",
+   "kind": "func",
+   "sha256": "2a80510684e7c76ee7ba2dd1fc8e4c341540294d21d6478582b3d76427c36687",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    2482,
+    2484
+   ],
+   "bytes": [
+    134652,
+    134786
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
   },
   {
    "file": "src/core/ports.ail",
@@ -2886,6 +3196,79 @@
    ],
    "declared_in_other_protected_files": [],
    "member_of": "starting_set"
+  },
+  {
+   "file": "src/core/world_ordinal.ail",
+   "symbol": "<imports:1>",
+   "kind": "imports",
+   "sha256": "44841ce7d70b295b56953c32a54507e4b4b1aee662acf6983a4c0b210eac9847",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    32,
+    34
+   ],
+   "bytes": [
+    1768,
+    2001
+   ],
+   "statements": [
+    {
+     "module": "src/core/ports",
+     "alias": null,
+     "names": [
+      "WorldState",
+      "RequestClass",
+      "RequestWitness",
+      "EnvRead",
+      "FileRead",
+      "ClockRead",
+      "ToolExec",
+      "ModelStep",
+      "WakeRead",
+      "empty_world_state",
+      "advance_ordinal"
+     ],
+     "line": 32,
+     "sha256": "bf8ad09c8713d1453b01ab7d3df3463a004ec46911b99927024073a2e1da0851"
+    },
+    {
+     "module": "std/option",
+     "alias": null,
+     "names": [
+      "Option",
+      "Some",
+      "None"
+     ],
+     "line": 33,
+     "sha256": "df8e69aaaefbdee263582fc4d877196e86a9127140fc35bc41f6cb8c827269a4"
+    },
+    {
+     "module": "std/list",
+     "alias": "List",
+     "names": [
+      "length"
+     ],
+     "line": 34,
+     "sha256": "71126fd8f4c121f78ee4cbb89f2dbee4c5534afbe5aa6b5ddfe380bd28e243e1"
+    }
+   ]
+  },
+  {
+   "file": "src/core/world_ordinal.ail",
+   "symbol": "advance",
+   "kind": "func",
+   "sha256": "946255fe17da3b85b0d5b062a18eb32ba0d475ac445b3f66129805dd7647cf1c",
+   "source_commit": "65003110ff5a15e2ae5b1f0e205e0ffa705d18dc",
+   "lines": [
+    40,
+    42
+   ],
+   "bytes": [
+    2284,
+    2382
+   ],
+   "declared_in_other_protected_files": [],
+   "member_of": "starting_set"
   }
  ],
  "crosscheck": {
@@ -3120,9 +3503,14 @@
   ],
   "FsNode@src/core/fs_node.ail": [
    "WorldState@src/core/ports.ail",
+   "has_children@src/core/ports.ail",
    "lookup_file@src/core/ports.ail",
+   "lookup_node@src/core/ports.ail",
+   "names_below@src/core/ports.ail",
+   "remove_path@src/core/ports.ail",
    "scripted_dir_make@src/core/ports.ail",
-   "scripted_file_write@src/core/ports.ail"
+   "scripted_file_write@src/core/ports.ail",
+   "world_path_kind@src/core/ports.ail"
   ],
   "GeneratorState@src/core/dst_generator.ail": [
    "WorldState@src/core/ports.ail"
@@ -3155,57 +3543,197 @@
   ]
  },
  "unlisted_callees": {
-  "decode_provider_outcome@src/core/ports.ail": [
-   "has_key@src/core/ports.ail"
+  "acquire_temp_path@src/core/tool_runtime.ail": [
+   "path_dirname@src/core/tool_runtime.ail",
+   "process_error_to_string@src/core/tool_runtime.ail"
   ],
-  "decode_tool_outcome@src/core/ports.ail": [
-   "opt_int_field@src/core/ports.ail"
+  "advance@src/core/dst_generator.ail": [
+   "prng_modulus@src/core/dst_generator.ail",
+   "prng_multiplier@src/core/dst_generator.ail"
   ],
-  "tool_calls_json@src/core/ports.ail": [
-   "tool_call_json@src/core/ports.ail"
+  "any_shell_tokens@src/core/tool_runtime.ail": [
+   "has_shell_tokens@src/core/tool_runtime.ail"
+  ],
+  "apply_edits@src/core/tool_runtime.ail": [
+   "count_occurrences@src/core/tool_runtime.ail",
+   "replace_all_occurrences@src/core/tool_runtime.ail",
+   "replace_once@src/core/tool_runtime.ail"
+  ],
+  "arg_string_list@src/core/tool_runtime.ail": [
+   "arg_string_list_rec@src/core/tool_runtime.ail"
+  ],
+  "atomic_write@src/core/tool_runtime.ail": [
+   "acquire_temp_path@src/core/tool_runtime.ail",
+   "process_error_to_string@src/core/tool_runtime.ail"
+  ],
+  "bounded_draw@src/core/dst_generator.ail": [
+   "draw_between@src/core/dst_generator.ail"
+  ],
+  "build_edit_file_diff@src/core/tool_runtime.ail": [
+   "common_prefix_len_lines@src/core/tool_runtime.ail",
+   "drop_n@src/core/tool_runtime.ail",
+   "join_lines@src/core/tool_runtime.ail",
+   "list_len@src/core/tool_runtime.ail",
+   "non_empty_lines@src/core/tool_runtime.ail",
+   "prefix_lines@src/core/tool_runtime.ail",
+   "render_hunk_range_at@src/core/tool_runtime.ail",
+   "trim_suffix_n@src/core/tool_runtime.ail"
+  ],
+  "build_write_file_diff@src/core/tool_runtime.ail": [
+   "join_lines@src/core/tool_runtime.ail",
+   "list_len@src/core/tool_runtime.ail",
+   "non_empty_lines@src/core/tool_runtime.ail",
+   "prefix_lines@src/core/tool_runtime.ail",
+   "render_hunk_range@src/core/tool_runtime.ail"
+  ],
+  "choose_approval@src/core/dst_generator.ail": [
+   "draw@src/core/dst_generator.ail"
+  ],
+  "choose_provider@src/core/dst_generator.ail": [
+   "bounded_draw@src/core/dst_generator.ail",
+   "clamp_text@src/core/dst_generator.ail",
+   "draw@src/core/dst_generator.ail",
+   "draw_between@src/core/dst_generator.ail",
+   "note_bound@src/core/dst_generator.ail",
+   "nth_code@src/core/dst_generator.ail",
+   "provider_error_codes_non_retryable@src/core/dst_fault_catalogue.ail",
+   "provider_error_codes_retryable@src/core/dst_fault_catalogue.ail"
+  ],
+  "choose_tool@src/core/dst_generator.ail": [
+   "bounded_draw@src/core/dst_generator.ail",
+   "clamp_text@src/core/dst_generator.ail",
+   "draw@src/core/dst_generator.ail"
+  ],
+  "cmd_string@src/core/tool_runtime.ail": [
+   "cmd_args_suffix@src/core/tool_runtime.ail"
+  ],
+  "collect_ext_schemas@src/core/tool_catalog.ail": [
+   "hook_schemas@src/core/tool_catalog.ail"
+  ],
+  "collect_hook_schemas@src/core/tool_catalog.ail": [
+   "ext_tool_schema@src/core/tool_catalog.ail"
+  ],
+  "count_kind@src/core/dst_interaction.ail": [
+   "interaction_kind@src/core/dst_interaction.ail"
+  ],
+  "count_occurrences@src/core/tool_runtime.ail": [
+   "find_from@src/core/tool_runtime.ail"
+  ],
+  "dispatch_one_typed@src/core/tool_dispatch_adapter.ail": [
+   "run_native_batch@src/core/tool_runtime.ail",
+   "tool_call_to_envelope@src/core/tool_dispatch_adapter.ail",
+   "tool_result_exit_code@src/core/tool_dispatch_adapter.ail",
+   "tool_result_item_to_json@src/core/tool_dispatch_adapter.ail"
+  ],
+  "draw@src/core/dst_generator.ail": [
+   "advance@src/core/dst_generator.ail",
+   "in_range@src/core/dst_generator.ail",
+   "salt_hash@src/core/dst_generator.ail"
+  ],
+  "draw_between@src/core/dst_generator.ail": [
+   "draw@src/core/dst_generator.ail"
+  ],
+  "empty_world_state@src/core/ports.ail": [
+   "no_generator@src/core/dst_generator.ail"
+  ],
+  "first_changed_line@src/core/tool_runtime.ail": [
+   "first_changed_line_rec@src/core/tool_runtime.ail"
+  ],
+  "generated_provider_entry@src/core/ports.ail": [
+   "choose_provider@src/core/dst_generator.ail",
+   "generator_authored_count@src/core/dst_interaction.ail",
+   "repeat_chunk@src/core/ports.ail"
+  ],
+  "generating_approval@src/core/ports.ail": [
+   "choose_approval@src/core/dst_generator.ail",
+   "generator_authored_count@src/core/dst_interaction.ail",
+   "generator_installed@src/core/dst_generator.ail"
+  ],
+  "generating_model_step@src/core/test/stub_step.ail": [
+   "generated_provider_entry@src/core/ports.ail",
+   "generator_authored_count@src/core/dst_interaction.ail"
+  ],
+  "generating_ports@src/core/test/stub_step.ail": [
+   "generating_approval@src/core/ports.ail",
+   "generating_model_step@src/core/test/stub_step.ail",
+   "generating_tool@src/core/ports.ail"
+  ],
+  "generating_tool@src/core/ports.ail": [
+   "choose_tool@src/core/dst_generator.ail",
+   "generator_authored_count@src/core/dst_interaction.ail",
+   "generator_installed@src/core/dst_generator.ail"
+  ],
+  "generator_authored_count@src/core/dst_interaction.ail": [
+   "count_kind@src/core/dst_interaction.ail",
+   "identity_kind@src/core/dst_interaction.ail"
+  ],
+  "generator_state@src/core/dst_generator.ail": [
+   "seed_state@src/core/dst_generator.ail"
+  ],
+  "has_parent_traversal_segment@src/core/tool_runtime.ail": [
+   "has_parent_traversal_segment_rec@src/core/tool_runtime.ail"
+  ],
+  "hash_step@src/core/dst_generator.ail": [
+   "prng_modulus@src/core/dst_generator.ail"
+  ],
+  "hook_schemas@src/core/tool_catalog.ail": [
+   "collect_hook_schemas@src/core/tool_catalog.ail",
+   "declared_schemas@src/core/tool_catalog.ail",
+   "provided_names@src/core/tool_catalog.ail"
+  ],
+  "in_range@src/core/dst_generator.ail": [
+   "prng_modulus@src/core/dst_generator.ail"
+  ],
+  "interaction_kind@src/core/dst_interaction.ail": [
+   "identity_kind@src/core/dst_interaction.ail"
+  ],
+  "line_count_of@src/core/tool_runtime.ail": [
+   "list_len@src/core/tool_runtime.ail"
+  ],
+  "live_ports@src/core/test/stub_step.ail": [
+   "ambient_dir_list@src/core/ports.ail",
+   "ambient_dir_make@src/core/ports.ail",
+   "ambient_env@src/core/ports.ail",
+   "ambient_file@src/core/ports.ail",
+   "ambient_file_remove@src/core/ports.ail",
+   "ambient_file_write@src/core/ports.ail",
+   "ambient_path_stat@src/core/ports.ail",
+   "live_wake_await@src/core/test/stub_step.ail",
+   "system_prompt_cache_breakpoint@src/core/test/stub_step.ail",
+   "tools_with_extensions@src/core/tool_catalog.ail",
+   "wake_request_json@src/core/test/stub_step.ail"
   ],
   "live_tool_outcome@src/core/ports.ail": [
-   "dispatch_one_typed@src/core/tool_dispatch_adapter.ail",
-   "envelope_to_call@src/core/ports.ail"
+   "dispatch_one_typed@src/core/tool_dispatch_adapter.ail"
   ],
-  "provider_outcome_record@src/core/ports.ail": [
-   "provider_fault_class_id@src/core/dst_fault_catalogue.ail"
+  "live_wake_await@src/core/test/stub_step.ail": [
+   "live_wake_input@src/core/test/stub_step.ail",
+   "wake_outcome_of@src/core/ports.ail",
+   "wake_str@src/core/test/stub_step.ail"
   ],
-  "scripted_wake@src/core/ports.ail": [
-   "wake_read_unbound@src/core/ports.ail"
+  "no_generator@src/core/dst_generator.ail": [
+   "generator_state@src/core/dst_generator.ail"
   ],
-  "recording_wake@src/core/ports.ail": [
-   "wake_payload@src/core/ports.ail"
+  "parse_edit_ops@src/core/tool_runtime.ail": [
+   "parse_edit_ops_rec@src/core/tool_runtime.ail"
   ],
-  "cursor_wake@src/core/ports.ail": [
-   "advance_ordinal@src/core/ports.ail"
+  "parse_edit_ops_rec@src/core/tool_runtime.ail": [
+   "arg_bool@src/core/tool_runtime.ail",
+   "arg_string@src/core/tool_runtime.ail"
   ],
-  "recording_ext_effect@src/core/ports.ail": [
-   "fault_class_extension_effect@src/core/dst_fault_catalogue.ail"
+  "parse_exec_from_args@src/core/tool_runtime.ail": [
+   "arg_bool@src/core/tool_runtime.ail",
+   "arg_string@src/core/tool_runtime.ail",
+   "arg_string_list@src/core/tool_runtime.ail"
   ],
-  "scripted_file_write@src/core/ports.ail": [
-   "lookup_node@src/core/ports.ail",
-   "remove_path@src/core/ports.ail"
+  "parse_search_lines@src/core/tool_runtime.ail": [
+   "join_with_colon@src/core/tool_runtime.ail",
+   "parse_line_number@src/core/tool_runtime.ail"
   ],
-  "scripted_file_remove@src/core/ports.ail": [
-   "remove_path@src/core/ports.ail"
-  ],
-  "scripted_dir_make@src/core/ports.ail": [
-   "world_path_kind@src/core/ports.ail"
-  ],
-  "scripted_path_stat@src/core/ports.ail": [
-   "world_path_kind@src/core/ports.ail"
-  ],
-  "scripted_dir_list@src/core/ports.ail": [
-   "names_below@src/core/ports.ail",
-   "sort_names@src/core/ports.ail",
-   "world_path_kind@src/core/ports.ail"
-  ],
-  "dispatch_step@src/core/test/stub_step.ail": [
-   "advance@src/core/world_ordinal.ail"
+  "path_dirname@src/core/tool_runtime.ail": [
+   "path_dirname_rec@src/core/tool_runtime.ail"
   ],
   "ported_provider@src/core/session.ail": [
-   "empty_world_state@src/core/ports.ail",
    "generating_ports@src/core/test/stub_step.ail",
    "live_ports@src/core/test/stub_step.ail",
    "scripted_ports@src/core/test/stub_step.ail",
@@ -3214,6 +3742,282 @@
   "provider_error_is_retryable@src/core/dst_fault_catalogue.ail": [
    "contains_code@src/core/dst_fault_catalogue.ail",
    "provider_error_codes_retryable@src/core/dst_fault_catalogue.ail"
+  ],
+  "provider_outcome_record@src/core/ports.ail": [
+   "provider_fault_class_id@src/core/dst_fault_catalogue.ail"
+  ],
+  "recording_ext_effect@src/core/ports.ail": [
+   "fault_class_extension_effect@src/core/dst_fault_catalogue.ail"
+  ],
+  "replace_all_occurrences@src/core/tool_runtime.ail": [
+   "find_from@src/core/tool_runtime.ail"
+  ],
+  "run_edit_file@src/core/tool_runtime.ail": [
+   "apply_edits@src/core/tool_runtime.ail",
+   "atomic_write@src/core/tool_runtime.ail",
+   "build_edit_file_diff@src/core/tool_runtime.ail",
+   "first_changed_line@src/core/tool_runtime.ail",
+   "list_len@src/core/tool_runtime.ail",
+   "resolve_workdir_path@src/core/tool_runtime.ail",
+   "validate_path_common@src/core/tool_runtime.ail"
+  ],
+  "run_native_batch@src/core/tool_runtime.ail": [
+   "run_native_batch_rec@src/core/tool_runtime.ail"
+  ],
+  "run_native_batch_rec@src/core/tool_runtime.ail": [
+   "run_native_call@src/core/tool_runtime.ail"
+  ],
+  "run_native_call@src/core/tool_runtime.ail": [
+   "arg_bool@src/core/tool_runtime.ail",
+   "arg_json@src/core/tool_runtime.ail",
+   "arg_number@src/core/tool_runtime.ail",
+   "arg_string@src/core/tool_runtime.ail",
+   "parse_edit_ops@src/core/tool_runtime.ail",
+   "parse_exec_from_args@src/core/tool_runtime.ail",
+   "run_edit_file@src/core/tool_runtime.ail",
+   "run_process_result@src/core/tool_runtime.ail",
+   "run_read_file@src/core/tool_runtime.ail",
+   "run_search@src/core/tool_runtime.ail",
+   "run_write_file@src/core/tool_runtime.ail"
+  ],
+  "run_process_result@src/core/tool_runtime.ail": [
+   "cmd_string@src/core/tool_runtime.ail",
+   "isSome@src/core/tool_runtime.ail",
+   "mk_meta@src/core/tool_runtime.ail",
+   "process_error_to_string@src/core/tool_runtime.ail",
+   "shell_tokens_in_process@src/core/tool_runtime.ail",
+   "to_bash_result@src/core/tool_runtime.ail",
+   "to_test_result@src/core/tool_runtime.ail"
+  ],
+  "run_read_file@src/core/tool_runtime.ail": [
+   "join_lines@src/core/tool_runtime.ail",
+   "line_count_of@src/core/tool_runtime.ail",
+   "list_len@src/core/tool_runtime.ail",
+   "normalize_range@src/core/tool_runtime.ail",
+   "resolve_workdir_path@src/core/tool_runtime.ail",
+   "select_lines@src/core/tool_runtime.ail",
+   "validate_path_common@src/core/tool_runtime.ail"
+  ],
+  "run_search@src/core/tool_runtime.ail": [
+   "parse_search_lines@src/core/tool_runtime.ail",
+   "process_error_to_string@src/core/tool_runtime.ail",
+   "resolve_workdir_path@src/core/tool_runtime.ail"
+  ],
+  "run_write_file@src/core/tool_runtime.ail": [
+   "build_write_file_diff@src/core/tool_runtime.ail",
+   "path_dirname@src/core/tool_runtime.ail",
+   "resolve_workdir_path@src/core/tool_runtime.ail",
+   "validate_path_common@src/core/tool_runtime.ail"
+  ],
+  "salt_hash@src/core/dst_generator.ail": [
+   "hash_step@src/core/dst_generator.ail"
+  ],
+  "search_matches_to_json@src/core/tool_dispatch_adapter.ail": [
+   "match_to_json@src/core/tool_dispatch_adapter.ail"
+  ],
+  "seed_state@src/core/dst_generator.ail": [
+   "in_range@src/core/dst_generator.ail",
+   "salt_hash@src/core/dst_generator.ail"
+  ],
+  "shell_tokens_in_process@src/core/tool_runtime.ail": [
+   "any_shell_tokens@src/core/tool_runtime.ail",
+   "shell_command_needs_wrap@src/core/tool_runtime.ail"
+  ],
+  "to_bash_result@src/core/tool_runtime.ail": [
+   "cmd_string@src/core/tool_runtime.ail",
+   "mk_meta@src/core/tool_runtime.ail"
+  ],
+  "to_test_result@src/core/tool_runtime.ail": [
+   "cmd_string@src/core/tool_runtime.ail",
+   "mk_meta@src/core/tool_runtime.ail"
+  ],
+  "tool_result_item_to_json@src/core/tool_dispatch_adapter.ail": [
+   "search_matches_to_json@src/core/tool_dispatch_adapter.ail",
+   "tool_result_exit_code@src/core/tool_dispatch_adapter.ail"
+  ],
+  "tools@src/core/tool_catalog.ail": [
+   "bash_exec_schema@src/core/tool_catalog.ail",
+   "edit_file_schema@src/core/tool_catalog.ail",
+   "motoko_runtime_status_schema@src/core/tool_catalog.ail",
+   "read_file_schema@src/core/tool_catalog.ail",
+   "run_tests_schema@src/core/tool_catalog.ail",
+   "search_schema@src/core/tool_catalog.ail",
+   "write_file_schema@src/core/tool_catalog.ail"
+  ],
+  "tools_with_extensions@src/core/tool_catalog.ail": [
+   "collect_ext_schemas@src/core/tool_catalog.ail",
+   "tools@src/core/tool_catalog.ail"
+  ],
+  "trim_suffix_n@src/core/tool_runtime.ail": [
+   "drop_n@src/core/tool_runtime.ail"
+  ],
+  "validate_path_common@src/core/tool_runtime.ail": [
+   "has_parent_traversal_segment@src/core/tool_runtime.ail",
+   "is_absolute_path@src/core/tool_runtime.ail",
+   "path_error@src/core/tool_runtime.ail",
+   "starts_with_root_dir@src/core/tool_runtime.ail",
+   "strip_workdir_prefix@src/core/tool_runtime.ail"
+  ],
+  "wait_descriptors_json@src/core/phase_vocab.ail": [
+   "wait_descriptor_to_json@src/core/phase_vocab.ail"
+  ],
+  "wake_request_json@src/core/test/stub_step.ail": [
+   "wait_descriptors_json@src/core/phase_vocab.ail"
   ]
- }
+ },
+ "unlisted_callee_status": {
+  "acquire_temp_path@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "advance@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "ambient_dir_list@src/core/ports.ail": "FLAGGED",
+  "ambient_dir_make@src/core/ports.ail": "FLAGGED",
+  "ambient_env@src/core/ports.ail": "FLAGGED",
+  "ambient_file@src/core/ports.ail": "FLAGGED",
+  "ambient_file_remove@src/core/ports.ail": "FLAGGED",
+  "ambient_file_write@src/core/ports.ail": "FLAGGED",
+  "ambient_path_stat@src/core/ports.ail": "FLAGGED",
+  "any_shell_tokens@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "apply_edits@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "arg_bool@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "arg_json@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "arg_number@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "arg_string@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "arg_string_list@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "arg_string_list_rec@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "atomic_write@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "bash_exec_schema@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "bounded_draw@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "build_edit_file_diff@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "build_write_file_diff@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "choose_approval@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "choose_provider@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "choose_tool@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "clamp_text@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "cmd_args_suffix@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "cmd_string@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "collect_ext_schemas@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "collect_hook_schemas@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "common_prefix_len_lines@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "contains_code@src/core/dst_fault_catalogue.ail": "path_refused:src/core/dst_*.ail",
+  "count_kind@src/core/dst_interaction.ail": "path_refused:src/core/dst_*.ail",
+  "count_occurrences@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "declared_schemas@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "dispatch_one_typed@src/core/tool_dispatch_adapter.ail": "path_refused:src/core/tool_dispatch_adapter.ail",
+  "draw@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "draw_between@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "drop_n@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "edit_file_schema@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "ext_tool_schema@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "fault_class_extension_effect@src/core/dst_fault_catalogue.ail": "path_refused:src/core/dst_*.ail",
+  "find_from@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "first_changed_line@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "first_changed_line_rec@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "generated_provider_entry@src/core/ports.ail": "FLAGGED",
+  "generating_approval@src/core/ports.ail": "FLAGGED",
+  "generating_model_step@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "generating_ports@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "generating_tool@src/core/ports.ail": "FLAGGED",
+  "generator_authored_count@src/core/dst_interaction.ail": "path_refused:src/core/dst_*.ail",
+  "generator_installed@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "generator_state@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "has_parent_traversal_segment@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "has_parent_traversal_segment_rec@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "has_shell_tokens@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "hash_step@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "hook_schemas@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "identity_kind@src/core/dst_interaction.ail": "path_refused:src/core/dst_*.ail",
+  "in_range@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "interaction_kind@src/core/dst_interaction.ail": "path_refused:src/core/dst_*.ail",
+  "isSome@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "is_absolute_path@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "join_lines@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "join_with_colon@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "line_count_of@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "list_len@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "live_ports@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "live_wake_await@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "live_wake_input@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "match_to_json@src/core/tool_dispatch_adapter.ail": "path_refused:src/core/tool_dispatch_adapter.ail",
+  "mk_meta@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "motoko_runtime_status_schema@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "no_generator@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "non_empty_lines@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "normalize_range@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "note_bound@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "nth_code@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "parse_edit_ops@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "parse_edit_ops_rec@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "parse_exec_from_args@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "parse_line_number@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "parse_search_lines@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "path_dirname@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "path_dirname_rec@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "path_error@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "prefix_lines@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "prng_modulus@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "prng_multiplier@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "process_error_to_string@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "provided_names@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "provider_error_codes_non_retryable@src/core/dst_fault_catalogue.ail": "path_refused:src/core/dst_*.ail",
+  "provider_error_codes_retryable@src/core/dst_fault_catalogue.ail": "path_refused:src/core/dst_*.ail",
+  "provider_fault_class_id@src/core/dst_fault_catalogue.ail": "path_refused:src/core/dst_*.ail",
+  "read_file_schema@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "render_hunk_range@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "render_hunk_range_at@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "repeat_chunk@src/core/ports.ail": "FLAGGED",
+  "replace_all_occurrences@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "replace_once@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "resolve_workdir_path@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "run_edit_file@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "run_native_batch@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "run_native_batch_rec@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "run_native_call@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "run_process_result@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "run_read_file@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "run_search@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "run_tests_schema@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "run_write_file@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "salt_hash@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "scripted_ports@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "scripted_world_state@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "search_matches_to_json@src/core/tool_dispatch_adapter.ail": "path_refused:src/core/tool_dispatch_adapter.ail",
+  "search_schema@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "seed_state@src/core/dst_generator.ail": "path_refused:src/core/dst_*.ail",
+  "select_lines@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "shell_command_needs_wrap@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "shell_tokens_in_process@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "starts_with_root_dir@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "strip_workdir_prefix@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "system_prompt_cache_breakpoint@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "to_bash_result@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "to_test_result@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "tool_call_to_envelope@src/core/tool_dispatch_adapter.ail": "path_refused:src/core/tool_dispatch_adapter.ail",
+  "tool_result_exit_code@src/core/tool_dispatch_adapter.ail": "path_refused:src/core/tool_dispatch_adapter.ail",
+  "tool_result_item_to_json@src/core/tool_dispatch_adapter.ail": "path_refused:src/core/tool_dispatch_adapter.ail",
+  "tools@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "tools_with_extensions@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail",
+  "trim_suffix_n@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "validate_path_common@src/core/tool_runtime.ail": "path_refused:src/core/tool_runtime.ail",
+  "wait_descriptor_to_json@src/core/phase_vocab.ail": "FLAGGED",
+  "wait_descriptors_json@src/core/phase_vocab.ail": "FLAGGED",
+  "wake_outcome_of@src/core/ports.ail": "FLAGGED",
+  "wake_request_json@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "wake_str@src/core/test/stub_step.ail": "path_refused:src/core/test/**",
+  "write_file_schema@src/core/tool_catalog.ail": "path_refused:src/core/tool_catalog.ail"
+ },
+ "closure_flags": [
+  "ambient_dir_list@src/core/ports.ail",
+  "ambient_dir_make@src/core/ports.ail",
+  "ambient_env@src/core/ports.ail",
+  "ambient_file@src/core/ports.ail",
+  "ambient_file_remove@src/core/ports.ail",
+  "ambient_file_write@src/core/ports.ail",
+  "ambient_path_stat@src/core/ports.ail",
+  "generated_provider_entry@src/core/ports.ail",
+  "generating_approval@src/core/ports.ail",
+  "generating_tool@src/core/ports.ail",
+  "repeat_chunk@src/core/ports.ail",
+  "wait_descriptor_to_json@src/core/phase_vocab.ail",
+  "wait_descriptors_json@src/core/phase_vocab.ail",
+  "wake_outcome_of@src/core/ports.ail"
+ ]
 }

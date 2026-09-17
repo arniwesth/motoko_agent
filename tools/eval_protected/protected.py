@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """The protected-source checker. ADR-004 v5 D5; PLAN-004 v2 §3 P1.4b.
 
-    gen   --at <commit> --symbols <starting_set.json> [--out M] [--skip-crosscheck]
+    gen   --at <commit> --symbols <starting_set.json> [--out M] [--skip-crosscheck] [--allow-flags]
     check --manifest M --tree <dir|rev> [--json] [--pins-root DIR]
     diff  --manifest M --parent <dir|rev> --candidate <dir|rev>
     pins  --at <commit> [--pins-root DIR]
     crosscheck --at <commit> --symbols <starting_set.json>
 
 Exit codes: 0 clean; 1 refused (check) or a pin mismatch (pins) or a failed
-cross-check; 2 hard error (lexer, overlap, missing/duplicate symbol at gen,
+cross-check or a flagged unlisted callee (gen); 2 hard error (lexer, overlap, missing/duplicate symbol at gen,
 usage).
 
 `gen` reads `git show <commit>:<path>` and never the working tree. `check`
@@ -217,13 +217,71 @@ def resolve_members(tree, symset):
                 members[key] = tspan
                 order.append((tpath, tspan.symbol, f"type_closure:{span.symbol}"))
                 work.append((tpath, tspan))
-    callees = {}
-    for (path, s), span in members.items():
-        if span.kind.startswith("func"):
-            c = _funcs_called(tree, path, span, members)
-            if c:
-                callees[f"{s}@{path}"] = c
-    return members, order, {k: sorted(v) for k, v in sorted(not_pinned.items())}, callees
+    callees, via = unlisted_closure(tree, members)
+    return members, order, {k: sorted(v) for k, v in sorted(not_pinned.items())}, callees, via
+
+
+def unlisted_closure(tree, members):
+    """The callee report, transitive to a fixed point (P1R R2): every function
+    a member calls that is not a member, then every function THOSE call, until
+    nothing new is reached. Returns caller -> [callee] for every function
+    walked (members and unlisted callees alike) and, per unlisted callee, the
+    first caller it was reached through."""
+    callees, via = {}, {}
+    work = sorted((path, s, span) for (path, s), span in members.items() if span.kind.startswith("func"))
+    work.reverse()
+    while work:
+        path, s, span = work.pop()
+        c = _funcs_called(tree, path, span, members)
+        if not c:
+            continue
+        callees[f"{s}@{path}"] = c
+        for key in c:
+            if key in via:
+                continue
+            via[key] = f"{s}@{path}"
+            name, cpath = key.split("@", 1)
+            ds = [d for d in tree.must(cpath).by_name(name) if d.kind.startswith("func")]
+            if len(ds) == 1:
+                work.append((cpath, name, ds[0]))
+            else:
+                raise HardError(f"{cpath}: unlisted callee {name} is declared {len(ds)} times")
+    return dict(sorted(callees.items())), dict(sorted(via.items()))
+
+
+def _glob_re(pattern):
+    out = []
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def path_refused_by(path, patterns):
+    for pat in patterns:
+        if _glob_re(pat).match(path):
+            return pat
+    return None
+
+
+def closure_status(via, patterns):
+    """Per unlisted callee: `path_refused:<pattern>`, or FLAGGED (a missing
+    member by D5's definition: a candidate may edit it and no span covers it)."""
+    status, flags = {}, []
+    for key in sorted(via):
+        pat = path_refused_by(key.split("@", 1)[1], patterns)
+        status[key] = f"path_refused:{pat}" if pat else "FLAGGED"
+        if not pat:
+            flags.append(key)
+    return status, flags
 
 
 def file_spans(tree, path, decl_symbols, call_sites):
@@ -265,10 +323,11 @@ def stmt_record(st, src):
 # gen
 # ---------------------------------------------------------------------------
 
-def generate(commit_spec, symset, crosscheck=True, log=sys.stderr):
+def generate(commit_spec, symset, crosscheck=True, log=sys.stderr, allow_flags=False):
     gs = GitSource(commit_spec)
     tree = Tree(gs)
-    members, order, not_pinned, callees = resolve_members(tree, symset)
+    members, order, not_pinned, callees, via = resolve_members(tree, symset)
+    status, flags = closure_status(via, symset.get("path_refused", []))
     files = sorted({k[0] for k in members} | set(symset["files"].keys()))
     by_file = {f: set() for f in files}
     for (f, s) in members:
@@ -293,6 +352,11 @@ def generate(commit_spec, symset, crosscheck=True, log=sys.stderr):
     for r in out_spans:
         if r["kind"] in DECL_KINDS:
             r["member_of"] = why[f"{r['symbol']}@{r['file']}"]
+    # after every hard error (exit 2) and before the slow cross-check
+    if flags and not allow_flags:
+        raise ClosureFlagged([(k, via[k]) for k in flags])
+    for k in flags:
+        print(f"FLAG unlisted callee {k} (via {via[k]}): recorded in closure_flags (--allow-flags)", file=log)
     unbraced = [r for r in out_spans if r["kind"] in UNBRACED_KINDS]
     cc = {"status": "skipped", "spans": len(unbraced)}
     if crosscheck:
@@ -308,7 +372,15 @@ def generate(commit_spec, symset, crosscheck=True, log=sys.stderr):
         "crosscheck": cc,
         "named_types_not_pinned": not_pinned,
         "unlisted_callees": callees,
+        "unlisted_callee_status": status,
+        "closure_flags": flags,
     }
+
+
+class ClosureFlagged(Exception):
+    def __init__(self, flags):
+        super().__init__("unlisted callees outside every path-refused file")
+        self.flags = flags
 
 
 class CrossCheckFailed(Exception):
@@ -725,6 +797,9 @@ def main(argv=None):
     g.add_argument("--symbols", required=True)
     g.add_argument("--out")
     g.add_argument("--skip-crosscheck", action="store_true")
+    g.add_argument("--allow-flags", action="store_true",
+                   help="write the manifest although unlisted callees are flagged; each is recorded in "
+                        "closure_flags and printed (for a membership ruling, never silently)")
     c = sub.add_parser("check")
     c.add_argument("--manifest", required=True)
     c.add_argument("--tree", required=True)
@@ -749,11 +824,18 @@ def main(argv=None):
             with open(args.symbols) as f:
                 symset = json.load(f)
             try:
-                m = generate(args.at, symset, crosscheck=not args.skip_crosscheck)
+                m = generate(args.at, symset, crosscheck=not args.skip_crosscheck, allow_flags=args.allow_flags)
             except CrossCheckFailed as e:
                 print(json.dumps(e.cc, indent=1), file=sys.stderr)
                 print("eval_protected gen: parser cross-check FAILED: " + ", ".join(e.cc["failed"]),
                       file=sys.stderr)
+                return 1
+            except ClosureFlagged as e:
+                for key, caller in e.flags:
+                    print(f"FLAG unlisted callee {key} (via {caller}): not a member, and its file is not "
+                          f"path-refused (a missing member, ADR-004 v5 D5)", file=sys.stderr)
+                print(f"eval_protected gen: closure not closed: {len(e.flags)} flagged callees; "
+                      f"no manifest written", file=sys.stderr)
                 return 1
             text = json.dumps(m, indent=1, sort_keys=False) + "\n"
             if args.out:
@@ -762,7 +844,9 @@ def main(argv=None):
             else:
                 sys.stdout.write(text)
             print(f"eval_protected gen: {len(m['spans'])} spans in {len(m['protected_files'])} files "
-                  f"at {m['source_commit'][:12]}; crosscheck {m['crosscheck']['status']}", file=sys.stderr)
+                  f"at {m['source_commit'][:12]}; crosscheck {m['crosscheck']['status']}; "
+                  f"{len(m['unlisted_callee_status'])} unlisted callees, {len(m['closure_flags'])} flagged",
+                  file=sys.stderr)
             return 0
         if args.cmd == "check":
             with open(args.manifest) as f:
@@ -799,7 +883,7 @@ def main(argv=None):
         if args.cmd == "crosscheck":
             with open(args.symbols) as f:
                 symset = json.load(f)
-            m = generate(args.at, symset, crosscheck=False)
+            m = generate(args.at, symset, crosscheck=False, allow_flags=True)
             gs = GitSource(args.at)
             cc = run_crosscheck(gs, Tree(gs), [r for r in m["spans"] if r["kind"] in UNBRACED_KINDS])
             print(json.dumps({k: v for k, v in cc.items() if k != "results"}, indent=1))

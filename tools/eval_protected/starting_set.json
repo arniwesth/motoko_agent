@@ -1,53 +1,157 @@
 {
   "schema": "eval-protected-symbols/1",
-  "source": "ADR-004 v5 D5 'Protected regions' (the reviewed starting set, with review C5's transitive members); PLAN-004 v2 §3 P1.4b 'Manifest'",
-  "note": "Every file named here is a protected file: its imports region (one aggregate span per contiguous run of import statements) is protected too. `type_closure` adds every type declaration a listed member names, resolved in the member's file or through its import statements to a project module (src/...), and repeated over the added types' own spans — but PINNED only when declared in one of `type_closure_files` (D5: 'in each of the three files … every type declaration a listed function names'); a named type declared elsewhere (e.g. phase_vocab.ail, which D5 leaves unfrozen on purpose) is listed in the manifest's `named_types_not_pinned` for review. The closure is REVIEWED, not derived (D5): the manifest's `unlisted_callees` is a report for P1R/P1G, not a membership rule.",
+  "source": "ADR-004 v5 D5 'Protected regions' (the reviewed starting set, with review C5's transitive members); PLAN-004 v2 \u00a73 P1.4b 'Manifest'",
+  "note": "Every file named here is a protected file: its imports region (one aggregate span per contiguous run of import statements) is protected too. `type_closure` adds every type declaration a listed member names, resolved in the member's file or through its import statements to a project module (src/...), and repeated over the added types' own spans \u2014 but PINNED only when declared in one of `type_closure_files` (D5: 'in each of the three files \u2026 every type declaration a listed function names'); a named type declared elsewhere (e.g. phase_vocab.ail, which D5 leaves unfrozen on purpose) is listed in the manifest's `named_types_not_pinned` for review. The closure is REVIEWED, not derived (D5): the manifest's `unlisted_callees` is a report for P1R/P1G, not a membership rule. It is transitive to a fixed point (P1R R2): every function a member calls, and every function those call, that is not itself a member; `gen` refuses (exit 1, `FLAG unlisted callee \u2026`) when one of them is declared in a file no `path_refused` pattern matches, and otherwise records each with the pattern that refuses its file (`unlisted_callee_status`).",
+  "path_refused_source": "scripts/eval/candidate.py D3_PATHS and EVALUATOR_PATHS (ADR-004 v5 D3's path list and PLAN-004 \u00a70.5's evaluator paths, as concrete paths at A); `*` does not cross `/`, `**` does",
+  "path_refused": [
+    "src/core/prompts.ail",
+    "src/core/agents_md.ail",
+    "src/core/ext/**",
+    "src/core/ext_world.ail",
+    "src/core/hook_phase.ail",
+    "src/core/tool_catalog.ail",
+    "src/core/tool_contract.ail",
+    "src/core/backend.ail",
+    "src/core/ai_compat.ail",
+    "src/core/env_client.ail",
+    "src/core/config.ail",
+    "src/core/context_limit.ail",
+    "src/core/tool_runtime.ail",
+    "src/core/tool_dispatch_adapter.ail",
+    "src/core/tool_envelope_dispatch.ail",
+    "src/core/tool_stream_phase.ail",
+    "src/core/dst_*.ail",
+    "src/core/test/**",
+    "scripts/dst/strict_replay_dst.ail",
+    "src/eval/journal/**",
+    "scripts/eval/**"
+  ],
   "type_closure": true,
-  "type_closure_files": ["src/core/ports.ail", "src/core/test/stub_step.ail", "src/core/session.ail"],
+  "type_closure_files": [
+    "src/core/ports.ail",
+    "src/core/test/stub_step.ail",
+    "src/core/session.ail"
+  ],
   "files": {
     "src/core/ports.ail": {
       "symbols": [
         "record_interaction",
-        "encode_provider_outcome", "decode_provider_outcome", "encode_exhausted_provider_outcome",
-        "encode_tool_outcome", "decode_tool_outcome",
-        "tool_calls_json", "tool_calls_of", "bool_field", "str_field", "int_field", "json_array",
-        "world_tool", "live_tool_outcome", "scripted_tool_outcome", "recording_tool",
-        "tool_outcome_record", "provider_outcome_record",
-        "scripted_step_ai_error", "scripted_step_faults",
-        "recording_clock", "virtual_clock",
-        "recording_env", "scripted_env", "lookup_env", "env_has_key",
-        "ports_shape_probe", "scripted_file", "lookup_file",
-        "scripted_approval", "recording_approval",
-        "scripted_wake", "recording_wake", "cursor_wake",
-        "recording_file_write", "recording_file_remove", "recording_dir_make", "recording_ext_effect",
-        "scripted_file_write", "scripted_file_remove", "scripted_dir_make", "scripted_path_stat",
-        "scripted_dir_list", "world_ext_effect",
-        "ToolInvocation", "ToolOutcome", "ToolExecution", "ScriptedStep", "ScriptedTool",
-        "WorldState", "Ports"
+        "encode_provider_outcome",
+        "decode_provider_outcome",
+        "encode_exhausted_provider_outcome",
+        "encode_tool_outcome",
+        "decode_tool_outcome",
+        "tool_calls_json",
+        "tool_calls_of",
+        "bool_field",
+        "str_field",
+        "int_field",
+        "json_array",
+        "world_tool",
+        "live_tool_outcome",
+        "scripted_tool_outcome",
+        "recording_tool",
+        "tool_outcome_record",
+        "provider_outcome_record",
+        "scripted_step_ai_error",
+        "scripted_step_faults",
+        "recording_clock",
+        "virtual_clock",
+        "recording_env",
+        "scripted_env",
+        "lookup_env",
+        "env_has_key",
+        "ports_shape_probe",
+        "scripted_file",
+        "lookup_file",
+        "scripted_approval",
+        "recording_approval",
+        "scripted_wake",
+        "recording_wake",
+        "cursor_wake",
+        "recording_file_write",
+        "recording_file_remove",
+        "recording_dir_make",
+        "recording_ext_effect",
+        "scripted_file_write",
+        "scripted_file_remove",
+        "scripted_dir_make",
+        "scripted_path_stat",
+        "scripted_dir_list",
+        "world_ext_effect",
+        "ToolInvocation",
+        "ToolOutcome",
+        "ToolExecution",
+        "ScriptedStep",
+        "ScriptedTool",
+        "WorldState",
+        "Ports",
+        "tool_call_json",
+        "has_key",
+        "opt_int_field",
+        "empty_world_state",
+        "envelope_to_call",
+        "advance_ordinal",
+        "wake_payload",
+        "wake_read_unbound",
+        "lookup_node",
+        "remove_path",
+        "world_path_kind",
+        "names_below",
+        "has_children",
+        "is_beneath",
+        "segment_below",
+        "wake_outcome_detail",
+        "wake_outcome_id",
+        "sort_names"
+      ]
+    },
+    "src/core/world_ordinal.ail": {
+      "symbols": [
+        "advance"
       ]
     },
     "src/core/tool_contract.ail": {
-      "symbols": ["ToolCallEnvelope"]
+      "symbols": [
+        "ToolCallEnvelope"
+      ]
     },
     "src/core/dst_interaction.ail": {
-      "symbols": ["TimedOutcome", "OutcomeStatus"]
+      "symbols": [
+        "TimedOutcome",
+        "OutcomeStatus"
+      ]
     },
     "src/core/test/stub_step.ail": {
       "symbols": [
-        "recording_ports", "recording_model_step", "scripted_to_step_result", "terminal_step",
-        "play_chunks", "scripted_chunks", "chunk_records", "provider_calls_in", "dispatch_step",
+        "recording_ports",
+        "recording_model_step",
+        "scripted_to_step_result",
+        "terminal_step",
+        "play_chunks",
+        "scripted_chunks",
+        "chunk_records",
+        "provider_calls_in",
+        "dispatch_step",
         "StepProvider"
       ]
     },
     "src/core/session.ail": {
-      "symbols": ["provider_api_model", "ported_provider"],
-      "call_sites": ["dispatch_step"]
+      "symbols": [
+        "provider_api_model",
+        "ported_provider"
+      ],
+      "call_sites": [
+        "dispatch_step"
+      ]
     },
     "src/core/dst_fault_catalogue.ail": {
       "symbols": [
-        "fault_class_tool_failed", "fault_class_tool_correlation_mismatch",
+        "fault_class_tool_failed",
+        "fault_class_tool_correlation_mismatch",
         "fault_class_tool_deadline_exceeded",
-        "fault_class_provider_error_retryable", "fault_class_provider_error_non_retryable",
+        "fault_class_provider_error_retryable",
+        "fault_class_provider_error_non_retryable",
         "fault_class_provider_partial_stream_then_error",
         "fault_class_provider_protocol_inconsistent_result",
         "provider_error_is_retryable"

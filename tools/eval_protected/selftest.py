@@ -39,9 +39,19 @@ PORTS = "src/core/ports.ail"
 STUB = "src/core/test/stub_step.ail"
 SESSION = "src/core/session.ail"
 CONTRACT = "src/core/tool_contract.ail"
+ORDINAL = "src/core/world_ordinal.ail"
 OTHER = "src/core/dst_generator.ail"       # not a protected file
 PINS_REV = "62a919d4c6c00656859558c4ad58574789625e8c"   # P1.4a's commit: digests.ail, 19 pins
 PINS_REV_READER = "a225404"                              # P1.2a's commit: + reader.ail, 127 pins in all
+# The transitive closure's open flags at A after P1R R2's 14 members: unlisted
+# callees in files no path_refused pattern matches, awaiting a membership
+# ruling (ADR-004's next revision). Pinned so a change to the set is seen.
+FLAGS_AT_A = sorted([f"{n}@{PORTS}" for n in (
+    "ambient_dir_list", "ambient_dir_make", "ambient_env", "ambient_file", "ambient_file_remove",
+    "ambient_file_write", "ambient_path_stat", "generated_provider_entry", "generating_approval",
+    "generating_tool", "repeat_chunk",
+    "wake_outcome_of")] + [
+    f"{n}@src/core/phase_vocab.ail" for n in ("wait_descriptor_to_json", "wait_descriptors_json")])
 NONBRACED_AT_A = 8                         # protected non-braced spans at A (the cross-check's population)
 
 
@@ -236,6 +246,21 @@ def m_call_site_twice(t):
         d, b"func zz_second_call(st: int) -> int {\n  let e = dispatch_step(st);\n  e\n}"))
 
 
+def m_token_has_key(t):
+    # P1R R2: a closure member that was an unlisted callee at 99 spans
+    edit(t, PORTS, in_span(PORTS, "has_key", b"(obj: Json, key: string)", b"(obj: Json, key : string)"))
+
+
+def m_token_advance(t):
+    # P1R R2: the 7th protected file's one member
+    edit(t, ORDINAL, in_span(ORDINAL, "advance", b"advance_ordinal(w, c)", b"advance_ordinal(w , c)"))
+
+
+def m_ordinal_imports(t):
+    edit(t, ORDINAL, lambda d: replace_once(d, b"import std/list as List (length)",
+                                            b"import std/list as L (length)"))
+
+
 def m_pin_drift(t):
     edit(t, "src/core/phase_vocab.ail", in_span("src/core/phase_vocab.ail", "frame", b"(", b"( "))
 
@@ -276,6 +301,12 @@ CHECK_CASES = [
      {("duplicate", "dispatch_step@call")}),
     ("unterminated_string", "an unterminated string literal", m_unterminated, 2, None),
     ("unbalanced_paren", "an unbalanced parenthesis", m_unbalanced, 2, None),
+    ("token_has_key", "one token in has_key (a P1R R2 member)", m_token_has_key, 1,
+     {("changed", "has_key")}),
+    ("token_world_ordinal_advance", "one token in world_ordinal.advance (a P1R R2 member)", m_token_advance, 1,
+     {("changed", "advance")}),
+    ("world_ordinal_imports", "an alias changed in world_ordinal.ail's imports region", m_ordinal_imports, 1,
+     {("changed", "<imports:1>")}),
     ("pin_drift_reported", "a pinned copy's source changed: drift reported, not refused", m_pin_drift, 0, set()),
 ]
 
@@ -289,6 +320,7 @@ EXTRA = {
     and _detail_has(rep, "scripted_step_faults", "span unchanged"),
     "unterminated_string": lambda rep, err: "unterminated string literal" in err and PORTS in err,
     "unbalanced_paren": lambda rep, err: ("mismatched" in err or "unbalanced" in err) and PORTS in err,
+    "world_ordinal_imports": lambda rep, err: all(f["file"] == ORDINAL for f in rep["findings"]),
     "pin_drift_reported": lambda rep, err: [d["symbol"] for d in rep["pin_drift"]] == ["frame"],
 }
 
@@ -334,7 +366,7 @@ def main(argv=None):
     manifest = os.path.join(scratch, "manifest.json")
     try:
         # 1. the independent manifest, from the commit
-        gen_args = ["gen", "--at", args.at, "--symbols", SYMBOLS, "--out", manifest]
+        gen_args = ["gen", "--at", args.at, "--symbols", SYMBOLS, "--out", manifest, "--allow-flags"]
         if args.skip_crosscheck:
             gen_args.append("--skip-crosscheck")
         rc, out, err = run(gen_args)
@@ -388,7 +420,7 @@ def main(argv=None):
             shutil.rmtree(tree)
 
         # 5. gen-side hard errors (exit 2)
-        def gen_case(cid, desc, symset, repo=None, needle=""):
+        def gen_case(cid, desc, symset, repo=None, needle="", want_rc=2, absent=""):
             if only and cid not in only:
                 return
             sp = os.path.join(scratch, cid + ".json")
@@ -397,8 +429,8 @@ def main(argv=None):
             cmd = [sys.executable, TOOL, "gen", "--at", "HEAD" if repo else args.at, "--symbols", sp,
                    "--skip-crosscheck"]
             r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo or os.getcwd())
-            ok = r.returncode == 2 and needle in r.stderr
-            R.record(cid, desc, ok, verdict_of(r.returncode), needle,
+            ok = r.returncode == want_rc and needle in r.stderr and not (absent and absent in r.stderr)
+            R.record(cid, desc, ok, {0: "generated", 1: "flagged"}.get(r.returncode, verdict_of(r.returncode)), needle,
                      detail=f"exit {r.returncode}; {r.stderr.strip()[:300]}")
 
         gen_case("gen_missing_symbol", "gen: a missing symbol",
@@ -407,6 +439,61 @@ def main(argv=None):
         gen_case("gen_overlap", "gen: two protected spans overlap (a call site inside a protected declaration)",
                  {"files": {PORTS: {"symbols": ["recording_tool"], "call_sites": ["world_tool"]}}},
                  needle="spans overlap")
+        # the closure report (P1R R2): an unlisted callee in a file that is not
+        # path-refused is FLAGGED by gen (exit 1), directly or transitively
+        with open(SYMBOLS) as f:
+            full = json.load(f)
+
+        def without(*names):
+            s = json.loads(json.dumps(full))
+            for spec in s["files"].values():
+                spec["symbols"] = [x for x in spec.get("symbols", []) if x not in names]
+            return s
+        gen_case("gen_flags_direct_callee", "gen flags an unlisted direct callee (has_key removed)",
+                 without("has_key"), want_rc=1,
+                 needle="FLAG unlisted callee has_key@src/core/ports.ail")
+        gen_case("gen_flags_transitive_callee",
+                 "gen flags a callee reached only through an unlisted callee (tool_calls_json, tool_call_json removed)",
+                 without("tool_calls_json", "tool_call_json"), want_rc=1,
+                 needle="FLAG unlisted callee tool_call_json@src/core/ports.ail (via tool_calls_json@")
+        gen_case("gen_path_refused_not_flagged",
+                 "gen does not flag an unlisted callee in a path-refused file (advance's file refused)",
+                 dict(without("advance"), path_refused=full.get("path_refused", []) + [ORDINAL]), want_rc=1,
+                 needle="closure not closed: %d flagged" % len(FLAGS_AT_A),
+                 absent="FLAG unlisted callee advance@")
+        if not only or "closure_flags_at_a" in only:
+            st = m.get("unlisted_callee_status", {})
+            flagged = m.get("closure_flags")
+            ok = (flagged == FLAGS_AT_A and bool(st)
+                  and all(v.startswith("path_refused:") for k, v in st.items() if k not in FLAGS_AT_A)
+                  and all(st[k] == "FLAGGED" for k in FLAGS_AT_A)
+                  and st.get("dispatch_one_typed@src/core/tool_dispatch_adapter.ail") == "path_refused:"
+                  "src/core/tool_dispatch_adapter.ail")
+            R.record("closure_flags_at_a",
+                     f"A's transitive closure: {len(st)} unlisted callees, exactly the {len(FLAGS_AT_A)} "
+                     f"recorded flags open, the rest path-refused",
+                     ok, "pass" if ok else "fail", "-", detail=f"flags {flagged}")
+        if not only or "path_refused_glob" in only:
+            pats = full["path_refused"]
+            probes = {"src/core/dst_fault_catalogue.ail": "src/core/dst_*.ail",
+                      "src/core/test/sub/x.ail": "src/core/test/**",
+                      "src/core/dst_sub/x.ail": None,          # `*` does not cross `/`
+                      "src/core/prompts.ail.orig": None,       # anchored at the end
+                      "x/src/core/prompts.ail": None,          # anchored at the start
+                      PORTS: None, ORDINAL: None}
+            got = {k: P.path_refused_by(k, pats) for k in probes}
+            ok = got == probes
+            R.record("path_refused_glob", "path_refused patterns: `*` stays in a segment, `**` crosses, anchored",
+                     ok, "pass" if ok else "fail", "-", detail=str(got))
+        if not only or "committed_manifest_current" in only:
+            with open(os.path.join(HERE, "manifest-A.json")) as f:
+                committed = json.load(f)
+            if args.skip_crosscheck:   # the only field the flag changes
+                committed = dict(committed, crosscheck=m["crosscheck"])
+            ok = committed == m
+            R.record("committed_manifest_current", "the committed manifest-A.json equals gen --at A"
+                     + (" (crosscheck field excluded: skipped)" if args.skip_crosscheck else ""),
+                     ok, "pass" if ok else "fail", "-")
         if not only or "gen_duplicate_symbol" in only:
             repo = os.path.join(scratch, "dup-repo")
             shutil.copytree(pristine, os.path.join(repo))
