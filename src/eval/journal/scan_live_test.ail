@@ -14,7 +14,13 @@
 --   m12_artifact_load_program
 --     program_artifact(p) is encode_artifact(p)'s bytes; written to a file,
 --     load_program gives a program with the same digest and the same bytes;
---     one changed body byte → LoadRefused (digest mismatch).
+--     one changed body byte → LoadRefused (digest mismatch). And WHY
+--     program_artifact does not call encode_artifact (P1R C7): a program
+--     whose environment key is credential-bearing (`FX_API_TOKEN`) is
+--     report-only under D6's policy (scan.ail: no refusal) but
+--     EncodeRefused by encode_artifact's own gate, so calling it would
+--     re-impose the policy D6 replaced; where the gate encodes, the bytes
+--     are equal (asserted above).
 --   m12_copies_agree_with_dst_secrets
 --     drift probe: on the fixtures the evaluator's shape copies give what
 --     dst_secrets.scan_text gives (per rule), and scan_text names only the
@@ -53,7 +59,8 @@ import src/core/dst_secrets (scan_text, EnvKeySite, secret_rule)
 import src/eval/journal/scan (
   EntryInputs, EntryOutcome, EntryWritten, EntryRefused, EntryRefusal, NamedText,
   program_artifact, artifact_digest, write_entry, write_layout, refusal_label,
-  entry_file_names, fixture_entry, fixture_poisoned_entry, CMetadata, ScanSite, policy_text, reason_id
+  entry_file_names, fixture_entry, fixture_poisoned_entry, CMetadata, ScanSite, policy_text, reason_id,
+  scan_program, scan_refused
 )
 import src/eval/journal/admission (Aggregate)
 import src/eval/journal/testdata/scan_fixtures (
@@ -109,8 +116,11 @@ func m12_artifact_load_program(tmp: string) -> bool ! {IO, FS} {
     LoadRefused(rs) => has_decode_rule(rs, "artifact-digest-mismatch"),
     LoadIoError(_) => false
   };
-  let _ = println("  artifact digest=${artifact_digest(p)} same_bytes=${show(same)} loaded=${show(loaded)} tampered_refused=${show(tampered)}");
-  lt_report("m12_artifact_load_program", same && loaded && tampered)
+  let named = { p | initial_world: { p.initial_world | synthetic_environment: [{ key: "FX_API_TOKEN", value: "plain" }] } };
+  let gate_refuses = match encode_artifact(named) { Encoded(_) => false, EncodeRefused(fs) => List.length(fs) > 0 };
+  let policy_admits = not scan_refused(scan_program(named)) && List.length(scan_program(named)) > 0;
+  let _ = println("  artifact digest=${artifact_digest(p)} same_bytes=${show(same)} loaded=${show(loaded)} tampered_refused=${show(tampered)} credential_name: gate_refuses=${show(gate_refuses)} policy_reports_only=${show(policy_admits)}");
+  lt_report("m12_artifact_load_program", same && loaded && tampered && gate_refuses && policy_admits)
 }
 
 pure func st_site() -> ScanSite { { component: CMetadata, location: Aggregate("fx"), field: "text" } }

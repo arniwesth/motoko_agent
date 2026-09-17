@@ -8,6 +8,8 @@
 --   run_source_findings(lines, jw, run, log)        -> [AdmissionFinding]    (A1..A4)
 --   admit_source(label, entry, kind, ids, cmp, lines, jw, epoch, workdir, scan)
 --                                                   -> AdmissionOutcome
+--                 (with the witness and the A8 result, which the entry
+--                 records keep: `candidate_checks_run.entry_of_admission`)
 --   admit_entry(label, entry, kind, ids, cmp, journal, log, sel, env, epoch, workdir, scan)
 --                                                   -> AdmissionOutcome
 --
@@ -51,7 +53,8 @@ import src/eval/journal/admission (
   begin_line, observed_end, preflight, a9b_unchecked, manifest_of, admission_program, refused_report
 )
 import src/eval/journal/admission_run (admission_run, frame_observation, end_observation, admission_findings)
-import src/eval/journal/bridge (a8_of_run)
+import src/core/dst_discovery (DiscoveryWitness)
+import src/eval/journal/bridge (A8Result, a8_of_run, run_witness)
 import src/eval/journal/source_checks (
   Admission, TranscriptObservation, AppendedRecord,
   source_chain, check_a1, transcript_expectation, check_a2,
@@ -91,7 +94,9 @@ export type AdmissionOutcome = {
   report: AdmissionReport,
   source: [AdmissionFinding],
   findings: [AdmissionFinding],
-  admission: Admission
+  admission: Admission,
+  witness: Option[DiscoveryWitness],
+  a8: Option[A8Result]
 }
 
 export func admit_source(label: string, entry: string, kind: EntryKind, ids: Identities, cmp: Comparators, lines: [Json], jw: JournalWorld, epoch: int, workdir: string, scan: [string]) -> AdmissionOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
@@ -100,7 +105,8 @@ export func admit_source(label: string, entry: string, kind: EntryKind, ids: Ide
   match pre {
     _ :: _ => {
       let r = refused_report(label, jw, pre, unchecked);
-      { report: r, source: [], findings: pre, admission: admission_verdict(entry, jw, scan, pre, false, unchecked) }
+      { report: r, source: [], findings: pre, admission: admission_verdict(entry, jw, scan, pre, false, unchecked),
+        witness: None, a8: None }
     },
     [] => {
       let w0 = journal_world_state(jw, epoch);
@@ -121,7 +127,8 @@ export func admit_source(label: string, entry: string, kind: EntryKind, ids: Ide
         findings: p16, program: Some(p), program_digest: "sha256:${program_digest(encode_body(p))}",
         interactions: List.length(run.world.log), unchecked: unchecked
       };
-      { report: report, source: src, findings: all, admission: admission_verdict(entry, jw, scan, all, true, unchecked) }
+      { report: report, source: src, findings: all, admission: admission_verdict(entry, jw, scan, all, true, unchecked),
+        witness: Some(run_witness(run, w0, jw)), a8: Some(a8) }
     }
   }
 }

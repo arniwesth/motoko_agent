@@ -19,7 +19,7 @@ copies or from `src/core/journal.ail`.
 Usage:
     gen_fixtures.py            # write digest_fixtures.ail and journal_fixtures.ail
     gen_fixtures.py --check    # exit 1 if either is stale
-    gen_fixtures.py --normalized-configuration <world fixture>
+    gen_fixtures.py --normalized-configuration <world or source-check fixture>
                                # print A9b's comparator for one fixture (P1.6)
 """
 
@@ -2398,7 +2398,12 @@ def print_normalized_configuration(name):
                 return 1
             print(normalized_configuration(jl, lg, s, env))
             return 0
-    print(f"no world fixture named {name}", file=sys.stderr)
+    # a source-check fixture (P1.7a), as the runner serves it (P1R R1)
+    for fname, _family, jl, lg, s in near_miss_pairs():
+        if fname == name:
+            print(source_expectations(jl, lg, s)["normalized_configuration"])
+            return 0
+    print(f"no world or source-check fixture named {name}", file=sys.stderr)
     return 1
 
 

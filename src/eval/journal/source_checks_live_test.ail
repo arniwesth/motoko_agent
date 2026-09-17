@@ -76,7 +76,7 @@ import src/eval/journal/source_checks (
   Admission, InvocationObservation,
   source_chain, check_a1, transcript_expectation, check_a2, request_expectations, request_observations, check_a3,
   invocation_expectations, invocation_observations, dispatched_calls, check_a4, projection_field,
-  admission_verdict, admission_label, admission_verdict_word, admission_first_finding, admission_position,
+  admission_verdict, admission_label, admission_verdict_word, admission_first_finding, admission_first_finding_name, admission_position,
   ordered_findings
 )
 import src/eval/journal/source_checks_run (AdmissionOutcome, transcript_observation, run_source_findings, admit_entry)
@@ -438,11 +438,11 @@ func m15_row(name: string, f: SourceCheckFixture, family_journal: [string], fami
   let src = lt_source_of(r);
   -- an A3 row: its call is the generator's, and A1, A2 are clean
   let at_divergence = if divergence then want_position == "call:${show(f.first_request_divergence)}" && lt_none_of(src, ["A1", "A2"]) else true;
-  let _ = println("${name}: family_journal=${if family_ok then "equal" else "DIFFERS"} reads=${if reads then "true" else "false"} verdict=${admission_verdict_word(a)} first=${admission_first_finding(a)} position=${admission_position(a)} generator_divergence=call:${show(f.first_request_divergence)} fault_tool=${if lt_has_fault_tool(r) then "true" else "false"}");
+  let _ = println("${name}: family_journal=${if family_ok then "equal" else "DIFFERS"} reads=${if reads then "true" else "false"} verdict=${admission_verdict_word(a)} first=${admission_first_finding_name(a)} position=${admission_position(a)} generator_divergence=call:${show(f.first_request_divergence)} fault_tool=${if lt_has_fault_tool(r) then "true" else "false"}");
   lt_report(name,
     family_ok && reads && at_divergence
       && admission_verdict_word(a) == want_verdict
-      && admission_first_finding(a) == want_first
+      && admission_first_finding_name(a) == want_first
       && admission_position(a) == want_position)
 }
 
@@ -467,17 +467,17 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let t1 = m15_row("m15_clean_base", fxs_clean_base(), fxj_clean().lines, None, "-", "admitted", "-", false);
   let t2 = m15_row("m15_clean_m2", fxs_clean_m2(), fxr_m2_clean().journal, Some(fxr_m2_clean().log), "-", "admitted", "-", false);
   let n1 = m15_row("m15_chain_break", fxs_near_miss_chain_break(), fxj_near_miss_chain_break().lines, None,
-                   "AdmissionCheck(A3)", "refused", "call:2", true);
+                   "A3:PayloadDiffers", "refused", "call:2", true);
   let n2 = m15_row("m15_malformed_entry", fxs_near_miss_malformed_entry(), fxj_near_miss_malformed_entry().lines, None,
-                   "AdmissionCheck(A3)", "refused", "call:2", true);
+                   "A3:PayloadDiffers", "refused", "call:2", true);
   let n3 = m15_row("m15_unexpected_tool_result", fxs_m15_unexpected_tool_result(), fxr_m15_unexpected_tool_result().journal,
-                   Some(fxr_m2_clean().log), "AdmissionCheck(A3)", "refused", "call:2", true);
+                   Some(fxr_m2_clean().log), "A3:PayloadDiffers", "refused", "call:2", true);
   let n4 = m15_row("m15_malformed_tool_arguments", fxs_m15_malformed_tool_arguments(), fxr_m15_malformed_tool_arguments().journal,
-                   Some(fxr_m2_clean().log), "AdmissionCheck(A3)", "refused", "call:2", true);
+                   Some(fxr_m2_clean().log), "A3:PayloadDiffers", "refused", "call:2", true);
   let n5 = m15_row("m15_duplicate_call_id_swap", fxs_m15_duplicate_call_id_swap(), fxr_m15_duplicate_call_id_swap().journal,
-                   Some(fxr_m2_clean().log), "AdmissionCheck(A2)", "refused", "snapshot:14", false);
+                   Some(fxr_m2_clean().log), "A2:MessageDiffers", "refused", "snapshot:14", false);
   let n6 = m15_row("m15_association", fxs_m15_association(), fxr_m15_association().journal,
-                   Some(fxr_m15_association().log), "AdmissionCheck(A3)", "refused", "call:1", true);
+                   Some(fxr_m15_association().log), "A3:PayloadDiffers", "refused", "call:1", true);
   if c1 && c2 && c3 && c4 && m10 && t1 && t2 && n1 && n2 && n3 && n4 && n5 && n6 then println("source_checks_live_test: all checks passed")
   else { let _ = println("source_checks_live_test: FAILED"); exit(1) }
 }

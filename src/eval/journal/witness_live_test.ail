@@ -61,7 +61,7 @@ import src/core/dst_interaction (
 import src/core/phase_vocab (
   LedgerTrace, LedgerRecord, WireRecord, DecisionRecord,
   ProviderCallPrepared, CheckpointTaken, ExtToolHandled, ParkEntered, WakeReceived,
-  StreamErrorRetry, HybridBashExtracted
+  StreamErrorRetry, HybridBashExtracted, HistoryAppended, HistoryAppendedInfo
 )
 import src/core/dst_driver_only (driver_only_manifest)
 import src/core/dst_result (unknown_replay_metadata)
@@ -69,22 +69,25 @@ import src/core/dst_execution (execution_of)
 import src/core/dst_invariants (NoReplay, StrictAgainst, family_evidence, evaluate, violation_rule)
 import src/core/dst_profile (replay_metadata_of)
 import src/core/session (TracedSessionResult)
+import src/eval/journal/reader (parse_lines)
 import src/eval/journal/stopping (JournalWorld, EndSuspended, EndFinalize)
 import src/eval/journal/world (journal_world_state, fixture_journal_world)
 import src/eval/journal/admission (
   AdmissionFinding, Identities, Comparators, SyntheticEntry, finding_label, first_label, report_ok,
-  manifest_of, normalized_configuration, profile_scan_roots
+  manifest_of, normalized_configuration, profile_scan_roots, admission_program
 )
-import src/eval/journal/admission_run (admission_run, admit_with_evidence)
+import src/eval/journal/admission_run (admission_run, admit_with_evidence, frame_observation, admission_findings)
 import src/eval/journal/witness (
   CensusRow, CensusCount, ColSuspended, ColFinalize, ColFault, build_witness, check_a7, census_of,
   census_counts, census_count, check_census, column_id, admission_column
 )
-import src/eval/journal/bridge (A8Result, admission_execution, a8_of_execution, a8_of_run, a7_of_run, check_bridge_inputs, family_findings)
+import src/eval/journal/bridge (A8Result, admission_execution, a8_of_execution, a8_of_run, a7_of_run, check_bridge_inputs, family_findings, evaluate_findings)
 import src/eval/journal/testdata/world_fixtures (
   WorldFixture, fxw_m3_selector_end, fxw_m4_stop_call_last,
   fxw_m5_config_missed_unknown, fxw_m5_config_missed_non_positive, fxw_m5_config_missed_no_event
 )
+import src/eval/journal/source_checks (ordered_findings, admission_verdict, admission_label)
+import src/eval/journal/source_checks_run (run_source_findings)
 import src/eval/journal/testdata/admission_fixtures (fxa_all)
 
 func lt_report(name: string, ok: bool) -> bool ! {IO} {
@@ -333,6 +336,52 @@ func m11_decision_budget(lr: LiveRun, stop: LiveRun) -> bool ! {IO} {
       && lt_strs_eq(lt_details(dropped_a8.findings), ["A8:DecisionCountMismatch@aggregate:census:decisions decisions observed 6 expected 7"]))
 }
 
+-- P1R C4 (G1): an admission whose FIRST finding is `evaluate`'s Violation.
+-- The live run's first `history_appended` record names another run id. The
+-- bridge's inputs (obligation, metadata, budgets, epoch) are the entry's; the
+-- census counts none of it; the witness, frame and end are unchanged; and
+-- A1–A4 read the snapshot, the final history and only the records' digests
+-- and `replaces_previous` (source_checks_run.sr_appended) — so every other
+-- check is clean and the first finding, over A1–A9 in A-order, is the
+-- emission-parity violation.
+pure func lt_map_first_appended(rs: [LedgerRecord], f: HistoryAppendedInfo -> HistoryAppendedInfo) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(HistoryAppended(i)) => WireRecord(HistoryAppended(f(i))) :: rest,
+      _ => r :: lt_map_first_appended(rest, f)
+    }
+  }
+}
+
+func m11_evaluate_violation_first(lr: LiveRun) -> bool ! {IO} {
+  let m = manifest_of(lt_ids(lr.jw));
+  let run = { lr.run | trace: { records: lt_map_first_appended(lr.run.trace.records, \i. { i | run_id: "other.r9.9" }) } };
+  let x = admission_execution(run, lt_epoch(), lr.jw, m);
+  let a8 = a8_of_run(run, lr.w0, lr.jw, m, lt_epoch());
+  let frame = frame_observation("admission", lr.w0.ordinal, run);
+  let p = admission_program(lr.jw, lr.w0, run.world.log, m, "a0a0a0-dev");
+  let lines = match parse_lines(fxw_m3_selector_end().journal) { Ok(ls) => ls, Err(_) => [] };
+  let source = run_source_findings(lines, lr.jw, run, run.world.log);
+  let all = ordered_findings(source ++ admission_findings(frame, lr.jw, run, lr.w0, p, a8));
+  let census = census_of(lr.jw.end.expected, List.length(lr.jw.calls), run.trace, run.world.log, lr.w0, run.world);
+  let v = admission_verdict("synthetic:m3_selector_end", lr.jw, [], all, true, []);
+  let _ = println("m11_a8_evaluate_violation_first: ${admission_label(v)} all=[${join(";", lt_labels(all))}] lines=${show(List.length(lines))}");
+  lt_report("m11_a8_evaluate_violation_first",
+    List.length(lines) > 0
+      && List.length(source) == 0
+      && List.length(check_bridge_inputs(x, lt_epoch(), lr.jw, m)) == 0
+      && List.length(check_census(census)) == 0
+      && List.length(a7_of_run(run, lr.w0, lr.jw)) == 0
+      && lt_strs_eq(lt_labels(all), ["A8:journal-payload-disagrees@aggregate:invariants:emission-parity"])
+      && lt_strs_eq(lt_labels(evaluate_findings(x)), lt_labels(all))
+      -- the clean twin: the unmutated run has no finding at all
+      && List.length(ordered_findings(run_source_findings(lines, lr.jw, lr.run, lr.run.world.log)
+                                      ++ admission_findings(frame_observation("admission", lr.w0.ordinal, lr.run), lr.jw, lr.run, lr.w0,
+                                                            admission_program(lr.jw, lr.w0, lr.run.world.log, m, "a0a0a0-dev"),
+                                                            a8_of_run(lr.run, lr.w0, lr.jw, m, lt_epoch())))) == 0)
+}
+
 -- One non-zero twin per census count on the live run.
 pure func lt_plus(run: TracedSessionResult, r: LedgerRecord) -> TracedSessionResult {
   { run | trace: { records: run.trace.records ++ [r] } }
@@ -416,7 +465,8 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
       let r3 = m11_wrong_obligation_or_metadata(c);
       let r4 = m11_decision_budget(c, s);
       let r5 = m11_census_twins(c);
-      r1 && r2 && r3 && r4 && r5
+      let r6 = m11_evaluate_violation_first(c);
+      r1 && r2 && r3 && r4 && r5 && r6
     },
     _ => lt_report("runs", false)
   };

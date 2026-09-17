@@ -45,9 +45,15 @@
 -- "forbidden" score line, the findings and the diagnostic in its envelope
 -- (`lt_diverged`); the Refused case asserts no score and that nothing ran.
 --
--- M15's K-rows need a candidate build with a real source edit, so they run in
--- other trees: EVAL_K_MODE=entry|candidate below, driven by
--- testdata/m15_k_rows.sh.
+--   m14_entry_records_round_trip  the entry records (`entry_json`, the one
+--                             entry-comparand codec, P1R C6) decode back to an
+--                             entry that gives C = P the same Reproduced
+--                             verdict; a record missing a field is refused
+--                             with the file named.
+--
+-- M15's K-rows need a candidate build with a real source edit, so they run
+-- through the runner's candidate mode (`scripts/eval/candidate.py`, K0–K7 in
+-- an assembled tree): `scripts/eval/test_candidate.py`'s live tests.
 --
 -- EXHAUSTED MARKER (M14): the actual first finding, never a universal
 -- ProgramExhausted —
@@ -68,13 +74,11 @@
 module src/eval/journal/candidate_checks_live_test
 
 import std/io (println, exit)
-import std/env (getEnvOr)
-import std/fs (readFileResult, writeFileResult)
 import std/json (Json)
 import std/list as List (length, map, foldl, filter)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (join, startsWith, contains)
+import std/string (join, startsWith, contains, length)
 import src/core/ports (WorldState, ScriptedTool)
 import src/core/session (TracedSessionResult)
 import src/core/dst_interaction (Interaction, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity, OutcomeOk, identity_projection)
@@ -91,8 +95,6 @@ import src/eval/journal/candidate_checks (
   candidate_verdict_word, candidate_first_finding, candidate_position
 )
 import src/eval/journal/candidate_checks_run (entry_of_admission, candidate_world, candidate_run, k_run_of, evaluate_candidate, print_verdict, entry_json, decode_entry)
-import src/eval/journal/candidate (load_entry_program, replay_refusal_label)
-import src/eval/journal/scan (program_artifact)
 import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_m3_selector_end, fxw_m4_stop_call_last)
 import src/eval/journal/testdata/admission_fixtures (fxa_all)
 
@@ -459,55 +461,29 @@ func m14_diagnostic(c: CRun) -> bool ! {IO} {
 }
 
 -- ============================================================================
--- M15's K-rows across two processes (testdata/m15_k_rows.sh). The entry is
--- admitted by P's build and written as the program artifact (P1.8's codec,
--- `load_program`) plus the entry record; the candidate build — a tree with
--- one real source edit — reads both and runs K1–K7.
---   EVAL_K_MODE=entry      admit m3_selector_end, write EVAL_K_DIR/{program.artifact,entry.json}
---   EVAL_K_MODE=candidate  read them, run this build as C, print the verdict,
---                          its envelope and `KROW <EVAL_K_CASE>\t<verdict>\t<first>\t<position>`
+-- The entry records (P1R C6): one codec, and it round-trips.
 -- ============================================================================
 
-func k_entry_mode(dir: string) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  match lt_admit(fxw_m3_selector_end()) {
-    None => { let _ = println("KENTRY failed: admission"); exit(1) },
-    Some(a) => match (writeFileResult("${dir}/program.artifact", program_artifact(a.entry.program)),
-                      writeFileResult("${dir}/entry.json", entry_json(a.entry))) {
-      (Ok(_), Ok(_)) => println("KENTRY written ${a.entry.name} interactions=${show(List.length(a.entry.program.interactions))}"),
-      _ => { let _ = println("KENTRY failed: write"); exit(1) }
-    }
-  }
-}
-
-func k_candidate_mode(dir: string, name: string) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let f = fxw_m3_selector_end();
-  match (fixture_journal_world(f), parse_lines(f.journal), load_entry_program("${dir}/program.artifact"), readFileResult("${dir}/entry.json")) {
-    (Ok(jw), Ok(lines), Ok(p), Ok(text)) => match decode_entry(text, p, lines, jw) {
-      Err(why) => { let _ = println("KROW ${name}\terror\t${why}\t-"); exit(1) },
-      Ok(e) => {
-        let o = evaluate_candidate("candidate", e, jw, lt_workdir(), "m15_k_rows.sh scratch tree (no candidate.py assembly; K0 not run)");
-        let _ = print_verdict(o.verdict);
-        let _ = match o.run {
-          Some(r) => match k_findings(e, r) {
-            Ok(fs) => println("KALL ${name} [${join(";", List.map(k_finding_label, fs))}]"),
-            Err(_) => ()
-          },
-          None => ()
-        };
-        println("KROW ${name}\t${candidate_verdict_word(o.verdict)}\t${candidate_first_finding(o.verdict)}\t${candidate_position(o.verdict)}")
-      }
-    },
-    (_, _, Err(x), _) => { let _ = println("KROW ${name}\terror\t${replay_refusal_label(x)}\t-"); exit(1) },
-    _ => { let _ = println("KROW ${name}\terror\tinputs\t-"); exit(1) }
-  }
+func m14_entry_records(c: CRun) -> bool ! {IO} {
+  let e = c.a.entry;
+  let r = entry_json(e);
+  let back = decode_entry(r, e.program, c.a.lines, c.a.jw);
+  let same = match back {
+    Ok(d) => lt_triple(lt_verdict(d, c.w0, c.run)) == "reproduced|-|-"
+               && d.calls == e.calls && d.decision_budget == e.decision_budget && d.epoch == e.epoch
+               && List.length(d.census) == List.length(e.census) && List.length(d.family_evidence) == List.length(e.family_evidence),
+    Err(_) => false
+  };
+  let broken = match decode_entry({ r | census: "{\"family_evidence\":[],\"omissions\":[]}\n" }, e.program, c.a.lines, c.a.jw) {
+    Err(why) => why == "census.txt: census",
+    Ok(_) => false
+  };
+  let _ = println("entry_records: witness=${show(length(r.witness))} census=${show(length(r.census))} round_trip=${if same then "reproduced" else "DIFFERS"} broken_refused=${if broken then "true" else "false"}");
+  lt_report("m14_entry_records_round_trip", same && broken)
 }
 
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let mode = getEnvOr("EVAL_K_MODE", "");
-  let dir = getEnvOr("EVAL_K_DIR", "");
-  if mode == "entry" then k_entry_mode(dir)
-  else if mode == "candidate" then k_candidate_mode(dir, getEnvOr("EVAL_K_CASE", "candidate"))
-  else main_checks()
+  main_checks()
 }
 
 func main_checks() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
@@ -526,7 +502,8 @@ func main_checks() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
           let k4 = m14_k4(c);
           let k5 = m14_k567(c);
           let dg = m14_diagnostic(c);
-          k2 && mk && k1 && k3 && k4 && k5 && dg
+          let er = m14_entry_records(c);
+          k2 && mk && k1 && k3 && k4 && k5 && dg && er
         }
       };
       if r1 && r2 && rest then println("candidate_checks_live_test: all checks passed")

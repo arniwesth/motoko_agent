@@ -8,7 +8,7 @@
 --   candidate_execution(run, entry)               -> ExecutionUnderTest   (K4's bridge)
 --   k_run_of(label, entry, w0, run)               -> KRun
 --   evaluate_candidate(label, entry, jw, workdir, provenance) -> CandidateOutcome
---   entry_json(entry) / decode_entry(text, program, lines, jw)
+--   entry_json(entry) -> EntryRecords / decode_entry(records, program, lines, jw)
 --
 -- C'S RUN. The same call as the admission run (`admission_run`, P1.6): the
 -- entry's recorded `BootInputs`, logical model, seed and `step_budget = N`
@@ -26,15 +26,21 @@
 -- entry.retry_budget, 0, [], entry.metadata)` — the entry's values, never
 -- recomputed from C's run.
 --
--- THE ENTRY RECORD. `entry_json` writes the comparands K1–K7 read that are
--- not the program or the snapshot (those have their own files: the program
--- artifact through `load_program`, P1.8; the snapshot through the reader):
--- end, calls, the witness, the budgets, the metadata, the epoch, the family
--- record, the census and the omissions. The transcript expectation is
--- re-derived from the snapshot by P1.7a's `source_chain`, which reads the
--- RECORDED digests. The decoder refuses a missing or mistyped field.
--- (P1.8's entry stores `witness.json`/`census.txt` as opaque text and
--- renders none of them; this is the rendering K1–K7 read.)
+-- THE ENTRY RECORDS — the one entry-comparand codec (P1R C6). `entry_json`
+-- renders the comparands K1–K7 read that are not the program or the
+-- snapshot (those have their own files: the program artifact through
+-- `load_program`, P1.8; the snapshot through the reader) as the two files of
+-- D6's entry layout, and `decode_entry` is its only reader:
+--   witness.json  one JSON object: name, end, calls, the witness, the
+--                 budgets, the metadata and the epoch;
+--   census.txt    one JSON object: the family record, the census and the
+--                 omissions (D6: "family and census record").
+-- The admission writes both (`scripts/eval/journal_replay.ail`, admit mode
+-- with EVAL_ENTRY_OUT); P1.8's `write_entry` stores whatever text it is
+-- handed under those names, so the entry holds exactly this rendering. The
+-- transcript expectation is re-derived from the snapshot by P1.7a's
+-- `source_chain`, which reads the RECORDED digests. The decoder refuses a
+-- missing or mistyped field, naming the file.
 --
 -- Privacy (§0.6): synthetic fixtures only; the record holds counts, keys,
 -- family names and version strings.
@@ -189,20 +195,28 @@ pure func cr_census_json(rows: [CensusRow]) -> Json {
   ]), rows))
 }
 
-export pure func entry_json(e: CandidateEntry) -> string {
-  encode(jo([
-    kv("name", js(e.name)),
-    kv("end", cr_end_json(e.end)),
-    kv("calls", jint(e.calls)),
-    kv("witness", cr_witness_json(e.witness)),
-    kv("decision_budget", jint(e.decision_budget)),
-    kv("retry_budget", jint(e.retry_budget)),
-    kv("metadata", cr_metadata_json(e.metadata)),
-    kv("epoch", jint(e.epoch)),
-    kv("family_evidence", ja(List.map(\f. jo([kv("family", js(f.family)), kv("evaluated", jb(f.evaluated)), kv("inputs", jint(f.inputs))]), e.family_evidence))),
-    kv("census", cr_census_json(e.census)),
-    kv("omissions", ja(List.map(js, e.omissions)))
-  ]))
+export type EntryRecords = { witness: string, census: string }
+
+export pure func entry_record_files() -> [string] { ["witness.json", "census.txt"] }
+
+export pure func entry_json(e: CandidateEntry) -> EntryRecords {
+  {
+    witness: "${encode(jo([
+      kv("name", js(e.name)),
+      kv("end", cr_end_json(e.end)),
+      kv("calls", jint(e.calls)),
+      kv("witness", cr_witness_json(e.witness)),
+      kv("decision_budget", jint(e.decision_budget)),
+      kv("retry_budget", jint(e.retry_budget)),
+      kv("metadata", cr_metadata_json(e.metadata)),
+      kv("epoch", jint(e.epoch))
+    ]))}\n",
+    census: "${encode(jo([
+      kv("family_evidence", ja(List.map(\f. jo([kv("family", js(f.family)), kv("evaluated", jb(f.evaluated)), kv("inputs", jint(f.inputs))]), e.family_evidence))),
+      kv("census", cr_census_json(e.census)),
+      kv("omissions", ja(List.map(js, e.omissions)))
+    ]))}\n"
+  }
 }
 
 -- Decoding: every field required.
@@ -296,37 +310,46 @@ pure func cr_row(j: Json) -> Option[CensusRow] {
   }
 }
 
-export pure func decode_entry(text: string, p: ExecutionProgram, lines: [Json], jw: JournalWorld) -> Result[CandidateEntry, string] {
+pure func cr_census_part(text: string) -> Result[{ fe: [FamilyEvidence], census: [CensusRow], om: [string] }, string] {
   match decode(text) {
-    Err(e) => Err("entry: ${e}"),
-    Ok(j) => match (cr_str(j, "name"), cr_obj(j, "end"), cr_int(j, "calls"), cr_obj(j, "witness"),
-                    cr_int(j, "decision_budget"), cr_int(j, "retry_budget")) {
+    Err(e) => Err("census.txt: ${e}"),
+    Ok(j) => match (cr_list(j, "family_evidence", cr_family), cr_list(j, "census", cr_row), cr_list(j, "omissions", asString)) {
+      (Ok(fe), Ok(census), Ok(om)) => Ok({ fe: fe, census: census, om: om }),
+      (Err(k), _, _) => Err("census.txt: ${k}"),
+      (_, Err(k), _) => Err("census.txt: ${k}"),
+      (_, _, Err(k)) => Err("census.txt: ${k}")
+    }
+  }
+}
+
+export pure func decode_entry(r: EntryRecords, p: ExecutionProgram, lines: [Json], jw: JournalWorld) -> Result[CandidateEntry, string] {
+  match (decode(r.witness), cr_census_part(r.census)) {
+    (Err(e), _) => Err("witness.json: ${e}"),
+    (_, Err(e)) => Err(e),
+    (Ok(j), Ok(cp)) => match (cr_str(j, "name"), cr_obj(j, "end"), cr_int(j, "calls"), cr_obj(j, "witness"),
+                              cr_int(j, "decision_budget"), cr_int(j, "retry_budget")) {
       (Ok(name), Ok(ej), Ok(calls), Ok(wj), Ok(db), Ok(rb)) =>
-        match (cr_end(ej), cr_witness(wj), cr_obj(j, "metadata"), cr_int(j, "epoch"),
-               cr_list(j, "family_evidence", cr_family), cr_list(j, "census", cr_row)) {
-          (Ok(end), Ok(w), Ok(mj), Ok(epoch), Ok(fe), Ok(census)) =>
-            match (cr_metadata(mj), cr_list(j, "omissions", asString)) {
-              (Ok(m), Ok(om)) => Ok({
+        match (cr_end(ej), cr_witness(wj), cr_obj(j, "metadata"), cr_int(j, "epoch")) {
+          (Ok(end), Ok(w), Ok(mj), Ok(epoch)) =>
+            match cr_metadata(mj) {
+              Ok(m) => Ok({
                 name: name, program: p, end: end, calls: calls,
                 transcript: transcript_expectation(source_chain(lines, jw)),
                 witness: w, decision_budget: db, retry_budget: rb, metadata: m, epoch: epoch,
-                family_evidence: fe, census: census, omissions: om }),
-              (Err(k), _) => Err("entry: ${k}"),
-              (_, Err(k)) => Err("entry: ${k}")
+                family_evidence: cp.fe, census: cp.census, omissions: cp.om }),
+              Err(k) => Err("witness.json: ${k}")
             },
-          (Err(k), _, _, _, _, _) => Err("entry: ${k}"),
-          (_, Err(k), _, _, _, _) => Err("entry: ${k}"),
-          (_, _, Err(k), _, _, _) => Err("entry: ${k}"),
-          (_, _, _, Err(k), _, _) => Err("entry: ${k}"),
-          (_, _, _, _, Err(k), _) => Err("entry: ${k}"),
-          (_, _, _, _, _, Err(k)) => Err("entry: ${k}")
+          (Err(k), _, _, _) => Err("witness.json: ${k}"),
+          (_, Err(k), _, _) => Err("witness.json: ${k}"),
+          (_, _, Err(k), _) => Err("witness.json: ${k}"),
+          (_, _, _, Err(k)) => Err("witness.json: ${k}")
         },
-      (Err(k), _, _, _, _, _) => Err("entry: ${k}"),
-      (_, Err(k), _, _, _, _) => Err("entry: ${k}"),
-      (_, _, Err(k), _, _, _) => Err("entry: ${k}"),
-      (_, _, _, Err(k), _, _) => Err("entry: ${k}"),
-      (_, _, _, _, Err(k), _) => Err("entry: ${k}"),
-      (_, _, _, _, _, Err(k)) => Err("entry: ${k}")
+      (Err(k), _, _, _, _, _) => Err("witness.json: ${k}"),
+      (_, Err(k), _, _, _, _) => Err("witness.json: ${k}"),
+      (_, _, Err(k), _, _, _) => Err("witness.json: ${k}"),
+      (_, _, _, Err(k), _, _) => Err("witness.json: ${k}"),
+      (_, _, _, _, Err(k), _) => Err("witness.json: ${k}"),
+      (_, _, _, _, _, Err(k)) => Err("witness.json: ${k}")
     }
   }
 }

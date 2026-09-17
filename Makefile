@@ -3110,6 +3110,19 @@ eval_protected_selftest:
 	@python3 tools/eval_protected/selftest.py
 
 # ---------------------------------------------------------------------------
+# PLAN-004 v2 §0.8 / §3 "The D8 P1 matrix" (P1R R1): run every suite a row of
+# src/eval/journal/testdata/MATRIX.expected.tsv names, write MATRIX.tsv with
+# OBSERVED fields only, and join the two on case_id (scripts/eval/candidate.py
+# `matrix`; its docstring states the two observation tiers). Sequential; the
+# test_candidate.py live compiles (~6, each under scripts/eval/mem_guard.py)
+# make this a ~25-40 min run — mind the 12 GiB memory.current rule.
+# EVAL_MATRIX_ARGS: e.g. --logs <dir>, or --no-live (never a clean matrix).
+# ---------------------------------------------------------------------------
+.PHONY: eval_matrix
+eval_matrix:
+	@bash scripts/eval/journal_replay.sh matrix $(EVAL_MATRIX_ARGS)
+
+# ---------------------------------------------------------------------------
 # ADR-001 Amendment A, WI-D12: CLASSIFIER 3 -- the extension-closure
 # ambient-source inventory. The fourth deferred gate mechanism, admitted
 # 2026-08-06 by both acceptance reviewers.

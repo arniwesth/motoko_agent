@@ -41,8 +41,10 @@
 --     Keys are NOT sorted: a key reorder changes A's digest.
 --
 -- The equality of each copy with the candidate function at A is tested in
--- `digests_at_a_test.ail` (the only evaluator module that imports src/core);
--- the equality with the independent Python generator is tested here.
+-- `digests_at_a_test.ail`, which imports the src/core originals for that
+-- comparison (other evaluator modules import src/core too — the world, the
+-- seams, the admission run — but none of them for these digests); the
+-- equality with the independent Python generator is tested here.
 
 module src/eval/journal/digests
 

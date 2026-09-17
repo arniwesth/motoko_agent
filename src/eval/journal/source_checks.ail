@@ -556,6 +556,17 @@ export pure func admission_first_finding(a: Admission) -> string {
   }
 }
 
+-- The FINDING-level first finding (P1R C1, ruled 2026-09-17): `Ak:<name>`
+-- for a check's refusal — the form every row that asserts which check caught
+-- what uses. `admission_first_finding`'s verdict-level `AdmissionCheck(Ak)`
+-- is kept for the verdict-mapping rows (M10.verdict.*, P17a.*).
+export pure func admission_first_finding_name(a: Admission) -> string {
+  match a {
+    Refused(AdmissionCheck(c, _, name)) => "${check_label(c)}:${name}",
+    _ => admission_first_finding(a)
+  }
+}
+
 export pure func admission_position(a: Admission) -> string {
   match a {
     SourceFaithful(_) => "-",

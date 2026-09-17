@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""The runner's candidate mode: refusals, assembly, execution provenance, K0.
+"""The runner's candidate mode: refusals, assembly, execution provenance, K0–K7.
 
-ADR-004 v5 D3 ("Refused before running", K0) and D5 ("The assembled tree",
-"Execution provenance"); PLAN-004 v2 §3 P1.9a. Driven by
+ADR-004 v5 D3 ("Refused before running", K0, "Candidate checks", "The
+verdict") and D5 ("The assembled tree", "Execution provenance"); PLAN-004 v2
+§3 P1.9a (refusals, assembly, provenance, K0) and P1.9b (K1–K7 and the
+verdict, wired here by P1R R1). Driven by
 `scripts/eval/journal_replay.sh candidate`, or directly:
 
     candidate.py run  --repo R --entry DIR --parent P --candidate C
@@ -11,9 +13,10 @@ ADR-004 v5 D3 ("Refused before running", K0) and D5 ("The assembled tree",
                       [--guard-lock PATH] [--keep-tree] [--fixture NAME]
     candidate.py pin  --repo R --at A --lock-root DIR --entry DIR
                       [--manifest M] [--out FILE]
+    candidate.py matrix --repo R [--expected F] [--out F] [--logs DIR] [--no-live]
 
-`run` exit codes: 0 K0 passed (K1–K7 are P1.9b's and are not run here);
-1 refused; 2 usage or an evaluator failure (nothing is scored either way).
+`run` exit codes: 0 Reproduced (the only verdict that permits a score);
+1 Refused or Diverged; 2 usage or an evaluator failure (nothing is scored).
 
 WHAT RUNS, IN ORDER (each step's first finding is the verdict; later steps do
 not run after a refusal):
@@ -46,10 +49,21 @@ not run after a refusal):
    assembled root, `AILANG_CACHE_DIR=<run>/cache` fresh and empty (non-empty →
    refused before running), `AILANG_NO_CACHE` and `AILANG_STDLIB_PATH` unset.
    The runner loads the entry's program (`ProgramUndecodable(ReplayRefusal)`
-   when it cannot) and prints the build's identities for K0.
+   when it cannot), prints the build's identities for K0, reads the entry
+   records (`witness.json`, `census.txt`: `EVAL_ENTRY_DIR`), runs the
+   assembled build as C against `world_state_of(program)` and prints K1–K7's
+   verdict (`KVERDICT`, `KALL`, `CANDIDATE`, the `ENVELOPE` lines; D3).
 4. K0: every pinned identity equals what was assembled and observed, and the
    three execution-provenance records agree (below). Any disagreement or
-   missing record → `PreflightMismatch(<class>:…)`.
+   missing record → `PreflightMismatch(<class>:…)`. K0 is decided after the
+   run because two of its records (the compiled set, the selections) are the
+   run's own; a K0 finding discards the run's K verdict (recorded as
+   `k_discarded`, never scored).
+5. The verdict: the runner's K1–K7 verdict, taken only when K0 passed —
+   `Reproduced` (exit 0, score permitted) or `Diverged(<Kn>:<finding>@
+   <location>)` (exit 1, no score); `Refused(ProgramUndecodable)` from K1.
+   A run that printed no K verdict (`CANDIDATE error`, or nothing) is an
+   evaluator failure (exit 2), never a verdict.
 
 EXECUTION PROVENANCE (D5; AILANG coordinates are the installed source
 `/home/motoko/.local/share/ailang` at `ae36986`, whose rule files are pinned
@@ -91,7 +105,35 @@ re-derivation below would be stale):
   runner's re-derivation of the loader's rules, cross-checked against the
   compiler's set, not the loader's own report.
 
-§0.6: synthetic entries only at P1.9a; the files written here hold digests,
+THE MATRIX (`make eval_matrix`, PLAN-004 §0.8 and §3 "The D8 P1 matrix";
+`matrix`, P1R R1). Runs every suite a `MATRIX.expected.tsv` row names, one at
+a time — the pure modules (`ailang test --format json`), the live runners
+(`*_live_test.ail`), `tools/eval_protected/selftest.py --observed-tsv`,
+`gen_fixtures.py --check`, `test_candidate.py` (junit, `EVAL_MATRIX_OBS`),
+and `test_mem_guard.py` as a gate — and writes `MATRIX.tsv` with the case
+id, the test name and OBSERVED fields only (verdict, first finding,
+position), `observed_by` and the commit; nothing is copied from the expected
+file. Then it joins the two on `case_id`. Two observation tiers:
+
+- `record`: the suite printed the verdict of the one row that names the
+  test — selftest's observed TSV, `test_candidate.py`'s `observe` records,
+  a live runner's `<test>: <Verdict>` line (`SourceFaithful(…)`,
+  `Refused(AdmissionCheck(Ak):Name@pos)`, `Refused(Refusal(X)@pos)`,
+  `Reproduced(…)`, `Diverged(Kn:Name[Family]@pos)`, a candidate refusal).
+  First findings are rendered per the C1 ruling: finding-level `Ak:Name`,
+  verdict-level `AdmissionCheck(Ak)` only on the verdict-mapping rows
+  (`M10.verdict.*`, `P17a.*`). The join requires the three fields equal.
+- `assertion`: a boolean test (the pure modules, most live checks) or a
+  test several rows share. The row's triple is asserted inside the test;
+  the only observation is its outcome, written as `pass`/`fail` with
+  `(asserted)` fields, and the join credits the row only when it passed.
+
+`inapplicable` rows (test `-`) are satisfied by their recorded reason. A
+row whose test failed, was skipped (`--no-live` skips the live compiles, so
+it cannot give a clean matrix), or was not found is not equal. Exit 0 only
+when every row is equal, credited or inapplicable and every suite exited 0.
+
+§0.6: synthetic entries only before P1G; the files written here hold digests,
 counts, identities and paths, never corpus content.
 """
 
@@ -109,8 +151,10 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 import uuid
+import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -991,6 +1035,39 @@ def parse_runner(out_text):
     return build, program, verdicts
 
 
+def parse_k(out_text):
+    """The runner's K1–K7 lines: (verdict or None, every K finding, envelope lines).
+    The verdict is {"word", "first", "position"} from the one `KVERDICT` line;
+    two such lines are no verdict."""
+    ks, kall, env = [], [], []
+    for line in out_text.splitlines():
+        if line.startswith("KVERDICT "):
+            parts = line[len("KVERDICT "):].split("\t")
+            if len(parts) == 3:
+                ks.append({"word": parts[0], "first": parts[1], "position": parts[2]})
+        elif line.startswith("KALL [") and line.endswith("]"):
+            kall = [x for x in line[len("KALL ["):-1].split(";") if x]
+        elif line.startswith("ENVELOPE "):
+            env.append(line)
+    return (ks[0] if len(ks) == 1 else None), kall, env
+
+
+def verdict_triple(record):
+    """The MATRIX fields of a run record's verdict: (verdict, first finding, position),
+    as `candidate_checks.ail`'s candidate_verdict_word / _first_finding / _position."""
+    v = record.get("verdict") or {}
+    st = v.get("status")
+    if st == "reproduced":
+        return "reproduced", "-", "-"
+    if st == "diverged":
+        return "diverged", v["finding"], v["position"]
+    if st == "refused":
+        pos = {"ProgramUndecodable": "aggregate:program", "GuardTripped": "aggregate:guard",
+               "PreflightMismatch": "aggregate:k0"}.get(v["reason"], "aggregate:refusal")
+        return "refused", f"{v['reason']}:{v['finding']}", pos
+    return "error", v.get("detail", "-"), "-"
+
+
 def k0_identity_findings(obs, ids, pins):
     """Everything K0 compares that is not the provenance records.
     `obs`: {build, program, toolchain, lock_a_sha256, lock_c_sha256, t0_sha256,
@@ -1052,7 +1129,23 @@ def guard_verdict(record_path, runner_verdicts, verify):
         child = rec.get("child") or {}
         if child.get("exit_code") == 1 and any(v.startswith("CANDIDATE refused ") for v in runner_verdicts):
             return None  # the runner's own refusal, with a healthy guard
+        if child.get("exit_code") == 2 and any(v.startswith("CANDIDATE error ") for v in runner_verdicts):
+            return None  # the runner could not read its inputs: an evaluator failure, not a trip
     return Refused("GuardTripped", why, f"guard record {os.path.basename(record_path)}")
+
+
+def decide(k0, kv, runner_errors):
+    """After the run: K0 first (a finding refuses and discards any K verdict),
+    then the runner's K1–K7 verdict, which must be exactly one reproduced or
+    diverged line with no runner error. Returns ("refused", Refused),
+    ("error", why) or ("k", verdict)."""
+    if k0:
+        return "refused", Refused("PreflightMismatch", k0[0]["finding"], k0[0]["detail"])
+    if runner_errors:
+        return "error", runner_errors[0]
+    if kv is None or kv["word"] not in ("reproduced", "diverged"):
+        return "error", "the runner printed no K1-K7 verdict"
+    return "k", kv
 
 
 # ---------------------------------------------------------------------------
@@ -1114,9 +1207,19 @@ def emit(out, line):
     print(line, flush=True)
 
 
-def envelope_lines(out, record):
-    emit(out, f"ENVELOPE checked=K0 not_run=K1-K7(P1.9b) evidence=execution-provenance "
-              f"marker=not-applicable(K1-K7 not landed)")
+def envelope_lines(out, record, runner_envelope=()):
+    """Every verdict's envelope: the runner's K1–K7 envelope when a run gave
+    one (D3: checked, pinned, the four words, identity evidence, marker check,
+    exhausted markers, findings, score, diagnostic), else this runner's; then
+    the residual gap (D5) and the record."""
+    if runner_envelope:
+        for line in runner_envelope:
+            if not line.startswith("ENVELOPE residual_gap="):
+                emit(out, line)
+    else:
+        emit(out, "ENVELOPE checked=K0 evidence=execution-provenance "
+                  "marker_check=not applicable: no K1-K7 verdict (refused or not run)")
+        emit(out, "ENVELOPE score=forbidden: no K1-K7 verdict")
     emit(out, f"ENVELOPE residual_gap={RESIDUAL_GAP}")
     if record:
         emit(out, f"ENVELOPE record={record}")
@@ -1142,21 +1245,31 @@ def run(opts):
     old_umask = os.umask(0o077)
     os.makedirs(run_dir)
     tree = os.path.join(run_dir, "tree")
+    rec_path = os.path.join(run_dir, "provenance.json")
     worktree_added = False
+    runner_env = []
 
-    def finish(code, refusal=None):
+    def finish(code, refusal=None, k=None, error=None):
         if refusal is not None:
             record["verdict"] = {"status": "refused", "reason": refusal.reason, "finding": refusal.finding,
-                                 "detail": refusal.detail}
+                                 "detail": refusal.detail, "score_permitted": False}
             emit(lines, f"CANDIDATE refused {refusal.label()} {refusal.detail}".rstrip())
+        elif error is not None:
+            record["verdict"] = {"status": "error", "detail": error, "score_permitted": False}
+            emit(lines, f"CANDIDATE error {error}")
+        elif k["word"] == "reproduced":
+            record["verdict"] = {"status": "reproduced", "k0": "passed", "checked": "K0-K7",
+                                 "score_permitted": True}
+            emit(lines, "CANDIDATE reproduced K0-K7 (score permitted)")
         else:
-            record["verdict"] = {"status": "preflight-passed", "k0": "passed"}
-            emit(lines, "CANDIDATE preflight-passed K0 (K1-K7: P1.9b)")
-        rec_path = os.path.join(run_dir, "provenance.json")
+            check = k["first"].split(":", 1)[0]
+            record["verdict"] = {"status": "diverged", "k0": "passed", "check": check, "finding": k["first"],
+                                 "position": k["position"], "score_permitted": False}
+            emit(lines, f"CANDIDATE diverged {k['first']}@{k['position']} (no score)")
         with open(rec_path, "w", encoding="utf-8") as f:
             json.dump(record, f, indent=1, sort_keys=True)
             f.write("\n")
-        envelope_lines(lines, rec_path)
+        envelope_lines(lines, rec_path, runner_env if refusal is None and error is None else ())
         return code, lines, record
 
     try:
@@ -1238,9 +1351,11 @@ def run(opts):
             k0.append(finding("protected", "assembled_before", prot_before[0].label()))
 
         # --- 3. the run, guarded
-        run_env = {k: v for k, v in env.items() if k not in ("AILANG_NO_CACHE", "AILANG_STDLIB_PATH")}
+        run_env = {k: v for k, v in env.items()
+                   if k not in ("AILANG_NO_CACHE", "AILANG_STDLIB_PATH", "EVAL_WORKDIR", "EVAL_ENTRY", "EVAL_LABEL")}
         run_env.update(AILANG_CACHE_DIR=cache, EVAL_MODE="candidate",
                        EVAL_PROGRAM=os.path.join(entry, "program.artifact"),
+                       EVAL_ENTRY_DIR=entry, EVAL_PROVENANCE=rec_path,
                        EVAL_FIXTURE=opts.fixture or "")
         if opts.guard_lock:
             run_env["EVAL_LOCK_PATH"] = opts.guard_lock
@@ -1268,8 +1383,10 @@ def run(opts):
             return finish(1, g)
         undecodable = [v for v in verdicts if v.startswith("CANDIDATE refused ProgramUndecodable")]
         if undecodable:
-            detail = undecodable[0][len("CANDIDATE refused ProgramUndecodable"):].strip()
+            detail = undecodable[0][len("CANDIDATE refused ProgramUndecodable"):].strip().lstrip(":")
             return finish(1, Refused("ProgramUndecodable", detail.split(" ", 1)[0], detail))
+        kv, kall, kenv = parse_k(out_text)
+        runner_errors = [v[len("CANDIDATE error "):] for v in verdicts if v.startswith("CANDIDATE error ")]
 
         # --- 4. K0: identities
         tool = toolchain_now(binary)
@@ -1328,16 +1445,282 @@ def run(opts):
         if walk_files(tree, skip=(".git",)) != assembled:
             k0.append(finding("tree", "changed_during_run", "the assembled tree changed"))
         record["k0"] = k0
-        if k0:
-            f0 = k0[0]
-            return finish(1, Refused("PreflightMismatch", f0["finding"], f0["detail"]))
-        return finish(0)
+        record["k"] = {"verdict": kv, "findings": kall}
+        kind, what = decide(k0, kv, runner_errors)
+        if kind == "refused":
+            if kv is not None:
+                record["k_discarded"] = "K0 failed: the run's K verdict is not a verdict"
+            return finish(1, what)
+        if kind == "error":
+            return finish(2, error=what)
+        runner_env[:] = kenv
+        return finish(0 if what["word"] == "reproduced" else 1, k=what)
     finally:
         if worktree_added and not opts.keep_tree:
             git(repo, "worktree", "remove", "--force", tree, check=False)
             shutil.rmtree(tree, ignore_errors=True)
             git(repo, "worktree", "prune", check=False)
         os.umask(old_umask)
+
+
+# ---------------------------------------------------------------------------
+# matrix
+# ---------------------------------------------------------------------------
+
+MATRIX_EXPECTED = "src/eval/journal/testdata/MATRIX.expected.tsv"
+MATRIX_OUT = "src/eval/journal/testdata/MATRIX.tsv"
+MATRIX_COLUMNS = ("case_id", "test_name", "observed_verdict", "observed_first_finding", "observed_position",
+                  "observed_by", "commit")
+VERDICT_LEVEL_ROWS = ("M10.verdict.", "P17a.")
+ASSERTED = "(asserted)"
+
+
+def read_tsv(path):
+    with open(path, encoding="utf-8") as f:
+        lines = [l.rstrip("\n") for l in f if l.strip()]
+    head = lines[0].split("\t")
+    return [dict(zip(head, l.split("\t"))) for l in lines[1:]]
+
+
+def _balanced(text, start):
+    """The index just past the parenthesised group opening at text[start]."""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
+def verdict_label(line_rest):
+    """The leading verdict label of `<Verdict>(...)` text, or None."""
+    m = re.match(r"(SourceFaithful|Reproduced|Refused|Diverged)\(", line_rest)
+    if not m:
+        return None
+    end = _balanced(line_rest, m.end() - 1)
+    return None if end is None else line_rest[:end]
+
+
+CANDIDATE_REFUSAL_POSITION = (("ProgramUndecodable:", "aggregate:program"), ("GuardTripped:", "aggregate:guard"),
+                              ("PreflightMismatch:", "aggregate:k0"))
+
+
+def label_triple(case_id, label):
+    """A printed verdict label as MATRIX fields (C1 format), or None."""
+    verdict_level = case_id.startswith(VERDICT_LEVEL_ROWS)
+    if label.startswith(("SourceFaithful(", )):
+        return "admitted", "-", "-"
+    if label.startswith("Reproduced("):
+        return "reproduced", "-", "-"
+    m = re.fullmatch(r"Diverged\((K\d):([^\[]+)\[[^\]]*\]@(.+)\)", label)
+    if m:
+        return "diverged", f"{m.group(1)}:{m.group(2)}", m.group(3)
+    m = re.fullmatch(r"Refused\(AdmissionCheck\((A\d+b?)\):(.+)@([^@]+)\)", label)
+    if m:
+        first = f"AdmissionCheck({m.group(1)})" if verdict_level else f"{m.group(1)}:{m.group(2)}"
+        return "refused", first, m.group(3)
+    m = re.fullmatch(r"Refused\(Refusal\((.+)\)@([^@]+)\)", label)
+    if m:
+        return "refused", m.group(1), m.group(2)
+    if label.startswith("Refused(ScanRefusal("):
+        return "refused", "ScanRefusal", "aggregate:scan"
+    m = re.fullmatch(r"Refused\((.+)\)", label)
+    if m:
+        inner = m.group(1)
+        pos = next((p for pre, p in CANDIDATE_REFUSAL_POSITION if inner.startswith(pre)), "aggregate:refusal")
+        return "refused", inner, pos
+    return None
+
+
+def live_observations(out_text):
+    """A live runner's output: ({label: passed}, {label: first verdict label})."""
+    passed, printed = {}, {}
+    for line in out_text.splitlines():
+        m = re.match(r"^(PASS|FAIL) (\S+)", line)
+        if m:
+            passed[m.group(2)] = passed.get(m.group(2), True) and m.group(1) == "PASS"
+            continue
+        m = re.match(r"^([A-Za-z0-9_]+): (.*)$", line)
+        if m and m.group(1) not in printed:
+            lab = verdict_label(m.group(2))
+            if lab is not None:
+                printed[m.group(1)] = lab
+    return passed, printed
+
+
+def pure_observations(out_text):
+    """`ailang test --format json` output: {test function: passed}."""
+    i = out_text.find("{")
+    if i < 0:
+        return {}
+    try:  # the JSON document, then whatever the runner wrote to stderr
+        doc, _ = json.JSONDecoder().raw_decode(out_text[i:])
+    except ValueError:
+        return {}
+    res = {}
+    for t in doc.get("tests", []):
+        name = re.sub(r"_test_\d+$", "", t.get("name", ""))
+        res[name] = res.get(name, True) and t.get("status") == "pass"
+    return res
+
+
+def junit_observations(path):
+    """pytest's junit XML: {test name: pass|fail|skipped}."""
+    res = {}
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return res
+    for tc in root.iter("testcase"):
+        kids = {c.tag for c in tc}
+        st = "fail" if kids & {"failure", "error"} else "skipped" if "skipped" in kids else "pass"
+        res[tc.get("name")] = st
+    return res
+
+
+def join_row(exp, obs):
+    """One row's join status."""
+    if exp["test_name"] == "-":
+        return "inapplicable" if exp["expected_verdict"] == "inapplicable" and obs["observed_verdict"] == "inapplicable" \
+            else "mismatch"
+    st = obs["observed_verdict"]
+    if obs["observed_by"] == "record":
+        if obs.get("_outcome") != "pass":
+            return {"skipped": "skipped", "missing": "missing"}.get(obs.get("_outcome"), "failed")
+        same = all(exp[f"expected_{k}"] == obs[f"observed_{k}"] for k in ("verdict", "first_finding", "position"))
+        return "equal" if same else "mismatch"
+    return {"pass": "credited", "skipped": "skipped", "missing": "missing"}.get(st, "failed")
+
+
+def matrix(opts):
+    repo = os.path.abspath(opts.repo)
+    expected_path = os.path.join(repo, opts.expected)
+    out_path = os.path.join(repo, opts.out)
+    logs = opts.logs or tempfile.mkdtemp(prefix="eval-matrix-")
+    os.makedirs(logs, exist_ok=True)
+    rows = read_tsv(expected_path)
+    head = git(repo, "rev-parse", "HEAD").strip()
+    dirty = git(repo, "status", "--porcelain", "--untracked-files=no", "--", *EVALUATOR_PATHS).strip()
+    commit = head + ("+dirty" if dirty else "")
+    by_test = {}
+    for r in rows:
+        by_test.setdefault(r["test_name"], []).append(r["case_id"])
+    files = sorted({t.split(":", 1)[0] for t in by_test if t != "-"})
+    env = {k: v for k, v in os.environ.items() if k not in ("EVAL_MATRIX_OBS",)}
+    suites, outcome, printed = [], {}, {}
+
+    def run_suite(name, cmd, log, timeout, extra_env=None):
+        e = dict(env, **(extra_env or {}))
+        print(f"eval_matrix: {name} ...", flush=True)
+        try:
+            r = subprocess.run(cmd, cwd=repo, env=e, capture_output=True, text=True, timeout=timeout,
+                               stdin=subprocess.DEVNULL)
+            rc, text = r.returncode, r.stdout + r.stderr
+        except subprocess.TimeoutExpired as ex:
+            rc, text = 124, (ex.stdout or b"").decode(errors="replace") if isinstance(ex.stdout, bytes) else (ex.stdout or "")
+        with open(os.path.join(logs, log), "w", encoding="utf-8") as f:
+            f.write(text)
+        suites.append({"suite": name, "exit": rc, "log": log})
+        print(f"eval_matrix: {name} exit {rc}", flush=True)
+        return rc, text
+
+    obs_path = os.path.join(logs, "candidate_obs.tsv")
+    for f in files:
+        base = os.path.basename(f)
+        if f.endswith("_live_test.ail"):
+            rc, text = run_suite(f, [opts.ailang, "run", "--caps", CAPS, "--ai-stub", "--entry", "main", f],
+                                 base + ".log", 1800)
+            passed, labels = live_observations(text)
+            for k, v in passed.items():
+                outcome[f"{f}:{k}"] = "pass" if v and rc == 0 else "fail"
+            for k, v in labels.items():
+                printed[f"{f}:{k}"] = v
+        elif f.endswith(".ail"):
+            rc, text = run_suite(f, [opts.ailang, "test", "--format", "json", f], base + ".log", 1800)
+            for k, v in pure_observations(text).items():
+                outcome[f"{f}:{k}"] = "pass" if v else "fail"
+        elif f == "tools/eval_protected/selftest.py":
+            tsv = os.path.join(logs, "selftest_observed.tsv")
+            rc, text = run_suite(f, [sys.executable, f, "--observed-tsv", tsv], "selftest.log", 1800)
+            failed = set(re.findall(r"^\s+FAIL M7\.(\S+):", text, re.M))
+            if os.path.isfile(tsv):
+                for o in read_tsv(tsv):
+                    cid = o["test_name"].split(":", 1)[1]
+                    outcome[o["test_name"]] = "fail" if cid in failed else "pass"
+                    printed[o["test_name"]] = (o["observed_verdict"], o["observed_first_finding"],
+                                               o["observed_position"])
+        elif f == "src/eval/journal/testdata/gen_fixtures.py":
+            rc, _ = run_suite(f, [sys.executable, f, "--check"], "gen_fixtures.log", 600)
+            for t in by_test:
+                if t.startswith(f + ":"):
+                    outcome[t] = "pass" if rc == 0 else "fail"
+        elif f == "scripts/eval/test_candidate.py":
+            if os.path.exists(obs_path):
+                os.remove(obs_path)
+            xml = os.path.join(logs, "test_candidate.xml")
+            extra = {"EVAL_MATRIX_OBS": obs_path}
+            if opts.no_live:
+                extra["EVAL_CANDIDATE_LIVE"] = "0"
+            rc, _ = run_suite(f, [sys.executable, "-B", "-m", "pytest", "-q", f, f"--junitxml={xml}"],
+                              "test_candidate.log", 7200, extra)
+            for k, v in junit_observations(xml).items():
+                outcome[f"{f}:{k}"] = v
+            if os.path.isfile(obs_path):
+                with open(obs_path, encoding="utf-8") as fh:
+                    for line in fh:
+                        parts = line.rstrip("\n").split("\t")
+                        if len(parts) == 4:
+                            printed.setdefault(parts[0], tuple(parts[1:]))
+        else:
+            suites.append({"suite": f, "exit": None, "log": "-", "note": "no runner for this test file"})
+    rc, _ = run_suite("scripts/eval/test_mem_guard.py",
+                      [sys.executable, "-B", "-m", "pytest", "-q", "scripts/eval/test_mem_guard.py"],
+                      "test_mem_guard.log", 900)
+
+    observed, joined = [], []
+    for r in rows:
+        t = r["test_name"]
+        o = {"case_id": r["case_id"], "test_name": t, "observed_by": "assertion", "commit": commit}
+        if t == "-":
+            o.update(observed_verdict="inapplicable", observed_first_finding="(no test)", observed_position="-",
+                     observed_by="reason")
+        else:
+            oc = outcome.get(t, "missing")
+            p = printed.get(t)
+            triple = None
+            if p is not None and len(by_test[t]) == 1:
+                triple = label_triple(r["case_id"], p) if isinstance(p, str) else p
+            if triple is not None:
+                o.update(observed_verdict=triple[0], observed_first_finding=triple[1],
+                         observed_position=triple[2], observed_by="record", _outcome=oc)
+            else:
+                o.update(observed_verdict=oc, observed_first_finding=ASSERTED, observed_position=ASSERTED)
+        observed.append(o)
+        joined.append((r["case_id"], join_row(r, o)))
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\t".join(MATRIX_COLUMNS) + "\n")
+        for o in observed:
+            f.write("\t".join(o[c] for c in MATRIX_COLUMNS) + "\n")
+    counts = {}
+    with open(os.path.join(logs, "join.tsv"), "w", encoding="utf-8") as f:
+        f.write("case_id\tstatus\n")
+        for cid, st in joined:
+            counts[st] = counts.get(st, 0) + 1
+            f.write(f"{cid}\t{st}\n")
+    with open(os.path.join(logs, "suites.json"), "w", encoding="utf-8") as f:
+        json.dump(suites, f, indent=1)
+    bad = [(c, st) for c, st in joined if st not in ("equal", "credited", "inapplicable")]
+    bad_suites = [x for x in suites if x["exit"] != 0]
+    print(f"eval_matrix: {len(rows)} rows: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    print(f"eval_matrix: suites {len(suites)}, non-zero exit: "
+          + (", ".join(f"{x['suite']}={x['exit']}" for x in bad_suites) or "none"))
+    for c, st in bad[:40]:
+        print(f"eval_matrix: {st} {c}")
+    print(f"eval_matrix: wrote {os.path.relpath(out_path, repo)} (commit {commit}); logs {logs}")
+    return 0 if not bad and not bad_suites else 1
 
 
 def main(argv=None):
@@ -1367,8 +1750,17 @@ def main(argv=None):
     p.add_argument("--manifest", default=os.path.join(HERE, "..", "..", "tools/eval_protected/manifest-A.json"))
     p.add_argument("--ailang", default="ailang")
     p.add_argument("--out")
+    mx = sub.add_parser("matrix")
+    mx.add_argument("--repo", default=".")
+    mx.add_argument("--expected", default=MATRIX_EXPECTED)
+    mx.add_argument("--out", default=MATRIX_OUT)
+    mx.add_argument("--logs")
+    mx.add_argument("--no-live", action="store_true", help="skip test_candidate's live compiles (never a clean matrix)")
+    mx.add_argument("--ailang", default="ailang")
     a = ap.parse_args(argv)
     try:
+        if a.cmd == "matrix":
+            return matrix(a)
         if a.cmd == "pin":
             pins = make_pins(os.path.abspath(a.repo), a.at, a.lock_root, a.entry, a.manifest,
                              shutil.which(a.ailang) or a.ailang, dict(os.environ))

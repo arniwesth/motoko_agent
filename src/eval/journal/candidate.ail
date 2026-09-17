@@ -189,23 +189,24 @@ pure func test_m13_program_undecodable_digest() -> bool
       == "ProgramStructurallyInvalid(artifact-digest-mismatch)"
   }
 
--- Not an artifact at all.
+-- Not an artifact at all: the decoder's first rule (P1R C2: a literal).
 pure func test_m13_program_undecodable_garbage() -> bool
   tests [((), true)]
   {
-    ct_err_label(program_of_bytes("not an artifact\n")) != "ok"
-      && ct_err_label(program_of_bytes("")) != "ok"
+    ct_err_label(program_of_bytes("not an artifact\n")) == "ProgramStructurallyInvalid(artifact-not-an-execution-program)"
+      && ct_err_label(program_of_bytes("")) == "ProgramStructurallyInvalid(artifact-not-an-execution-program)"
   }
 
--- Decodes, but the structural validator refuses it (a duplicated ordinal).
+-- Decodes, but the structural validator refuses it (a duplicated ordinal;
+-- P1R C2: the rule is asserted literally).
 pure func test_m13_program_structurally_invalid() -> bool
   tests [((), true)]
   {
     let p = synthetic_program();
     let dup = { p | interactions: p.interactions ++ [fxs_interaction_provider(1, "payload=sha256:fx system=sha256:fx", "{\"served\":true}", "hello")] };
     match program_refusal(dup) {
-      Some(ProgramStructurallyInvalid(_)) => true,
-      _ => false
+      Some(x) => replay_refusal_label(x) == "ProgramStructurallyInvalid(program-duplicate-ordinal)",
+      None => false
     }
   }
 

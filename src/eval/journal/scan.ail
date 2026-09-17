@@ -60,6 +60,15 @@
 -- the bytes are `encode_artifact`'s for a program its gate admits; this
 -- policy, not that gate (which refuses an ordinary long repository path), is
 -- what decides whether the program is written.
+-- WHY `program_artifact` DOES NOT CALL `encode_artifact` (P1R C7):
+-- `encode_artifact` (dst_persistence.ail:663) is `scan_program` then the same
+-- frame; its gate refuses what D6's policy explicitly reports and admits — a
+-- credential-bearing environment NAME (report-only here) and the opaque-run
+-- heuristic on paths. Calling it would re-impose the gate D6 replaced (and
+-- `EncodeRefused` would leave no bytes to write). The frame is the only
+-- thing re-spelled, and `scan_live_test.ail` asserts both halves: equal
+-- bytes wherever the gate encodes, and a credential-bearing name that the
+-- gate refuses while this policy reports it.
 --
 -- THE ENTRY. `.motoko/eval-corpus/<entry>/`, directories 0700, files 0600:
 --   snapshot.jsonl, excerpt.jsonl, sources.sha256 (`sha256sum -c` format),
@@ -81,7 +90,12 @@
 -- WHAT IT DOES NOT DO. It renders none of the records it is given (witness,
 -- census, envelope, identities, selector, expectations, T0 settings, end):
 -- those are the runner's (P1.6/P1.7b/P1.9a), passed in as text and scanned as
--- metadata here. It does not scan the exposure log (agent records this code
+-- metadata here. `witness.json` and `census.txt` are the entry-comparand
+-- records K1–K7 read, and their one codec is `candidate_checks_run.
+-- entry_json` / `decode_entry` (P1R C6); the runner's admit mode writes them
+-- (EVAL_ENTRY_OUT), and an `EntryInputs` built for a real entry takes them
+-- from `entry_json` — the fixture texts below are scan-policy test data, not
+-- entry records. It does not scan the exposure log (agent records this code
 -- writes, not corpus content).
 --
 -- Privacy (§0.6): synthetic fixtures only; reports carry counts, lengths,

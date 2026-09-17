@@ -4,16 +4,24 @@
 # collection, then the runner (`journal_replay.ail`).
 #
 # Usage:
-#   journal_replay.sh admit --fixture <world fixture> [--at <A>] [--out <dir>] [--e-record <file>]
-#   journal_replay.sh admit --entry <path>            [--at <A>] [--out <dir>] [--e-record <file>]
+#   journal_replay.sh admit --fixture <fixture> [--at <A>] [--out <dir>] [--e-record <file>] [--entry-out <dir>]
+#   journal_replay.sh admit --entry <path>      [--at <A>] [--out <dir>] [--e-record <file>]
 #   journal_replay.sh collect (--fixture <name> | --entry <path>) [--at <A>] [--out <dir>] [--e-record <file>]
 #   journal_replay.sh candidate --entry <dir> --parent <P> --candidate <C> --record <candidate.json>
 #                     --evaluator <E rev|dir> --peak-bytes <n> --peak-source <text> [candidate.py run options]
 #   journal_replay.sh pin --at <A> --lock-root <dir> --entry <dir> [--out <file>]
+#   journal_replay.sh matrix [candidate.py matrix options]      (make eval_matrix)
 #
-# `candidate` and `pin` are P1.9a's (ADR-004 D3/D5): refusals before running,
-# the assembly under <entry>/runs/<run-id>/, the execution-provenance records
-# and K0, all in scripts/eval/candidate.py (its docstring is the contract).
+# `candidate` and `pin` are P1.9a's and P1.9b's (ADR-004 D3/D5): refusals
+# before running, the assembly under <entry>/runs/<run-id>/, the
+# execution-provenance records, K0, then K1–K7 and the candidate verdict, all
+# in scripts/eval/candidate.py (its docstring is the contract). `matrix` runs
+# the P1 suites and writes MATRIX.tsv (candidate.py's `matrix`, P1R R1).
+#
+# `--fixture` names a world fixture (world_fixtures.ail) or a source-check
+# fixture (source_check_fixtures.ail). `--entry-out` writes an ADMITTED
+# synthetic entry's records there: program.artifact, witness.json and
+# census.txt (the runner's EVAL_ENTRY_OUT).
 #
 # `--at` is the assembled tree A (default: this checkout). `--out` receives
 # identities.json, comparators.json, the run's wire, identities.after.json and
@@ -63,7 +71,11 @@
 # The run's stdout is the wire: WORLD_RUN_BEGIN/END and the world_request
 # lines are checked by scripts/dst/run_world_framed_wire.sh --wire (one frame).
 #
-# Exit: 0 admitted-as-checked (A5, A6, A9, A9b; A1–A4, A7, A8 are P1.7a/P1.7b's);
+# The run's workdir is the runner's default (`.motoko/eval-admission-workdir`
+# relative to A): the string reaches the tool projections, so an admission and
+# its candidates are handed the same one.
+#
+# Exit: 0 admitted (A1–A9, A9b, and the after-run collection unchanged);
 # 1 refused or a finding; 2 usage or a collection failure.
 #
 # Synthetic only at P1.6 (§0.6): the files written here carry identities,
@@ -74,14 +86,15 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 CAPS="IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand"
 
-usage() { sed -n '5,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '5,28p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 mode="${1:-}"; [ -n "$mode" ] || usage; shift
 case "$mode" in
   candidate) exec python3 "$REPO/scripts/eval/candidate.py" run --repo "$REPO" "$@" ;;
   pin) exec python3 "$REPO/scripts/eval/candidate.py" pin --repo "$REPO" "$@" ;;
+  matrix) exec python3 "$REPO/scripts/eval/candidate.py" matrix --repo "$REPO" "$@" ;;
 esac
-fixture=""; entry=""; at="$REPO"; out=""; e_record=""
+fixture=""; entry=""; at="$REPO"; out=""; e_record=""; entry_out=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --fixture) fixture="${2:-}"; shift 2 ;;
@@ -89,6 +102,7 @@ while [ $# -gt 0 ]; do
     --at) at="${2:-}"; shift 2 ;;
     --out) out="${2:-}"; shift 2 ;;
     --e-record) e_record="${2:-}"; shift 2 ;;
+    --entry-out) entry_out="${2:-}"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -99,6 +113,10 @@ at="$(cd "$at" && pwd)"
 if [ -z "$out" ]; then out="$(mktemp -d)"; fi
 mkdir -p "$out"
 if [ -n "$e_record" ] && [ ! -f "$e_record" ]; then echo "journal_replay: no E record at $e_record" >&2; exit 2; fi
+if [ -n "$entry_out" ]; then
+  [ -n "$fixture" ] || { echo "journal_replay: --entry-out is for synthetic fixtures only" >&2; exit 2; }
+  mkdir -p "$entry_out"; entry_out="$(cd "$entry_out" && pwd)"
+fi
 
 runner() {
   ( cd "$at" && env "$@" ailang run --caps "$CAPS" --ai-stub --entry main scripts/eval/journal_replay.ail < /dev/null )
@@ -285,13 +303,15 @@ echo "  collected identities.json and comparators.json before the run"
 
 kind_env=(EVAL_FIXTURE="$fixture")
 [ -n "$entry" ] && kind_env=(EVAL_ENTRY="$entry")
+out_env=()
+[ -n "$entry_out" ] && out_env=(EVAL_ENTRY_OUT="$entry_out")
 
 set +e
-runner EVAL_MODE=admit "${kind_env[@]}" EVAL_IDENTITIES="$out/identities.json" \
-  EVAL_COMPARATORS="$out/comparators.json" EVAL_WORKDIR="$(mktemp -d)" > "$out/wire.txt" 2>&1
+runner EVAL_MODE=admit "${kind_env[@]}" "${out_env[@]}" EVAL_IDENTITIES="$out/identities.json" \
+  EVAL_COMPARATORS="$out/comparators.json" > "$out/wire.txt" 2>&1
 rc=$?
 set -e
-grep -E '^(FINDING|ADMISSION|WORLD_RUN_)' "$out/wire.txt" | sed 's/^/  /' || true
+grep -E '^(FINDING|VERDICT|AVERDICT|ENTRY_RECORDS|ADMISSION|WORLD_RUN_)' "$out/wire.txt" | sed 's/^/  /' || true
 
 fail=0
 [ "$rc" -eq 0 ] || fail=1
@@ -311,8 +331,14 @@ collect_identities "$out/identities.after.json" || { echo "journal_replay: ident
 if cmp -s "$out/identities.json" "$out/identities.after.json"; then
   echo "  ✓ identities unchanged across the run"
 else
-  echo "  ✗ FINDING A9b:IdentitiesChangedDuringRun@aggregate:provenance"
-  diff "$out/identities.json" "$out/identities.after.json" | sed 's/^/    /' | head -20
+  # the fields that changed, by name (no values: §0.6)
+  changed="$(python3 - "$out/identities.json" "$out/identities.after.json" <<'PY'
+import json, sys
+a, b = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:3])
+print(",".join(sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))))
+PY
+)"
+  echo "FINDING A9b:IdentitiesChangedDuringRun@aggregate:provenance fields=${changed}"
   fail=1
 fi
 set +e
@@ -330,7 +356,7 @@ grep -E '^(FINDING|A9B)' "$out/a9b.after.txt" | sed 's/^/  /' || true
 } > "$out/summary.txt"
 
 if [ "$fail" -eq 0 ]; then
-  echo "journal_replay ${mode}: CHECKED (A5, A6, A9, A9b; A1–A4, A7, A8 not yet landed)"
+  echo "journal_replay ${mode}: ADMITTED (A1–A9, A9b; identities unchanged across the run)"
   exit 0
 fi
 echo "journal_replay ${mode}: REFUSED"

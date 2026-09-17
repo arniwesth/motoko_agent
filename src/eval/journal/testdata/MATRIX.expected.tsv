@@ -38,9 +38,9 @@ M1.reader.gen	src/eval/journal/reader.ail:test_reader_equals_generator	pass	-	ag
 M1.fold.at_a	src/eval/journal/reader_at_a_test.ail:test_fold_copy_equals_fold_journal_at_a	pass	-	aggregate:reader
 M1.fold.at_a.every_leaf	src/eval/journal/reader_at_a_test.ail:test_fold_copy_equals_fold_journal_at_every_leaf	pass	-	aggregate:reader
 M15.ChainBreak.passes_M1	src/eval/journal/reader.ail:test_m15_near_miss_chain_break_passes_m1	pass	-	aggregate:reader
-M15.ChainBreak	src/eval/journal/source_checks_live_test.ail:m15_chain_break	refused	AdmissionCheck(A3)	call:2
+M15.ChainBreak	src/eval/journal/source_checks_live_test.ail:m15_chain_break	refused	A3:PayloadDiffers	call:2
 M15.MalformedEntry.passes_M1	src/eval/journal/reader.ail:test_m15_near_miss_malformed_entry_passes_m1	pass	-	aggregate:reader
-M15.MalformedEntry	src/eval/journal/source_checks_live_test.ail:m15_malformed_entry	refused	AdmissionCheck(A3)	call:2
+M15.MalformedEntry	src/eval/journal/source_checks_live_test.ail:m15_malformed_entry	refused	A3:PayloadDiffers	call:2
 M15.UnknownEntryType	-	inapplicable	reason: the nearest decodable input is a known type, and a known type in-segment is a cutoff (M3) or a content change (M15.MalformedEntry)	-
 M15.UnknownSchema	-	inapplicable	reason: an entry under an undecodable schema cannot be read	-
 M15.park_wake	-	inapplicable	reason: v5 D1/D8 - Parked is a cutoff (M3); a wake-opened start is ContinuationStart (M2); a stray wake is MalformedEntry (M1.MalformedEntry.stray_wake.*)	-
@@ -110,13 +110,13 @@ M2.excerpt.thinking_usage	src/eval/journal/excerpt.ail:test_excerpt_thinking_usa
 M2.excerpt.rpc_banner_and_retry	src/eval/journal/excerpt.ail:test_excerpt_rpc_banner_and_retry	pass	-	aggregate:excerpt
 M2.excerpt.refusals_located	src/eval/journal/excerpt.ail:test_excerpt_refusals_are_located	pass	-	aggregate:excerpt
 M15.UnexpectedToolResult.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_unexpected_tool_result_passes_m2	pass	-	aggregate:association
-M15.UnexpectedToolResult	src/eval/journal/source_checks_live_test.ail:m15_unexpected_tool_result	refused	AdmissionCheck(A3)	call:2
+M15.UnexpectedToolResult	src/eval/journal/source_checks_live_test.ail:m15_unexpected_tool_result	refused	A3:PayloadDiffers	call:2
 M15.MalformedToolArguments.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_malformed_tool_arguments_passes_m2	pass	-	aggregate:association
-M15.MalformedToolArguments	src/eval/journal/source_checks_live_test.ail:m15_malformed_tool_arguments	refused	AdmissionCheck(A3)	call:2
+M15.MalformedToolArguments	src/eval/journal/source_checks_live_test.ail:m15_malformed_tool_arguments	refused	A3:PayloadDiffers	call:2
 M15.DuplicateOrAmbiguousCallId.association_accepts	src/eval/journal/association.ail:test_m15_near_miss_duplicate_call_id_swap_is_accepted	pass	-	aggregate:association
-M15.DuplicateOrAmbiguousCallId	src/eval/journal/source_checks_live_test.ail:m15_duplicate_call_id_swap	refused	AdmissionCheck(A2)	snapshot:14
+M15.DuplicateOrAmbiguousCallId	src/eval/journal/source_checks_live_test.ail:m15_duplicate_call_id_swap	refused	A2:MessageDiffers	snapshot:14
 M15.Association.passes_M2	src/eval/journal/association.ail:test_m15_near_miss_association_passes_m2	pass	-	aggregate:association
-M15.Association	src/eval/journal/source_checks_live_test.ail:m15_association	refused	AdmissionCheck(A3)	call:1
+M15.Association	src/eval/journal/source_checks_live_test.ail:m15_association	refused	A3:PayloadDiffers	call:1
 M15.ContinuationStart	-	inapplicable	reason: no evaluated call exists - a T0 refusal of the run's start	-
 M15.EmptySegment	-	inapplicable	reason: no evaluated call exists	-
 M3.SelectorEnd	src/eval/journal/stopping.ail:test_m3_selector_end	admitted	cut:SelectorEnd;sel=EndAt(e20);N=3;end=EndSuspended(3);genuine	selector
@@ -157,7 +157,7 @@ M5.context.window	src/eval/journal/stopping.ail:test_m5_context_limit_window	pas
 M5.context.catalogue_declared	src/eval/journal/stopping.ail:test_m5_context_limit_catalogue_declared	pass	-	aggregate:configuration
 M5.context.disabled	src/eval/journal/stopping.ail:test_m5_context_limit_disabled	pass	-	aggregate:configuration
 M5.context.missed_encoded	src/eval/journal/stopping.ail:test_m5_context_limit_missed_is_encoded	pass	-	aggregate:configuration
-M5.ProfileMissed.witness	src/eval/journal/witness_live_test.ail:m11_profile_missed_models_file_refused	refused	AdmissionCheck(A7)	aggregate:witness
+M5.ProfileMissed.witness	src/eval/journal/witness_live_test.ail:m11_profile_missed_models_file_refused	refused	A7:EnvReadOverRecorded	aggregate:witness
 M5.logical_model	src/eval/journal/stopping.ail:test_m5_logical_model_mismatch_is_refused	refused	Association	event:21
 M5.unreproduced	src/eval/journal/stopping.ail:test_m5_unreproduced	pass	-	aggregate:configuration
 M5.api_model.live_vectors	src/eval/journal/configuration.ail:test_api_model_copy_live_vectors	pass	-	aggregate:configuration
@@ -381,7 +381,25 @@ M11.live.budget.derived	src/eval/journal/witness_live_test.ail:m11_decision_budg
 M11.live.budget.n	src/eval/journal/witness_live_test.ail:m11_decision_budget	refused	A8:DecisionBudgetDiffers	aggregate:bridge:decision_budget
 M11.live.budget.retry	src/eval/journal/witness_live_test.ail:m11_decision_budget	refused	A8:RetryBudgetNonZero	aggregate:bridge:retry_budget
 M11.live.budget.decision_dropped	src/eval/journal/witness_live_test.ail:m11_decision_budget	refused	A8:DecisionCountMismatch	aggregate:census:decisions
-M11.live.census_twins	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:<each count>
+M11.live.census_twins.checkpoint_decisions	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:checkpoint_decisions
+M11.live.census_twins.checkpoint_records	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:checkpoint_records
+M11.live.census_twins.stream_chunks	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:stream_chunks
+M11.live.census_twins.approval_reads	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:approval_reads
+M11.live.census_twins.approvals_consumed	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:approvals_consumed
+M11.live.census_twins.waits_opened	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:waits_opened
+M11.live.census_twins.parks	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:parks
+M11.live.census_twins.wakes	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:wakes
+M11.live.census_twins.extension_effects	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:extension_effects
+M11.live.census_twins.retries	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:retries
+M11.live.census_twins.injected_messages	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:injected_messages
+M11.live.census_twins.hybrid_extractions	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:hybrid_extractions
+M11.live.census_twins.file_writes	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:file_writes
+M11.live.census_twins.file_removes	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:file_removes
+M11.live.census_twins.dir_makes	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:dir_makes
+M11.live.census_twins.exit_manifest_reads	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:exit_manifest_reads
+M11.live.census_twins.exit_manifest_writes	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:exit_manifest_reads
+M11.live.census_twins.capture_reads	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:CensusMismatch	aggregate:census:capture_reads
+M11.live.census_twins.decisions	src/eval/journal/witness_live_test.ail:m11_census_twins_live	refused	A8:DecisionCountMismatch	aggregate:census:decisions
 M12.PrivateKeyBlock	src/eval/journal/scan.ail:test_m12_shape_refusals	refused	ScanRefusal:PrivateKeyBlock	metadata:aggregate:fx
 M12.JsonWebToken	src/eval/journal/scan.ail:test_m12_shape_refusals	refused	ScanRefusal:JsonWebToken	metadata:aggregate:fx
 M12.UrlUserinfo	src/eval/journal/scan.ail:test_m12_shape_refusals	refused	ScanRefusal:UrlUserinfo	metadata:aggregate:fx
@@ -418,7 +436,16 @@ M12.entry.written	src/eval/journal/scan_live_test.ail:m12_entry_written	pass	-	a
 M12.entry.permission_failure	src/eval/journal/scan_live_test.ail:m12_entry_permission_failure	refused	Entry:Io:mkdir	aggregate:entry
 M12.entry.partial_write_failure	src/eval/journal/scan_live_test.ail:m12_entry_partial_write_failure	refused	Entry:Io:write:missing/x	aggregate:entry
 M12.entry.exists	src/eval/journal/scan_live_test.ail:m12_entry_exists	refused	Entry:Exists:fx-entry	aggregate:entry
-M12.entry.scan_refused	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:<per component, as M12.component.*>	aggregate:entry
+M12.entry.scan_refused.snapshot	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:PrivateKeyBlock	aggregate:entry
+M12.entry.scan_refused.excerpt	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:UrlUserinfo	aggregate:entry
+M12.entry.scan_refused.identity	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:ProviderTokenLiteral:sk-	aggregate:entry
+M12.entry.scan_refused.projection	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:UrlUserinfo	aggregate:entry
+M12.entry.scan_refused.payload	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:ProviderTokenLiteral:sk-	aggregate:entry
+M12.entry.scan_refused.chunks	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:PrivateKeyBlock	aggregate:entry
+M12.entry.scan_refused.env	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:UrlUserinfo	aggregate:entry
+M12.entry.scan_refused.files	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:JsonWebToken	aggregate:entry
+M12.entry.scan_refused.metadata	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:ProviderTokenLiteral:sk-	aggregate:entry
+M12.entry.scan_refused.record	src/eval/journal/scan_live_test.ail:m12_entry_scan_refused	refused	ScanRefusal:PrivateKeyBlock	aggregate:entry
 M12.entry.name_invalid	src/eval/journal/scan_live_test.ail:m12_entry_name_invalid	refused	Entry:NameInvalid	aggregate:entry
 M15.ScanRefusal	-	inapplicable	reason: a 15-character body is reported and admitted (M12.body15.reported); the scan does not affect the replay, so there is no divergence to catch (V5G)	-
 M13.InadmissibleCandidate.path.prompts	scripts/eval/test_candidate.py:test_m13_inadmissible_path_d3[src/core/prompts.ail]	refused	InadmissibleCandidate:path:src/core/prompts.ail	aggregate:refusal
@@ -513,15 +540,15 @@ M13.PreflightMismatch.identity.program_missing	scripts/eval/test_candidate.py:te
 M13.PreflightMismatch.loader_rules	scripts/eval/test_candidate.py:test_m13_preflight_loader_rules_moved	refused	PreflightMismatch:loader_rules:moved:internal/loader/stdlib_resolver.go	aggregate:k0
 M13.PreflightMismatch.trace_loader_discarded	scripts/eval/test_candidate.py:test_m13_trace_loader_is_discarded_at_ae36986	pass	-	aggregate:k0
 M13.PreflightMismatch.pins	scripts/eval/test_candidate.py:test_m13_pins_shape	pass	-	aggregate:k0
-M13.PreflightMismatch.run.during_run	scripts/eval/test_candidate.py:test_m13_run_corpus_and_tree_changed_during_run	refused	PreflightMismatch:<first of k0; asserts corpus:changed_during_run, tree:changed_during_run present>	aggregate:k0
+M13.PreflightMismatch.run.during_run	scripts/eval/test_candidate.py:test_m13_run_corpus_and_tree_changed_during_run	refused	PreflightMismatch:profile:profile_id	aggregate:k0
 M13.PreflightMismatch.run.dev_evaluator_real_entry	scripts/eval/test_candidate.py:test_m13_run_dev_evaluator_refused_for_real_entry	refused	PreflightMismatch:e_unpinned:dev_generator	aggregate:k0
 M13.run.refused_before_assembly	scripts/eval/test_candidate.py:test_m13_run_refused_before_assembly	refused	InadmissibleCandidate:path:src/core/prompts.ail	aggregate:refusal
 M13.run.run_directory_exists	scripts/eval/test_candidate.py:test_m13_run_directory_must_not_exist	error	EvalError:run directory exists	-
 M13.live.provenance_record	scripts/eval/test_candidate.py:test_m13_live_provenance_record	pass	-	aggregate:k0
 M13.ProgramUndecodable.clean.starts	src/eval/journal/candidate.ail:test_m13_program_starts	pass	-	aggregate:program
 M13.ProgramUndecodable.digest	src/eval/journal/candidate.ail:test_m13_program_undecodable_digest	refused	ProgramUndecodable:ProgramStructurallyInvalid(artifact-digest-mismatch)	aggregate:program
-M13.ProgramUndecodable.garbage	src/eval/journal/candidate.ail:test_m13_program_undecodable_garbage	refused	ProgramUndecodable:ProgramStructurallyInvalid(<decode rule>)	aggregate:program
-M13.ProgramUndecodable.structural	src/eval/journal/candidate.ail:test_m13_program_structurally_invalid	refused	ProgramUndecodable:ProgramStructurallyInvalid(<program rule>)	aggregate:program
+M13.ProgramUndecodable.garbage	src/eval/journal/candidate.ail:test_m13_program_undecodable_garbage	refused	ProgramUndecodable:ProgramStructurallyInvalid(artifact-not-an-execution-program)	aggregate:program
+M13.ProgramUndecodable.structural	src/eval/journal/candidate.ail:test_m13_program_structurally_invalid	refused	ProgramUndecodable:ProgramStructurallyInvalid(program-duplicate-ordinal)	aggregate:program
 M13.ProgramUndecodable.provider_outcome	src/eval/journal/candidate.ail:test_m13_program_provider_outcome_undecodable	refused	ProgramUndecodable:ProviderOutcomeUndecodable(1)	aggregate:program
 M13.ProgramUndecodable.labels	src/eval/journal/candidate.ail:test_m13_refusal_labels	pass	-	aggregate:program
 M13.ProgramUndecodable.clean.loads	src/eval/journal/candidate_live_test.ail:m13_program_loads	pass	-	aggregate:program
@@ -539,7 +566,7 @@ M15.InadmissibleCandidate.digest_function_only.passes_path	scripts/eval/test_can
 M15.InadmissibleCandidate.digest_function_only.passes_k0	scripts/eval/test_candidate.py:test_m15_digest_function_only_k0_passes	pass	-	aggregate:k0
 M15.InadmissibleCandidate.digest_function_only.intent.passes_intent	scripts/eval/test_candidate.py:test_m15_digest_function_only_passes_intent_refusal	pass	-	aggregate:refusal
 M15.EvaluatorTouched.passes_evaluator	scripts/eval/test_candidate.py:test_m15_evaluator_touched_passes_evaluator_refusal	pass	-	aggregate:refusal
-M15.ProtectedRegionTouched.passes_protected	scripts/eval/test_candidate.py:test_m15_protected_region_passes_protected_refusal	pass	-	aggregate:refusal
+M15.ProtectedRegionTouched.passes_protected	scripts/eval/test_candidate.py:test_m15_protected_region_search_passes_protected_refusal	pass	-	aggregate:refusal
 M15.ProgramUndecodable	-	inapplicable	reason: the program is pinned by the entry and K0 compares corpus hashes, so a candidate cannot change it; the reachable counterpart is M14's OutcomeDiffers (PLAN-004 M15)	-
 M15.PreflightMismatch	-	inapplicable	reason: identity refusals have no replay (PLAN-004 M15)	-
 M15.GuardTripped	-	inapplicable	reason: resource refusals have no replay (PLAN-004 M15)	-
@@ -576,10 +603,20 @@ M14.pure.K2.positions	src/eval/journal/candidate_checks.ail:test_m14_k2_position
 M14.pure.K4.family_record	src/eval/journal/candidate_checks.ail:test_m14_k4_family_record	pass	-	aggregate:family
 M14.pure.K4.census_record	src/eval/journal/candidate_checks.ail:test_m14_k4_census_record	pass	-	aggregate:census
 M14.pure.refused_arm	src/eval/journal/candidate_checks.ail:test_m14_refused_arm	pass	-	aggregate:refusal
-M15.clean.candidate	src/eval/journal/testdata/m15_k_rows.sh:clean	reproduced	-	-
-M15.InadmissibleCandidate.path	src/eval/journal/testdata/m15_k_rows.sh:path_permitted	diverged	K7:SeedDigestDiffers	snapshot:12
-M15.InadmissibleCandidate.intent	src/eval/journal/testdata/m15_k_rows.sh:path_permitted	diverged	K7:SeedDigestDiffers	snapshot:12
-M15.EvaluatorTouched	src/eval/journal/testdata/m15_k_rows.sh:evaluator_touched	diverged	K2:UnsafeIdentity	interaction:9
-M15.ProtectedRegionTouched.fixture_comment_only	src/eval/journal/testdata/m15_k_rows.sh:protected_region	reproduced	-	-
-M15.ProtectedRegionTouched.search.passes_protected	src/eval/journal/testdata/m15_k_rows.sh:closure_search	pass	-	aggregate:refusal
-M15.ProtectedRegionTouched	src/eval/journal/testdata/m15_k_rows.sh:closure_search	diverged	K2:OutcomeDiffers	interaction:7
+M15.clean.candidate	scripts/eval/test_candidate.py:test_m15_clean_candidate_reproduced	reproduced	-	-
+M15.InadmissibleCandidate.path	scripts/eval/test_candidate.py:test_m15_inadmissible_path_diverges_k2	diverged	K2:ProjectionDiffers	interaction:14
+M15.InadmissibleCandidate.intent	scripts/eval/test_candidate.py:test_m15_inadmissible_intent_diverges_k2	diverged	K2:ProjectionDiffers	interaction:14
+M15.InadmissibleCandidate.digest_function_only	scripts/eval/test_candidate.py:test_m15_digest_function_only_diverges_k7	diverged	K7:SeedDigestDiffers	snapshot:12
+M15.InadmissibleCandidate.digest_function_only.intent	scripts/eval/test_candidate.py:test_m15_digest_function_only_intent_diverges_k7	diverged	K7:SeedDigestDiffers	snapshot:12
+M15.EvaluatorTouched	scripts/eval/test_candidate.py:test_m15_evaluator_touched_diverges_k2	diverged	K2:UnsafeIdentity	interaction:9
+M15.ProtectedRegionTouched.fixture_comment_only	scripts/eval/test_candidate.py:test_m15_protected_region_comment_only_now_refused	refused	ProtectedRegionTouched:changed:has_key	aggregate:refusal
+M15.ProtectedRegionTouched	scripts/eval/test_candidate.py:test_m15_protected_region_search_diverges_k2	diverged	K2:UnsafeIdentity	interaction:5
+M15.DuplicateOrAmbiguousCallId.runner	scripts/eval/test_candidate.py:test_m15_admission_through_runner[swap]	refused	A2:MessageDiffers	snapshot:14
+M15.clean.m2.runner	scripts/eval/test_candidate.py:test_m15_admission_through_runner[clean_m2]	admitted	-	-
+M13.decide.k0_first	scripts/eval/test_candidate.py:test_m13_decide_k0_first_then_the_k_verdict	pass	-	aggregate:k0
+M13.verdict_triple	scripts/eval/test_candidate.py:test_m13_verdict_triple	pass	-	aggregate:verdict
+M9.A9b.post_run_change	scripts/eval/test_candidate.py:test_m9_a9b_post_run_change_is_a_finding	refused	A9b:IdentitiesChangedDuringRun	aggregate:provenance
+M9.A9b.post_run_unchanged	scripts/eval/test_candidate.py:test_m9_a9b_post_run_unchanged_twin	pass	-	aggregate:provenance
+M11.live.a8_evaluate_violation_first	src/eval/journal/witness_live_test.ail:m11_a8_evaluate_violation_first	refused	A8:journal-payload-disagrees	aggregate:invariants:emission-parity
+M14.entry_records.round_trip	src/eval/journal/candidate_checks_live_test.ail:m14_entry_records_round_trip	pass	-	aggregate:entry_records
+MX.observation_rules	scripts/eval/test_candidate.py:test_eval_matrix_observation_rules	pass	-	aggregate:matrix

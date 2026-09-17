@@ -920,6 +920,125 @@ No open owner question remains at v2. New questions go to the operator through t
 
 ## 6. Results
 
+### `P1R` R1 (`P1.9b-v2·a2`), 2026-09-17: K1–K7 in the runner, `make eval_matrix`, the catching halves
+
+HEAD at start `d74079d` (unchanged until the commit); `src/core` = A (`git diff --quiet 65003110 -- src/core` → 0).
+Write scope per the operator's directive (2026-09-17T06:20:46Z): `scripts/eval/candidate.py`,
+`journal_replay.ail`/`.sh`, the Makefile's `eval_matrix` target, `src/eval/journal/**` (P1.9b's scope,
+incl. `MATRIX.expected.tsv` and the fixtures), `scripts/eval/test_candidate.py` (item 1), and this record (C14).
+
+**Wired.** The runner's candidate mode now runs K1–K7 in the assembled tree and prints `KVERDICT`/`KALL` and the
+D3 envelope; `candidate.py` decides K0 after the run (a K0 finding discards any K verdict), then takes the K
+verdict: `Reproduced` exit 0 (score permitted), `Diverged` exit 1, a runner input error exit 2 (never a verdict).
+The runner's admit mode runs A1–A9b (`admit_source`) and, with `EVAL_ENTRY_OUT`, writes the entry records.
+`entry_json` renders `witness.json` + `census.txt` and `decode_entry` is their only reader (C6). The workdir string
+reaches tool projections, so admission and candidates share the runner's default (a first C = P smoke with two
+workdirs diverged at `K2:ProjectionDiffers@interaction:10`; with one, `Reproduced`).
+
+**M15 K-rows through `candidate.py` (guard, K0, effective lock), on m3_selector_end admitted by this build:**
+
+| row | observed (K0 passed on every run) |
+|---|---|
+| `M15.clean.candidate` (C = P) | reproduced |
+| `M15.InadmissibleCandidate.path` / `.intent` (sent-message edit) | diverged `K2:ProjectionDiffers` `interaction:14` |
+| `M15.InadmissibleCandidate.digest_function_only` / `.intent` (renamed) | diverged `K7:SeedDigestDiffers` `snapshot:12` |
+| `M15.EvaluatorTouched` | diverged `K2:UnsafeIdentity` `interaction:9` |
+| `M15.ProtectedRegionTouched.fixture_comment_only` | refused `ProtectedRegionTouched:changed:has_key` (member since R2) |
+| `M15.ProtectedRegionTouched` (the redone search) | diverged `K2:UnsafeIdentity` `interaction:5` |
+| `M15.DuplicateOrAmbiguousCallId.runner` (swap, admit mode) | refused `A2:MessageDiffers` `snapshot:14` |
+
+**The redone search (D8) found a missing closure member — for ADR-004's next revision (D5).** Every unlisted
+callee of the 119-span closure is path-refused (123) or one of the 14 R2 flags (reached only from path-refused
+`stub_step` arms). But the closure walk starts at the recorder and the seams' delegates, not at the program
+decoder: `dst_persistence` (path-refused) calls `fs_node_of_kind` / `fs_content_of` / `fs_kind_id` in
+`src/core/fs_node.ail`, which is neither protected nor refused. An edit there that serves every world file with a
+leading `#` and writes it back without one leaves the artifact bytes and the re-encoded digest unchanged (checker 0
+findings, K0 passes) and changes the world `recording_ports` serves (the profile config no longer decodes):
+`K2:UnsafeIdentity@interaction:5`. A digest-preserving variant that only appends a newline reproduced (scratch
+run). Recommended: protect `fs_node.ail`'s three functions and `FsNode` (C8 already lists `FsNode`), and start the
+walk also at `load_program`/`decode_artifact`. Not changed here (R2's owner).
+
+**Corrections landed.** C1 (finding-level `Ak:Name`; `M5.ProfileMissed.witness` → `A7:EnvReadOverRecorded`,
+the six M15 A-rows → `A3:PayloadDiffers`×5 / `A2:MessageDiffers`); C2 (garbage/structural rules literal,
+`during_run` → `PreflightMismatch:profile:profile_id`, `M12.entry.scan_refused` split ×10,
+`M11.live.census_twins` split ×19); C4 (`M11.live.a8_evaluate_violation_first`:
+`A8:journal-payload-disagrees@aggregate:invariants:emission-parity`, first over A1–A9); C5
+(`M9.A9b.post_run_change` / `.post_run_unchanged`); C6; C7 (not called: `encode_artifact`'s gate refuses a
+credential-bearing name D6 reports — asserted live); C9; C14 (below). `m15_k_rows.sh` retired; its rows moved.
+
+**Gates.**
+
+| command | exit | result |
+|---|---:|---|
+| `make eval_matrix EVAL_MATRIX_ARGS="--logs <scratch>"` | 0 | 621 rows: 185 equal (recorded), 425 credited (asserted), 11 inapplicable; 28 suites, all exit 0; `MATRIX.tsv` sha256 `1ac7f001…4686` (not committed; commit column `d74079d+dirty`) |
+| — inside it: `ailang test` ×17 pure modules | 0 | 180/180 |
+| — live runners ×7 | 0 | admission 9, candidate 4, candidate_checks 30, scan 8, seams 4, source_checks 19, witness 11 PASS lines |
+| — `pytest scripts/eval/test_candidate.py` (live on) | 0 | 123 passed (15m50s) |
+| — `tools/eval_protected/selftest.py` | 0 | 42/42 |
+| — `gen_fixtures.py --check`; `pytest test_mem_guard.py` | 0 / 0 | up to date; 55 passed |
+| `ailang check` ×36 evaluator files | 0 | 0 failed |
+| `protected.py check --manifest manifest-A.json --tree . --pins-root .` | 0 | 119 spans, 0 findings, 0 pin drift |
+| `protected.py pins --at 65003110 --pins-root .` | 0 | 147 pins, 0 bad |
+
+A first full matrix run had one `GuardTripped:monitor_gap` (a 2.87 s sampling gap, threshold 2.0 s, on the C = P
+run): a correct refusal under §0.2, not a verdict; the rerun above is clean. **The matrix's two tiers are a design
+point for `P1G`:** 425 rows are boolean tests whose triple is asserted in the test body and credited on pass; a
+recorded triple for them needs the pure tests to return their triple (17 modules).
+
+**§0.8.** Red observed first: the workdir divergence above; C4's first mutations (dropped dispatch/tool records)
+gave no finding; R2's `has_key` test failing at `d74079d`. Mutations (each restored, sha256 checked): MR1 K0 not
+first → `decide…`, `…during_run`; MR2 two `KVERDICT` lines accepted → `decide…`; MR3 runner error as a trip →
+`guard_clean…`; MR4 verdict-level everywhere, MR5 join ignores values, MR6 pure-test last-case-wins (survived
+once, test tightened, then caught) → `observation_rules`; MR7 A1–A4 dropped from `admit_source` →
+`through_runner[swap]`; MR8 after-run comparison skipped → `a9b_post_run_change`; MR9 census dropped from the
+records → `m14_entry_records_round_trip`; MR10 `evaluate` dropped from A8 → `m11_a8_evaluate_violation_first`,
+`m11_decision_budget`; MR11 finding-level name removed → six `m15_*` live rows; MR12/MR13 source-check fixtures
+unresolvable (generator / runner) → `through_runner[*]`; MR14 the C7 gate probe on the clean program →
+`m12_artifact_load_program`. 14/14 caught.
+
+### `P1R` C14, 2026-09-17: the P1.7a and P1.8 itemised §0.8 tables, made durable
+
+The review (`REVIEW-plan004-p1-verdicts-claude.md` §5 (h)) found these tables only in gitignored delegate
+answers. They are copied here verbatim in content (test names only, no corpus content), with their sources:
+`.motoko/herdr-delegates/answer-mot-dlg-1789591401669.md` (sha256 `6709813e5bbe652b598cfbd606c34ad008e6c6f60ac59bcf7a487c98b38a154f`,
+lines 69–90) and `.motoko/herdr-delegates/answer-mot-dlg-1789593205428.md` (sha256
+`e8f59fdadca114a29c53410ab0447a3c12f75fbc6fd0611a54a67b876bb0efdc`, lines 86–106).
+
+**P1.7a (`9c1067d`), `source_checks.ail` / `source_checks_live_test.ail`.** Red first: `chain_findings`,
+`transcript_findings`, `request_findings`, `invocation_findings` stubbed to `[]` and `admission_verdict` to
+always `SourceFaithful` → `ailang test source_checks.ail` exit 1, 5 of 7 fail (`a1_seed_digest_tamper`,
+`a2_transcript`, `a3_requests`, `a4_invocations`, `verdict_mapping`); the live runner exit 1, 13 FAIL
+(`p17a_preflight_refusal`, all seven `m10_*`, all six M15 near-miss rows), the five clean/refusal twins passing.
+Mutations, each applied once and restored (file sha256 `68417951…9b29` before and after):
+
+| # | mutation | pure test that fails | live check that fails |
+|---|---|---|---|
+| M1 | A1 compares the folded prefix to itself instead of to the recorded value | `a1_seed_digest_tamper` | `m10_a1_seed_digest_tamper` |
+| M2 | A2 ignores `HistoryAppended` digests | `a2_transcript` | `m10_a2_one_byte_append_change` |
+| M3 | A3 expects the unconverted logical model | `expectations_from_world` | `m10_a3_model_conversion` |
+| M4 | A4 uses byte (digest) equality instead of JSON equality | `a4_invocations` | none |
+| M5 | verdict takes findings unordered | `verdict_mapping` | none |
+| M6 | A3 misses a dropped call | `a3_requests` | `m10_a3_msg_count_and_count` |
+| M7 | A4 skips the program-digest check | `a4_invocations` | `m10_a4_json_inequal` |
+
+**P1.8 (`a20d988`), `scan.ail` / `scan_live_test.ail`.** Red first: `policy_text`/`name_finding`/`scan_lines` →
+`[]`, `program_artifact` → `""`, `entry_files` → `[]`, `migrate_exposure` → `Ok([])`, `entry_name_ok` → `true`:
+`ailang test src/eval/journal/scan.ail` exit 1, 9 tests, 0 passed (first failure `test_m12_shape_refusals`).
+Mutations (10 of 10 caught; pure / live):
+
+| mutation | caught by |
+|---|---|
+| P1: threshold `>` instead of `>=` | body16_later_occurrence / – |
+| P2: only the first occurrence of a prefix counted | body16_later_occurrence / – |
+| P3: CredentialBearingName refused | credential_bearing_name_report_only, report_contains_no_body / – |
+| P4: chunks not scanned | one_hit_per_component, report_contains_no_body / m12_entry_scan_refused |
+| P5: CredentialBearingName dropped | credential_bearing_name_report_only, report_contains_no_body / – |
+| P6: artifact without its final newline | artifact_frame / m12_artifact_load_program, m12_entry_written |
+| L1: no cleanup after a write failure | – / m12_entry_partial_write_failure |
+| L2: no `chmod 0600` | – / m12_entry_written, m12_entry_exists |
+| L3: scan gate skipped | – / m12_entry_scan_refused |
+| L4: existing-entry check removed | – / m12_entry_exists |
+
 ### `PSYNC`, 2026-09-16: PLAN-004 v2 and the v2 graph
 
 HEAD `988a863`. `git diff 3920814 988a863 --stat -- src/ scripts/dst/ Makefile tools/` → empty (code
