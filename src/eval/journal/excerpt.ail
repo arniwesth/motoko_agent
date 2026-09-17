@@ -51,7 +51,7 @@ import std/json (Json, decode, get, has, asString, asArray, asObject, asNumber, 
 import std/list as List (length, map, foldl)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import src/eval/journal/testdata/association_fixtures (RunFixture, fxr_all, fxr_m2_clean, fxr_m2_continuation_suspended_resumed, fxr_m2_retry_cut, fxr_m2_excerpt_missing_field, fxr_m2_excerpt_session_start_shape, fxr_m2_excerpt_zero_cache, fxr_m2_excerpt_type_not_string, fxr_m2_excerpt_not_json_line)
+import src/eval/journal/testdata/association_fixtures (RunFixture, fxr_all, fxr_m2_clean, fxr_m2_continuation_suspended_resumed, fxr_m2_retry_cut, fxr_m2_excerpt_missing_field, fxr_m2_excerpt_session_start_shape, fxr_m2_excerpt_session_start_no_shape, fxr_m2_excerpt_zero_cache, fxr_m2_excerpt_type_not_string, fxr_m2_excerpt_not_json_line)
 
 -- ============================================================================
 -- The excerpt.
@@ -391,7 +391,7 @@ pure func find_thinking(x: Excerpt, index: int) -> Option[Thinking] {
 pure func test_excerpt_equals_generator() -> bool
   tests [((), true)]
   {
-    List.length(fxr_all()) == 32 && List.foldl(\acc f. acc && excerpt_agrees(f), true, fxr_all())
+    List.length(fxr_all()) == 33 && List.foldl(\acc f. acc && excerpt_agrees(f), true, fxr_all())
   }
 
 -- Both `session_start` shapes, the four other types with positions, other
@@ -456,6 +456,7 @@ pure func test_excerpt_refusals_are_located() -> bool
   {
     excerpt_refused_at(fxr_m2_excerpt_missing_field(), 21, "provider_call_prepared.payload_digest")
       && excerpt_refused_at(fxr_m2_excerpt_session_start_shape(), 0, "session_start.shape")
+      && excerpt_refused_at(fxr_m2_excerpt_session_start_no_shape(), 0, "session_start.shape")
       && excerpt_refused_at(fxr_m2_excerpt_zero_cache(), 28, "thinking.cache_read_input_tokens")
       && excerpt_refused_at(fxr_m2_excerpt_type_not_string(), 12, "type")
       && excerpt_refused_at(fxr_m2_excerpt_not_json_line(), 12, "json")
