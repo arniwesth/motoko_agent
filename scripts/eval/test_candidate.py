@@ -114,7 +114,15 @@ def refuse(clone, work, changes, name, **rec):
 
 
 # The candidate edits, each against HEAD (whose src/core equals A's).
-PERMITTED_EDIT = {"src/core/phase_vocab.ail": ('["m-end;"]', '["m-end!"]')}          # one message's frame
+# PERMITTED_EDIT changes only the digest-only `m-end;` terminator of
+# `canonical_messages` (whose one user is `digest_messages`): no sent message
+# changes (P1R R3). Kept as M15's digest-function-only row and as the M13 edit.
+PERMITTED_EDIT = {"src/core/phase_vocab.ail": ('["m-end;"]', '["m-end!"]')}
+# P1R R3: a named permitted file edited so that a sent message changes: each
+# tool-role result message the model is sent gains a trailing space, so the
+# first affected call is the first one after a tool result.
+SENT_MESSAGE_EDIT = {"src/core/phase_vocab.ail": ("content: cap_tool_message_content(content),",
+                                                  'content: cap_tool_message_content("${content} "),')}
 TOOL_PHASE_EDIT = {"src/core/tool_phase.ail": ("MOTOKO_TOOL_TIMEOUT_MS", "MOTOKO_TOOL_TIMEOUT_MX")}
 OUTSIDE_SPANS_EDIT = {"src/core/ports.ail": (  # has_key: an unlisted callee of decode_provider_outcome
     "pure func has_key(obj: Json, key: string) -> bool {",
@@ -260,21 +268,54 @@ def test_m13_clean_twin_passes_every_refusal(clone, work):
     assert steps == ["path", "intent", "evaluator", "protected"]
 
 
+def m15_passes_path_and_protected(clone, work, changes, name):
+    first, rs, steps = refuse(clone, work, changes, name)
+    assert first is None and rs == []
+    assert steps == ["path", "intent", "evaluator", "protected"]
+    for path in changes:
+        assert C.path_refusals([path]) == [], path
+
+
+def m15_passes_intent(clone, work, changes, name):
+    # Declared and reviewed resource-only, but it changes one output.
+    cand = clone.commit(clone.head, changes)
+    rec = C.load_record(record_for(work / f"rec-{name}.json", clone.head, cand))
+    assert C.intent_refusals(rec, clone.head, cand) == []
+    first, _, _ = C.refuse_before_running(clone.root, clone.head, cand, str(work / f"rec-{name}.json"),
+                                          CHECKER, MANIFEST)
+    assert first is None
+
+
 def test_m15_inadmissible_path_passes_path_refusal(clone, work):
-    # A named permitted file edited so that one message's frame changes: the
-    # path refusal and the protected check pass (K0: the live test below).
-    first, _, steps = refuse(clone, work, PERMITTED_EDIT, "m15-path")
-    assert first is None and "path" in steps and "protected" in steps
+    # The sent-message edit: the path refusal and the protected check pass
+    # (K0: the live test below).
+    m15_passes_path_and_protected(clone, work, SENT_MESSAGE_EDIT, "m15-path")
+
+
+def test_m15_inadmissible_path_edit_changes_a_sent_message(clone):
+    # The edit sits in `tool_result_message`, which builds the tool-role
+    # messages the model is sent, and in no span of the manifest.
+    (path, (old, _)), = SENT_MESSAGE_EDIT.items()
+    src = show(clone.root, clone.head, path)
+    fn = src.index(b"export func tool_result_message(call: ToolCall, content: string) -> Message {")
+    at = src.index(old.encode())
+    assert fn < at < src.index(b"\n}\n", fn)
+    with open(MANIFEST) as f:
+        spans = [s for s in json.load(f)["spans"] if s["file"] == path]
+    assert all(not (s["bytes"][0] <= at < s["bytes"][1]) for s in spans), spans
 
 
 def test_m15_inadmissible_intent_passes_intent_refusal(clone, work):
-    # Declared and reviewed resource-only, but it changes one output.
-    cand = clone.commit(clone.head, PERMITTED_EDIT)
-    rec = C.load_record(record_for(work / "rec-m15-intent.json", clone.head, cand))
-    assert C.intent_refusals(rec, clone.head, cand) == []
-    first, _, _ = C.refuse_before_running(clone.root, clone.head, cand, str(work / "rec-m15-intent.json"),
-                                          CHECKER, MANIFEST)
-    assert first is None
+    m15_passes_intent(clone, work, SENT_MESSAGE_EDIT, "m15-intent")
+
+
+def test_m15_digest_function_only_passes_path_refusal(clone, work):
+    # PERMITTED_EDIT: the digest-only terminator (P1R R3's renamed row).
+    m15_passes_path_and_protected(clone, work, PERMITTED_EDIT, "m15-digest-path")
+
+
+def test_m15_digest_function_only_passes_intent_refusal(clone, work):
+    m15_passes_intent(clone, work, PERMITTED_EDIT, "m15-digest-intent")
 
 
 def test_m15_evaluator_touched_passes_evaluator_refusal(clone, work):
@@ -804,7 +845,7 @@ def test_m13_run_program_undecodable_from_runner(clone, entry, work, tmp_path):
 
 @pytest.fixture(scope="session")
 def near_miss_run(clone, entry, work):
-    """M15 InadmissibleCandidate(path): the permitted edit, assembled and compiled."""
+    """M15 digest-function-only (PERMITTED_EDIT), assembled and compiled; the M13 live tests reuse it."""
     cand = clone.commit(clone.head, PERMITTED_EDIT)
     rec = record_for(work / "rec-live.json", clone.head, cand)
     code, lines, record = C.run(run_opts(clone, entry, clone.head, cand, rec, run_id="live-near-miss",
@@ -813,13 +854,31 @@ def near_miss_run(clone, entry, work):
     git(clone.root, "worktree", "remove", "--force", str(entry / "runs/live-near-miss/tree"))
 
 
-@live
-def test_m15_inadmissible_path_k0_passes(near_miss_run):
-    code, lines, record, run_dir = near_miss_run
+@pytest.fixture(scope="session")
+def sent_message_run(clone, entry, work):
+    """M15 InadmissibleCandidate(path): the sent-message edit, assembled and compiled."""
+    cand = clone.commit(clone.head, SENT_MESSAGE_EDIT)
+    rec = record_for(work / "rec-live-sent.json", clone.head, cand)
+    code, lines, record = C.run(run_opts(clone, entry, clone.head, cand, rec, run_id="live-sent-message"))
+    return code, lines, record
+
+
+def assert_k0_passes(code, lines, record):
     assert record.get("k0") == [], record.get("k0")
     assert code == 0 and record["verdict"]["status"] == "preflight-passed"
     assert record["steps"] == ["path", "intent", "evaluator", "protected"]
     assert any(l.startswith("ENVELOPE residual_gap=") for l in lines)
+
+
+@live
+def test_m15_inadmissible_path_k0_passes(sent_message_run):
+    assert_k0_passes(*sent_message_run)
+
+
+@live
+def test_m15_digest_function_only_k0_passes(near_miss_run):
+    code, lines, record, run_dir = near_miss_run
+    assert_k0_passes(code, lines, record)
 
 
 @live
