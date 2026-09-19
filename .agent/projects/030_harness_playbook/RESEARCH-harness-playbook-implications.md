@@ -106,6 +106,41 @@ five.
 | Interface | Pi's `render(): string[]` contract measured at 267 s of render time in one session, 13% of CPU in one `.includes`; replaced by RichText runs pushed once into a sink, 90 ms. A typed component model (`<box>`, `<row>`, `<ico:new/>`, semantic colours) so tool authors describe structure and each surface lays it out. Verification is part of the interface: a non-destructive, off-screen, multi-instance debug protocol so the agent cannot redefine success. The transcript is a protocol — blocks active → finalized → committed, mutable vs append-only, width-independent logical history, three resize policies — modelled in TLA+ (Appendix B). |
 | Stack | Language choice is architecture: TypeScript permits twenty equally normal local styles and agents pick one each; Rust for the core; Python for extensions because agents write decent Python, the runtime makes Eval dependable, and AST introspection makes `@remote` possible. |
 
+### 1.3 What the post does not cover: testing the harness
+
+The post never mentions deterministic simulation testing, scripted or simulated providers, fault
+injection, property-based testing, seeded generation, shrinking, or record-and-replay as a test
+technique, and it says nothing about how the agent loop itself is tested (checked by grep over the
+full text for those terms and their neighbours, 2026-09-15). The nearest passages:
+
+- **Replay is a product property, not an oracle.** The state chapter's argument is
+  `replay(.dem) == original` against `replay(.jsonl) ≠ original` — rewind, fork, resume and
+  replication being honest to the user. It is never turned around into "drive the engine from the
+  journal in a test". It does state the precondition DST would want: "at any journal point, the
+  harness can materialize — and therefore snapshot — the whole session".
+- **The test harness is listed as one more consumer.** Twice: "the model, user, journal, remote
+  client, and test harness observe different projections of the same state" (a running tool
+  element), and "the TUI, web client, snapshot test, and remote inspector" (a component). That is
+  004 ADR-001's "production telemetry and DST traces must be one artifact, not two", left as a
+  list item.
+- **Formal methods, scoped to the terminal.** The only verified artifact is the TLA+ model of the
+  transcript protocol, checked with TLC. The stated motivation is a move *away* from fuzzing: "in
+  the previous iteration, we had to write a fuzzer to get to a stable point, and this time I'd like
+  to avoid that." Nothing formal touches the loop, the journal fold, tools or compaction.
+- **"Verification is part of the interface"** is dev-loop verification of the product — a
+  non-destructive, off-screen, multi-instance debug protocol so a coding agent cannot redefine
+  success — not testing of the harness.
+- **The compat compiler's checks are static** (unknown directive → error; ambiguous precedence →
+  error; no rule → unknown), and the design envelope's four modes are "architecture tests" only
+  in the sense of thought experiments.
+
+Consequence for §2 and §3: the DST asymmetry is total. Motoko's harness (22,411 lines of
+`src/core/dst_*.ail`, the world ordinal, strict replay, the fault catalogue, ADR-004's
+journal-as-benchmark) has no counterpart in print, and the inverse holds too — the post's
+single-authority journal is exactly the substrate that would make DST cheap, since every piece of
+state a harness must script or check would already be in one replayable stream. ADR-003 and
+ADR-004 are where the two lines meet.
+
 ---
 
 ## 2. Mapping onto Motoko

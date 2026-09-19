@@ -107,7 +107,7 @@ and a crash loses the run.
 | P1 | step 1 | typed suspension, `suspended` and `final`, the `[Message]` codec, in-process resume, the host's `run_suspended` case | 6–9 days, core + host |
 | P2 | — | **deleted** (v4.1's ported writer, its class, its leaf module, the strict world decoder, the child-written restart update) | 0 |
 | P3 | step 3 | the journal-class vocabulary, then the fold and its invariant family (red), then the emits (green); the host's journal writer, identity and lease; `--resume`; the rest of the wire | 9–12 days, core + host |
-| P4 | step 4 | durable park as entries (D7) | unscheduled; gates named |
+| P4 | step 4 | durable park as entries (D7): park/wake entries, cursor-first live wake_read, resumer, suspended-child host state | 8–12 days, core + host; gated on P4-Q1; planned v1 reviewed R1–R8 |
 
 P1 depends on nothing outside this plan. P3 depends on P1 and on nothing from PLAN-001 P2
 except one field: `run_finished.world_ordinal` is added when P2's `ordinal` exists
@@ -586,20 +586,541 @@ compares child-computed digests only).
 
 ---
 
-### P4 — D7: durable park as entries (unscheduled)
+### P4 — D7: durable park as entries (planned, first draft; 8–12 days, core + host)
 
-Gates before it can be scheduled, all external to this plan: ADR-002 D2 activated (the
-`ParkRequest`, `wake_read`, the host protocol, the `wakes` cursor, `ParkEntered` and
-`WakeReceived` appended and emitted) under ADR-002's step 4; ADR-001's between-turn frame
-(ADR-002 D4) exists. When both hold, P4 is: the `park` and `wake` entry types and their
-decoders; the `suspended-child` branch in the exit handler before `restartPending`; the host
-writing the `wake` entry as a child of the `park` entry on the answer; the resumer seeding the
-`wakes` cursor from it with the `request_id` rewritten to the re-issued request; the live
-`wake_read` that reads the cursor first (the one named exception to `live_ports`' ambient
-overrides, `ports.ail:2568–2570`) and the recording binding that records the served wake
-(`:1718–1747` pattern); the named states with `Lost`/`Aborted` exits. No wake file, no
-generation check: a consumed wake is followed by a `run_started` and the fold offers it once.
-`--park-exits` stays off until one live parked session has resumed through the cursor.
+**Status.** v1 reviewed (REVIEW-plan003-p4-v1-verdicts-motoko.md, ACCEPT WITH CORRECTIONS), R1–R8 applied 2026-09-14. Written by the P4 planning pass (`P4·a1`,
+`.dagr/run-plan003.json`). Grounded at HEAD `d5edebf` on `arniwesth/013-plan003-and-herdr`.
+Every code coordinate in this section was read at `d5edebf` (`git show d5edebf:<path>`).
+This section **replaces** v3.1's twelve-line sketch, which is quoted verbatim at the end of
+the Background as the scope it was planned against. The governing decision is ADR-003 v6.1
+D7, plus D1, D4 rule 6, D5 and D6 step 5 where D7 leans on them.
+
+The park mechanics are PLAN-002 v3's, **transcribed, not re-decided**: W4 Parts 1–7, W5(b),
+§6, and the owner decisions §8.3–8.4. Where ADR text is stale against HEAD, the row says **ADR
+text residual, plan pins HEAD behavior**. Where the texts leave a choice open, it is an owner
+question (P4-Q*n*), not a decision.
+
+#### Background: the two gates, and the tier they were met at
+
+The sketch named two gates, both external to this plan. Both hold **on code** at HEAD:
+
+| gate | landed | what P4 consumes, at HEAD | verified at |
+|---|---|---|---|
+| ADR-002 D2 activated (PLAN-002 W4) | `85ce0c7` | the `Park` arm `session.ail:3527–3564`; `ParkRequest { request_id, step, waits, attempt }` `ports.ail:779`; `park_request_id` `session.ail:3091–3093`; `wake_matches` `:3121–3129`; `apply_wake` `:3149–3159`; `wake_message` `:3168–3179`; `ParkEntered`/`WakeReceived` `phase_vocab.ail:1320–1321` (payloads `:1015`, `:1020`; wire `:1503–1504`); the `wakes` cursor `ports.ail:211–221`, of `WakeObservation` `:792`; `scripted_wake` `:1157–1163`; `recording_wake` `:1174–1199`; the live wake `stub_step.ail:214–222` and `live_wake_await` `:294–319`; the host protocol `runtime-process.ts:137–142`, `:737–746`, `:985–1040`; the waiter factory `wake-waiter.ts:108`, `:479` | **T2**: `park_wake` (17 fixtures, `park_wake_dst.ail:725–752`), metric `== 4` on each channel. **T4 not recorded** (below) |
+| ADR-001's between-turn frame, the D4 subset (PLAN-002 W5) | `8004874` | `initial_park_ordinal` `session.ail:602–604`; `between_turn_request_id` `:4723–4725`; `next_turn_world` `:4736–4738`; `loop_run_identity` `:4683–4689` | **T4**: the three-turn probe, 6/6; captures tracked at `.agent/projects/013_core_architecture_for_dst/evidence/plan002-w5-probe/` (repo-root path, added by `8004874`): `w5-tree/judge.log` ends "probe: 6/6 assertions green"; `redfirst-85ce0c7/judge.log` is the 4/6 red-first control |
+
+**The sweep.** The confirmation sweep for `d5edebf` is `.ailang/post-pindh-sweep.out`: 748 s,
+exit 2, `FAILED (1)`, and the failure is `depth_canary`. Its `NOTE` lines report
+`driver_plus_herdr` and `herdr_graded` PASSED while still listed. So the board is green except
+`depth_canary`.
+
+**Two discrepancies, reported, not repaired.** Neither is P4's to fix.
+1. **W4's live gates are open.** The brief for this pass said the 4-call metric was measured
+   live. The record says otherwise:
+   - `85ce0c7`'s gate 8: "full LIVE herdr delegation NOT run in this attempt — precondition for
+     W5 recorded open". Its gate 7 is the fixture metric only.
+   - The W4 node of `.dagr/run-plan002.json`: "OPEN for W5: live measurement + live parked run".
+   - PLAN-002 §7 has no W4 entry.
+
+   So W4 gates 7 and 8 are met at T2, not T4. See P4-Q1.
+2. **`Makefile:672` still reads `DST_KNOWN_RED := depth_canary driver_plus_herdr herdr_graded`.**
+   `d5edebf` ("Drop driver_plus_herdr + herdr_graded from DST_KNOWN_RED") rewrote the comment
+   above the assignment (`:653–671`) but not the assignment itself. This is PINDH's, owned by
+   the operator, and P4 does not touch it. Sweep gates below read "green, with `depth_canary`
+   reported as known red", which this does not affect.
+
+**The sketch this section replaces** (v3.1, verbatim):
+
+> Gates before it can be scheduled, all external to this plan: ADR-002 D2 activated (the
+> `ParkRequest`, `wake_read`, the host protocol, the `wakes` cursor, `ParkEntered` and
+> `WakeReceived` appended and emitted) under ADR-002's step 4; ADR-001's between-turn frame
+> (ADR-002 D4) exists. When both hold, P4 is: the `park` and `wake` entry types and their
+> decoders; the `suspended-child` branch in the exit handler before `restartPending`; the host
+> writing the `wake` entry as a child of the `park` entry on the answer; the resumer seeding the
+> `wakes` cursor from it with the `request_id` rewritten to the re-issued request; the live
+> `wake_read` that reads the cursor first (the one named exception to `live_ports`' ambient
+> overrides, `ports.ail:2568–2570`) and the recording binding that records the served wake
+> (`:1718–1747` pattern); the named states with `Lost`/`Aborted` exits. No wake file, no
+> generation check: a consumed wake is followed by a `run_started` and the fold offers it once.
+> `--park-exits` stays off until one live parked session has resumed through the cursor.
+
+#### Coordinate drift from the sketch (`97827bf` → `d5edebf`)
+
+| sketch cites (`97827bf`) | HEAD `d5edebf` |
+|---|---|
+| `ports.ail:2568–2570`: "the one named exception to `live_ports`' ambient overrides", which is the WI-D24 comment | The comment is now `ports.ail:2830–2832`, inside `ports_shape_probe` (`:2809–2835`), which binds `wake_read: scripted_wake` (`:2820`). **`live_ports` has left `ports.ail`.** It is `src/core/test/stub_step.ail:186–262`, and the binding P4 changes is its `wake_read` (`:214–222`). The rule P4 makes the exception to is stated at the live approval: "a live run's approvals are not a replayable cursor" (`:205–208`). |
+| `ports.ail:1718–1747`: `recording_approval`, the pattern to copy | `recording_approval` is at `:1974` (confirm at run time). Its wake twin **already exists**: `recording_wake` (`:1174–1199`), from W4 Part 4. |
+| "the exit handler before `restartPending`"; §0 cites `index.ts:922–985` | The TTY child-exit callback is `index.ts:1132–1185`: `pendingRestart` read at `:1138`, one-shot branch `:1142–1153`, `writeExit` `:1160`, respawn `:1161–1185`. The non-TTY child-exit callback is `:1048–1060`, with `writeExit("child_exit")` at `:1052`. The `restartPending` getter is `runtime-process.ts:1067–1069`. |
+
+#### ADR text vs HEAD: what P4 pins
+
+| # | ADR says | HEAD / plan pins |
+|---|---|---|
+| 1 | D7: the resumer rewrites the wake's `request_id` "to the re-issued request (`run_id + park ordinal 0`)" (`ADR-003:546–547`) | **Agreement, stated.** PLAN-002 §8.4 (decided) gives the request that opens a run's waiting the id `<run_id>.p0`, and starts every run opened by a consumed wake at `initial_park_ordinal(true) == 1` (`session.ail:602–604`). It names P4's resumer as a site the rule was written for (W4 Part 2 R9; W5(b); the comment at `session.ail:4713–4722`). The two texts say one thing: **`.p0` is the re-issued request that the consumed wake answers, and the resumed run's own parks begin at `.p1`**. The resumer's `run_id` is the identity `run_v2_resume_with_conversation` already builds, `loop_run_identity(session_id, profile, resume_count, 0)` (`session.ail:5318–5319`). So the rewritten id is exactly `between_turn_request_id(session_id, profile, resume_count, 0)` (`:4723–4725`), and W5's test pins the pairing (`:5867–5893`). **Residual**: D7's "the first `decide` parks and `wake_read` serves it" puts the consumption *inside* the resumed run. §8.4/R9 put it *before* the run ("a site that opens a run from a consumed between-turn wake applies … before the run's first decision"). The ids agree either way. The call-site count, the journal order and the `Aborted` path do not. Part 3 is drafted to §8.4; the choice is P4-Q2. |
+| 2 | D7: the `park` entry carries "`open_waits` and the `ParkRequest`" | **ADR text residual, plan pins HEAD behavior.** `Park` carries only the waits (PLAN-002 §1 row 3), so those waits are the request's. `ParkEntered` is emitted only when `park_attempt == 0` (`session.ail:3530`), so its `attempt` is always 0. The entry payload is therefore `ParkEnteredInfo` as it stands: `{ request_id, step, waits }` (`phase_vocab.ail:1015`). No payload change and no golden move (`:1962–1963`). |
+| 3 | D7: "the live and recording `wake_read` bindings are v4.1's" | **Residual: half landed.** The recording binding already serves the cursor: `recording_wake` wraps `scripted_wake`, which serves the head of `wakes` (`ports.ail:1157–1163`, `:1181–1199`). P4 adds only the live cursor-first read (Part 2) and an *assertion* on the recording binding. |
+| 4 | D7: "The states, their `Lost`/`Aborted` exits … are v4.1's" | **Residual: v4.1's D7 is not in the tree.** ADR-003 enters git at v6.1 (`bbe28dd`); `git log -S'suspended-child'` finds only `bbe28dd` and `3ee3d03`. What survives of v4.1 D7 is in its reviews. `REVIEW-adr003-verdicts-fable.md` §8 (`:220–228`): test the branch before `restartPending`, because a restart during a park is a cancel; quitting the TUI during a durable park runs the exit actions and kills the delegates, so the resume then wakes `Lost`; "name the states". `REVIEW-adr003-v3-verdicts-fable.md:94–96`: `Aborted` on `restart` while suspended cancels the request and leaves the session resumable. Part 6 names the states from those sources and from W4 Part 5's command table. See P4-Q5. |
+| 5 | D4 rule 6: "the last entry's type decides how the loop re-enters"; D7: `last = Parked(request, wake?)` | **Residual: the two ADRs disagree.** ADR-002 D4 (`ADR-002:499–500`) says "the host writes the `exit` entry; a park entry with no wake child is then re-observed on resume". So a path `park → exit` must fold to `Parked(req, None)`, not to `Exit`. Part 1 pins ADR-002 D4's reading. An `exit` after a park keeps `Parked`. Only `run_started`, a history entry, `state_delta`, `run_finished` or `suspended` ends it. See P4-Q4. |
+| 6 | D7: the host writes the `wake` entry "as a child of the `park` entry" | **Pinned, with no branch operation.** D1's `parent_id` is the leaf, and the leaf is the last entry, since no operation moves it. So the `wake` is a child of the `park` only if nothing is appended between them. Therefore the suspended-child branch (Part 4) writes **no** `exit` entry. A host that dies during suspended-child writes its `exit` through the lease hook (`session-lease.ts:236`, `:240`), and the park is re-observed on resume (row 5). Part 5's test asserts `wake.parent_id == park.id`. |
+| 7 | D7: "No wake file, no `WakeGeneration`" | Holds at HEAD, and is P4's closing invariant (Part 7): the only files under `.motoko/sessions/<id>/` stay `journal.jsonl` and `lease`. |
+| 8 | (code comment, not ADR) `session-journal.ts:36–46` and its test `session-journal.test.ts:484–490` say `park_entered`/`wake_received` "DO NOT EXIST — … ADR-002 D2 is not activated" | **Stale since `85ce0c7`.** Both exist (`phase_vocab.ail:1320–1321`; host types `runtime-process.ts:141–142`). The test is flipped red first in Part 1. |
+| 9 | (code) the twin, `journal_lines_of_records` | Its `twin_event` (`journal.ail:1873`) ends in `_ => acc` (`:1989`). A parked trace's journal therefore silently has no `park` and no `wake`, so `JournalFold` folds a parked run blind to the park and stays green. Part 1 turns this into a red-first row. |
+| 10 | D5: `from_ordinal` is "the last `run_finished.world_ordinal` … the previous frame's `final`" | **Residual for a park exit.** A run that exits while parked writes no `run_summary`. So `SessionState.world_ordinal` (`journal.ail:1251–1256`) and `SessionResumed.from_ordinal` (`:2169`) name the *previous* run's final ordinal, not the parked run's last one. At HEAD the resumed world restarts its ordinals anyway (`journal_resume_dst.ail:30–34`). See P4-Q6. |
+
+#### Work items, in dependency order
+
+The order differs from the sketch's list: core comes before host. That way the host's respawn
+(Part 5) hands the journal to a resumer that already exists (Part 3), and every core part is
+visible to DST before any live part runs (§0.6).
+
+| part | scope | estimate |
+|---|---|---|
+| 1 | `park`/`wake` entry types, their decoders, `BoundaryParked`, the twin's lines, the host's routing; red first | 1½–2 days, core + host |
+| 2 | the live `wake_read` reads the cursor first; the recording binding asserted | ½–1 day, core |
+| 3 | the resumer: fold `Parked` → seed the re-issued `<R'>.p0` into `wakes` → consume it → open the run at `initial_park_ordinal(true)`; the `park_resume` DST target, red first | 2–3 days, core |
+| 4 | the suspended-child branch in the exit handler, before `restartPending`; `--park-exits` parsed, default off | 1–1½ days, host |
+| 5 | on the answer, the host writes the `wake` entry as the `park`'s child, then respawns with `--resume` | 1 day, host |
+| 6 | the named states and their `Lost`/`Aborted` exits | 1–1½ days, host |
+| 7 | the no-wake-file / no-generation invariant, exactly-once across two resumes, and the live gate | ½ day, plus ½–1 day live |
+
+**Estimate: 8–12 days** (core 4–6, host 3–4, the live gate and invariant 1–1½). Priced on Part
+3 as drafted (P4-Q2 option (a)); option (b) falls within the same band.
+
+##### Part 1 — the entries, red first (1½–2 days, core + host)
+
+**Red-first commit** (tests only). Each is red at `d5edebf` and is recorded in §5 at T1:
+1. `journal.ail:2739` asserts `List.length(all_entry_types()) == 10`. It becomes `== 12`, with
+   `park` and `wake` in the list (`:1173–1176`).
+2. `journal.ail:3136–3141` mutates entry 6 to `type: "park"` and expects `Entry(6,
+   "type=park")`. Flip it on W3 flip 2's pattern: mutate to a genuinely unknown type
+   (`"not_an_entry"`) and keep the refusal. A **new** test folds a journal that ends in a
+   `park` to `BoundaryParked`; today that journal is refused at `:1496–1499`, so the test is red.
+3. A twin test: `journal_lines_of_records` over records holding `ParkEntered` then
+   `WakeReceived` yields a `park` line, then a `wake` line. Red, because `:1989` drops both.
+4. `session-journal.test.ts:484–490`, flipped: `park_entered` and `wake_received` **are**
+   journal-class. A new case records both and asserts two entries with `wake.parent_id ==
+   park.id`.
+
+**Green** (one commit):
+- **Entry decoders** in `journal.ail`, beside the envelope (`:658–731`) and the entry-type set
+  (`:1173–1176`):
+  - `park` is `{ request_id, step, waits }`. `waits` is decoded through
+    `phase_vocab.wait_descriptor_from_json` (`phase_vocab.ail:539`).
+  - `wake` is `{ request_id, wait_id, outcome, detail }`. `outcome` must be one of the six ids
+    the vocabulary names, the same set `dst_invariants.ail:1242–1243` checks.
+  - **No new import.** `journal.ail` does not import `ports` (`:39–65`), and `ports.ail`
+    imports `dst_interaction`, `dst_generator` and more (`ports.ail:44–88`). So the conversion
+    from string to `WakeOutcome` (`wake_outcome_of`, `ports.ail:1140`) stays in `session.ail`,
+    which already imports that module (`session.ail:201`).
+  - Decoding is strict per field and refuses with `Refusal::Entry(seq, field)` (`:579–590`).
+- **`Boundary`** (`:1226–1239`) gains `BoundaryParked(ParkEntry, Option[WakeEntry])`, with
+  `boundary_id` `"parked"`.
+- **`fold_entry`** (`:1438–1501`) gains two arms:
+  - `park` sets `last: BoundaryParked(p, None)`.
+  - `wake` requires `last` to be `BoundaryParked(p, None)` with `p.request_id ==
+    w.request_id`, and otherwise refuses with `Entry(seq, "request_id")`. It then sets
+    `BoundaryParked(p, Some(w))`.
+  - The `exit` arm (`:1491–1494`) keeps a `last` that is `BoundaryParked` (row 5, P4-Q4).
+  - Every other arm already moves `last` off a park. That is D7's exactly-once rule inside the
+    fold: a consumed wake is followed by `run_started` (`:1461–1463`), so it is not offered
+    again.
+  - **One more closure (P4-Q2, P4-Q4).** A `wake` whose outcome is `aborted` folds to
+    `BoundaryOpen("wake:aborted")`, so a cancelled park is not re-offered on a resume that
+    opens no run.
+- `plan_resume` (`:2110–2187`) keeps its shape. `suspended` stays `None` for `Parked`
+  (`:2141–2156`), and `plan.last` (`:2180`) carries the park to the resumer.
+- **The twin** (`twin_event`, `:1873`): `ParkEntered` becomes a `park` line and `WakeReceived`
+  a `wake` line, both handled before the `_ => acc` arm.
+- **The host.** `JOURNAL_CLASS` (`session-journal.ts:47–57`) gains both event types. `record`
+  (`:482–529`) gains `case "park_entered"` → `append("park", …)` and `case "wake_received"` →
+  `append("wake", …)`. The stale comment at `:36–46` is rewritten to say what landed.
+
+**Gate.**
+- The four reds are green.
+- `ailang test src/core/journal.ail` is green, including fold fixtures for:
+  - `park` alone → `Parked(p, None)`;
+  - `park, wake` → `Parked(p, Some(w))`;
+  - `park, wake, run_started` → not `Parked`;
+  - `park, exit` → `Parked(p, None)`;
+  - `park, wake(aborted)` → `Open("wake:aborted")`;
+  - a `wake` for another `request_id` → refused at that entry with `Entry(seq, "request_id")`;
+  - a `waits` element that is not a descriptor → refused at `waits`.
+- `bun run test` and `tsc` green in `src/tui`.
+- Unchanged and green: `make journal_resume` (13/13 at W5, and `rows=13` in the `d5edebf`
+  sweep; confirm the count at run time), `make stream_parity` (runs `JournalFold`,
+  `dst_invariants.ail:1991`), `make park_wake`.
+- `make event_vocabulary` unchanged (45 rows in the `d5edebf` sweep; confirm the count at run
+  time). **No `LedgerEvent` variant is added**, so `event_vocabulary_version()` does not
+  move (Do not touch, below).
+- No `session.ail` edit, so no anchor moves.
+
+##### Part 2 — the live `wake_read` reads the cursor first (½–1 day, core)
+
+- **Factor the cursor read.** In `ports.ail`, pull `scripted_wake`'s head arm (`:1160–1161`)
+  out into `cursor_wake(state, req) -> Option[WakeInput]`. It returns the head of `wakes` as
+  `Some`, with `next_state = advance_ordinal({ state | wakes: rest }, WakeRead)`.
+  `scripted_wake` becomes `match cursor_wake(…) { Some(w) => w, None => wake_read_unbound(…)
+  }`, with byte-identical behaviour.
+- **The live binding.** `live_ports`' `wake_read` (`stub_step.ail:218–222`) becomes `match
+  cursor_wake(state, req) { Some(w) => w, None => { println(wake_request_json(req));
+  live_wake_await(state, req) } }`. A wake served from the cursor emits **no** `wake_request`
+  and reads no stdin, because the host has already answered it (Part 5).
+- **The named exception, written where the rule is stated.** Two comments each gain one
+  sentence saying that `wake_read` is the one live binding that consults a world cursor,
+  because a durable park's answer arrives through the journal (ADR-003 D7):
+  - the live approval's comment (`stub_step.ail:205–208`), "a live run's approvals are not a
+    replayable cursor";
+  - the WI-D24 comment (`ports.ail:2830–2832`).
+- **Recording: asserted, not changed.** Over a world seeded with `<R'>.p0`, `recording_wake`
+  records one `WakeIdentity("loop_v2", "<R'>.p0", wait_id)` with `OutcomeOk`
+  (`ports.ail:1188–1197`). If it does not, stop: the fault is W4 Part 4's, not P4's.
+
+**Gate, red first.**
+- **The red row.** A row in Part 3's `park_resume_dst.ail`, run by its Make target with stdin
+  from `/dev/null`: on a world seeded with one `Settled` observation, `live_ports(rt).wake_read`
+  returns that observation. At `d5edebf` it prints a `wake_request`, `readLine` returns `""`,
+  and the reply is `Aborted` with `wait_id "eof"` (`stub_step.ail:296`). So the row is red and
+  cannot hang. It is green after this part.
+- `ailang test src/core/ports.ail` green, with the wake tests at `:1207`, `:1217` and `:1233`
+  unchanged.
+- `make park_wake` unchanged.
+- `make driver_leaf_inventory` unchanged: `live_ports` is not a driver call site.
+- `make anchors` run, since `stub_step.ail` is in the §0.2 cascade. If an anchor moves, it is
+  re-baselined in this commit.
+
+##### Part 3 — the resumer (2–3 days, core)
+
+Drafted to PLAN-002 §8.4, R9 and W5(b): P4-Q2's option (a). When `plan.last` is
+`BoundaryParked(p, wake?)`, `run_v2_resume_with_conversation` (`session.ail:5299–5333`) does
+the following before it enters the conversation loop at `:5332`:
+
+1. **Build the re-issued request.** `R'` is the identity the function already builds
+   (`:5318–5319`, `initial_ordinal = 0`). The request is `{ request_id:
+   between_turn_request_id(session_id, profile, resume_count, initial_ordinal), step: 0,
+   waits: p.waits, attempt: 0 }`, which is `<R'>.p0` (row 1).
+2. **Seed the cursor.**
+   - With a `wake` child: `{ started_provider.world | wakes: [{ request_id: req.request_id,
+     wait_id: w.wait_id, outcome: wake_outcome_of(w.outcome, w.detail) }] }`. Only the
+     `request_id` is rewritten.
+   - Without one: nothing is seeded. The live read (Part 2) asks the host, whose waiter
+     performs ADR-002 D2's initial read, i.e. the re-observation. A gone pane is `Lost` (D7).
+3. **Consume the wake in the resumed frame.**
+   - Emit `ParkEntered(req)`, then call `wake = provider.ports.wake_read(world, req)`. This
+     `ParkEntered` belongs to the **resumed** frame's trace (the prior frame already
+     journaled its own `park`), so the twin's exactly-once argument (`run_started` after the
+     `wake`) reads over the resumed journal, not as a duplicate of the prior frame's entry.
+   - Witness the successor into the resumed frame via `witness` (def `session.ail:4572`).
+   - Check `wake_matches(req, wake)` (`:3121–3129`). A mismatch is dropped with
+     `park_drop_warning` (`:3183–3186`), and the resumer enters between turns with the folded
+     history. There is no re-issue loop outside a run, because no step budget exists there to
+     bound one.
+   - A match emits `WakeReceived`.
+4. **Open the run from the consumed wake.**
+   - **`Aborted` opens no run.** The conversation loop is entered between turns, just as W4
+     Part 5's `abort` returns from the read loop (`session.ail:4809–4815`), and the host is
+     idle.
+   - **Any other outcome opens one:**
+     - Build the resumed state as `c2_state_from_continuation` does (`:2644–2685`), from the
+       folded history plus `wake_message(wake)` (`:3168–3179`). The loop emits that message as
+       `HistoryAppended`, on the operator message's pattern.
+     - Apply `{ st | open_waits: apply_wake(p.waits, wake), park_ordinal:
+       initial_park_ordinal(true), last_finish_reason: "user_injected" }`. This is the one
+       site W5(b) names.
+     - Run it through a new traced sibling of `run_v2_from_continuation_traced` (`:4378`). A
+       sibling is needed because `Continuation` carries no waits (`journal.ail:135`;
+       `session.ail:2675–2683`).
+   - The run's `run_started` follows the consumed wake in the journal, which is D7's
+     exactly-once order. After the run, the loop is entered with `run_ordinal` 1.
+5. **The harness entry.** A new export (§0.7), `run_v2_session_park_resumed_traced`, beside
+   `run_v2_session_resumed_traced` (`:5346–5361`) and on its pattern. It performs steps 1–4
+   over a `ResumePlan` and returns the traced run with `SessionResumed`, `ParkEntered`, the
+   witness and `WakeReceived` prepended.
+
+**The DST script.**
+- New file `scripts/dst/park_resume_dst.ail`, with a Make target `park_resume` beside
+  `park_wake` (`Makefile:366–368`) and a row in `DST_TARGETS` (`:489–500`).
+- It reuses the scripted runner shape of `park_wake_dst.ail` (`run_scripted` `:389`,
+  `run_recorded` `:397`).
+- It runs a delegate run that parks, builds the run's journal with `journal_lines_of_records`,
+  and makes three truncations: after `park_entered`, after `wake_received`, and with an
+  `exit` appended.
+- Each journal is folded, planned, and resumed through the harness entry.
+
+**Gate, red first.** The script lands before steps 1–5, and every resume row is red.
+- `plan.last` is `Parked` for the three truncations, and not `Parked` for the untruncated
+  journal.
+- The resumed frame's `WakeIdentity` names `<R'>.p0` (recording ports, `stub_step.ail:626`,
+  `:723`; confirm the sites at run time) and is served from the cursor (`OutcomeOk`).
+- There is exactly one `WakeReceived` for `<R'>.p0`, and the resumed run's next park is `<R'>.p1`
+  (the script parks twice).
+- **Exactly once.** In the resumed run's journal (from the twin), `run_started(R')` comes after
+  the `wake` for `<R'>.p0`, and folding it again gives a `last` that is not `Parked`.
+- **Re-observation, T2.** `park, exit` with no wake child resumes to `HostError("wake_read
+  unbound")` in DST (the unbound fall-through, `ports.ail:1109–1112`), with the waits kept.
+  `Lost` is only visible at T4 (Part 7).
+- A consumed `Aborted` opens no run, and the journal folds to `Open("wake:aborted")`.
+- Part 2's `/dev/null` row.
+
+Also green:
+- `ailang test src/core/session.ail`, with W5's tests at `:5867–5893` unchanged (confirm the
+  range at run time).
+- `make park_wake`, `make journal_resume`, `make ledger_parity`, `make world_framed_wire`, as
+  regression.
+- `make driver_leaf_inventory`: under option (a), **26 sites, including one new `.wake_read(`
+  site, witnessed**. The 25 baseline is confirmed from `make driver_leaf_inventory`'s output at
+  the branch point before the 26 is asserted: the `d5edebf` sweep reads `driver leaf
+  inventory (25 sites, 0 unresolved, 0 out of order)`, with the one `wake_read` site at
+  `session.ail:3531` (`c2_loop`, clean). `make driver_leaf_inventory_selftest` gains a
+  `TREE_MUTANTS` entry for the new site on the pattern of `derive.py:640–644` (the existing
+  `wake_read successor not witnessed` mutant: `("leaf", "st.provider.wake_read", …)`).
+- `make anchors` re-baselined.
+- The sweep at the branch point, disclosed (§0.1).
+
+##### Part 4 — the suspended-child branch (1–1½ days, host)
+
+- **`--park-exits`**: a bare TTY flag parsed beside `--oneshot` (`index.ts:658`), default
+  **off**. With the flag off, nothing in this part runs.
+- **Entering suspended-child** (P4-Q3). In `RuntimeProcess.onWakeRequest`
+  (`runtime-process.ts:985–999`), a first issue under `--park-exits` ends the child with
+  `kill()`. By then the `park` entry is on disk: the child emits `park_entered` before
+  `wake_request` (`session.ail:3530`, then `stub_step.ail:220`), and the host appends it
+  synchronously. `kill()` sets `killRequested`, which suppresses the synthesized `error`
+  (`:775`).
+- **The exit branch, before `restartPending`.**
+  - Today `proc.on("exit")` (`:764–780`) calls `resolvePark()` (`:769`), which cancels the
+    waiter (`:1028–1032`). Under suspended-child it instead hands the outstanding request and
+    the running waiter to a host-lifetime `SuspendedChild` owner.
+  - The TTY child-exit callback (`index.ts:1132–1185`) gains a first branch, **above** `const
+    pendingRestart` (`:1138`). On suspended-child it writes no `exit` (row 6), skips the
+    one-shot branch, shows the operator a parked status while keeping input open for the
+    parked input route, and returns.
+  - The non-TTY callback (`:1048–1060`) does not take the flag (P4-Q3).
+- The lease stays held (`index.ts:906–928`).
+- **The race, named.** A waiter reply that arrives between `kill()` and the child's exit
+  writes **no** `wake` entry and starts **no** respawn: the request died with the child, and
+  the park is re-observed on the next resume (row 5). Only a reply the `SuspendedChild`
+  owner receives, after the exit branch has taken the request, is Part 5's.
+
+**Gate, red first.**
+- A `runtime-process` test with a fake child, using the `runtime-process.wake.test.ts`
+  harness: `wake_request` under `--park-exits` → `kill` → exit.
+  - The waiter is **still running**.
+  - No `error` reaches `onEvent`.
+  - The journal's leaf is the `park` entry.
+  - Kill-then-reply writes nothing: a reply delivered between `kill()` and the exit leaves
+    the leaf at the `park` entry and requests no respawn.
+- The test is red at `d5edebf`, where the waiter is cancelled at `:769`.
+- `bun run test` and `tsc` green.
+
+##### Part 5 — the `wake` entry and the respawn (1 day, host)
+
+- **On the waiter's reply** in suspended-child:
+  1. `journal.record({ type: "wake_received", request_id, wait_id, outcome, detail })`. Part
+     1's routing appends a `wake` whose `parent_id` is the leaf, i.e. the `park` (row 6).
+  2. `respawnForRestart()` (`index.ts:1244–1254`), which checks `canResume`
+     (`session-journal.ts:258`), bumps the resume count, and passes `--resume <journal>`.
+- Late and duplicate replies are dropped by `request_id`. That is `sendWakeReply`'s rule
+  (`runtime-process.ts:1005–1019`), which moves with the request to the new owner.
+
+**Gate.** Host tests:
+- exactly one `wake` entry, with `wake.parent_id == park.id`;
+- a second reply writes nothing;
+- the respawn's argv carries `--resume`, asserted as `harness-dst.test.ts:132–145` does;
+- the written file folds to `Parked(p, Some(w))`, checked by a small AILANG script (P3 Part 4's
+  gate shape).
+
+`bun run test` and `tsc` green.
+
+##### Part 6 — the named states and their exits (1–1½ days, host)
+
+Transcribed from row 4's sources and W4 Part 5's command table (§8.7). The rows that v4.1
+settled are for P4-Q5 to confirm.
+
+| state | entered on | left on | journal | then |
+|---|---|---|---|---|
+| `parked` (W4; exists) | `wake_request` while the child is alive (`runtime-process.ts:985–999`) | `wake_received`; a park-ending event (`:184`); child exit | the child's events | — |
+| `suspended-child` | Part 4 | a waiter reply; operator input; ESC; `restart`; quit; host death | nothing on entry | per row below |
+| `resuming` | a `wake` entry is written | the resumed child's `session_resumed` | `wake` | `--resume` |
+
+| while `suspended-child` | wake written | then |
+|---|---|---|
+| the waiter replies `Settled` / `Lost` / `TimedOut` / `HostError` | that outcome | respawn (Part 5) |
+| operator input (the parked input route) | `OperatorInput(content)` | respawn |
+| ESC (`interruptRuntime`, `runtime-process.ts:187–197`) | `Aborted`, `wait_id "abort"` | no respawn; the TUI awaits a task, and the next prompt resumes through `onInitialTask` (`index.ts:1313–1326`) into `Open("wake:aborted")` |
+| `restart` (profile p) | `Aborted`, `wait_id "restart:<p>"` | respawn with the new profile (`index.ts:1161–1166`) |
+| quit | **none**; the lease hook writes `exit` (`session-lease.ts:236`) | the exit actions run; a later resume re-observes, and wakes `Lost` if the delegates were reaped (REVIEW §8) |
+| host death (signal) | none; the lease hook writes `exit`, reason `abort` or `host_exit` (`session-lease.ts:240`) | as quit |
+
+The two operator-input rows differ by entry condition alone: text **typed at the parked
+prompt** takes the parked input route (`OperatorInput(content)`, then respawn), while
+**ESC** goes through `interruptRuntime` (`Aborted`, `wait_id "abort"`, no respawn).
+
+**Gate.**
+- One host test per row, with a fake waiter and a fake child.
+- The ESC row asserts no respawn and exactly one `wake(aborted)`.
+- The quit row asserts no `wake`, and an `exit` entry after the `park`.
+- `bun run test` and `tsc` green.
+
+##### Part 7 — the invariant, and the live gate (½ day, plus ½–1 day live)
+
+- **No wake file, no generation.**
+  - T0: after Part 5's host test, the session directory contains only `journal.jsonl` and
+    `lease`, and `git grep -n -i -E 'WakeGeneration|wake_generation|wake-file'` over `src/core`
+    and `src/tui/src` finds nothing.
+  - T2: Part 3's exactly-once rows, extended to a **second** resume of the resumed journal. No
+    cursor is seeded and no `WakeIdentity` is recorded.
+- **The live gate** (T4; recorded in §5 with log paths). In a herdr pane, with `--park-exits`
+  passed explicitly, run one delegation:
+  1. `Delegate`, then the run parks.
+  2. The child exits, with no `error`, and the journal's leaf is the `park`.
+  3. The delegate answers, and exactly one `wake` entry is written as the `park`'s child.
+  4. The host respawns with `--resume`, and the resumed frame serves `<R'>.p0` from the cursor:
+     no `wake_request` appears on the resumed child's stdout before its `wake_received`.
+  5. `DelegateCheck`, then the final answer.
+
+  Record the provider-call count across both processes; the success path is 4. Add one `Lost`
+  control: kill the delegate pane while the host is in suspended-child.
+- **`--park-exits` stays off** in every default after this gate. Turning it on is an owner
+  act, taken after the §5 entry exists.
+
+**Done when.** Parts 1–7 are green at their tiers, and §5 carries the red-first records (Parts
+1–4), the sweep disclosure, and the live gate.
+
+#### Do not touch
+
+- **W-O5** (`DelegateAwait`): it never landed (`85ce0c7` gate 9). P4 adds no fallback tool.
+- **QCANARY**: the `depth_canary` pin (`run_depth_canary.sh`) and its `DST_KNOWN_RED` entry.
+  Operator-owned.
+- **PINDH-owned files**: `src/core/dst_driver_plus_herdr.ail` and
+  `scripts/dst/herdr_graded_dst.ail` (`eba309c`, `9ad4d2b`), and the `DST_KNOWN_RED` block
+  `Makefile:653–672`. That includes its assignment line, which was not dropped; this is
+  reported above and left alone.
+- **`event_vocabulary_version()`** (`dst_event_vocabulary.ail:121`, `"event-vocabulary/1"`).
+  The version changes only on a change to a variant, a wire name, a payload schema or a
+  classification (`:80–85`). P4 makes none of these: the `park` and `wake` entries are
+  projections of W4's two existing variants. A part that finds it needs such a change has left
+  this plan.
+- **`--park-exits` on by default**, before Part 7's live gate.
+- **Also unchanged:**
+  - `ParkEnteredInfo` and `WakeReceivedInfo`, and their goldens (`phase_vocab.ail:1015–1020`,
+    `:1962–1963`);
+  - `decide`;
+  - the body of the `Park` arm (`session.ail:3527–3564`);
+  - the `Ports` field set (`ports.ail:896`, §0.8);
+  - `world_of_json`;
+  - the headless `error` (P3 Part 6);
+  - the signatures of the exported traced entries (§0.7).
+
+#### Evidence tiers
+
+PLAN-002 §5's tiers: T0 static; T1 unit; T2 DST target; T3 wire-framed; T4 live.
+
+| part | closes at |
+|---|---|
+| 1 | T1 (journal and host unit tests) + T2 (`journal_resume`, `stream_parity`, `park_wake`, as regression) |
+| 2 | T2 (`park_resume`'s `/dev/null` row) + T1 |
+| 3 | T2 (`park_resume`; the inventory); T3 as regression (`world_framed_wire`, `ledger_parity`) |
+| 4–6 | T1 (host tests). Nothing in these parts is visible to DST (§0.6) |
+| 7 | T0 + T2 + **T4** |
+
+A claim is reported at the tier it was verified at, never above it.
+
+#### Owner questions (§8-style; none reopens an ADR decision)
+
+1. **P4-Q1. Can P4 start on W4's T2 evidence? DECIDED (owner 2026-09-14) — Parts 1–3 may
+   start; Parts 4–7 wait for W4 gate 8's live parked run.** W4 gates 7 and 8 are open at T4
+   (Background). Parts 1–3 are pure core, DST-visible; Parts 4–7 are a strict superset of
+   the live run.
+2. **P4-Q2. Where is the re-issued `<R'>.p0` consumed?**
+   - **(a) In the resumed frame, before the run** (drafted in Part 3).
+     - For: it transcribes §8.4, R9 and W5(b), and D7's exactly-once order (`run_started`
+       after the wake).
+     - Against: it adds a second witnessed `.wake_read(` site. The inventory goes from 25 to
+       26 with a new tree mutant, and W4's "one call site" statement becomes "one per frame
+       kind". It also needs a mismatch path with no budget, and the `Aborted`-closure fold
+       rule.
+   - **(b) In the resumed run's first `decide`** (D7's literal text). The run opens at
+     `park_ordinal` 0 with the waits; the existing `Park` arm serves `.p0` and increments to 1.
+     - For: one call site, and `Aborted` ends in `c2_fail` → `run_finished` with no new fold
+       rule.
+     - Against: `run_started` comes before the consumed wake, and `initial_park_ordinal(true)`
+       is not applied at the resumer (the arm's increment reaches 1 instead), which contradicts
+       R9's wording.
+
+   Recommended: (a). §8.4 is decided, and (b) would re-read it.
+
+   **DECIDED (owner 2026-09-14) — option (a): consume `<R'>.p0` in the resumed frame,
+   before the run.** Accept the costs: 25→26 driver sites with one new witnessed
+   `.wake_read(` + tree mutant, a droppable mismatch path with no budget
+   (`park_drop_warning`), and the `Aborted`-closure fold rule.
+3. **P4-Q3. How does the child exit under `--park-exits`, and which parks exit?** Drafted: the
+   host calls `kill()` once the `park` entry is on disk; every first-issue park exits; TTY
+   only. The alternative on scope is that only parks whose waits are all `DelegateWait` exit,
+   so an `OperatorWait` or `TimerWait` park stays live. A core-side exit is not offered: it
+   would write `run_summary` and fold to `RunFinished`.
+
+   **DECIDED (owner 2026-09-14) — as drafted:** host `kill()` once the `park` entry is on
+   disk; every first-issue park exits; TTY only; non-TTY callback unchanged; no core-side
+   exit.
+4. **P4-Q4. The fold's boundary rules** (row 5, and the `Aborted` closure). Confirm that `park
+   → exit` folds to `Parked` (ADR-002 D4 over the literal text of ADR-003 D4 rule 6), and that
+   `wake(aborted)` closes the park.
+
+   **DECIDED (owner 2026-09-14) — confirm both rules:** `park → exit` folds to
+   `Parked(req, None)` per ADR-002 D4 (over literal ADR-003 D4 rule 6); `wake(aborted)`
+   closes the park (→ `Open("wake:aborted")`).
+5. **P4-Q5. The suspended-child command table** (Part 6). It needs sign-off because v4.1's D7
+   is not in the tree. In particular, quit writes **no** `wake` and the park is re-observed on
+   resume (REVIEW §8), whereas W4 Part 5 makes `exit` sent to a live child an `Aborted` cancel.
+
+   **DECIDED (owner 2026-09-14) — sign off the Part 6 table as written, including the
+   dead-child vs live-child distinction:** quit / host death while suspended writes **no**
+   `wake` (lease hook writes `exit`; later resume re-observes, `Lost` if delegates were
+   reaped); `exit` sent to a *live* child is an `Aborted` cancel per W4 Part 5. ESC → one
+   `wake(aborted)`, no respawn, TUI awaits task → `Open("wake:aborted")`; `restart` →
+   `Aborted` with `wait_id "restart:<p>"` + respawn on the new profile.
+6. **P4-Q6. `from_ordinal` after a park exit** (row 10). Either accept it as a stated limit,
+   or add the parked run's last ordinal to the `park` entry. The second option would change
+   `ParkEnteredInfo` and its golden, and would move `event_vocabulary_version()` under the
+   `:80–85` rule.
+
+   **DECIDED (owner 2026-09-14) — accept as a stated limit.** `from_ordinal` after a park
+   exit names the previous run's final; the resumed world restarts ordinals anyway. Do not
+   extend `ParkEnteredInfo` (no golden move, no vocab-bump).
+7. **P4-Q7. The live gate's operator, and the flag's future.** Who runs Part 7's herdr session
+   (it needs a real delegate)? Is `--park-exits` ever defaulted on, or does it stay opt-in?
+
+   **DECIDED (owner 2026-09-14) — operator runs the Part 7 herdr session;
+   `--park-exits` stays default-off.** Turning it on is a later, explicit owner act after
+   the §5 entry with log paths exists.
+
+#### Handoff (§7-ready)
+
+- **Row for the §7 estimates table:** `| P4 | v3 | 8–12 | entries and fold (1½–2); live cursor-first read (½–1); resumer and park_resume target (2–3); suspended-child branch (1–1½); wake-as-child and respawn (1); named states (1–1½); invariant and live gate (1–1½) — planned v1 reviewed, R1–R8 applied, grounded d5edebf; Parts 1–3 startable on T2, 4–7 gated on W4-live |
+  live cursor-first read (½–1); resumer and park_resume target (2–3); suspended-child branch
+  (1–1½); wake-as-child and respawn (1); named states (1–1½); invariant and live gate (1–1½)
+  |`.
+- **Row for the Phases table:** `| P4 | step 4 | durable park as entries (D7): park/wake
+  entries, cursor-first live wake_read, resumer, suspended-child host state | 8–12 days, core
+  + host; gated on P4-Q1 |`.
+- Neither row is applied by this pass, which edits one section only.
+- **Commits:** one per part, titled `ADR-003 D7: P4 Part N — …`, with the red-first record in
+  the commit message and in §5.
+- **dagr:** `P4` in `.dagr/run-plan003.json` splits into `P4.1`–`P4.7`.
+  - Dependencies run in order: 1 → 2 → 3 → 4 → 5 → 6 → 7.
+  - Parts 4–7 are also gated on P4-Q1.
+  - Part 3 is gated on P4-Q2.
+  - Parts 4 and 6 are gated on P4-Q3 and P4-Q5.
+  - Part 1's fold rules are gated on P4-Q4.
+- **§5 entries to fill:**
+  - Part 1's four reds;
+  - Part 2's `/dev/null` red;
+  - Part 3's red resume rows;
+  - Part 4's waiter-cancel red;
+  - the sweep at the branch point;
+  - Part 7's live session, with log paths.
+- **Review.** Review this section (v1, against HEAD) before Part 1 starts, and apply the §7 and
+  Phases rows in the same pass.
 
 ---
 
@@ -695,6 +1216,645 @@ instruction and is green. The canary pin was not touched; on 2026-09-07 the owne
 `depth_canary` listed under `DST_KNOWN_RED` (`Makefile:493`) with the bisection above as its
 reason, pending the re-measure; the summary script's reverse check reports it the day it
 passes (Open question 9).
+
+### P4 Part 7, 2026-09-15: the invariant, exactly once across two resumes, and the live gate
+
+Base `44c7a3a` (P4 Part 6). One commit `298bec5` on `arniwesth/013-plan003-and-herdr`, not pushed.
+P4-Q1 as decided: Parts 4–7 ran after W4 gate 8's live parked run (the 2026-09-14 session
+`session_1789402741851`, 4 provider calls, in `.motoko/logfile`). P4-Q7 as decided: the worker ran
+the herdr session as the operator's delegate, in its own pane; `--park-exits` was passed explicitly
+on each launch and stays default-off. Part 7 has no red-first record: its rows are the invariant's,
+not a behaviour's, and the plan asks for none. Its commit holds the two T2 rows' files, the T0 test,
+and the live captures; this record stays in the working tree, on Parts 1–6's pattern.
+
+**T0, the invariant.** `git grep -n -i -E 'WakeGeneration|wake_generation|wake-file' -- src/core
+src/tui/src` exits 1 with no line, at `44c7a3a` and at `298bec5` (the new test's comment
+describes the grep without spelling its names, since a first draft of it was the grep's one hit).
+The host test (`runtime-process.wake.test.ts`, the Part 7 block): Part 5's flow — the park, the
+waiter's reply, the `wake` as the park's child, the `--resume` respawn — run under the lease the host
+takes (`acquireLease(journal.dir, sessionId)`, as index.ts does), with `readdirSync` of the session
+directory asserted at four points: `["journal.jsonl"]` before the lease (the harness takes none),
+`["journal.jsonl", "lease"]` while suspended, after the wake and after the respawn, and
+`["journal.jsonl"]` after `release()`; the whole `.motoko/sessions` tree under the test's workdir is
+that one session with those two names, and no name matches `/wake|generation/i`. `jest
+src/runtime-process.wake.test.ts` 27/27 (26 + 1). `tsc --noEmit -p src/tui` clean. `bun run test` in
+`src/tui`: 420/420 tests, 41/46 suites; the five that fail to LOAD are Part 1's five
+(`compose-output-validator`, `compose_guard_semiformal`, `env-server`, `scratchpad/loopback`,
+`test/path-guard`), as Parts 5 and 6 recorded. Live (below): every session directory held
+`journal.jsonl` and `lease` while its host ran, in suspended-child included, and `journal.jsonl`
+alone after the host quit; nothing else was ever written there.
+
+**T2, exactly once across two resumes.** `make park_resume` PASS: **11 rows** (7 + 4), every
+assertion, every shell check, 10.4 s. The resumed journal — frame 1 cut after `wake_received`, then
+a resumed frame shaped as `resume_after_wake`'s, re-run under its own label `resume_twice_base` so
+Part 3's row is untouched — is resumed a second time, cut three ways, through the same harness entry
+(`run_v2_session_park_resumed_traced`, resume_count 2, recording ports):
+
+| row | cut | what it pins |
+|---|---|---|
+| `resume_twice_base` | — | Part 3's claims hold in the input: one `WakeReceived` for `w4.r1.0.p0` with the first wake's detail; `run_started(w4.r1.0)` after the `wake` for `w4.r1.0.p0`; each consumed wake's line (`w4.r0.0.p0`, `w4.r1.0.p0`) exactly once |
+| `resume_twice_started` | right after `run_started(w4.r1.0)` — the child died the instant the run opened | `last` is `open:run_started`, not Parked; the second frame is `SessionResumed` alone (no `ParkEntered`, `WakeReceived`, `SessionStart`, `ProviderCallPrepared`); **no `WakeIdentity`, no `wake_read` witness**; a decoy cursor element for `w4.r2.0.p0` is still the world's head, nothing seeded ahead of it; the frame returns the folded history between turns; the three-frame journal refolds to not Parked and holds each consumed wake's line once |
+| `resume_twice_finished` | the whole two-frame journal | `last` is `run_finished`; the same second frame and the same assertions |
+| `resume_twice_parked` | after the resumed run's OWN park `w4.r1.0.p1` on [h2], no wake child | the re-issue is `w4.r2.0.p0` at step 0 on [h2]; exactly one `WakeReceived`, for `w4.r2.0.p0`, settled on h2 with the world's detail (`a2`) — none for `w4.r1.0.p0`, none with the first wake's detail; the only `WakeIdentity` names `w4.r2.0.p0` on h2; the run opens once (`w4.r2.0`) and ends Ok; the three-frame journal has `run_started(w4.r2.0)` after the `wake` for `w4.r2.0.p0`, each consumed wake's line once, refolds to not Parked and to the run's final history |
+| wire (shell) | | the two no-run frames: no `wake_request`, `wake_received`, `park_entered` or `session_start`, exactly one `session_resumed`, no `error`; the re-parked frame: exactly one `wake_received`, for `w4.r2.0.p0` on h2, one `session_start` for `w4.r2.0`, **in that order**, none for `w4.r1.0.p0`, no `wake_request`, no `error` |
+
+The discriminating control is Part 3's own `resume_after_wake`: the same journal cut one entry
+earlier (after the `wake`, before `run_started`) DOES seed and consume. What separates "offered
+once" from "offered again" is the `run_started` that follows the consumed wake, and nothing else —
+no wake file, no generation. `ailang check scripts/dst/park_resume_dst.ail` clean.
+
+**T4, the live gate** (captures tracked at
+`.agent/projects/013_core_architecture_for_dst/evidence/plan003-p4-live-gate/`, repo-root path,
+added by `298bec5`; per capture `wire.jsonl` is the SessionLogger's copy of both children's
+stdout in order, `journal.jsonl` the session's journal after the host quit, `timeline.txt` the
+journal's entries with UTC times, `judge.log` the output of the directory's `judge.sh` over the
+capture). Herdr pane `w1:p3M` in its own tab, TTY, `HERDR_DELEGATE_DEPTH=0` (the worker's own pane
+carries depth 1, which is the extension's default limit and would have refused the delegation),
+profile `default`, `MODEL=openrouter/anthropic/claude-haiku-4.5`, delegate kind `claude`,
+`./scripts/run-agent.sh --park-exits`, the task typed at the prompt (the awaiting-task path). The
+task is the 2026-09-14 gate-8 task: Delegate once, end the turn waiting, on the wake call
+`DelegateCheck` once and answer with the delegate's number; the delegate counts the `test_`
+functions in `src/core/step_machine.ail` (25).
+
+*The success path* — `success/`, session `session_1789481992510-a735568fbeff5102`, the delegate
+told to sleep 75 s first (finding 1 below is why):
+
+| gate item | observed |
+|---|---|
+| 1. Delegate, then the run parks | wire: `native_tool_calls` (`Delegate`) at line 74, `park_entered` at 89, `wake_request` at 90 (attempt 0), 2 `provider_call_prepared` before it; journal `0009 park r0.0.p0` at 14:21:24.807, `step 2`, one `DelegateWait` (`mot-dlg-1789482044663`, pane `w1:p3R`) |
+| 2. The child exits, no `error`, the leaf is the `park` | no `error` and no `wake_received` from the first child; at 14:21:46 the host's only child process was the waiter's `herdr agent wait w1:p3R --until idle --until done --until blocked` (`host-children-while-suspended.txt`; no `ailang`), herdr reported the pane `blocked`, the footer read `suspended_child`, the session directory held `journal.jsonl lease` |
+| 3. The delegate answers; exactly one `wake` as the park's child | answer file at 14:23:02.265; journal `0010 wake` at 14:23:02.365, `parent_id 0009`, `settled`, `wait_id mot-dlg-1789482044663`, `detail "25\n"`; one `wake` for `r0.0.p0` in the file; no `exit` between them |
+| 4. The host respawns with `--resume`; the resumed frame serves `<R'>.p0` from the cursor | `ps` at 14:23:02: `ailang run … supervisor.ail -- --profile default … --resume /workspaces/motoko_agent/.motoko/sessions/session_1789481992510-a735568fbeff5102/journal.jsonl`, no `--resume-force` (`resumed-child-argv.txt`); journal `0011 resumed` (`resume_count 1`, `from_id 0010`), `0012 park r1.0.p0` (step 0, the same wait), `0013 wake r1.0.p0` settled `"25\n"`, `0014 run_started r1.0`, all at 14:23:52.466–.473; wire after `session_resumed` (line 95): `park_entered` 98, `wake_received` 109 for `r1.0.p0` with the journal's outcome and detail, `session_start(r1.0)` 110 — **no `wake_request` on the resumed child's stdout before its `wake_received`**, and none after |
+| 5. `DelegateCheck`, then the final answer | wire: `native_tool_calls` (`DelegateCheck`) at 138, `done` at 174 (`"… contains **25** functions …"`); journal `0021 run_finished r1.0`, `cumulative.provider_calls_completed 4`; no `error` |
+
+**Provider-call count across both processes: 4** — `provider_call_prepared` 2 in the first child
+(lines 21, 79) and 2 in the resumed child (117, 143); the journal's `run_finished.cumulative`
+carries the same 4 across the process boundary. `judge.log`: 15/15, PASS. Quit (Ctrl+C) wrote
+`0022 exit child_exit`; the session directory then held `journal.jsonl` alone.
+
+*The `Lost` control* — `lost/`, session `session_1789482343611-ea7db6272bf89647`, the delegate
+told to sleep 300 s: at 14:27:13, with the park journaled (`0009`, 14:27:13.292), the host's runtime
+child gone and its only child the waiter's `herdr agent wait w1:p3T …`, the worker ran `herdr pane
+close w1:p3T`. The waiter replied within a second: journal `0010 wake` at 14:27:14.231, the park's
+child — **outcome `host_error`, not `lost`** (finding 2 below), `wait_id ""`, detail `herdr agent
+wait w1:p3T --until idle --until done --until blocked failed (exit 1, code agent_not_running)`. The
+rest is the success path's shape: the respawn with `--resume <journal>` (14:27:14), `resumed`,
+`park r1.0.p0` with the wait KEPT (a `HostError` wake keeps its waits, Part 3's `resume_park_exit`
+row), `wake r1.0.p0 host_error` served from the cursor with no `wake_request` before it (wire 101 →
+104 → 115), `run_started r1.0`; the model was told the host could not observe the waits, called
+`DelegateCheck` (wire 183), which reported `agent_not_found`, and answered "DelegateCheck reported:
+agent `mot-dlg-1789482392903` was not found — the delegate pane is no longer live …" (`done`, 217);
+`run_finished` with `provider_calls_completed 4` (2 + 2). `judge.log` with expected outcome
+`host_error`: 15/15, PASS. The session resumed through the cursor and finished on the wake the
+host wrote; what the wake was called is finding 2.
+
+**`--park-exits` stays off in every default.** `parseMotokoFlags` initialises `parkExits: false`
+(`index.ts:656`) and only the literal `--park-exits` sets it (`:666–671`); `RuntimeProcess`'s
+constructor defaults `parkExits = false` (`runtime-process.ts:883`); `git grep -- '--park-exits'`
+over `Makefile`, `scripts`, `.motoko/config` and `docs` finds only the fold script's comment, and no
+`parkExits: true` exists outside the tests. Part 4's control test ("with --park-exits off nothing
+here runs") is green in the 27. The recovery run below ran without the flag and its runtime child
+answered its own `wake_request` over stdin, as before P4. Turning the flag on remains an owner act.
+
+**Two findings, reported, not repaired** (both outside Part 7's files; Parts 3–6's internals and
+the herdr extension are not this part's to change).
+
+1. **R5's window swallows an answer that is already on disk at the park** —
+   `attempt1-r5-window/`, session `session_1789481624070-4283dd460d10de91`, the first success-path
+   attempt, whose delegate was given the gate-8 task unchanged. The delegate answered in 27 s: its
+   answer file landed at 14:15:00.220; the model's second turn was slower and the park was journaled
+   at 14:15:13.480 (`timeline.txt`). At the `wake_request` the waiter's initial answer read found the
+   file and queued `settled` (`wake-waiter.ts`, `observeAnswer` → `ready` → `deps.defer(flush)`);
+   `onWakeRequest` had already called `kill()` synchronously, so the deferred reply reached
+   `onWaiterReply` with `suspending !== null` and Part 4's R5 rule dropped it ("between kill() and
+   the exit … nothing is sent and nothing is written"), with the waiter `finished` by its own
+   `flush`. The exit then handed the owner a request whose waiter would never report again. The host
+   sat in `suspended_child` for 3½ minutes with the answer on disk and no `wake`; the worker quit it
+   (Ctrl+C, Part 6 row 5: `0010 exit host_exit`, the park's child, no `wake`, the lease released).
+   **Recovery, measured** (`recovery-*` in the same directory): the session restarted WITHOUT
+   `--park-exits` (`MOTOKO_SESSION_ID=<id> ./scripts/run-agent.sh`) adopted the journal, folded
+   `Parked(p, None)`, re-observed the park through a live `wake_request` (`r1.0.p0`, the wait kept),
+   and the new waiter's initial read found the answer: `0013 wake r1.0.p0 settled "25\n"` 9 ms
+   after the re-issued park, `run_started r1.0`, `DelegateCheck`, `done` with 25, `run_finished`
+   with `provider_calls_completed 4` (2 + 2 across the session's two runs). Under the flag the same
+   restart would lose the race again, deterministically: the answer is on disk before every
+   `wake_request`. So: **a delegate that finishes before the run parks is never woken under
+   `--park-exits`**; the session is not lost, but the automatic wake is, and the owner should
+   weigh this before turning the flag on. The repair is small and in Part 4's file: hold the reply
+   that arrives while `suspending !== null` and hand it to the `SuspendedChild` at construction (it
+   already accepts a held reply, Part 5's "a reply held before install"), which flips Part 4's
+   "kill-then-reply writes nothing" row to "kill-then-reply is held for the owner". Owner's call.
+2. **Closing a delegate's pane wakes `host_error`, not `lost`.** `herdr agent wait <pane>` blocked
+   on a pane that is closed under it exits 1 with code `agent_not_running`, a code neither twin
+   classifies as the agent being gone (`herdrMeansAgentGone`, `wake-waiter.ts:128–130`; the
+   extension's `means_agent_gone`, `types.ail:1012–1021`, whose own comment says the enumeration is
+   measured, not exhaustive). Only `agent_not_found` — what `agent get` returns afterwards, and what
+   `DelegateCheck` saw — means gone. So the outcome the plan calls `Lost` reached the journal and
+   the resumed run as `HostError` with the waits kept, and the session finished only because the
+   model called `DelegateCheck`, which settled it. The mapping is W4 Part 5's file and the
+   extension's; adding `agent_not_running` to both twins, with a fixture, is a one-line change each
+   and an owner decision. The DST row for the `lost` wake (Part 6 row 1's `lost`, `park_wake`'s
+   fixtures) is unaffected: it tests the outcome, not herdr's code for it.
+
+**Anchors at `298bec5`.** `park_resume_dst.ail`: the ids `twice_run_id` / `rp2`, the helpers
+`records_through_nth`, `count_lines`, `twice_script`, the `Twice` record and `twice(f)`, the rows
+`row_resume_twice_base`, `row_resume_twice_no_run` (shared by `_started` and `_finished`),
+`row_resume_twice_parked`, and `main`'s `twice_results`; `run_park_resume.sh`: rows 11, the four
+frame labels, the Part 7 checks after "abort/dropped". `runtime-process.wake.test.ts`: the Part 7
+block at the end of the file (`walk`, the one test). The captures' directory: `README.md`,
+`judge.sh`, `success/`, `lost/`, `attempt1-r5-window/`.
+
+**The sweep at the branch point (§0.1), disclosed.** Not run for this part (foreground `make dst`
+is outside the worker's scope, and this part touches no `src/core` file; the DST target it extends
+was run alone). The standing record is Part 3's.
+
+**Judgment calls, stated.**
+1. **The second-resume rows re-run the resumed frame under their own label** rather than returning
+   it from Part 3's row: Part 3's row keeps its signature and its frame, one scripted frame is
+   cheap, and `resume_twice_base` asserts the input's exactly-once claims itself, so the rows are
+   self-validating.
+2. **Three cuts, not one.** The plan's sentence names the resumed journal; "after `run_started`" is
+   the tightest reading (a death the instant the run opened), "finished" is the ordinary one, and
+   "after the run's own park" is the case where the second resume is itself a park resume, which is
+   where a re-offer would do the most damage (a stale wake answering the wrong delegate). All three
+   assert the consumed wake's line appears once in the three-frame file.
+3. **T0's host test takes the lease as index.ts does**, since the plan's sentence names `lease`
+   and the harness's `suspend` takes none; the four listings pin that nothing but the journal and
+   the lease is ever created, including by the respawn.
+4. **The gate's delegate was slowed, not the host.** After finding 1 the success path needs the
+   answer to land after the park; a 75 s `time.sleep` in the delegate's task does that without
+   touching any file. Finding 1's attempt is kept as a capture, not discarded: it is the gate's
+   most useful output.
+5. **The `Lost` control closes the pane** (`herdr pane close`), the plan's words, rather than
+   killing the delegate's process, which would have left the pane and its row.
+6. **Default-off is verified in three places** — the parse default, the constructor default and
+   the grep over build and config files — plus Part 4's control test and a live run without the
+   flag; no one place proves it alone.
+7. **The judge is a script beside the captures**, so the owner can re-run it on the same files (or
+   on a later run) rather than trust this record's reading of them. Its two tool-call lookups were
+   wrong on the first run (`"name"` for `"tool"`) and were corrected before the numbers above; the
+   captures did not change.
+
+### P4 Part 6, 2026-09-15: the named states and their exits — red first, then green
+
+Base `ab9c47e` (P4 Part 5). One commit `44c7a3a` on `arniwesth/013-plan003-and-herdr`, not pushed.
+P4-Q5 as decided (owner 2026-09-14): the Part 6 table as written, including the dead-child vs
+live-child distinction. Input as Part 5 left it: the owner's one reply consumed by
+`installSuspendedWake` (the `wake`, the `--resume` respawn), with "how that reply's waiter is
+ended" on the `restart`/quit rows, and the parked/resuming footer state, left to this part. The
+red-first record is here and in the commit message, on Parts 2–5's pattern: the reds were taken in
+the working tree.
+
+**T1, red at `ab9c47e`** (only `runtime-process.wake.test.ts` and `herdr-agent-state.test.ts`
+changed: six tests under `the named states and their exits`, two extended): both suites fail to
+compile. The wake suite: `TS2724: '"./runtime-process.js"' has no exported member named
+'abortSuspendedChild'`, `TS2339: Property 'isClosed' does not exist on type 'SuspendedChild'` (×4),
+`TS2339 … 'close'`, and `TS2554: Expected 1 arguments, but got 2` (×3, `interruptRuntime`'s second
+parameter). The herdr suite: `TS2322`/`TS2345: Type '"parked"' is not assignable to type
+'MotokoRunState'` and the same for `"suspended_child"` and `"resuming"`. 0 tests run.
+
+**T1′, red in the harness shape** — the surface exported but inert (`close()` returns true and ends
+nothing; `abortSuspendedChild` closes and writes nothing; `interruptRuntime` therefore answers
+`"none"`): 3 of the 6 red, 3 green. The reds, from node's jest: row 3 (ESC) `Expected: "wake_aborted"
+Received: "none"`; row 4 (`restart`) `Expected: true Received: false`; row 5 (quit) `Expected: 1
+Received: 0` (the waiter's cancel count). The three green are rows 1, 2 and 6: they pin what Part 5's
+consumer and the lease hook already do, and are the table's controls.
+
+**Green at `44c7a3a`.** `jest src/runtime-process.wake.test.ts` 26/26 (20 + 6 new);
+`jest src/herdr-agent-state.test.ts` 16/16. `tsc --noEmit -p src/tui` clean. `bun run test` in
+`src/tui`: 419/419 tests, 41/46 suites; the five that fail to LOAD are Part 1's five
+(`compose-output-validator`, `compose_guard_semiformal`, `env-server`, `scratchpad/loopback`: depd
+`callSite.getFileName is not a function` under bun; `test/path-guard`: the jest worker), none of
+which imports this part's files. One disclosure: a verbose run of the wake suite started
+CONCURRENTLY with the full suite, seconds after the test file was edited, showed two failures — Part
+4's flag-off control and Part 5's first test, both fast (3–5 ms), neither Part 6's. Five subsequent
+runs (three bun and one node alone, two node processes concurrently on the file) were 26/26, and the
+full suite's own run of the file passed. The likeliest cause is two jest processes re-transforming
+the same changed file into one shared cache at the same moment; not verified.
+
+**The fold gate** (Part 5's `scripts/fold_parked_journal.ail`, on the files rows 3 and 5 write when
+`MOTOKO_P4_JOURNAL_OUT_ESC` / `MOTOKO_P4_JOURNAL_OUT_QUIT` are set):
+
+```
+MOTOKO_P4_JOURNAL_OUT_ESC=$S/p4-part6-esc.jsonl MOTOKO_P4_JOURNAL_OUT_QUIT=$S/p4-part6-quit.jsonl \
+  bun node_modules/.bin/jest src/runtime-process.wake.test.ts                         # src/tui
+ailang run --caps IO,FS,Env --entry main scripts/fold_parked_journal.ail -- $S/p4-part6-esc.jsonl
+  3 entr(ies), 0 undecodable line(s)
+  leaf                 0002
+NOT PARKED  last=open:wake:aborted
+ailang run --caps IO,FS,Env --entry main scripts/fold_parked_journal.ail -- $S/p4-part6-quit.jsonl
+  3 entr(ies), 0 undecodable line(s)
+  leaf                 0002
+  last                 parked
+  park.request_id      s.r0.1.p1        park.step 3        park.waits 1
+PARKED(p, None)      -- no wake: re-observed on resume
+```
+
+The ESC file is `header` (`0000`), `park` (`0001`), `wake` (`0002`, parent `0001`, `wait_id "abort"`,
+`outcome "aborted"`, `detail ""`): the fold CLOSES the park (P4-Q4), so the next prompt's `--resume`
+opens no run and reads the prompt as the next turn. The quit file is `header`, `park`, `exit`
+(`0002`, parent `0001`, reason `host_exit`): row 5's shape, `Parked(p, None)`, re-observed on resume.
+
+| test (one per row of the Part 6 table) | what it pins |
+|---|---|
+| row 1: the waiter replies `settled` / `lost` / `timed_out` / `host_error` | four suspensions, one per outcome: `header, park, wake` with `wake == { request_id, wait_id, outcome, detail }` and `parent_id == park.id`; one respawn with `--resume <journal>` and `canResume` true; the waiter cancelled once; afterwards `isClosed` false and `abortSuspendedChild(…, "abort")` → false, nothing written (the park is answered, not cancelled) |
+| row 2: a line at the parked prompt | `deliver(operator_input)` → `wake(operator_input, "go on")`, the park's child, one respawn, one cancel; then `interruptRuntime(rp, { owner, journal })` → `"none"`, `isClosed` false, `header, park, wake` unchanged — the two typed-input rows differ by entry condition alone |
+| row 3: ESC | the owner cleared first (`stillCurrent` false), then `interruptRuntime(rp, { owner, journal })` → `"wake_aborted"`; `header, park, wake`, `wake == { request_id: RID, wait_id: "abort", outcome: "aborted", detail: "" }`, `parent_id == park.id`, `currentLeaf == wake.id`; `isClosed` true, one cancel, `waiter.finished`; **0 respawns**; a second ESC → `"none"`, the waiter's late reply and a typed line dropped (`reply` null), nothing written; `interruptRuntime(rp)` with no owner → `"kill"` (a dead child ignores it), nothing written; `canResume` true and the host's respawn, called as `onInitialTask` calls it, carries `--resume <journal>` with `header, park, wake` on disk |
+| row 4: `restart` to profile `q` | `abortSuspendedChild(owner, journal, "restart:q")` → true; `wake == { wait_id: "restart:q", outcome: "aborted", detail: "" }`, the park's child; `isClosed`, one cancel; Part 5's consumer's respawn **never** called; the host's respawn on the new profile carries `--profile q` and `--resume <journal>`, no `--resume-force`, with `header, park, wake` on disk; the delegate settling afterwards is dropped |
+| row 5: quit | `close()` → true, one cancel, `header, park` unchanged; then the lease hook's `exit` listener (`registerLeaseHooks` against a fake emitter, a real lease on the journal's dir): `header, park, exit`, `exit.reason == "host_exit"`, `exit.parent_id == park.id`; **no `wake`**; 0 respawns; `canResume` true; a waiter reply and a typed line afterwards write nothing |
+| row 6: host death | SIGINT → `exit(abort)`, SIGTERM → `exit(host_exit)`, each after the park, a consecutive `exit` suppressed; no `wake`; 0 respawns; `canResume` true |
+| `herdr-agent-state.test.ts` | the exhaustive map: `parked` and `suspended_child` → `blocked`, `resuming` → `working`; both parks carry a message beginning `parked`, only the dead-child one says the runtime exited, and they differ; `resuming` carries none |
+
+**Anchors at `44c7a3a`.** `runtime-process.ts`: `interruptRuntime` `:197` (the suspended-child case
+first); `SuspendedChild` `:671`, the `closed` guard in `deliver` `:693`, `isClosed` `:700`, `close`
+`:712`; the state table `:799–828`; `SuspendedChildAbort` `:830`; `abortSuspendedChild` `:850`.
+`ui.ts`: `RunState` `:807`; `isWaitingState` `:1803`; the ESC guard `:2200`; `session_resumed`
+leaving `resuming` `:2853`; `wake_request` / `wake_received` `:2895` / `:2899`; `showSuspendedChild`'s
+state `:4149`; `showResuming` `:4165`; the footer colours `:4441`. `index.ts`: the import `:26`;
+`ui.showResuming()` in Part 5's `notify` `:1193`; quit's `suspendedChild?.close()` `:1350`;
+`onInterrupt` `:1365` (the wake `:1370`); `onRestart` `:1385` (the wake `:1399`).
+`herdr-agent-state.ts`: `MotokoRunState` `:43`; the three cases `:118–123`. The test: the shared
+harness `runtime-process.wake.test.ts:415–503` (`suspend(sessionId)` `:442`, `resumeRespawn(journal,
+profile)` `:480`), the Part 6 block `:635–842` (`installAsHost` `:637`, `FakeProc` `:645`,
+`leaseHooks` `:659`, the rows `:668`, `:694`, `:716`, `:763`, `:792`, `:821`).
+
+**The sweep at the branch point (§0.1), disclosed.** Not run for this part (foreground `make dst`
+is outside the worker's scope, and this part touches no `src/core` file). The standing record is
+Part 3's.
+
+**Judgment calls, stated.**
+1. **The three states are `RunState` members, not a separate type.** `parked`, `suspended_child`
+   (the plan's `suspended-child`, in the union's spelling) and `resuming` join the one union ui.ts
+   and `herdr-agent-state.ts` share, so herdr's exhaustive `mapRunState` makes an omitted mapping a
+   compile error, as it did for `suspended` and `done`. They are distinct from `suspended` (ADR-003
+   D2's step budget): a parked run holds nothing exhausted, and its next line answers the park, not
+   the run. The table itself lives in `runtime-process.ts` as the Part 6 block's header.
+2. **Both parks report `blocked` to herdr, `resuming` reports `working`.** The reason `suspended`
+   is `blocked`: the run is stopped and waiting on something outside this process (its delegates,
+   or a line at the parked prompt), and no model call is in flight — `working` would be a lie and
+   `idle` would say nothing is held. The two messages differ in the one fact herdr cannot see,
+   whether the runtime child is alive. `resuming` spins: a respawned child is folding the journal.
+3. **`SuspendedChild.close()` is how the waiter ends on the cancelling rows**, the item Part 5's
+   judgment call 3 left here. It refuses — and does nothing — when the owner already accepted a
+   reply: the park is answered and Part 5's consumer owns what follows, so a cancel after a reply
+   cannot write a second wake behind the first. Quit closes the owner too: the journal sees nothing
+   of it (the row's "none"), but without it a herdr poll would outlive the process. Host death by a
+   signal cannot close anything, and the row does not ask it to.
+4. **ESC stays one decision.** `interruptRuntime` takes the suspended-child as its first case, so
+   the three things ESC can do — cancel a suspended park in the journal, abort a live park over
+   stdin, kill anything else — are one function the test drives, and index.ts's handler is a guard
+   around it. `interrupted` is not set on the suspended-child row: no child exits on it, and the
+   flag would have mislabelled the next real exit's `journalExitReason`.
+5. **The owner is cleared BEFORE the cancel, on both rows.** Part 5's consumer is guarded on
+   `stillCurrent`, so clearing `suspendedChild` first means a reply racing the cancel can neither
+   write a wake nor respawn; `close()` then refuses it at the owner as well. Clearing
+   `ui.suspendedChild` closes the parked input route, so the line typed after ESC is a task
+   (`initial_task` → `onInitialTask` → `--resume`), not an answer to a park that no longer exists.
+6. **The `restart` row's `wait_id` names the profile the respawn runs on** (`restart:<newProfile ??
+   profile>`), so the entry is self-describing; the respawn is `respawnForRestart` called at once,
+   not after the live restart's 100 ms window, since the child is already dead and no prompt can
+   race it. `/restart` on a dead child that is NOT a suspended-child stays Part 4's finding (a),
+   reported there and outside this row: unchanged.
+7. **`resuming` is one added line in Part 5's `notify`**, before the respawn, rather than a change to
+   `installSuspendedWake`: the consumer stays as Part 5 left it, and the state is left on the
+   resumed child's `session_resumed` (the table's exit), after which the child's own events —
+   `session_resume_view`, `session_start`, the wake's `wake_received` — drive the footer as before.
+8. **A live `wake_received(aborted)` leaves the state where it was.** The run ends with neither
+   `done` nor `error` and the child's exit follows; the exit handler's `interrupted` branch then
+   puts the TUI into awaiting a task. Every other outcome goes to `thinking`: the run continues on
+   the wake's message.
+9. **What the tests cannot reach**, as Part 5 recorded: index.ts's closures (`onInterrupt`,
+   `onRestart`, `onAbort`) and ui.ts's transitions. The rows are pinned through the functions those
+   closures call, in the order they call them, and the respawn is asserted on the argv a real child
+   received. The quit and host-death rows use `registerLeaseHooks` against a fake emitter and a
+   real lease, session-lease.test.ts's mechanism.
+
+### P4 Part 5, 2026-09-15: the wake entry as the park's child, and the respawn — red first, then green
+
+Base `b660b55` (P4 Part 4). One commit `ab9c47e` on `arniwesth/013-plan003-and-herdr`, not pushed.
+Input as Part 4 left it: the `SuspendedChild` owner holding one reply by `request_id`, with
+`onReply` as the attachment point. The red-first record is here and in the commit message, on
+Parts 2–4's pattern: the reds were taken in the working tree.
+
+**T1, red at `b660b55`** (only `runtime-process.wake.test.ts` changed: four tests under `the wake
+entry and the respawn`): the suite fails to compile — `TS2305: Module './runtime-process.js' has no
+exported member 'installSuspendedWake'`, and two `TS7006` that follow from it (the `notify`
+callback's parameters). 0 tests run.
+
+**T1′, red in the harness shape** — the surface exported (`WakeJournal`, `SuspendedWakeDeps`,
+`installSuspendedWake`) and the consumer installed but doing nothing: 3 of the 4 red, 1 green (the
+late-reply control, which pins that nothing happens without a consumer acting). The reds, from
+node's jest: journal entry types Expected `["header","park","wake"]`, Received `["header","park"]`,
+at each of the three (test `:529`, `:571`, `:594`).
+
+**Green at `ab9c47e`.** `jest src/runtime-process.wake.test.ts` 20/20 (16 + 4 new). `tsc --noEmit
+-p src/tui` clean. `bun run test` in `src/tui`: 413/413 tests, 41/46 suites; the five that fail to
+LOAD are Part 1's five (`compose-output-validator`, `compose_guard_semiformal`, `env-server`,
+`scratchpad/loopback`: depd `callSite.getFileName is not a function` under bun; `test/path-guard`:
+the jest worker), and none of them imports this part's files (checked by grep).
+
+**The fold gate** (the plan's fourth gate line; P3 Part 4's shape). `scripts/fold_parked_journal.ail`
+(new) reads a journal with the resume path's ambient `readFile`, folds it from its leaf, and prints
+the park and the wake that answered it. Run on the file the host test writes when
+`MOTOKO_P4_JOURNAL_OUT` is set:
+
+```
+MOTOKO_P4_JOURNAL_OUT=$S/p4-part5.jsonl bun node_modules/.bin/jest src/runtime-process.wake.test.ts   # src/tui
+ailang run --caps IO,FS,Env --entry main scripts/fold_parked_journal.ail -- $S/p4-part5.jsonl
+  3 entr(ies), 0 undecodable line(s)
+  leaf                 0002
+  last                 parked
+  park.request_id      s.r0.1.p1        park.step 3        park.waits 1
+  wake.request_id      s.r0.1.p1        wake.wait_id h1    wake.outcome settled    wake.detail answer
+PARKED(p, Some(w))   -- the wake answers the park; the resumer consumes it as <R'>.p0
+```
+
+The file is `header` (`0000`), `park` (`0001`, parent `0000`), `wake` (`0002`, parent `0001`).
+Control, the same file cut to Part 4's shape (`header, park`): `PARKED(p, None) -- no wake:
+re-observed on resume`. The header is `writeHeader`'s (empty digests, zeroed `boot`) and the
+history is empty — an empty seed is what the test uses to make `canResume` hold — and the fold
+accepts both, since `finish_fold` has no empty-history refusal and `system_is_head_prefix([])` is
+true; a live journal carries a real chain and folds the same way.
+
+| test | what it pins |
+|---|---|
+| the waiter's reply | install writes nothing (no reply held); on the reply: journal `header, park, wake`, `wake.parent_id == park.id`, `wake == { request_id: RID, wait_id: h1, outcome: settled, detail: answer }`, `currentLeaf == wake.id`; `notify` called once with `written: true`; the waiter cancelled **once** and `finished`; the respawn called **once**, with `canResume` true and `header, park, wake` on disk at the call; the resumed child's argv (a real second `RuntimeProcess` with `{ journalPath }`, its child a script that writes `"$@"`) carries `--resume` followed by `journal.filePath`, no `--resume-force`, the empty task last; afterwards a second waiter reply, `deliver(settled)` and `deliver(operator_input)` all write nothing and respawn nothing — `deliver` returns false, the leaf stays the wake |
+| the operator's line | `deliver(operator_input)` → true; `wake` with `wait_id ""`, `outcome operator_input`, the park's child; respawn once with `--resume`; the delegate's waiter cancelled once; the delegate settling afterwards is dropped, nothing written |
+| a reply held before install | Part 4 wrote nothing on it (`header, park`); at install it is consumed once: `wake(settled, early)` as the park's child, one respawn with `--resume <journal>` |
+| a reply after a later spawn (`stillCurrent` false) | the owner holds it (`reply` equals it); `header, park` unchanged; no respawn |
+
+**Anchors at `ab9c47e`.** `runtime-process.ts`: `WakeJournal` `:693`; `SuspendedWakeDeps` `:698`;
+`installSuspendedWake` `:743` (the `stillCurrent` return `:745`, the cancel `:746`, the record
+`:747–754`, the respawn `:756`). `index.ts`: the import `:26`; the install in the first branch
+`:1180–1194` (`stillCurrent: () => suspendedChild === suspended` `:1181`, `respawn:
+respawnForRestart` `:1183`); `respawnForRestart` `:1305`. The test block:
+`runtime-process.wake.test.ts:415–614` (`suspend` `:445`, `resumeRespawn` `:482`, the four tests
+`:511`, `:563`, `:584`, `:601`). The script: `scripts/fold_parked_journal.ail` (126 lines).
+
+**The sweep at the branch point (§0.1), disclosed.** Not run for this part (foreground `make dst`
+is outside the worker's scope, and this part touches no `src/core` file; the new script is under
+`scripts/`, not a DST target). The standing record is Part 3's.
+
+**Judgment calls, stated.**
+1. **The consumer is a free function beside the owner, not a method on it.** `installSuspendedWake`
+   takes the owner and what the host lends it (`stillCurrent`, the journal narrowed to `record`,
+   `respawn`, `notify`), so Part 4's `SuspendedChild` is unchanged and the test drives the same
+   function index.ts calls, with a real respawn in place of `respawnForRestart`. What the test
+   cannot reach is `respawnForRestart` itself (a closure in `main`); it is P3 Part 5's function,
+   called by name, and the test's stand-in does what it does on the resume path (checks
+   `canResume`, spawns with `{ journalPath }`), asserted on the argv the child received rather
+   than on `buildSupervisorArgs` alone.
+2. **The waiter is cancelled on consumption.** The plan's Part 5 lists the record and the respawn;
+   `sendWakeReply`'s rule, which the plan says moves with the request, includes `stopWaiter()`
+   after accepting a reply. Without it an operator-input wake leaves a herdr-polling waiter alive
+   for a request the journal has answered, and the resumed run parks on the same delegates with a
+   waiter of its own. Cancel is idempotent on a waiter that already delivered (`flush` cancels
+   before `onReady`), so the "waiter replies" row costs nothing. Pinned by the first two tests
+   (`cancels() == 1`).
+3. **`stillCurrent`, a guard the plan does not name.** The owner outlives the `RuntimeProcess` and
+   the consumer closure outlives the suspended-child: every spawn clears `suspendedChild`. A reply
+   reaching the old owner after that would, without the guard, append a `wake` behind the new
+   child's entries — a wake answering no open park, which the fold refuses at `request_id` — and
+   make the session unresumable by typing. So index.ts passes "this owner is still
+   `suspendedChild`", and a late reply writes nothing and respawns nothing. Pinned by the fourth
+   test. How that reply's waiter is ended is Part 6's (the `restart`/quit rows).
+4. **A wake the journal could not append still respawns.** `record` returns 0 and `onError` has
+   reported it; the child then folds `Parked(p, None)` and re-observes the park (row 5) — the
+   reply is lost, the session is not. `notify` says so in red. Not tested: `SessionJournal`'s
+   append failure is a filesystem fault the harness would have to inject.
+5. **No UI state beyond one history line.** `awaitingTask` is not set (the restart path sets it
+   because a restarted child idles on stdin; a wake-resumed child runs the wake's turn, and its
+   `session_resumed`/`session_start` drive the status). A parked or resuming footer state is Part
+   6's, as Part 4 recorded.
+6. **The fold gate runs by hand, as P3 Part 4's did.** The host test copies its journal to
+   `MOTOKO_P4_JOURNAL_OUT` when set, and the script folds it; the numbers above are from that run.
+   Wiring `ailang` into jest would make the unit suite depend on the toolchain, which no other TUI
+   test does.
+
+**Part 7's T0, observed in passing.** The test's session directory holds `journal.jsonl` only
+(the harness takes no lease); `git grep -n -i -E 'WakeGeneration|wake_generation|wake-file'` over
+`src/core` and `src/tui/src` finds nothing. Part 7 records it.
+
+### P4 Part 4, 2026-09-15: the suspended-child branch — red first, then green
+
+Base `2c0fa52` (P4 Part 3). One commit `b660b55` on `arniwesth/013-plan003-and-herdr`, not pushed.
+P4-Q3 as decided: host `kill()` once the `park` entry is on disk; every first-issue park exits; TTY
+only; the non-TTY callback unchanged; no core-side exit. P4-Q1: Parts 4–7 proceed on W4 gate 8's
+live parked run. The red-first record is here and in the commit message, on Parts 2 and 3's
+pattern: the reds were taken in the working tree.
+
+**T1, red at `2c0fa52`** (only `runtime-process.wake.test.ts` changed: five tests under
+`suspended-child under --park-exits`): the suite fails to compile — `TS2305: Module
+'./runtime-process.js' has no exported member 'SuspendedChild'`; `TS2339: Property
+'suspendedChild' does not exist on type 'RuntimeProcess'`; `TS2554: Expected 11-13 arguments, but
+got 14` (the trailing `parkExits`). 0 tests run.
+
+**T1′, red in the harness shape** — the flag reaching `RuntimeProcess`, the kill on a first issue,
+the `SuspendedChild` owner and the R5 drop rule in place, the exit handler still `resolvePark()`
+(the plan's `:769`): 3 of the 5 red, 2 green (the abort-inside-onEvent guard and the flag-off
+control, which pin HEAD's behaviour). The reds, from node's jest (bun's swallows the diffs):
+`expect(rec.cancels()).toBe(0)` — Expected 0, Received 1 (the waiter cancelled at the exit
+handler; test `:324`); journal entry types Expected `["header","park"]`, Received
+`["header","park","exit"]` (the mirrored TTY callback wrote `exit` after the park; `:363`);
+`TypeError: Cannot read properties of null (reading 'deliver')` (no owner; `:374`).
+
+**Green at `b660b55`.** `jest src/runtime-process.wake.test.ts` 16/16 (11 + 5 new). `tsc --noEmit
+-p src/tui` clean. `bun run test` in `src/tui`: 409/409 tests, 41/46 suites; the five that fail to
+LOAD are Part 1's five (`compose-output-validator`, `compose_guard_semiformal`, `env-server`,
+`scratchpad/loopback`: express → body-parser → depd `callSite.getFileName is not a function` under
+bun 1.4.2; `test/path-guard`: a jest worker crash). Their imports are `env-server.js`,
+`loopback.js`, `node:path` and `express`; none reaches this part's files.
+
+| test | what it pins |
+|---|---|
+| first issue → kill → exit | events `park_entered, wake_request`, no `error`; `isParked` true inside onEvent (forwarded before the kill); stdin log empty (the child read nothing); one waiter started, **0 cancels**, `waiter.finished` false; `suspendedChild.request.request_id == RID`, its `reply` null; `wakeRequest` null, `isParked` false, `restartPending` undefined; journal `header, park`, the park's `id == currentLeaf` |
+| kill-then-reply (R5) | a reply delivered in a microtask after `onWakeRequest` returned — `isDead` still false — through the waiter's callback and through `sendWakeReply` (→ false): stdin empty, journal `header, park`, the owner's `reply` null, no restart pending, 0 cancels |
+| post-exit reply | a stale id → false; the waiter's callback reaches the owner (`reply` equals it); a second → false; `sendWakeReply` on the dead process → false; `onReply` installed afterwards receives the held reply once; journal still `header, park` |
+| abort from inside onEvent, flag on | `interruptRuntime` → `abort` down stdin, the child exits itself; 1 cancel; `suspendedChild` null; journal `header, park, exit` |
+| control, flag off | 1 cancel; `suspendedChild` null; `header, park, exit` with reason `child_exit` |
+
+**Anchors at `b660b55`.** `runtime-process.ts`: `SuspendedChild` `:657`; the exit branch
+`:811–829` (`if (this.suspending !== null && this.waiter !== null)` at `:814`); the
+`suspendedChild` getter `:1053`; `onWakeRequest` `:1067` (the kill at its end); `onWaiterReply`
+`:1094`; the R5 rule in `sendWakeReply` `:1111`. `index.ts`: `--park-exits` `:666`; `let
+suspendedChild` `:896`; the non-TTY notice `:982`; the first branch `:1168–1173`; the TTY spawn's
+flag `:1264`. `ui.ts`: `showSuspendedChild` `:4117`; the route's request id `:4144`; the owner
+delivery `:4154`. The test block: `runtime-process.wake.test.ts:249–413`.
+
+**The sweep at the branch point (§0.1), disclosed.** Not run for this part (foreground `make dst`
+is outside the worker's scope, and this part touches no `src/core` file). The standing record is
+Part 3's.
+
+**Judgment calls, stated.**
+1. The kill comes AFTER the `wake_request` is forwarded, and is guarded on the park still being
+   tracked (`outstandingWake === req`, a live waiter): a consumer that aborts from inside `onEvent`
+   (ESC) has cancelled the park, and that exit stays the ordinary one. Pinned by the fourth test.
+2. The R5 window DROPS the reply rather than holding it for the owner, as the plan states it ("the
+   request died with the child"). With the real waiter a reply also finishes the handle
+   (`startWakeWaiter`'s `flush` cancels before `onReady`), so the owner then holds a finished
+   waiter and no reply; the park is re-observed on the next resume, which is Part 5's respawn or
+   the operator's line or restart. A delegate's answer landing in that window is therefore not
+   acted on until then. The plan's decision, recorded.
+3. `SuspendedChild` holds one reply by `request_id` and takes a consumer through `onReply`, handing
+   over a reply held before the consumer was installed. That is the surface Part 5 attaches to
+   (write the `wake`, respawn). Part 4 installs no consumer, so under the flag an answer or a typed
+   line is held and nothing else happens; the flag is off by default and Part 7's live gate is what
+   turns it on.
+4. The UI's run state is left where the park left it: a live park shows the same today, and the
+   two existing alternatives reach herdr with the wrong meaning (`suspended` maps to `blocked` with
+   the step-budget message; `idle` says nothing is held). A parked footer state, live or suspended,
+   is a UI item for Part 6 or later, not this branch's.
+5. The parked input route stays open by reading the owner's request id when no child holds one;
+   with no child the line is delivered to the owner (`operator_input`, once). `awaitingTask` is
+   not set, so a plain line is not a new task, which would have resumed through `onInitialTask`
+   and re-observed the park instead of answering it.
+6. A `kill()`ed child that manages to emit a park-ending event (`error`, `done`) before it dies
+   resolves the park in the line handler as today; at exit the waiter is gone, the branch is not
+   taken, and the exit is the ordinary explained one. Not tested: the AILANG runtime does not do
+   this on SIGTERM in the ESC path today.
+
+**Two findings, reported, not repaired.** (a) `/restart` on a dead child is a no-op:
+`RuntimeProcess.restart()` returns on `dead`, and `ui.onRestart` only falls back to
+`respawnForRestart()` when `runtimeProcess` is undefined, which it never is after a spawn. Under
+suspended-child that is Part 6's `restart` row; it also holds for any exited child at HEAD.
+(b) bun's jest prints no `expect` diff for a failing assertion (`@ processTicksAndRejections@`);
+node's jest under `--experimental-vm-modules` prints them, and T1′'s numbers come from there.
+
+### P4 Part 3, 2026-09-15: the resumer — red first, then green
+
+Base `97265c2` (P4 Part 2). One commit `2c0fa52` on `arniwesth/013-plan003-and-herdr`, not pushed.
+P4-Q2 **option (a)**, as decided: `<R'>.p0` is consumed in the resumed frame, before the run
+(§8.4, R9, W5(b)). The red-first record is here and in the commit message, on Part 2's pattern:
+the reds were taken in the working tree with the gate files present and `session.ail` at the
+stated state, not as separate commits.
+
+**T1, red at `97265c2`** (`park_resume_dst.ail` and `run_park_resume.sh` landed, `session.ail`
+untouched): `make park_resume` fails to compile the script — `Error: type error in
+scripts/dst/park_resume_dst (decl 44): undefined variable: Session at
+scripts/dst/park_resume_dst.ail:375:11`, the harness entry's call — exit 1, no frames, 52 s, did
+not hang.
+
+**T1′, red against HEAD's behaviour in the harness shape.** A stub
+`run_v2_session_park_resumed_traced` that emits `SessionResumed` and returns the folded history
+between turns — exactly what `run_v2_resume_with_conversation` did for a `Parked` boundary at
+`97265c2` — makes 20 of the 25 resume assertions red across the five resume rows: `parks=`,
+`wakes=` and `seen=` (no `WakeIdentity`) empty; `order=SessionResumed|`; `drops=1 warnings=0`;
+and the two-frame journal folding to **`open:resumed`** — the `resumed` entry moves `last` off
+the park, so at HEAD a resume of a parked journal silently dropped the park. The fold/plan rows
+(three truncations → `parked`; the untruncated control → `run_finished`) and Part 2's row are
+green at both reds, as designed: they are Part 1's fold, the precondition.
+
+**Green at `2c0fa52`.** `make park_resume` PASS: 7 rows, every assertion, every shell check.
+
+| row | what it pins |
+|---|---|
+| fold/plan | after `park_entered` → `Parked(w4.r0.0.p0 [h1], None)`; after `wake_received` → `Parked(p, Some(w))`; `park, exit` (host-shaped `exit`, reason `child_exit`) → `Parked(p, None)`; untruncated → `run_finished` |
+| `resume_after_wake` (recording ports) | `SessionResumed` first and once; `ParkEntered w4.r1.0.p0` at step 0 on [h1] before any run; exactly one `WakeReceived` for `w4.r1.0.p0`, settled on h1 with the child's detail; `WakeIdentity("loop_v2", "w4.r1.0.p0", "h1")` **`ok`** (served from the cursor), then `w4.r1.0.p1`; the run's own park `w4.r1.0.p1` on [h2] (`initial_park_ordinal(true)`); the model told to call `DelegateCheck` once, run Ok, `done=final answer`; one `SessionStart`, two `wake_read` witnesses; two-frame journal: `run_started(w4.r1.0)` **after** `wake(w4.r1.0.p0)`, refolds to `run_finished` and plans, folded history == the run's final history |
+| `resume_after_park` (scripted) | no wake child → nothing seeded → the world's cursor answers the re-observation (`settled`, `late answer`); run opens, parks at `w4.r1.0.p1`, ends Ok; refold not `Parked` |
+| `resume_park_exit` (scripted, empty cursor) | T2's re-observation: `WakeReceived w4.r1.0.p0 host_error "wake_read unbound"` with `wait_id ""`; waits **kept** — next park `w4.r1.0.p1` still on [h1]; the model told the host could not observe; refold not `Parked` |
+| `resume_aborted` | `WakeReceived(aborted, "abort")`, **no run** (no `SessionStart`, `HistorySeeded`, `ProviderCallPrepared`, `RunSummary`; one `wake_read` witness); the frame returns the folded history, not suspended; two-frame journal folds to `open:wake:aborted` |
+| `resume_dropped` | one `ParkEntered w4.r1.0.p0`, no `WakeReceived`, no run, the cursor element consumed; folded history returned; two-frame journal keeps `Parked(w4.r1.0.p0, None)` for the next resume; shell: `drops=1 warnings=1`, no `wake_received` on the wire |
+| wire (shell) | `live_cursor`: 0 `wake_request` lines (Part 2); `resume_after_wake`: exactly one `wake_received` for `w4.r1.0.p0` and one `session_start` for `w4.r1.0`, **in that order**; `resume_aborted`: no `session_start`; no `error` event in the abort/dropped frames |
+
+**Also green at `2c0fa52`.** `ailang test src/core/session.ail` 40/40 (38 + 2 new:
+`test_p4_parked_cursor_rewrites_only_the_request_id_at_the_head`,
+`test_p4_state_from_parked_applies_the_wake_and_parks_at_p1`); W5's tests byte-identical (`git
+diff` touches no `test_w5_` line), moved `:5867–5897` → `:6141–6171` by the resumer block above
+them. `make park_wake` PASS, 17 fixtures. `make journal_resume` PASS rows=13. `make ledger_parity`
+wire gate PASS. `make world_framed_wire` selftest + gate PASS. `make driver_leaf_inventory`: **26
+sites** (25 + `session.ail:5514 ports.wake_read WakeRead clean [consume_parked_wake]`), WakeRead=2,
+0 unresolved, 0 out of order. `make driver_leaf_inventory_selftest`: 0 failures, with the new
+`TREE_MUTANTS` entry `resumer wake_read successor not witnessed` → `advanced-unwitnessed` and the
+unmutated tree 26 leaves clean. `make anchors` 10/10, **no move and no re-baseline**: every edit
+above `:4523` is line-neutral (three names joined onto the journal import line, `wake_outcome_of`
+onto the ports import line, `initial_park_ordinal`'s two comment lines re-tensed, `C2Seed`'s third
+variant and its match arm on their existing lines); everything else sits below
+`run_v2_session_resumed_traced`. `ailang check src/core/rpc.ail` clean. The recording sites the
+plan said to confirm at run time are `stub_step.ail:635–640` (`recording_ports`, `wake_read:
+recording_wake`) and `:737` (`generating_ports`).
+
+**The sweep at the branch point (§0.1), disclosed.** Not run for this part (foreground `make dst`
+is outside the worker's scope). The standing record is `.ailang/post-pindh-sweep.out` at `d5edebf`
+(2026-09-14 17:45 UTC): exit 2, `FAILED (1): depth_canary` known-red, `NOTE` lines that
+`driver_plus_herdr` and `herdr_graded` PASSED while listed, `driver leaf inventory (25 sites…)`,
+`journal_resume PASS rows=13`. Between `d5edebf` and `2c0fa52` only P4 Parts 1–3 landed, each with
+its own gates.
+
+**Judgment calls, stated.**
+1. The harness entry takes `session_id: string`, not a `RunIdentity`: `<R'>.p0` and `R'` must be
+   one construction, so both are built from `(session_id, plan.profile, plan.info.resume_count,
+   0)` — `between_turn_request_id` and `loop_run_identity` over the same four inputs.
+2. The rewritten observation goes to the **head** of `wakes` (`seeded :: world.wakes`) rather
+   than replacing the list: identical for the live world (empty cursor); a DST world keeps the
+   observations for the resumed run's own parks (`resume_after_wake` serves `w4.r1.0.p1` from it).
+3. The no-run arms (`Aborted`, dropped) return the frame alone as a `TracedSessionResult`:
+   `Ok(plan.history)`, `suspended: None`, `final` the folded state. The live entry enters the loop
+   between turns with `suspended: None` and `run_ordinal` 0 — no traced run happened (D5).
+4. `SessionStart(R')` is emitted **and appended** by the run-opening path: it is the `run_started`
+   the `user_message` arm emits for every other run, and without it the fold would re-offer the
+   wake on the next resume. Journal order: `park, wake, run_started, history_appended(wake
+   message)`, then the run's seed, dropped by D1's arm 3.
+5. `nudges_used` is re-derived with `count_persist_nudges(plan.history)`, as `plan_resume` does for
+   a suspended boundary.
+6. `wake_outcome_of`'s `None` arm (unreachable past the fold, which refuses an outcome outside the
+   six) seeds nothing — the re-observation path — rather than a fabricated outcome.
+
+**Two findings, reported, not repaired.** (a) The fold's `resumed` arm moves `last` off a
+`Parked` boundary (`journal.ail`, `BoundaryOpen("resumed")`). A child that writes `resumed` and
+dies before `park(<R'>.p0)` — two consecutive emits in `run_v2_resume_with_conversation` — leaves
+a journal that folds to `open:resumed`, and the prior park with its wake is not re-offered. Same
+class as P4-Q4's `exit` rule; it is a fold rule of Part 1, not Part 3's. (b) Every `ailang`
+invocation warns `dependency sunholo/motoko_ext_progress_contract_guard content changed … Run
+'ailang lock'`; not run, the lock is not Part 3's.
+
+### P4 Part 1, 2026-09-14: the park and wake entries — red first, then green
+
+Base `6e2e13c` (= `d5edebf` + one docs-only commit, `RESEARCH-harness-playbook-implications.md`;
+nothing under `src/` differs, and every Part 1 anchor holds verbatim). Red commit `3e9b8e3`
+(tests only), green commit `686da16`, both on `arniwesth/013-plan003-and-herdr`, neither pushed.
+
+**T1, red at `6e2e13c`.** `ailang test src/core/journal.ail`: 32 tests, 29 passed, 3 failed.
+jest `src/session-journal.test.ts`: 44 tests, 42 passed, 2 failed.
+
+| # | test | red because |
+|---|---|---|
+| 1 | `test_the_twin_writes_one_entry_per_message`: `List.length(all_entry_types()) == 12` | the set held ten |
+| 2 | `test_a_journal_ending_in_a_park_folds_to_parked` (new; a host-shaped `park` line, built as `t_exit_line` is) | refused `Entry(seq, "type=park")` at the unknown-type arm. The old unknown-type row's mutation moved to `not_an_entry` and stayed green (W3 flip 2's pattern) |
+| 3 | `test_the_twin_writes_park_then_wake` (new) | `twin_event`'s `_ => acc` dropped both lines |
+| 4 | `session-journal.test.ts` "knows exactly which events are journal-class" (flipped) and "journals a park and its wake, the wake as the park's child" (new; asserts `wake.parent_id == park.id`) | `record()` returned 0 for both types |
+
+**T1, green at `686da16`.** `ailang test src/core/journal.ail` 32/32; jest 44/44; `tsc --noEmit`
+clean. Fold fixtures, all in `test_a_journal_ending_in_a_park_folds_to_parked`: park →
+`Parked(p, None)` with the waits read back `h1,op`; park,wake → `Parked(p, Some(w))`;
+park,wake,run_started → `open:run_started`; park,exit → `Parked(p, None)`; park,wake,exit →
+`Parked(p, Some(w))`; park,wake(aborted) → `open:wake:aborted`; a wake for another request, a
+wake with no park, a second wake → `Entry(seq, "request_id")`; a non-descriptor `waits` element
+and an empty `waits` → `Entry(seq, "waits")`; an outcome outside the six → `Entry(seq, "outcome")`;
+a missing `step` → `Entry(seq, "step")`; `plan_resume` of a parked session: `suspended` `None`,
+`boundary` `"parked"` in `resume_view_json`. The twin test also pins the twin's `waits` bytes equal
+to the host-shaped bytes, and folds the twin's journal to the answered park.
+
+**T2, unchanged and green at `686da16`.** `make journal_resume` PASS rows=13, `SessionResumed`
+projected 2 == returned 2. `make stream_parity` PASS, the `JournalFold` family clean over the
+real run, wire 14 == trace 14. `make park_wake` PASS, 17 fixtures. `make event_vocabulary`:
+45 `LedgerEvent` variants == 45 rows == 45 goldens, unchanged — no new `LedgerEvent`, so
+`event_vocabulary_version()` does not move. `ailang check` on `rpc.ail`, `dst_invariants.ail`
+and `scripts/fold_live_journal.ail` clean. No `session.ail` edit; `ParkEnteredInfo` and its
+golden untouched (P4-Q6).
+
+**Two findings, reported, not repaired.** (a) `bun run test` in `src/tui`: 404/404 tests pass,
+but five suites fail to LOAD, identically with Part 1's files reverted to base:
+`compose-output-validator`, `compose_guard_semiformal`, `env-server` and `scratchpad/loopback`
+die in express → body-parser → depd with `callSite.getFileName is not a function` under bun
+1.4.2; `test/path-guard` is a jest worker crash. None imports the journal, the logger or
+`runtime-process`. (b) Every `ailang` invocation warns `dependency
+sunholo/motoko_ext_progress_contract_guard content changed … Run 'ailang lock'`; not run, the
+lock is not Part 1's.
+
+**One judgment call, stated.** An empty `waits` list is refused at `waits`, beside the
+non-descriptor element the plan named: ADR-002 D2 makes the park the request's open waits, and
+`dst_invariants.park_payload_step` refuses an empty list on the wire, so the fold agrees with the
+wire rather than accepting a park with nothing to wait for.
 
 ### P3 Part 6, 2026-09-12: the eval-harness finding, and the loggers' exit
 
