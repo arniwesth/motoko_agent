@@ -3,7 +3,7 @@
 **Goal:** Empirically test whether Gemma 4 writes F# materially better than it writes AILANG. This answers the foundational question gating the F# → AILANG transpiler idea.
 
 **Infrastructure:**
-- **Inference:** Gemma 4 26B A4B-it running locally on NVIDIA DGX Spark at `http://100.79.48.75:8000/v1` (OpenAI-compatible)
+- **Inference:** Gemma 4 26B A4B-it running locally on NVIDIA DGX Spark at `http://<dgx-host>:8000/v1` (OpenAI-compatible)
 - **Harness:** AILANG eval harness (`ailang/internal/eval_harness/`), extended with F# support, running on this host machine
 - **F# runtime:** .NET SDK (`dotnet fsi`) installed on host machine
 
@@ -239,7 +239,7 @@ The v0.9.0 baselines cover GPT-5, Claude, and Gemini models but NOT the local Ge
 
 ```bash
 for SEED in 42 43 44; do
-  OPENAI_BASE_URL=http://100.79.48.75:8000/v1 \
+  OPENAI_BASE_URL=http://<dgx-host>:8000/v1 \
   ailang eval-suite \
     --models openai/google/gemma-4-26B-A4B-it \
     --langs ailang \
@@ -256,7 +256,7 @@ done
 
 ```bash
 for SEED in 42 43 44; do
-  OPENAI_BASE_URL=http://100.79.48.75:8000/v1 \
+  OPENAI_BASE_URL=http://<dgx-host>:8000/v1 \
   ailang eval-suite \
     --models openai/google/gemma-4-26B-A4B-it \
     --langs fsharp \
@@ -273,7 +273,7 @@ done
 
 ```bash
 for SEED in 42 43 44; do
-  OPENAI_BASE_URL=http://100.79.48.75:8000/v1 \
+  OPENAI_BASE_URL=http://<dgx-host>:8000/v1 \
   ailang eval-suite \
     --models openai/google/gemma-4-26B-A4B-it \
     --langs fsharp-constrained \

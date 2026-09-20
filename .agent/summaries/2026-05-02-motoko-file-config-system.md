@@ -57,7 +57,7 @@ The repo default `.motoko/config.toml` was changed to match `make run_test_local
 - `EDIT_MODE=hashline`
 - `MOTOKO_PLAIN_VERBOSE_STREAM=1`
 - `MOTOKO_AI_OPTIONS_JSON={"chat_template_kwargs":{"enable_thinking":true, "thinking_token_budget":256}}`
-- `OPENAI_BASE_URL=http://100.79.48.75:8000/v1`
+- `OPENAI_BASE_URL=http://<dgx-host>:8000/v1`
 - `CORE_EXT_ORDER=context_mode,exa_search`
 - `HYBRID_TOOLS=1`
 

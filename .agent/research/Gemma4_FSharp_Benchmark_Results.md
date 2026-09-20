@@ -1,7 +1,7 @@
 # Gemma 4 F# Benchmark Results
 
 Date: 2026-04-18 (UTC)
-Model: `openai/google/gemma-4-26B-A4B-it` via `OPENAI_BASE_URL=http://100.79.48.75:8000/v1`
+Model: `openai/google/gemma-4-26B-A4B-it` via `OPENAI_BASE_URL=http://<dgx-host>:8000/v1`
 Harness: `ailang eval-suite` with self-repair enabled
 
 Research context:
