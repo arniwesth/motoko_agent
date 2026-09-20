@@ -1,0 +1,19 @@
+# P0.2 mutgate spec — ADR-001 (031) boundary probe suite.
+# Each row breaks THE BEHAVIOUR ITS ROW NAMES and must turn that row red.
+# Row 1 uses the make target itself (P0.2's green criterion); rows 2-7 assert one
+# row each, so a red is attributable to that row and not to a neighbour.
+#
+# NO PIPES IN A test_cmd. mutgate.sh runs `eval` under its own `set -o pipefail`
+# (:35, :62), and `grep -q` exits at the first match, so the suite upstream of it
+# takes SIGPIPE and the pipeline returns 141 — a BASELINE RED that says nothing
+# about the row. Measured while building this spec: the piped form scored
+# baseline red / mutated red on a row that discriminates perfectly. So each row
+# redirects to a log and greps the FILE.
+# fix_id	target_file	sed_expr	test_cmd
+p02_g3_lim6_escape	scripts/dst/fixtures/adr001_boundary/n_pure_passthru_captured.ail	s/func build() -> Slot ! {IO}/func build() -> Slot/	make declared_vs_performed
+p02_g4_lim18_binding	scripts/dst/fixtures/adr001_boundary/v7_mkmod.ail	s/func body(_ctx: Ctx) -> int { 2 }/func body(_ctx: Ctx) -> int { 1 }/	./scripts/dst/run_declared_vs_performed.sh > /tmp/p02_p02_g4_lim18_binding.log 2>&1; grep -qF "✓ LIMITATION 18 still holds" /tmp/p02_p02_g4_lim18_binding.log
+p02_g1_named_control	scripts/dst/fixtures/adr001_boundary/named.ail	s/let _ = println(ctx.name); //	./scripts/dst/run_declared_vs_performed.sh > /tmp/p02_p02_g1_named_control.log 2>&1; grep -qF "✓ GROUP 1 (named)" /tmp/p02_p02_g1_named_control.log
+p02_g2_clean_control	scripts/dst/fixtures/adr001_boundary/clean.ail	s/-> int { 1 })/-> int { 2 })/	./scripts/dst/run_declared_vs_performed.sh > /tmp/p02_p02_g2_clean_control.log 2>&1; grep -qF "✓ GROUP 2 (clean)" /tmp/p02_p02_g2_clean_control.log
+p02_2a_lim3_missing	scripts/dst/fixtures/adr001_boundary/missingport.ail	s/ctx.ports.emit(ctx.name)/println(ctx.name)/	./scripts/dst/run_declared_vs_performed.sh > /tmp/p02_p02_2a_lim3_missing.log 2>&1; grep -qF "✓ LIMITATION 3 still holds" /tmp/p02_p02_2a_lim3_missing.log
+p02_provenance	scripts/dst/fixtures/adr001_boundary/named_static_constant.ail	s/let policy = 7/let policy = 8/	./scripts/dst/run_declared_vs_performed.sh > /tmp/p02_p02_provenance.log 2>&1; grep -qF "✓ PROVENANCE:" /tmp/p02_p02_provenance.log
+p02_imported_sum_pin	scripts/dst/run_declared_vs_performed.sh	s/^ADR_LOCALSUM_PINNED=.*/ADR_LOCALSUM_PINNED="config_projection"/	./scripts/dst/run_declared_vs_performed.sh > /tmp/p02_p02_imported_sum_pin.log 2>&1; grep -qF "✓ IMPORTED-SUM MECHANISM" /tmp/p02_p02_imported_sum_pin.log

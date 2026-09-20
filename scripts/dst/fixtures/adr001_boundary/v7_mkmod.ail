@@ -1,0 +1,4 @@
+module scripts/dst/fixtures/adr001_boundary/v7_mkmod
+import scripts/dst/fixtures/adr001_boundary/boundary_types (Ctx, Capability, ToolPolicy)
+func body(_ctx: Ctx) -> int { 2 }
+export func make_hooks(_n: int) -> [Capability] { [ToolPolicy(body)] }

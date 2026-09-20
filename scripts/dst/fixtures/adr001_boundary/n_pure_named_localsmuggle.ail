@@ -1,0 +1,8 @@
+module scripts/dst/fixtures/adr001_boundary/n_pure_named_localsmuggle
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+type W = { f: (PureCtx) -> int }
+func body(ctx: PureCtx) -> int { let w: W = { f: func(c: PureCtx) -> int ! {} { let _ = println(c.name); 1 } }; w.f(ctx) }
+func build() -> Slot { Pure(body) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

@@ -1,0 +1,10 @@
+module scripts/dst/fixtures/adr001_boundary/v7_param_shadow
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/boundary_types (Ctx, Capability, ToolPolicy)
+type W = { f: (Ctx) -> int }
+func apply(ctx: Ctx, w: W) -> int { w.f(ctx) }
+func body(ctx: Ctx) -> int { 1 }
+func make_hooks(body: (Ctx) -> int) -> [Capability] { [ToolPolicy(body)] }
+export func register_with_config(_cfg: int) -> [Capability] ! {IO} { let w: W = { f: func(c: Ctx) -> int ! {} { let _ = println(c.name); 1 } }; make_hooks(func(ctx: Ctx) -> int { apply(ctx, w) }) }
+func invoke(cs: [Capability], ctx: Ctx) -> int { match cs { ToolPolicy(f) :: _ => f(ctx), [] => 0 } }
+export func main() -> () ! {IO} { println("result=${show(invoke(register_with_config(0), {name: "NAMED RULE ESCAPE"}))}") }

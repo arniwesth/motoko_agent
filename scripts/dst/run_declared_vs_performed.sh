@@ -1029,6 +1029,396 @@ else
 fi
 rm -f "$LIMMOD"
 
+# ============================================================================
+# P0.2: THE ADR-001 (031) REGISTRATION-BOUNDARY PROBE SUITE
+# ============================================================================
+#
+# PLAN-001 (031) §2 P0.2, ADR-001 (031) freeze evidence 2(a) and 2(b). Seven
+# reviews of ADR-001 produced a body of compiler probes -- attacks, controls and
+# escapes -- that lived only as quoted sources inside review appendices. This
+# section gives them a home and makes them a REGRESSION: the fixtures are in
+# `scripts/dst/fixtures/adr001_boundary/`, one file per case, and every case has
+# a row here with its own expected result.
+#
+# WHAT THIS SECTION IS EVIDENCE OF, AND WHAT IT IS NOT. It measures the BARE
+# COMPILER on the pin. The registration boundary itself -- ADR D2's shape rule
+# in scoping order -- is P0.3 and does not exist yet. So the group-3 rows below
+# record the escapes as ACCEPTED. That is the documented pre-boundary state, not
+# a failure: it is the measurement P0.3's gate will later be scored against, and
+# it is the whole point of writing the suite first. When P0.3 lands, these rows
+# do not change; the gate's own fixtures go red beside them.
+#
+# WHY THE IMPORTED-SUM MECHANISM, AND NOT `write_lim`'s LOCAL SUM. Read the B8
+# comment at the head of the IMPORTED-SUM block above: for a sum type IMPORTED
+# from another module the compiler unifies a constructor argument's row against
+# the payload row as CLOSED rows, and that REVERSES the local-sum verdicts. The
+# real registration boundary imports `Capability` from the ABI (ADR N48), so a
+# probe built on a LOCAL sum measures the permissive position and proves less
+# than it appears to. Every fixture here therefore imports its capability sum
+# from a sibling module -- `types.ail` (`Slot`, `FsSlot`) or `boundary_types.ail`
+# (`Capability`) -- exactly as `write_abi_ctor` imports the ABI's. The two cases
+# that declare their sum locally are DERIVED and named by the row below rather
+# than left for a reader to discover, because for those two the escape is
+# evidence in the weaker position.
+#
+# THE FOUR GROUPS (ADR freeze 2(b)), each with its own expected result:
+#   1  compiler-rejected controls      the compiler itself rejects, by its own mechanism
+#   2  compiler-accepted ordinary      legitimate registrations that must keep compiling
+#   3  compiler-accepted escapes       accepted bare; the BOUNDARY must reject them
+#   4  compiler-clean, boundary-rejected  the import shadow the rule over-rejects BY DESIGN
+# and, kept separate because ADR item 2 says the three classes never substitute
+# for one another (N23):
+#   2(a) missing authority            accepted; dies AT INVOCATION on a missing field
+#
+# A GROUP'S DENOMINATOR IS FIXED BY ITS MEMBERSHIP. A new case is a NEW ROW. No
+# case is moved between groups to make a count come out, and the class-2(a) rows
+# are NOT folded into any 2(b) group -- a runtime missing-field failure is not an
+# ambient-effect escape and cannot stand in for one.
+#
+# THE ROW IDIOM is the file's own two-sided one (`:751-771`): where the row
+# measures something the pinned compiler ACCEPTS, an upstream fix must turn the
+# row RED so the controls get re-read, so it is written `ok "LIMITATION n still
+# holds …"` / `bad "LIMITATION n IS FIXED UPSTREAM …"`. LIMITATION 1 and 2 are
+# taken above; these are 3 onward. Groups 1 and 2 are CONTROLS, not limitations:
+# their expected result is the compiler's correct behaviour, so their polarity is
+# the other way round and they are not numbered.
+#
+# WHERE THE FIXTURES CAME FROM. Every fixture is the source QUOTED in a review
+# appendix, re-pathed and not otherwise touched; the first row below re-derives
+# them from the review documents and fails if any has drifted. Cases that exist
+# only as a table row or a prose description in a review are NOT here -- see the
+# `NOT_FIXTURES` note and P0.2's envelope.
+#
+# WHY THE DIRECTORY IS `adr001_boundary` AND NOT `adr001-boundary`. PLAN-001 §0
+# item 6 names the hyphenated spelling. The pinned compiler refuses a hyphen in
+# a module or import path (`PAR_HYPHEN_IN_MODULE ... parsed as subtraction`), and
+# this suite's entire mechanism is a fixture importing its sum from a sibling
+# module. The directory is therefore spelled with an underscore, under the plan's
+# own "a part may move one with the reason recorded" clause. The reason is a
+# compiler verdict.
+
+echo ""
+echo "-- P0.2: ADR-001 (031) registration-boundary probe suite (freeze evidence 2(a), 2(b)) --"
+
+ADR_FX=scripts/dst/fixtures/adr001_boundary
+
+# PROVENANCE, AS A CHECK RATHER THAN A PROMISE. "The fixture is the review's
+# quoted source" is the claim the whole suite rests on -- a re-invented case
+# would measure the drafter's idea of the attack rather than the attack the
+# review ran. So it is re-derived here from the five review documents.
+if adr_prov=$(python3 scripts/dst/adr001_boundary_provenance.py verify 2>&1); then
+  ok "PROVENANCE: $(echo "$adr_prov" | tail -1)"
+else
+  bad "PROVENANCE: a boundary fixture is not the source quoted in its review appendix, so every row below measures something other than the case the review ran: $(echo "$adr_prov" | tail -3 | tr '\n' ' ')"
+fi
+
+# DERIVED, NOT WRITTEN, AND PINNED MEMBER-FOR-MEMBER: which cases measure on the
+# imported sum. See the B8 rationale above. A COUNT would let one case quietly
+# take another's place, so the exceptions are pinned BY NAME: the two cases the
+# reviews wrote on a locally declared sum, plus the one that registers nothing at
+# all. The row goes red if that set changes in either direction -- a case that
+# stopped binding through an imported sum has moved to the permissive position
+# and its verdict no longer means what this suite says it means.
+ADR_LOCALSUM_PINNED="config_projection n_dec_prepare_escape v7_describe_config"
+adr_localsum=$(for f in "$ADR_FX"/*.ail; do
+  n=$(basename "$f" .ail)
+  case "$n" in types|helpers|boundary_types|v7_mkmod) continue;; esac
+  grep -qE "^import $ADR_FX/(types|boundary_types) \(.*(Slot|FsSlot|Capability)" "$f" || echo "$n"
+done | sort | tr '\n' ' ' | sed 's/ $//')
+adr_n_local=$(echo $adr_localsum | wc -w | tr -d ' ')
+adr_n_cases=$(ls "$ADR_FX"/*.ail | wc -l | tr -d ' ')
+adr_n_cases=$((adr_n_cases - 4))
+if [ "$adr_localsum" = "$ADR_LOCALSUM_PINNED" ]; then
+  ok "IMPORTED-SUM MECHANISM: $((adr_n_cases - adr_n_local)) of $adr_n_cases cases bind their payload into a sum IMPORTED from a sibling module, the position the real ABI puts the boundary in (B8 above; ADR N48). The $adr_n_local exceptions are the pinned set: n_dec_prepare_escape and v7_describe_config declare their sum LOCALLY, which is the PERMISSIVE position, so their verdicts are not imported-sum evidence; config_projection registers no capability at all and is the configuration-channel control"
+else
+  bad "IMPORTED-SUM MECHANISM CHANGED: the cases NOT binding through an imported sum are now [$adr_localsum], pinned [$ADR_LOCALSUM_PINNED]. The local-sum verdicts are known to REVERSE against the imported ABI (B8 above), so a case that left the imported position no longer measures where the registration boundary is -- re-site it, or re-read every verdict it supports, before moving this pin"
+fi
+
+adr_chk() { ailang check "$ADR_FX/$1.ail" 2>&1; }
+adr_run() { ailang run --caps IO,FS --entry main "$ADR_FX/$1.ail" </dev/null 2>&1; }
+adr_err() { echo "$1" | grep -E '^Error' | head -1; }
+# Run output is matched with newlines flattened, so a row's evidence regex may
+# span the lines of a multi-line result (config_projection's two questions).
+adr_flat() { echo "$1" | tr '\n' ' '; }
+
+g1_n=0; g1_held=0
+g2_n=0; g2_held=0
+g3_n=0; g3_held=0
+g4_n=0; g4_held=0
+ga_n=0; ga_held=0
+
+# GROUP 1 -- compiler-rejected controls. The expected result is a REJECTION, and
+# `$2` is the row's OWN mechanism: a rejection that lands for another reason
+# (a typo, a missing import, an undefined name) would certify nothing, which is
+# the failure WI-D6 hit while building the compile-time control above.
+adr_g1() {   # $1 case, $2 reason regex, $3 what it establishes
+  g1_n=$((g1_n+1))
+  local out
+  if out=$(adr_chk "$1"); then
+    bad "GROUP 1 ($1): the pinned compiler ACCEPTED a control it rejected in the review that sourced it — $3. The named arm has weakened: re-read ADR D2 layer (b) and every escape row below, which are only interesting against a compiler that rejects this"
+  elif echo "$out" | grep -qE "$2"; then
+    ok "GROUP 1 ($1): REJECTED by its own mechanism (/$2/) — $3"
+    g1_held=$((g1_held+1))
+  else
+    bad "GROUP 1 ($1): rejected, but NOT by its own mechanism (expected /$2/), so the row establishes nothing about $3: $(adr_err "$out")"
+  fi
+}
+
+# GROUP 2 -- compiler-accepted ordinary controls. Expected: compiles, runs, and
+# produces its own benign result. A rejection here means the boundary's supported
+# grammar stopped compiling, which breaks every legitimate extension.
+adr_g2() {   # $1 case, $2 expected run output regex, $3 what it establishes
+  g2_n=$((g2_n+1))
+  local out rout
+  if ! out=$(adr_chk "$1"); then
+    bad "GROUP 2 ($1): an ORDINARY control no longer COMPILES — $3. This is the direction that breaks legitimate registrations, not the direction that closes an escape: $(adr_err "$out")"
+    return
+  fi
+  if ! rout=$(adr_run "$1"); then
+    bad "GROUP 2 ($1): compiles but FAILS AT INVOCATION — $3. An ordinary control that cannot run is not a control: $(echo "$rout" | grep -E '^Error' | head -1)"
+    return
+  fi
+  if adr_flat "$rout" | grep -qE "$2"; then
+    ok "GROUP 2 ($1): compiles and runs clean (/$2/) — $3"
+    g2_held=$((g2_held+1))
+  else
+    bad "GROUP 2 ($1): compiles and runs, but its result is not /$2/, so the control no longer witnesses $3"
+  fi
+}
+
+# GROUP 3 -- compiler-accepted escapes. THE LIMITATION ROWS. Each is accepted by
+# the bare compiler AND performs its effect at invocation, and each must be
+# rejected by the D2 boundary (P0.3). `$3` is the effect evidence in the run
+# output: acceptance alone is not an escape -- an accepted case that performs
+# nothing is a group-2 or group-4 row, not this.
+adr_g3() {   # $1 limitation number, $2 case, $3 effect-evidence regex, $4 what still holds, $5 what a fix invalidates
+  g3_n=$((g3_n+1))
+  local out rout
+  if ! out=$(adr_chk "$2"); then
+    bad "LIMITATION $1 IS FIXED UPSTREAM: $5 ($2 is now rejected at check: $(adr_err "$out"))"
+    return
+  fi
+  if ! rout=$(adr_run "$2"); then
+    bad "LIMITATION $1 ($2): the pinned compiler still ACCEPTS the construction, but it no longer PERFORMS at invocation. The row can no longer tell an escape from a compile-only curiosity — re-measure before citing it: $(echo "$rout" | grep -E '^Error' | head -1)"
+    return
+  fi
+  if adr_flat "$rout" | grep -qE "$3"; then
+    ok "LIMITATION $1 still holds: $4 — fb_30e82f6bdc5fc8c3"
+    g3_held=$((g3_held+1))
+  else
+    bad "LIMITATION $1 ($2): accepted and ran, but the escape evidence /$3/ is ABSENT from the output, so this row no longer witnesses an effect performed and must not be counted as an escape"
+  fi
+}
+
+# GROUP 4 -- compiler-clean, boundary-rejected BY DESIGN. The pinned compiler
+# resolves an IMPORTED name over a local `let` of the same name (ADR fact 6,
+# N62), so the import runs and NO effect is performed. D2's rule resolves locals
+# first and therefore OVER-REJECTS this row. That is the safe direction, taken
+# deliberately, and it is scored as its own class so the over-rejection is
+# visible rather than hidden inside group 3's denominator.
+#
+# THE TICKET NAMED HERE IS DELIBERATE AND IT IS NOT THIS ROW'S MECHANISM. This
+# is import precedence, not the effect-inference gap; `fb_30e82f6bdc5fc8c3` is
+# named because PLAN-001 §0 item 10 makes both equally properties of the v0.33.0
+# pin and NOTE-001 §7 re-reads them together at a bump.
+adr_g4() {   # $1 limitation number, $2 case, $3 expected output regex, $4 escape line that must be ABSENT, $5 what still holds
+  g4_n=$((g4_n+1))
+  local out rout
+  if ! out=$(adr_chk "$2"); then
+    bad "LIMITATION $1 IS FIXED UPSTREAM: $2 no longer compiles, so the pinned import-precedence fact (ADR fact 6, N62) has changed. D2's rule was written to OVER-REJECT this case on purpose; re-read the fourth class and the gate's import-shadow fixtures: $(adr_err "$out")"
+    return
+  fi
+  if ! rout=$(adr_run "$2"); then
+    bad "LIMITATION $1 ($2): compiles but fails at invocation — the import-precedence measurement is gone: $(echo "$rout" | grep -E '^Error' | head -1)"
+    return
+  fi
+  if adr_flat "$rout" | grep -qF "$4"; then
+    bad "LIMITATION $1 IS FIXED UPSTREAM — IN THE DANGEROUS DIRECTION: $2 now performs the effect (/$4/ appeared), so v0.33.0's import precedence has REVERSED and the local shadow wins. This is no longer a compiler-clean row: it is an ESCAPE, it belongs in group 3, and ADR fact 6 and the fourth class must be re-read before anything else in this suite is trusted"
+  elif adr_flat "$rout" | grep -qE "$3"; then
+    ok "LIMITATION $1 still holds: $5 — a property of the v0.33.0 pin alongside fb_30e82f6bdc5fc8c3, though NOT that ticket: this is import precedence (ADR fact 6, N62), re-read with it at any bump (NOTE-001 §7)"
+    g4_held=$((g4_held+1))
+  else
+    bad "LIMITATION $1 ($2): ran without the effect, but the output is not /$3/, so which binding ran is no longer established and the row states nothing about import precedence"
+  fi
+}
+
+# CLASS 2(a) -- MISSING AUTHORITY. Its own ADR class (item 2(a), N23), kept out
+# of every 2(b) denominator. The callback calls a port its view does not carry;
+# `ailang check` ACCEPTS it for a lambda -- the compile-time check does not catch
+# it, and the evidence must say so -- and the call fails AT INVOCATION with a
+# missing-field failure the runtime reports as a registration defect, never as an
+# `Unavailable` an interpreter may vote on.
+adr_ma() {   # $1 limitation number, $2 case, $3 runtime error regex, $4 what still holds
+  ga_n=$((ga_n+1))
+  local out rout
+  if ! out=$(adr_chk "$2"); then
+    bad "LIMITATION $1 IS FIXED UPSTREAM: $2 is now REJECTED AT CHECK, so the compile-time check DOES catch a lambda calling a port its view lacks. That is good news and it invalidates ADR fact 1 and the 2(a) evidence's 'the compile-time check does not catch it for lambdas' sentence, which must be re-read: $(adr_err "$out")"
+    return
+  fi
+  if rout=$(adr_run "$2"); then
+    bad "LIMITATION $1 ($2): accepted at check AND COMPLETED AT RUNTIME. The missing field no longer fails the call, so a port-free view is no longer a runtime barrier either and 2(a)'s whole class is unsupported: $(echo "$rout" | tail -2 | tr '\n' ' ')"
+    return
+  fi
+  if adr_flat "$rout" | grep -qE "$3"; then
+    ok "LIMITATION $1 still holds: $4 — a host control failure of the registration, not an Unavailable; fb_30e82f6bdc5fc8c3"
+    ga_held=$((ga_held+1))
+  else
+    bad "LIMITATION $1 ($2): failed at invocation, but NOT with /$3/ — it died for some other reason and establishes nothing about missing authority: $(echo "$rout" | grep -E '^Error' | head -1)"
+  fi
+}
+
+echo ""
+echo "   class 2(a) — MISSING AUTHORITY: accepted at check, fails at invocation (ADR item 2(a), N23)"
+
+adr_ma 3 missingport "record has no field: ports" \
+  "an inline lambda calling ctx.ports.emit on a PureCtx that carries NO ports field is ACCEPTED by ailang check and fails only at invocation — the compile-time rejection ADR v0.3 claimed does not exist for lambdas (ADR fact 1)"
+adr_ma 4 missingannot "record has no field: ports" \
+  "the same call under an explicit ! {} annotation on the lambda is ACCEPTED too — annotating the payload does not make the checker see the missing field"
+adr_ma 5 fs_missing "record has no field: clock_now" \
+  "an annotated ! {FS} lambda calling clock_now, a port OUTSIDE the FsCtx view, is accepted at check and fails at invocation — a narrow view's authority is enforced by the record's shape at runtime, not by the effect row at compile time"
+
+echo ""
+echo "   group 1 — COMPILER-REJECTED CONTROLS: the named arm the compiler itself enforces"
+
+adr_g1 direct "incompatible closed rows" \
+  "an inline lambda performing println straight into the payload is rejected at the payload row"
+adr_g1 named "incompatible closed rows" \
+  "the same body as a NAMED top-level function is rejected — the named arm is what carries the effect load (ADR D2 layer (b))"
+adr_g1 captured "incompatible closed rows" \
+  "a lambda calling an effectful field of an UNTYPED captured record is rejected"
+adr_g1 capturedannot "incompatible closed rows" \
+  "the same with the payload lambda annotated ! {} is rejected at its own annotation's row"
+adr_g1 capturednamed "incompatible closed rows" \
+  "a NAMED body that builds the effectful record in its own body is rejected — a named function cannot capture, so the value must arrive by a charged call"
+adr_g1 localrecord "incompatible closed rows" \
+  "a locally-typed record's field passed DIRECTLY as the payload, Pure(w.f), is rejected — the pass-through named call is what makes the escape, not the record"
+adr_g1 localunannot "incompatible closed rows" \
+  "the same direct Pure(w.f) under an enclosing ! {IO} with the stored lambda unannotated is still rejected"
+adr_g1 localannot "incompatible closed rows" \
+  "and with the stored lambda annotated ! {} — so group 3's escapes are attributable to the intervening named call, not to the local record type"
+adr_g1 helper "record field mismatch: expected 2 fields, got 1" \
+  "the closed-record migration control: a callback cannot widen its own context by calling a helper that wants more fields — AILANG records are closed"
+adr_g1 missingnamed "record field 'ports' not found in concrete record" \
+  "the same missing-port body as a NAMED function IS caught at compile time — which is exactly what class 2(a) above shows lambdas escape"
+adr_g1 missingworld "record field 'world' not found in concrete record" \
+  "reading ctx.world from a view that has no world token is rejected — PureCtx drops the world as well as the ports"
+adr_g1 n_pure_named_localsmuggle "incompatible closed rows" \
+  "a NAMED body building the local record in its own body is rejected — the fourth review's escape does not survive being named"
+adr_g1 n_pure_passthru_capturedfn "incompatible closed rows" \
+  "the pass-through capturing a BARE FUNCTION VALUE instead of a record is rejected — the carrier must be a record FIELD, which is the 017 hole"
+adr_g1 n_pure_passthru_xmod "let annotation w" \
+  "the same pass-through with the record type IMPORTED is rejected AT THE LET — a cross-module record type closes the escape, and this is where a migrated ABI type puts it"
+adr_g1 fs_direct "Effect checking failed for function 'build'" \
+  "an inline lambda performing IO inside an FS view is charged to the enclosing build"
+adr_g1 fs_named "Effect checking failed for function 'body'" \
+  "the same body named is charged to the named function itself"
+adr_g1 fs_direct_io "lambda at .* uses effects not declared in its" \
+  "with the enclosing row widened to admit IO, the lambda is rejected AT ITS OWN ANNOTATION — so fs_direct's rejection is the row's doing, not the call being malformed"
+adr_g1 fs_named_io "Effect checking failed for function 'body'" \
+  "the named variant under the same widened enclosing row is still charged to the named function — the enclosing row never absorbs a named atom"
+adr_g1 fs_smuggle_norow "Effect checking failed for function 'build'" \
+  "dropping the enclosing ! {IO} turns the group-3 fs_smuggle escape into a rejection — the attribution control that makes that escape a positional fact"
+adr_g1 n_fs_named_localsmuggle "Effect checking failed for function 'body'" \
+  "the FsCtx smuggle inside a NAMED body is charged to it"
+adr_g1 n_fs_named_indirect "Effect checking failed for function 'body'" \
+  "and a named ! {IO} MAKER of the record does not help either — the call is charged"
+adr_g1 q_named_recfield_named "incompatible closed rows" \
+  "a local record field holding println under a FALSE ! {} row is charged to the callback (fifth review's A.3 arm)"
+adr_g1 q_named_toplevel_apply "Effect checking failed for function 'w'" \
+  "a MODULE-LEVEL let holding the effectful record is itself effect-checked as a rowless function — the one place a value could arrive without a call is closed"
+adr_g1 named_match_record "Effect checking failed for function 'body'" \
+  "an effectful local lambda inside a MATCHED record is charged to the named body"
+adr_g1 named_list_lambda "incompatible closed rows" \
+  "the same inside a LIST is rejected"
+adr_g1 named_tuple_lambda "incompatible closed rows" \
+  "the same inside a TUPLE is rejected"
+adr_g1 named_module_env "Effect checking failed for function 'policy'" \
+  "a module-level INITIALIZER reading the environment is charged to itself, with Missing effects: Env — registration-time ambient reads are not free"
+
+echo ""
+echo "   group 2 — COMPILER-ACCEPTED ORDINARY CONTROLS: what must keep compiling"
+
+adr_g2 clean "result=1" \
+  "the ordinary pure registration compiles, runs and performs nothing"
+adr_g2 registration_record "result=1" \
+  "D2's supported return shape { config: Json, caps: [Capability] } with a NAMED payload compiles, runs and performs nothing — the grammar the boundary is written around"
+adr_g2 named_static_constant "result=7" \
+  "a named callback MAY read a pure module-level constant: that is code, versioned, not registration state (sixth review), and the boundary must not reject it"
+adr_g2 config_projection "question A.*question B" \
+  "two different ext_config values project to two DIFFERENT questions under an unchanged policy state — the configuration channel D2 relies on. A control, not a registration"
+adr_g2 v7_describe_config "configured=1 empty=0" \
+  "a DescribeTools-shaped named callback whose catalog DIFFERS between a configured and an empty tool set (N49) — measured on a LOCALLY declared sum, see the imported-sum row above"
+
+echo ""
+echo "   group 3 — COMPILER-ACCEPTED ESCAPES: accepted bare, and the D2 boundary (P0.3) must reject every one"
+
+adr_g3 6 n_pure_passthru_captured "EFFECT WITH NO PORTS OR WORLD" \
+  "an inline PASS-THROUGH lambda that captures a locally-typed record and hands it to a named function performs IO from a PureCtx with no ports and no world (ADR fact 4)" \
+  "the pass-through escape is closed: ADR fact 4, D2's 'this is why there is no pass-through arm' rationale and this group's denominator must all be re-read"
+adr_g3 7 n_pure_passthru_unannot "EFFECT WITH NO PORTS OR WORLD" \
+  "the same pass-through with the stored lambda UNANNOTATED escapes too (fifth review N44, correcting the fourth review's table) — the ! {} annotation was never the precondition" \
+  "the unannotated variant no longer escapes: N44's correction is spent and the fourth review's original table reading is restored"
+adr_g3 8 n_fs_passthru_captured2 "IO OUTSIDE FS VIEW" \
+  "the same construction performs OUT-OF-ROW IO from the narrow FsCtx view — a per-slot view restricts supplied authority but does not close this door" \
+  "narrow views now bound the pass-through: D2's residual for narrow slots shrinks and the per-slot view mitigation becomes structural rather than partial"
+adr_g3 9 n_dec_prepare_escape "EXFIL candidate=secret candidate text" \
+  "the same construction at D2's REAL prepare arity exfiltrates the candidate text through a pure slot — measured on a LOCALLY declared sum (see the imported-sum row above)" \
+  "the prepare arity is no longer reachable by the pass-through; re-measure it on an IMPORTED sum before recording it as closed, because this case's sum is local"
+adr_g3 10 q_named_paren_apply "EFFECT WITH NO PORTS OR WORLD" \
+  "the PARENTHESIZED spelling (w.f)(ctx) escapes as readily as the dotted one, and the transitive walk cannot see it at all (_APPLY needs an identifier before the parenthesis)" \
+  "the parenthesized spelling is rejected; the walk's blind spot at _APPLY stops being load-bearing and D2 layer (c)'s limits can be re-read"
+adr_g3 11 q_named_partial "EFFECT WITH NO PORTS OR WORLD" \
+  "a PARTIAL APPLICATION in payload position, Pure(apply_w(w)), compiles and performs — nothing but the shape rule can stop a call expression there" \
+  "a call expression in payload position is now rejected by the compiler, so the shape rule's partial-application clause is belt-and-braces rather than the only enforcement"
+adr_g3 12 q_named_shadow "EFFECT WITH NO PORTS OR WORLD" \
+  "a local let body SHADOWING a top-level func body registers the lambda and performs from PureCtx — a binding that LOOKS named is not necessarily one (ADR fact 5)" \
+  "shadowing is rejected by the compiler; D2's locals-first resolution stops being the only thing standing between a reader and the wrong body"
+adr_g3 13 delegate_shadow "NAMED RULE ESCAPE" \
+  "a local let make_hooks shadowing a DELEGATED top-level func make_hooks performs, while a reader that resolves the delegation to the top-level declaration certifies a body that never runs (ADR fact 6)" \
+  "the delegated shadow is rejected; N51's 'checking the final binding cannot repair a shadowed delegation' and the per-hop scope chain lose their motivating case"
+adr_g3 14 v7_param_shadow "NAMED RULE ESCAPE" \
+  "a payload bound to a PARAMETER that shadows a top-level function performs, and the tool certifies it as that function because it never reads a signature (seventh review)" \
+  "the parameter shadow is rejected; N63's 'func_body must return the signature's parameter names' loses its motivating case and the gate's fx_param_shadow fixture becomes redundant"
+adr_g3 15 v7_delegate_param "NAMED RULE ESCAPE" \
+  "the same one hop earlier: the DELEGATED CALLEE is a parameter shadowing a top-level function" \
+  "the delegated parameter is rejected; the per-hop (module, parameters, lets) chain loses its second motivating case"
+adr_g3 16 computed_list "NAMED RULE ESCAPE" \
+  "a COMPUTED capability list (if … then [ToolPolicy(…)] else []) compiles and performs, and a reader that enumerates only LITERAL lists never sees its payload" \
+  "computed lists are rejected by the compiler; N52's 'zero rejections is insufficient when the registration was never enumerated' loses its case and the totality criterion can be re-read"
+adr_g3 17 fs_smuggle "IO OUTSIDE FS VIEW" \
+  "a record-FIELD payload bound straight into the capability, Fs(w.f), performs out-of-row IO from FsCtx — the 017 record-field hole in payload position, and the oldest escape in this suite (third review)" \
+  "record-field payload rows are checked upstream; LIMITATION 1 above must have gone red with it, and control_env/control_fs — built through that same door — can no longer be constructed"
+
+echo ""
+echo "   group 4 — COMPILER-CLEAN, BOUNDARY-REJECTED BY DESIGN: the import shadow D2 over-rejects"
+
+adr_g4 18 v7_delegate_import_shadow "result=2" "NAMED RULE ESCAPE" \
+  "on v0.33.0 an IMPORTED make_hooks outranks a local let make_hooks of the same name: the import runs, the result is 2 and NO effect is performed — so D2's stricter locals-first order OVER-REJECTS a compiler-clean registration, deliberately and in the safe direction"
+
+# ============================================================================
+# THE SCORE. Each group's denominator is its MEMBERSHIP, printed here so that a
+# later part cannot quietly move a case between groups to make a count come out:
+# the counts are derived from the rows that ran, not asserted.
+# ============================================================================
+echo ""
+echo "   -- P0.2 group scores (ADR freeze 2(b), plus 2(a) kept separate) --"
+printf '      %-46s %s\n' "class 2(a) missing authority (accepted, dies at call)" "$ga_held/$ga_n"
+printf '      %-46s %s\n' "group 1  compiler-rejected controls"                   "$g1_held/$g1_n"
+printf '      %-46s %s\n' "group 2  compiler-accepted ordinary controls"          "$g2_held/$g2_n"
+printf '      %-46s %s\n' "group 3  compiler-accepted escapes (boundary must reject)" "$g3_held/$g3_n"
+printf '      %-46s %s\n' "group 4  compiler-clean, boundary-rejected by design"  "$g4_held/$g4_n"
+adr_scored=$((ga_n + g1_n + g2_n + g3_n + g4_n))
+if [ "$adr_scored" -eq "$adr_n_cases" ]; then
+  ok "EVERY FIXTURE IS SCORED: $adr_scored cases in $ADR_FX, $adr_scored rows, each in exactly one class"
+else
+  bad "FIXTURE/ROW MISMATCH: $ADR_FX holds $adr_n_cases cases but only $adr_scored are scored. An unscored fixture is a probe nobody reads — give it a row in the class its measured result puts it in, and never by widening an existing group's denominator"
+fi
+if [ "$g3_held" -eq "$g3_n" ] && [ "$g3_n" -gt 0 ]; then
+  echo "      RED-FIRST RECORD: all $g3_n group-3 escapes are ACCEPTED by the bare compiler on the pin."
+  echo "      That is the documented PRE-BOUNDARY state. The D2 shape gate (P0.3) does not exist yet;"
+  echo "      when it lands it must reject all $g3_n of them, and these rows do not move."
+fi
+
 # THE FOURTH LIMITATION PROBE: CONSUMPTION / MATCH-OUT POSITION (ADR-001 Phase B,
 # B1; decides plan D9). The previous rows all bound a hook at CONSTRUCTION. D9
 # asks the consumer-side of the same hole: once a capability payload is matched

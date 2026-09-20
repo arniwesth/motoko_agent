@@ -1,0 +1,7 @@
+module scripts/dst/fixtures/adr001_boundary/localannot
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+type W = { f: (PureCtx) -> int }
+func build() -> Slot ! {IO} { let w: W = { f: func(ctx: PureCtx) -> int ! {} { let _ = println(ctx.name); 1 } }; Pure(w.f) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

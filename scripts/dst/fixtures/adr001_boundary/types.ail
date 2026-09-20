@@ -1,0 +1,5 @@
+module scripts/dst/fixtures/adr001_boundary/types
+export type PureCtx = { name: string }
+export type Slot = Pure((PureCtx) -> int)
+export type FsCtx = { name: string, world: int, ports: { file_read: (int, string) -> string ! {FS} } }
+export type FsSlot = Fs((FsCtx) -> int ! {FS})

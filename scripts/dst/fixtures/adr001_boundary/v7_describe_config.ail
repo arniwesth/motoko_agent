@@ -1,0 +1,9 @@
+module scripts/dst/fixtures/adr001_boundary/v7_describe_config
+import std/io (println)
+import std/json (Json, JString, JNull)
+import std/list (length)
+type Cap = Describe((Json) -> [string]) | Other(int)
+func describe(cfg: Json) -> [string] { match cfg { JString(s) => [s], _ => [] } }
+func caps() -> [Cap] { [Describe(describe)] }
+func schemas(cs: [Cap], cfg: Json) -> [string] { match cs { Describe(f) :: rest => f(cfg) ++ schemas(rest, cfg), _ :: rest => schemas(rest, cfg), [] => [] } }
+export func main() -> () ! {IO} { println("configured=${show(length(schemas(caps(), JString("tool"))))} empty=${show(length(schemas(caps(), JNull)))}") }
