@@ -1,0 +1,296 @@
+-- scripts/verify_delegate_kind_required.ail
+--
+-- A `Delegate` with no `kind` is REFUSED when the operator permits more than one
+-- kind and set no default. Measured failure, not a hypothetical: in the
+-- PLAN-001 live run (2026-09-05, `HERDR_ALLOWED_KINDS=claude,motoko`) the model
+-- called `Delegate` twice without `kind`, `register.ail` fell back to
+-- `default_kind()` = claude, two claude-code panes started against a task
+-- written for motoko workers, both were gone before producing anything, and the
+-- operator's first report of the session was "it started claude code instances
+-- and not motoko".
+-- (`.agent/projects/021_herdr_delegation/DESIGN-delegate-model-selection.md`,
+-- status paragraph; `MEASUREMENTS-2026-09-05-plan001-live-run.md` finding 3.)
+--
+-- WHAT IS PINNED, and the four cases are the four corners of one condition —
+-- `cfg.kind == "" && allowed_kind_count(allowed) > 1`:
+--
+--   1. several allowed, no operator default, no kind on the call -> REFUSED,
+--      and refused BEFORE a pane is split, because the whole point is not to
+--      spend a pane on a guess
+--   2. several allowed, the model named one -> proceeds
+--   3. ONE allowed, no kind on the call -> still defaults to it. This is the
+--      shipped configuration and it must not have changed.
+--   4. several allowed but the operator set HERDR_DELEGATE_KIND -> proceeds on
+--      that. An operator's choice is a decision, not a guess, which is why
+--      `register.ail` now leaves `cfg.kind` EMPTY when the variable is unset —
+--      before, `claude` meant both "the operator chose claude" and "nobody
+--      chose", and no caller could tell them apart.
+--
+--   5. AND THE SCHEMA AGREES WITH THE HANDLER. A schema that says "omit it
+--      unless you have a reason" while the handler refuses the omission costs a
+--      turn every time and the model can only find out by being refused.
+--
+-- Scripted ports, no herdr and no filesystem, so it runs everywhere. The
+-- scripted `tool_handle` records each argv into the world token, so "nothing was
+-- spent" is asserted against the calls that were made.
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run \
+--     --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main scripts/verify_delegate_kind_required.ail
+module scripts/verify_delegate_kind_required
+
+import std/io (println, exit)
+import std/json (Json, jo, ja, kv, js, jnum, encode, decode, get, asArray, asString)
+import std/string (contains, join)
+import std/option (Some, None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtClockReading,
+  ToolCallEnvelope, ToolSchema,
+  Handled, Delegate, BudgetPlan, empty_ext_world
+)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle, describe_tools)
+
+-- ---------------------------------------------------------------------------
+-- The call log, carried in the world token (same shape as verify_mot137)
+-- ---------------------------------------------------------------------------
+
+func log_of(w: ExtWorld) -> [Json] {
+  match asArray(w.token) { Some(xs) => xs, None => [] }
+}
+
+func record(w: ExtWorld, entry: string) -> ExtWorld {
+  { token: ja(log_of(w) ++ [js(entry)]) }
+}
+
+func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (match asString(x) { Some(s) => s, None => "" }) :: strings_of(rest)
+  }
+}
+
+func log_text(w: ExtWorld) -> string {
+  match asArray(w.token) { None => "", Some(xs) => join("\n", strings_of(xs)) }
+}
+
+func argv_text(args_json: string) -> string {
+  match decode(args_json) {
+    Err(_) => "",
+    Ok(o) => match get(o, "args") {
+      None => "",
+      Some(a) => match asArray(a) { Some(xs) => join(" ", strings_of(xs)), None => "" }
+    }
+  }
+}
+
+func envelope(stdout: string, stderr: string, code: int) -> string {
+  encode(jo([kv("stdout", js(stdout)), kv("stderr", js(stderr)),
+             kv("exit_code", jnum(_int_to_float(code)))]))
+}
+
+func scripted(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  let argv = argv_text(args_json);
+  let w = record(world, argv);
+  if contains(argv, "pane split") then
+    { output: envelope("{\"result\":{\"pane\":{\"pane_id\":\"w1:pA\"},\"type\":\"pane_info\"}}", "", 0),
+      exit_code: 0, next_state: w }
+  else if contains(argv, "agent explain") then
+    { output: envelope("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}", "", 0),
+      exit_code: 0, next_state: w }
+  else
+    { output: envelope("{\"result\":{}}", "", 0), exit_code: 0, next_state: w }
+}
+
+func ok_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: world }
+}
+
+func ok_dir(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: true, error: "", next_state: world }
+}
+
+-- The sweep sentinel is marked done for verify_mot137's reason: MOT-133's
+-- orphan sweep has its own gate and nothing here is about it.
+func fresh_run(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, ".sweep-") then { present: true, content: "200", next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+func fixed_clock(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 1787475040757, next_state: world }
+}
+
+func ports() -> ExtPorts {
+  let base = noop_ext_ports();
+  { ai_step: base.ai_step,
+    tool_handle: scripted,
+    file_read: fresh_run,
+    file_write: ok_write,
+    file_remove: base.file_remove,
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: ok_dir,
+    clock_now: fixed_clock,
+    env_get: base.env_get }
+}
+
+func mk_ctx() -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  { task: "verify-delegate-kind", step: 0, model: "test-model", cwd: "/tmp",
+    hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
+    env_server_url: "", budget_remaining: 4, history_slice: [],
+    state_key: "test", context_limit: 0, ports: ports(),
+    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
+    world: empty_ext_world() }
+}
+
+-- `dagr_pane: false` and no session identity: the view and the run file have
+-- their own gates and would only add calls to the log this one reads.
+func mk_cfg(kind: string, allowed: string) -> HerdrConfig {
+  { bin: "herdr", own_pane: "w1:p1", work_dir: "/tmp/mot", kind: kind,
+    allowed_kinds: allowed, depth: 0, max_depth: 1, motoko_script: "./x.sh",
+    session_ms: "", sweep_stale: false, dagr_dir: "/tmp/.dagr",
+    dagr_pane: false,
+    start_timeout_ms: 1000, check_wait_ms: 1000, max_output_chars: 16000,
+    reap_on_exit: false }
+}
+
+func delegate_call(kind: string) -> ToolCallEnvelope {
+  if kind == "" then
+    { id: "c1", tool: "Delegate", arguments: jo([kv("prompt", js("do a thing"))]) }
+  else
+    { id: "c1", tool: "Delegate",
+      arguments: jo([kv("prompt", js("do a thing")), kv("kind", js(kind))]) }
+}
+
+type Case = {
+  label: string,
+  cfg_kind: string,
+  allowed: string,
+  call_kind: string,
+  expect_exit: int,
+  expect_in_out: [string],
+  expect_not_in_out: [string],
+  expect_in_log: [string],
+  expect_not_in_log: [string]
+}
+
+func all_contained(hay: string, needles: [string]) -> bool {
+  match needles {
+    [] => true,
+    n :: rest => if contains(hay, n) then all_contained(hay, rest) else false
+  }
+}
+
+func none_contained(hay: string, needles: [string]) -> bool {
+  match needles {
+    [] => true,
+    n :: rest => if contains(hay, n) then false else none_contained(hay, rest)
+  }
+}
+
+func run_case(c: Case) -> bool ! {IO, Process, FS, Clock} {
+  let out = on_tool_handle(mk_cfg(c.cfg_kind, c.allowed), mk_ctx(), delegate_call(c.call_kind));
+  let calls = log_text(out.next_state);
+  match out.decision {
+    Delegate => {
+      println("FAIL: ${c.label} — on_tool_handle delegated a Delegate call");
+      false
+    },
+    Handled(r) => {
+      let text = "${r.stdout}${r.stderr}";
+      if r.exit_code != c.expect_exit then {
+        println("FAIL: ${c.label} — exit ${show(r.exit_code)} (wanted ${show(c.expect_exit)}); out: ${text}");
+        false
+      } else if all_contained(text, c.expect_in_out) == false then {
+        println("FAIL: ${c.label} — result text missing an expected phrase; out: ${text}");
+        false
+      } else if none_contained(text, c.expect_not_in_out) == false then {
+        println("FAIL: ${c.label} — result text carried a forbidden phrase; out: ${text}");
+        false
+      } else if all_contained(calls, c.expect_in_log) == false then {
+        println("FAIL: ${c.label} — expected herdr call not issued; calls:\n${calls}");
+        false
+      } else if none_contained(calls, c.expect_not_in_log) == false then {
+        println("FAIL: ${c.label} — a forbidden herdr call was issued; calls:\n${calls}");
+        false
+      } else {
+        println("OK: ${c.label}");
+        true
+      }
+    }
+  }
+}
+
+-- The schema half. `describe_tools` is pure, so this is read directly.
+func schema_params(allowed: string, must_choose: bool) -> string {
+  match describe_tools(allowed, must_choose) {
+    [] => "",
+    t :: _ => t.parameters
+  }
+}
+
+func check_schema() -> bool ! {IO} {
+  let strict = schema_params("claude,motoko", true);
+  let loose = schema_params("claude", false);
+  if contains(strict, "\"required\":[\"prompt\",\"kind\"]") == false then {
+    println("FAIL: schema — kind is not required when the operator permits several and set no default");
+    false
+  } else if contains(strict, "Omit it unless you have a specific reason") then {
+    println("FAIL: schema — the strict schema still advises omitting `kind`, which the handler refuses");
+    false
+  } else if contains(loose, "\"required\":[\"prompt\"]") == false then {
+    println("FAIL: schema — kind became required in the single-kind (shipped) configuration");
+    false
+  } else {
+    println("OK: the schema requires `kind` exactly when the handler does");
+    true
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let c1 = run_case({
+    label: "several kinds allowed, no default, no kind on the call: refused before a pane is split",
+    cfg_kind: "", allowed: "claude,motoko", call_kind: "",
+    expect_exit: 1,
+    expect_in_out: ["needs a `kind`", "claude,motoko", "HERDR_DELEGATE_KIND"],
+    -- The refusal must not be dressed as an unknown-kind error: "`` is not an
+    -- agent kind herdr knows at all" is a true sentence about the wrong problem.
+    expect_not_in_out: ["is not an agent kind herdr knows at all"],
+    expect_in_log: [],
+    expect_not_in_log: ["pane split"] });
+
+  let c2 = run_case({
+    label: "several kinds allowed and the model named one: proceeds",
+    cfg_kind: "", allowed: "claude,motoko", call_kind: "claude",
+    expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA"],
+    expect_not_in_out: ["needs a `kind`"],
+    expect_in_log: ["pane split"],
+    expect_not_in_log: [] });
+
+  let c3 = run_case({
+    label: "one kind allowed, no kind on the call: still defaults to it (the shipped configuration)",
+    cfg_kind: "", allowed: "claude", call_kind: "",
+    expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA"],
+    expect_not_in_out: ["needs a `kind`"],
+    expect_in_log: ["agent start", "--kind claude"],
+    expect_not_in_log: [] });
+
+  let c4 = run_case({
+    label: "several allowed but HERDR_DELEGATE_KIND is set: the operator's choice is not a guess",
+    cfg_kind: "codex", allowed: "claude,codex", call_kind: "",
+    expect_exit: 0,
+    expect_in_out: ["is running `codex` in pane w1:pA"],
+    expect_not_in_out: ["needs a `kind`"],
+    expect_in_log: ["--kind codex"],
+    expect_not_in_log: [] });
+
+  let c5 = check_schema();
+
+  if c1 && c2 && c3 && c4 && c5 then () else exit(1)
+}

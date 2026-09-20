@@ -272,7 +272,14 @@ export class SessionLogger {
     switch (event.type) {
       case "session_start":
         this.ensureThinkingLine();
-        this.writeTranscriptLine(`AILANG built ${event.ailangBuilt} | Core Runtime v${event.brainVersion} | TUI v${this.tuiVersion}`);
+        // Same guard as ui.ts's session_start arm. session_start is re-emitted
+        // once per user turn by agent_loop_v2.conversation_loop_v2 without the
+        // version fields; only the runtime-startup emit from rpc.ail carries
+        // them. Unguarded, every turn after the first writes "AILANG built
+        // undefined | Core Runtime vundefined" into the transcript.
+        if (event.ailangBuilt && event.brainVersion) {
+          this.writeTranscriptLine(`AILANG built ${event.ailangBuilt} | Core Runtime v${event.brainVersion} | TUI v${this.tuiVersion}`);
+        }
         if (Array.isArray(event.loaded_extensions)) {
           const extText = event.loaded_extensions.length > 0 ? event.loaded_extensions.join(", ") : "(none)";
           this.writeTranscriptLine(`Loaded extensions: ${extText}`);

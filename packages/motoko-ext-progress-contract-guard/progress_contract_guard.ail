@@ -107,11 +107,85 @@ export pure func candidate_claims_complete_or_allowed_stop(candidate: string) ->
      ))
 }
 
+-- ---------------------------------------------------------------------------
+-- Waiting on a delegate is an ALLOWED STOP (PLAN-001 live run, 2026-09-05)
+--
+-- The second occurrence of this module's defect, in the other direction. The
+-- orchestrator delegated a task, ended its answer with "I'll settle it when the
+-- answer lands", and stopped -- which is correct: the work is in another pane
+-- and nothing the orchestrator can do advances it. The guard read the sentence
+-- as an incomplete task and nudged, and the only thing the model could do in
+-- response was poll: 193 steps in one turn, 55 `DelegateCheck` calls each
+-- truthfully reporting "has not written its answer yet", then a takeover.
+-- (`.agent/issues/progress-guard-prose-heuristics-permit-premature-stop.md`,
+-- "Second occurrence".)
+--
+-- THE SIGNAL IS THE TOOL RESULT, NOT THE PROSE, and that distinction is the
+-- whole point of this section. `ExtCtx` carries no in-flight delegate count --
+-- the herdr extension knows one and the ABI has no slot for it -- so the
+-- cheapest TRUTHFUL signal available here is the text the herdr extension
+-- itself wrote into a tool-role message. Those sentences are produced by
+-- deterministic code in `packages/motoko-ext-herdr/herdr.ail`, not by the
+-- model, so unlike every other predicate in this file the guard is reading a
+-- fact rather than a claim. The phrases below are quoted from that file's
+-- `Delegate` and `DelegateCheck` result strings; if they are re-worded there
+-- and not here, this degrades to the pre-fix behaviour (a nudge) rather than
+-- to a wrong allowance, which is the safe direction.
+--
+-- ASSISTANT MESSAGES ARE EXCLUDED for `history_has_contract`'s reason (trap
+-- #1): a candidate that quotes the tool result back would otherwise write its
+-- own permission to stop.
+
+-- The delegate is running and nobody has collected it. Both `Delegate` launch
+-- shapes and both "not settled yet" `DelegateCheck` shapes.
+pure func text_reports_delegate_open(s: string) -> bool {
+  contains(s, "this call did not wait for it")
+  || contains(s, "is running motoko in pane")
+  || contains(s, "has not written its answer yet")
+  || contains(s, "no answer yet")
+}
+
+-- The delegate is collected, dead, or finished without producing anything.
+-- `DelegateCheck`'s terminal shapes.
+pure func text_reports_delegate_settled(s: string) -> bool {
+  contains(s, "` finished.")
+  || contains(s, "` is gone:")
+  || contains(s, "never wrote its answer file")
+  -- BLOCKED is deliberately NOT open. A delegate waiting for someone to answer
+  -- a prompt on its screen will not progress on its own, so stopping on it is
+  -- not "waiting for work that is happening" -- it is a thing to report. The
+  -- guard keeps nudging.
+  || contains(s, "waiting for someone to answer a prompt on its screen")
+}
+
+-- 0 = no delegate mentioned, 1 = open, 2 = settled. The LAST signal in the
+-- slice wins: a delegate launched at message 3 and collected at message 40 is
+-- settled, and a second one launched at 41 is open again.
+pure func last_delegate_signal(msgs: [Msg], seen: int) -> int {
+  match msgs {
+    [] => seen,
+    m :: rest => {
+      let t = toLower(m.content);
+      let here =
+        if m.role == "assistant" then seen
+        else if text_reports_delegate_settled(t) then 2
+        else if text_reports_delegate_open(t) then 1
+        else seen;
+      last_delegate_signal(rest, here)
+    }
+  }
+}
+
+export pure func has_open_delegate(ctx: ExtCtx) -> bool {
+  last_delegate_signal(ctx.history_slice, 0) == 1
+}
+
 export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
   if trim(candidate) != ""
      && has_progress_contract(ctx, candidate)
      && candidate_self_reports_incomplete(candidate)
      && not candidate_claims_complete_or_allowed_stop(candidate)
+     && not has_open_delegate(ctx)
      && count_markers(ctx.history_slice) < max_feedback
   then ContinueWithFeedback(guard_message())
   else NoDecision
@@ -131,6 +205,12 @@ func user(content: string) -> Msg {
 
 func assistant(content: string) -> Msg {
   { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+-- Tool-role message, the shape `phase_vocab.envelope_to_tool_message` builds
+-- for an extension-handled call. The delegate signals are read only off these.
+func tool(content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: "tc" }
 }
 
 func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
@@ -381,4 +461,65 @@ pure func test_budget_exhaustion() -> bool
       NoDecision => true,
       _ => false
     }
+  }
+
+-- ---------------------------------------------------------------------------
+-- The delegate-waiting allowed stop. The candidate is the live-run shape: a
+-- sentence that self-reports incomplete ("remaining") and ends by saying the
+-- model will settle the task when the delegate answers. The ONLY difference
+-- between the two cases is whether a herdr tool result in the slice reports an
+-- uncollected delegate, which is what makes this a runtime-state decision
+-- rather than another prose rule.
+-- ---------------------------------------------------------------------------
+
+func waiting_candidate() -> string {
+  "INV is delegated to pane w3:pN and the remaining work is blocked on it. I'll settle it when the answer lands."
+}
+
+func delegate_launched_msg() -> Msg {
+  tool("Delegate `mot-dlg-1788637404283` is running motoko in pane w3:pN. Starting it took 0.0s. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `mot-dlg-1788637404283`.")
+}
+
+pure func test_open_delegate_makes_waiting_an_allowed_stop() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(
+      test_ctx(contract_task(), [delegate_launched_msg()]),
+      waiting_candidate(),
+      2
+    ) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_no_open_delegate_still_nudges() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx(contract_task(), []), waiting_candidate(), 2) {
+      ContinueWithFeedback(m) => contains(m, guard_marker()),
+      _ => false
+    }
+  }
+
+-- The collected delegate is not an open one: after `DelegateCheck` returns the
+-- answer, the same sentence is a stop with nothing behind it.
+pure func test_settled_delegate_is_not_open() -> bool
+  tests [((), true)]
+  {
+    let history = [
+      delegate_launched_msg(),
+      tool("Delegate `mot-dlg-1788637404283` finished. Took 41.2s.\n\nthe answer")
+    ];
+    not has_open_delegate(test_ctx(contract_task(), history))
+      && has_open_delegate(test_ctx(contract_task(), [delegate_launched_msg()]))
+  }
+
+-- Trap #1, one slot over: the candidate quoting the tool result back must not
+-- write its own permission to stop.
+pure func test_assistant_prose_cannot_open_a_delegate() -> bool
+  tests [((), true)]
+  {
+    not has_open_delegate(test_ctx(contract_task(),
+      [assistant("It has the task and is working now; this call did not wait for it.")]))
   }

@@ -1,0 +1,81 @@
+flowchart TB
+  %% 013 ADR-001 v3 — WHAT THE SEVEN DECISIONS UNLOCK, and what stays capped.
+  %% Colour = role: blue a cap measured at HEAD · amber the ADR · green decided now (work) ·
+  %% purple decided but relocated or deferred · teal a capability unlocked by a named gate ·
+  %% teal-dashed potential, contingent on an upstream reply or a later phase ·
+  %% gray-dashed still capped by this ADR (D7's dispositions).
+  %% Layout note: the renderer lays same-rank nodes in a row, so unlocks are chained where
+  %% "then" is honest (u1 -> u1b, u2 -> u2b -> u2c) and D7's capped items are one node.
+  %% Grounded 2026-09-05: ADR-001 v3 at HEAD 62cb753, on branch arniwesth/013-dst-architecture-adr
+  %% cut at 3fe71b0. Caps from NOTE-002 §1 and the ADR's grounding block; v3 follows two
+  %% adversarial reviews (REVIEW-adr001-verdicts.md, REVIEW-adr001-v2-verdicts-codex.md).
+  %% NOTHING in the green, teal or purple nodes exists at HEAD — this is the target.
+
+  subgraph CAPS["The caps this ADR works — RESEARCH §2, re-measured in NOTE-002 §1, unchanged since 13 Aug"]
+    direction TB
+    cS["<b>the sentinel</b> · NOTE-165 §2<br/>context_limit: int — 0 means unknown, disabled, healthy<br/>compaction silently off on default · 028 NOTE-005 §1"]:::cap
+    cB["<b>B · hand-threaded world</b><br/>198 next_state lines · a drop is a study, not a gate<br/>real drops at :2730 and in the exit publish"]:::cap
+    cD["<b>D · emission by discipline</b><br/>ledger_emit private to session.ail, 37 sites<br/>c2_loop: 682 effectful lines, out of the fragment"]:::cap
+    cE["<b>E · lifecycle outside the world</b><br/>registration ambient at start<br/>exit render's successor discarded at end · ABI 7.0"]:::cap
+  end
+
+  adr{"<b>ADR-001 v3</b><br/>2026-09-05 · Proposed<br/>after two adversarial reviews"}:::decision
+  cS --> adr
+  cB --> adr
+  cD --> adr
+  cE --> adr
+
+  subgraph NOW["Decided now — work, in this order: D6 · D3 · D1 · D2"]
+    direction TB
+    d6["<b>D6 · the sweep first</b><br/>make dst at the branch point<br/>DST_KNOWN_RED populated — disclosure, not a waiver<br/>half a day, reds unpriced"]:::now
+    d3["<b>D3 · three AILANG asks</b><br/>local records, then upstream, owner-filed<br/>plus one 012 evaluation of the landed registry<br/>half a day plus filing"]:::now
+    d1["<b>D1 · the limit is a sum</b><br/>Bounded · Disabled · Unknown carrying the failed chain<br/>three pure projections serve every int surface<br/>5–8 days · D6-gated"]:::now
+    d2["<b>D2 · ordinal + witness + frame</b><br/>advance: pure, one writer · witness: session.ail<br/>per-run frames on the stdout wire, strict +1<br/>6–9 days after the inventory and D6"]:::now
+  end
+  adr --> d6
+  adr --> d3
+  adr --> d1
+  adr --> d2
+
+  capped["<b>D7 · still capped — named, not scheduled</b><br/>§2.A: FS / env / clock faults stay 0, census 9 of 12 → spike first<br/>§2.C: coverage stays 1 of 40, no runner → after D4's pilot<br/>extension-side drops · the :3265 stdin loop · WorldM dropped<br/>behaviour under Unknown beyond loudness · TUI 'unmeasured'"]:::capped
+  adr -.->|"what this ADR does not uncap"| capped
+
+  u6["<b>a truthful baseline</b><br/>every boundary change starts from a disclosed sweep state<br/><i>gate: DST_KNOWN_RED plus the sweep_summary note</i>"]:::unlocked
+  u3["<b>the asks exist as issues</b><br/>handlers Phase 1 · scope-params · clock and FS modes<br/>012's registry gains three entries and one evaluation<br/><i>a deliverable, not a gate</i>"]:::unlocked
+  u1["<b>a measurement boundary that fails loud</b><br/>context_limit_source on every poll<br/>ContextLimitResolved once per run, live and DST paths<br/><i>gate: runtime_status_tool_dst arms A · B · C, C the decoy</i>"]:::unlocked
+  u1b["<b>the reason reaches decide</b><br/>CompactionPolicy carries the sum · InputBudget carries InvalidWindow<br/>raw denominators kept — checkpoint policy unchanged<br/><i>gate: three substantive contracts in the 027 register</i>"]:::unlocked
+  u2["<b>a dropped successor goes red</b><br/>duplicate, gap or final mismatch inside a framed run<br/>the frozen-cursor anecdote becomes a gate<br/><i>gate: framed-wire shell check · ledger_parity second signal</i>"]:::unlocked
+  u2b["<b>two production drops repaired</b><br/>exit publish before the final clock, successor threaded<br/>provider-error env read threaded into the terminal call<br/><i>gate: both shown red before the fix</i>"]:::unlocked
+  u2c["<b>a request inventory with a no-bypass pin</b><br/>every leaf, including dispatch_step's in stub_step.ail<br/>bootstrap requests witnessed into the seeded trace<br/><i>gate: derivation script with an alias-bypass mutant</i>"]:::unlocked
+
+  d6 --> u6
+  d3 --> u3
+  d1 --> u1
+  u1 --> u1b
+  d2 --> u2
+  u2 --> u2b
+  u2b --> u2c
+
+  subgraph LATER["Decided, relocated or deferred"]
+    direction TB
+    d5["<b>D5 · lifecycle, both ends</b><br/>LifecycleBoundary and two classes,<br/>each admitted when its own boundary is driven"]:::later
+    d4["<b>D4 · commands + interpreter</b><br/>a phase of 028 PLAN-002 · tool-phase pilot<br/>gates: fragment membership · emission ownership"]:::later
+  end
+  u2b -->|"the exit end's obligation"| d5
+  u2c -->|"collapses to one request site under"| d4
+  d3 -.->|"before"| d4
+
+  p3["<b>if the asks land</b><br/>handlers: selected boundary plumbing may go — measure first<br/>scope-params: a Rand / AI subset of the 20 assumed entries<br/>modes: clock_ms and files become the language's"]:::potential
+  p5["<b>once each lifecycle end is driven</b><br/>extension_registration_failure · exit_action_unexecutable<br/>as reachable fault classes, not waivers"]:::potential
+  p4["<b>after D4's pilot passes its gates</b><br/>sole emission as a type property · Row 7 decidable<br/>multi-actor as an interpreter change, not a second driver<br/>symbolic execution past decide · PSE note"]:::potential
+  u3 -.-> p3
+  d5 -.-> p5
+  d4 -.-> p4
+
+  classDef cap fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef now fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef later fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef unlocked fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2px;
+  classDef potential fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-dasharray:6 4;
+  classDef capped fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;

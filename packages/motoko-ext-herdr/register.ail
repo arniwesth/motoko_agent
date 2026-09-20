@@ -27,7 +27,7 @@ import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/option (Some, None)
 import pkg/sunholo/motoko_ext_abi/types (Capability)
-import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_kind, default_allowed_kinds, default_max_depth)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_allowed_kinds, default_max_depth)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, tool_names)
 
 func parse_int_or(s: string, fallback: int) -> int {
@@ -58,7 +58,16 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- the transcript. `.motoko/herdr-delegates/` is gitignored so answering
     -- still does not dirty `git status`.
     work_dir: getEnvOr("HERDR_DELEGATE_DIR", "${workdir}/.motoko/herdr-delegates"),
-    kind: getEnvOr("HERDR_DELEGATE_KIND", default_kind()),
+    -- EMPTY MEANS "THE OPERATOR DID NOT SAY", and that is the whole point of the
+    -- change here (2026-09-06). This read `getEnvOr("HERDR_DELEGATE_KIND",
+    -- default_kind())`, so `cfg.kind` was `claude` whether the operator had
+    -- chosen claude or chosen nothing, and `Delegate` could not tell an operator
+    -- decision from a fallback. Under `HERDR_ALLOWED_KINDS=claude,motoko` it
+    -- defaulted a `Delegate` with no `kind` to claude and said nothing; the
+    -- PLAN-001 live run is what that cost. `herdr.on_tool_handle` now falls back
+    -- to the allowlist when it holds exactly one kind and REFUSES otherwise, so
+    -- the single-kind default (the shipped configuration) is unchanged.
+    kind: getEnvOr("HERDR_DELEGATE_KIND", ""),
     -- WHICH KINDS THE MODEL MAY PICK. Operator policy; defaults to claude
     -- alone. P2-7 recorded codex's relaxed argv as "opt-in", and opt-in a model
     -- can take unilaterally is opt-out — see `types.kind_allowed`.

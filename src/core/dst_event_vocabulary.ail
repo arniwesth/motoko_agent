@@ -6,20 +6,20 @@
 -- its wire projection as a maintained compatibility surface, and this artifact
 -- carries that obligation.
 --
--- One artifact binds, for every one of the 34 `LedgerEvent` variants:
+-- One artifact binds, for every one of the 35 `LedgerEvent` variants:
 --
 --   the variant itself; its wire name; its payload schema; and its
 --   classification as LOGICAL or DISPLAY-ONLY.
 --
 -- This is new construction. `phase_vocab.ledger_record_name` is not a seed and
--- is not grown here: it names three of the 34 and collapses the rest to the
+-- is not grown here: it names three of the 35 and collapses the rest to the
 -- literal "wire", which is a different thing that happens to share a subject.
 --
 -- ============================================================================
 -- The schema is `wire name = f(variant, payload)`, and that is settled
 -- ============================================================================
 --
--- One variant of the 34 is payload-dependent: `StreamDelta` projects to
+-- One variant of the 35 is payload-dependent: `StreamDelta` projects to
 -- `reasoning_delta` or `thinking_delta` selected from `i.kind`. A
 -- one-name-per-variant artifact cannot represent that, so the shape is:
 --
@@ -99,6 +99,7 @@ import src/core/phase_vocab (
   Dp7VerifierRejected, CostExhausted, CompactionApplied, CompactionExhausted,
   ExtCompactionRejected, ExtensionDiagnostic, ThinkingStreamStart, ThinkingStreamEnd,
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
+  ToolArgumentsUndecodable,
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
   NativeToolResults, SessionSuspend, SessionStart, ErrorEvent, TotalsUpdated,
   CheckpointTaken, StreamDelta
@@ -163,6 +164,7 @@ export pure func event_variant_id(e: LedgerEvent) -> string {
     CostWarning(_) => "CostWarning",
     ExtInterceptHandled(_) => "ExtInterceptHandled",
     HybridBashExtracted(_) => "HybridBashExtracted",
+    ToolArgumentsUndecodable(_) => "ToolArgumentsUndecodable",
     DoneEvent(_) => "DoneEvent",
     EmptyStopFinalize(_) => "EmptyStopFinalize",
     ExtSolverFeedback(_) => "ExtSolverFeedback",
@@ -212,6 +214,7 @@ export pure func event_wire_name(e: LedgerEvent) -> string {
     CostWarning(_) => "cost_warning",
     ExtInterceptHandled(_) => "ext_intercept_handled",
     HybridBashExtracted(_) => "hybrid_bash_extracted",
+    ToolArgumentsUndecodable(_) => "tool_arguments_undecodable",
     DoneEvent(_) => "done",
     EmptyStopFinalize(_) => "empty_stop_finalize",
     ExtSolverFeedback(_) => "ext_solver_feedback",
@@ -357,6 +360,19 @@ export pure func event_vocabulary() -> [EventRow] {
 
     { variant: "HybridBashExtracted", wire_names: ["hybrid_bash_extracted"],
       payload: [req("step"), req("cmd")],
+      classification: Logical, reaches_trace_today: true },
+
+    { variant: "ToolArgumentsUndecodable", wire_names: ["tool_arguments_undecodable"],
+      payload: [req("step"), req("stream_id"), req("tool"), req("id"), req("raw_length")],
+      -- LOGICAL: a call the model made and the runtime did not perform is a
+      -- transition, not a decoration, and the tool result the model gets back is
+      -- derived from the same fact. `reaches_trace_today: true` is a claim about
+      -- the EMISSION SITE and not about coverage: it is emitted from
+      -- `tool_phase.execute_allowed_tool_call` and carried in that function's
+      -- returned `emitted` log, which is the property `ScratchpadResult`'s
+      -- register entry says makes an event a reachability question rather than a
+      -- parity one. No fixture in `make dst` emits it, so it prints under
+      -- `unwitnessed` in the wire gate — a coverage gap, reported by name there.
       classification: Logical, reaches_trace_today: true },
 
     { variant: "DoneEvent", wire_names: ["done"],
@@ -656,7 +672,7 @@ export pure func is_logical(rows: [EventRow], variant: string) -> bool {
 }
 
 -- ============================================================================
--- Inline tests. The 34-variant round trip lives in the DST script, because it
+-- Inline tests. The 35-variant round trip lives in the DST script, because it
 -- needs one sample value per constructor.
 -- ============================================================================
 
@@ -667,10 +683,16 @@ pure func has_rule(rs: [VocabularyRejection], rule: string) -> bool {
   }
 }
 
-pure func test_vocabulary_has_thirty_four_distinct_rows() -> bool
+-- RENAMED from `..._thirty_four_...` when the vocabulary grew
+-- `ToolArgumentsUndecodable`. A rename reads as a new declaration to
+-- `new_contract_policy`, which is why this excuse appears on a test that
+-- predates the rule.
+-- contracts: BLOCKED — RECURSIVE, through `no_dups`; a synthesised
+-- `ensures { true }` fails to encode rather than failing to prove.
+pure func test_vocabulary_has_thirty_five_distinct_rows() -> bool
   tests [((), true)]
   {
-    List.length(event_vocabulary()) == 34
+    List.length(event_vocabulary()) == 35
       && no_dups(row_variants(event_vocabulary()), [])
   }
 
@@ -736,7 +758,7 @@ pure func test_classification_partitions_the_vocabulary() -> bool
   tests [((), true)]
   {
     let rows = event_vocabulary();
-    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 34
+    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 35
       && List.length(display_only_variants(rows)) == 6
   }
 

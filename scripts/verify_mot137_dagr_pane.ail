@@ -127,6 +127,12 @@ func scripted(open_ok: bool)
     else if contains(argv, "agent explain") then
       { output: envelope("{\"agent\":\"claude\",\"matched_rule\":{\"id\":\"live_prompt_box\"},\"fallback_reason\":null}", "", 0),
         exit_code: 0, next_state: w }
+    else if contains(argv, "pane get") then
+      -- The operator's recorded view, still up and still a dagr pane. Only case
+      -- 6 gets here: every other case's `.dagr/.pane` is absent, so the id is
+      -- never probed.
+      { output: envelope("{\"result\":{\"pane\":{\"label\":\"dagr\",\"pane_id\":\"w1:pOP\"}}}", "", 0),
+        exit_code: 0, next_state: w }
     else if contains(argv, "plugin pane open") then
       if open_ok then { output: envelope(plugin_pane_opened(), "", 0), exit_code: 0, next_state: w }
       else { output: envelope("", herdr_error("plugin_not_installed"), 1), exit_code: 1, next_state: w }
@@ -161,6 +167,18 @@ func fresh_run(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
 func view_already_open(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
   if contains(path, ".sweep-") then { present: true, content: "200", next_state: world }
   else if contains(path, ".pane-") then { present: true, content: "w1:pV", next_state: world }
+  else { present: false, content: "", next_state: world }
+}
+
+-- The operator opened a dagr view by hand: `scripts/dagr-pane.sh` left the pane
+-- id in `.dagr/.pane`. THE EXTENSION'S OWN MARKER IS ABSENT here — that is the
+-- whole point of the case. `.pane-` is checked first because `/tmp/.dagr/.pane`
+-- is a prefix of neither, and reading them in the other order would answer the
+-- extension's marker with the operator's id and pin nothing.
+func operator_view_present(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  if contains(path, ".sweep-") then { present: true, content: "200", next_state: world }
+  else if contains(path, ".pane-") then { present: false, content: "", next_state: world }
+  else if contains(path, "/.pane") then { present: true, content: "w1:pOP", next_state: world }
   else { present: false, content: "", next_state: world }
 }
 
@@ -337,5 +355,25 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
     expect_in_log: [],
     expect_not_in_log: ["plugin pane open"] });
 
-  if c1 && c2 && c3 && c4 && c5 then () else exit(1)
+  -- 2026-09-06. The extension yields to a view the OPERATOR opened. Two run
+  -- files describing the same work, side by side on screen and disagreeing, is
+  -- what the PLAN-001 live run's operator objected to; option B of
+  -- `.agent/issues/herdr-extension-run-file-drifts-from-operator-plan-file.md`
+  -- keeps the drift and takes the second pane off the screen.
+  --
+  -- THE PROBE IS ASSERTED, not just the absence of the open. A marker read
+  -- without `pane get` would suppress the view on a STALE id for the rest of
+  -- the run, which is a silent failure and the more expensive of the two.
+  let c6 = run_case({
+    label: "an operator dagr view is already open: the extension yields, silently",
+    ports: ports_for(true, operator_view_present),
+    dagr_pane: true, session_ms: "200", expect_exit: 0,
+    expect_in_out: ["is running `claude` in pane w1:pA"],
+    -- Silent: no "showing this run live", and no fallback instruction either —
+    -- the operator is looking at a dagr view already.
+    expect_not_in_out: ["showing this run live", "scripts/dagr-pane.sh"],
+    expect_in_log: ["pane get w1:pOP"],
+    expect_not_in_log: ["plugin pane open"] });
+
+  if c1 && c2 && c3 && c4 && c5 && c6 then () else exit(1)
 }

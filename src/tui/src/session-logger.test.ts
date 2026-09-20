@@ -126,6 +126,37 @@ describe("SessionLogger filename unification (M4a)", () => {
     }
   });
 
+  // The transcript half of the guard ui.ts has carried since the banner was
+  // added: session_start is re-emitted once per user turn without the version
+  // fields, and an unguarded banner writes "AILANG built undefined | Core
+  // Runtime vundefined" into the transcript for every turn after the first.
+  it("writes the version banner only for the session_start that carries versions", async () => {
+    process.env.MOTOKO_SESSION_ID = "version-banner-transcript";
+    const logger = new SessionLogger(projectRoot, "test-tui-version");
+    logger.log({
+      type: "session_start",
+      task: "t",
+      model: "m",
+      mode: "v2",
+      ailangBuilt: "unknown",
+      brainVersion: "0.2.0",
+    } as never);
+    logger.log({
+      type: "session_start",
+      task: "t",
+      model: "m",
+      mode: "v2",
+      ailangBuilt: null,
+      brainVersion: null,
+    } as never);
+    await logger.close();
+
+    const markdown = fs.readFileSync(logger.markdownPath, "utf8");
+    expect(markdown).toContain("AILANG built unknown | Core Runtime v0.2.0 | TUI vtest-tui-version");
+    expect(markdown).not.toContain("undefined");
+    expect(markdown.match(/AILANG built /g) ?? []).toHaveLength(1);
+  });
+
   it("writes scratchpad_result summaries to the markdown transcript", async () => {
     process.env.MOTOKO_SESSION_ID = "scratchpad-result-transcript";
     const logger = new SessionLogger(projectRoot, "test-tui-version");

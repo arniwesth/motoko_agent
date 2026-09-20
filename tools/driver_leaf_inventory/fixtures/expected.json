@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Expectations for the driver leaf inventory self-test (PLAN-001 P-INV).",
+    "",
+    "Each form_*.ail uses one bypass shape PLAN §2.1 names. Each MUST come",
+    "back with its verdict below. A bypass fixture that comes back clean is",
+    "the fail-open defect this inventory exists to prevent, and the suite",
+    "treats silence as failure.",
+    "",
+    "`control_clean.ail` must come back clean. Without it an inventory that",
+    "flagged everything would pass."
+  ],
+  "fixtures": {
+    "form_unadvanced_direct.ail": {
+      "form": "un-advanced direct leaf",
+      "verdict": "un-advanced-and-unwitnessed"
+    },
+    "form_unadvanced_indirect.ail": {
+      "form": "un-advanced leaf behind named indirection",
+      "verdict": "un-advanced-and-unwitnessed"
+    },
+    "form_witnessed_after_record.ail": {
+      "form": "helped leaf witnessed after record construction",
+      "verdict": "witnessed-after-construction"
+    },
+    "control_clean.ail": {
+      "form": "correctly helped-and-witnessed-in-order control",
+      "verdict": "clean"
+    }
+  }
+}

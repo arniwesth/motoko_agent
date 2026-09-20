@@ -125,8 +125,8 @@ Note that herdr cannot *launch* Motoko (`agent start --kind` is a fixed list) �
 .devcontainer/agent_confined/agent.sh session=review kill
 .devcontainer/agent_confined/agent.sh shell            # a bash prompt, outside herdr
 .devcontainer/agent_confined/agent.sh run make test    # one-shot; dies with this terminal
-.devcontainer/agent_confined/agent.sh build            # rebuild at the PINNED versions
-.devcontainer/agent_confined/agent.sh upgrade          # re-resolve every version, rewrite versions.env, rebuild
+.devcontainer/agent_confined/agent.sh build            # rebuild: pins reproduced, CLIs re-resolved at latest
+.devcontainer/agent_confined/agent.sh upgrade          # re-resolve every pinned version, rewrite versions.env, rebuild
 .devcontainer/agent_confined/agent.sh stop             # stop and remove the container
 .devcontainer/agent_confined/agent.sh check            # the R9 sweep
 .devcontainer/agent_confined/agent.sh help             # the header block of the script, coloured
@@ -135,21 +135,25 @@ Note that herdr cannot *launch* Motoko (`agent start --kind` is a fixed list) �
 A **session** is a whole herdr server with its own panes, sockets and persisted state. You usually want one,
 with several panes in it — a second session is for work that must be genuinely independent.
 
-### Versions are pinned in the tree
+### Versions: half pinned, half floating
 
-[`versions.env`](./versions.env) carries herdr's version and sha256 and the three CLI versions, and is
-committed. Two things follow, both deliberate:
+[versions.env](./versions.env) carries herdr's version and sha256 and the agent-browser version, and is
+committed. The agent CLIs (claude, codex, omp) are deliberately NOT in it: the Dockerfile installs them at
+npm `latest` on every build, by decision 2026-09-06 — reproducibility of those three is not a goal.
 
-* **`stop`, `sessions`, `logs` and `build` work with no network**, because nothing is resolved at run time.
-* **An upgrade is a commit.** `agent.sh upgrade` re-resolves each line from upstream, prints the diff,
-  rewrites the file and rebuilds; that diff is the record of what the agent now runs. `build` never
-  re-resolves.
+Two things follow, both deliberate:
 
-This replaces the source profile's resolve-on-every-start arrangement, and it exists for the same reason:
-`RUN bun install -g …@latest` inside a Dockerfile does **not** track latest — the instruction text never
-changes, so Docker reuses the cached layer and the image keeps whatever was current the day it was first
-built, indefinitely and invisibly. A build arg whose *value* changes is what invalidates the layer. Override
-one for a single command by exporting it: `HERDR_VERSION=0.8.1 agent.sh build`.
+* **`stop`, `sessions`, `logs` work with no network**, because nothing is resolved at run time.
+* **A harness upgrade is a commit** for the pinned half. `agent.sh upgrade` re-resolves each pinned line
+  from upstream, prints the diff, rewrites the file and rebuilds; that diff is the record of what the
+  agent now runs. `build` never re-resolves the pinned half — but it DOES re-resolve the CLIs, through a
+  fresh `AGENTS_CACHE_BUST` timestamp that invalidates the Dockerfile layer.
+
+The bust exists because `RUN bun install -g …@latest` inside a Dockerfile does **not** track latest on its
+own — the instruction text never changes, so Docker reuses the cached layer and the image keeps whatever
+was current the day it was first built, indefinitely and invisibly. A build arg whose *value* changes is
+what invalidates the layer. Override a pin for a single command by exporting it:
+`HERDR_VERSION=0.8.1 agent.sh build`.
 
 **The agent cannot upgrade itself**, and that is the same property as the missing `sudo`. herdr is installed
 root-owned in `/usr/local/bin`, `update.version_check` is off, and `GH_PROMPT_DISABLED=1` is set — but

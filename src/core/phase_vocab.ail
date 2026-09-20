@@ -569,6 +569,14 @@ export type ToolCallInfo = { step: int, stream_id: string, tool: string, id: str
 export type ToolDeniedInfo = { step: int, stream_id: string, tool: string, id: string, reason: string }
 export type ToolHandledInfo = { step: int, stream_id: string, tool: string, id: string, exit_code: int }
 export type ToolDispatchCompleteInfo = { step: int, stream_id: string, id: string }
+-- WI-D25 / PLAN-001 live-run fix 1. A native tool call whose `arguments` string
+-- is not JSON. `raw_length` and not the raw string: the payload is a truncated
+-- argument blob that can be several kilobytes of a file the model was writing,
+-- and a ledger record is not the place for it. The LENGTH is what discriminates
+-- the two causes — a few bytes is a malformed emission, four thousand is an
+-- output budget that ran out mid-argument, which is the case this event was
+-- added for.
+export type ToolArgsUndecodableInfo = { step: int, stream_id: string, tool: string, id: string, raw_length: int }
 export type ToolBatchInfo = { request_id: string, step: int, stream_id: string, payload: Json }
 export type CompactionInfo = { step: int, note: string }
 export type CompactionExhaustedInfo = { step: int, model: string, reason: string }
@@ -717,6 +725,7 @@ export type LedgerEvent
   | CostWarning(CostWarningInfo)             -- [prod] cost_warning
   | ExtInterceptHandled(ToolHandledInfo)     -- [prod] ext_intercept_handled
   | HybridBashExtracted(HybridBashInfo)      -- [prod] hybrid_bash_extracted
+  | ToolArgumentsUndecodable(ToolArgsUndecodableInfo) -- [NEW]  tool_arguments_undecodable
   | DoneEvent(DoneInfo)                      -- [prod] done
   | EmptyStopFinalize(EmptyStopFinalizeInfo) -- [prod] empty_stop_finalize
   | ExtSolverFeedback(FeedbackInfo)          -- [prod] ext_solver_feedback
@@ -799,6 +808,7 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     CostWarning(i) => [kv("type", js("cost_warning")), kv("threshold", js(i.threshold)), kv("step", jnum(_int_to_float(i.step))), kv("pct", jnum(_int_to_float(i.pct))), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("cap_millicents", jnum(_int_to_float(i.cap_millicents)))],
     ExtInterceptHandled(i) => [kv("type", js("ext_intercept_handled")), kv("step", jnum(_int_to_float(i.step))), kv("tool", js(i.tool)), kv("exit_code", jnum(_int_to_float(i.exit_code)))],
     HybridBashExtracted(i) => [kv("type", js("hybrid_bash_extracted")), kv("step", jnum(_int_to_float(i.step))), kv("cmd", js(i.cmd))],
+    ToolArgumentsUndecodable(i) => [kv("type", js("tool_arguments_undecodable")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("raw_length", jnum(_int_to_float(i.raw_length)))],
     DoneEvent(i) => done_kvs(i),
     EmptyStopFinalize(i) => [kv("type", js("empty_stop_finalize")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("context_limit", jnum(_int_to_float(i.context_limit)))],
     ExtSolverFeedback(i) => [kv("type", js("ext_solver_feedback")), kv("step", jnum(_int_to_float(i.step))), kv("feedback", js(i.feedback))],
@@ -1239,6 +1249,7 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(CostWarning({ threshold: "75pct", step: 2, pct: 80, total_cost_millicents: 800, total_cost_usd: 0.008, cap_millicents: 1000 }), "{\"type\":\"cost_warning\",\"threshold\":\"75pct\",\"step\":2,\"pct\":80,\"total_cost_millicents\":800,\"total_cost_usd\":0.008,\"cap_millicents\":1000}")
     && golden(ExtInterceptHandled({ step: 1, stream_id: "", tool: "T", id: "", exit_code: 0 }), "{\"type\":\"ext_intercept_handled\",\"step\":1,\"tool\":\"T\",\"exit_code\":0}")
     && golden(HybridBashExtracted({ step: 1, cmd: "echo hi" }), "{\"type\":\"hybrid_bash_extracted\",\"step\":1,\"cmd\":\"echo hi\"}")
+    && golden(ToolArgumentsUndecodable({ step: 36, stream_id: "step-36", tool: "WriteFile", id: "call_9", raw_length: 4176 }), "{\"type\":\"tool_arguments_undecodable\",\"step\":36,\"stream_id\":\"step-36\",\"tool\":\"WriteFile\",\"id\":\"call_9\",\"raw_length\":4176}")
     && golden(DoneEvent({ step: 1, output: "ok", source: "" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\"}")
     && golden(DoneEvent({ step: 1, output: "ok", source: "ext_solver_accept" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\",\"source\":\"ext_solver_accept\"}")
     && golden(EmptyStopFinalize({ step: 96, input_tokens: 22312, estimated_input_tokens: 8600, context_limit: 131072 }), "{\"type\":\"empty_stop_finalize\",\"step\":96,\"input_tokens\":22312,\"estimated_input_tokens\":8600,\"context_limit\":131072}")

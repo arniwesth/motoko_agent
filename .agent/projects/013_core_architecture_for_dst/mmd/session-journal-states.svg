@@ -1,0 +1,289 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2790.973083333333 1964.4" width="2790.973083333333" height="1964.4" style="--bg:#1a1b26;--fg:#a9b1d6;--line:#3d59a1;--accent:#7aa2f7;--muted:#565f89;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="MEM" data-label="In memory — the runtime child holds the session (D2, D5, D6)">
+  <rect x="1087.4558499999998" y="64" width="1345.4662999999998" height="535.9000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1087.4558499999998" y="64" width="1345.4662999999998" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1099.4558499999998" y="78" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">In memory — the runtime child holds the session (D2, D5, D6)</text>
+</g>
+<g class="subgraph" data-id="JOURNAL" data-label="The journal — .motoko/sessions/&lt;id&gt;/journal.jsonl, the only thing that exists when no process holds the session">
+  <rect x="1309.2015833333335" y="1128" width="1078.0709999999995" height="277.4" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1309.2015833333335" y="1128" width="1078.0709999999995" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1321.2015833333335" y="1142" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">The journal — .motoko/sessions/&lt;id&gt;/journal.jsonl, the only thing that exists when no process holds the session</text>
+</g>
+<g class="subgraph" data-id="RES" data-label="A fresh child — --resume &lt;journal&gt;, under the host's lease (D4, D5, D6)">
+  <rect x="1123.0359999999998" y="1536" width="851.8862499999997" height="368.40000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1123.0359999999998" y="1536" width="851.8862499999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1135.0359999999998" y="1550" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">A fresh child — --resume &lt;journal&gt;, under the host&#39;s lease (D4, D5, D6)</text>
+</g>
+<g class="subgraph" data-id="PARK" data-label="D7 · durable park — unscheduled until ADR-002 D2 activates and the between-turn frame exists">
+  <rect x="219.5" y="692.2" width="978.6909999999998" height="725.2" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="219.5" y="692.2" width="978.6909999999998" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="231.5" y="706.2" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">D7 · durable park — unscheduled until ADR-002 D2 activates and the between-turn frame exists</text>
+</g>
+<polyline class="edge" data-from="idle" data-to="exited" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="abort · exit · restart" points="1438.5583291666667,583.9000000000001 1438.5583291666665,599.9000000000001 1438.5583291666665,1035.7 1447.3851624999998,1035.7 1447.3851624999998,1104 1692.18425,1104 1692.18425,1128 1692.18425,1166.3000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="suspended" data-to="exited" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="abort · exit · restart" points="2149.859483333333,583.9000000000001 2149.859483333333,599.9000000000001 2149.859483333333,1035.7 2276.0674166666663,1035.7 2276.0674166666663,1092 1514.1929166666669,1092 1514.1929166666669,1128 1514.1929166666666,1166.3000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="running" data-to="crashed" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="child killed · host crash · container restart" points="1784.8492749999998,382.6 1784.8492749999998,418.6 1857.1036499999998,418.6 1857.1036499999998,599.9000000000001 1857.1036499999996,1035.7 2046.2134999999994,1035.7 2046.2134999999994,1104 2129.224083333333,1104 2129.224083333333,1128 2129.224083333333,1166.3000000000002" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="idle" data-to="leaf" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="host crash" points="1363.0719958333332,583.9000000000001 1363.0719958333332,599.9000000000001 1363.071995833333,1035.7 1354.2451624999997,1035.7 1354.2451624999997,1116 2370.272583333333,1116 2370.272583333333,1128 2370.272583333333,1280.7 2040.181133333333,1280.7 2040.181133333333,1317.7" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="suspended" data-to="leaf" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="host crash" points="2283.390816666666,583.9000000000001 2283.3908166666665,599.9000000000001 2283.3908166666665,1035.7 2389.490083333333,1035.7 2389.490083333333,1080 1325.2015833333335,1080 1325.2015833333335,1128 1325.2015833333335,1280.7 1692.2315333333333,1280.7 1692.2315333333333,1317.7" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="leaf" data-to="resumer" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="TUI respawn after restart passes --resume; --profile already flows" points="1866.206333333333,1402.4 1866.206333333333,1405.4 1866.206333333333,1455.7 1927.972833333333,1455.7 1927.972833333333,1524 1814.5007499999997,1524 1814.5007499999997,1536 1814.5007499999997,1580" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="leaf" data-to="resumer" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="operator, later" points="2011.1853333333331,1402.4 2011.1853333333331,1405.4 2011.1853333333331,1455.7 2133.8748333333333,1455.7 2133.8748333333333,1512 1670.0792499999998,1512 1670.0792499999998,1536 1670.0792499999998,1580" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="resumer" data-to="idle" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="last = run_finished or exit" points="1670.0792499999998,1701.4 1670.0792499999998,1713.4 1754.1459999999997,1713.4 1754.1459999999997,1904.4 1754.1459999999997,1916.4 103.5,1916.4 103.5,40 1103.4558499999998,40 1103.4558499999998,64 1103.4558499999998,489.20000000000005 1332.8774624999999,489.20000000000005 1332.8774624999999,513.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="resumer" data-to="suspended" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="last = suspended" points="1814.5007499999997,1701.4 1814.5007499999997,1713.4 1832.8567499999995,1713.4 1832.8567499999995,1904.4 1832.8567499999995,1916.4 2691.350083333333,1916.4 2691.350083333333,52 2406.8702124999995,52 2406.8702124999995,64 2406.8702124999995,477.20000000000005 2316.7736499999996,477.20000000000005 2316.7736499999996,513.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="running" data-to="parkReq" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="decide → Park (ADR-002 D2)" points="1567.138775,382.6 1567.138775,394.6 1116.4558499999998,394.6 1116.4558499999998,599.9000000000001 1116.4558499999998,611.9000000000001 927.3459999999998,611.9000000000001 927.3459999999998,692.2 927.3459999999998,736.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="parkReq" data-to="running" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="path 1: runtime alive, wake_read returns / wake entry" points="1010.2901666666664,790 1010.2901666666664,802 1181.1909999999998,802 1181.1909999999998,1417.4 1181.1909999999998,1429.4 2556.6300833333325,1429.4 2556.6300833333325,40 1665.1217749999996,40 1665.1217749999998,64 1665.1217749999998,259 1730.4216499999998,259 1730.4216499999998,295" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="resuming" data-to="running" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="recorded under the recording adapter" points="673.5009999999999,1388.4 673.5009999999999,1417.4 673.5009999999999,1904.4 209.5,1904.4 209.5,52 1604.1941499999998,52 1604.1941499999998,64 1604.1941499999998,259 1621.5664,259 1621.5664,295" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="leaf" data-to="resumer" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="a park entry with no wake child:
+re-park under a new request, re-observe" points="1721.2273333333333,1402.4 1721.2273333333333,1405.4 1721.2273333333333,1441.4 1545.9887499999995,1441.4 1545.9887499999995,1524 1525.6577499999999,1524 1525.6577499999999,1536 1525.6577499999999,1580" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="fresh" data-to="running" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="first task / run_started" points="1904.5767749999998,178.7 1904.5767749999998,259 1839.2768999999998,259 1839.2768999999998,295" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="running" data-to="suspended" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="step_idx == step_budget
+/ suspended entry" points="1893.7045249999996,382.6 1893.7045249999996,394.6 2257.1474625,394.6 2257.1474625,477.20000000000005 2216.62515,477.20000000000005 2216.62515,513.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="suspended" data-to="running" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="continue
+step_idx 0 · totals zero · counts carried / history_appended" points="2116.4766499999996,513.2 2116.4766499999996,477.20000000000005 2038.8174624999997,477.20000000000005 2038.8174624999997,406.6 1839.2768999999998,406.6 1839.2768999999998,382.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="running" data-to="idle" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="done / run_finished with cumulative and world_ordinal" points="1621.5664,382.6 1621.5664,406.6 1304.2056499999999,406.6 1304.2056499999999,477.20000000000005 1378.1692624999998,477.20000000000005 1378.1692624999998,513.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="running" data-to="idle" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="non-budget error / run_finished" points="1675.994025,382.6 1675.994025,418.6 1523.0536499999998,418.6 1523.0536499999998,477.20000000000005 1423.4610625,477.20000000000005 1423.4610625,513.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="idle" data-to="running" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="user_message / history_appended, run_started" points="1468.7528625,513.2 1468.7528625,489.20000000000005 1730.4216499999998,489.20000000000005 1730.4216499999998,382.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="idle" data-to="idle" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="model_change / settings" points="1287.5856625,536.7666666666667 1277.5856625,536.7666666666667 1277.5856625,560.3333333333334 1287.5856625,560.3333333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="suspended" data-to="suspended" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="model_change / settings" points="2016.3281499999998,536.7666666666667 2006.3281499999998,536.7666666666667 2006.3281499999998,560.3333333333334 2016.3281499999998,560.3333333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="exited" data-to="leaf" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1603.1885833333333,1251.0000000000002 1603.1885833333333,1268.7 1808.2147333333332,1268.7 1808.2147333333332,1317.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="crashed" data-to="leaf" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="2129.224083333333,1251.0000000000002 2129.224083333333,1268.7 1924.1979333333331,1268.7 1924.1979333333331,1317.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="resumer" data-to="refused" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="any Refusal" points="1525.6577499999999,1701.4 1525.6577499999999,1713.4 1441.591,1713.4 1441.5909999999997,1817.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="parkReq" data-to="suspWait" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="path 2: --park-exits" points="844.4018333333332,790 844.4018333333331,802 673.5009999999999,802 673.5009999999999,906.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="suspWait" data-to="wakeRes" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="the wait's answer arrives" points="673.5009999999999,993.9000000000001 673.5009999999999,1166.3000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="wakeRes" data-to="resuming" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="host respawns with --resume" points="673.5009999999999,1220.1000000000001 673.5009999999999,1317.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="suspWait" data-to="lost" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="764.387,993.9000000000001 764.387,1005.9000000000001 967.9299999999998,1005.9000000000001 967.9299999999998,1041.9" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="suspWait" data-to="aborted" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="582.6149999999999,993.9000000000001 582.6149999999998,1005.9000000000001 408.75049999999993,1005.9000000000001 408.75049999999993,1041.9" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="idle" data-to="exited" data-label="abort · exit · restart">
+  <rect x="1391.8851624999998" y="1042.7" width="110.31400000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1447.0421624999997" y="1057.8500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">abort · exit · restart</text>
+</g>
+<g class="edge-label" data-from="suspended" data-to="exited" data-label="abort · exit · restart">
+  <rect x="2220.5674166666663" y="1042.7" width="110.31400000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2275.7244166666665" y="1057.8500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">abort · exit · restart</text>
+</g>
+<g class="edge-label" data-from="running" data-to="crashed" data-label="child killed · host crash · container restart">
+  <rect x="1938.2134999999994" y="1042.7" width="215.45200000000006" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2045.9394999999995" y="1057.8500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">child killed · host crash · container restart</text>
+</g>
+<g class="edge-label" data-from="idle" data-to="leaf" data-label="host crash">
+  <rect x="1319.7451624999997" y="1042.7" width="68.14" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1353.8151624999996" y="1057.8500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">host crash</text>
+</g>
+<g class="edge-label" data-from="suspended" data-to="leaf" data-label="host crash">
+  <rect x="2354.990083333333" y="1042.7" width="68.14" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2389.0600833333333" y="1057.8500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">host crash</text>
+</g>
+<g class="edge-label" data-from="leaf" data-to="resumer" data-label="TUI respawn after restart passes --resume; --profile already flows">
+  <rect x="1767.972833333333" y="1462.7" width="319.40199999999993" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1927.673833333333" y="1477.8500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">TUI respawn after restart passes --resume; --profile already flows</text>
+</g>
+<g class="edge-label" data-from="leaf" data-to="resumer" data-label="operator, later">
+  <rect x="2091.3748333333333" y="1474.7" width="84.77200000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2133.7608333333333" y="1489.8500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">operator, later</text>
+</g>
+<g class="edge-label" data-from="resumer" data-to="idle" data-label="last = run_finished or exit">
+  <rect x="36" y="1879.1000000000001" width="134.074" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="103.037" y="1894.2500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">last = run_finished or exit</text>
+</g>
+<g class="edge-label" data-from="resumer" data-to="suspended" data-label="last = suspended">
+  <rect x="2642.350083333333" y="1879.1000000000001" width="97.246" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2690.973083333333" y="1894.2500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">last = suspended</text>
+</g>
+<g class="edge-label" data-from="running" data-to="parkReq" data-label="decide → Park (ADR-002 D2)">
+  <rect x="853.3459999999998" y="618.9000000000001" width="147.736" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="927.2139999999997" y="634.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">decide → Park (ADR-002 D2)</text>
+</g>
+<g class="edge-label" data-from="parkReq" data-to="running" data-label="path 1: runtime alive, wake_read returns / wake entry">
+  <rect x="2427.1300833333325" y="1392.1000000000001" width="258.22" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2556.2400833333327" y="1407.2500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">path 1: runtime alive, wake_read returns / wake entry</text>
+</g>
+<g class="edge-label" data-from="resuming" data-to="running" data-label="recorded under the recording adapter">
+  <rect x="110.5" y="618.9000000000001" width="197.038" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="209.019" y="634.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">recorded under the recording adapter</text>
+</g>
+<g class="edge-label" data-from="leaf" data-to="resumer" data-label="a park entry with no wake child:
+re-park under a new request, re-observe">
+  <rect x="1440.9887499999995" y="1448.4" width="209.512" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1545.7447499999996" y="1470.7" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="1545.7447499999996" dy="-3.3000000000000007">a park entry with no wake child:</tspan><tspan x="1545.7447499999996" dy="14.3">re-park under a new request, re-observe</tspan></text>
+</g>
+<g class="edge-label" data-from="fresh" data-to="running" data-label="first task / run_started">
+  <rect x="1844.5767749999995" y="221.7" width="119.81800000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1904.4857749999996" y="236.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">first task / run_started</text>
+</g>
+<g class="edge-label" data-from="running" data-to="suspended" data-label="step_idx == step_budget
+/ suspended entry">
+  <rect x="2191.1474624999996" y="425.6" width="131.69800000000004" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2256.9964625" y="447.90000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="2256.9964625" dy="-3.3000000000000007">step_idx == step_budget</tspan><tspan x="2256.9964625" dy="14.3">/ suspended entry</tspan></text>
+</g>
+<g class="edge-label" data-from="suspended" data-to="running" data-label="continue
+step_idx 0 · totals zero · counts carried / history_appended">
+  <rect x="1890.3174624999997" y="425.6" width="296.83" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="2038.7324624999997" y="447.90000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="2038.7324624999997" dy="-3.3000000000000007">continue</tspan><tspan x="2038.7324624999997" dy="14.3">step_idx 0 · totals zero · counts carried / history_appended</tspan></text>
+</g>
+<g class="edge-label" data-from="running" data-to="idle" data-label="done / run_finished with cumulative and world_ordinal">
+  <rect x="1171.2056499999999" y="432.75" width="265.34799999999996" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1303.8796499999999" y="447.9" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">done / run_finished with cumulative and world_ordinal</text>
+</g>
+<g class="edge-label" data-from="running" data-to="idle" data-label="non-budget error / run_finished">
+  <rect x="1440.5536499999998" y="432.75" width="164.36800000000005" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1522.7376499999998" y="447.9" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">non-budget error / run_finished</text>
+</g>
+<g class="edge-label" data-from="idle" data-to="running" data-label="user_message / history_appended, run_started">
+  <rect x="1608.9216499999998" y="432.75" width="242.182" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1730.0126499999997" y="447.9" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">user_message / history_appended, run_started</text>
+</g>
+<g class="edge-label" data-from="idle" data-to="idle" data-label="model_change / settings">
+  <rect x="1149.6696624999997" y="533.4" width="129.91600000000005" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1214.6276624999998" y="548.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">model_change / settings</text>
+</g>
+<g class="edge-label" data-from="suspended" data-to="suspended" data-label="model_change / settings">
+  <rect x="1878.4121499999999" y="533.4" width="129.91600000000005" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1943.37015" y="548.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">model_change / settings</text>
+</g>
+<g class="edge-label" data-from="resumer" data-to="refused" data-label="any Refusal">
+  <rect x="1405.091" y="1744.3999999999999" width="72.89200000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1441.5369999999998" y="1759.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">any Refusal</text>
+</g>
+<g class="edge-label" data-from="parkReq" data-to="suspWait" data-label="path 2: --park-exits">
+  <rect x="621.5009999999999" y="833.0000000000001" width="103.78000000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="673.3909999999998" y="848.1500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">path 2: --park-exits</text>
+</g>
+<g class="edge-label" data-from="suspWait" data-to="wakeRes" data-label="the wait's answer arrives">
+  <rect x="606.0009999999997" y="1062.1" width="134.668" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="673.3349999999998" y="1077.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">the wait&#39;s answer arrives</text>
+</g>
+<g class="edge-label" data-from="wakeRes" data-to="resuming" data-label="host respawns with --resume">
+  <rect x="598.0009999999999" y="1257.4" width="150.11200000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="673.0569999999999" y="1272.5500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">host respawns with --resume</text>
+</g>
+<g class="node" data-id="fresh" data-label="&lt;b&gt;fresh session&lt;/b&gt;
+resume_count 0 · run_ordinal 0 · run_id session.r0.0
+the host writes the header; the first run's seed becomes N history entries" data-shape="stadium">
+  <rect x="1676.1217749999998" y="108" width="456.9099999999998" height="70.7" rx="35.35" ry="35.35" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="1904.5767749999998" y="143.35" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="1904.5767749999998" dy="-12.350000000000001"><tspan font-weight="bold">fresh session</tspan></tspan><tspan x="1904.5767749999998" dy="16.900000000000002">resume_count 0 · run_ordinal 0 · run_id session.r0.0</tspan><tspan x="1904.5767749999998" dy="16.900000000000002">the host writes the header; the first run&#39;s seed becomes N history entries</tspan></text>
+</g>
+<g class="node" data-id="running" data-label="&lt;b&gt;Running&lt;/b&gt;
+a traced run under RunIdentity
+every history change emitted as it happens — one message per entry
+step_idx counts toward step_budget" data-shape="stadium">
+  <rect x="1512.71115" y="295" width="435.4209999999997" height="87.60000000000001" rx="43.800000000000004" ry="43.800000000000004" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="1730.42165" y="338.8" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="1730.42165" dy="-20.8"><tspan font-weight="bold">Running</tspan></tspan><tspan x="1730.42165" dy="16.900000000000002">a traced run under RunIdentity</tspan><tspan x="1730.42165" dy="16.900000000000002">every history change emitted as it happens — one message per entry</tspan><tspan x="1730.42165" dy="16.900000000000002">step_idx counts toward step_budget</tspan></text>
+</g>
+<g class="node" data-id="suspended" data-label="&lt;b&gt;Suspended (BudgetExhausted)&lt;/b&gt;
+held in memory by the conversation loop
+herdr: blocked · TUI: input unlocked · headless: exit non-zero" data-shape="stadium">
+  <rect x="2016.3281499999998" y="513.2" width="400.59399999999977" height="70.7" rx="35.35" ry="35.35" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="2216.62515" y="548.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="2216.62515" dy="-12.350000000000001"><tspan font-weight="bold">Suspended (BudgetExhausted)</tspan></tspan><tspan x="2216.62515" dy="16.900000000000002">held in memory by the conversation loop</tspan><tspan x="2216.62515" dy="16.900000000000002">herdr: blocked · TUI: input unlocked · headless: exit non-zero</tspan></text>
+</g>
+<g class="node" data-id="idle" data-label="&lt;b&gt;Between turns&lt;/b&gt;
+conversation loop reading stdin
+run_ordinal + 1 on the next run" data-shape="stadium">
+  <rect x="1287.5856625" y="513.2" width="226.45899999999997" height="70.7" rx="35.35" ry="35.35" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="1400.8151624999998" y="548.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="1400.8151624999998" dy="-12.350000000000001"><tspan font-weight="bold">Between turns</tspan></tspan><tspan x="1400.8151624999998" dy="16.900000000000002">conversation loop reading stdin</tspan><tspan x="1400.8151624999998" dy="16.900000000000002">run_ordinal + 1 on the next run</tspan></text>
+</g>
+<g class="node" data-id="leaf" data-label="&lt;b&gt;leaf = the last entry on the active branch&lt;/b&gt;
+one entry per line · id, parent_id, seq · a tree
+history entries carry an incremental digest_after · a checkpoint is a history_replaced pointer" data-shape="cylinder">
+  <rect x="1576.2483333333334" y="1324.7" width="579.9159999999997" height="70.7" fill="#2a2f3a" stroke="none" />
+  <line x1="1576.2483333333334" y1="1324.7" x2="1576.2483333333334" y2="1395.4" stroke="#9aa4b2" stroke-width="2px" />
+  <line x1="2156.164333333333" y1="1324.7" x2="2156.164333333333" y2="1395.4" stroke="#9aa4b2" stroke-width="2px" />
+  <ellipse cx="1866.2063333333333" cy="1395.4" rx="289.95799999999986" ry="7" fill="#2a2f3a" stroke="#9aa4b2" stroke-width="2px" />
+  <ellipse cx="1866.2063333333333" cy="1324.7" rx="289.95799999999986" ry="7" fill="#2a2f3a" stroke="#9aa4b2" stroke-width="2px" />
+  <text x="1866.2063333333333" y="1360.05" text-anchor="middle" font-size="13" font-weight="500" fill="#d5dbe5"><tspan x="1866.2063333333333" dy="-12.350000000000001"><tspan font-weight="bold">leaf = the last entry on the active branch</tspan></tspan><tspan x="1866.2063333333333" dy="16.900000000000002">one entry per line · id, parent_id, seq · a tree</tspan><tspan x="1866.2063333333333" dy="16.900000000000002">history entries carry an incremental digest_after · a checkpoint is a history_replaced pointer</tspan></text>
+</g>
+<g class="node" data-id="exited" data-label="&lt;b&gt;exit entry&lt;/b&gt;
+reason: abort · exit · restart · child_exit · host_exit, plus pending_tool_calls
+written by the host from its exit handler and, synchronously, from its process-exit hook" data-shape="cylinder">
+  <rect x="1336.2015833333335" y="1173.3000000000002" width="533.9739999999997" height="70.7" fill="#2a2f3a" stroke="none" />
+  <line x1="1336.2015833333335" y1="1173.3000000000002" x2="1336.2015833333335" y2="1244.0000000000002" stroke="#9aa4b2" stroke-width="2px" />
+  <line x1="1870.1755833333332" y1="1173.3000000000002" x2="1870.1755833333332" y2="1244.0000000000002" stroke="#9aa4b2" stroke-width="2px" />
+  <ellipse cx="1603.1885833333333" cy="1244.0000000000002" rx="266.98699999999985" ry="7" fill="#2a2f3a" stroke="#9aa4b2" stroke-width="2px" />
+  <ellipse cx="1603.1885833333333" cy="1173.3000000000002" rx="266.98699999999985" ry="7" fill="#2a2f3a" stroke="#9aa4b2" stroke-width="2px" />
+  <text x="1603.1885833333333" y="1208.65" text-anchor="middle" font-size="13" font-weight="500" fill="#d5dbe5"><tspan x="1603.1885833333333" dy="-12.350000000000001"><tspan font-weight="bold">exit entry</tspan></tspan><tspan x="1603.1885833333333" dy="16.900000000000002">reason: abort · exit · restart · child_exit · host_exit, plus pending_tool_calls</tspan><tspan x="1603.1885833333333" dy="16.900000000000002">written by the host from its exit handler and, synchronously, from its process-exit hook</tspan></text>
+</g>
+<g class="node" data-id="crashed" data-label="&lt;b&gt;a crash: the journal ends at the last flushed entry&lt;/b&gt;
+the assistant's tool calls are already journaled before the tool phase runs
+so the last entry may be an unpaired call" data-shape="cylinder">
+  <rect x="1898.1755833333332" y="1173.3000000000002" width="462.09699999999975" height="70.7" fill="#2a2f3a" stroke="none" />
+  <line x1="1898.1755833333332" y1="1173.3000000000002" x2="1898.1755833333332" y2="1244.0000000000002" stroke="#9aa4b2" stroke-width="2px" />
+  <line x1="2360.272583333333" y1="1173.3000000000002" x2="2360.272583333333" y2="1244.0000000000002" stroke="#9aa4b2" stroke-width="2px" />
+  <ellipse cx="2129.224083333333" cy="1244.0000000000002" rx="231.04849999999988" ry="7" fill="#2a2f3a" stroke="#9aa4b2" stroke-width="2px" />
+  <ellipse cx="2129.224083333333" cy="1173.3000000000002" rx="231.04849999999988" ry="7" fill="#2a2f3a" stroke="#9aa4b2" stroke-width="2px" />
+  <text x="2129.224083333333" y="1208.65" text-anchor="middle" font-size="13" font-weight="500" fill="#d5dbe5"><tspan x="2129.224083333333" dy="-12.350000000000001"><tspan font-weight="bold">a crash: the journal ends at the last flushed entry</tspan></tspan><tspan x="2129.224083333333" dy="16.900000000000002">the assistant&#39;s tool calls are already journaled before the tool phase runs</tspan><tspan x="2129.224083333333" dy="16.900000000000002">so the last entry may be an unpaired call</tspan></text>
+</g>
+<g class="node" data-id="resumer" data-label="&lt;b&gt;--resume&lt;/b&gt;
+lease → read the journal ambiently → fold from the leaf
+→ runtime for the invoked profile → budget and prompt from header.boot.task
+→ digest compare → SessionResumed(resume_count, from_id, from_ordinal, …)
+the folded history on screen with a marker line; a trailing unpaired call stripped and named
+on a profile switch the head prefix is replaced and the seed journaled as history_replaced" data-shape="hexagon">
+  <polygon points="1411.5862499999998,1580 1928.5722499999997,1580 1958.9222499999996,1640.7 1928.5722499999997,1701.4 1411.5862499999998,1701.4 1381.23625,1640.7" fill="#3a2f12" stroke="#e0af68" stroke-width="2.5px" />
+  <text x="1670.0792499999998" y="1640.7" text-anchor="middle" font-size="13" font-weight="500" fill="#f2e2c2"><tspan x="1670.0792499999998" dy="-37.70000000000001"><tspan font-weight="bold">--resume</tspan></tspan><tspan x="1670.0792499999998" dy="16.900000000000002">lease → read the journal ambiently → fold from the leaf</tspan><tspan x="1670.0792499999998" dy="16.900000000000002">→ runtime for the invoked profile → budget and prompt from header.boot.task</tspan><tspan x="1670.0792499999998" dy="16.900000000000002">→ digest compare → SessionResumed(resume_count, from_id, from_ordinal, …)</tspan><tspan x="1670.0792499999998" dy="16.900000000000002">the folded history on screen with a marker line; a trailing unpaired call stripped and named</tspan><tspan x="1670.0792499999998" dy="16.900000000000002">on a profile switch the head prefix is replaced and the seed journaled as history_replaced</tspan></text>
+</g>
+<g class="node" data-id="refused" data-label="&lt;b&gt;refused&lt;/b&gt;
+Header · Entry(seq, field) · Digest(seq) · HeadPrefix · Transcript · Pairing(seq)
+Workdir · ExtSet (same profile) · Prompt (same profile, unless --resume-force) · Leased · Schema" data-shape="rectangle">
+  <rect x="1139.0359999999998" y="1817.7" width="605.1099999999998" height="70.7" rx="0" ry="0" fill="#3b1d24" stroke="#f7768e" stroke-width="0.75" />
+  <text x="1441.5909999999997" y="1853.05" text-anchor="middle" font-size="13" font-weight="500" fill="#f5c6ce"><tspan x="1441.5909999999997" dy="-12.350000000000001"><tspan font-weight="bold">refused</tspan></tspan><tspan x="1441.5909999999997" dy="16.900000000000002">Header · Entry(seq, field) · Digest(seq) · HeadPrefix · Transcript · Pairing(seq)</tspan><tspan x="1441.5909999999997" dy="16.900000000000002">Workdir · ExtSet (same profile) · Prompt (same profile, unless --resume-force) · Leased · Schema</tspan></text>
+</g>
+<g class="node" data-id="parkReq" data-label="&lt;b&gt;ParkRequested&lt;/b&gt;
+ParkEntered appended and emitted / park entry with open waits and the request" data-shape="stadium">
+  <rect x="678.5135" y="736.2" width="497.66499999999974" height="53.800000000000004" rx="26.900000000000002" ry="26.900000000000002" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="927.3459999999999" y="763.1" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="927.3459999999999" dy="-3.9000000000000012"><tspan font-weight="bold">ParkRequested</tspan></tspan><tspan x="927.3459999999999" dy="16.900000000000002">ParkEntered appended and emitted / park entry with open waits and the request</tspan></text>
+</g>
+<g class="node" data-id="suspWait" data-label="&lt;b&gt;SuspendedWaiting&lt;/b&gt;
+--park-exits: the child has exited / run_suspended(park)
+the host's suspended-child state owns the ParkRequest
+no exit actions run · lease and reporter kept" data-shape="stadium">
+  <rect x="491.72899999999987" y="906.3000000000001" width="363.544" height="87.60000000000001" rx="43.800000000000004" ry="43.800000000000004" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="673.5009999999999" y="950.1" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="673.5009999999999" dy="-20.8"><tspan font-weight="bold">SuspendedWaiting</tspan></tspan><tspan x="673.5009999999999" dy="16.900000000000002">--park-exits: the child has exited / run_suspended(park)</tspan><tspan x="673.5009999999999" dy="16.900000000000002">the host&#39;s suspended-child state owns the ParkRequest</tspan><tspan x="673.5009999999999" dy="16.900000000000002">no exit actions run · lease and reporter kept</tspan></text>
+</g>
+<g class="node" data-id="wakeRes" data-label="&lt;b&gt;WakeResolved&lt;/b&gt;
+the answer arrives / wake entry, a child of the park entry" data-shape="stadium">
+  <rect x="490.98799999999994" y="1166.3000000000002" width="365.0259999999998" height="53.800000000000004" rx="26.900000000000002" ry="26.900000000000002" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="673.5009999999999" y="1193.2000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="673.5009999999999" dy="-3.9000000000000012"><tspan font-weight="bold">WakeResolved</tspan></tspan><tspan x="673.5009999999999" dy="16.900000000000002">the answer arrives / wake entry, a child of the park entry</tspan></text>
+</g>
+<g class="node" data-id="resuming" data-label="&lt;b&gt;Resuming&lt;/b&gt;
+--resume · the fold finds park + wake · wakes cursor seeded, request_id rewritten
+first decide parks; wake_read serves from the cursor once — a run_started follows" data-shape="stadium">
+  <rect x="414.66499999999996" y="1317.7" width="517.6719999999998" height="70.7" rx="35.35" ry="35.35" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="673.5009999999999" y="1353.05" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="673.5009999999999" dy="-12.350000000000001"><tspan font-weight="bold">Resuming</tspan></tspan><tspan x="673.5009999999999" dy="16.900000000000002">--resume · the fold finds park + wake · wakes cursor seeded, request_id rewritten</tspan><tspan x="673.5009999999999" dy="16.900000000000002">first decide parks; wake_read serves from the cursor once — a run_started follows</tspan></text>
+</g>
+<g class="node" data-id="lost" data-label="&lt;b&gt;Lost&lt;/b&gt;
+TUI quit (exit actions kill the delegates) · herdr server restart
+the journal stays; the next resume re-observes and wakes Lost" data-shape="rectangle">
+  <rect x="764.6689999999999" y="1041.9" width="406.5219999999999" height="70.7" rx="0" ry="0" fill="#123038" stroke="#2ac3de" stroke-width="0.75" />
+  <text x="967.9299999999998" y="1077.25" text-anchor="middle" font-size="13" font-weight="500" fill="#bdeef5"><tspan x="967.9299999999998" dy="-12.350000000000001"><tspan font-weight="bold">Lost</tspan></tspan><tspan x="967.9299999999998" dy="16.900000000000002">TUI quit (exit actions kill the delegates) · herdr server restart</tspan><tspan x="967.9299999999998" dy="16.900000000000002">the journal stays; the next resume re-observes and wakes Lost</tspan></text>
+</g>
+<g class="node" data-id="aborted" data-label="&lt;b&gt;Aborted&lt;/b&gt;
+abort or restart while suspended / exit entry
+the request is cancelled; the journal stays resumable" data-shape="rectangle">
+  <rect x="235.5" y="1041.9" width="346.50099999999986" height="70.7" rx="0" ry="0" fill="#123038" stroke="#2ac3de" stroke-width="0.75" />
+  <text x="408.75049999999993" y="1077.25" text-anchor="middle" font-size="13" font-weight="500" fill="#bdeef5"><tspan x="408.75049999999993" dy="-12.350000000000001"><tspan font-weight="bold">Aborted</tspan></tspan><tspan x="408.75049999999993" dy="16.900000000000002">abort or restart while suspended / exit entry</tspan><tspan x="408.75049999999993" dy="16.900000000000002">the request is cancelled; the journal stays resumable</tspan></text>
+</g>
+</svg>
