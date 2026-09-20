@@ -471,6 +471,53 @@ decision interventions beyond the recorded events; power-loss durability (proces
 *(one entry per part: HEAD, command, exit code, output excerpt, what could not run, intake count for P1.2
 batches; appended by the orchestrator as parts land)*
 
+### SWEEP — 2026-09-20, record, no commit
+
+| | |
+|---|---|
+| HEAD | `75fefdcb` (documents-only over `2f3ee4d1`; `src/`, `packages/`, `tools/`, `scripts/`, `Makefile` empty diff vs `2062605`) |
+| Command | `make dst DST_JOBS=1` |
+| Exit code | **2** |
+| Duration | 1686 s (28 min) |
+| Targets | 51 — **49 passed, 2 failed**, 0 skipped |
+| AILANG | `v0.33.0` (`ae36986`), the pin |
+| Memory | peak `memory.current` 9.09 GiB against the 12 GiB rule; 112 samples at 15 s; no trip, no monitor gap |
+| Record | `RECORD-SWEEP.md` (per-target table) |
+| Log | `evidence/SWEEP-2026-09-20.log` (3.9 MB, uncommitted pending the operator's evidence-retention call) |
+| Could not run | nothing |
+
+**The two reds, and they are one cause.**
+
+```
+make[1]: *** [Makefile:833: profile_definition] Error 1
+make[1]: *** [Makefile:1344: driver_only] Error 1
+FAIL: packages/motoko-ext-abi/ailang.toml declares ABI 7.4, and these pin something else:
+  src/eval/journal/admission.ail: pinned '7.3'
+```
+
+Both targets run the same ABI-version check and fail it identically; every other assertion in both
+targets passed (`profile_definition_dst PASS`, `driver_only_dst PASS` precede the failure in each).
+Orchestrator intake (rule 5, own mechanical receipt, not the delegate's envelope): the log holds
+**exactly two** make-level errors, and `src/eval/journal/admission.ail:993` reads
+
+```
+(tx_first(RealEntry, { i | abi_version: "7.3" }, c), "A9b:AbiVersionDiffers@aggregate:provenance:abi_version"),
+```
+
+— a **test fixture** that constructs an entry with a deliberately differing ABI version to exercise the
+`A9b:AbiVersionDiffers` admission finding. The checker cannot distinguish that literal from a stale
+manifest pin. `git log 2062605..HEAD` on `admission.ail` and on `packages/motoko-ext-abi/ailang.toml` is
+empty, so the red is **pre-existing at the grounding commit** and sits on 013/PLAN-004's evaluator
+surface, not on 031's.
+
+**Neither red is explained by `DST_KNOWN_RED`**, so §0 item 2 applies: **P0.4 is blocked until the
+operator rules** (graph: `Q-SWEEP`, `P0.4` blocked, unblock = operator).
+
+**The register is also stale in the other direction.** `DST_KNOWN_RED := driver_plus_herdr herdr_graded`
+(`Makefile:697`) — **both PASSED** this run (`HERDR-GRADED: PASS`; `dst_driver_plus_herdr.ail 3/3
+passed`). The register's own comment says to drop both entries when the summary reports them passed.
+That edit is not this line's to make; it is recorded here for the owner of `Makefile:697`.
+
 ## 10. Estimates
 
 | phase | delegate-days |
