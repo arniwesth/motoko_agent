@@ -552,6 +552,39 @@ export type ExtCtx = {
   -- rather than guessing with a stale heuristic. Eliminates the duplicate
   -- model-registry tables that previously lived in motoko_ext_compaction_ai.
   context_limit: int,
+  -- 7.2: THE PROVIDER'S finish reason for the step this context describes, or
+  -- "" when this context does not follow a provider result (a pre-step shaper,
+  -- a tool-phase context, a budget or system-prompt context).
+  --
+  -- IT IS THE PROVIDER'S AND NOT THE LOOP'S. `C2LoopState.last_finish_reason`
+  -- is overloaded with harness pseudo-reasons -- `hybrid_bash`,
+  -- `await_approval`, `persist_nudge`, `solver_feedback`, `dp7_rejected`,
+  -- `stream_error` -- which are control states of the driver and not statements
+  -- about the model's response. An extension that saw those would be reading
+  -- the driver's private vocabulary and would break when it changed. The host
+  -- fills this from `StepResult.finish_reason` at the one site where the raw
+  -- result is in scope.
+  --
+  -- WHY IT IS HERE AT ALL. A finalize hook cannot otherwise tell a response
+  -- TRUNCATED at the output-token cap (`"length"`, zero tool calls, empty text)
+  -- from a model that simply said nothing -- measured on the PLAN-001 live run,
+  -- where five steps per stalled worker ended exactly that way and the guard
+  -- told the model it "returned an empty response", which was true and useless.
+  -- `telemetry.last_output_tokens` cannot separate them either: the cap is not
+  -- in this record, and `context_limit` is the INPUT window.
+  --
+  -- TREAT AN UNKNOWN VALUE AS "no opinion". Providers do not agree on this
+  -- string beyond `stop`/`length`/`tool_calls`, so match the ones you act on
+  -- and fall through on the rest.
+  finish_reason: string,
+  -- 7.3: what OTHER extensions declared outstanding, aggregated by the host
+  -- from every registered `WorkInFlight` atom. Empty means nothing is, and
+  -- empty is also what a declarer's own bootstrap context carries.
+  --
+  -- IT IS A FACT ABOUT THE WORLD, NOT ABOUT THE MODEL. That is the whole
+  -- distinction it buys a finalize hook: "the model's answer sounds unfinished"
+  -- is a claim about prose, and "a delegate is still running" is not.
+  work_in_flight: [WorkItem],
   ports: ExtPorts,
   artifacts: Json,
   telemetry: TokenTelemetry,
@@ -1079,7 +1112,59 @@ export type PaneCloseAction = {
   token_value: string
 }
 
+-- Publish a file the extension already wrote, by rename, onto a destination it
+-- already owns. The second verb, added 7.1 for dagr settle-on-exit — the
+-- consumer the 7.0 review said `PublishFile` should wait for.
+--
+-- READ THE PARAGRAPH ABOVE BEFORE THIS ONE. 7.0 dropped a `PublishFile` whose
+-- payload was a pair of FREE PATHS, and nothing here reopens that. The v1 shape
+-- let a manifest name any source and any destination; this one is refused
+-- unless BOTH paths sit inside a root the HOST resolves from its own
+-- environment (`MOTOKO_EXIT_PUBLISH_ROOT`) and the operator had to set. Unset,
+-- and no publish in any manifest can execute at all — the same opt-in shape as
+-- the reap, and for the same reason: a cleanup that writes should be something
+-- the operator turned on, not something an install decides.
+--
+-- WHY A RENAME AND NOT A WRITE. The extension writes its content while it is
+-- ALIVE, at turn end, through its own routed ports and inside the runtime's FS
+-- sandbox; the host's whole half is one `rename` syscall. So the exit path
+-- performs no serialization, holds no content, spawns nothing, and cannot blow
+-- a timeout. It also means the manifest never carries file BYTES — a manifest
+-- that could carry content would be an arbitrary-write surface again, wearing
+-- a different shape.
+--
+-- `expect_sha256` IS THE GENERATION PRECONDITION, and it is required rather
+-- than optional because an absent precondition must never decay into an
+-- unconditional overwrite -- the `token_key` lesson above, applied before it
+-- can be learned twice. It is the SHA-256 of the content the extension last
+-- observed at `dest`, lowercase hex; the host hashes `dest` at exit and
+-- refuses the rename unless they agree. There is NO "publish if absent" mode:
+-- `dest` must already exist. A producer that has not written its file yet has
+-- nothing to settle and should emit no action, and encoding that case as an
+-- empty field would put a mode back into a value that malformed input decays
+-- to.
+--
+-- A DIGEST AND NOT A BYTE COUNT, which was the first draft of this field and
+-- was wrong twice over. `std/string.length` counts RUNES: for a run file
+-- carrying a task title with one non-ASCII character -- a model-authored
+-- string, so the ordinary case rather than the exotic one -- the extension's
+-- count and the host's `stat().size` disagree, every publish is refused, and
+-- the feature fails silently and only on real data. A digest also catches the
+-- concurrent write that a size cannot: an edit that happens to preserve the
+-- length. `std/crypto.sha256Hex` and node's `createHash("sha256")` were
+-- checked to agree byte-for-byte on UTF-8 input before this was frozen.
+--
+-- The host additionally refuses the rename unless `tmp` is at least as new as
+-- `dest`. That is the HOST's rule, not this contract's -- a manifest cannot
+-- influence it, and a future host may only strengthen it.
+export type PublishFileAction = {
+  tmp: string,
+  dest: string,
+  expect_sha256: string
+}
+
 export type ExitAction = ClosePane(PaneCloseAction)
+                       | PublishFile(PublishFileAction)
 
 -- The render's answer, and it carries a SUCCESSOR for the same reason the four
 -- other outcome types do (WI-B2b): the render reads FS-backed state, it reads
@@ -1096,6 +1181,41 @@ export type ExitAction = ClosePane(PaneCloseAction)
 -- an FS-reading hook that cannot return its successor is exactly the shape
 -- WI-D1 found in production.
 export type ExitIntentOutcome = { actions: [ExitAction], next_state: ExtWorld }
+
+-- =========================================================================
+-- 7.3: WorkInFlight -- one extension telling the rest of the system that it is
+-- waiting on something.
+--
+-- THE PROBLEM IT REPLACES. `progress_contract_guard` decided whether a session
+-- was legitimately waiting by READING ENGLISH SENTENCES that
+-- `motoko-ext-herdr` had written into tool-role messages. The strings came from
+-- deterministic code rather than from the model, which is what made it safe
+-- ENOUGH -- but re-wording one of them degraded the guard silently, and a
+-- delegate is only one of the things a session can be waiting on.
+--
+-- WHY IT IS NOT A FIELD THE HOST FILLS. `ExtCtx` is built by the core, and for
+-- the core to fill "how many delegates are open" it would have to know what a
+-- delegate is -- exactly what 7.0 removed when it deleted the TUI's reaper. The
+-- host must aggregate a fact it does not understand, which is what a capability
+-- is for.
+--
+-- WHAT A `label` IS FOR: diagnostics and nothing else. A consumer that switches
+-- on labels has re-created the coupling this removes. The only question the ABI
+-- promises to answer is "is anything outstanding", and `detail` is a sentence
+-- for a person.
+-- =========================================================================
+export type WorkItem = {
+  label: string,
+  detail: string
+}
+
+-- `next_state` IS REQUIRED, and not for symmetry. The barrier derivation
+-- classifies a slot by (rowed, dispatched unconditionally, returns explicit
+-- world state); `ExitIntent`'s v1 returned a bare list, read `std/fs` ambiently,
+-- and `make driver_plus_no_ops` rejected it because a rowed unconditional slot
+-- returning NO world state makes every extension in the tree non-zero-barrier
+-- at a stroke. This slot has the same shape and would fail the same gate.
+export type WorkOutcome = { items: [WorkItem], next_state: ExtWorld }
 
 -- Neutral hooks for record-update construction. Each result is the identity for
 -- its host dispatcher: empty concatenations/patches, no policy opinion, and
@@ -1127,6 +1247,16 @@ export type Capability
   -- FS-backed state the extension already owns. `! {FS}` is the whole
   -- enforcement: a render that wanted to spawn a subprocess could not.
   | ExitIntent(string, bool, (ExtCtx) -> ExitIntentOutcome ! {FS})
+  -- 7.3. POSITIONAL for `ExitIntent`'s reason. `label` names the declarer in
+  -- diagnostics; the render answers what it is waiting on. `! {FS}` because the
+  -- honest answers live in files an extension already owns -- and because a
+  -- slot consulted this often must not be able to spawn anything.
+  --
+  -- THE RENDER RECEIVES A BOOTSTRAP CONTEXT whose own `work_in_flight` is
+  -- empty. A declarer reports what IT is waiting on and has no business reading
+  -- the aggregate it is about to contribute to; the empty list is that rule
+  -- made structural rather than written down.
+  | WorkInFlight(string, (ExtCtx) -> WorkOutcome ! {FS})
 
 -- The registry entry: D5's owner-bearing shape. `id` is the host's install
 -- stamp (`"${name}#${idx}"`), `caps` the registration list UNCHANGED in list

@@ -37,8 +37,18 @@ calls and needs no host help.
 The same missing slot bites one more place: the dagr run file freezes tasks `working`
 when the model delegates and moves on (DESIGN-dagr-as-delegation-view.md §6: "there is
 no ABI slot for 'session ended'"). Session-end settlement for the run file is the same
-seam, a different question — and `ExitAction.PublishFile` now exists to serve it (§3b),
-though nothing uses it yet.
+seam, a different question — and **there is no action kind for it.** (This sentence read
+"`ExitAction.PublishFile` now exists to serve it (§3b), though nothing uses it yet" until
+2026-09-07. It was true of the v2 draft and false of what shipped: the security pass
+recorded in §3's `ExitAction` comment dropped `PublishFile` along with `RunArgv` and
+`ClosePane`'s own `bin`. `ExitAction` ships with exactly one variant, `ClosePane`, and
+`exit-actions.ts:parseAction` rejects every other `kind`. Two sessions have now read this
+line and believed the slot was there for the taking; the correction is in §3b too.
+**Resolved 2026-09-07: ABI 7.1 adds the verb, with the authorization the 7.0 comment asked
+for.** `PublishFile({tmp, dest, expect_sha256})`, refused unless both paths sit under a root
+the HOST resolves from its own environment (`MOTOKO_EXIT_PUBLISH_ROOT`, unset by default),
+neither is a symlink, `dest` already exists, `dest` hashes to `expect_sha256`, and `tmp` is at
+least as new as `dest`. dagr settle-on-exit is its consumer.)
 
 ## 2. What the ABI had, and why it could not host this
 
@@ -250,8 +260,17 @@ moved and left that drift reporting itself.
 2. **(M9, can the two-step publish complete inside the exit budget?)** Yes, and the answer
    is cheaper than the question assumed: the extension writes the tmp file while it is
    alive, and the host's half of the transaction is `fs.renameSync` — one syscall, no
-   subprocess, no timeout to blow. `PublishFile` therefore ships as an action kind, tested,
-   with no consumer yet; dagr's settle-on-exit can take it whenever that item lands.
+   subprocess, no timeout to blow. `PublishFile` was therefore going to ship as an action
+   kind with no consumer yet — **and then did not.** The later security pass in the same
+   review (§3's `ExitAction` comment) dropped it: the manifest is one file under the
+   workdir, writable by anything with FS access — another extension, an agent file tool, a
+   delegate sharing the checkout — and it is executed at exit with the TUI's privileges,
+   outside the runtime's FS sandbox. A free `{tmp, dest}` pair is an arbitrary-write
+   surface, and "it had no consumer" is what settled the argument for dropping rather than
+   hardening it. The standing instruction for whoever needs it: it "should arrive with a
+   host-granted destination and a generation precondition rather than a pair of free
+   paths". The M9 answer above stands — the exit budget is not the obstacle. The
+   authorization shape is.
 3. **(M7, the render's row and what enforces it.)** `! {FS}` — stated in the ABI, and the
    row IS the mechanism: a render that wanted to spawn a subprocess would not compile.
    Corrected in one respect the question did not anticipate: `{FS}` alone was not enough,

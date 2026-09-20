@@ -1,4 +1,5 @@
 import { spawnSync } from "child_process";
+import { createHash } from "crypto";
 import * as fs from "fs";
 import { randomBytes } from "crypto";
 import * as path from "path";
@@ -15,7 +16,9 @@ import { sessionStartMs } from "./session-identity.js";
  * facts was a second copy of a rule whose first copy lives in AILANG.
  *
  * Nothing here knows what a delegate is. It reads a manifest, checks a proof the manifest names,
- * and performs three kinds of action. `mot-owner` does not appear in this file.
+ * and performs the two verbs below. `mot-owner` does not appear in this file, and neither does
+ * `.dagr`: a publish names paths, and whether they may be written is decided by the operator's
+ * grant, not by this file recognising what is in them.
  *
  * WHY A MANIFEST FILE RATHER THAN A CALL INTO THE EXTENSION. The extension's code runs in the
  * AILANG runtime, a child process that is normally already gone by the time this runs — and even
@@ -95,7 +98,47 @@ export interface ClosePaneAction {
  * The executable is now resolved HERE, from this process's own environment, and is never read from
  * the file. A manifest writer can ask for a tagged pane to be closed and can ask for nothing else.
  */
-export type ExitAction = ClosePaneAction;
+/**
+ * Publish a file the extension already wrote, by rename. ABI 7.1, and the SECOND and last verb.
+ *
+ * READ `ExitAction`'s note above before this one: 7.0 deleted a `publish_file` carrying two free
+ * paths, and this is not that. Every one of the following must hold or the rename does not happen,
+ * and the first four are what make the difference:
+ *
+ *   1. `MOTOKO_EXIT_PUBLISH_ROOT` is set in THIS process's environment. Unset — the default — and
+ *      no publish in any manifest executes. The manifest cannot set it, name it, or widen it.
+ *   2. Both paths are absolute and resolve inside that root. The check is on the REAL path of each
+ *      parent directory, so a symlinked directory cannot walk out of the root.
+ *   3. Neither path is a symlink, fifo, device or directory: `lstat().isFile()`, which is false for
+ *      all of them.
+ *   4. `dest` already EXISTS. There is no publish-if-absent mode, so a manifest cannot create files.
+ *   5. `dest` hashes to `expect_sha256` — the extension's generation precondition, required. A
+ *      digest and not a size: AILANG's `length` counts runes, so a byte count would disagree with
+ *      `stat().size` for any run file holding a non-ASCII task title and refuse every publish on
+ *      exactly the real data.
+ *   6. `tmp` is at least as new as `dest`. THE MANIFEST CANNOT INFLUENCE THIS ONE, which is why it
+ *      is here and not in the ABI: it is what actually catches a concurrent writer that happened to
+ *      leave `dest` the same size.
+ *
+ * The host holds no content and serializes nothing: the extension wrote the bytes at turn end,
+ * through its own routed ports, inside the runtime's FS sandbox. This half is one syscall.
+ */
+export interface PublishFileAction {
+  kind: "publish_file";
+  tmp: string;
+  dest: string;
+  expectSha256: string;
+}
+
+export type ExitAction = ClosePaneAction | PublishFileAction;
+
+/**
+ * The operator's grant. Read from this process's environment and never from a manifest.
+ *
+ * Its ABSENCE is the default and the safe direction: a publish verb that worked out of the box
+ * would be a write surface every install carried whether or not anything needed it.
+ */
+export const EXIT_PUBLISH_ROOT_VAR = "MOTOKO_EXIT_PUBLISH_ROOT";
 
 /**
  * Where the manifest for THIS session lives.
@@ -201,12 +244,25 @@ function reqStr(v: unknown): string | null {
  * unproven-close mode now; if one is ever wanted it needs its own authorization.
  */
 function parseAction(raw: Record<string, unknown>): ExitAction | null {
-  if (raw?.kind !== "close_pane") return null;
-  const pane = reqStr(raw.pane);
-  const tokenKey = reqStr(raw.token_key);
-  const tokenValue = reqStr(raw.token_value);
-  if (!pane || !tokenKey || !tokenValue) return null;
-  return { kind: "close_pane", pane, tokenKey, tokenValue };
+  if (raw?.kind === "close_pane") {
+    const pane = reqStr(raw.pane);
+    const tokenKey = reqStr(raw.token_key);
+    const tokenValue = reqStr(raw.token_value);
+    if (!pane || !tokenKey || !tokenValue) return null;
+    return { kind: "close_pane", pane, tokenKey, tokenValue };
+  }
+  if (raw?.kind === "publish_file") {
+    const tmp = reqStr(raw.tmp);
+    const dest = reqStr(raw.dest);
+    // A DIGEST THAT IS NOT A DIGEST IS NOT A WILDCARD. Missing, empty, uppercase, truncated and
+    // "any" are all refused rather than coerced: `expect_sha256` is the precondition, and a
+    // precondition that decays to a permissive value on malformed input is the `token_key` mistake
+    // in a new coat. The shape is checked here so the executor compares two digests or nothing.
+    const expectSha256 = reqStr(raw.expect_sha256);
+    if (!tmp || !dest || !expectSha256 || !/^[0-9a-f]{64}$/.test(expectSha256)) return null;
+    return { kind: "publish_file", tmp, dest, expectSha256 };
+  }
+  return null;
 }
 
 /** Test seam: replaces every subprocess. Returns stdout. */
@@ -293,6 +349,77 @@ export interface ExitActionReport {
   unproven: number;
   /** Actions abandoned because the aggregate budget ran out. */
   overBudget: number;
+  /** Publish actions refused: no operator grant, outside the root, or a failed precondition. */
+  refused: number;
+}
+
+/**
+ * The operator-granted publish root, resolved to a real path, or null.
+ *
+ * Null for every reason: unset, relative, missing, not a directory, unreadable. A publish action
+ * without a root is refused, so "cannot tell" and "not allowed" collapse to the same answer.
+ */
+export function resolvePublishRoot(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env[EXIT_PUBLISH_ROOT_VAR] ?? "";
+  if (raw === "" || !path.isAbsolute(raw)) return null;
+  try {
+    const real = fs.realpathSync(raw);
+    return fs.statSync(real).isDirectory() ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `p`'s stats if it is an existing REGULAR file inside `root`, else null.
+ *
+ * The containment test is on the real path of the PARENT, not of `p` itself: `p` may be renamed
+ * away a moment later, and resolving the parent is what stops a symlinked directory from walking
+ * out of the grant. `lstatSync` and not `statSync`, so a symlink is rejected as itself rather than
+ * followed to whatever it names.
+ */
+function containedRegularFile(p: string, root: string): fs.Stats | null {
+  if (!path.isAbsolute(p)) return null;
+  let parentReal: string;
+  try {
+    parentReal = fs.realpathSync(path.dirname(p));
+  } catch {
+    return null;
+  }
+  if (parentReal !== root && !parentReal.startsWith(root + path.sep)) return null;
+  try {
+    const st = fs.lstatSync(p);
+    return st.isFile() ? st : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One publish, or false with nothing written. Every check in `PublishFileAction`'s list, in order. */
+function performPublish(a: PublishFileAction, root: string | null): boolean {
+  if (!root) return false;
+  const tmpSt = containedRegularFile(a.tmp, root);
+  if (!tmpSt) return false;
+  // `dest` must ALREADY EXIST: no publish-if-absent mode, so this cannot create a file.
+  const destSt = containedRegularFile(a.dest, root);
+  if (!destSt) return false;
+  // Hashed, not sized — see `PublishFileAction`. The file is a run document of a few KB and this
+  // runs once per publish at exit.
+  let actual: string;
+  try {
+    actual = createHash("sha256").update(fs.readFileSync(a.dest)).digest("hex");
+  } catch {
+    return false;
+  }
+  if (actual !== a.expectSha256) return false;
+  // The host's own guard, which no manifest can influence.
+  if (tmpSt.mtimeMs < destSt.mtimeMs) return false;
+  try {
+    fs.renameSync(a.tmp, a.dest);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -311,6 +438,7 @@ export function performExitActions(
   actions: ExitAction[],
   bin: string,
   now: () => number = Date.now,
+  publishRoot: string | null = null,
 ): ExitActionReport {
   const targets = actions.slice(0, EXIT_ACTION_LIMIT);
   const report: ExitActionReport = {
@@ -318,24 +446,35 @@ export function performExitActions(
     truncated: actions.length - targets.length,
     unproven: 0,
     overBudget: 0,
+    refused: 0,
   };
-  // No binary means no way to act, and inventing one is exactly what this file must not do.
-  if (targets.length === 0 || !bin) {
-    report.overBudget = bin ? 0 : targets.length;
-    return report;
-  }
+  if (targets.length === 0) return report;
+
+  // A PUBLISH NEEDS NO BINARY, so `bin` stopped being a precondition for the whole dispatch when
+  // 7.1 landed. It is still a precondition for every CLOSE: no binary means no way to close a pane,
+  // and inventing one is exactly what this file must not do.
+  const closes = targets.filter((a): a is ClosePaneAction => a.kind === "close_pane");
+  if (closes.length > 0 && !bin) report.overBudget = closes.length;
 
   const deadline = now() + EXIT_BUDGET_MS;
   // One enumeration for the whole manifest: every close names the same server, because the server
-  // is ours and not the file's.
-  const tokens = paneTokens(run(bin, ["pane", "list"]));
+  // is ours and not the file's. Skipped entirely when nothing needs it — a manifest of publishes
+  // should not spawn a subprocess at exit.
+  const tokens =
+    closes.length > 0 && bin ? paneTokens(run(bin, ["pane", "list"])) : new Map<string, Record<string, string>>();
 
   for (let i = 0; i < targets.length; i += 1) {
     const a = targets[i]!;
     if (now() >= deadline) {
-      report.overBudget = targets.length - i;
+      report.overBudget += targets.length - i;
       break;
     }
+    if (a.kind === "publish_file") {
+      if (performPublish(a, publishRoot)) report.performed.push(a);
+      else report.refused += 1;
+      continue;
+    }
+    if (!bin) continue;
     if (!paneProofHolds(tokens, a)) {
       report.unproven += 1;
       continue;
@@ -371,7 +510,7 @@ export function __resetExitDispatchForTests(): void {
  * install with no extension declaring an intent, has nothing to do here and says nothing.
  */
 export function runExitActions(env: NodeJS.ProcessEnv = process.env): ExitActionReport {
-  const empty: ExitActionReport = { performed: [], truncated: 0, unproven: 0, overBudget: 0 };
+  const empty: ExitActionReport = { performed: [], truncated: 0, unproven: 0, overBudget: 0, refused: 0 };
   if (dispatched) return empty;
   dispatched = true;
   const p = manifestPath;
@@ -394,7 +533,7 @@ export function runExitActions(env: NodeJS.ProcessEnv = process.env): ExitAction
     return empty;
   }
   try {
-    return performExitActions(parseExitManifest(json), bin);
+    return performExitActions(parseExitManifest(json), bin, Date.now, resolvePublishRoot(env));
   } catch {
     // Never let an exit action keep Motoko from exiting.
     return empty;

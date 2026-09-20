@@ -82,6 +82,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   ResponseInterceptor,
   SolverJudge,
   ExitIntent,
+  WorkInFlight,
   ExitAction,
   ExitIntentOutcome
 )
@@ -159,7 +160,8 @@ export pure func kind_name(c: Capability) -> string {
     ToolProvider(_, _) => "ToolProvider",
     ResponseInterceptor(_) => "ResponseInterceptor",
     SolverJudge(_) => "SolverJudge",
-    ExitIntent(_, _, _) => "ExitIntent"
+    ExitIntent(_, _, _) => "ExitIntent",
+    WorkInFlight(_, _) => "WorkInFlight"
   }
 }
 
@@ -217,6 +219,13 @@ pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], s
       let repeat_exempt = match c {
         ToolProvider(_, _) => true,
         ExitIntent(_, _, _) => true,
+        -- 7.3: a CONCATENATION kind like the two above it. One extension may be
+        -- waiting on several unrelated things and there is nothing to arbitrate
+        -- between them, so N>1 is admitted. Labels are NOT required to be
+        -- disjoint the way `ExitIntent`'s are: an exit label names an action the
+        -- host will execute and must identify it, where a work label is only a
+        -- word in a diagnostic.
+        WorkInFlight(_, _) => true,
         _ => false
       };
       if repeated && is_vote_kind(c) then Err(SecondVote(id, k, pos))

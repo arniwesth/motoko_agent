@@ -20,7 +20,7 @@ import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, FinalizeOutcome,
   FinalizeDecision,
   PreStepDecision,
   DiagnosticField,
-  Capability, ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExitAction, ExitIntentOutcome, -- B8: the 6.0 sum, same line so A5's anchor at :199 holds
+  Capability, ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExitAction, ExitIntentOutcome, WorkInFlight, WorkItem, WorkOutcome, -- B8: the 6.0 sum, same line so A5's anchor at :199 holds
   ExtRuntime, ExtWorld, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome -- WI-B2b; on one line to hold A5's anchor at :190
 )
 import src/core/types (Msg)
@@ -590,6 +590,51 @@ export func dispatch_exit_intents(rt: ExtRuntime, ctx: ExtCtx) -> ExitIntentRend
   { intents: out.intents, next_state: clear_holder(out.next_state) }
 }
 
+-- 7.3: the WorkInFlight fold. UNCONDITIONAL, once per step, registry order.
+--
+-- CONCATENATION, like `DescribeTools` and unlike the vote kinds: several
+-- extensions may be waiting on several things at once and there is nothing to
+-- arbitrate. N>1 within one extension is admitted for the same reason.
+--
+-- THE BOOTSTRAP CONTEXT. Every declarer is called with `work_in_flight: []` —
+-- not with the partial aggregate built so far. Feeding an extension the
+-- half-finished list would make the answer depend on registry ORDER, and a
+-- declarer that read it could loop on its own contribution. What an extension
+-- reports must be a function of the world, not of who ran before it.
+--
+-- The world is threaded atom to atom and the holder stamped per re-seat,
+-- exactly as `render_intent_atoms` does, and for the same reason: the render
+-- reads FS-backed state through the ports and its successor must not be lost.
+export type WorkRendering = { items: [WorkItem], next_state: ExtWorld }
+
+func work_atoms(id: string, caps: [Capability], ctx: ExtCtx, world: ExtWorld) -> WorkRendering ! {FS} {
+  match caps {
+    [] => { items: [], next_state: world },
+    WorkInFlight(_label, f) :: rest => {
+      let out = f({ ctx | work_in_flight: [], world: stamp_holder(world, id) });
+      let tail = work_atoms(id, rest, ctx, out.next_state);
+      { items: out.items ++ tail.items, next_state: tail.next_state }
+    },
+    _ :: rest => work_atoms(id, rest, ctx, world)
+  }
+}
+
+func work_entries(entries: [ExtEntry], ctx: ExtCtx, world: ExtWorld) -> WorkRendering ! {FS} {
+  match entries {
+    [] => { items: [], next_state: world },
+    e :: rest => {
+      let head = work_atoms(e.id, e.caps, ctx, world);
+      let tail = work_entries(rest, ctx, head.next_state);
+      { items: head.items ++ tail.items, next_state: tail.next_state }
+    }
+  }
+}
+
+export func dispatch_work_in_flight(rt: ExtRuntime, ctx: ExtCtx) -> WorkRendering ! {FS} {
+  let out = work_entries(rt.registry.entries, ctx, ctx.world);
+  { items: out.items, next_state: clear_holder(out.next_state) }
+}
+
 -- WI-D7 CASCADE. The `on_solver_candidate` SLOT narrowed to `! {Process}`;
 -- this dispatcher is wider, and the extra `{IO, Clock}` is the HOST's, not any
 -- extension's: `emit_dummy_hook` below prints a test-instrumentation record
@@ -697,6 +742,8 @@ func smoke_ctx() -> ExtCtx {
     budget_remaining: 10,
     history_slice: [],
 	    state_key: "k",
+	    finish_reason: "",
+	    work_in_flight: [],
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),

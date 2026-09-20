@@ -159,8 +159,9 @@ export type CapabilityKind
   | ResponseInterceptorKind
   | SolverJudgeKind
   | ExitIntentKind
+  | WorkInFlightKind
 
--- THREE kinds since ABI 7.0, and the third exists because two could only
+-- THREE kinds since the 7.0 ABI bump, and the third exists because two could only
 -- describe `ExitIntent` by lying in one direction or the other.
 --
 --   Unconditional  every registered atom, every run. Excluding one is a
@@ -220,7 +221,13 @@ export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
     ToolProviderKind => Gated,
     ResponseInterceptorKind => Unconditional,
     SolverJudgeKind => Unconditional,
-    ExitIntentKind => Lifecycle
+    ExitIntentKind => Lifecycle,
+    -- 7.3: UNCONDITIONAL, not Lifecycle. `ExitIntent` is Lifecycle because a
+    -- run may or may not reach a clean exit; this is dispatched on every step
+    -- that produced a provider result, so a profile excluding it is claiming
+    -- something false about its own run — which is exactly what Unconditional
+    -- means here.
+    WorkInFlightKind => Unconditional
   }
 }
 
@@ -234,7 +241,8 @@ export pure func capability_kind_id(k: CapabilityKind) -> string {
     ToolProviderKind => "tool_provider",
     ResponseInterceptorKind => "response_interceptor",
     SolverJudgeKind => "solver_judge",
-    ExitIntentKind => "exit_intent"
+    ExitIntentKind => "exit_intent",
+    WorkInFlightKind => "work_in_flight"
   }
 }
 
@@ -248,13 +256,14 @@ export pure func capability_kind_from_id(id: string) -> Option[CapabilityKind] {
   else if id == "response_interceptor" then Some(ResponseInterceptorKind)
   else if id == "solver_judge" then Some(SolverJudgeKind)
   else if id == "exit_intent" then Some(ExitIntentKind)
+  else if id == "work_in_flight" then Some(WorkInFlightKind)
   else None
 }
 
 export pure func all_capability_kinds() -> [CapabilityKind] {
   [DescribeToolsKind, PromptShaperKind, BudgetShaperKind, CompactorKind,
    ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind, SolverJudgeKind,
-   ExitIntentKind]
+   ExitIntentKind, WorkInFlightKind]
 }
 
 -- THE UNIT: an atom is (kind, index-within-kind) in the registration's list
@@ -596,24 +605,27 @@ pure func count_unconditional_kinds(ks: [CapabilityKind]) -> int {
 -- unencodable type "()"". Every nullary enumerator in this module is blocked the
 -- same way, so every test reading one is too. The assertion is the `tests [...]`
 -- block, run by `ailang test` and by `make profile_coverage`.
-pure func test_all_capability_kinds_is_nine_distinct() -> bool
+pure func test_all_capability_kinds_is_ten_distinct() -> bool
   tests [((), true)]
   {
-    List.length(all_capability_kinds()) == 9 && distinct_ids(kind_ids(all_capability_kinds()), [])
+    List.length(all_capability_kinds()) == 10 && distinct_ids(kind_ids(all_capability_kinds()), [])
   }
 
 pure func test_one_atom_per_kind_fully_covered_passes() -> bool
   tests [((), true)]
   {
-    List.length(one_per_kind()) == 9
+    List.length(one_per_kind()) == 10
       && capability_install_list_ok([cap_full("ext_a", one_per_kind())])
       && capability_install_list_ok([])
   }
 
--- SEVEN unconditional, ONE gated, ONE lifecycle at 7.0 -- and the three-way
--- split is the assertion, not the seven. A version of this test that only
--- counted unconditional kinds would pass with `ExitIntent` classified either
--- way, which is exactly how the first 7.0 answer went in undetected.
+-- EIGHT unconditional, ONE gated, ONE lifecycle at 7.3 (seven/one/one at 7.0)
+-- -- and the three-way split is the assertion, not the eight. A version of this
+-- test that only counted unconditional kinds would pass with `ExitIntent`
+-- classified either way, which is exactly how the first 7.0 answer went in
+-- undetected. `WorkInFlight` is the eighth unconditional one: no operator knob,
+-- nothing the host must name, dispatched on the same branch as
+-- `ResponseInterceptor`.
 --
 -- Each arm exercises the CONSEQUENCE of its kind rather than the label:
 -- excluding the unconditional one is rejected, excluding the gated one loads
@@ -621,7 +633,7 @@ pure func test_one_atom_per_kind_fully_covered_passes() -> bool
 -- reason, recorded in `capability_dispatch`.
 -- contracts: SKIPPED — "calls "all_capability_kinds" whose signature uses an
 -- unencodable type "()"". See the note above `test_all_capability_kinds_is_nine_distinct`.
-pure func test_dispatch_kinds_split_seven_one_one() -> bool
+pure func test_dispatch_kinds_split_eight_one_one() -> bool
   tests [((), true)]
   {
     let gated: CapabilityDisclosure =
@@ -639,7 +651,7 @@ pure func test_dispatch_kinds_split_seven_one_one() -> bool
     capability_install_list_ok([gated])
       && capability_install_list_ok([life])
       && has_rule(validate_capability_disclosure(unc), "unconditional-hook-excluded")
-      && count_unconditional_kinds(all_capability_kinds()) == 7
+      && count_unconditional_kinds(all_capability_kinds()) == 8
       && count_gated_kinds(all_capability_kinds()) == 1
       && count_lifecycle_kinds(all_capability_kinds()) == 1
   }

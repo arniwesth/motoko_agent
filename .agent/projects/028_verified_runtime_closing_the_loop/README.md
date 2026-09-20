@@ -65,6 +65,17 @@ targeted task never touches.
     measures tour cost (~8.2M input / 70 steps, ~96% cache reads);
     `progress_contract_guard` firing on assessment-shaped prose;
     interactive `make run` exceeding the tool ceiling.
+14. **NOTE-009-fifth-session-demo-assessment-and-complexity.md** — fifth
+    session (2026-09-07): extended demo + assessment + complexity levers under
+    the same pinned model, now catalogued (`context_limit: 1048576`, usage
+    3–5%, no compaction — correctly). Closes NOTE-005/NOTE-008 finding 1 as a
+    data row (catalogue entry present); the loud-guard half (warn when limit
+    resolves to 0 on a compaction profile) is still open. Re-verifies the full
+    tour read-only (rpc → session 3966 lines → step_machine → phases/ports →
+    ext dispatch/registry → TUI/env-server), corrects the tool count to 7
+    (`MotokoRuntimeStatus`), and records six complexity levers (delete dead
+    paths → split the three giants → sum types → single-source catalog →
+    shrink/lazy-load order → isolate the two couplings).
 
 ## The one-paragraph state
 
