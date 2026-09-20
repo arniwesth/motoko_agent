@@ -25,7 +25,12 @@ Rebuilding the binary invalidates the freeze — restart if you do.
 ## Environment, verbatim
 
 ```bash
-export T=/workspaces/p23-sweep-r4 C=$T/clone A=/workspaces/motoko_agent-eval
+# One assignment per line: `export T=… C=$T/clone` expands $T BEFORE it is set,
+# so C becomes /clone and every `git -C $C` fails with
+# `fatal: cannot change to '/clone'`. Found by P2.3R·a5 on the way in.
+export T=/workspaces/p23-sweep-r4
+export C=$T/clone
+export A=/workspaces/motoko_agent-eval
 export PATH=/workspaces/ailang-pins:$PATH
 export AILANG_FS_SANDBOX=/workspaces
 export TMPDIR=$T/tmp
