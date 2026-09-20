@@ -1,0 +1,113 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________________ test_p23_r6_d1_classes_through_shell _____________________
+
+tmp_path = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-0/test_p23_r6_d1_classes_through0')
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-0/cand0')
+
+    def test_p23_r6_d1_classes_through_shell(tmp_path, work):
+        # P2.3R R6 (round 4, half i): 7 typed rc1 cases through the SHELL admit
+        # path — the 5 reader-refused fixtures + unreadable dir + bad end — each
+        # refused with its generator family + position, ran=false, exit 1, and
+        # DISTINCT labels for unreadable (MalformedEntry@path) vs bad end
+        # (BadSelector@path). The test passes an E record (clean gate inputs).
+        import pathlib
+        sys.path.insert(0, os.path.join(REPO, "src", "eval", "journal", "testdata"))
+        import gen_fixtures as g
+        out = os.path.join(str(work), "p23-r6-collect")
+        shutil.rmtree(out, ignore_errors=True)
+        os.makedirs(out, mode=0o700, exist_ok=True)
+        r = subprocess.run(["bash", os.path.join(HERE, "journal_replay.sh"), "collect",
+                            "--fixture", FIXTURE, "--out", out],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+        erec_path = os.path.join(out, "erec.json")
+        _p23_erecord_for(out, erec_path)
+        clean_ids, clean_cmp = _p23_clean_inputs(out, erec_path)
+        # 5 reader-refused fixtures (family + position from the generator).
+        refused = [(n, exp) for t in g.world_fixtures() for (n, exp) in [(t[0], t[4])] if exp]
+        assert len(refused) == 5, [n for n, _ in refused]
+        seen = set()
+        for name, (fam, pos, _field) in refused:
+>           e = build_entry_from_fixture(work, name)
+
+scripts/eval/test_candidate.py:1313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/test_candidate.py:1007: in build_entry_from_fixture
+    (e / "t0_settings.json").write_text(g.normalized_configuration(jl, lg, sel, env) + "\n")
+src/eval/journal/testdata/gen_fixtures.py:2208: in normalized_configuration
+    w = read_world(jl, lg, s, env)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+lines = [{'at_ms': 1000, 'boot': {'budget': {'solver': 12, 'total': 12, 'verifier': 0}, 'cost_rates': {'input_per_1m_millicent...'id': 'e5', 'message': {'content': 'a.txt\nb.txt', 'images': [], 'role': 'tool', 'tool_call_id': 'c1', ...}, ...}, ...]
+log = [{'ailangBuilt': 'fx', 'backend_mode': 'fx', 'brainVersion': 'fx', 'config_dir': '/fx/cfg', ...}, {'mode': 'v2', 'mode...baa2ed7a9dcf712bea08519145dfeb8ad08', ...}, {'seq': 0, 'step': 1, 'stream_id': 'step-1', 'text_delta': 'fx', ...}, ...]
+s = {'end': ('EndAt', 'e15'), 'leaf': 'e17', 'run_id': 'sess_fx.r0.1', 'start': 'e13'}
+env = {'base_url': '', 'headless': '1', 'retry': '1', 'timeout': None}
+
+    def read_world(lines, log, s, env):
+        """ADR-004 D1 (P1.3): cutoffs, the six shapes, the ends, HybridPredicate,
+        the logical model and the T0 settings. Raises WorldRefused."""
+        text = log_text(log)
+    
+        def run(sx):
+            try:
+                return read_run(lines, text, sx)
+            except RunRefused as err:
+                raise WorldRefused(err.family, err.position, err.field)
+    
+        try:
+            r = read(lines, s)
+        except ReaderRefused:
+            run(s)
+            raise AssertionError("read_run accepted a selector read refused")
+        path, seg = r["path"], r["segment"]
+        start = seg[0]
+        cut, first_cf, assistants = scan_cutoffs(seg)
+        after_start = next_on_path(path, start["id"])
+        start_only = (with_end(s, "CutoffBefore", after_start["id"]) if after_start
+                      else with_end(s, "EndAt", start["id"]))
+        empty_reason = None
+        if cut is not None and (first_cf is None or cut[0] <= first_cf):
+            s1 = start_only if cut[0] == 0 else with_end(s, "CutoffBefore", seg[cut[0]]["id"])
+            if cut[0] == 0:
+                empty_reason = cut[1]
+            via_cf = False
+        elif first_cf is not None:
+            nxt = next_on_path(path, seg[first_cf]["id"])
+            s1 = (with_end(s, "CutoffBefore", nxt["id"]) if nxt else with_end(s, "EndAt", seg[first_cf]["id"]))
+            via_cf = True
+        else:
+            s1, via_cf = s, False
+        a1 = run(s1)
+        if empty_reason:
+            raise WorldRefused("EmptySegment", f"entry:{start['seq']}", empty_reason)
+        events = a1["events"]
+        final_cut = None      # (kind, detail, position)
+        s2 = None
+        stop_call = False
+        if a1["cut"]:
+            reason, k, ev = a1["cut"]
+            asst_seq = [e["seq"] for e in seg if e["type"] == "history_appended"
+                        and e["message"]["role"] == "assistant" and not e["replaces_previous"]][k - 1]
+            s2 = with_end(s, "CutoffBefore", next(e["id"] for e in seg if e["seq"] == asst_seq))
+            final_cut = (reason, "", f"event:{ev}")
+        elif via_cf:
+            f = seg[first_cf]
+            last = a1["calls"][-1]
+            assert last["seq"] == f["seq"]
+            think = next(e for e in events if e["index"] == last["thinking"])
+            kind = None
+            if think["finish_reason"] == "tool_calls":
+                kind = "CallFreeToolCallsFinish"
+            elif f["message"]["content"].strip() == "":
+                kind = "BlankStop"
+            if kind:
+                if first_cf == 0:
+>                   raise WorldRefused("EmptySegment", f"entry:{f['seq']}", kind)
+E                   gen_fixtures.WorldRefused: ('EmptySegment', 'entry:13', 'BlankStop')
+
+src/eval/journal/testdata/gen_fixtures.py:1782: WorldRefused
+=========================== short test summary info ============================
+FAILED scripts/eval/test_candidate.py::test_p23_r6_d1_classes_through_shell
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed in 17.18s

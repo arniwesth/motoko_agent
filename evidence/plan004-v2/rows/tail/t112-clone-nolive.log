@@ -1,0 +1,223 @@
+........................................................................ [ 55%]
+............................FF.F.......F.....sssssssssssss               [100%]
+=================================== FAILURES ===================================
+_______________ test_p23_mut4_prefetch_catches_stale_comparators _______________
+
+tmp_path = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/test_p23_mut4_prefetch_catches0')
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/cand0')
+
+    def test_p23_mut4_prefetch_catches_stale_comparators(tmp_path, work):
+        # P2.3R R8/MUT-4 catcher (round 4, half i): the named test that goes red
+        # when the runner reads STALE comparators. Simulate: collect, then rewrite
+        # comparators.json main_packages_clean to True while the tree is dirty —
+        # the runner-side cross-check (assembled_tree recomputed in-process) must
+        # refuse. Red without the check, green with it.
+        out = os.path.join(str(work), "p23-mut4-%d" % os.getpid())
+        shutil.rmtree(out, ignore_errors=True)
+        os.makedirs(out, mode=0o700, exist_ok=True)
+        r = subprocess.run(["bash", os.path.join(HERE, "journal_replay.sh"), "collect",
+                            "--fixture", FIXTURE, "--out", out],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+        cmp_path = os.path.join(out, "comparators.json")
+        cmpj = json.loads(open(cmp_path).read())
+        # stale-comparator simulation: flip the file's verdict without changing
+        # the tree it describes.
+        cmpj["main_packages_clean"] = True
+        cmpj["dot_packages_state"] = "pinned_equal"
+        cmpj["assembled_tree"] = cmpj["revision_tree"]
+        json.dump(cmpj, open(cmp_path, "w"), indent=1, sort_keys=True)
+        ids = json.loads(open(os.path.join(out, "identities.json")).read())
+>       assert ids["tracked_changes"], "sweep runs on a dirty checkout; test needs it"
+E       AssertionError: sweep runs on a dirty checkout; test needs it
+E       assert []
+
+scripts/eval/test_candidate.py:1154: AssertionError
+_________________ test_p23_mut5_env_poison_refused_before_run __________________
+
+tmp_path = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/test_p23_mut5_env_poison_refus0')
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/cand0')
+
+    def test_p23_mut5_env_poison_refused_before_run(tmp_path, work):
+        # P2.3R R2e/MUT-5 named test (round 4, half i): a well-formed env poison
+        # (credential prefix + 16-char body inside recorded_env.json) refuses with
+        # ScanRefusal BEFORE the world runs (ran=false, exit 1, nothing written).
+        # Red when the pre-run scan is removed; green with it.
+        import pathlib
+        sys.path.insert(0, os.path.join(REPO, "src", "eval", "journal", "testdata"))
+        out = os.path.join(str(work), "p23-mut5-collect")
+        shutil.rmtree(out, ignore_errors=True)
+        os.makedirs(out, mode=0o700, exist_ok=True)
+        r = subprocess.run(["bash", os.path.join(HERE, "journal_replay.sh"), "collect",
+                            "--fixture", FIXTURE, "--out", out],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-500:] + r.stderr[-400:]
+        erec_path = os.path.join(out, "erec.json")
+        _p23_erecord_for(out, erec_path)
+        e = build_entry_from_fixture(work, "m3_selector_end")
+        envp = os.path.join(str(e), "env.json")
+        env = json.loads(open(envp).read())
+        env["headless"] = "sk-live-AAAAAAAAAAAAAAAA"
+        open(envp, "w").write(json.dumps(env) + "\n")
+        corpus = tmp_path / "corpus-mut5"
+        corpus.mkdir(exist_ok=True)
+        r = _p23_admit_entry(e, corpus, erec_path)
+        assert r.returncode == 1, r.stdout[-800:] + r.stderr[-400:]
+        rows = [l for l in r.stdout.splitlines() if l.startswith("AVERDICT ")]
+>       assert len(rows) == 1 and rows[0].split("\t")[0] == "AVERDICT refused", rows
+E       AssertionError: []
+E       assert (0 == 1)
+E        +  where 0 = len([])
+
+scripts/eval/test_candidate.py:1200: AssertionError
+_____________________ test_p23_r6_d1_classes_through_shell _____________________
+
+tmp_path = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/test_p23_r6_d1_classes_through0')
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/cand0')
+
+    def test_p23_r6_d1_classes_through_shell(tmp_path, work):
+        # P2.3R R6 (round 4, half i): 7 typed rc1 cases through the SHELL admit
+        # path — the 5 reader-refused fixtures + unreadable dir + bad end — each
+        # refused with its generator family + position, ran=false, exit 1, and
+        # DISTINCT labels for unreadable (MalformedEntry@path) vs bad end
+        # (BadSelector@path). The test passes an E record (clean gate inputs).
+        import pathlib
+        sys.path.insert(0, os.path.join(REPO, "src", "eval", "journal", "testdata"))
+        import gen_fixtures as g
+        out = os.path.join(str(work), "p23-r6-collect")
+        shutil.rmtree(out, ignore_errors=True)
+        os.makedirs(out, mode=0o700, exist_ok=True)
+        r = subprocess.run(["bash", os.path.join(HERE, "journal_replay.sh"), "collect",
+                            "--fixture", FIXTURE, "--out", out],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+        erec_path = os.path.join(out, "erec.json")
+        _p23_erecord_for(out, erec_path)
+        clean_ids, clean_cmp = _p23_clean_inputs(out, erec_path)
+        # 5 reader-refused fixtures (family + position from the generator).
+        refused = [(n, exp) for t in g.world_fixtures() for (n, exp) in [(t[0], t[4])] if exp]
+        assert len(refused) == 5, [n for n, _ in refused]
+        seen = set()
+        for name, (fam, pos, _field) in refused:
+>           e = build_entry_from_fixture(work, name)
+
+scripts/eval/test_candidate.py:1313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/test_candidate.py:1007: in build_entry_from_fixture
+    (e / "t0_settings.json").write_text(g.normalized_configuration(jl, lg, sel, env) + "\n")
+src/eval/journal/testdata/gen_fixtures.py:2208: in normalized_configuration
+    w = read_world(jl, lg, s, env)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+lines = [{'at_ms': 1000, 'boot': {'budget': {'solver': 12, 'total': 12, 'verifier': 0}, 'cost_rates': {'input_per_1m_millicent...'id': 'e5', 'message': {'content': 'a.txt\nb.txt', 'images': [], 'role': 'tool', 'tool_call_id': 'c1', ...}, ...}, ...]
+log = [{'ailangBuilt': 'fx', 'backend_mode': 'fx', 'brainVersion': 'fx', 'config_dir': '/fx/cfg', ...}, {'mode': 'v2', 'mode...baa2ed7a9dcf712bea08519145dfeb8ad08', ...}, {'seq': 0, 'step': 1, 'stream_id': 'step-1', 'text_delta': 'fx', ...}, ...]
+s = {'end': ('EndAt', 'e15'), 'leaf': 'e17', 'run_id': 'sess_fx.r0.1', 'start': 'e13'}
+env = {'base_url': '', 'headless': '1', 'retry': '1', 'timeout': None}
+
+    def read_world(lines, log, s, env):
+        """ADR-004 D1 (P1.3): cutoffs, the six shapes, the ends, HybridPredicate,
+        the logical model and the T0 settings. Raises WorldRefused."""
+        text = log_text(log)
+    
+        def run(sx):
+            try:
+                return read_run(lines, text, sx)
+            except RunRefused as err:
+                raise WorldRefused(err.family, err.position, err.field)
+    
+        try:
+            r = read(lines, s)
+        except ReaderRefused:
+            run(s)
+            raise AssertionError("read_run accepted a selector read refused")
+        path, seg = r["path"], r["segment"]
+        start = seg[0]
+        cut, first_cf, assistants = scan_cutoffs(seg)
+        after_start = next_on_path(path, start["id"])
+        start_only = (with_end(s, "CutoffBefore", after_start["id"]) if after_start
+                      else with_end(s, "EndAt", start["id"]))
+        empty_reason = None
+        if cut is not None and (first_cf is None or cut[0] <= first_cf):
+            s1 = start_only if cut[0] == 0 else with_end(s, "CutoffBefore", seg[cut[0]]["id"])
+            if cut[0] == 0:
+                empty_reason = cut[1]
+            via_cf = False
+        elif first_cf is not None:
+            nxt = next_on_path(path, seg[first_cf]["id"])
+            s1 = (with_end(s, "CutoffBefore", nxt["id"]) if nxt else with_end(s, "EndAt", seg[first_cf]["id"]))
+            via_cf = True
+        else:
+            s1, via_cf = s, False
+        a1 = run(s1)
+        if empty_reason:
+            raise WorldRefused("EmptySegment", f"entry:{start['seq']}", empty_reason)
+        events = a1["events"]
+        final_cut = None      # (kind, detail, position)
+        s2 = None
+        stop_call = False
+        if a1["cut"]:
+            reason, k, ev = a1["cut"]
+            asst_seq = [e["seq"] for e in seg if e["type"] == "history_appended"
+                        and e["message"]["role"] == "assistant" and not e["replaces_previous"]][k - 1]
+            s2 = with_end(s, "CutoffBefore", next(e["id"] for e in seg if e["seq"] == asst_seq))
+            final_cut = (reason, "", f"event:{ev}")
+        elif via_cf:
+            f = seg[first_cf]
+            last = a1["calls"][-1]
+            assert last["seq"] == f["seq"]
+            think = next(e for e in events if e["index"] == last["thinking"])
+            kind = None
+            if think["finish_reason"] == "tool_calls":
+                kind = "CallFreeToolCallsFinish"
+            elif f["message"]["content"].strip() == "":
+                kind = "BlankStop"
+            if kind:
+                if first_cf == 0:
+>                   raise WorldRefused("EmptySegment", f"entry:{f['seq']}", kind)
+E                   gen_fixtures.WorldRefused: ('EmptySegment', 'entry:13', 'BlankStop')
+
+src/eval/journal/testdata/gen_fixtures.py:1782: WorldRefused
+______________ test_m13_run_dev_evaluator_refused_for_real_entry _______________
+
+clone = <test_candidate.Clone object at 0xffffacfde3f0>
+entry = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/cand0/twodoor-entry-976164')
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/cand0')
+
+    def test_m13_run_dev_evaluator_refused_for_real_entry(clone, entry, work):
+        cand = clone.commit(clone.head, PERMITTED_EDIT)
+        rec = record_for(work / "rec-run-dev.json", clone.head, cand)
+>       code, _, record = C.run(run_opts(clone, entry, clone.head, cand, rec, run_id="dev-real", synthetic=False))
+
+scripts/eval/test_candidate.py:1493: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/candidate.py:1345: in run
+    e_files, e_ident = evaluator_files(opts.evaluator, repo, synthetic=bool(opts.synthetic))
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+spec = '/workspaces/p23-sweep-r4/clone'
+repo = '/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-2/cand0/repo'
+
+    def evaluator_files(spec, repo, *, synthetic=False):
+        """E's evaluator files as {path: bytes}, and E's identity.
+    
+        P2.3 (C4/C9 item 3): --evaluator is always a commit, never a directory
+        (a directory is fail-open: nothing compares it with the entry's
+        generator_version). A directory spec is refused here.
+        """
+        files = {}
+        if os.path.isdir(spec):
+            # P2.3R C3: a directory evaluator is allowed ONLY for synthetic entries
+            # (`run --synthetic`); production callers always pass a commit, and a
+            # directory there is refused (fail-open: nothing compares it with the
+            # entry's generator_version).
+            if not synthetic:
+>               raise EvalError(f"--evaluator takes a commit, not a directory: {spec} (directories need --synthetic)")
+E               candidate.EvalError: --evaluator takes a commit, not a directory: /workspaces/p23-sweep-r4/clone (directories need --synthetic)
+
+scripts/eval/candidate.py:517: EvalError
+=========================== short test summary info ============================
+FAILED scripts/eval/test_candidate.py::test_p23_mut4_prefetch_catches_stale_comparators
+FAILED scripts/eval/test_candidate.py::test_p23_mut5_env_poison_refused_before_run
+FAILED scripts/eval/test_candidate.py::test_p23_r6_d1_classes_through_shell
+FAILED scripts/eval/test_candidate.py::test_m13_run_dev_evaluator_refused_for_real_entry
+4 failed, 113 passed, 13 skipped in 296.79s (0:04:56)

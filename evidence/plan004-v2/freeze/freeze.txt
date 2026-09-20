@@ -1,0 +1,50 @@
+P2.3 round 4 half (i) freeze — 2026-09-18T10:20:19Z
+X=20626054e8015ebd8623459789d8de8bb6c260d2
+Xtree=f2c7f212d19aa45de964e25b2fef108a2931eaff
+diff-sha256=2cabc903667d3620a49a947d48f3dcad3130a1ae9e8348cb96196607f8fc4873
+--- per-file git hash-object ---
+4cb6003189eb67d88d26f4fc4ba9824337609c63 scripts/eval/candidate.py
+3909f17cb45adaf3e3fc4f4789bba84ddf411192 scripts/eval/journal_replay.ail
+e0ea6cf4b1596e94f36b36abcd0cf2bf09cf720a scripts/eval/journal_replay.sh
+cb024982cb9a715e3e2bf5e9582f8c5e4e331711 scripts/eval/test_candidate.py
+5908c3b6f3b1aa78d54224c8a18167db168c41fd src/eval/journal/admission.ail
+4e5ac8a03196d2c7dcaf7ea903799b6e576939e6 src/eval/journal/admission_live_test.ail
+2d092544a92291d7ceab5e07d203f0114066215d src/eval/journal/candidate_checks_live_test.ail
+207008423d07b90e08f02a8bff644d15fda5563c src/eval/journal/scan.ail
+ff2b7b7fdc7e56221e7875759c4f7fbe7adc65de src/eval/journal/scan_live_test.ail
+4a54f5ca5499c8d7ec4929ba8ea44709a797b096 src/eval/journal/source_checks_live_test.ail
+9d038780835af76c729e3cb6d6e8d58f85726115 src/eval/journal/source_checks_run.ail
+bf51a42cec94298554b940e47b0907484e3f7b1a src/eval/journal/testdata/MATRIX.expected.tsv
+80fe5405a2e0d4a09f1da5b69dab0316e9d4495c src/eval/journal/testdata/scan_fixtures.ail
+36af8987050c7d522b3a051fc7797d4c1b191182 src/eval/journal/witness_live_test.ail
+627294e9c7dd8093dd03d1f4f626f5b622d3d5b5 scripts/eval/entry_config.py
+3f5f83e758804a4a7bbea555bab18c7e2280128f scripts/eval/p23_collector.py (X1 only; superseded)
+--- re-freeze 2026-09-18 (R1a fallback; blob equality re-verified) ---
+X1=929879cec823c2c902fd410b39fabee4e6e763c7 (superseded: collector without fallback)
+X2=90f945ddfed2c3f5fefcc440f49868878cde3ef7 (sweep commit)
+X2tree=e7f196e61b645e8e65c0aab64a59a4b3fe3e5610
+A-diff-sha256=2cabc903667d3620a49a947d48f3dcad3130a1ae9e8348cb96196607f8fc4873
+collector-blob=13954918f235ae9de509f8fbd2e3758c0a60484d
+X3=d6ef9d8e77c07206e7a7b6ac61cdc8fd60ce1f3e (sweep commit; X2 superseded: 3-file entry-out writer)
+X3tree=c07a8d19fbc322bc5ccb42020ca5a73a829b4aa5
+journal_replay.ail-blob=b9d12770261edc99f856b7d96084399a92568a17
+X4=ae2f95d053d267c1fa6dbe31a41f930187ed40e2 (sweep commit; X3 superseded: fixture raw_env/raw_sel empty)
+X4tree=b233ace6d16d8b470d1873f99cf852abf81fb9af
+journal_replay.ail-blob2=6f07fb6335864128a02e9b1791a7c7dae839cb26
+CACHE-INCIDENT 2026-09-18: sweep clone carried a stale 194M compile cache at
+scripts/eval/.ailang/cache/compile (ignored+untracked, populated X1-X3 era).
+Stale cache served X3 jr_input (raw "" literals) under X4 bytes; pristine copy
+proved X4 correct. Deleted (rm -rf scripts/eval/.ailang in clone only); tree
+still clean (status empty); frozen bytes untouched. Bisect post-clear: FULL.
+X5=bfb9fc4d3ef6bff305fa18406aa0b2b26dcf0f8c (sweep commit; X4 superseded: driver passed checkout path as pin revision)
+X5tree=e0ea92e27c6ac2ab64f9390f020bd477042c8c0c
+journal_replay.sh-blob=b3951b1e4f242d37b19bb8a213954f6ff48bf46e
+door1-X4-note: door1 28/3 ran on X4 bytes (XCHK pure X4); X4->X5 shell edit is unobservable on the fixture door (0/31 door-out wires contain ENTRY_COMPLETED; merge block entry-door-only). Door1 RE-RUN on X5 below for one-X compliance.
+--- re-freeze 2026-09-18T13:58:34Z (X6: admit_rev pin class + 644 mode + R1b/R6/C4a leftovers) ---
+X6=20a78579e5eaef34bfdad10cc81d9f2f2e61d753 (sweep commit; X5 superseded: fresh rev-parse at merge time)
+X6tree=ec46735ce9715b1eba59f0d04de15679066296c9
+journal_replay.sh-blob=0b01cd032c28798068be11ca00a309ccc0ab79ff
+test_candidate.py-blob=6d6a4c27d76e1aedde79e0a8659ba7ed3323dc8b
+journal_replay.ail-blob3=4f5fd067255c023144e31bc7c4280e0f56741104
+A-diff-sha256=4a961343e616526e93975676b91890fc8f82f5289d8838052a97e85015980a0b
+entry_config.py-mode=100644 (workdir + tree; mode drift closed)

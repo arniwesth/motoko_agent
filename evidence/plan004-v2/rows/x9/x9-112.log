@@ -1,0 +1,298 @@
+X9-1.12 legs at e397d957c38ffe59598bdfcd9c0bb4456a0c2e0a started 2026-09-19T13:26:22Z
+=== clone nolive ===
+........................................................................ [ 55%]
+.............................................sssssssssssss               [100%]
+117 passed, 13 skipped in 504.10s (0:08:24)
+nolive=0
+=== clone live ===
+........................................................................ [ 55%]
+.............................................FFFFFFFFF....               [100%]
+=================================== FAILURES ===================================
+_____________________ test_m15_inadmissible_path_k0_passes _____________________
+
+sent_message_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide...ive-sent-message/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...})
+
+    @live
+    def test_m15_inadmissible_path_k0_passes(sent_message_run):
+>       assert_k0_passes(*sent_message_run)
+
+scripts/eval/test_candidate.py:1673: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...spaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-sent-message/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...live-sent-message/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed
+ENVELOPE checked=K0 evidence=execution-provenance marker_check=not applicable: no K1-K7 verdict (refused or not run)
+ENVELOPE score=forbidden: no K1-K7 verdict
+ENVELOPE residual_gap=a module's selected path is the runner's re-derivation of the loader's rules (ailang ae36986), cross-checked against the compiler's module set, not the loader's own report; ailang run discards -trace-loader at ae36986, so the stdlib search order is re-derived from the pinned source; a loader flag printing id -> selected path would close this (AILANG feature request)
+ENVELOPE record=/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-sent-message/provenance.json
+____________________ test_m15_inadmissible_path_diverges_k2 ____________________
+
+sent_message_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide...ive-sent-message/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...})
+
+    @live
+    def test_m15_inadmissible_path_diverges_k2(sent_message_run):
+        # K2 precedes K7: the first affected call's request projection differs
+>       assert_diverged(*sent_message_run, "K2:ProjectionDiffers", "interaction:14")
+
+scripts/eval/test_candidate.py:1680: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/test_candidate.py:1659: in assert_diverged
+    assert_k0_passes(code, lines, record)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...spaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-sent-message/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...live-sent-message/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+___________________ test_m15_inadmissible_intent_diverges_k2 ___________________
+
+sent_message_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide...ive-sent-message/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...})
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0')
+
+    @live
+    def test_m15_inadmissible_intent_diverges_k2(sent_message_run, work):
+        # the same run IS the intent case: declared and reviewed resource-only
+        code, lines, record = sent_message_run
+        rec = json.loads((work / "rec-live-sent-message.json").read_text())
+        assert rec["intent"] == C.INTENT and rec["reviewer"] and "intent" in record["steps"]
+>       assert_diverged(code, lines, record, "K2:ProjectionDiffers", "interaction:14")
+
+scripts/eval/test_candidate.py:1689: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/test_candidate.py:1659: in assert_diverged
+    assert_k0_passes(code, lines, record)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...spaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-sent-message/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...live-sent-message/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+___________________ test_m15_digest_function_only_k0_passes ____________________
+
+near_miss_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide..., PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-near-miss'))
+
+    @live
+    def test_m15_digest_function_only_k0_passes(near_miss_run):
+        code, lines, record, run_dir = near_miss_run
+>       assert_k0_passes(code, lines, record)
+
+scripts/eval/test_candidate.py:1695: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...orkspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-near-miss/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...ns/live-near-miss/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed
+ENVELOPE checked=K0 evidence=execution-provenance marker_check=not applicable: no K1-K7 verdict (refused or not run)
+ENVELOPE score=forbidden: no K1-K7 verdict
+ENVELOPE residual_gap=a module's selected path is the runner's re-derivation of the loader's rules (ailang ae36986), cross-checked against the compiler's module set, not the loader's own report; ailang run discards -trace-loader at ae36986, so the stdlib search order is re-derived from the pinned source; a loader flag printing id -> selected path would close this (AILANG feature request)
+ENVELOPE record=/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-near-miss/provenance.json
+__________________ test_m15_digest_function_only_diverges_k7 ___________________
+
+near_miss_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide..., PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-near-miss'))
+
+    @live
+    def test_m15_digest_function_only_diverges_k7(near_miss_run):
+        # the digest-only terminator reaches only the trace's history digests
+        code, lines, record, run_dir = near_miss_run
+>       assert_diverged(code, lines, record, "K7:SeedDigestDiffers", "snapshot:12")
+
+scripts/eval/test_candidate.py:1703: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/test_candidate.py:1659: in assert_diverged
+    assert_k0_passes(code, lines, record)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...orkspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-near-miss/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...ns/live-near-miss/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+_______________ test_m15_digest_function_only_intent_diverges_k7 _______________
+
+near_miss_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide..., PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-near-miss'))
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0')
+
+    @live
+    def test_m15_digest_function_only_intent_diverges_k7(near_miss_run, work):
+        # the digest-only case under its declared, reviewed resource-only record
+        code, lines, record, run_dir = near_miss_run
+        rec = json.loads((work / "rec-live-near-miss.json").read_text())
+        assert rec["intent"] == C.INTENT and rec["reviewer"] and "intent" in record["steps"]
+>       assert_diverged(code, lines, record, "K7:SeedDigestDiffers", "snapshot:12")
+
+scripts/eval/test_candidate.py:1712: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/test_candidate.py:1659: in assert_diverged
+    assert_k0_passes(code, lines, record)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...orkspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-near-miss/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...ns/live-near-miss/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+_____________________ test_m15_clean_candidate_reproduced ______________________
+
+clean_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide.../runs/live-clean/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...})
+
+    @live
+    def test_m15_clean_candidate_reproduced(clean_run):
+        code, lines, record = clean_run
+>       assert_k0_passes(code, lines, record)
+
+scripts/eval/test_candidate.py:1718: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...d=/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-clean/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...1/runs/live-clean/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed
+ENVELOPE checked=K0 evidence=execution-provenance marker_check=not applicable: no K1-K7 verdict (refused or not run)
+ENVELOPE score=forbidden: no K1-K7 verdict
+ENVELOPE residual_gap=a module's selected path is the runner's re-derivation of the loader's rules (ailang ae36986), cross-checked against the compiler's module set, not the loader's own report; ailang run discards -trace-loader at ae36986, so the stdlib search order is re-derived from the pinned source; a loader flag printing id -> selected path would close this (AILANG feature request)
+ENVELOPE record=/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-clean/provenance.json
+____________________ test_m15_evaluator_touched_diverges_k2 ____________________
+
+evaluator_touched_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide...valuator-touched/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...})
+
+    @live
+    def test_m15_evaluator_touched_diverges_k2(evaluator_touched_run):
+        # MOTOKO_TOOL_TIMEOUT_MS -> _MX: an environment-read identity (G4)
+>       assert_diverged(*evaluator_touched_run, "K2:UnsafeIdentity", "interaction:9")
+
+scripts/eval/test_candidate.py:1729: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/test_candidate.py:1659: in assert_diverged
+    assert_k0_passes(code, lines, record)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...s/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-evaluator-touched/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...evaluator-touched/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed
+ENVELOPE checked=K0 evidence=execution-provenance marker_check=not applicable: no K1-K7 verdict (refused or not run)
+ENVELOPE score=forbidden: no K1-K7 verdict
+ENVELOPE residual_gap=a module's selected path is the runner's re-derivation of the loader's rules (ailang ae36986), cross-checked against the compiler's module set, not the loader's own report; ailang run discards -trace-loader at ae36986, so the stdlib search order is re-derived from the pinned source; a loader flag printing id -> selected path would close this (AILANG feature request)
+ENVELOPE record=/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-evaluator-touched/provenance.json
+_________________ test_m15_protected_region_search_diverges_k2 _________________
+
+closure_search_run = (1, ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evide...e-closure-search/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...})
+
+    @live
+    def test_m15_protected_region_search_diverges_k2(closure_search_run):
+        # the missing closure member (fs_node.ail): K0 passes — the artifact's
+        # bytes and re-encoded digest are the pinned ones — and C diverges
+        code, lines, record = closure_search_run
+        assert record["execution"]["compiled_ids"] and "src/core/fs_node" in record["execution"]["compiled_ids"]
+>       assert_diverged(code, lines, record, "K2:UnsafeIdentity", "interaction:5")
+
+scripts/eval/test_candidate.py:1738: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/eval/test_candidate.py:1659: in assert_diverged
+    assert_k0_passes(code, lines, record)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = 1
+lines = ['CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed', 'ENVELOPE checked=K0 evidence=...aces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-closure-search/provenance.json']
+record = {'assembly': {'compat_patch': None, 'effective_lock_sha256': 'sha256:a243376fa9dc22956954d84294e725b07a738f8fbd0db7bc8...ve-closure-search/cache', 'AILANG_NO_CACHE': None, 'AILANG_STDLIB_PATH': None, 'HOME': '/home/motoko', ...}, ...}, ...}
+
+    def assert_k0_passes(code, lines, record):
+>       assert record.get("k0") == [], record.get("k0")
+E       AssertionError: [{'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}]
+E       assert [{'class': 'c..._during_run'}] == []
+E         Left contains one more item: {'class': 'corpus', 'detail': 'an entry file changed', 'finding': 'corpus:changed_during_run'}
+E         Use -v to get more diff
+
+scripts/eval/test_candidate.py:1652: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+CANDIDATE refused PreflightMismatch:corpus:changed_during_run an entry file changed
+ENVELOPE checked=K0 evidence=execution-provenance marker_check=not applicable: no K1-K7 verdict (refused or not run)
+ENVELOPE score=forbidden: no K1-K7 verdict
+ENVELOPE residual_gap=a module's selected path is the runner's re-derivation of the loader's rules (ailang ae36986), cross-checked against the compiler's module set, not the loader's own report; ailang run discards -trace-loader at ae36986, so the stdlib search order is re-derived from the pinned source; a loader flag printing id -> selected path would close this (AILANG feature request)
+ENVELOPE record=/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-36/cand0/twodoor-entry-1321281/runs/live-closure-search/provenance.json
+=========================== short test summary info ============================
+FAILED scripts/eval/test_candidate.py::test_m15_inadmissible_path_k0_passes
+FAILED scripts/eval/test_candidate.py::test_m15_inadmissible_path_diverges_k2
+FAILED scripts/eval/test_candidate.py::test_m15_inadmissible_intent_diverges_k2
+FAILED scripts/eval/test_candidate.py::test_m15_digest_function_only_k0_passes
+FAILED scripts/eval/test_candidate.py::test_m15_digest_function_only_diverges_k7
+FAILED scripts/eval/test_candidate.py::test_m15_digest_function_only_intent_diverges_k7
+FAILED scripts/eval/test_candidate.py::test_m15_clean_candidate_reproduced - ...
+FAILED scripts/eval/test_candidate.py::test_m15_evaluator_touched_diverges_k2
+FAILED scripts/eval/test_candidate.py::test_m15_protected_region_search_diverges_k2
+9 failed, 121 passed in 1118.98s (0:18:38)
+live=1
+X9-1.12 legs finished 2026-09-19T13:53:26Z
