@@ -1084,7 +1084,7 @@ pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = compose_manifest("r", "t", "7.4", "{}", ["env_get"], [], "r");
+    let m = compose_manifest("r", "t", "8.0", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_compose().installed_packages)
       && List.length(m.extension_packages) == 1
       && m.profile_id == compose_profile_id()

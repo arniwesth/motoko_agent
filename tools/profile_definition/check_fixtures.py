@@ -913,11 +913,7 @@ def check_abi_version():
     artifact class it had not been pointed at. The version is a fact declared in
     `packages/motoko-ext-abi/ailang.toml`, so it is read from there.
     """
-    m = re.search(r'^version\s*=\s*"([^"]+)"', ABI_TOML.read_text(), re.M)
-    if not m:
-        fail(f"could not read the ABI version from {ABI_TOML.relative_to(REPO)}; a profile's "
-             "recorded abi_version cannot be checked against the package that declares it")
-    live = m.group(1)
+    live = live_abi_version()
 
     # ---- rule 1: PROSE, in profile records only ---------------------------
     #
@@ -970,6 +966,39 @@ def check_abi_version():
           f"declares: {live} ({seen} site(s) across "
           f"{len([p for p in subjects if p.exists()])} file(s))")
 
+    check_abi_pins(live)
+
+
+def live_abi_version():
+    m = re.search(r'^version\s*=\s*"([^"]+)"', ABI_TOML.read_text(), re.M)
+    if not m:
+        fail(f"could not read the ABI version from {ABI_TOML.relative_to(REPO)}; a profile's "
+             "recorded abi_version cannot be checked against the package that declares it")
+    return m.group(1)
+
+
+# FIXTURE LITERALS BUILT TO DIFFER — the one named exemption from rule 2.
+#
+# 031 P1.5r, under the operator's `Q-SWEEP` ruling (2026-09-20). Rule 2 cannot
+# tell a stale manifest pin from a test fixture that constructs a DIFFERING ABI
+# version on purpose, to exercise a version-mismatch finding. `SWEEP` flagged
+# exactly that: `admission.ail`'s A9b fixture, whose `"7.3"` exists so that
+# `a9b_abi` fires `A9b:AbiVersionDiffers`. Setting it to the live version — the
+# repair this rule used to recommend — makes that fixture assert nothing.
+#
+# This is an EXEMPTION, NOT A LOOSENING. Each entry is (file, anchor, reason):
+# the anchor is text on the literal's own line (the finding the fixture
+# expects), so the exemption follows the fixture if it moves and names nothing
+# else. Each entry must match EXACTLY ONE pin, and that pin must still DIFFER
+# from the live version; either failing is red. The `pins == 0` and `< 50
+# files` guards below count and fire exactly as before.
+ABI_PIN_EXEMPTIONS = [
+    ("src/eval/journal/admission.ail", "A9b:AbiVersionDiffers",
+     "the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers"),
+]
+
+
+def check_abi_pins(live):
     # ---- rule 2: PINS, wherever they are ----------------------------------
     #
     # WHY THIS EXISTS SEPARATELY, 2026-09-08. Rule 1 was written for a manifest
@@ -1013,16 +1042,37 @@ def check_abi_version():
              "looking at almost nothing.")
     pins = 0
     drifted = []
+    exempted = {i: [] for i in range(len(ABI_PIN_EXEMPTIONS))}
     for path in pin_files:
         if not path.exists():
             continue
         text = path.read_text()
-        found = re.findall(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S) \
-            + re.findall(r'abi_version:\s*"([0-9]+\.[0-9]+)"', text)
-        for arg in found:
+        rel = str(path.relative_to(REPO))
+        found = [m.start(1) for m in re.finditer(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S)] \
+            + [m.start(1) for m in re.finditer(r'abi_version:\s*"([0-9]+\.[0-9]+)"', text)]
+        for pos in found:
+            arg = re.match(r'[0-9]+\.[0-9]+', text[pos:]).group(0)
+            lineno = text.count("\n", 0, pos) + 1
+            line = text.splitlines()[lineno - 1]
+            hit = [i for i, (f, anchor, _) in enumerate(ABI_PIN_EXEMPTIONS)
+                   if f == rel and anchor in line]
+            if hit:
+                exempted[hit[0]].append((f"{rel}:{lineno}", arg))
+                continue
             pins += 1
             if arg != live:
-                drifted.append(f"{path.relative_to(REPO)}: pinned '{arg}'")
+                drifted.append(f"{rel}:{lineno}: pinned '{arg}'")
+    for i, (f, anchor, reason) in enumerate(ABI_PIN_EXEMPTIONS):
+        sites = exempted[i]
+        if len(sites) != 1:
+            fail(f"the ABI-pin exemption ({f}, '{anchor}') matched {len(sites)} pin(s), not exactly "
+                 "one. An exemption that names nothing is stale, and one that names several "
+                 "exempts pins nobody reviewed: " + ", ".join(s for s, _ in sites))
+        site, arg = sites[0]
+        if arg == live:
+            fail(f"{site} is exempted as a fixture literal built to DIFFER ({reason}), but it reads "
+                 f"'{arg}', the live ABI version. Equal, the fixture asserts nothing — a vacuous "
+                 "test. Restore a differing version.")
     if pins == 0:
         fail("the pin sweep found no manifest `abi_version` pin anywhere in the tree, so it "
              "re-derived nothing. An assertion with no subject cannot be told from one that "
@@ -1031,11 +1081,17 @@ def check_abi_version():
         fail(f"{ABI_TOML.relative_to(REPO)} declares ABI {live}, and these pin something else:\n  "
              + "\n  ".join(drifted)
              + f"\n\nA manifest whose whole job is exact reproducibility pins a contract this "
-               f"tree does not have. These are inert metadata strings — no assertion reads them "
-               f"and no digest covers them (`trajectory_key` digests interactions only) — so the "
-               f"repair is to set each to {live}.")
+               f"tree does not have. A manifest pin is inert metadata — no digest covers it "
+               f"(`trajectory_key` digests interactions only) — and is repaired by setting it to "
+               f"{live}. A literal BUILT TO DIFFER is not a pin: a fixture exercising a "
+               f"version-mismatch finding asserts nothing once it equals {live}, so do NOT set "
+               f"it; name it in ABI_PIN_EXEMPTIONS with the finding it exercises.")
     print(f"  ✓ every manifest ABI pin in the tree is the declared one: {live} "
           f"({pins} pin(s) across {len(pin_files)} tracked .ail file(s))")
+    for i, (f, anchor, reason) in enumerate(ABI_PIN_EXEMPTIONS):
+        site, arg = exempted[i][0]
+        print(f"  ✓ exempted, a fixture literal built to differ: {site} pins '{arg}' != {live} "
+              f"— {reason}")
 
 
 if __name__ == "__main__":
@@ -1043,5 +1099,9 @@ if __name__ == "__main__":
         # 031 P0.5: the kind list alone, without the producers the full run
         # provisions (classifier 3 compiles every extension).
         check_capability_kinds()
+    elif sys.argv[1:] == ["--abi-pins"]:
+        # 031 P1.5r: rule 2 of check_abi_version alone (the pin sweep), without
+        # `derive()`, which exits 1 on the tree while P1.2 is open.
+        check_abi_pins(live_abi_version())
     else:
         main()

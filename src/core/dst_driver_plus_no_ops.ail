@@ -988,7 +988,7 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = no_ops_manifest("r", "t", "7.4", "{}", ["env_get"], [], "r");
+    let m = no_ops_manifest("r", "t", "8.0", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_no_ops().installed_packages)
       && List.length(m.extension_packages) == 4
       && m.profile_id == no_ops_id()

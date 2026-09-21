@@ -1,0 +1,86 @@
+# P1.5r checks — HEAD 031c0f16 + the P1.5r diff, 2026-09-21, AILANG v0.33.0
+
+## 1. pin sweep, standalone: python3 tools/profile_definition/check_fixtures.py --abi-pins
+  ✓ every manifest ABI pin in the tree is the declared one: 8.0 (31 pin(s) across 519 tracked .ail file(s))
+  ✓ exempted, a fixture literal built to differ: src/eval/journal/admission.ail:993 pins '7.3' != 8.0 — the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers
+exit 0
+
+## 2. probe runner: bash .agent/projects/031_system_one_decisions/evidence/P1.5r/run_abi_probes.sh
+-- BudgetShaper payload row (scripts/dst/run_declared_vs_performed.sh:127-139) --
+      packages/motoko-ext-abi/types.ail:1945  | BudgetShaper((PureCtx, BudgetPlan) -> BudgetPatch)
+  ✓ ABI declares the BudgetShaper payload (on_budget_plan through 5.x) effect-free (WI-D6 narrowed it; was the closed ! {Env, FS} through WI-D5)
+-- Compactor slot row (scripts/dst/run_declared_vs_performed.sh:714-720) --
+  ✓ Capability.Compactor (ExtensionHooks.on_pre_step through 5.x) declares ! {AI, IO, Trace} — the fixpoint of compaction_ai's chain once the port narrowed
+
+P1.5r ABI text probes: 2 passed, 0 failed
+exit 0
+
+## 3. A9b test: bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/eval/journal/admission.ail (throwaway workspace, compiles AILANG)
+p11: test src/eval/journal/admission.ail ok -- 12 tests: 12 passed, 0 failed, 0 skipped (52.48928184s)
+exit 0
+   in place, primary checkout: AILANG_RELAX_MODULES=1 ailang test src/eval/journal/admission.ail
+  ✓ test_m9_a9b_clean_test_1 (25.109877532s)
+  ✓ test_m9_a9b_each_identity_false_test_1 (2.423725893s)
+  ✓ test_m9_a9b_real_entry_refused_before_p1g_test_1 (2.515542257s)
+12 tests: 12 passed, 0 failed, 0 skipped (56.348431168s)
+exit 0
+
+## 3b. regression: the changed src/core pin modules' own tests (p11_core_check.sh test ...)
+p11: test src/core/dst_profile.ail ok -- 42 tests: 42 passed, 0 failed, 0 skipped (28.889150505s)
+p11: test src/core/dst_replay.ail ok -- 21 tests: 21 passed, 0 failed, 0 skipped (21.150571453s)
+p11: test src/core/dst_driver_only.ail ok -- 6 tests: 6 passed, 0 failed, 0 skipped (3.06601281s)
+p11: test src/core/dst_driver_plus_no_ops.ail ok -- 7 tests: 7 passed, 0 failed, 0 skipped (4.158855016s)
+p11: test src/core/dst_driver_plus_compose.ail ok -- 9 tests: 9 passed, 0 failed, 0 skipped (5.399519948s)
+exit 0
+
+## 4. mutgate (013 mutgate.sh --spec .agent/projects/031_system_one_decisions/evidence/P1.5r/mutgate_spec.tsv --repo <fresh clone of 031c0f16 + this diff>)
+PASS p15r_exemption_removed — discriminates
+PASS p15r_exemption_stale — discriminates
+PASS p15r_fixture_equal_guard — discriminates
+PASS p15r_fixture_equal_a9b — discriminates
+PASS p15r_pin_reverted — discriminates
+PASS p15r_budgetshaper_widened — discriminates
+PASS p15r_compactor_widened — discriminates
+---
+mutgate: 7/7 discriminate, 0 failed. Record: mg_out/mutgate.tsv
+Submission precondition MET.
+
+## 4b. why each mutated run is red (the same seds re-applied by hand in that clone, then restored)
+-- p15r_budgetshaper_widened
+  ✗ the ABI row carries an effect row again — WI-D6 narrowed it to none, and D5 criterion 1 fails the moment it comes back
+-- p15r_compactor_widened
+  ✗ Capability.Compactor is no longer at ! {AI, IO, Trace}; re-measure the compaction_ai chain before moving it
+-- p15r_exemption_removed
+FAIL: packages/motoko-ext-abi/ailang.toml declares ABI 8.0, and these pin something else:
+  src/eval/journal/admission.ail:993: pinned '7.3'
+-- p15r_exemption_stale
+FAIL: the ABI-pin exemption (src/eval/journal/admission.ail, 'A9b:NoSuchFinding') matched 0 pin(s), not exactly one. An exemption that names nothing is stale, and one that names several exempts pins nobody reviewed: 
+-- p15r_fixture_equal_a9b
+p11: test src/eval/journal/admission.ail FAILED (exit 1; 12 tests: 11 passed, 1 failed, 0 skipped (51.338398123s))
+-- p15r_fixture_equal_guard
+FAIL: src/eval/journal/admission.ail:993 is exempted as a fixture literal built to DIFFER (the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers), but it reads '8.0', the live ABI version. Equal, the fixture asserts nothing — a vacuous test. Restore a differing 
+-- p15r_pin_reverted
+FAIL: packages/motoko-ext-abi/ailang.toml declares ABI 8.0, and these pin something else:
+  scripts/dst/driver_only_dst.ail:287: pinned '7.4'
+-- p15r_fixture_equal_a9b, the failing test by name (in-place diagnostic run in the clone):
+  ✗ test_m9_a9b_each_identity_false_test_1 (2.204450625s)
+12 tests: 11 passed, 1 failed, 0 skipped (51.586001322s)
+
+## 5. full targets (primary checkout; packages/ carries P1.2a's in-flight edits)
+-- make profile_definition
+subprocess.CalledProcessError: Command '['/usr/bin/python3', 'tools/ext_call_inventory/derive.py', '--json']' returned non-zero exit status 1.
+make: *** [Makefile:833: profile_definition] Error 1
+-- make driver_only
+subprocess.CalledProcessError: Command '['/usr/bin/python3', 'tools/ext_call_inventory/derive.py', '--json']' returned non-zero exit status 1.
+make: *** [Makefile:1344: driver_only] Error 1
+-- check_abi_version() in full (rule 1 prose + rule 2 pins), what those targets reach once derive.py is green:
+FAIL: src/core/dst_driver_only.ail names 'ABI 7.4' and packages/motoko-ext-abi/ailang.toml declares 8.0. A profile record or manifest that pins the wrong ABI pins nothing.
+-- make declared_vs_performed
+      packages/motoko-ext-abi/types.ail:1945  | BudgetShaper((PureCtx, BudgetPlan) -> BudgetPatch)
+  ✓ ABI declares the BudgetShaper payload (on_budget_plan through 5.x) effect-free (WI-D6 narrowed it; was the closed ! {Env, FS} through WI-D5)
+  ✗ compose_pre_step died with Env, FS and Process withheld — it performs one of them
+  ✗ compose_budget died with Env, FS and Process withheld — it performs one of them
+  ✗ compose_solver died with Env, FS and Process withheld — it performs one of them
+  ✗ compose_intercept_noninline died with Env, FS and Process withheld — it performs one of them
+make: *** [Makefile:445: declared_vs_performed] Error 1
+exit 2

@@ -121,7 +121,11 @@ echo "-- producer 1: DECLARED, read from source --"
 # row rather than trusting a comment about it, and it asserts the NEW state:
 # a re-widening must turn this red rather than pass quietly.
 # B8: the slot is the `BudgetShaper` payload of the 6.0 `Capability` sum.
-abi_row=$(grep -n 'BudgetShaper((ExtCtx, BudgetPlan)' "$ABI" || true)
+# 031 P1.5r: 8.0 takes the payload's context from `ExtCtx` to `PureCtx` (ADR-001
+# D2's views). The anchor follows the 8.0 text; the assertion is unchanged —
+# the ROW, which must stay absent.
+# >>> P1.5r probe: BudgetShaper payload row
+abi_row=$(grep -n 'BudgetShaper((PureCtx, BudgetPlan)' "$ABI" || true)
 if [ -z "$abi_row" ]; then
   bad "BudgetShaper's payload row (was on_budget_plan's ABI row) not found in $ABI — the detector's declared side has no producer"
 else
@@ -132,6 +136,7 @@ else
     ok "ABI declares the BudgetShaper payload (on_budget_plan through 5.x) effect-free (WI-D6 narrowed it; was the closed ! {Env, FS} through WI-D5)"
   fi
 fi
+# <<< P1.5r probe: BudgetShaper payload row
 
 # Every binding must MATCH the ABI row exactly — closed-row equality on a record
 # field admits exactly one width, which WI-D6 measured directly:
@@ -704,11 +709,15 @@ if grep -qF -- "ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, T
 else
   bad "ExtPorts.ai_step is no longer at its measured row ! {AI, IO, Trace}. It was measured from ext_ai_step's BODY, not from an annotation — re-measure before moving it"
 fi
-if grep -qF -- "Compactor((ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})" "$ABI"; then
+# 031 P1.5r: 8.0 takes Compactor's context from `ExtCtx` to `AiCtx`, whose one
+# port is `ai_step`. The anchor follows the 8.0 text; the assertion is the row.
+# >>> P1.5r probe: Compactor slot row
+if grep -qF -- "Compactor((AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})" "$ABI"; then
   ok "Capability.Compactor (ExtensionHooks.on_pre_step through 5.x) declares ! {AI, IO, Trace} — the fixpoint of compaction_ai's chain once the port narrowed"
 else
   bad "Capability.Compactor is no longer at ! {AI, IO, Trace}; re-measure the compaction_ai chain before moving it"
 fi
+# <<< P1.5r probe: Compactor slot row
 
 # S22: DERIVE the site sets and assert the counts. The WI-D8 handoff said
 # "eleven annotation sites"; deriving them found SEVENTEEN, and the first
