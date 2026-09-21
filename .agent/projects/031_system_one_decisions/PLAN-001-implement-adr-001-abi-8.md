@@ -544,6 +544,29 @@ suggested repair is refused for that site — it would make the `A9b` fixture va
 **P1.5r**, owns the 31 manifest pins `7.4 → 8.0` and an explicit fixture-literal exemption, landing
 before `R-G`. (c) The `DST_KNOWN_RED` edit stays with the owner of `Makefile:697`.
 
+### P0.2 — 2026-09-20, commits `af6b1d34` + `bcdbf68a`
+
+| | |
+|---|---|
+| Commits | `af6b1d34` (52 fixtures + 51 rows; placeholder message) and `bcdbf68a` (the record, landed as a second commit rather than an amend so `e4731b33` on top kept its hash) |
+| Home | `scripts/dst/fixtures/adr001_boundary/` — **underscore**, moved under §0 item 6: the pin refuses a hyphen in a module path (`PAR_HYPHEN_IN_MODULE`), and the suite's mechanism is a fixture importing its sum from a sibling module |
+| Groups | g1 compiler-rejected **27/27**; g2 accepted controls **5/5**; g3 escapes (boundary must reject) **12/12**; g4 compiler-clean boundary-rejected **1/1**; class 2(a) missing authority **3/3**, outside every 2(b) denominator (N23) |
+| Red-first | all 12 group-3 escapes **accepted** by the bare compiler and perform at invocation — the pre-boundary state P0.3 is scored against |
+| Delegate exit | `make declared_vs_performed` 114/0 (63 before + 51 rows); mutgate 7/7 |
+| **Intake (orchestrator)** | `make declared_vs_performed` → **114 passed, 0 failed, exit 0**; `mutgate.sh --clone-from` into a fresh clone → **7/7 discriminate**, every row GREEN → RED → GREEN, bytes same |
+| Provenance | `adr001_boundary_provenance.py` re-derives all 52 files from the review documents on every run; 16 cases quoted twice are byte-identical; digests match those reviews 6 and 7 recorded |
+| Not fixtures | `constructor_shadow` (review 6 records it as an invalid setup) and `v7_ctor_shadow` (its support module is never quoted) |
+| ADR amendment | none needed by the delegate's reading — every D2 sentence a fixture reaches held |
+| Intake defects | 0 |
+
+**Carried to `P0G`.** ADR freeze 2(b) names "the 20 named-arm attacks reject at the compiler". Review 5
+§A.3 is a 21-row table of probe *shapes* and quotes full source for five cases only — `q_named_shadow`,
+`q_named_paren_apply`, `q_named_partial`, `q_named_toplevel_apply`, `q_named_recfield_named` — which are
+the five committed. The other 16 were measured by that review but cannot be re-run as fixtures. The
+plan's P0.2 premise ("every source is quoted in a review appendix") is false for them. Options at
+`P0G`: a numbered amendment citing review 5's table, or reconstructing the 16 from their shapes as new
+rows.
+
 ## 10. Estimates
 
 | phase | delegate-days |
