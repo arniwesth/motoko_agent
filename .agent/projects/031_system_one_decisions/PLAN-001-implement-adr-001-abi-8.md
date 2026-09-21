@@ -323,6 +323,26 @@ and `decision_state = None` at ordinary sites, `Some` with identity, limits, the
 zeroed ledger terms at decision sites. Truthful, never asserting success (D3). **Exit.** fixtures; mutation:
 default `Passed` → red.
 
+### P1.5r — manifest ABI pins 7.4 → 8.0, and the fixture-literal exemption (½ day, 25 tracked `.ail` files, `tools/profile_definition/check_fixtures.py`) — **line R**, added 2026-09-20 by the operator's ruling on `Q-SWEEP`
+
+**Why this part exists.** `SWEEP` (§9) found that the ABI-version pin sweep in `check_fixtures.py`
+(`:912-943`) regexes every `abi_version: "X.Y"` and `_manifest(… "X.Y")` literal across **all tracked
+`.ail` files** and compares it with the version `packages/motoko-ext-abi/ailang.toml` declares live. At
+HEAD that is **31 pins at `7.4` in 25 files**, plus one `7.3`. When P0.4 sets 8.0, all 31 drift and
+`make profile_definition` and `make driver_only` go red on 31 sites. No other part owns those files:
+G5b's "19 package pins" are `ailang.toml` path pins, a different set, and P1.1 covers `src/core/ext/*`
+and `tool_catalog`, not `dst_profile`, `dst_replay` or `dst_driver_*`. Neither target is in `R-G`'s
+checklist, so without this part nothing would force the pins and the drift would ship.
+**What.** Every one of the 31 pins reads `8.0`. The one exception is deliberate:
+`src/eval/journal/admission.ail:993` builds an entry with `abi_version: "7.3"` so that `a9b_abi` fires
+`A9b:AbiVersionDiffers` — setting it equal to the lock makes that fixture assert nothing, which is a
+vacuous test and is refused at intake. So the sweep gains an **explicit, named exemption** for fixture
+literals built to differ, rather than being loosened; its `pins == 0` and `< 50 files` guards must still
+fire. The checker's current message ("the repair is to set each to" the live version) is corrected so it
+stops recommending the vacuous repair.
+**Exit.** `make profile_definition` and `make driver_only` green on the tree at 8.0; `mutgate`: remove
+the exemption → the `7.3` fixture is swept again → red → restore → green, bytes identical.
+
 ### P1.4x — evidence construction and the invocation state (1½–2 days, `session.ail`) — **line X**
 
 `VerificationEvidence` from `run_dp7_verifier` (`:2241-2254`), `VerificationUnavailable` marked heuristic
@@ -518,11 +538,17 @@ operator rules** (graph: `Q-SWEEP`, `P0.4` blocked, unblock = operator).
 passed`). The register's own comment says to drop both entries when the summary reports them passed.
 That edit is not this line's to make; it is recorded here for the owner of `Makefile:697`.
 
+**Operator ruling (`Q-SWEEP`, 2026-09-20), adopting the orchestrator's recommendation in full.** (a) The
+`admission.ail:993` red is a **known false positive**; P0.4 is unblocked. (b) The checker's own
+suggested repair is refused for that site — it would make the `A9b` fixture vacuous — and a new part,
+**P1.5r**, owns the 31 manifest pins `7.4 → 8.0` and an explicit fixture-literal exemption, landing
+before `R-G`. (c) The `DST_KNOWN_RED` edit stays with the owner of `Makefile:697`.
+
 ## 10. Estimates
 
 | phase | delegate-days |
 |---|---|
-| **R** | **14–18** (SWEEP ½, P0.2 1, P0.3 2–2½, P0.4 1½, P0.5 1–1½, P0.6 1, P1.1 2–2½, P1.2 4–6, P1.3r 1–1½, P1.4r ½, gate ½) |
+| **R** | **14½–18½** (SWEEP ½, P0.2 1, P0.3 2–2½, P0.4 1½, P0.5 1–1½, P0.6 1, P1.1 2–2½, P1.2 4–6, P1.3r 1–1½, P1.4r ½, **P1.5r ½**, gate ½) — P1.5r added by the `Q-SWEEP` ruling |
 | P0 (X part) | 2–2½ (P0.7) |
 | P1 (X part) | 4–5½ (P1.3x 3–4, P1.4x 1½–2) |
 | P2 | 8–10 |
