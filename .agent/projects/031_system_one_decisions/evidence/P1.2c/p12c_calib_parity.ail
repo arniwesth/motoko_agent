@@ -1,0 +1,64 @@
+-- 031 PLAN-001 P1.2c: compaction-ai no longer imports src/core (own-root check, ADR
+-- Amendment 2), so it carries the calibrated usage estimate itself. This probe holds the
+-- two copies equal: package `calibrated_usage_percent` vs core
+-- `calibrated_usage_percent_anchored`, over a grid of message sizes, limits and anchors.
+-- Run by p12c_core_check.sh run scripts/p12c/p12c_calib_parity.ail IO.
+module scripts/p12c/p12c_calib_parity
+
+import std/io (println, exit)
+import std/ai (Message)
+import pkg/sunholo/motoko_ext_abi/types (Msg)
+import src/core/compaction (calibrated_usage_percent_anchored)
+import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (calibrated_usage_percent)
+
+func pad(n: int) -> string { if n <= 0 then "" else "abcdefghij${pad(n - 1)}" }
+
+func msgs(k: int, size: int) -> [Msg] {
+  if k <= 0 then [] else {
+    let m: Msg = { role: "user", content: pad(size + k), tool_calls: [], tool_call_id: "" };
+    m :: msgs(k - 1, size)
+  }
+}
+
+func to_messages(ms: [Msg]) -> [Message] {
+  match ms {
+    [] => [],
+    m :: rest => {
+      let x: Message = { role: m.role, content: m.content, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id, images: [] };
+      x :: to_messages(rest)
+    }
+  }
+}
+
+func case_ok(k: int, size: int, limit: int, real: int, est: int) -> int ! {IO} {
+  let ms = msgs(k, size);
+  let a = calibrated_usage_percent(ms, limit, real, est);
+  let b = calibrated_usage_percent_anchored(to_messages(ms), limit, real, est);
+  if a == b then 0 else { println("MISMATCH k=${show(k)} size=${show(size)} limit=${show(limit)} real=${show(real)} est=${show(est)} pkg=${show(a)} core=${show(b)}"); 1 }
+}
+
+func grid(cases: [{ k: int, size: int, limit: int, real: int, est: int }]) -> int ! {IO} {
+  match cases {
+    [] => 0,
+    c :: rest => case_ok(c.k, c.size, c.limit, c.real, c.est) + grid(rest)
+  }
+}
+
+export func main() -> () ! {IO} {
+  let cases = [
+    { k: 0, size: 0, limit: 0, real: 0, est: 0 },
+    { k: 3, size: 5, limit: 100, real: 0, est: 0 },
+    { k: 8, size: 20, limit: 250, real: 0, est: 0 },
+    { k: 8, size: 20, limit: 250, real: 400, est: 300 },
+    { k: 8, size: 20, limit: 250, real: 100, est: 900 },
+    { k: 12, size: 40, limit: 8000, real: 5000, est: 4000 },
+    { k: 2, size: 1, limit: 10, real: 1, est: 1 },
+    { k: 20, size: 60, limit: 262144, real: 185000, est: 135000 },
+    -- limit 1 makes the percent the token count x100, so a single token of drift shows
+    -- (the first mutgate run found a 1-permille change to the density vacuous without it)
+    { k: 20, size: 60, limit: 1, real: 1, est: 1 }
+  ];
+  let bad = grid(cases);
+  if bad == 0 then println("OK: calibration parity (9 cases)")
+  else { println("FAIL: calibration parity mismatches=${show(bad)}"); exit(1) }
+}

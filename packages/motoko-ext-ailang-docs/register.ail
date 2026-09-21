@@ -1,10 +1,20 @@
 module sunholo/motoko_ext_ailang_docs/register
 
 import std/env (getEnvOr)
+import std/json (Json)
 import std/string (stringToInt)
 import std/option (Some, None)
-import pkg/sunholo/motoko_ext_abi/types (Capability)
-import pkg/sunholo/motoko_ext_ailang_docs/ailang_docs (make_hooks)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtRegistration, DescribeTools, PromptShaper, ToolProvider,
+  PureCtx, ProviderCtx, PromptPatch, ToolCallEnvelope, ToolHandleOutcome, ToolSchema
+)
+import pkg/sunholo/motoko_ext_mcp/resolve (all_tool_names)
+import pkg/sunholo/motoko_ext_ailang_docs/types (tool_mappings)
+import pkg/sunholo/motoko_ext_ailang_docs/prompts (build_prompt_patch)
+import pkg/sunholo/motoko_ext_ailang_docs/ailang_docs (
+  workdir_is_ailang_project, ailang_docs_config_json, ailang_docs_catalog,
+  mcp_config_of, on_tool_handle
+)
 
 func parse_int_or(s: string, fallback: int) -> int {
   match stringToInt(s) {
@@ -13,14 +23,42 @@ func parse_int_or(s: string, fallback: int) -> int {
   }
 }
 
--- Mirrors motoko_ext_exa_search/register: read workdir + timing knobs
--- from env, hand off to ailang_docs.make_hooks. The workdir-gate happens
--- inside make_hooks (see workdir_is_ailang_project), so a non-AILANG
--- workdir loads the extension with empty provided_tools — same shape
--- as motoko_ext_omnigraph's portability gate.
-export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS, Process, Rand} {
-  let workdir          = getEnvOr("MOTOKO_WORKDIR", ".");
+-- ABI 8.0 (031 ADR-001 D2): every payload a named top-level function bound
+-- directly, in this module (an imported one charges its row to
+-- `register_with_config` on the pin -- 031 P1.2c `import_leak_probe/`).
+
+-- The catalog is a function of the configuration: all 23 schemas when the
+-- workdir gate passed at registration, none otherwise or for `{}`.
+func ailang_docs_describe_tools(cfg: Json) -> [ToolSchema] {
+  ailang_docs_catalog(cfg)
+}
+
+func ailang_docs_prompt(ctx: PureCtx) -> PromptPatch {
+  build_prompt_patch(ctx.task)
+}
+
+func ailang_docs_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  on_tool_handle(mcp_config_of(ctx.ext_config), tool_mappings(), ctx, call)
+}
+
+-- Mirrors motoko_ext_exa_search/register: the workdir-gate happens here, so a
+-- non-AILANG workdir loads the extension with empty provided_tools and an
+-- empty catalog -- same shape as motoko_ext_omnigraph's portability gate. The
+-- workdir VALUE is read here and not disclosed; the gate's answer and the two
+-- limits are (ADR-001 Amendment 3), read once, as in 7.4.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  let workdir = getEnvOr("MOTOKO_WORKDIR", ".");
+  let active  = workdir_is_ailang_project(workdir);
   let timeout_ms       = parse_int_or(getEnvOr("AILANG_DOCS_TIMEOUT_MS", "30000"), 30000);
   let max_output_chars = parse_int_or(getEnvOr("AILANG_DOCS_MAX_OUTPUT_CHARS", "8000"), 8000);
-  make_hooks(workdir, timeout_ms, max_output_chars)
+  let tools   = if active then all_tool_names(tool_mappings()) else [];
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: ailang_docs_config_json(active, timeout_ms, max_output_chars),
+    caps: [
+      DescribeTools(ailang_docs_describe_tools),
+      PromptShaper(ailang_docs_prompt),
+      ToolProvider(tools, ailang_docs_tool_handle)
+    ]
+  }
 }

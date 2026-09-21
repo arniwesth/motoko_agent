@@ -41,7 +41,11 @@ import src/core/phase_vocab (
 import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
   ExtRegistry,
-  ExtCtx,
+  PureCtx,
+  AiCtx,
+  ProviderCtx,
+  pure_ctx,
+  ai_ctx,
   BudgetPlan,
   PromptPatch,
   BudgetPatch,
@@ -66,7 +70,7 @@ import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
 import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
 import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/ctx_defaults (empty_ext_artifacts)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 
 let qwen_model = "openrouter/qwen/qwen3.6-35b-a3b"
@@ -204,28 +208,38 @@ func headroom_fail_open_history() -> [Message] {
   [msg("system", "s"), msg("user", headroom_block(200000))]
 }
 
-func headroom_direct_ctx(limit: int, msgs: [Msg]) -> ExtCtx {
-  {
+-- 8.0: `compact_for_pre_step` takes `PureCtx` (P1.2a), so this is built through
+-- the ABI's `pure_ctx` + record update; the no-op ports it carried are gone.
+func headroom_direct_ctx(limit: int, msgs: [Msg]) -> PureCtx {
+  { pure_ctx(jo([])) |
     task: "issue-165",
     step: 0,
     model: qwen_model,
     context_limit: limit,
     cwd: ".",
-    hybrid_tools: false,
     budget: budget(),
     mode: "default",
     workdir: ".",
-    env_server_url: "",
     budget_remaining: 1,
     history_slice: msgs,
     state_key: "issue-165",
-    finish_reason: "",
-    work_in_flight: [],
-    open_waits: ja([]),
-    ports: noop_ext_ports(),
-    artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry(),
-    world: empty_ext_world()
+    artifacts: empty_ext_artifacts()
+  }
+}
+
+-- 8.0: the Compactor's `AiCtx` projected to the data view `compact_for_pre_step`
+-- takes (compaction-structural's own `pure_view`, which it does not export).
+func pure_view(ctx: AiCtx) -> PureCtx {
+  { pure_ctx(ctx.ext_config) |
+    task: ctx.task, step: ctx.step, model: ctx.model, cwd: ctx.cwd,
+    hybrid_tools: ctx.hybrid_tools, budget: ctx.budget, mode: ctx.mode,
+    workdir: ctx.workdir, env_server_url: ctx.env_server_url,
+    budget_remaining: ctx.budget_remaining, history_slice: ctx.history_slice,
+    state_key: ctx.state_key, context_limit: ctx.context_limit,
+    finish_reason: ctx.finish_reason, work_in_flight: ctx.work_in_flight,
+    open_waits: ctx.open_waits, artifacts: ctx.artifacts, telemetry: ctx.telemetry,
+    verification: ctx.verification, tool_evidence: ctx.tool_evidence,
+    decision_state: ctx.decision_state
   }
 }
 
@@ -572,13 +586,14 @@ func compaction_ai_hook() -> FixtureHooks ! {AI, Clock, Env, FS, IO, Net, Proces
     hard_override_pct: 95
   };
   fixture_hooks("compaction_ai", {
+    config: jo([]),
     tools: [],
     describe: \_ . [],
     prompt: \_ . { prepend: [], append: [] },
     budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
-    compact: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { compact_with_ai(ctx, msgs, cfg) },
+    compact: func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { compact_with_ai(ctx, msgs, cfg) },
     policy: \_ _ . Allow,
-    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
     intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
     judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
   })
@@ -586,15 +601,16 @@ func compaction_ai_hook() -> FixtureHooks ! {AI, Clock, Env, FS, IO, Net, Proces
 
 func structural_hook() -> FixtureHooks {
   fixture_hooks("compaction_structural", {
+    config: jo([]),
     tools: [],
     describe: \_ . [],
     prompt: \_ . { prepend: [], append: [] },
     budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
-    compact: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
-      compact_for_pre_step(ctx, msgs)
+    compact: func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+      compact_for_pre_step(pure_view(ctx), msgs)
     }, next_state: ctx.world } },
     policy: \_ _ . Allow,
-    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
     intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
     judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
   })
@@ -617,13 +633,14 @@ func next_marker_from_call_id(id: string) -> string {
 
 func long_tool_hook() -> FixtureHooks {
   fixture_hooks("long_result_tool", {
+    config: jo([]),
     tools: ["LongResult"],
     describe: \_ . [{ name: "LongResult", description: "deterministic long-result fixture", parameters: "{\"type\":\"object\"}" }],
     prompt: \_ . { prepend: [], append: [] },
     budget: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
     compact: \ctx _. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace},
     policy: \_ _ . Allow,
-    provide: func(ctx: ExtCtx, call) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+    provide: func(ctx: ProviderCtx, call) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
       let next = next_marker_from_call_id(call.id);
       Handled({
         tool_call_id: call.id,
@@ -653,6 +670,7 @@ func structural_only_runtime() -> ExtRuntime {
 
 func headroom_budget_probe_hook() -> FixtureHooks {
   fixture_hooks("headroom_budget_probe", {
+    config: jo([]),
     tools: [],
     describe: \_ . [],
     prompt: \_ . { prepend: [], append: [] },
@@ -664,7 +682,7 @@ func headroom_budget_probe_hook() -> FixtureHooks {
       next_state: ctx.world
     } ! {AI, IO, Trace},
     policy: \_ _ . Allow,
-    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    provide: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
     intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
     judge: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
   })
@@ -1221,25 +1239,25 @@ func strict_provider_orphaned_toolcall_scenario() -> Scenario {
   { id: "compaction.strict_provider_orphaned_toolcall", seed: "fixed", run: scenario_strict_provider_rejects_orphaned_toolcall }
 }
 
-func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: string, step: int) -> ExtCtx ! {AI, IO, Trace} {
-  {
-    task: task,
-    step: step,
-    model: qwen_model,
-    context_limit: limit,
-    cwd: ".",
-    hybrid_tools: false,
-    budget: budget(),
-    mode: "default",
-    workdir: ".",
-    env_server_url: "",
-    budget_remaining: 1,
-    history_slice: [],
-    state_key: "k",
-    finish_reason: "",
-    work_in_flight: [],
-    open_waits: ja([]),
-    ports: {
+-- 8.0: the Compactor's view, `AiCtx`, through the ABI's constructors. It
+-- carries the one port the view has; the nine fixed ports it used to carry are
+-- not in `AiCtx` (their definitions above are left in place, unused).
+func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: string, step: int) -> AiCtx ! {AI, IO, Trace} {
+  ai_ctx(
+    { pure_ctx(jo([])) |
+      task: task,
+      step: step,
+      model: qwen_model,
+      context_limit: limit,
+      cwd: ".",
+      budget: budget(),
+      mode: "default",
+      workdir: ".",
+      budget_remaining: 1,
+      state_key: "k",
+      artifacts: artifacts
+    },
+    {
       -- S12: this shim PERFORMS a provider call, so it must return the world
       -- `model_step` advanced. It previously handed `empty_world_state()` in and
       -- returned the token it was given — the exact defect
@@ -1255,24 +1273,13 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
           },
           next_state: world_to_token(exchange.next_state)
         }
-      },
-      tool_handle: fixed_ext_exec,
-      file_read: fixed_ext_file_read,
-      file_write: fixed_ext_file_write,
-      file_remove: fixed_ext_file_remove,
-      path_stat: fixed_ext_path_stat,
-      dir_list: fixed_ext_dir_list,
-      dir_make: fixed_ext_dir_make,
-      clock_now: fixed_ext_clock,
-      env_get: fixed_ext_env
+      }
     },
-    artifacts: artifacts,
-    telemetry: zero_token_telemetry(),
-    world: empty_ext_world()
-  }
+    empty_ext_world()
+  )
 }
 
-func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx ! {AI, IO, Trace} {
+func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> AiCtx ! {AI, IO, Trace} {
   direct_ctx_with_task_step(limit, ports, artifacts, "direct", 0)
 }
 
@@ -1495,7 +1502,7 @@ func output_headroom_fail_open_scenario() -> Scenario {
 -- and the hook that short-circuits below threshold must NOT (S12: an identity
 -- transition is the correct answer for a component that did nothing).
 func recording_direct_ctx(limit: int, artifacts: Json, w: WorldState)
-  -> ExtCtx ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  -> AiCtx ! {AI, Clock, Env, FS, IO, Process, Trace} {
   { direct_ctx_with_task_step(limit, recording_ports(empty_rt()), artifacts, "s12", 0)
     | world: world_to_token(w) }
 }

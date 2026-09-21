@@ -1,0 +1,15 @@
+-- 031 P1.2c: minimal reproduction of the cold-cache Scenario collision (README, "Masked files").
+-- Put at scripts/p12c/min_collision.ail in a p12c_core_check.sh workspace (P12C_KEEP=1), clear
+-- scripts/**/.ailang, then: AILANG_RELAX_MODULES=1 ailang check scripts/p12c/min_collision.ail
+--   P12C_REV=a7aa68a8 -> rc=0
+--   P12C_REV=4109827b -> rc=1  type error in src/core/test/dst_harness (decl 4):
+--                              cannot unify list[Capability] with ()
+-- 4109827b adds `import pkg/sunholo/motoko_ext_conformance/harness (neutral_registration)` to
+-- src/core/ext/runtime.ail; that module declares its own `Scenario` (run: [Capability] -> ...).
+module scripts/p12c/min_collision
+import std/result (Result, Ok, Err)
+import src/core/ext/runtime (init_runtime)
+import src/core/test/dst_harness (Scenario, ScenarioFailure, run_all)
+func run_x() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} { Ok(()) }
+func sc() -> Scenario { { id: "x", seed: "s", run: run_x } }
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} { let _ = run_all([sc()], 0); () }

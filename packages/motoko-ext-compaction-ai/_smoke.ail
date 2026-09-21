@@ -28,42 +28,43 @@
 
 module sunholo/motoko_ext_compaction_ai/_smoke
 
-import std/json (ja)
+import std/json (jo)
 import std/io (println)
-import std/string (length, contains)
 import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config)
 import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
 import pkg/sunholo/motoko_ext_compaction_ai/types (default_config)
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, BudgetPlan, PassThrough, PassThroughObserved, Compacted)
+import pkg/sunholo/motoko_ext_abi/types (
+  empty_ext_world, pure_ctx, ai_ctx, ExtWorld, AiStepOutcome, Msg,
+  PassThrough, PassThroughObserved, Compacted
+)
 
-export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+-- 8.0: the smoke's context is the Compactor's view, built through the ABI's
+-- constructors, with an `ai_step` that is unavailable (the publish sandbox has
+-- no provider), as the host's no-op port was. No `src/core` import.
+func unavailable_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
+  { result: Err("ext ai_step port unavailable"), next_state: world }
+}
+
+export func main() -> () ! {AI, Env, FS, IO, Trace} {
   -- Assertion 1: register_with_config doesn't panic
   let _ = register_with_config(0);
   println("OK: register_with_config returned without panic");
 
-  let budget: BudgetPlan = { total: 1, solver: 1, verifier: 0 };
-  let ctx: ExtCtx = {
-    task: "smoke",
-    step: 0,
-    model: "m",
-    cwd: ".",
-    hybrid_tools: false,
-    budget: budget,
-    mode: "default",
-    workdir: ".",
-    env_server_url: "",
-    budget_remaining: 1,
-    history_slice: [],
-    state_key: "k",
-    finish_reason: "",
-    work_in_flight: [],
-    open_waits: ja([]),
-    context_limit: 1,
-    ports: noop_ext_ports(),
-    artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry(), world: empty_ext_world()
-  };
+  let ctx = ai_ctx(
+    { pure_ctx(jo([])) |
+      task: "smoke",
+      model: "m",
+      cwd: ".",
+      budget: { total: 1, solver: 1, verifier: 0 },
+      mode: "default",
+      workdir: ".",
+      budget_remaining: 1,
+      state_key: "k",
+      context_limit: 1
+    },
+    { ai_step: unavailable_ai_step },
+    empty_ext_world()
+  );
   match compact_with_ai(ctx, [{ role: "user", content: "long enough to trigger compaction", tool_calls: [], tool_call_id: "" }], default_config()).decision {
     PassThrough => println("OK: compact_with_ai can pass through"),
     PassThroughObserved(code, _) => println("OK: compact_with_ai observed ${code}"),
