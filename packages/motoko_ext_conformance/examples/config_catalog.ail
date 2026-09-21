@@ -10,29 +10,34 @@
 -- function that captures nothing -- advertises exactly what that data names:
 -- configured, one tool; empty, none.
 --
--- The operator's setting arrives at registration the way the in-tree
--- extensions' settings do today, from the environment
--- (`MOTOKO_EXAMPLE_CATALOG_TOOL`, synthetic), and crosses into the callback
--- ONLY through `config`. Everything here is synthetic.
+-- The operator's tool set arrives as the REGISTRATION INPUT -- this example's
+-- settings object, typed `Json` because the kit does not depend on core:
+-- `{"tools": [<name>, ...]}`, absent meaning none. Registration discloses the
+-- resolved list as `config`, and it crosses into the callback ONLY through
+-- that. No environment is read: the registration has no row. Everything here
+-- is synthetic.
 module sunholo/motoko_ext_conformance/examples/config_catalog
 
-import std/env (getEnvOr)
 import std/json (Json, jo, ja, kv, js, getStringArrayOrEmpty)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, DescribeTools, ToolSchema)
 
-export pure func catalog_config(tool: string) -> Json {
-  if tool == "" then jo([kv("tools", ja([]))]) else jo([kv("tools", ja([js(tool)]))])
+export func catalog_config(cfg: Json) -> Json {
+  jo([kv("tools", ja(strings_json(getStringArrayOrEmpty(cfg, "tools"))))])
 }
 
-export func register_with_config(_cfg: a) -> ExtRegistration ! {Env} {
+export func register_with_config(cfg: Json) -> ExtRegistration {
   {
-    config: catalog_config(getEnvOr("MOTOKO_EXAMPLE_CATALOG_TOOL", "")),
+    config: catalog_config(cfg),
     caps: [DescribeTools(describe_tools)]
   }
 }
 
 func describe_tools(cfg: Json) -> [ToolSchema] {
   schemas_for(getStringArrayOrEmpty(cfg, "tools"))
+}
+
+pure func strings_json(xs: [string]) -> [Json] {
+  match xs { [] => [], x :: rest => js(x) :: strings_json(rest) }
 }
 
 pure func schemas_for(names: [string]) -> [ToolSchema] {

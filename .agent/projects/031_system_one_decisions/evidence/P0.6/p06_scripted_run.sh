@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # 031 PLAN-001 P0.6: exit checks 1 and 2 -- `ailang check` every example module
 # against THIS checkout's ABI 8.0 and conformance kit, then the scripted run:
-# each decision consumer's votes (examples/scripted_backend.ail `main`) and the
-# DescribeTools catalog configured and empty (`catalog_main`, run twice with
-# and without the synthetic MOTOKO_EXAMPLE_CATALOG_TOOL). Run from a repo root.
+# each decision consumer's votes, the disclosure and second-registration checks,
+# and the DescribeTools catalog registered configured and empty -- all in
+# examples/scripted_backend.ail `main`, which exits 1 on any mismatch. Run from
+# a repo root.
 # Exits 0 only when every module checks, every scripted vote matches, and the
 # catalog reads configured=1 empty=0.
 set -euo pipefail
@@ -21,8 +22,4 @@ done
 cp deps/motoko_ext_conformance/examples/scripted_backend.ail run.ail
 sed -i 's|^module sunholo/motoko_ext_conformance/examples/scripted_backend$|module run|' run.ail
 ailang run --caps IO --entry main run.ail < /dev/null
-configured=$(env MOTOKO_EXAMPLE_CATALOG_TOOL=example_lookup ailang run --caps IO,Env --entry catalog_main run.ail < /dev/null | sed -n 's/^catalog=//p')
-empty=$(env -u MOTOKO_EXAMPLE_CATALOG_TOOL ailang run --caps IO,Env --entry catalog_main run.ail < /dev/null | sed -n 's/^catalog=//p')
-echo "describe_tools (config_catalog): configured=${configured} empty=${empty}"
-[ "$configured" = 1 ] && [ "$empty" = 0 ] || { echo "p06: DescribeTools catalog FAILED (want configured=1 empty=0)"; exit 1; }
 echo "p06: scripted run PASS"

@@ -11,9 +11,13 @@
 -- with the exact prepared request. Each case prints the vote and is checked
 -- against the vote the consumer must return; any mismatch exits 1.
 --
--- `catalog_main` is the `DescribeTools` half: it prints `catalog=<n>` for the
--- registration the current environment produces, and
--- `evidence/P0.6/p06_scripted_run.sh` runs it configured and empty.
+-- CONFIGURATION THROUGH THE CHANNEL: every consumer is registered from a
+-- settings object (the registration input), and the runner checks that the
+-- registration DISCLOSES what it resolved -- `config.question_config` and
+-- `config.interpretation_config` equal the descriptor's projections -- and
+-- that two different inputs yield a different request or vote. The
+-- `DescribeTools` half registers the catalog configured and empty and prints
+-- `configured=<n> empty=<n>`.
 --
 -- The kit's own neutrality predicates (`invariants.ail`) classify the votes:
 -- an `Unavailable` must leave both consumers neutral, an intervention must not
@@ -21,7 +25,7 @@
 module sunholo/motoko_ext_conformance/examples/scripted_backend
 
 import std/io (println, exit)
-import std/json (Json, jo, kv, jint, getArray)
+import std/json (Json, jo, ja, kv, js, jint, getArray, getObject, getInt, encode)
 import std/option (Option, Some, None)
 import std/string (length)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -243,21 +247,21 @@ func judge_bound_at_interpret(reg: ExtRegistration, a: JudgeAtom) -> int ! {IO} 
   }
 }
 
--- Evidence selection: the request carries `max_tool_records` (3) of the five.
-func judge_evidence_selection(reg: ExtRegistration, a: JudgeAtom) -> int ! {IO} {
+-- Evidence selection: the request carries `max_tool_records` of the five.
+func judge_evidence_selection(reg: ExtRegistration, a: JudgeAtom, want: int) -> int ! {IO} {
   let ctx = decision_ctx(reg.config, a.descriptor, a.descriptor.interpretation_config, 0,
                          failing_verification(), window(five_records()));
   match a.prepare(ctx, "Done.") {
     JudgeImmediate(d) => verdict("finalize evidence selection", show_finalize(d), false),
     JudgeQuery(req) => {
       let n = match getArray(req.state, "tool_evidence") { Some(xs) => count_j(xs), None => 0 - 1 };
-      verdict("finalize evidence selection: request.state.tool_evidence", "${show(n)} of 5 records", n == 3)
+      verdict("finalize evidence selection: request.state.tool_evidence", "${show(n)} of 5 records", n == want)
     }
   }
 }
 
 func finalize_cases() -> int ! {IO} {
-  let reg = register_completion(());
+  let reg = register_completion(jo([]));
   match judge_atom(reg.caps) {
     None => verdict("finalize atom", "none registered", false),
     Some(a) => {
@@ -267,14 +271,13 @@ func finalize_cases() -> int ! {IO} {
       let unavailable = run_judge("Unavailable(Timeout)", reg, a, ic, 0, failing_verification(), Fail(Timeout), true, WantNoDecision);
       let passed = run_judge("verification Passed", reg, a, ic, 0, Passed(vrun(0, "ok")), AnswerEvery(1500), false, WantNoDecision);
       let at_limit = run_judge("interventions exhausted", reg, a, ic, a.descriptor.max_interventions, failing_verification(), AnswerEvery(1500), false, WantNoDecision);
-      let lower = run_judge("Answered(1500 bp), interpretation_config min_complete_bp=1000", reg, a,
-                            jo([kv("min_complete_bp", jint(1000)), kv("max_feedback_chars", jint(240))]),
-                            0, failing_verification(), AnswerEvery(1500), true, WantNoDecision);
       let missing = run_judge("Answered(1500 bp), interpretation_config {}", reg, a, jo([]), 0,
                               failing_verification(), AnswerEvery(1500), true, WantNoDecision);
-      answered + high + unavailable + passed + at_limit + lower + missing
-        + judge_bound_at_interpret(reg, a) + judge_evidence_selection(reg, a)
+      answered + high + unavailable + passed + at_limit + missing
+        + judge_bound_at_interpret(reg, a) + judge_evidence_selection(reg, a, 3)
         + judge_kit_neutrality(reg, a)
+        + disclosed("finalize", reg, a.descriptor)
+        + judge_other_registration()
     }
   }
 }
@@ -295,6 +298,30 @@ func judge_kit_neutrality(reg: ExtRegistration, a: JudgeAtom) -> int ! {IO} {
               not judge_preparation_neutral(p) && finalize_vote_neutral(u) && not finalize_vote_neutral(n))
     }
   }
+}
+
+-- A DIFFERENT REGISTRATION INPUT, the same evidence and the same answer: the
+-- threshold and the evidence selection move with the registration.
+func judge_other_registration() -> int ! {IO} {
+  let reg = register_completion(jo([kv("min_complete_bp", jint(1000)), kv("max_tool_records", jint(1))]));
+  match judge_atom(reg.caps) {
+    None => verdict("finalize atom (second registration)", "none registered", false),
+    Some(a) =>
+      run_judge("registered {min_complete_bp: 1000, max_tool_records: 1}, Answered(1500 bp)", reg, a,
+                a.descriptor.interpretation_config, 0, failing_verification(), AnswerEvery(1500), true, WantNoDecision)
+        + judge_evidence_selection(reg, a, 1)
+        + disclosed("finalize (second registration)", reg, a.descriptor)
+  }
+}
+
+-- The registration discloses what it resolved: `config` carries the
+-- descriptor's two projections and its limit, byte for byte.
+func disclosed(label: string, reg: ExtRegistration, d: DecisionPolicyDescriptor) -> int ! {IO} {
+  let q = match getObject(reg.config, "question_config") { Some(j) => encode(j), None => "<absent>" };
+  let i = match getObject(reg.config, "interpretation_config") { Some(j) => encode(j), None => "<absent>" };
+  let m = match getInt(reg.config, "max_interventions") { Some(n) => n, None => 0 - 1 };
+  verdict("${label} disclosure: ext_config = descriptor projections", "question_config ${q}; interpretation_config ${i}",
+          q == encode(d.question_config) && i == encode(d.interpretation_config) && m == d.max_interventions)
 }
 
 -- ---------------------------------------------------------------------------
@@ -319,7 +346,7 @@ func run_tool(label: string, reg: ExtRegistration, a: ToolAtom, rs: [ToolEvidenc
 }
 
 func tool_cases() -> int ! {IO} {
-  let reg = register_repeat(());
+  let reg = register_repeat(jo([]));
   match tool_atom(reg.caps) {
     None => verdict("tool_policy atom", "none registered", false),
     Some(a) => {
@@ -340,25 +367,29 @@ func tool_cases() -> int ! {IO} {
                               ev("c3", 3, "bash", CommandExit(0), "error")],
                              AnswerEvery(9000), false, WantNoOpinion);
       answered + unavailable + low + one + old + untyped
+        + disclosed("tool_policy", reg, a.descriptor)
+        + tool_other_registration()
     }
+  }
+}
+
+-- A different registration input: with `min_failures: 1` the same single
+-- failure is enough to ask, and the same answer denies.
+func tool_other_registration() -> int ! {IO} {
+  let reg = register_repeat(jo([kv("min_failures", jint(1))]));
+  match tool_atom(reg.caps) {
+    None => verdict("tool_policy atom (second registration)", "none registered", false),
+    Some(a) =>
+      run_tool("registered {min_failures: 1}, one typed failure, Answered(9000 bp)", reg, a,
+               [ev("c1", 1, "bash", CommandExit(2), "exit 2"), ev("c2", 2, "read", ToolSucceeded, "ok")],
+               AnswerEvery(9000), true, WantDenyWithin(200))
+        + disclosed("tool_policy (second registration)", reg, a.descriptor)
   }
 }
 
 pure func count_q(qs: [NamedQuestion]) -> int { match qs { [] => 0, _ :: rest => 1 + count_q(rest) } }
 
 pure func count_j(xs: [Json]) -> int { match xs { [] => 0, _ :: rest => 1 + count_j(rest) } }
-
-export func main() -> () ! {IO} {
-  let _ = println("finalize consumer (DecisionSolverJudge, example.completion_guard):");
-  let f = finalize_cases();
-  let _ = println("tool-policy consumer (DecisionToolPolicy, example.repeat_failure_policy):");
-  let t = tool_cases();
-  if f + t == 0 then println("scripted backend PASS")
-  else {
-    let _ = println("scripted backend FAIL count=${show(f + t)}");
-    exit(1)
-  }
-}
 
 -- ---------------------------------------------------------------------------
 -- The DescribeTools consumer: the pure catalog's call, `f(entry.config)`
@@ -374,7 +405,24 @@ pure func catalog_size(config: Json, caps: [Capability]) -> int {
 
 pure func count_s(xs: [a]) -> int { match xs { [] => 0, _ :: rest => 1 + count_s(rest) } }
 
-export func catalog_main() -> () ! {IO, Env} {
-  let reg = register_catalog(());
-  println("catalog=${show(catalog_size(reg.config, reg.caps))}")
+func catalog_cases() -> int ! {IO} {
+  let configured = register_catalog(jo([kv("tools", ja([js("example_lookup")]))]));
+  let empty = register_catalog(jo([]));
+  let c = catalog_size(configured.config, configured.caps);
+  let e = catalog_size(empty.config, empty.caps);
+  let _ = println("describe_tools (config_catalog): configured=${show(c)} empty=${show(e)}");
+  if c == 1 && e == 0 then 0 else 1
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("finalize consumer (DecisionSolverJudge, example.completion_guard):");
+  let f = finalize_cases();
+  let _ = println("tool-policy consumer (DecisionToolPolicy, example.repeat_failure_policy):");
+  let t = tool_cases();
+  let c = catalog_cases();
+  if f + t + c == 0 then println("scripted backend PASS")
+  else {
+    let _ = println("scripted backend FAIL count=${show(f + t + c)}");
+    exit(1)
+  }
 }

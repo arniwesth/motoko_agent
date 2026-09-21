@@ -11,8 +11,10 @@
 --   * THE VOTE: `NoDecision`, or a `ContinueWithFeedback` built from this
 --     module's own template and BOUNDED twice -- by the host's intervention
 --     limit on `decision_state`, and by `max_feedback_chars`.
---   * CONFIGURATION ONLY THROUGH THE CHANNEL: evidence selection and question
---     text read `question_config`; the threshold, the feedback bound and the
+--   * CONFIGURATION ONLY THROUGH THE CHANNEL: `register_with_config` builds
+--     both projections FROM ITS INPUT (documented defaults below) and returns
+--     them in `config`, which the host stamps as `ext_config`. Evidence
+--     selection and question text read `question_config`; the threshold, the feedback bound and the
 --     abstentions read `interpretation_config` -- the two descriptor
 --     projections the host hands back on `decision_state` (D3). Nothing is
 --     hard-coded: a missing threshold abstains. The conformance obligation
@@ -43,40 +45,70 @@ import pkg/sunholo/motoko_ext_abi/types (
 -- Registration
 -- ---------------------------------------------------------------------------
 
-export pure func completion_question_config() -> Json {
+-- THE REGISTRATION INPUT is this example's settings object. The kit does not
+-- depend on core, so the input is typed `Json` here; how the host's
+-- `RuntimeConfig` hands an extension its settings is P1.1's. Every field is
+-- optional, and an absent field takes its DOCUMENTED DEFAULT:
+--
+--   field               default               projection
+--   backend_binding     "completion-judge"    question_config
+--   question_id         "task_complete"       question_config
+--   max_tool_records    3                     question_config  (evidence selection)
+--   candidate_chars     200                   question_config  (evidence selection)
+--   min_complete_bp     6000                  interpretation_config  (threshold)
+--   max_feedback_chars  240                   interpretation_config  (feedback bound)
+--   max_interventions   2                     the descriptor's limit
+--
+-- Registration RESOLVES the input into the two projections and returns them
+-- twice: on the descriptor, which the host hands back on `decision_state`,
+-- and in `config`, which the host stamps as `ext_config` and hashes -- so the
+-- whole configuration is disclosed through the channel (D2, N50, N58). The
+-- callbacks read only the projections.
+
+export func completion_question_config(cfg: Json) -> Json {
   jo([
-    kv("backend_binding", js("completion-judge")),
-    kv("question_id", js("task_complete")),
-    kv("max_tool_records", jint(3)),
-    kv("candidate_chars", jint(200))
+    kv("backend_binding", js(opt_str(getString(cfg, "backend_binding"), "completion-judge"))),
+    kv("question_id", js(opt_str(getString(cfg, "question_id"), "task_complete"))),
+    kv("max_tool_records", jint(opt_int(getInt(cfg, "max_tool_records"), 3))),
+    kv("candidate_chars", jint(opt_int(getInt(cfg, "candidate_chars"), 200)))
   ])
 }
 
-export pure func completion_interpretation_config() -> Json {
+export func completion_interpretation_config(cfg: Json) -> Json {
   jo([
-    kv("min_complete_bp", jint(6000)),
-    kv("max_feedback_chars", jint(240))
+    kv("min_complete_bp", jint(opt_int(getInt(cfg, "min_complete_bp"), 6000))),
+    kv("max_feedback_chars", jint(opt_int(getInt(cfg, "max_feedback_chars"), 240)))
   ])
 }
 
-export pure func completion_descriptor() -> DecisionPolicyDescriptor {
+export func completion_max_interventions(cfg: Json) -> int {
+  opt_int(getInt(cfg, "max_interventions"), 2)
+}
+
+export func completion_descriptor(cfg: Json) -> DecisionPolicyDescriptor {
   {
     local_id: "example.completion_guard",
     question_version: "completion-question/1",
-    question_config: completion_question_config(),
+    question_config: completion_question_config(cfg),
     interpretation_version: "completion-interpretation/1",
-    interpretation_config: completion_interpretation_config(),
-    max_interventions: 2
+    interpretation_config: completion_interpretation_config(cfg),
+    max_interventions: completion_max_interventions(cfg)
   }
 }
 
--- `config` is disclosed data only; the callbacks read the descriptor
--- projections, which is where the conformance obligation puts every value
--- that shapes the question or the vote.
-export func register_with_config(_cfg: a) -> ExtRegistration {
+-- The disclosed configuration: exactly the resolved projections and limit.
+export func completion_config(cfg: Json) -> Json {
+  jo([
+    kv("question_config", completion_question_config(cfg)),
+    kv("interpretation_config", completion_interpretation_config(cfg)),
+    kv("max_interventions", jint(completion_max_interventions(cfg)))
+  ])
+}
+
+export func register_with_config(cfg: Json) -> ExtRegistration {
   {
-    config: jo([kv("example", js("completion-guard"))]),
-    caps: [DecisionSolverJudge(completion_descriptor(), completion_prepare, completion_interpret)]
+    config: completion_config(cfg),
+    caps: [DecisionSolverJudge(completion_descriptor(cfg), completion_prepare, completion_interpret)]
   }
 }
 

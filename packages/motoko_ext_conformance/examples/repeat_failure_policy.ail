@@ -13,7 +13,8 @@
 -- `ToolFailed`. Output text, `ToolOutcomeUnknown` and `ToolPending` never do
 -- (D3: textual output cannot create a typed outcome).
 --
--- Configuration, as in `completion_guard`: evidence selection (`window`,
+-- Configuration, as in `completion_guard`: registration builds both
+-- projections from its input and discloses them in `config`; evidence selection (`window`,
 -- `min_failures`) and the question read `question_config`; the threshold and
 -- the feedback bound read `interpretation_config`; a missing threshold
 -- abstains. Both callbacks are named, unshadowed, top-level functions bound
@@ -36,37 +37,66 @@ import pkg/sunholo/motoko_ext_abi/types (
 -- Registration
 -- ---------------------------------------------------------------------------
 
-export pure func repeat_question_config() -> Json {
+-- THE REGISTRATION INPUT, as in `completion_guard`: this example's settings
+-- object, typed `Json` because the kit does not depend on core. Every field is
+-- optional; an absent field takes its DOCUMENTED DEFAULT:
+--
+--   field               default                  projection
+--   backend_binding     "repeat-failure-judge"   question_config
+--   question_id         "repeats_failure"        question_config
+--   window              4                        question_config  (evidence selection)
+--   min_failures        2                        question_config  (when to ask)
+--   deny_min_bp         7000                     interpretation_config  (threshold)
+--   max_feedback_chars  200                      interpretation_config  (feedback bound)
+--   max_interventions   3                        the descriptor's limit
+--
+-- The resolved projections go on the descriptor AND in `config` (stamped as
+-- `ext_config`); the callbacks read only the projections.
+
+export func repeat_question_config(cfg: Json) -> Json {
   jo([
-    kv("backend_binding", js("repeat-failure-judge")),
-    kv("question_id", js("repeats_failure")),
-    kv("window", jint(4)),
-    kv("min_failures", jint(2))
+    kv("backend_binding", js(opt_str(getString(cfg, "backend_binding"), "repeat-failure-judge"))),
+    kv("question_id", js(opt_str(getString(cfg, "question_id"), "repeats_failure"))),
+    kv("window", jint(opt_int(getInt(cfg, "window"), 4))),
+    kv("min_failures", jint(opt_int(getInt(cfg, "min_failures"), 2)))
   ])
 }
 
-export pure func repeat_interpretation_config() -> Json {
+export func repeat_interpretation_config(cfg: Json) -> Json {
   jo([
-    kv("deny_min_bp", jint(7000)),
-    kv("max_feedback_chars", jint(200))
+    kv("deny_min_bp", jint(opt_int(getInt(cfg, "deny_min_bp"), 7000))),
+    kv("max_feedback_chars", jint(opt_int(getInt(cfg, "max_feedback_chars"), 200)))
   ])
 }
 
-export pure func repeat_descriptor() -> DecisionPolicyDescriptor {
+export func repeat_max_interventions(cfg: Json) -> int {
+  opt_int(getInt(cfg, "max_interventions"), 3)
+}
+
+export func repeat_descriptor(cfg: Json) -> DecisionPolicyDescriptor {
   {
     local_id: "example.repeat_failure_policy",
     question_version: "repeat-question/1",
-    question_config: repeat_question_config(),
+    question_config: repeat_question_config(cfg),
     interpretation_version: "repeat-interpretation/1",
-    interpretation_config: repeat_interpretation_config(),
-    max_interventions: 3
+    interpretation_config: repeat_interpretation_config(cfg),
+    max_interventions: repeat_max_interventions(cfg)
   }
 }
 
-export func register_with_config(_cfg: a) -> ExtRegistration {
+-- The disclosed configuration: exactly the resolved projections and limit.
+export func repeat_config(cfg: Json) -> Json {
+  jo([
+    kv("question_config", repeat_question_config(cfg)),
+    kv("interpretation_config", repeat_interpretation_config(cfg)),
+    kv("max_interventions", jint(repeat_max_interventions(cfg)))
+  ])
+}
+
+export func register_with_config(cfg: Json) -> ExtRegistration {
   {
-    config: jo([kv("example", js("repeat-failure-policy"))]),
-    caps: [DecisionToolPolicy(repeat_descriptor(), repeat_prepare, repeat_interpret)]
+    config: repeat_config(cfg),
+    caps: [DecisionToolPolicy(repeat_descriptor(cfg), repeat_prepare, repeat_interpret)]
   }
 }
 
