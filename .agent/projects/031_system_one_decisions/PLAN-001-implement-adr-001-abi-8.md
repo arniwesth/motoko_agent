@@ -850,6 +850,17 @@ byte-identical. **Intake (orchestrator):** `min_collision.ail` checks **clean on
 clone (no `.ailang` directory); `mutgate.sh --clone-from` **2/2** (harness re-added → probe red; moved test
 dropped → count red). The regression P1.2c found is closed.
 
+### P1.5r follow-up — 2026-09-21, commit `37ad833d`
+
+The four rule-1 profile notes at 8.0, line-neutral; `check_abi_prose()` split out with `--abi-prose`;
+`herdr_abi_version()` at `"8.0"`, and rule 2 now reads the body of every `*abi_version()` function (33 pins —
+a pin behind a call can no longer hide); not replaced by a single source, since no AILANG module can read the
+ABI package's version. **Intake (orchestrator):** `--abi-pins` exit 0, `--abi-prose` exit 0, `mutgate.sh
+--clone-from` **4/4**. **Finding, assigned:** `profile_definition`/`driver_only` still red, now only at
+classifier 2 — `tools/ext_call_inventory/derive.py` never taught the 8.0 view shapes (24 unresolved: 15 ABI
+view constructors, 8 compose, 1 agentcli). D7 names the edit; P0.5 covered the other classifiers but not this
+one; **assigned to P1.7r**.
+
 ## 10. Estimates
 
 | phase | delegate-days |
