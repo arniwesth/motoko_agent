@@ -539,6 +539,8 @@ per-call decode cost from P1.2 batch D and the retained config sizes, against th
    placement makes it pass without a live service wins; the ADR's D5/D6 text names the winner as an amendment.
 2. **Per-call decode cost** (ADR D2, N50 cost): P1.2 batch D's measurement. Threshold for an amendment: hook
    latency growth above what the ADR's "cheap against a hook's cost" can carry, stated as a number in §6.
+   **Settled 2026-09-21 by ADR Amendment 4** (P1.2d's bench): +32 to +175 µs median per call, 2–9× the hook
+   body, under 0.1% of a step; the expectation is restated against the step, per-call decoding kept.
 3. **The mirror's update rule** (N47, sixth review Q-3): every reply carries the terms; `Immediate`
    applications advance local counts. Settled by P1.3's fixture "mirror understates money → `prepare`
    abstains → the useful query is lost" versus "overstates → host refuses safely"; the ADR keeps

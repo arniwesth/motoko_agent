@@ -1276,6 +1276,40 @@ journals, which the existing corpus privacy rules (013 ADR-004 D6) govern. **Rej
 host-stamped identity field on the views (a change to the frozen contract for one package), and an
 exemption for herdr's atoms (the registration-shape gate requires every site).
 
+### Amendment 4 (2026-09-21) — the per-call decode cost, measured, is stated against the step
+
+**Supersedes** D2's cost expectation that per-call decoding of `ext_config` is "cheap against a hook's
+cost" (the paragraph "**Cost, as an expectation the plan measures.**"). **The contract does not change**:
+payloads keep decoding their values from `ext_config` on each call.
+
+**The artifact: a measurement.** PLAN-001 P1.2d benchmarked the two hooks the plan named, 7.4 against
+8.0 on identical inputs, in lock-free workspaces (7.4 from `181051d0`), interleaved, n = 45 samples of
+400 calls each (`evidence/P1.2d/bench/`: `bench.sh`, `RAW.txt`, `SUMMARY.txt`; `STOP-measurement.md`).
+Medians, µs per call:
+
+| case | 7.4 | 8.0 | added |
+|---|---:|---:|---:|
+| compose interceptor, default mode (every response) | 12.5 | 120.0 | +107.5 (×9.6) |
+| compose interceptor, inline mode, no fence | 15.0 | 155.0 | +140.0 |
+| herdr prompt shaper, orchestrator off | 10.0 | 42.5 | +32.5 (×4.3) |
+| herdr prompt shaper, orchestrator on, two run files | 160.0 | 335.0 | +175.0 (×2.1) |
+| control: compose hook body only | 12.5 | 12.5 | 0 |
+| control: herdr prompt body only | 150.0 | 160.0 | +10 (noise) |
+
+The views cost nothing (the controls are equal); the whole increase is the payload decoding its values.
+It is the pin's interpreted JSON access, not the amount decoded — herdr's minimal case (one nested
+`get`, one `getBool`) is already 3×, so lazier decoding would not change the class. Retained `config` is
+about 0.6 KB per extension.
+
+**The expectation, restated.** Against **the hook body**, per-call decoding costs **2–9×** and the
+original sentence is false. Against **the step** it is negligible: the worst measured median, 335 µs
+(tail 680 µs), is under 0.1% of a step whose model call takes seconds. That is the bound this ADR now
+claims: *per-call decoding adds at most ~0.35 ms median per hook invocation on the pin, negligible
+against a step*. **Recorded for later:** the relative cost would matter for a hook dispatched per streamed
+token rather than per step; none exists, and a future one reads these numbers first. **Rejected
+alternative:** the host handing each atom a decoded, typed value — a contract change (a typed config
+position or a per-extension decode hook, 9.0 under the 8.x rule) to save about 0.1 ms per step.
+
 ## Related records
 
 - [First review: Claude Fable](REVIEW-adr001-v0.1-verdicts-fable.md)
