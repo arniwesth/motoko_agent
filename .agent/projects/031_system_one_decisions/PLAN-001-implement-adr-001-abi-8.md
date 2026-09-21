@@ -587,6 +587,19 @@ share the constructors `Immediate`/`Query`, and a consumer's `Immediate(Accept)`
 only distinct names passed; Amendment 1 adopts `JudgeImmediate`/`JudgeQuery` and
 `ToolImmediate`/`ToolQuery`, evidence at `evidence/P0.4-amendment-1/`. P0.4 resumed under it.
 
+### P0.4 — 2026-09-21, commit `f7df893c` (under Amendment 1)
+
+| | |
+|---|---|
+| Commit | `f7df893c` — `packages/motoko-ext-abi/types.ail` (+746/−18) and `ailang.toml`; nothing else |
+| Contract | six views with the ports of ADR D2 `:320-327` and an exported constructor each; `ext_config: Json` on every view; every `Capability` variant re-signed; `DescribeTools((Json) -> [ToolSchema])`; `Trace` on `ToolProvider`; `DecisionSolverJudge`, `DecisionToolPolicy` and the D3 vocabulary; nullary `Accept`; `ExtRegistration = { config, caps }`, `ExtEntry.config` |
+| 8.x rule | in the header (`types.ail:12-30`) and in `ai_summary` (033 G5d) |
+| Red-first | a 7.4 `PromptShaper((ExtCtx) -> PromptPatch)` consumer is green on 7.4 and red on 8.0: `record field mismatch … extra fields: ports, world; missing fields: ext_config` |
+| Check | `AILANG_RELAX_MODULES=1 ailang check packages/motoko-ext-abi/types.ail` exit 0. The bare form fails `MOD010` on the module path, as it does at 7.4 (pre-existing) |
+| **Intake (orchestrator)** | check exit 0; version 8.0; 8.x rule present; `mutgate.sh --clone-from` fresh clone **6/6 discriminate** — PureCtx gains a port, FsCtx drops `ext_config`, AiCtx widened to `ExtPorts`, ProviderCtx loses `Trace`, `Accept` not nullary, Amendment 1's names merged back |
+| Evidence | `evidence/P0.4-amendment-1/`, including the mutgate spec and consumer helper moved out of the delegate's `/tmp` with repo-relative paths (`5e54996b`); the helper builds a throwaway workspace because `ailang.lock` pins path dependencies to the primary checkout's absolute path |
+| Intake defects | 0 (the spec's `/tmp` paths were a durability gap, not a defect; fixed by the orchestrator) |
+
 ## 10. Estimates
 
 | phase | delegate-days |
