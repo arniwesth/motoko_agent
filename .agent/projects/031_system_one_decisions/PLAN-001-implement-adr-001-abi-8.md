@@ -793,6 +793,17 @@ per-session by construction and stated. B, C and D briefs corrected; B and D res
 attempts. Batch D is **10** sites (compose 4, herdr 6), not 11. Not counted as intake defects: both
 delegates did exactly what the brief required.
 
+### P1.3r — 2026-09-21, commit `4109827b`
+
+| | |
+|---|---|
+| Commit | `ext/runtime.ail` +289: decision atoms run in their family's folds in registry/atom order — prepare → on `JudgeQuery`/`ToolQuery` a typed cursor (ext id, atom index, site, exact prepared request) to the **stub arm** → interpret → the vote joins the family list → next atom; `JudgeImmediate`/`ToolImmediate` through the existing merges; precedence preserved. `stub_decision_answer`, a named pure function, answers every query `Unavailable(UnconfiguredBackend)` with zero usage; folds hold only `PureCtx` (no port, no ordinal, world handed through). 7 new tests (runtime 31/31). No leaf, no `Ports` field, `:199` anchor held |
+| Measured fact (for line X) | `evidence/P1.3r/open_row_probe`: on v0.33.0 a **function-typed parameter's effect row is open** — an annotated `! {IO}` lambda passed where a narrower row is declared checks clean and performs. So the arm is a named function, not an injected answerer. **P1.3x must not introduce the live arm as a parameter**; a candidate for NOTE-001 and an upstream report (operator's call) |
+| Deviation, accepted | the brief's "neutral decision atom in the no-op profile": not done — `dst_driver_plus_no_ops.ail` mirrors four real packages' registrations (cross-checked by `check_no_op_profile.py`), so a synthetic atom would misstate them; P0.5's `neutral_registration` is dispatched through the cursor instead. `make driver_plus_no_ops` is unreachable on the red tree anyway (provision fails on 7.4 roots) |
+| **Intake (orchestrator)** | every `src/core` module **71/72** (the one failure `integration_tests.ail`, a package outside the workspace); `ext/runtime.ail` tests **31/31**; `make anchors` 0; open-row probe reproduced; `mutgate.sh --clone-from` fresh clone **17/17** |
+| Delegate exits | end to end: P0.6's finalize consumer → `JudgeQuery` → `NoDecision` on the stub, `Accept` behind a legacy atom; tool-policy → `ToolQuery` → `NoOpinion`, `Pending` behind; clock tripwire never read; `make driver_leaf_inventory` byte-identical; `make profile_coverage` 0 |
+| Intake defects | 0 |
+
 ## 10. Estimates
 
 | phase | delegate-days |
