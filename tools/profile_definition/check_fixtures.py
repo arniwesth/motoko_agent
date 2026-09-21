@@ -320,9 +320,15 @@ def check_barrier_count(abi, disp):
     # criterion 1; see the docstring), so this widening was taken deliberately
     # and the two profile records that carry the count in PROSE moved with it.
     # `check_barrier_prose` below is what stops them drifting apart again.
-    slots = ["budget_shaper", "compactor", "tool_provider",
-             "response_interceptor", "solver_judge",
-             "exit_intent", "work_in_flight"]
+    #
+    # WIDENED AGAIN AT 8.0 (031 P0.5): the list is now `CAPABILITY_KINDS`'s
+    # "derived" rows, and it gained the two decision kinds. They declare no row,
+    # so they land in `covered` and the barrier count does not move; what moves
+    # is that the derivation DECIDES them, with the basis the coverage artifact
+    # records (`capability_purity_basis`: the views plus the boundary, ADR D2),
+    # instead of never looking.
+    purity = check_capability_kinds(abi, disp)
+    slots = [k for k, role in CAPABILITY_KINDS.items() if role == "derived"]
     payloads = capability_payloads(abi)
 
     slot_barriers, covered, gated = [], [], []
@@ -363,7 +369,9 @@ def check_barrier_count(abi, disp):
         print(f"      BARRIER  {slot}: {how}, declares ! {{{row}}}"
               f"  (outcome returns world state: {'yes' if returns_world[slot] else 'NO'})")
     for slot in covered:
-        print(f"      coverable {slot}: unconditionally dispatched, declares NO row")
+        basis = ("pure on the views plus the boundary (ADR-001 (031) D2), not on a declared row"
+                 if purity.get(slot) == "ViewsPlusBoundary" else "declares NO row")
+        print(f"      coverable {slot}: unconditionally dispatched, {basis}")
     for slot in gated:
         print(f"      gated     {slot}: excludable, so not a barrier")
 
@@ -434,6 +442,93 @@ def check_barrier_prose(barrier_slots):
 
 
 COVERAGE = REPO / "src/core/dst_profile_coverage.ail"
+
+
+#: EVERY capability kind, by kind id, and the part it plays in the slot-level
+#: barrier derivation (`check_barrier_count`). Held here rather than derived --
+#: the discipline `CAPABILITY_KINDS` carries in the hook-scope tool -- so that a
+#: kind the ABI and the coverage artifact gain and this list lacks is a FAIL
+#: (`check_capability_kinds`), never a kind the derivation silently skips.
+#:
+#:   "derived"  the derivation classifies it: barrier, coverable or gated.
+#:   "outside"  not a subject of the derivation, as since B8: `describe_tools`,
+#:              `prompt_shaper` and `tool_policy` are named here so that their
+#:              absence from the derivation is a recorded decision, and
+#:              `check_barrier_prose` refuses a record that calls one a barrier.
+#:
+#: 12 at ABI 8.0 (031 P0.5): the two decision kinds are "derived".
+CAPABILITY_KINDS = {
+    "describe_tools": "outside",
+    "prompt_shaper": "outside",
+    "tool_policy": "outside",
+    "budget_shaper": "derived",
+    "compactor": "derived",
+    "tool_provider": "derived",
+    "response_interceptor": "derived",
+    "solver_judge": "derived",
+    "exit_intent": "derived",
+    "work_in_flight": "derived",
+    "decision_solver_judge": "derived",
+    "decision_tool_policy": "derived",
+}
+
+#: The purity bases the coverage artifact may name (`PurityBasis`, 031 P0.5).
+PURITY_BASES = ("EffectRow", "DeclaredEmptyRow", "ViewsPlusBoundary")
+
+
+def purity_basis(disp, kind_id):
+    """The purity basis of a kind, read from `capability_purity_basis`'s
+    `XKind => EffectRow|DeclaredEmptyRow|ViewsPlusBoundary` arms."""
+    block = re.search(r"func capability_purity_basis\(.*?\n\}", disp, re.S)
+    if not block:
+        fail("could not find `capability_purity_basis` in dst_profile_coverage.ail; the basis a "
+             "rowless kind is covered on cannot be read")
+    m = re.search(re.escape(kind_ctor(kind_id)) + r"\s*=>\s*(" + "|".join(PURITY_BASES) + r")\b",
+                  block.group(0))
+    if not m:
+        fail(f"`{kind_ctor(kind_id)}` has no arm in `capability_purity_basis` naming one of "
+             f"{PURITY_BASES}")
+    return m.group(1)
+
+
+def check_capability_kinds(abi=None, disp=None):
+    """031 P0.5. `CAPABILITY_KINDS` against its two producers, both directions,
+    and the coverage artifact's purity classification against the ABI's rows:
+
+      1. the kind ids equal the coverage artifact's (`capability_kind_id`) and
+         the ABI's `Capability` variants, so a kind dropped from this list, or
+         added to the ABI and not here, is red;
+      2. per kind, a NON-EMPTY declared row is exactly an `EffectRow` basis; a
+         rowless kind is `DeclaredEmptyRow` or `ViewsPlusBoundary`, and which
+         one is the coverage artifact's decision (ADR D2), pinned by its tests.
+
+    Returns kind id -> basis for the caller's report."""
+    abi = ABI_TYPES.read_text() if abi is None else abi
+    disp = COVERAGE.read_text() if disp is None else disp
+    listed = set(CAPABILITY_KINDS)
+    table = set(capability_kind_ids(disp))
+    payloads = capability_payloads(abi)
+    if listed != table or listed != set(payloads):
+        fail(f"check_fixtures.CAPABILITY_KINDS {sorted(listed)} disagrees with the coverage "
+             f"artifact's kind table {sorted(table)} or the ABI's `Capability` variants "
+             f"{sorted(payloads)}: missing here {sorted((table | set(payloads)) - listed)}, "
+             f"unknown here {sorted(listed - (table & set(payloads)))}. A kind must be DECIDED "
+             "into this list (derived or outside), never inherited or skipped.")
+    bad = [role for role in CAPABILITY_KINDS.values() if role not in ("derived", "outside")]
+    if bad:
+        fail(f"CAPABILITY_KINDS names roles {bad}; the roles are 'derived' and 'outside'")
+    out = {}
+    for kid in sorted(listed):
+        row = payloads[kid][0]
+        basis = purity_basis(disp, kid)
+        if bool(row) != (basis == "EffectRow"):
+            fail(f"`{kid}` declares row {{{row}}} in the ABI and is classified {basis} in "
+                 "dst_profile_coverage.ail; a non-empty row is exactly `EffectRow`")
+        out[kid] = basis
+    views = sorted(k for k, b in out.items() if b == "ViewsPlusBoundary")
+    print(f"  ✓ CAPABILITY_KINDS: {len(listed)} kinds agree with the ABI and the coverage artifact; "
+          f"rowless on the views plus the boundary: {views}")
+    return out
 
 
 def kind_of(hook_id):
@@ -944,4 +1039,9 @@ def check_abi_version():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--capability-kinds"]:
+        # 031 P0.5: the kind list alone, without the producers the full run
+        # provisions (classifier 3 compiles every extension).
+        check_capability_kinds()
+    else:
+        main()

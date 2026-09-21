@@ -1,0 +1,128 @@
+-- 031 PLAN-001 P0.5: the conformance kit RUN against ABI 8.0, without core.
+--
+-- `make conformance` also checks and runs two consumers that are 7.4 until P1:
+-- `scripts/dst/conformance_selftest.ail` (whose accept arms register
+-- compaction-ai and compaction-structural, P1.2 batches C and A) and
+-- `scripts/dst/conformance_registry_probe.ail` (which imports `src/core`, P1.1).
+-- This runner is the part of the self-test that depends only on the kit: the
+-- three reject fixtures against the four compactor scenarios, verbatim from the
+-- self-test's reject half, plus the no-op profile -- the kit's neutral
+-- registration must read neutral, and a registration with one intervening
+-- decision atom must not (the two-sided control).
+module run
+
+import std/io (println, exit)
+import std/json (jo)
+import std/result (Result, Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, ExtRegistration, PureCtx, DecisionRequest, DecisionObservation,
+  DescribeTools, DecisionSolverJudge, FinalizeDecision, ContinueWithFeedback,
+  JudgePreparation, JudgeImmediate
+)
+import pkg/sunholo/motoko_ext_conformance/invariants (no_tools, neutral_descriptor, neutral_judge_interpret)
+import pkg/sunholo/motoko_ext_conformance/harness (
+  Scenario,
+  run_scenario,
+  neutral_registration,
+  registration_neutral,
+  scenario_system_prefix_preserved,
+  scenario_tool_pairing_preserved,
+  scenario_deterministic_replay,
+  scenario_artifact_cache_effective
+)
+import pkg/sunholo/motoko_ext_conformance/fixtures/reject_fixtures (
+  reject_prefix_hooks,
+  reject_pair_hooks,
+  reject_nocache_hooks
+)
+
+func expect_ok(label: string, caps: [Capability], s: Scenario) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  match run_scenario(caps, s) {
+    Ok(_) => 0,
+    Err(f) => {
+      let _ = println("kit FAIL ${label} scenario=${s.id} unexpected=${f.failed_invariant}");
+      1
+    }
+  }
+}
+
+func expect_fail(label: string, caps: [Capability], s: Scenario, expected: string) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  match run_scenario(caps, s) {
+    Ok(_) => {
+      let _ = println("kit FAIL ${label} scenario=${s.id} expected=${expected} got=ok");
+      1
+    },
+    Err(f) =>
+      if f.failed_invariant == expected then 0
+      else {
+        let _ = println("kit FAIL ${label} scenario=${s.id} expected=${expected} got=${f.failed_invariant}");
+        1
+      }
+  }
+}
+
+func expect_reject_prefix() -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let hooks = reject_prefix_hooks();
+  expect_fail("reject_prefix", hooks, scenario_system_prefix_preserved(), "no_system_in_output")
+    + expect_ok("reject_prefix", hooks, scenario_tool_pairing_preserved())
+    + expect_ok("reject_prefix", hooks, scenario_deterministic_replay())
+    + expect_ok("reject_prefix", hooks, scenario_artifact_cache_effective())
+}
+
+func expect_reject_pair() -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let hooks = reject_pair_hooks();
+  expect_ok("reject_pair", hooks, scenario_system_prefix_preserved())
+    + expect_fail("reject_pair", hooks, scenario_tool_pairing_preserved(), "pairing_preserved")
+    + expect_ok("reject_pair", hooks, scenario_deterministic_replay())
+    + expect_ok("reject_pair", hooks, scenario_artifact_cache_effective())
+}
+
+func expect_reject_nocache() -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let hooks = reject_nocache_hooks();
+  expect_ok("reject_nocache", hooks, scenario_system_prefix_preserved())
+    + expect_ok("reject_nocache", hooks, scenario_tool_pairing_preserved())
+    + expect_ok("reject_nocache", hooks, scenario_deterministic_replay())
+    + expect_fail("reject_nocache", hooks, scenario_artifact_cache_effective(), "artifact_cache_effective")
+}
+
+-- The control: one decision atom that intervenes. Named, as D2 requires.
+pure func nudging_prepare(_ctx: PureCtx, _candidate: string) -> JudgePreparation {
+  JudgeImmediate(ContinueWithFeedback("control: this atom intervenes"))
+}
+
+func nudging_registration() -> ExtRegistration {
+  { config: jo([]),
+    caps: [DescribeTools(no_tools),
+           DecisionSolverJudge(neutral_descriptor("control.nudge"), nudging_prepare, neutral_judge_interpret)] }
+}
+
+func expect_neutral_profile() -> int ! {IO} {
+  let neutral = neutral_registration();
+  let a = if registration_neutral(neutral) then 0 else {
+    let _ = println("kit FAIL neutral_registration does not read neutral");
+    1
+  };
+  let b = if registration_neutral(nudging_registration()) then {
+    let _ = println("kit FAIL an intervening decision atom read neutral (the predicate is vacuous)");
+    1
+  } else 0;
+  let _ = println("kit neutral_registration atoms=${show(length_caps(neutral.caps))}");
+  a + b
+}
+
+pure func length_caps(caps: [Capability]) -> int {
+  match caps { [] => 0, _ :: rest => 1 + length_caps(rest) }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let failures =
+    expect_reject_prefix()
+    + expect_reject_pair()
+    + expect_reject_nocache()
+    + expect_neutral_profile();
+  if failures == 0 then println("conformance kit on ABI 8.0 PASS")
+  else {
+    let _ = println("conformance kit on ABI 8.0 FAIL count=${show(failures)}");
+    exit(1)
+  }
+}

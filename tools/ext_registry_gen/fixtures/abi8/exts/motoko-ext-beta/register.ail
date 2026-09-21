@@ -1,0 +1,20 @@
+-- 031 P0.5 registry fixture: a synthetic 8.0 extension registering one atom of
+-- a decision variant, neutral, with an empty configuration.
+module fixture/motoko_ext_beta/register
+
+import std/json (Json, jo)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtRegistration, PureCtx, ToolCallEnvelope, DecisionRequest, DecisionObservation,
+  DecisionToolPolicy, ToolPreparation, ToolImmediate, ToolPolicyDecision, NoOpinion
+)
+
+pure func prepare(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolImmediate(NoOpinion) }
+
+pure func interpret(_ctx: PureCtx, _call: ToolCallEnvelope, _req: DecisionRequest, _obs: DecisionObservation) -> ToolPolicyDecision { NoOpinion }
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]),
+    caps: [DecisionToolPolicy({ local_id: "beta.policy", question_version: "fixture/1", question_config: jo([]),
+                                interpretation_version: "fixture/1", interpretation_config: jo([]),
+                                max_interventions: 0 }, prepare, interpret)] }
+}

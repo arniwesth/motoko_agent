@@ -160,6 +160,10 @@ export type CapabilityKind
   | SolverJudgeKind
   | ExitIntentKind
   | WorkInFlightKind
+  -- 8.0 (031 ADR-001 D2): the two structured-decision variants, one per vote
+  -- family. Their classification is `capability_purity_basis` below.
+  | DecisionSolverJudgeKind
+  | DecisionToolPolicyKind
 
 -- THREE kinds since the 7.0 ABI bump, and the third exists because two could only
 -- describe `ExitIntent` by lying in one direction or the other.
@@ -227,7 +231,60 @@ export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
     -- that produced a provider result, so a profile excluding it is claiming
     -- something false about its own run — which is exactly what Unconditional
     -- means here.
-    WorkInFlightKind => Unconditional
+    WorkInFlightKind => Unconditional,
+    -- 8.0: each decision variant is dispatched where its vote family's legacy
+    -- kind is -- the judge on every finalize candidate, the policy on every
+    -- proposed tool call -- so each takes its family's class. A `Disabled`
+    -- decision mode skips the callbacks (ADR D6), but that is a RUN term the
+    -- host records, not a property of the atom a profile could exclude; filing
+    -- it `Lifecycle` would admit an unchecked exclusion, and `Unconditional` is
+    -- the direction that rejects one.
+    DecisionSolverJudgeKind => Unconditional,
+    DecisionToolPolicyKind => Unconditional
+  }
+}
+
+-- WHY A KIND MAY BE COVERED WITHOUT A BARRIER: the basis its purity rests on.
+-- 031 P0.5, classifying the two new slots as ADR-001 D2 states them.
+--
+--   EffectRow          the slot declares a non-empty effect row. Not pure; a
+--                      barrier wherever it is dispatched (check_fixtures.py).
+--   DeclaredEmptyRow   the slot declares no row and was admitted on that
+--                      declared row before 8.0 -- D5 criterion 1's basis.
+--   ViewsPlusBoundary  the slot declares no row, and D2 is explicit that this
+--                      is NOT what makes it pure: the pin's effect pass does not
+--                      check an inline lambda's row (NOTE-001), so a rowless
+--                      decision callback enters the pure-slot criterion "on the
+--                      strength of the views plus the boundary" -- it is handed
+--                      `PureCtx`, which carries no port and no world, and the
+--                      registration boundary admits only a named top-level
+--                      function. That is restricted SUPPLIED AUTHORITY, not
+--                      compile-time purity, and D2's residual bounds it: a
+--                      registry-installed extension with no in-tree source meets
+--                      neither the shape rule nor the walk, and the runtime's
+--                      missing-field failure is its only enforcement. The host's
+--                      decision-query leaf is separately subject to the
+--                      recording gates; nothing here covers it.
+--
+-- The 7.x rowless slots also take `PureCtx` at 8.0, and they keep the basis they
+-- were admitted on: D2 re-bases the two new slots, not the old ones, and this
+-- table does not widen the ADR.
+export type PurityBasis = EffectRow | DeclaredEmptyRow | ViewsPlusBoundary
+
+export pure func capability_purity_basis(k: CapabilityKind) -> PurityBasis {
+  match k {
+    DescribeToolsKind => DeclaredEmptyRow,
+    PromptShaperKind => DeclaredEmptyRow,
+    BudgetShaperKind => DeclaredEmptyRow,
+    CompactorKind => EffectRow,
+    ToolPolicyKind => DeclaredEmptyRow,
+    ToolProviderKind => EffectRow,
+    ResponseInterceptorKind => EffectRow,
+    SolverJudgeKind => EffectRow,
+    ExitIntentKind => EffectRow,
+    WorkInFlightKind => EffectRow,
+    DecisionSolverJudgeKind => ViewsPlusBoundary,
+    DecisionToolPolicyKind => ViewsPlusBoundary
   }
 }
 
@@ -242,7 +299,9 @@ export pure func capability_kind_id(k: CapabilityKind) -> string {
     ResponseInterceptorKind => "response_interceptor",
     SolverJudgeKind => "solver_judge",
     ExitIntentKind => "exit_intent",
-    WorkInFlightKind => "work_in_flight"
+    WorkInFlightKind => "work_in_flight",
+    DecisionSolverJudgeKind => "decision_solver_judge",
+    DecisionToolPolicyKind => "decision_tool_policy"
   }
 }
 
@@ -257,13 +316,15 @@ export pure func capability_kind_from_id(id: string) -> Option[CapabilityKind] {
   else if id == "solver_judge" then Some(SolverJudgeKind)
   else if id == "exit_intent" then Some(ExitIntentKind)
   else if id == "work_in_flight" then Some(WorkInFlightKind)
+  else if id == "decision_solver_judge" then Some(DecisionSolverJudgeKind)
+  else if id == "decision_tool_policy" then Some(DecisionToolPolicyKind)
   else None
 }
 
 export pure func all_capability_kinds() -> [CapabilityKind] {
   [DescribeToolsKind, PromptShaperKind, BudgetShaperKind, CompactorKind,
    ToolPolicyKind, ToolProviderKind, ResponseInterceptorKind, SolverJudgeKind,
-   ExitIntentKind, WorkInFlightKind]
+   ExitIntentKind, WorkInFlightKind, DecisionSolverJudgeKind, DecisionToolPolicyKind]
 }
 
 -- THE UNIT: an atom is (kind, index-within-kind) in the registration's list
@@ -605,21 +666,23 @@ pure func count_unconditional_kinds(ks: [CapabilityKind]) -> int {
 -- unencodable type "()"". Every nullary enumerator in this module is blocked the
 -- same way, so every test reading one is too. The assertion is the `tests [...]`
 -- block, run by `ailang test` and by `make profile_coverage`.
-pure func test_all_capability_kinds_is_ten_distinct() -> bool
+-- TWELVE at 8.0 (the two decision variants); ten at 7.3.
+pure func test_all_capability_kinds_is_twelve_distinct() -> bool
   tests [((), true)]
   {
-    List.length(all_capability_kinds()) == 10 && distinct_ids(kind_ids(all_capability_kinds()), [])
+    List.length(all_capability_kinds()) == 12 && distinct_ids(kind_ids(all_capability_kinds()), [])
   }
 
 pure func test_one_atom_per_kind_fully_covered_passes() -> bool
   tests [((), true)]
   {
-    List.length(one_per_kind()) == 10
+    List.length(one_per_kind()) == 12
       && capability_install_list_ok([cap_full("ext_a", one_per_kind())])
       && capability_install_list_ok([])
   }
 
--- EIGHT unconditional, ONE gated, ONE lifecycle at 7.3 (seven/one/one at 7.0)
+-- TEN unconditional, ONE gated, ONE lifecycle at 8.0 (eight/one/one at 7.3,
+-- seven/one/one at 7.0)
 -- -- and the three-way split is the assertion, not the eight. A version of this
 -- test that only counted unconditional kinds would pass with `ExitIntent`
 -- classified either way, which is exactly how the first 7.0 answer went in
@@ -633,7 +696,7 @@ pure func test_one_atom_per_kind_fully_covered_passes() -> bool
 -- reason, recorded in `capability_dispatch`.
 -- contracts: SKIPPED — "calls "all_capability_kinds" whose signature uses an
 -- unencodable type "()"". See the note above `test_all_capability_kinds_is_nine_distinct`.
-pure func test_dispatch_kinds_split_eight_one_one() -> bool
+pure func test_dispatch_kinds_split_ten_one_one() -> bool
   tests [((), true)]
   {
     let gated: CapabilityDisclosure =
@@ -651,7 +714,7 @@ pure func test_dispatch_kinds_split_eight_one_one() -> bool
     capability_install_list_ok([gated])
       && capability_install_list_ok([life])
       && has_rule(validate_capability_disclosure(unc), "unconditional-hook-excluded")
-      && count_unconditional_kinds(all_capability_kinds()) == 8
+      && count_unconditional_kinds(all_capability_kinds()) == 10
       && count_gated_kinds(all_capability_kinds()) == 1
       && count_lifecycle_kinds(all_capability_kinds()) == 1
   }
@@ -792,3 +855,50 @@ pure func first_atom_id(xs: [AtomRef]) -> string {
     x :: _ => atom_id(x)
   }
 }
+
+-- 031 P0.5: the purity classification, SIX / FOUR / TWO, and the two are the
+-- decision kinds by name. Counting alone would pass with the two bases swapped
+-- between a decision kind and an old rowless one, which is the reading this
+-- table exists to keep apart; so the decision kinds are asserted by name, and
+-- so is one old rowless kind keeping its declared-row basis.
+pure func count_purity(ks: [CapabilityKind], want: string) -> int {
+  match ks {
+    [] => 0,
+    k :: rest =>
+      (if purity_name(capability_purity_basis(k)) == want then 1 else 0) + count_purity(rest, want)
+  }
+}
+
+pure func purity_name(b: PurityBasis) -> string {
+  match b { EffectRow => "effect-row", DeclaredEmptyRow => "declared-empty-row", ViewsPlusBoundary => "views-plus-boundary" }
+}
+
+pure func test_purity_basis_split_six_four_two() -> bool
+  tests [((), true)]
+  {
+    count_purity(all_capability_kinds(), "effect-row") == 6
+      && count_purity(all_capability_kinds(), "declared-empty-row") == 4
+      && count_purity(all_capability_kinds(), "views-plus-boundary") == 2
+      && purity_name(capability_purity_basis(DecisionSolverJudgeKind)) == "views-plus-boundary"
+      && purity_name(capability_purity_basis(DecisionToolPolicyKind)) == "views-plus-boundary"
+      && purity_name(capability_purity_basis(ToolPolicyKind)) == "declared-empty-row"
+  }
+
+-- The new kinds round-trip through their ids and are dispatched on every run,
+-- so a profile excluding one is rejected like any unconditional kind.
+pure func test_decision_kinds_round_trip_and_are_not_excludable() -> bool
+  tests [((), true)]
+  {
+    let ids_ok = match capability_kind_from_id("decision_solver_judge") {
+      Some(k) => capability_kind_id(k) == "decision_solver_judge",
+      None => false
+    } && match capability_kind_from_id("decision_tool_policy") {
+      Some(k) => capability_kind_id(k) == "decision_tool_policy",
+      None => false
+    };
+    let d: CapabilityDisclosure =
+      { extension_id: "quiet_guard", atoms: one_per_kind(),
+        covered: without_kind(one_per_kind(), DecisionSolverJudgeKind),
+        excluded: [{ kind: DecisionSolverJudgeKind, index: 0 }] };
+    ids_ok && has_rule(validate_capability_disclosure(d), "unconditional-hook-excluded")
+  }

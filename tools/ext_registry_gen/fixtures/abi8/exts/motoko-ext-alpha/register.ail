@@ -1,0 +1,14 @@
+-- 031 P0.5 registry fixture: a synthetic 8.0 extension. Its configuration is
+-- the data its one callback reads, through `ext_config`, not a capture.
+module fixture/motoko_ext_alpha/register
+
+import std/json (Json, jo, kv, js, JString)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, DescribeTools, ToolSchema)
+
+func describe(cfg: Json) -> [ToolSchema] {
+  match cfg { JString(s) => [{ name: s, description: "fixture tool", parameters: "{}" }], _ => [] }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: JString("alpha_tool"), caps: [DescribeTools(describe)] }
+}

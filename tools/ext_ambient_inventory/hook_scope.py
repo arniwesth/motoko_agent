@@ -149,10 +149,12 @@ SHAPE_GATE_FIXTURES = "scripts/dst/fixtures/adr001_boundary/gate"
 #: tool FAIL on it (`capability-list-unresolvable`) rather than silently skip
 #: the atom -- the discipline the 5.x `SLOTS` tuple carried.  "Literal lists
 #: only": a list built by an expression is a rejection, and B8 makes that an
-#: ABI rule.  8.0's two decision variants (`DecisionSolverJudge`,
-#: `DecisionToolPolicy`, each `(descriptor, prepare, interpret)`) are NOT here:
-#: the kind and arity maps are P0.5's, and until then an atom of either kind is
-#: `list-not-enumerable` -- a failure, never a skip.
+#: ABI rule.  8.0's two decision variants were added by 031 P0.5, below; until
+#: then an atom of either kind was `list-not-enumerable` -- a failure, never a
+#: skip.  Since P0.5 every row is ALSO checked against the ABI's own
+#: `export type Capability` declaration (`abi_capability_arities`, run by the
+#: self-test and by `--gate-fixtures`), so the table is hand-held for the
+#: fail-closed reason above and cannot drift from the signature it transcribes.
 CAPABILITY_KINDS: dict[str, tuple[int, tuple[int, ...]]] = {
     "DescribeTools": (1, (0,)),
     "PromptShaper": (1, (0,)),
@@ -171,7 +173,96 @@ CAPABILITY_KINDS: dict[str, tuple[int, tuple[int, ...]]] = {
     # render is the binding. No `enabled` third field: unlike the exit intent
     # this performs nothing, so there is no operator opt-in to resolve.
     "WorkInFlight": (2, (1,)),
+    # 8.0 (031 ADR-001 D2): (descriptor, prepare, interpret). The descriptor is
+    # DATA -- the policy's identity, versions and configs -- and both callbacks
+    # are bindings, each keyed `Kind[i]@position`, and each goes through the
+    # shape pass on its own: a named `prepare` does not excuse an inline
+    # `interpret`.
+    "DecisionSolverJudge": (3, (1, 2)),
+    "DecisionToolPolicy": (3, (1, 2)),
 }
+
+#: Where the `Capability` declaration `CAPABILITY_KINDS` transcribes lives.
+ABI_CAPABILITY_SOURCE = "packages/motoko-ext-abi/types.ail"
+
+
+def _has_top_arrow(text: str) -> bool:
+    """True when `->` occurs at bracket depth 0 -- a function TYPE, as opposed
+    to data (`[string]`, `bool`, `DecisionPolicyDescriptor`) or a parenthesised
+    type that only contains an arrow deeper down."""
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch in "{[(":
+            depth += 1
+        elif ch in "}])":
+            depth -= 1
+        elif ch == "-" and depth == 0 and text[i + 1:i + 2] == ">":
+            return True
+    return False
+
+
+def abi_capability_arities(abi_text: str) -> dict[str, tuple[int, tuple[int, ...]]]:
+    """`Capability` variant -> (arity, function-typed argument positions), read
+    from the ABI's own declaration: the second producer `CAPABILITY_KINDS` is
+    checked against (031 P0.5).  Comments are stripped line by line (no string
+    literal occurs in the declaration); the block runs from `export type
+    Capability` to the next `export`; variants split at depth-0 `|`, arguments
+    at depth-0 `,`, and an argument is a binding exactly when its type is a
+    function type.  An unreadable declaration is an empty map, which the caller
+    reports as a failure rather than as agreement."""
+    code = "\n".join(line.split("--", 1)[0] for line in abi_text.splitlines())
+    m = re.search(r"^export type Capability\b\s*=(.*?)(?=^export\s)", code, re.M | re.S)
+    if not m:
+        return {}
+    variants, depth, cur = [], 0, ""
+    for ch in m.group(1):
+        if ch in "{[(":
+            depth += 1
+        elif ch in "}])":
+            depth -= 1
+        if ch == "|" and depth == 0:
+            variants.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    variants.append(cur.strip())
+    out: dict[str, tuple[int, tuple[int, ...]]] = {}
+    for v in variants:
+        vm = re.fullmatch(rf"({IDENT})\s*(?:\((.*)\))?", v, re.S)
+        if vm is None:
+            return {}
+        args = split_args(vm.group(2) or "")
+        out[vm.group(1)] = (len(args), tuple(i for i, a in enumerate(args) if _has_top_arrow(a)))
+    return out
+
+
+def check_capability_arities(repo: Path) -> tuple[list[str], list[str]]:
+    """Every `CAPABILITY_KINDS` row against its 8.0 signature, both directions:
+    a variant the ABI declares and the table lacks, a row the ABI no longer
+    declares, and an arity or binding position that disagrees are each a
+    failure.  Returns `(failures, lines)`."""
+    src = repo / ABI_CAPABILITY_SOURCE
+    if not src.is_file():
+        return [f"ABI ARITY: no ABI declaration at {ABI_CAPABILITY_SOURCE}"], []
+    abi = abi_capability_arities(src.read_text())
+    if not abi:
+        return [f"ABI ARITY: `export type Capability` in {ABI_CAPABILITY_SOURCE} could not be "
+                f"read, so no arity in CAPABILITY_KINDS is checked"], []
+    fails, lines = [], []
+    for kind in sorted(set(abi) | set(CAPABILITY_KINDS)):
+        if kind not in CAPABILITY_KINDS:
+            fails.append(f"ABI ARITY: the ABI declares `{kind}` {abi[kind]} and CAPABILITY_KINDS "
+                         f"does not enumerate it -- an atom of it would be `list-not-enumerable`")
+        elif kind not in abi:
+            fails.append(f"ABI ARITY: CAPABILITY_KINDS enumerates `{kind}`, which the ABI does "
+                         f"not declare")
+        elif abi[kind] != CAPABILITY_KINDS[kind]:
+            fails.append(f"ABI ARITY: `{kind}` is (arity, bindings) {abi[kind]} in the ABI and "
+                         f"{CAPABILITY_KINDS[kind]} in CAPABILITY_KINDS")
+        else:
+            lines.append(f"  ok  arity {kind:<22} {abi[kind][0]} arg(s), binding(s) at "
+                         f"{list(abi[kind][1])}")
+    return fails, lines
 
 #: Rejection shapes this module adds to the parent's five.  Each is a REJECTION
 #: of the WALK -- the instrument.  B8 removed `hook-record-unresolvable` and
@@ -1902,6 +1993,12 @@ def self_test(repo: Path, c3, producer, builtins: dict[str, str],
     else:
         print(f"  ok  reading control            registration={a}, hook={b} -- they DISAGREE")
 
+    # THE ARITY TABLE AGAINST THE ABI (031 P0.5): every row, both directions.
+    afails, alines = check_capability_arities(repo)
+    for ln in alines:
+        print(ln)
+    fails.extend(afails)
+
     # THE GATE'S OWN FIXTURES (P0.3), with the walk beside the shape.
     gate_dir = repo / SHAPE_GATE_FIXTURES
     gfails, glines = gate_fixture_suite(repo, gate_dir, producer, builtins, ext_fields)
@@ -2029,6 +2126,11 @@ def main(argv: list[str]) -> int:
                                       ailang_check=args.ailang_check, only=only)
     for ln in lines:
         print(ln)
+    # 031 P0.5: the arity table the gate enumerates atoms with, against the ABI.
+    afails, alines = check_capability_arities(repo)
+    for ln in alines:
+        print(ln)
+    fails.extend(afails)
     print(f"\nregistration-shape gate fixtures: {len(lines)} ok, {len(fails)} failure(s)")
     for f in fails:
         print(f"  FAIL {f}")

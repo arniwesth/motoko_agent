@@ -437,9 +437,11 @@ func seven_unconditional() -> bool ! {IO} {
 func sweep_slots(xs: [AtomRef], seen: int, acc: bool) -> bool ! {IO} {
   match xs {
     [] => {
-      let ok = seen == 8;
-      let _ = if ok then println("  ✓ all EIGHT unconditionally-dispatched slots reject exclusion (D5's prose says six)")
-              else println("  ✗ expected 8 unconditionally-dispatched slots, swept ${show(seen)}");
+      -- TEN at 8.0 (031 P0.5, re-pinned by hand): the two decision kinds are
+      -- dispatched where their vote families' legacy kinds are. Eight at 7.3.
+      let ok = seen == 10;
+      let _ = if ok then println("  ✓ all TEN unconditionally-dispatched slots reject exclusion (D5's prose says six)")
+              else println("  ✗ expected 10 unconditionally-dispatched slots, swept ${show(seen)}");
       acc && ok
     },
     s :: rest => {

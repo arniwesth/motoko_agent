@@ -165,7 +165,7 @@ def parse_output(path):
 # ---------------------------------------------------------------------------
 
 
-EXPECTED_CAPABILITY_KINDS = 10
+EXPECTED_CAPABILITY_KINDS = 12  # 031 P0.5: + DecisionSolverJudge, DecisionToolPolicy (ABI 8.0)
 
 
 def abi_slots():
@@ -180,8 +180,9 @@ def abi_slots():
     row (or the reverse) is a FAIL, never a skip.
     """
     kinds = capability_kind_ids()
-    # TEN at ABI 7.3 (`WorkInFlight`), nine at 7.0 (`ExitIntent`), eight before
-    # it. Pinned rather than
+    # TWELVE at ABI 8.0 (the two decision variants, re-pinned by hand at 031
+    # P0.5), ten at 7.3 (`WorkInFlight`), nine at 7.0 (`ExitIntent`), eight
+    # before it. Pinned rather than
     # derived on purpose: the count is what makes a kind added to the ABI and
     # forgotten here a FAIL instead of a silent skip, so it moves by hand, once,
     # with the variant.
