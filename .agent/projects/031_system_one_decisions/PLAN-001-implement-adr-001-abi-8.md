@@ -743,6 +743,16 @@ clean. Isolation: **no worktrees**; §0 item 13, one writer per surface, with th
 (P1.3r → P1.4r), packages (P1.2a → B, C, D) and scripts/tools (P1.5r → P1.6r, P1.7r). R: 17–21½
 delegate-days.
 
+### P1.5r — 2026-09-21, commit `3eb6b71a`
+
+| | |
+|---|---|
+| Commit | 31 manifest ABI pins 7.4 → 8.0 in 25 `.ail` files (plus the coupled `admission.ail:1058` assertion); `check_fixtures.py` rule 2 split out as `check_abi_pins()` with `--abi-pins`, `ABI_PIN_EXEMPTIONS` naming the A9b fixture by file and anchor (an exemption must match exactly one pin that still differs), guards unchanged, the vacuous-repair message corrected; `run_declared_vs_performed.sh` `:124`/`:707` probes re-anchored on `PureCtx`/`AiCtx` asserting the same rows |
+| Full targets | `make profile_definition`, `make driver_only`, `make declared_vs_performed` still red on the tree — `ext_call_inventory` and the 7.4 compose package, P1.2's — as briefed |
+| **Intake (orchestrator)** | `--abi-pins` exit 0 (31 at 8.0; `admission.ail:993` exempted at 7.3); `run_abi_probes.sh` 2/2; `mutgate.sh --clone-from` fresh clone **7/7** |
+| Findings, assigned | (1) four rule-1 profile-record notes "ABI 7.4" in `src/core/dst_driver_{only,plus_compose,plus_no_ops,plus_herdr}.ail` — the same checker's other rule, red at 8.0; (2) `herdr_abi_version() -> "7.4"` (`dst_driver_plus_herdr.ail:137`), a pin through a call. Both → a **P1.5r follow-up after P1.4r** (src/core lane). (3) the root `ailang.lock` records the ABI at 7.4 → regenerated at **P1.2d** |
+| Intake defects | 0 |
+
 ## 10. Estimates
 
 | phase | delegate-days |
