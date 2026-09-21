@@ -453,6 +453,56 @@ pure func compose_cfg(mode: string) -> ComposeHostConfig {
 -- at registration, so narrowing those rows is its own measurement item rather
 -- than an ABI edit.
 --
+-- RE-MEASURED AT ABI 8.0 (031 P1.5r-a3). The counts above are WI-D8's; the
+-- runner carries the chain since (16/14/9 of 16 at Phase A, 17/15/9 of 17
+-- with repetition_guard). At 8.0 they are
+--
+--   Env      admitted by 16 of the 16 registration ROWS
+--   FS       admitted by 13 of 16
+--   Process  admitted by  3 of 16
+--
+-- and nothing the ABI enforces was narrowed to get there. 8.0 (P1.2b-d) moved
+-- every effectful payload OUT of the registration function into a NAMED
+-- top-level function bound directly, so a registration's row now covers only
+-- what it reads to build `config`: Env everywhere, FS where a prompt or config
+-- file is read. `compose.ail`'s real registration lost its row outright (its
+-- atoms come from the rowless `compose_caps()`), which is the 17 -> 16.
+-- `compaction_ai` is at `! {Env, FS}`: the one total-absorption site above is
+-- closed.
+--
+-- WHAT THE NEW COUNTS MEAN FOR HOW MUCH THE WI-D6/D7/D8 NARROWINGS ENFORCE.
+-- The absorption counts measure ONE door, and it is the smaller one now:
+--
+--   (1) An atom bound straight into the IMPORTED `Capability` — named, or
+--       inline without the smuggle — is checked against the PAYLOAD row by the
+--       compiler (the runner's IMPORTED SUM named-wide / unannot / annot rows).
+--       Every extension atom is now named (`make ext_hook_scope`: 0 binding
+--       rejections; only this file's controls smuggle), so for every binding
+--       that exists the narrowed slot rows are compiler-enforced, and no registration row
+--       takes part. That is the larger change at 8.0, and these counts do not
+--       see it.
+--   (2) The record-field smuggle (limitation 1; the runner's `smuggle` row) is
+--       the one form that still bypasses the payload row, and its bound is the
+--       enclosing registration's row. The counts say where the COMPILER would
+--       let a smuggled effect through: Process in 3 extensions, down from 9,
+--       and all three rows (herdr, omnigraph, compose's register.ail wrapper)
+--       are OVER-DECLARED — by their callees' own rows the bodies perform only
+--       Env and FS — so no registration needs the door open for Process. FS in
+--       13, down from 15. Env in every one of the 16, as before: every
+--       registration reads Env for its config, so the narrowings enforce
+--       nothing against a smuggled Env read through this door.
+--
+-- AND THE DOOR IS SHUT ONE LEVEL UP, BY A CHECK THAT IS NOT THE COMPILER. The
+-- 8.0 registration-shape rule (`hook_scope.py`, ADR-001 D2) passes a payload
+-- only when it is a bare name resolving to a top-level `func`; `w.f` and an
+-- inline lambda are shape rejections, so `make ext_hook_scope` refuses a
+-- smuggled atom in any installable extension before any row is consulted. The
+-- counts are therefore what the compiler alone would allow, and the upper
+-- bound on what a shape-rule regression would re-open. A registration that
+-- delegates `caps` to a helper (`compose_caps`, `herdr_caps`, both rowless)
+-- bounds a smuggle in the helper by the HELPER's row, not the wrapper's, so the
+-- per-effect counts are an upper bound on that too.
+--
 -- These two builders declare `! {Env}` and `! {FS}` for exactly that reason —
 -- the leak reaches them, and they are honest about it.
 --

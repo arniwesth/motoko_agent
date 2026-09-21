@@ -158,7 +158,12 @@ def check_omission_basis(profile_src, required):
     # B8: the 5.x `ExtensionHooks.on_budget_plan` field is gone; the same fact
     # now lives in the `BudgetShaper((ExtCtx, BudgetPlan) -> BudgetPatch ...)`
     # payload of the 6.0 `Capability` sum.
-    m = re.search(r"BudgetShaper\(\(ExtCtx,\s*BudgetPlan\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
+    # 031 P1.5r-a3: 8.0 takes the payload's context from `ExtCtx` to `PureCtx`
+    # (ADR-001 D2's views), as `run_declared_vs_performed.sh:128` already reads it.
+    # The anchor follows the 8.0 text; the assertions are unchanged — the return
+    # type (no successor) and the ROW (absent). A re-signed context is a changed
+    # payload (a major bump), so it is not matched loosely.
+    m = re.search(r"BudgetShaper\(\(PureCtx,\s*BudgetPlan\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
                   abi, re.M)
     if not m:
         fail("could not read `Capability.BudgetShaper`'s payload in "

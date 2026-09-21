@@ -526,13 +526,18 @@ echo "-- producer 3: PERFORMED, inferred by the compiler (total over inputs) --"
 # else in the file (a typo, a missing import) would read as the effect checker
 # doing its job. WI-D6's first attempt failed exactly that way, on
 # `undefined variable: getEnvOr`.
+# 031 P1.5r-a3: both mutants below now name 8.0 contexts (`PureCtx` for the
+# BudgetShaper mirror, `AiCtx` for the inline Compactor). Neither verdict moved:
+# `mutant_budget` is a named function checked against its OWN row and never
+# bound into a slot, and `mutant_register`'s atom is an inline lambda, whose
+# parameter annotation v0.33.0 does not unify at all (see the B8 block below).
 write_mutant() {
   cat > "$MUTANT" <<EOF
 module scripts/dst/dvp_mutant_probe
 import std/env (getEnvOr)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, BudgetPlan, BudgetPatch)
-export func mutant_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch$1 {
+import pkg/sunholo/motoko_ext_abi/types (PureCtx, BudgetPlan, BudgetPatch)
+export func mutant_budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch$1 {
   let _ = getEnvOr("PATH", "");
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
@@ -572,9 +577,9 @@ write_mutant_register() {
   cat > "$MUTANT" <<EOF
 module scripts/dst/dvp_mutant_probe
 import std/env (getEnvOr)
-import pkg/sunholo/motoko_ext_abi/types (Capability, Compactor, ExtCtx, Msg, PreStepOutcome, PassThrough)
+import pkg/sunholo/motoko_ext_abi/types (Capability, Compactor, AiCtx, Msg, PreStepOutcome, PassThrough)
 export func register_with_config(_cfg: a) -> [Capability]$1 {
-  [Compactor(func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH", ""); { decision: { PassThrough }, next_state: ctx.world } })]
+  [Compactor(func(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH", ""); { decision: { PassThrough }, next_state: ctx.world } })]
 }
 EOF
 }
@@ -960,30 +965,59 @@ echo "-- B8: CONSTRUCTOR ARGUMENT on the IMPORTED ABI sum (the rows above use a 
 # rows ARE compiler-enforced for named functions and unannotated lambdas, and an
 # annotated lambda is checked at its own annotation. What survives is the
 # record-field smuggle (limitation 1), pinned last.
+#
+# 031 P1.5r-a3: THE PROBES NAME 8.0's `AiCtx`, AND THE REASON IS A MEASUREMENT.
+# At 8.0 the Compactor slot takes `AiCtx`, not `ExtCtx`. Left on `ExtCtx`, the
+# named-wide probe was rejected on "record field mismatch: expected 24 fields,
+# got 23" — the CONTEXT, not the row — and said so ("establishes nothing"). The
+# four inline probes did NOT notice, and could not: MEASURED on v0.33.0, an
+# inline lambda's PARAMETER annotation in constructor-argument position is not
+# unified with the payload at all (`ctx: int`, `ctx: Bogus` and an unimported
+# `ExtCtx` all check clean) — the same gap LIMITATION 3 pins for `ctx.ports`
+# (fb_30e82f6bdc5fc8c3). So the inline rows' verdicts are context-independent
+# and still measure the row, but a stale context in them is invisible to the
+# compiler. Two rows below make each half explicit:
+#   named-exact  a NAMED impl at exactly the payload row on `AiCtx` is ACCEPTED,
+#                so named-wide's rejection is the Env label and nothing else;
+#   8.0 context  the probes' own text names no context but `AiCtx` — the only
+#                check that CAN see an inline probe left on a 7.4 context.
+b8_ctx_stale=""
 write_abi_ctor() {  # $1 = declarations after the imports
+  local stale
+  stale=$(grep -oE '\b(Ext|Pure|Fs|Process|Intercept|Provider)Ctx\b' <<<"$1" | sort -u | tr '\n' ' ' || true)
+  if [ -n "$stale" ]; then b8_ctx_stale="$b8_ctx_stale$stale"; fi
   cat > "$LIMPROBE" <<EOF
 module scripts/dst/dvp_limitation_probe
 import std/env (getEnvOr)
-import pkg/sunholo/motoko_ext_abi/types (Capability, Compactor, ExtCtx, Msg, PreStepOutcome, PassThrough)
+import pkg/sunholo/motoko_ext_abi/types (Capability, Compactor, AiCtx, Msg, PreStepOutcome, PassThrough)
 $1
 EOF
 }
-write_abi_ctor 'func impl(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace, Env} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } }
+write_abi_ctor 'func impl(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace, Env} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } }
 export func build() -> [Capability] ! {Env} { [Compactor(impl)] }'
 if out=$(AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" 2>&1); then
   bad "IMPORTED SUM (named-wide): a named function declared ! {AI, IO, Trace, Env} was ACCEPTED as a Compactor atom -- the payload row does not bound a named binding on the REAL ABI, and B2's named-atom body scan is the only thing that catches it"
-elif echo "$out" | grep -q "incompatible closed rows"; then
-  ok "IMPORTED SUM (named-wide): a named function declared ! {AI, IO, Trace, Env} is REJECTED as a Compactor atom (incompatible closed rows) -- on the real ABI the payload row IS compiler-enforced for named atoms"
+elif grep -qF "incompatible closed rows: r1 has extra labels [], r2 has extra labels [Env]" <<<"$out"; then
+  ok "IMPORTED SUM (named-wide): a named function declared ! {AI, IO, Trace, Env} is REJECTED as a Compactor atom (incompatible closed rows, the ONLY extra label Env) -- on the real ABI the payload row IS compiler-enforced for named atoms"
 else
-  bad "IMPORTED SUM (named-wide): rejected, but not on closed-row unification -- establishes nothing: $(echo "$out" | grep -E '^Error' | head -1)"
+  bad "IMPORTED SUM (named-wide): rejected, but not on closed-row unification over Env alone -- establishes nothing: $(echo "$out" | grep -E '^Error' | head -1)"
 fi
-write_abi_ctor 'export func build() -> [Capability] ! {Env} { [Compactor(func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } })] }'
-if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+write_abi_ctor 'func impl(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } }
+export func build() -> [Capability] { [Compactor(impl)] }'
+if out=$(AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" 2>&1); then
+  ok "IMPORTED SUM (named-exact): the SAME named impl at exactly the payload row is ACCEPTED -- so named-wide's rejection is caused by the Env label, not by the context type, the import, or the probe"
+else
+  bad "IMPORTED SUM (named-exact) was REJECTED -- a named impl at the payload's own row and context does not compile, so named-wide above measures something other than the row: $(echo "$out" | grep -E '^Error' | head -1)"
+fi
+write_abi_ctor 'export func build() -> [Capability] ! {Env} { [Compactor(func(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } })] }'
+if out=$(AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" 2>&1); then
   bad "IMPORTED SUM (unannot): an UNANNOTATED inline lambda performing Env was ACCEPTED as a Compactor atom under an enclosing ! {Env} -- the 5.x absorption survives on the real ABI"
-else
+elif grep -qF "incompatible closed rows" <<<"$out" && grep -qF "r2 has extra labels [Env]" <<<"$out"; then
   ok "IMPORTED SUM (unannot): an UNANNOTATED inline lambda performing Env is REJECTED at the payload row even though the enclosing row admits Env -- the enclosing row no longer absorbs an inline atom"
+else
+  bad "IMPORTED SUM (unannot): rejected, but not at the payload row over Env -- establishes nothing: $(echo "$out" | grep -E '^Error' | head -1)"
 fi
-write_abi_ctor 'export func build() -> [Capability] ! {Env} { [Compactor(func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } })] }'
+write_abi_ctor 'export func build() -> [Capability] ! {Env} { [Compactor(func(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } })] }'
 if out=$(AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" 2>&1); then
   bad "IMPORTED SUM (annot): an inline lambda DECLARING the payload row and performing Env was ACCEPTED -- limitation 1 now applies in constructor-argument position"
 elif echo "$out" | grep -q "uses effects not declared in its"; then
@@ -991,21 +1025,26 @@ elif echo "$out" | grep -q "uses effects not declared in its"; then
 else
   bad "IMPORTED SUM (annot): rejected, but not at the lambda's annotation: $(echo "$out" | grep -E '^Error' | head -1)"
 fi
-write_abi_ctor 'export func build() -> [Capability] { [Compactor(func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } })] }'
+write_abi_ctor 'export func build() -> [Capability] { [Compactor(func(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } })] }'
 if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
   ok "IMPORTED SUM (exact-ctl): an inline lambda at exactly the payload row, performing nothing, is ACCEPTED -- so the three rejections above are caused by the rows, not by the probe"
 else
   bad "IMPORTED SUM (exact-ctl) was REJECTED -- a clean atom at the payload's own row does not compile, so nothing in this section measures rows"
 fi
-write_abi_ctor 'type W = { f: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace} }
+write_abi_ctor 'type W = { f: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace} }
 export func build() -> [Capability] ! {Env} {
-  let w: W = { f: func(ctx: ExtCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } } };
+  let w: W = { f: func(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { let _ = getEnvOr("PATH",""); { decision: PassThrough, next_state: ctx.world } } };
   [Compactor(w.f)]
 }'
 if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
   ok "IMPORTED SUM (smuggle): the SAME performing lambda bound to a LOCAL record field first and then passed as the atom is ACCEPTED -- limitation 1 is the one remaining door into a 6.0 payload, and it is what this file's control_env/control_fs use"
 else
   bad "IMPORTED SUM (smuggle) was REJECTED: record-field lambda rows are now checked upstream. GOOD NEWS, and control_env/control_fs (built through that door) can no longer be constructed -- rebuild them before trusting the runtime rows above"
+fi
+if [ -z "$b8_ctx_stale" ]; then
+  ok "IMPORTED SUM (8.0 context): every probe above names the Compactor slot's 8.0 context, AiCtx, and no other -- the compiler cannot check this for the inline probes (v0.33.0 does not unify an inline lambda's parameter annotation; fb_30e82f6bdc5fc8c3), so this row does"
+else
+  bad "IMPORTED SUM (8.0 context): a probe above names [${b8_ctx_stale% }] where the 8.0 Compactor slot takes AiCtx -- an inline probe on the wrong context still checks clean on v0.33.0, so its verdict is about a payload the ABI no longer has"
 fi
 # The local-vs-imported control: the SAME sum, once imported, flips the verdict.
 LIMMOD=scripts/dst/dvp_limitation_sum.ail   # no dot prefix: the module name must match the file name to be importable
@@ -1609,10 +1648,15 @@ limcleanup
 # both of which declare a row. The denominator is still ROWS, and it is still
 # (extensions - 2 rowless + 1 for compose's second), stated as that arithmetic
 # so the next extension moves it by a visible +1 rather than by a re-pin.
-want_reg_rows=$((N_EXTS - 2 + 1))
+# 17 -> 16 at 031 P1.2b-d (ABI 8.0), and by the arithmetic, not by a count:
+# `compose.ail`'s real registration now only writes `{ config, caps:
+# compose_caps() }`, whose atoms are named top-level functions, so it declares
+# NO row. THREE registrations are rowless now (decision_framework, microrag,
+# compose.ail), and compose's second function (register.ail) still adds one.
+want_reg_rows=$((N_EXTS - 3 + 1))
 n_reg_rows=$( { grep -rlE "func register_with_config.*!" --include=*.ail packages/ 2>/dev/null || true; } | wc -l | tr -d ' ')
 if [ "$n_reg_rows" -eq "$want_reg_rows" ]; then
-  ok "$n_reg_rows register_with_config rows across the $N_EXTS extensions (decision_framework and microrag declare none; compose declares two) — the denominator for the absorption rows below"
+  ok "$n_reg_rows register_with_config rows across the $N_EXTS extensions (decision_framework, microrag and compose.ail's real registration declare none; compose's register.ail wrapper adds one) — the denominator for the absorption rows below"
 else
   bad "the number of register_with_config rows moved from $want_reg_rows to $n_reg_rows, so every absorption fraction below has a different denominator than the one they were measured against"
 fi
@@ -1621,7 +1665,7 @@ absorb() {  # $1 = effect name, $2 = expected count of ROWS admitting it
   n=$( { grep -rhE "func register_with_config.*!" --include=*.ail packages/ 2>/dev/null || true; } \
        | grep -oE '!\s*\{[^}]*\}' | grep -cE "[{,]\s*$1\s*[,}]" || true )
   if [ "$n" -eq "$2" ]; then
-    ok "absorption of '$1' by register_with_config rows: $n of $n_reg_rows, unchanged — an inline hook that begins performing '$1' compiles silently under exactly those $n"
+    ok "absorption of '$1' by register_with_config rows: $n of $n_reg_rows, unchanged — a record-field-smuggled atom (the one 8.0 form that bypasses the payload row) that begins performing '$1' compiles under exactly those $n; the shape rule, not the compiler, refuses it"
   else
     bad "absorption of '$1' moved from $2 to $n rows. That changes how much the WI-D6/D7/D8 slot narrowings actually enforce — re-read the note in declared_vs_performed.ail"
   fi
@@ -1642,9 +1686,29 @@ absorb() {  # $1 = effect name, $2 = expected count of ROWS admitting it
 # so Env moves 16 -> 17 and FS 14 -> 15, and Process does NOT move, because that
 # row does not admit it. The asymmetry is the point of re-measuring rather than
 # bumping all three: a pin that moved uniformly would be a pin nobody read.
-absorb Env 17
-absorb FS 15
-absorb Process 9
+#
+# RE-MEASURED AT ABI 8.0 (031 P1.5r-a3), and re-pinned BY HAND from the rows,
+# not from the failure message. 8.0 moved every effectful payload out of the
+# registration function into a NAMED top-level function carrying its own slot
+# row (P1.2b-d), so a registration now only reads configuration and writes
+# `{ config, caps }`. Its row shrank to what THAT reads, which is Env (all 16)
+# and, for 13, FS (a prompt or config file). Per effect, against 7.4
+# (bff0948f):
+#   Env      17 -> 16 of 16  the row lost with compose.ail; every row that
+#                            exists still admits Env, so the sharp end is
+#                            unchanged: a smuggled Env read compiles wherever a
+#                            registration row exists at all
+#   FS       15 -> 13 of 16  compose.ail (rowless) and agentcli (now ! {Env})
+#   Process   9 ->  3 of 16  herdr, omnigraph and compose's register.ail
+#                            wrapper — and by their callees' own rows all three
+#                            bodies perform only Env and FS, so what is left
+#                            is OVER-DECLARATION, not a registration that
+#                            spawns anything (recorded, not fixed: narrowing
+#                            them is those packages' item, not this one)
+# What it means for the narrowings is in declared_vs_performed.ail's note.
+absorb Env 16
+absorb FS 13
+absorb Process 3
 # The one registration that absorbs EVERYTHING, named rather than counted.
 if grep -qE "func register_with_config.*! ?$old_ten" packages/motoko-ext-compaction-ai/register.ail; then
   ok "compaction_ai's register_with_config still carries the ten-effect row — the ONE registration that absorbs any effect its inline hooks begin performing (recorded, not fixed: narrowing it is its own measurement item)"

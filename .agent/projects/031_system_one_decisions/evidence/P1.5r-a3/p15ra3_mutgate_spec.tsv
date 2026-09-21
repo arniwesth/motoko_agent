@@ -1,0 +1,18 @@
+# P1.5r-a3 mutgate spec — the last ABI-text readers and the absorption re-pins.
+# Each row breaks THE BEHAVIOUR ITS ROW NAMES and must turn that row's test red (baseline GREEN ->
+# mutated RED -> restored GREEN, bytes identical). mutgate.sh runs it in a THROWAWAY clone
+# (p15ra3_mutgate.sh); every test_cmd is p15ra3_test.sh, which regenerates the clone's lock once so
+# no compile resolves the primary's packages (all three targets compile AILANG).
+#
+# Tests: `make profile_definition`, `make driver_only`, `make declared_vs_performed` — GREEN iff exit 0.
+# The red REASON of each mutated run is in MUTGATE-red-reasons.txt (from mutgate's mutated logs).
+#
+# NO PIPES IN A test_cmd (mutgate.sh's `set -o pipefail` + `grep -q` = exit 141).
+# fix_id	target_file	sed_expr	test_cmd
+p15ra3_fixture_pattern_reverted_pd	tools/profile_definition/check_fixtures.py	s/BudgetShaper\\(\\(PureCtx,/BudgetShaper\\(\\(ExtCtx,/	bash .agent/projects/031_system_one_decisions/evidence/P1.5r-a3/p15ra3_test.sh profile_definition
+p15ra3_fixture_pattern_reverted_do	tools/profile_definition/check_fixtures.py	s/BudgetShaper\\(\\(PureCtx,/BudgetShaper\\(\\(ExtCtx,/	bash .agent/projects/031_system_one_decisions/evidence/P1.5r-a3/p15ra3_test.sh driver_only
+p15ra3_b8_block_reverted_to_extctx	scripts/dst/run_declared_vs_performed.sh	/^b8_ctx_stale=""/,/^# The local-vs-imported control/s/AiCtx/ExtCtx/g	bash .agent/projects/031_system_one_decisions/evidence/P1.5r-a3/p15ra3_test.sh dvp
+p15ra3_b8_inline_probe_reverted	scripts/dst/run_declared_vs_performed.sh	s/export func build() -> \[Capability\] { \[Compactor(func(ctx: AiCtx,/export func build() -> [Capability] { [Compactor(func(ctx: ExtCtx,/	bash .agent/projects/031_system_one_decisions/evidence/P1.5r-a3/p15ra3_test.sh dvp
+p15ra3_absorb_process_off_by_one	scripts/dst/run_declared_vs_performed.sh	s/^absorb Process 3$/absorb Process 4/	bash .agent/projects/031_system_one_decisions/evidence/P1.5r-a3/p15ra3_test.sh dvp
+p15ra3_absorb_fs_off_by_one	scripts/dst/run_declared_vs_performed.sh	s/^absorb FS 13$/absorb FS 12/	bash .agent/projects/031_system_one_decisions/evidence/P1.5r-a3/p15ra3_test.sh dvp
+p15ra3_denominator_arith_reverted	scripts/dst/run_declared_vs_performed.sh	s/want_reg_rows=\$((N_EXTS - 3 + 1))/want_reg_rows=$((N_EXTS - 2 + 1))/	bash .agent/projects/031_system_one_decisions/evidence/P1.5r-a3/p15ra3_test.sh dvp
