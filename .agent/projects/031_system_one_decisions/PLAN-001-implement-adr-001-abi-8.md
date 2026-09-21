@@ -768,6 +768,15 @@ Two packages under `packages/` are in no batch — `motoko-ext-ai-compat`, `moto
 need none: neither imports the ABI, registers, or is in the generated registry. The root `ailang.lock`
 regeneration (P1.5r's finding) goes to **whichever P1.2 batch lands last**, assigned at its intake.
 
+### P1.2a follow-up — 2026-09-21, commit `a7aa68a8` (Amendment 2 ceilings)
+
+`[effects].max` widened to the rows of the registered slots, and only that: compaction-structural
+`+Trace` (Compactor), microrag `+Trace +Rand`, omnigraph `+AI +Net +Clock +Stream +Rand +Trace`
+(ToolProvider). Three packages could be *narrowed* (compaction-structural to `[AI, IO, Trace, Env, FS]`,
+both guards to `[Process, Env, FS]`); left unchanged — Amendment 2 requires only admitting the rows.
+**Intake (orchestrator):** own-root check **6/6** (was 2/6); gate unchanged 6/18, 32; mutgate fresh
+clone **28/28**. Batch A complete: 0 intake defects on either attempt.
+
 ## 10. Estimates
 
 | phase | delegate-days |
