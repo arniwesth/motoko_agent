@@ -87,7 +87,28 @@
     "`returns-it` off their new core seams and all three failed by name before this",
     "block was edited. Three items in a row, three additions, three named failures",
     "-- the assertion is now the only thing in this tool that notices an ABI row",
-    "arriving, and the membership loop below still cannot."
+    "arriving, and the membership loop below still cannot.",
+    "",
+    "8.0 (031 PLAN-001 P1.7r, ADR-001 D2/D7 'the leaf inventory must recognize every view type as a",
+    "receiver'). Three things taught, each with a control and a negative, each a one-line rule in derive.py:",
+    "  * VIEWS: a record every field of which is an ExtPorts field with the IDENTICAL signature is a view",
+    "    (the ABI's FsPorts/AiPorts/InterceptPorts; an extension's own narrower record). Derived by",
+    "    STRUCTURE every run and pinned below in `port_views` in both directions, like `membership`. A call",
+    "    through a view is a resolved call (control_view_receiver).",
+    "  * PROJECTIONS: an ExtPorts field taken as a value is resolved when it is the same-named field of a",
+    "    record literal in a function whose declared result type is a view declaring it -- the ABI's",
+    "    fs_ports/ai_ports/intercept_ports, 15 sites that read as form 3 and made every closure UNRESOLVED.",
+    "    Counted as `projections`, never as calls (control_view_projection); any other value-escape is",
+    "    still form 3 (form_projection_not_a_view).",
+    "  * SCOPED BINDERS: a parameter's type is read from ITS function, not from the first declaration of",
+    "    that name in the file (control_scoped_binder: agentcli's `p: Provider`, compose's `ctx: PureCtx`).",
+    "RE-PIN, NAMED: `form_alias.ail` 1 unresolved -> 1 resolved. Scoping the binders exposed that every",
+    "in-tree `let p = ctx.ports` (herdr x4, compose x2; 31 call sites) had been counted resolved only",
+    "through some OTHER function's `p: ExtPorts`. The sharpened rule binds an alias of a DECLARED-typed",
+    "path to the type that path resolves to in scope -- the same declaration-only lookup a direct",
+    "`ctx.ports.ai_step(` gets, one step earlier, no inference; 009 ADR-001 D5 names the alias as a",
+    "limit of the grep approximation, not as a rule, and asks for the type-aware form. The alias of an",
+    "UNDECLARED source is what form 1 still means: form_alias_untyped.ail keeps it unresolved."
   ],
   "fixtures": {
     "control_resolved.ail": {
@@ -96,9 +117,9 @@
       "resolved": 1
     },
     "form_alias.ail": {
-      "form": "local alias (unannotated binding)",
-      "unresolved": 1,
-      "resolved": 0
+      "form": "RE-PINNED 8.0 (P1.7r): alias of a DECLARED-typed path resolves in scope, no inference",
+      "unresolved": 0,
+      "resolved": 1
     },
     "form_reexport.ail": {
       "form": "re-export (receiver is an accessor result)",
@@ -114,6 +135,32 @@
       "form": "computed receiver (shares form 2's detector on this pin)",
       "unresolved": 1,
       "resolved": 0
+    },
+    "form_alias_untyped.ail": {
+      "form": "form 1 as it survives: alias of an UNDECLARED source stays unresolved",
+      "unresolved": 1,
+      "resolved": 0
+    },
+    "control_view_receiver.ail": {
+      "form": "8.0 control: calls through AiPorts / FsPorts views resolve",
+      "unresolved": 0,
+      "resolved": 2
+    },
+    "control_view_projection.ail": {
+      "form": "8.0 control: same-named projection into a (local) view, then a call through it",
+      "unresolved": 0,
+      "resolved": 1,
+      "projections": 1
+    },
+    "form_projection_not_a_view.ail": {
+      "form": "form 3 still: forwarded under another name / into a non-view record",
+      "unresolved": 2,
+      "resolved": 0
+    },
+    "control_scoped_binder.ail": {
+      "form": "8.0 control: binders read from THEIR function (first `p`/`ctx` in the file are not ports)",
+      "unresolved": 0,
+      "resolved": 2
     }
   },
   "membership": {
@@ -157,5 +204,36 @@
       "state": "returns-it",
       "seam": "clock_now"
     }
+  },
+  "port_views": {
+    "_comment": [
+      "The ABI's views of ExtPorts, derived by structure every run (never read from here), pinned",
+      "by name and field set in BOTH directions: a view the ABI adds without a pin is a receiver",
+      "nobody reviewed; a pinned view that stops deriving is a projection the ABI dropped or a",
+      "signature that drifted from ExtPorts, which would silently turn every call through it back",
+      "into form 3. Extension-local views (compose's SnippetExecPorts, RemovePorts) are reported",
+      "by the inventory and not pinned here: they belong to their package."
+    ],
+    "AiPorts": [
+      "ai_step"
+    ],
+    "FsPorts": [
+      "dir_list",
+      "dir_make",
+      "file_read",
+      "file_remove",
+      "file_write",
+      "path_stat"
+    ],
+    "InterceptPorts": [
+      "clock_now",
+      "dir_list",
+      "dir_make",
+      "file_read",
+      "file_remove",
+      "file_write",
+      "path_stat",
+      "tool_handle"
+    ]
   }
 }

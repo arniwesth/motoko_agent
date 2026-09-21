@@ -539,22 +539,36 @@ def inventory_module(ext: str, path: Path, repo: Path, producer: Producer,
 
 
 def mediated_calls(ext: str, mods: list[Path], repo: Path, ext_fields: list[str],
-                   other_owners: set[str]) -> tuple[int, int]:
-    """`(ExtPorts field calls, unresolved receivers)` in the closure, via classifier 2.
+                   other_owners: set[str]) -> tuple[int, int, int]:
+    """`(ExtPorts field calls, unresolved receivers, port-view projections)` in
+    the closure, via classifier 2.
 
     This is property 1's POSITIVE half: the calls that do arrive through a
     world-mediated port.  It does not soften the verdict -- an ambient import is
     a rejection whether or not the extension also mediates -- but a classifier
     that only ever reports absence cannot be told from one that resolves nothing.
+
+    8.0 (ADR-001 (031) D2/D7; P1.7r): the ABI projects `ExtPorts` into per-row
+    VIEWS (`FsPorts`, `AiPorts`, `InterceptPorts`), built by `fs_ports` /
+    `ai_ports` / `intercept_ports` taking each field as a value into a record
+    literal, and `types.ail` is in EVERY closure.  Classifier 2 matched
+    `ExtPorts` by name, read those 15 projections as escaped values, and every
+    closure came out UNRESOLVED -- the yield 0 of 18 (P1.6r found it at
+    `make driver_plus_no_ops`).  The teaching lives in classifier 2's
+    `scan_file`, which this tool loads by path and shares: views are receivers
+    (derived by structure), a same-named projection into a view resolves and
+    is counted HERE as a projection -- neither a call nor an unresolved
+    receiver -- and binders are read from their own function.
     """
     calls = unresolved = 0
+    projections: list = []
     for p in mods:
-        for o in c2.scan_file(p, repo, ext_fields, {}, other_owners):
+        for o in c2.scan_file(p, repo, ext_fields, {}, other_owners, projections=projections):
             if o.kind == "call":
                 calls += 1
             else:
                 unresolved += 1
-    return calls, unresolved
+    return calls, unresolved, len(projections)
 
 
 def provision(exts: dict[str, Path], repo: Path) -> list[str]:
@@ -607,7 +621,13 @@ def derive(repo: Path, do_provision: bool) -> dict:
     c2.ALL_TYPES.update(core_types)
     c2.ALL_TYPES.update(abi_types)
     ext_fields = list(abi_types.get("ExtPorts", {}))
-    other_owners = {ty for ty, fs in {**abi_types, **core_types}.items()
+    # 8.0: an ABI record that shares field names with `ExtPorts` is a VIEW
+    # (classifier 2 derives it by structure and resolves calls through it) or
+    # nothing that may be skipped; only the CORE's own owners of those names
+    # (`Ports`, `ContextReader` -- the driver's calls) are skipped as another
+    # type's field.  Passing the ABI's views here used to skip every call
+    # through a view silently.
+    other_owners = {ty for ty, fs in core_types.items()
                     if ty != "ExtPorts" and any(f in fs for f in ext_fields)}
 
     report: dict[str, dict] = {}
@@ -624,7 +644,7 @@ def derive(repo: Path, do_provision: bool) -> dict:
                     std_needed.add(mpath)
                     if mpath in producer.mods:
                         std_resolved.add(mpath)
-        calls, unres_recv = mediated_calls(ext, mods, repo, ext_fields, other_owners)
+        calls, unres_recv, projections = mediated_calls(ext, mods, repo, ext_fields, other_owners)
 
         ambient = [f for f in findings if f.verdict == "AMBIENT"]
         rejected = [f for f in findings if f.verdict not in ("AMBIENT",)]
@@ -647,6 +667,7 @@ def derive(repo: Path, do_provision: bool) -> dict:
             "ambient": [f.as_dict() for f in ambient],
             "rejected": [f.as_dict() for f in rejected],
             "ext_ports_calls": calls,
+            "ext_ports_projections": projections,
             "unresolved_receivers": unres_recv,
             "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
             "producer_revision": {m: producer.revision(m) for m in sorted(
@@ -708,7 +729,8 @@ def emit(res: dict) -> int:
     for e in ambient:
         r = exts[e]
         print(f"  {e} -- {len(r['ambient'])} ambient source(s), "
-              f"{r['ext_ports_calls']} ExtPorts field call(s) in closure")
+              f"{r['ext_ports_calls']} ExtPorts field call(s) in closure"
+              + (f", {r['ext_ports_projections']} port-view projection(s)" if r.get('ext_ports_projections') else ""))
         for f in r["ambient"][:6]:
             print(f"      {f['file']}:{f['line']}  {f['origin']}.{f['symbol']}"
                   f"  {{{', '.join(f['effects'] or [])}}}")

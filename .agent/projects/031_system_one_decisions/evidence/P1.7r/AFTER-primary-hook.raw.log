@@ -1,0 +1,69 @@
+  ok  control_capability_list_empty      HOOK-PORT-MEDIATED   shape=pass 8.0: `caps: []` resolves with ZERO atoms, pinned (D7 is B3's question, not the reader's)  atoms=0
+  ok  control_capability_list_inline     HOOK-PORT-MEDIATED   shape=fail KEPT 7.4 (P1.7r): the per-atom split over INLINE lambdas with commas -- a form 8.0 forbids; the gate pins payload-inline-lambda + return-shape-unsupported on it  atoms=3
+  ok  control_capability_list_named_wide HOOK-AMBIENT         shape=pass 8.0: a wide-rowed NAMED atom on ProcessCtx is scanned, not trusted -- it reaches std/env (the compiler, not the gate, refuses the row)  atoms=1
+  ok  control_capability_list_same_kind  HOOK-PORT-MEDIATED   shape=pass 8.0: N>1 of one kind enumerated per index, ToolProvider(names, handle), delegated at `caps`, every payload named  atoms=4
+  ok  control_ext_ports_call             HOOK-PORT-MEDIATED   shape=pass 8.0: property 1's positive half -- AiPorts.ai_step on the Compactor's AiCtx is admitted, not rejected  atoms=8
+  ok  control_hook_reaches_env           HOOK-AMBIENT         shape=pass 8.0: TWO-SIDED twin of the above -- the same call, in the NAMED hook body  atoms=8
+  ok  control_interpolated_call          HOOK-AMBIENT         shape=pass 8.0: door 4 -- the effectful call exists only inside a string interpolation, in a named payload  atoms=8
+  ok  control_named_hook_in_register     HOOK-AMBIENT         shape=pass 8.0: the microrag shape -- a named ToolProvider handle on ProviderCtx reaching std/fs  atoms=8
+  ok  control_registration_only          HOOK-PORT-MEDIATED   shape=pass 8.0: registration reads Env and discloses it through `config`; the named hook decodes `ext_config` (the WI-D6 shape under Amendment 3)  atoms=8
+  ok  reject_applied_local               HOOK-UNRESOLVED      shape=fail KEPT 7.4 (P1.7r): a hook APPLIES a value closed over at registration (door 6's corner) -- a capture 8.0's named payloads cannot express; the gate pins payload-inline-lambda + return-shape-unsupported on it  atoms=8
+  ok  reject_binding_unresolvable        HOOK-UNRESOLVED      shape=fail 8.0: an atom bound to a bare name that resolves nowhere (the gate: payload-unresolved)  atoms=8
+  ok  reject_capability_list_arity       HOOK-UNRESOLVED      shape=fail 8.0: ToolProvider applied to one argument -- the binding position is a guess
+  ok  reject_capability_list_computed    HOOK-UNRESOLVED      shape=fail 8.0: `caps` is built by `[..] ++ extra(cfg)` -- literal lists only (caps-computed, the `xs ++ ys` case)
+  ok  reject_capability_list_element     HOOK-UNRESOLVED      shape=fail 8.0: one element is a call returning an atom -- a computed element
+  ok  reject_capability_list_juxtaposed  HOOK-UNRESOLVED      shape=fail 8.0: `A(f) ++ B(g)` INSIDE the list -- one element, two constructor heads
+  ok  reject_capability_list_unknown_kind HOOK-UNRESOLVED      shape=fail 8.0: `Judge(..)` is not a known constructor; plus a trailing comma (count discipline)
+  ok  reject_unknown_callee              HOOK-UNRESOLVED      shape=pass 8.0: door 3 -- `show` applied in a named payload; the shape PASSES beside the walk's rejection  atoms=8
+  ok  reading control            registration=HOOK-PORT-MEDIATED, hook=HOOK-AMBIENT -- they DISAGREE
+  ok  arity BudgetShaper           1 arg(s), binding(s) at [0]
+  ok  arity Compactor              1 arg(s), binding(s) at [0]
+  ok  arity DecisionSolverJudge    3 arg(s), binding(s) at [1, 2]
+  ok  arity DecisionToolPolicy     3 arg(s), binding(s) at [1, 2]
+  ok  arity DescribeTools          1 arg(s), binding(s) at [0]
+  ok  arity ExitIntent             3 arg(s), binding(s) at [2]
+  ok  arity PromptShaper           1 arg(s), binding(s) at [0]
+  ok  arity ResponseInterceptor    1 arg(s), binding(s) at [0]
+  ok  arity SolverJudge            1 arg(s), binding(s) at [0]
+  ok  arity ToolPolicy             1 arg(s), binding(s) at [0]
+  ok  arity ToolProvider           2 arg(s), binding(s) at [1]
+  ok  arity WorkInFlight           2 arg(s), binding(s) at [1]
+  ok  fx_computed                    fail  caps-computed                                        computed_list: `caps: if .. then [ToolPolicy(..)] else []`
+  ok  fx_delegate_import_shadow      fail  delegation-let-bound                                 v7_delegate_import_shadow: local `let make_hooks` over an IMPORTED `make_hooks`; the import runs (N62)
+  ok  fx_delegate_param              fail  delegation-parameter-bound                           v7_delegate_param: `build_with(mk: ..)` delegates to its PARAMETER under a top-level func's name
+  ok  fx_delegate_shadow             fail  delegation-let-bound                                 fact 6 / delegate_shadow: local `let make_hooks` over top-level `func make_hooks`
+  ok  fx_delegate_unresolved         fail  delegation-unresolved                                `caps: make_hooks(cfg)` with no such function anywhere
+  ok  fx_delegated_record            fail  return-shape-unsupported                             `register_with_config(cfg) = make_reg(cfg)` -- the record only BEHIND a delegation; the rule admits delegation at `caps`
+  ok  fx_empty                       pass  -                                                    8.0 head; `caps: []` -- a recognised empty list passes (ADR D2 'The gate')  walk=HOOK-PORT-MEDIATED
+  ok  fx_form_delegated_let          fail  payload-let-bound, return-shape-unsupported          IN-TREE FORM (a2a, agentcli, ailang-docs, exa-search, mcp, scratchpad, compose, herdr): `make_hooks(cfg)` let-binding its payloads
+  ok  fx_form_describe_inline        fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (a2a, agentcli, ailang-docs, scratchpad): `DescribeTools(\_ . schemas)` capturing discovered schemas
+  ok  fx_form_inline_backslash       fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (context-mode, omnigraph, scratchpad PromptShaper; test-dummy): 7.4 list, `\ctx. f(captured, ctx)`
+  ok  fx_form_inline_func            fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (progress-contract-guard, omnigraph ToolProvider, compaction-ai): 7.4 list, inline `func(..) { .. }`
+  ok  fx_form_let_lambda             fail  payload-let-bound, return-shape-unsupported          IN-TREE FORM (repetition-guard, context-mode): 7.4 list, `let policy = func(..)` capturing a registration value
+  ok  fx_form_named_list             fail  return-shape-unsupported                             IN-TREE FORM (batch A: compaction-structural, decision-framework, empty-stop-guard, microrag): 7.4 bare list, named payload -- the head alone fails
+  ok  fx_import_ok                   pass  -                                                    8.0 head; the payload resolves through the home module's IMPORT to a sibling's top-level func  walk=HOOK-PORT-MEDIATED
+  ok  fx_import_shadow               fail  payload-let-bound                                    v7_import_shadow: local `let body` over an IMPORTED `body`; the pinned compiler runs the import (N62)
+  ok  fx_inline_lambda               fail  payload-inline-lambda                                8.0 head; `ToolPolicy(func(ctx) { apply(ctx, w) })` -- facts 1 and 4's construction
+  ok  fx_list_not_enumerable         fail  list-not-enumerable                                  `[ToolPolicy(body), Judge(body)]` -- an unknown constructor; the list cannot be enumerated atom by atom
+  ok  fx_match                       fail  caps-match-selected                                  `caps: match cfg { 0 => [], _ => [ToolPolicy(..)] }`
+  ok  fx_named_delegated_ok          pass  -                                                    8.0 head; `caps: make_hooks(cfg)` delegated to a named top-level function returning a literal list  walk=HOOK-PORT-MEDIATED
+  ok  fx_named_ok                    pass  -                                                    8.0 head; three named top-level payloads, DescribeTools taking Json (N49)  walk=HOOK-PORT-MEDIATED
+  ok  fx_no_register                 fail  registration-missing                                 a module with no `register_with_config` at all
+  ok  fx_not_a_name                  fail  payload-not-a-name                                   `ToolPolicy(w.f)` -- a field read is neither a bare name nor an inline function
+  ok  fx_param_shadow                fail  payload-parameter-bound                              v7_param_shadow: `make_hooks(body: (Ctx) -> int)` binds its PARAMETER under a top-level func's name
+  ok  fx_partial                     fail  payload-partial-application                          q_named_partial: `ToolPolicy(apply_w(w))` -- a function value built at registration
+  ok  fx_payload_unresolved          fail  payload-unresolved                                   `ToolPolicy(nowhere)` -- a bare name that resolves to nothing
+  ok  fx_record_extra_field          fail  return-shape-unsupported                             `{ config, caps, extra }` -- the head is exactly two fields
+  ok  fx_residue                     pass  -                                                    named callback applying `show` -- door-3 walk residue beside a PASSING shape: distinct, never hidden  walk=HOOK-UNRESOLVED
+  ok  fx_shadow                      fail  payload-let-bound                                    fact 5 / q_named_shadow: local `let body = func(..)` over top-level `func body`
+  ok  fx_unknown                     fail  caps-unknown                                         `let hooks = [..]; caps: hooks` -- a list the reader cannot resolve to a literal or a named func
+  ok  yield HOOK-PORT-MEDIATED   6 of 18: decision_framework, empty_stop_guard, mcp, progress_contract_guard, repetition_guard, test_dummy
+  ok  yield HOOK-AMBIENT         3 of 18: a2a, agentcli, scratchpad
+  ok  capability-list atoms         45 atom(s) over 18 of 18 extension(s)
+  ok  registration heads          18 on `{ config, caps }`, 0 on the 7.4 list
+  ok  registration shape          pass 18 of 18
+  ok  shape binding rejections    0 ()
+  ok  door-3 residue              intToFloat, show
+
+hook-scope self-test: 1 failure(s)
+  FAIL SHIPPED VERDICT MOVED: closure PORT-MEDIATED is [], expected ['compaction_structural', 'decision_framework', 'empty_stop_guard', 'progress_contract_guard']. WI-D15 measures a second reading and must not change the first.

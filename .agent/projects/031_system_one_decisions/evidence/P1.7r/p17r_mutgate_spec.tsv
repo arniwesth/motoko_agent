@@ -1,0 +1,69 @@
+# 031 PLAN-001 P1.7r mutgate spec (013 GATE-mutation-red-submission-precondition.md).
+# fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd. Run through p17r_mutgate.sh, never in a checkout anyone
+# is using. Every row's test_cmd is p17r_selftest.sh hook: the hook-scope self-test in the throwaway (its lock
+# regenerated once, so nothing resolves the primary), GREEN iff the only failure is the ONE known residual outside
+# P1.7r's files (classifier 2 on the 8.0 ABI's projections -- README.md), RED on any other failure line. Rows assert
+# P1.7r's OWN files' results -- a fixture's pins, or the yield pins P1.7r re-pinned -- never a total measured elsewhere.
+# No `cmd | grep -q` anywhere (pipefail/SIGPIPE): the harness logs to a file, then greps it.
+#
+# --- the 15 MIGRATED fixtures: revert each one's head to the 7.4 bare list -> its head/shape pins -> red
+revert_control_ext_ports_call	tools/ext_ambient_inventory/fixtures/hook_scope/control_ext_ports_call.ail	s/^  { config: jo(\[\]), caps: \[$/  [/;s/^  \] }$/  ]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_control_hook_reaches_env	tools/ext_ambient_inventory/fixtures/hook_scope/control_hook_reaches_env.ail	s/^  { config: jo(\[\]), caps: \[$/  [/;s/^  \] }$/  ]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_control_interpolated_call	tools/ext_ambient_inventory/fixtures/hook_scope/control_interpolated_call.ail	s/^  { config: jo(\[\]), caps: \[$/  [/;s/^  \] }$/  ]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_control_named_hook_in_register	tools/ext_ambient_inventory/fixtures/hook_scope/control_named_hook_in_register.ail	s/^  { config: jo(\[\]), caps: \[$/  [/;s/^  \] }$/  ]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_reject_binding_unresolvable	tools/ext_ambient_inventory/fixtures/hook_scope/reject_binding_unresolvable.ail	s/^  { config: jo(\[\]), caps: \[$/  [/;s/^  \] }$/  ]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_reject_unknown_callee	tools/ext_ambient_inventory/fixtures/hook_scope/reject_unknown_callee.ail	s/^  { config: jo(\[\]), caps: \[$/  [/;s/^  \] }$/  ]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_control_registration_only	tools/ext_ambient_inventory/fixtures/hook_scope/control_registration_only.ail	s/^  { config: jo(\[kv("marker", js(marker))\]), caps: \[$/  [/;s/^  \] }$/  ]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_control_capability_list_empty	tools/ext_ambient_inventory/fixtures/hook_scope/control_capability_list_empty.ail	s/^  { config: jo(\[\]), caps: \(.*\) }$/  \1/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_control_capability_list_named_wide	tools/ext_ambient_inventory/fixtures/hook_scope/control_capability_list_named_wide.ail	s/^  { config: jo(\[\]), caps: \(.*\) }$/  \1/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_control_capability_list_same_kind	tools/ext_ambient_inventory/fixtures/hook_scope/control_capability_list_same_kind.ail	s/^  { config: jo(\[\]), caps: \(.*\) }$/  \1/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_reject_capability_list_arity	tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_arity.ail	s/^  { config: jo(\[\]), caps: \(.*\) }$/  \1/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_reject_capability_list_computed	tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_computed.ail	s/^  { config: jo(\[\]), caps: \(.*\) }$/  \1/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_reject_capability_list_element	tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_element.ail	s/^  { config: jo(\[\]), caps: \(.*\) }$/  \1/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_reject_capability_list_juxtaposed	tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_juxtaposed.ail	s/^  { config: jo(\[\]), caps: \(.*\) }$/  \1/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+revert_reject_capability_list_unknown_kind	tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_unknown_kind.ail	s/^  { config: jo(\[\]), caps: \(.*\) }$/  \1/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+#
+# --- the WALK pins of the migrated controls: move or remove the probe -> the pinned verdict flips -> red
+walk_hook_reaches_env_probe_removed	tools/ext_ambient_inventory/fixtures/hook_scope/control_hook_reaches_env.ail	s/\[getEnvOr("FIXTURE_MARKER", "")\]/[]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+walk_registration_only_hook_reads_env	tools/ext_ambient_inventory/fixtures/hook_scope/control_registration_only.ail	s/\[marker_of(ctx.ext_config)\]/[getEnvOr("FIXTURE_MARKER", "")]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+walk_interpolated_call_probe_removed	tools/ext_ambient_inventory/fixtures/hook_scope/control_interpolated_call.ail	s/"t=${now()}"/"t="/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+walk_named_hook_probe_removed	tools/ext_ambient_inventory/fixtures/hook_scope/control_named_hook_in_register.ail	s/do_write("out.txt", "x")/Delegate/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+walk_unknown_callee_probe_removed	tools/ext_ambient_inventory/fixtures/hook_scope/reject_unknown_callee.ail	s/"n=${show(1)}"/"n=1"/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+walk_named_wide_probe_removed	tools/ext_ambient_inventory/fixtures/hook_scope/control_capability_list_named_wide.ail	s/^  let _ = getEnvOr("PATH", "");$//	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+walk_ext_ports_call_binding_unresolved	tools/ext_ambient_inventory/fixtures/hook_scope/control_ext_ports_call.ail	s/^    Compactor(compact),$/    Compactor(compact_from_nowhere),/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+#
+# --- the 2 KEPT fixtures: migrate the head anyway -> the 7.4 head/shape pins they carry -> red
+kept_capability_list_inline_migrated	tools/ext_ambient_inventory/fixtures/hook_scope/control_capability_list_inline.ail	s/^  \[$/  { config: jo([]), caps: [/;s/^  \]$/  ] }/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+kept_applied_local_migrated	tools/ext_ambient_inventory/fixtures/hook_scope/reject_applied_local.ail	s/^  \[$/  { config: jo([]), caps: [/;s/^  \]$/  ] }/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+#
+# --- the yield pins P1.7r re-pinned (heads, shape results, bindings): one package back to an inline payload
+#     (in the throwaway only) -> 17 of 18, 1 binding -> red; and the pin file itself -> red
+yield_test_dummy_reinlined	packages/motoko-ext-test-dummy/register.ail	s/      PromptShaper(dummy_prompt),/      PromptShaper(\\ctx. dummy_prompt(ctx)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+yield_pin_bindings	tools/ext_ambient_inventory/fixtures/hook_scope/expected.json	s/"shape_binding_rejections": 0/"shape_binding_rejections": 35/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+#
+# --- classifier 2 (tools/ext_call_inventory/derive.py) taught the 8.0 views, projections and scoped binders (the orchestrator's
+#     first scope addition). Each rule is one line; break it -> the tree (make ext_call_inventory) red, its self-test red, and
+#     -- through the shared scan_file -- the ambient inventory's yield pin and the hook-scope's shipped-closure pin red.
+# drop a view from the receiver set (the structural rule now needs >1 field, so AiPorts is no longer a view):
+c2_view_dropped_tree	tools/ext_call_inventory/derive.py	s/        if all(f in ext and ext\[f\] == sig for f, sig in fields.items()):/        if len(fields) > 1 and all(f in ext and ext[f] == sig for f, sig in fields.items()):/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh c2
+c2_view_dropped_selftest	tools/ext_call_inventory/derive.py	s/        if all(f in ext and ext\[f\] == sig for f, sig in fields.items()):/        if len(fields) > 1 and all(f in ext and ext[f] == sig for f, sig in fields.items()):/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh call
+c2_view_dropped_ambient	tools/ext_call_inventory/derive.py	s/        if all(f in ext and ext\[f\] == sig for f, sig in fields.items()):/        if len(fields) > 1 and all(f in ext and ext[f] == sig for f, sig in fields.items()):/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh ambient
+c2_view_dropped_hook	tools/ext_call_inventory/derive.py	s/        if all(f in ext and ext\[f\] == sig for f, sig in fields.items()):/        if len(fields) > 1 and all(f in ext and ext[f] == sig for f, sig in fields.items()):/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh hook
+# projections back to form 3:
+c2_projection_off_tree	tools/ext_call_inventory/derive.py	s/                if named_field and target in views and field in types\[target\]:/                if False and named_field and target in views and field in types[target]:/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh c2
+c2_projection_off_selftest	tools/ext_call_inventory/derive.py	s/                if named_field and target in views and field in types\[target\]:/                if False and named_field and target in views and field in types[target]:/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh call
+c2_projection_off_ambient	tools/ext_call_inventory/derive.py	s/                if named_field and target in views and field in types\[target\]:/                if False and named_field and target in views and field in types[target]:/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh ambient
+# binders file-wide again (the first function's parameters type every occurrence):
+c2_scope_filewide_tree	tools/ext_call_inventory/derive.py	s/        return \[s for s in scopes if s.start <= o < s.end\]/        return scopes[:1]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh c2
+c2_scope_filewide_selftest	tools/ext_call_inventory/derive.py	s/        return \[s for s in scopes if s.start <= o < s.end\]/        return scopes[:1]/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh call
+# the typed-path alias rule off (the regex never matches):
+c2_alias_off_tree	tools/ext_call_inventory/derive.py	s/\[ \\t\]\*(?:;|\\n)", clean):/[ \\t]*(?:;;)", clean):/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh c2
+c2_alias_off_selftest	tools/ext_call_inventory/derive.py	s/\[ \\t\]\*(?:;|\\n)", clean):/[ \\t]*(?:;;)", clean):/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh call
+# the pins and controls themselves are live: a view un-pinned; a control's view type removed
+c2_pin_view_removed	tools/ext_call_inventory/fixtures/expected.json	s/    "AiPorts": \[/    "AiPortsX": [/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh call
+c2_control_view_untyped	tools/ext_call_inventory/fixtures/control_view_receiver.ail	s/export func compact(ctx: AiCtx, msgs/export func compact(ctx, msgs/	bash .agent/projects/031_system_one_decisions/evidence/P1.7r/p17r_selftest.sh call
+#
+# --- classifier 3 (tools/ext_ambient_inventory/derive.py), the twin (the orchestrator's second addition): it shares scan_file,
+#     and its own change is the owners set (core-only) and the projections count; skipping the ABI's views as 'another owner'
+#     again must not change a verdict (views are resolved first) -- so the live check is the report field and the yield rows above.
+c3_projections_unreported	tools/ext_ambient_inventory/derive.py	s/    return calls, unresolved, len(projections)/    return calls, unresolved, 0/	python3 -c "import json,subprocess,sys; r=json.loads(subprocess.run([sys.executable,'tools/ext_ambient_inventory/derive.py','--json','--no-provision'],capture_output=True,text=True).stdout); sys.exit(0 if all(x.get('ext_ports_projections',0) >= 15 for x in r['extensions'].values()) else 1)"

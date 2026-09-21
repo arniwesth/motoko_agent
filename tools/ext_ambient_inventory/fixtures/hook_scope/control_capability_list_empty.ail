@@ -1,9 +1,15 @@
--- The EMPTY registration, `[]`.  The reader resolves it with ZERO atoms and
--- says so in the pinned count; whether zero atoms may be installed is D7's
+-- The EMPTY registration, `caps: []`.  The reader resolves it with ZERO atoms
+-- and says so in the pinned count; whether zero atoms may be installed is D7's
 -- question and lives in dst_profile_coverage (B3), not here.  A green with
 -- atoms=0 is honest only because the count is pinned beside the verdict.
+-- P1.7r (031 ADR-001 D2): MIGRATED from the 7.4 bare `[]` onto the 8.0 head --
+-- the record `{ config, caps }` at the registration tail -- so the shape
+-- result PASSES and the atom count is still zero.
 module fixture/control_capability_list_empty
 
-export func register_with_config(_cfg: a) -> [Capability] {
-  []
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration)
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [] }
 }

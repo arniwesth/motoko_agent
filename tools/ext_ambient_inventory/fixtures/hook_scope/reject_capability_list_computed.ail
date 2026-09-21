@@ -1,16 +1,22 @@
--- "Literal lists only".  The list is BUILT by an expression -- a literal
+-- "Literal lists only".  `caps` is BUILT by an expression -- a literal
 -- concatenated with a call -- so the atoms past the literal are text this tool
 -- has not read.  Fail closed: capability-list-unresolvable.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head.  On the 7.4 head the
+-- concatenation WAS the registration tail and no head was reached at all; now
+-- the record is the head and `caps` is the computed expression, so the result
+-- fails by `caps-computed` alone -- the `xs ++ ys` case SHAPE_REASONS names,
+-- beside the gate's own `fx_computed` (the `if .. then .. else` case).
 module fixture/reject_capability_list_computed
 
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, FinalizeOutcome)
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ProcessCtx, FinalizeOutcome, Capability, ExtRegistration, SolverJudge, NoDecision)
 
-func judge(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
-  { decision: { NoDecision }, next_state: ctx.world }
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
 }
 
 func extra(_cfg: a) -> [Capability] { [] }
 
-export func register_with_config(cfg: a) -> [Capability] {
-  [SolverJudge(judge)] ++ extra(cfg)
+export func register_with_config(cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [SolverJudge(judge)] ++ extra(cfg) }
 }

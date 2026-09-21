@@ -1,24 +1,71 @@
 -- POSITIVE CONTROL.  Registration reads Env; no hook can reach it.  This is the
--- WI-D6 shape (nine of fifteen register_with_config implementations read Env
--- before any hook is dispatched) and it is the shape the reading turns on: the
--- import is in the closure, the CALL is not hook-reachable.  Must resolve CLEAN.
--- B8: written as the 6.0 eight-atom literal list; the binding positions are
--- the same as the 5.x record's slots.
+-- WI-D6 shape (registration reads Env before any hook is dispatched) and it is
+-- the shape the reading turns on: the import is in the closure, the CALL is
+-- not hook-reachable.  Must resolve CLEAN.
+-- B8: written as the eight-atom literal list.
+-- P1.7r (031 ADR-001 D2, Amendment 3): MIGRATED onto the 8.0 head.  The marker
+-- the 7.4 lambda CAPTURED is now DISCLOSED through `config` at registration
+-- and DECODED from `ctx.ext_config` by the named `PromptShaper` -- the
+-- configuration channel, which is how every in-tree registration value
+-- reaches a named payload at 8.0.  The hook reaches only `std/json`, whose
+-- rows are closed and empty, so the walk stays clean while its twin
+-- (`control_hook_reaches_env`, the same `getEnvOr` call in the hook body)
+-- reads ambient.
 module fixture/control_registration_only
 
 import std/env (getEnvOr)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
+import std/json (Json, jo, kv, js, getString)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx, AiCtx, ProcessCtx, ProviderCtx, InterceptCtx, ExtRegistration,
+  DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  Msg, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch, ToolCallEnvelope, ToolPolicyDecision,
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  PassThrough, NoOpinion, Delegate, NoIntercept, NoDecision
+)
 
-export func register_with_config(_cfg: a) -> [Capability] ! {Env} {
+func marker_of(cfg: Json) -> string {
+  match getString(cfg, "marker") { Some(m) => m, None => "" }
+}
+
+func describe(_cfg: Json) -> [ToolSchema] { [] }
+
+func shape(ctx: PureCtx) -> PromptPatch {
+  { prepend: [], append: [marker_of(ctx.ext_config)] }
+}
+
+func budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func compact(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: PassThrough, next_state: ctx.world }
+}
+
+func policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+
+func handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+
+func intercept(ctx: InterceptCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  { decision: NoIntercept, next_state: ctx.world }
+}
+
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env} {
   let marker = getEnvOr("FIXTURE_MARKER", "");
-  [
-    DescribeTools(\_ . []),
-    PromptShaper(\_ctx. { prepend: [], append: [marker] }),
-    BudgetShaper(\_ctx _plan. { requested_total: None, requested_solver: None, requested_verifier: None }),
-    Compactor(func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } }),
-    ToolPolicy(\_ctx _call. NoOpinion),
-    ToolProvider([], func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } }),
-    ResponseInterceptor(func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } }),
-    SolverJudge(func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } })
-  ]
+  { config: jo([kv("marker", js(marker))]), caps: [
+    DescribeTools(describe),
+    PromptShaper(shape),
+    BudgetShaper(budget),
+    Compactor(compact),
+    ToolPolicy(policy),
+    ToolProvider([], handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(judge)
+  ] }
 }

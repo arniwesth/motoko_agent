@@ -1,24 +1,37 @@
 -- N>1 of ONE KIND, plus the two-argument constructor.  Two `Compactor` atoms
 -- are enumerated as (Compactor, 0) and (Compactor, 1), not collapsed to one;
 -- `ToolProvider(names, handle)` binds its SECOND argument only.  A delegation
--- hop precedes the list (`make_caps`), as five of the record-shaped
--- extensions do today.  Must resolve CLEAN with FOUR atoms.
+-- hop precedes the list (`make_caps`).  Must resolve CLEAN with FOUR atoms.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head.  The delegation now sits
+-- at `caps` -- the one position D2 admits it -- every payload is a named
+-- top-level function on its view (`AiCtx`, `ProviderCtx`, `DescribeTools` on
+-- `Json`), and the 7.4 fixture's `let handle = func ...` and inline second
+-- `Compactor` are gone with the forms 8.0 forbids.  The enumeration mechanics
+-- it pins (per-kind index, arg-1 binding, the hop) are what survive.
 module fixture/control_capability_list_same_kind
 
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepOutcome, ToolCallEnvelope, ToolHandleOutcome)
+import std/json (Json, jo)
+import pkg/sunholo/motoko_ext_abi/types (AiCtx, ProviderCtx, Msg, PreStepOutcome, ToolCallEnvelope, ToolHandleOutcome, ToolSchema, Capability, Compactor, ToolProvider, DescribeTools, ExtRegistration, PassThrough, Delegate)
 
-func pass(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
-  { decision: { PassThrough }, next_state: ctx.world }
+func pass_first(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: PassThrough, next_state: ctx.world }
 }
+
+func pass_second(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: PassThrough, next_state: ctx.world }
+}
+
+func handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+
+func describe(_cfg: Json) -> [ToolSchema] { [] }
 
 func make_caps(_cfg: a) -> [Capability] {
-  let handle = func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-    { decision: { Delegate }, next_state: ctx.world }
-  };
-  [Compactor(pass), Compactor(\ctx _msgs. { decision: PassThrough, next_state: ctx.world }),
-   ToolProvider(["FixtureEcho", "FixtureOther"], handle), DescribeTools(\_ . [])]
+  [Compactor(pass_first), Compactor(pass_second),
+   ToolProvider(["FixtureEcho", "FixtureOther"], handle), DescribeTools(describe)]
 }
 
-export func register_with_config(cfg: a) -> [Capability] {
-  make_caps(cfg)
+export func register_with_config(cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: make_caps(cfg) }
 }

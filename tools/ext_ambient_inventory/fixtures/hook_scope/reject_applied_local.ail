@@ -4,6 +4,15 @@
 -- rejection, not a pass.  This is door 6's dangerous corner: registration
 -- usually hands a hook DATA, and this fixture is the case where it does not.
 -- B8: eight-atom list, the application in `Compactor`.
+-- P1.7r (031 ADR-001 D2): KEPT ON THE 7.4 SHAPE DELIBERATELY.  A payload that
+-- CLOSES OVER a registration local is exactly the construction the 8.0
+-- boundary forbids (a named top-level function captures nothing; fact 4 is
+-- the reason `payload-inline-lambda` exists), so there is no 8.0 form of this
+-- door to migrate to -- on 8.0 the same walk rejection reappears only as an
+-- applied PARAMETER of a higher-order helper (herdr's `f`, pinned in the
+-- tree-wide yield).  The gate is TESTING this old form: it pins
+-- `payload-inline-lambda` and `return-shape-unsupported` on this text, beside
+-- the walk's `applied-local`.
 module fixture/reject_applied_local
 
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
