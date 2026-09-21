@@ -685,6 +685,18 @@ is `R-G`'s; (iii) freeze 2(b) at **19 of review 5's 20** named-arm attacks as re
 amendment; (iv) the two unowned ABI text probes (`:124`, `:707`) folded into **P1.5r**. 033 G5a (as amended:
 items 1, 2, 8) is met. ADR status set to Accepted. `P1.1` opens.
 
+### P1.1 — 2026-09-21, attempt 1 `08669414` rejected; attempt 2 `3e7a7a05` accepted
+
+| | |
+|---|---|
+| Model | `claude-fable-5-1` |
+| a1 `08669414` | 30 files: `ext/runtime.ail` projects each view per atom through the ABI constructors and stamps `e.config` as `ext_config`; `registry_normalize.ail` vote families (legacy + new in one family → `SecondVote`) and `ext_config_digest` over config + ToolProvider names, ExitIntent label/enabled, WorkInFlight label (N58); `ext_set_digest` kind-only; `tool_catalog.ail` passes `e.config`; fixtures on the views; `session.ail` literals gain the D3 fields line-neutrally; a **constructor collision** on the pin — `ToolFailed` in core `ToolOutcome` and ABI `ObservedToolOutcome` — resolved by a named import, probe at `evidence/P1.1/ctor_collision/` (a likely line-X amendment). **Rejected**: over all 72 `src/core` modules, 69 ok — `rpc.ail` built `ExtCtx` literals inline (20 fields vs 23) and never names the type, so the name-driven scope and inventory missed it; `supervisor.ail` fell with it |
+| a2 `3e7a7a05` | `rpc.ail`'s three inline literals (`:131`, `:365`, `:473`) migrated line-neutrally; exit 1 made exhaustive; inventory re-derived **type-driven** (202 `scripts/`, 67 `tools/` files checked on 8.0) |
+| Counts at HEAD | the plan's "37 literals in 28 files" was a first-review count; the inventory holds **160 rows**: P1.1 18, P1.5r 14, P0.5 8, P1.2a 3, **UNOWNED 117** |
+| **Intake (orchestrator)** | every tracked `src/core` module checked: **71/72**, the one failure `test/integration_tests.ail` on its 7.4 `compaction_structural` import (P1.2a); inventory completeness cross-checked against the sweep (the 51 failing files outside it are 41 by-design boundary fixtures and 10 negative/parser fixtures unrelated to 8.0); `mutgate.sh --clone-from` fresh clone **27/27** |
+| Delegate exits | `make anchors` 0; `make driver_leaf_inventory` 0, byte-identical; `make registry_gen_check` 0; runtime 24/24, registry 17/17, catalog 5/5 |
+| Intake defects | **1** (a1) |
+
 ## 10. Estimates
 
 | phase | delegate-days |
