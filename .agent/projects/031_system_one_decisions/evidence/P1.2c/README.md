@@ -141,7 +141,8 @@ were regenerated.
    run through the real registrations against synthetic fixtures).
 5. mutgate: `p12c_mutgate.sh --overlay` runs a fresh clone of HEAD with this part's paths, over
    `p12c_mutgate_spec.tsv`. **51/51 discriminate** with bytes restored; the verdicts are in
-   `mutgate-result.tsv`. The rows cover 5 re-inlines (one per package), the tree reading 11/23, 8 captures
+   `mutgate-result.tsv`. The rows cover 5 re-inlines (one per package), batch C's own five shape rows together (attempt 2: attempt 1 asserted whole-tree
+   totals measured before P1.2b landed, red at baseline on the commit), 8 captures
    read from a module value, 3 registrations withholding what they read (Amendment 3), the 8.0 pin, the
    failing test port, calibration parity, both masked files, and 29 ceiling effects.
    **The first run scored 49/51 and was refused.** Two rows were vacuous. `cai_calib_parity`'s 1‰ drift

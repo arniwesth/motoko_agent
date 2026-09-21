@@ -10,8 +10,10 @@ agentcli_inline	packages/motoko-ext-agentcli/register.ail	s/      ToolProvider(t
 docs_inline	packages/motoko-ext-ailang-docs/register.ail	s/      PromptShaper(ailang_docs_prompt),/      PromptShaper(\\ctx. ailang_docs_prompt(ctx)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate ailang_docs
 mcp_inline	packages/motoko-ext-mcp/register.ail	s/      ToolProvider(collect_all_tool_names(cfg), mcp_tool_handle)/      ToolProvider(collect_all_tool_names(cfg), \\ctx call. mcp_tool_handle(ctx, call))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate mcp
 cai_inline	packages/motoko-ext-compaction-ai/register.ail	s/      Compactor(compaction_ai_compact)/      Compactor(\\ctx msgs. compaction_ai_compact(ctx, msgs))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate compaction_ai
-# the tree reading at submission: shape pass 11 of 18, binding rejections 23 (HEAD 4109827b + batch C)
-tree_11_23	packages/motoko-ext-mcp/register.ail	s/      ToolProvider(collect_all_tool_names(cfg), mcp_tool_handle)/      ToolProvider(collect_all_tool_names(cfg), \\ctx call. mcp_tool_handle(ctx, call))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh tree 11 23
+# batch C's OWN five registration-shape rows (each config-caps pass), independent of what other batches land.
+# Attempt 1 asserted the WHOLE-TREE totals (11 of 18, 23) here, measured before P1.2b landed; at the commit
+# (on top of P1.2b) the tree read 16/18 and 9, so the row was red at baseline and intake refused it.
+batch_c_shape	packages/motoko-ext-mcp/register.ail	s/      ToolProvider(collect_all_tool_names(cfg), mcp_tool_handle)/      ToolProvider(collect_all_tool_names(cfg), \\ctx call. mcp_tool_handle(ctx, call))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate a2a agentcli ailang_docs mcp compaction_ai
 #
 # --- each capture read from a captured (module) value instead of ext_config -> the channel probe -> red
 a2a_capture_describe	packages/motoko-ext-a2a/register.ail	s/  collect_schemas(parse_a2a_json(cfg).agents)/  collect_schemas(parse_a2a_json(a2a_config_json({ agents: [] })).agents)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
