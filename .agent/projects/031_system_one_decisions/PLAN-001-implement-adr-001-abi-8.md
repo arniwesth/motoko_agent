@@ -804,6 +804,16 @@ delegates did exactly what the brief required.
 | Delegate exits | end to end: P0.6's finalize consumer → `JudgeQuery` → `NoDecision` on the stub, `Accept` behind a legacy atom; tool-policy → `ToolQuery` → `NoOpinion`, `Pending` behind; clock tripwire never read; `make driver_leaf_inventory` byte-identical; `make profile_coverage` 0 |
 | Intake defects | 0 |
 
+### P1.2b — 2026-09-21, commit `ca689e29` (batch B)
+
+| | |
+|---|---|
+| Items | **14 sites in 5 packages** + masked `verify_repetition_guard.ail`; stopped once on D2 `:370-372` (→ Amendment 3), resumed on the same attempt |
+| Commit | named payloads bound directly; 15 registration values — environment values included — encoded once as `config` and decoded per call (repetition-guard's budgets, test-dummy's four, scratchpad's timeout, exa-search's prompt/timeout/cap, context-mode's prompt and `CtxConfig`); exa's key stays a name; workdir withheld; ceilings widened only for registered rows (repetition-guard's surplus reported, not narrowed); compiler fact: an **imported** payload's row is charged to `register_with_config` on the pin, so effectful payloads live in `register.ail` |
+| **Intake (orchestrator)** | gate at the commit **11 of 18, 18 bindings** — exact; own-root **5/5**; `mutgate.sh --clone-from` fresh clone **46/46** |
+| Pre-existing | exa-search 2 test failures, identical at `181051d0` |
+| Intake defects | 0 |
+
 ## 10. Estimates
 
 | phase | delegate-days |
