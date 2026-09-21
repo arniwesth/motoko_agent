@@ -1180,6 +1180,42 @@ limits, first-guard wording/thresholds, and live quality measurements can evolve
 the proposed ABI. Persistence and adapter implementation remain separate release work; they are
 not grounds to call an unprobed ABI frozen.
 
+## Amendments
+
+Recorded under the acceptance rule (ii): each cites the artifact that forced it, and supersedes the
+cited text without revising it.
+
+### Amendment 1 (2026-09-21) — distinct constructor names for the two preparation sums
+
+**Supersedes** D2 `:121` and `:129`:
+
+```
+JudgePreparation = JudgeImmediate(FinalizeDecision)   | JudgeQuery(DecisionRequest)
+ToolPreparation  = ToolImmediate(ToolPolicyDecision)  | ToolQuery(DecisionRequest)
+```
+
+**The artifact: a compile error on the pin.** As written, both sums declare constructors named
+`Immediate` and `Query`. On AILANG v0.33.0 the ABI package alone checks clean, but a consumer that
+imports both cannot build a `JudgePreparation`: `Immediate(Accept)` in a finalize `prepare` resolves to
+the later declaration and fails with `cannot unify type constructors: ToolPolicyDecision vs
+FinalizeDecision`. So freeze evidence 2(c) — compiled ABI-8 consumers of **both** decision variants —
+cannot be built from the text. Three readings were compiled against the pin by P0.4, each with an 8.0
+consumer that registers every slot (`evidence/P0.4-amendment-1/EVIDENCE.txt`, the three workspaces
+beside it):
+
+| reading | ABI alone | an 8.0 consumer |
+|---|---|---|
+| as written (`Immediate`/`Query` in both sums) | clean | **fails** — the unification error above |
+| parametric `Preparation[v]` with the two names as aliases | clean | **fails** matching on the alias: `constructor 'Immediate' belongs to ADT 'Preparation', not 'JudgePreparation'`; passes only if every scrutinee is typed `Preparation[FinalizeDecision]` |
+| **distinct names** (above) | clean | **clean** |
+
+Only the distinct reading gives both variants an ordinary consumer without type annotations the ADR
+never asks for, so it is adopted. **Nothing else moves.** Where D2–D7 say `Immediate` or `Query` as a
+kind of preparation — an `Immediate` vote, a free `Immediate` intervention, `Immediate(NoDecision)` —
+they mean `JudgeImmediate`/`ToolImmediate` and `JudgeQuery`/`ToolQuery` for the respective variant;
+the semantics, the D5 accounting of an immediate vote and the D6 records are unchanged. The two
+`Query` constructors carry the same `DecisionRequest`, so the host's decision path is untouched.
+
 ## Related records
 
 - [First review: Claude Fable](REVIEW-adr001-v0.1-verdicts-fable.md)

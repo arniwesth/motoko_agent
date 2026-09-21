@@ -1,0 +1,39 @@
+module consumer80
+import std/json (Json, jo, js, kv)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, WorkInFlight, DecisionSolverJudge, DecisionToolPolicy, ExtRegistration, ExtEntry, ToolSchema, PureCtx, ProcessCtx, FsCtx, AiCtx, InterceptCtx, ProviderCtx, ExtCtx, ExtPorts, ExtWorld, pure_ctx, pure_ctx_of, process_ctx, fs_ctx, ai_ctx, intercept_ctx, provider_ctx, fs_ports, ai_ports, intercept_ports, empty_ext_world, PromptPatch, BudgetPlan, BudgetPatch, Msg, PreStepOutcome, PassThrough, ToolCallEnvelope, ToolPolicyDecision, Allow, NoOpinion, Deny, ToolHandleOutcome, Delegate, ResponseInterceptOutcome, NoIntercept, FinalizeOutcome, FinalizeDecision, Accept, NoDecision, ContinueWithFeedback, ExitIntentOutcome, WorkOutcome, DecisionPolicyDescriptor, DecisionRequest, DecisionObservation, JudgePreparation, ToolPreparation, Immediate, Query, NamedQuestion, Binary, Answered, Unavailable, UnconfiguredBackend, DecisionAnswer, BinaryAnswer, NotReached, Passed, VerificationEvidence, DecisionInvocationState, EnforcingDecision)
+func describe(cfg: Json) -> [ToolSchema] { [] }
+func shape(ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
+func budget(ctx: PureCtx, _b: BudgetPlan) -> BudgetPatch { { requested_total: None, requested_solver: None, requested_verifier: None } }
+func compact(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } }
+func policy(ctx: PureCtx, _c: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+func provide(ctx: ProviderCtx, _c: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { { decision: Delegate, next_state: ctx.world } }
+func intercept(ctx: InterceptCtx, _s: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: NoIntercept, next_state: ctx.world } }
+func judge(ctx: ProcessCtx, _s: string) -> FinalizeOutcome ! {Process} { { decision: Accept, next_state: ctx.world } }
+func exit_render(ctx: FsCtx) -> ExitIntentOutcome ! {FS} { { actions: [], next_state: ctx.world } }
+func work(ctx: FsCtx) -> WorkOutcome ! {FS} { let r = ctx.ports.file_read(ctx.world, "x"); { items: [], next_state: r.next_state } }
+func req(ctx: PureCtx) -> DecisionRequest { { backend_binding: "b", state: ctx.ext_config, questions: [{ id: "done", prompt: "done?", guidance: jo([]), kind: Binary }] } }
+func dprep(ctx: PureCtx, cand: string) -> JudgePreparation { if cand == "" then Immediate(Accept) else Query(req(ctx)) }
+func dinterp(ctx: PureCtx, _c: string, _r: DecisionRequest, o: DecisionObservation) -> FinalizeDecision {
+  match o.result { Answered(resp) => ContinueWithFeedback("x"), Unavailable(_) => NoDecision }
+}
+func tprep(ctx: PureCtx, _c: ToolCallEnvelope) -> ToolPreparation { match ctx.decision_state { Some(s) => if s.run_cost_millicents > 5 then Immediate(NoOpinion) else Query(req(ctx)), None => Immediate(NoOpinion) } }
+func tinterp(ctx: PureCtx, _c: ToolCallEnvelope, _r: DecisionRequest, _o: DecisionObservation) -> ToolPolicyDecision { Deny("stop") }
+func desc() -> DecisionPolicyDescriptor { { local_id: "g", question_version: "1", question_config: jo([]), interpretation_version: "1", interpretation_config: jo([]), max_interventions: 2 } }
+export func register_with_config(_cfg: Json) -> ExtRegistration {
+  { config: jo([kv("mode", js("strict"))]),
+    caps: [DescribeTools(describe), PromptShaper(shape), BudgetShaper(budget), Compactor(compact), ToolPolicy(policy),
+           ToolProvider(["t"], provide), ResponseInterceptor(intercept), SolverJudge(judge), ExitIntent("e", true, exit_render),
+           WorkInFlight("w", work), DecisionSolverJudge(desc(), dprep, dinterp), DecisionToolPolicy(desc(), tprep, tinterp)] }
+}
+export func entry(r: ExtRegistration) -> ExtEntry { { id: "x#0", config: r.config, caps: r.caps } }
+export func views(ctx: ExtCtx, cfg: Json) -> FsCtx {
+  let p = pure_ctx_of(ctx, cfg);
+  let _a = ai_ctx(p, ai_ports(ctx.ports), ctx.world);
+  let _i = intercept_ctx(p, intercept_ports(ctx.ports), ctx.world);
+  let _v = provider_ctx(p, ctx.ports, ctx.world);
+  let _j = process_ctx(p, ctx.world);
+  fs_ctx(p, fs_ports(ctx.ports), ctx.world)
+}
+export func fixture() -> PureCtx { { pure_ctx(jo([])) | task: "t", step: 3, verification: NotReached } }
+export func judged(p: JudgePreparation) -> bool { match p { Immediate(Accept) => true, Immediate(_) => false, Query(_) => false } }
