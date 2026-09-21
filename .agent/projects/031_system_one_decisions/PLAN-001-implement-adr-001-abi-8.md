@@ -600,6 +600,24 @@ only distinct names passed; Amendment 1 adopts `JudgeImmediate`/`JudgeQuery` and
 | Evidence | `evidence/P0.4-amendment-1/`, including the mutgate spec and consumer helper moved out of the delegate's `/tmp` with repo-relative paths (`5e54996b`); the helper builds a throwaway workspace because `ailang.lock` pins path dependencies to the primary checkout's absolute path |
 | Intake defects | 0 (the spec's `/tmp` paths were a durability gap, not a defect; fixed by the orchestrator) |
 
+### P0.5 — 2026-09-21, commit `616f9f1e`
+
+| | |
+|---|---|
+| Commit | `616f9f1e` — conformance kit (`invariants.ail`, `harness.ail`, `reject_fixtures.ail`) on 8.0; neutral constructors (`no_tools` as a **named** `DescribeTools` payload, since the boundary rejects inline; neutral judge/tool `prepare`/`interpret`); `generate.py` template emits `config`; `hook_scope.py` arity table + an ABI cross-check; `check_fixtures.py` `CAPABILITY_KINDS` 10 → 12 (pin sweep untouched); `dst_profile_coverage.ail` maps and the two rowless kinds classified "views plus boundary"; registry fixture tree `tools/ext_registry_gen/fixtures/abi8/` |
+| Outside the brief's list | `scripts/dst/profile_definition_dst.ail`: the unconditionally-dispatched slot count re-pinned by hand 8 → 10 (the two new kinds), disclosed; `check_no_op_profile.py` 7 lines |
+| **Plan exit, as written** | `make conformance` **red** and `make ext_hook_scope_selftest` **red** — both **unreachable on the red tree**: `conformance` registers the 7.4 `compaction_ai`, and the self-test's provision step fails closed on 18 7.4 extension roots |
+| **Orchestrator verification of that claim** | at P0.5's parent `4a5c7058`, in a clean clone: `make conformance` exit 2 **in `harness.ail`** (P0.5's surface) and `make ext_hook_scope_selftest` exit 2 (`CACHE PRECONDITION NOT ESTABLISHED`). At HEAD: `make conformance` exit 2 **only in `compaction_ai.ail`** (P1.2 batch C's surface). P0.5 made its own surface green; the remaining red is P1's |
+| Stand-ins (orchestrator re-run at HEAD) | `p05_conformance_check.sh` (kit checked + run on 8.0 in a workspace) exit 0; `hook_scope.py --gate-fixtures --ailang-check` 29 ok exit 0; `make profile_coverage` exit 0 (was 2); `check_fixtures.py --capability-kinds` exit 0; `p05_registry_fixture_check.sh` exit 0 |
+| **mutgate (orchestrator)** | fresh clone **14/14 discriminate**, bytes same |
+| Intake defects | 0 |
+
+**For `P0G`.** The checklist item "P0.5 tooling green" cannot mean `make conformance` and
+`make ext_hook_scope_selftest` green before P1: both need in-tree extensions compiled. It is met by the
+stand-ins above, verified; the two targets turn green at `R-G`, which already lists `make conformance`.
+The same holds for P0.6's "conformance harness green". This is a plan defect (§0 item 3 makes the tree
+red from P0.4, while P0.5's exit assumed it compiled), not an ADR one.
+
 ## 10. Estimates
 
 | phase | delegate-days |
