@@ -827,6 +827,29 @@ delegates did exactly what the brief required.
 | **Intake (orchestrator)** | gate at `9b2dfa2c` **16 of 18, 9 bindings** — exact; own-root **5/5**; a2 `mutgate.sh --clone-from` fresh clone **51/51** (`batch_c_shape` asserts C's own five rows) |
 | Intake defects | **1** (a1, a mutgate spec row; the migration itself had none) |
 
+### P1.2d — 2026-09-21, commit `a3a82311` (batch D) — **P1.2 complete**
+
+| | |
+|---|---|
+| Items | **10 sites** (compose 4, herdr 6; the plan said 11) + 11 masked files; stopped twice — on D2 `:370-372` (→ Amendment 3) and on the cost measurement (→ Amendment 4) — and resumed on the same attempt |
+| Commit | named payloads, `caps` delegated to literal lists (`compose_caps()`, `herdr_caps(tools, exit_enabled)` whose arguments are the constructor data positions); 6 captures through config with round-trip tests; **herdr's config digest per-session by construction** (pane id, session time, bin, delegate and dagr directories, run-file paths — none a credential); compose's `ExtPorts` helpers onto `SnippetExecPorts{tool_handle}` and `RemovePorts{path_stat, file_remove}`; herdr's renders on `FsCtx`; ceilings per Amendment 2 |
+| **Intake (orchestrator)** | gate at the commit, clean clone: **18 of 18, 0 binding rejections, 0 head rejections** — P0.3's 35 are gone; own-root **2/2**; `mutgate.sh --clone-from` fresh clone **44/44** |
+| Delegate exits | compose `config` 2/2; herdr 8/8, 90/90, 73/73, 282/282; masked 11/11 check, 22/22 run cases |
+| Not done here | the root `ailang.lock` ABI entry (still 7.4) — the orchestrator never told D it was the last batch; assigned to P1.6r |
+| Intake defects | 0 |
+
+**P1.2 totals.** 4 batches, **43 registration sites** (A 9, B 14, C 9 — plan said 11 —, D 10 — plan said 11;
+the plan's "45" counted two sites twice), 25 masked files; 7 attempts, **1 rejected** (C a1, a time-dependent
+mutgate row); **0 independent migration defects**; 3 ADR amendments (2, 3, 4) raised from batch artifacts.
+
+### P1.3r follow-up — 2026-09-21, commit `6d81fbce`
+
+The conformance harness import (test-only) removed from `ext/runtime.ail`; its one test moved with the same
+assertions to `src/core/test/ext_neutral_registration.ail` (36 → 35 + 1); line 40 blank again, anchors
+byte-identical. **Intake (orchestrator):** `min_collision.ail` checks **clean on a cold cache** in a fresh
+clone (no `.ailang` directory); `mutgate.sh --clone-from` **2/2** (harness re-added → probe red; moved test
+dropped → count red). The regression P1.2c found is closed.
+
 ## 10. Estimates
 
 | phase | delegate-days |
