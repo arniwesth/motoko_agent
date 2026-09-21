@@ -1,0 +1,380 @@
+-- 031 PLAN-001 P0.6 -- THE SCRIPTED BACKEND: the three example consumers run
+-- the way a host would run them, with no provider, no host service and no
+-- wire.
+--
+-- For each decision consumer the runner does what D4 puts at the port leaf:
+-- call `register_with_config`, find the atom in `caps`, build the `PureCtx`
+-- from the registration's `config` (the host's `ext_config` stamp) and hand
+-- back the descriptor's two configuration projections on `decision_state`;
+-- call `prepare`; on a query, answer THAT request from a script (every
+-- question in it, by id) as a `DecisionObservation`; and call `interpret`
+-- with the exact prepared request. Each case prints the vote and is checked
+-- against the vote the consumer must return; any mismatch exits 1.
+--
+-- `catalog_main` is the `DescribeTools` half: it prints `catalog=<n>` for the
+-- registration the current environment produces, and
+-- `evidence/P0.6/p06_scripted_run.sh` runs it configured and empty.
+--
+-- The kit's own neutrality predicates (`invariants.ail`) classify the votes:
+-- an `Unavailable` must leave both consumers neutral, an intervention must not
+-- read neutral. Everything here is synthetic.
+module sunholo/motoko_ext_conformance/examples/scripted_backend
+
+import std/io (println, exit)
+import std/json (Json, jo, kv, jint, getArray)
+import std/option (Option, Some, None)
+import std/string (length)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx, pure_ctx, ExtRegistration, Capability, DescribeTools, DecisionSolverJudge, DecisionToolPolicy,
+  ToolCallEnvelope, DecisionPolicyDescriptor, DecisionRequest, DecisionObservation, DecisionResult,
+  NamedQuestion, DecisionAnswer, BinaryAnswer, Answered, Unavailable,
+  UnavailableReason, Timeout, ProviderFailure,
+  EnforcingDecision,
+  VerificationEvidence, VerificationRun, NotReached, Passed, Failed,
+  ToolEvidence, ToolEvidenceWindow, ObservedToolOutcome, CommandExit, ToolSucceeded, ToolFailed, ToolOutcomeUnknown,
+  FinalizeDecision, Accept, ContinueWithFeedback, NoDecision,
+  ToolPolicyDecision, Allow, Deny, NoOpinion, Pending,
+  JudgePreparation, JudgeImmediate, JudgeQuery,
+  ToolPreparation, ToolImmediate, ToolQuery
+)
+import pkg/sunholo/motoko_ext_conformance/invariants (
+  finalize_vote_neutral, tool_vote_neutral, judge_preparation_neutral, tool_preparation_neutral
+)
+import pkg/sunholo/motoko_ext_conformance/examples/completion_guard (register_with_config as register_completion)
+import pkg/sunholo/motoko_ext_conformance/examples/repeat_failure_policy (register_with_config as register_repeat)
+import pkg/sunholo/motoko_ext_conformance/examples/config_catalog (register_with_config as register_catalog)
+
+-- ---------------------------------------------------------------------------
+-- The backend script
+-- ---------------------------------------------------------------------------
+
+type Script = AnswerEvery(int) | Fail(UnavailableReason)
+
+pure func answer_all(qs: [NamedQuestion], bp: int) -> [DecisionAnswer] {
+  match qs { [] => [], q :: rest => binary(q.id, bp) :: answer_all(rest, bp) }
+}
+
+pure func binary(qid: string, bp: int) -> DecisionAnswer { { question_id: qid, answer: BinaryAnswer(bp) } }
+
+-- The backend answers the request it was given, question by question. Usage
+-- is `None`: a scripted backend knows no token count or cost, and D3 forbids
+-- manufacturing a zero.
+pure func observe(req: DecisionRequest, s: Script) -> DecisionObservation {
+  let result = match s {
+    AnswerEvery(bp) => Answered({ answers: answer_all(req.questions, bp) }),
+    Fail(r) => Unavailable(r)
+  };
+  { result: result, usage: { input_tokens: None, output_tokens: None, cost_millicents: None } }
+}
+
+-- ---------------------------------------------------------------------------
+-- The host's half: atoms, the context stamp
+-- ---------------------------------------------------------------------------
+
+type JudgeAtom = {
+  descriptor: DecisionPolicyDescriptor,
+  prepare: (PureCtx, string) -> JudgePreparation,
+  interpret: (PureCtx, string, DecisionRequest, DecisionObservation) -> FinalizeDecision
+}
+
+type ToolAtom = {
+  descriptor: DecisionPolicyDescriptor,
+  prepare: (PureCtx, ToolCallEnvelope) -> ToolPreparation,
+  interpret: (PureCtx, ToolCallEnvelope, DecisionRequest, DecisionObservation) -> ToolPolicyDecision
+}
+
+func judge_atom(caps: [Capability]) -> Option[JudgeAtom] {
+  match caps {
+    [] => None,
+    DecisionSolverJudge(d, p, i) :: _ => Some({ descriptor: d, prepare: p, interpret: i }),
+    _ :: rest => judge_atom(rest)
+  }
+}
+
+func tool_atom(caps: [Capability]) -> Option[ToolAtom] {
+  match caps {
+    [] => None,
+    DecisionToolPolicy(d, p, i) :: _ => Some({ descriptor: d, prepare: p, interpret: i }),
+    _ :: rest => tool_atom(rest)
+  }
+}
+
+-- `ext_config` from the registration; `decision_state` carries the
+-- descriptor's projections, the limit from `max_interventions`, and ledger
+-- terms that are informational only.
+pure func decision_ctx(cfg: Json, d: DecisionPolicyDescriptor, interpretation: Json, used: int,
+    v: VerificationEvidence, w: ToolEvidenceWindow) -> PureCtx {
+  { pure_ctx(cfg) |
+    task: "synthetic task: make the example test pass",
+    step: 7,
+    verification: v,
+    tool_evidence: w,
+    decision_state: Some({
+      invocation_id: "synthetic-invocation",
+      mode: EnforcingDecision,
+      interventions_used: used,
+      intervention_limit: d.max_interventions,
+      question_config: d.question_config,
+      interpretation_config: interpretation,
+      allowance_millicents: 1000,
+      known_spend_millicents: 0,
+      outstanding_millicents: 0,
+      run_cost_millicents: 0,
+      run_cap_millicents: None
+    })
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Synthetic evidence
+-- ---------------------------------------------------------------------------
+
+pure func ev(id: string, step: int, tool: string, o: ObservedToolOutcome, out: string) -> ToolEvidence {
+  { call_id: id, step: step, tool_name: tool, outcome: o, output: out, truncated: false, workspace_revision: None }
+}
+
+pure func window(rs: [ToolEvidence]) -> ToolEvidenceWindow {
+  { records: rs, complete_from_session_start: true, omitted_count: Some(0) }
+}
+
+pure func vrun(code: int, out: string) -> VerificationRun {
+  { occurrence: "verify-1", step: 6, command: "make test", exit_code: Some(code), output: out,
+    truncated: false, workspace_revision: None }
+}
+
+pure func failing_verification() -> VerificationEvidence {
+  Failed(vrun(2, "FAIL example_test: expected 3, got 2 (synthetic output long enough that the feedback template would exceed its configured bound if it were not clipped)"))
+}
+
+pure func five_records() -> [ToolEvidence] {
+  [ev("c1", 1, "read", ToolSucceeded, "ok"),
+   ev("c2", 2, "bash", CommandExit(0), "ok"),
+   ev("c3", 3, "edit", ToolSucceeded, "ok"),
+   ev("c4", 4, "bash", CommandExit(2), "exit 2"),
+   ev("c5", 5, "bash", ToolFailed("synthetic failure"), "failed")]
+}
+
+pure func bash_call() -> ToolCallEnvelope {
+  { id: "c6", tool: "bash", arguments: jo([kv("cmd_len", jint(9))]) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Printing and checking votes
+-- ---------------------------------------------------------------------------
+
+pure func show_finalize(d: FinalizeDecision) -> string {
+  match d {
+    Accept => "Accept",
+    NoDecision => "NoDecision",
+    ContinueWithFeedback(t) => "ContinueWithFeedback(${show(length(t))} chars: \"${t}\")"
+  }
+}
+
+pure func show_tool(d: ToolPolicyDecision) -> string {
+  match d {
+    Allow => "Allow",
+    NoOpinion => "NoOpinion",
+    Deny(t) => "Deny(${show(length(t))} chars: \"${t}\")",
+    Pending(t, _) => "Pending(${t})"
+  }
+}
+
+type Want = WantNoDecision | WantFeedbackWithin(int) | WantNoOpinion | WantDenyWithin(int)
+
+pure func finalize_ok(d: FinalizeDecision, w: Want) -> bool {
+  match (d, w) {
+    (NoDecision, WantNoDecision) => true,
+    (ContinueWithFeedback(t), WantFeedbackWithin(n)) => length(t) > 0 && length(t) <= n,
+    _ => false
+  }
+}
+
+pure func tool_ok(d: ToolPolicyDecision, w: Want) -> bool {
+  match (d, w) {
+    (NoOpinion, WantNoOpinion) => true,
+    (Deny(t), WantDenyWithin(n)) => length(t) > 0 && length(t) <= n,
+    _ => false
+  }
+}
+
+func verdict(label: string, shown: string, ok: bool) -> int ! {IO} {
+  let _ = println("${if ok then "  ok  " else "  FAIL"} ${label} -> ${shown}");
+  if ok then 0 else 1
+}
+
+-- ---------------------------------------------------------------------------
+-- The finalize consumer
+-- ---------------------------------------------------------------------------
+
+-- One finalize invocation: prepare, then (on a query) the backend and
+-- interpret. `want_query` pins whether `prepare` must ask.
+func run_judge(label: string, reg: ExtRegistration, a: JudgeAtom, interpretation: Json, used: int,
+    v: VerificationEvidence, s: Script, want_query: bool, want: Want) -> int ! {IO} {
+  let ctx = decision_ctx(reg.config, a.descriptor, interpretation, used, v, window(five_records()));
+  let candidate = "Done: the example test now passes.";
+  match a.prepare(ctx, candidate) {
+    JudgeImmediate(d) =>
+      verdict("finalize ${label}: prepare JudgeImmediate", show_finalize(d),
+              not want_query && finalize_ok(d, want)),
+    JudgeQuery(req) => {
+      let obs = observe(req, s);
+      let d = a.interpret(ctx, candidate, req, obs);
+      verdict("finalize ${label}: prepare JudgeQuery(1 request, ${show(count_q(req.questions))} question) -> interpret",
+              show_finalize(d),
+              want_query && count_q(req.questions) == 1 && finalize_ok(d, want))
+    }
+  }
+}
+
+-- The bound checked at interpret itself: the request a first invocation
+-- prepared, answered below threshold, interpreted with the limit reached.
+func judge_bound_at_interpret(reg: ExtRegistration, a: JudgeAtom) -> int ! {IO} {
+  let fresh = decision_ctx(reg.config, a.descriptor, a.descriptor.interpretation_config, 0,
+                           failing_verification(), window(five_records()));
+  let spent = decision_ctx(reg.config, a.descriptor, a.descriptor.interpretation_config,
+                           a.descriptor.max_interventions, failing_verification(), window(five_records()));
+  match a.prepare(fresh, "Done.") {
+    JudgeImmediate(d) => verdict("finalize bound: fresh prepare must query", show_finalize(d), false),
+    JudgeQuery(req) => {
+      let d = a.interpret(spent, "Done.", req, observe(req, AnswerEvery(1500)));
+      verdict("finalize Answered(1500 bp) at the intervention limit: interpret", show_finalize(d),
+              finalize_ok(d, WantNoDecision))
+    }
+  }
+}
+
+-- Evidence selection: the request carries `max_tool_records` (3) of the five.
+func judge_evidence_selection(reg: ExtRegistration, a: JudgeAtom) -> int ! {IO} {
+  let ctx = decision_ctx(reg.config, a.descriptor, a.descriptor.interpretation_config, 0,
+                         failing_verification(), window(five_records()));
+  match a.prepare(ctx, "Done.") {
+    JudgeImmediate(d) => verdict("finalize evidence selection", show_finalize(d), false),
+    JudgeQuery(req) => {
+      let n = match getArray(req.state, "tool_evidence") { Some(xs) => count_j(xs), None => 0 - 1 };
+      verdict("finalize evidence selection: request.state.tool_evidence", "${show(n)} of 5 records", n == 3)
+    }
+  }
+}
+
+func finalize_cases() -> int ! {IO} {
+  let reg = register_completion(());
+  match judge_atom(reg.caps) {
+    None => verdict("finalize atom", "none registered", false),
+    Some(a) => {
+      let ic = a.descriptor.interpretation_config;
+      let answered = run_judge("Answered(1500 bp)", reg, a, ic, 0, failing_verification(), AnswerEvery(1500), true, WantFeedbackWithin(240));
+      let high = run_judge("Answered(9000 bp)", reg, a, ic, 0, failing_verification(), AnswerEvery(9000), true, WantNoDecision);
+      let unavailable = run_judge("Unavailable(Timeout)", reg, a, ic, 0, failing_verification(), Fail(Timeout), true, WantNoDecision);
+      let passed = run_judge("verification Passed", reg, a, ic, 0, Passed(vrun(0, "ok")), AnswerEvery(1500), false, WantNoDecision);
+      let at_limit = run_judge("interventions exhausted", reg, a, ic, a.descriptor.max_interventions, failing_verification(), AnswerEvery(1500), false, WantNoDecision);
+      let lower = run_judge("Answered(1500 bp), interpretation_config min_complete_bp=1000", reg, a,
+                            jo([kv("min_complete_bp", jint(1000)), kv("max_feedback_chars", jint(240))]),
+                            0, failing_verification(), AnswerEvery(1500), true, WantNoDecision);
+      let missing = run_judge("Answered(1500 bp), interpretation_config {}", reg, a, jo([]), 0,
+                              failing_verification(), AnswerEvery(1500), true, WantNoDecision);
+      answered + high + unavailable + passed + at_limit + lower + missing
+        + judge_bound_at_interpret(reg, a) + judge_evidence_selection(reg, a)
+        + judge_kit_neutrality(reg, a)
+    }
+  }
+}
+
+-- The kit's predicates: an Unavailable vote is neutral, an intervention is
+-- not, a query preparation is not.
+func judge_kit_neutrality(reg: ExtRegistration, a: JudgeAtom) -> int ! {IO} {
+  let ctx = decision_ctx(reg.config, a.descriptor, a.descriptor.interpretation_config, 0,
+                         failing_verification(), window(five_records()));
+  let p = a.prepare(ctx, "Done.");
+  match p {
+    JudgeImmediate(_) => verdict("finalize kit neutrality", "prepare did not query", false),
+    JudgeQuery(req) => {
+      let u = a.interpret(ctx, "Done.", req, observe(req, Fail(ProviderFailure)));
+      let n = a.interpret(ctx, "Done.", req, observe(req, AnswerEvery(1500)));
+      verdict("finalize kit: judge_preparation_neutral(query)=false, finalize_vote_neutral(Unavailable vote)=true, (intervention)=false",
+              "${show(judge_preparation_neutral(p))}/${show(finalize_vote_neutral(u))}/${show(finalize_vote_neutral(n))}",
+              not judge_preparation_neutral(p) && finalize_vote_neutral(u) && not finalize_vote_neutral(n))
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The tool-policy consumer
+-- ---------------------------------------------------------------------------
+
+func run_tool(label: string, reg: ExtRegistration, a: ToolAtom, rs: [ToolEvidence], s: Script,
+    want_query: bool, want: Want) -> int ! {IO} {
+  let ctx = decision_ctx(reg.config, a.descriptor, a.descriptor.interpretation_config, 0, NotReached, window(rs));
+  let p = a.prepare(ctx, bash_call());
+  match p {
+    ToolImmediate(d) =>
+      verdict("tool_policy ${label}: prepare ToolImmediate", show_tool(d), not want_query && tool_ok(d, want)),
+    ToolQuery(req) => {
+      let d = a.interpret(ctx, bash_call(), req, observe(req, s));
+      let kit = if tool_ok(d, WantNoOpinion) then tool_vote_neutral(d) else not tool_vote_neutral(d);
+      verdict("tool_policy ${label}: prepare ToolQuery(1 request, ${show(count_q(req.questions))} question) -> interpret",
+              show_tool(d),
+              want_query && count_q(req.questions) == 1 && tool_ok(d, want) && kit && not tool_preparation_neutral(p))
+    }
+  }
+}
+
+func tool_cases() -> int ! {IO} {
+  let reg = register_repeat(());
+  match tool_atom(reg.caps) {
+    None => verdict("tool_policy atom", "none registered", false),
+    Some(a) => {
+      let answered = run_tool("Answered(9000 bp), bash failed twice in window", reg, a, five_records(), AnswerEvery(9000), true, WantDenyWithin(200));
+      let unavailable = run_tool("Unavailable(ProviderFailure)", reg, a, five_records(), Fail(ProviderFailure), true, WantNoOpinion);
+      let low = run_tool("Answered(3000 bp)", reg, a, five_records(), AnswerEvery(3000), true, WantNoOpinion);
+      let one = run_tool("one typed failure", reg, a,
+                         [ev("c1", 1, "bash", CommandExit(2), "exit 2"), ev("c2", 2, "read", ToolSucceeded, "ok")],
+                         AnswerEvery(9000), false, WantNoOpinion);
+      let old = run_tool("failures outside the window", reg, a,
+                         [ev("c1", 1, "bash", CommandExit(1), "x"), ev("c2", 2, "bash", CommandExit(1), "x"),
+                          ev("c3", 3, "read", ToolSucceeded, "ok"), ev("c4", 4, "read", ToolSucceeded, "ok"),
+                          ev("c5", 5, "edit", ToolSucceeded, "ok"), ev("c6", 6, "read", ToolSucceeded, "ok")],
+                         AnswerEvery(9000), false, WantNoOpinion);
+      let untyped = run_tool("untyped outcomes only (exit 0, unknown, 'error' text)", reg, a,
+                             [ev("c1", 1, "bash", CommandExit(0), "error: looks bad"),
+                              ev("c2", 2, "bash", ToolOutcomeUnknown, "error"),
+                              ev("c3", 3, "bash", CommandExit(0), "error")],
+                             AnswerEvery(9000), false, WantNoOpinion);
+      answered + unavailable + low + one + old + untyped
+    }
+  }
+}
+
+pure func count_q(qs: [NamedQuestion]) -> int { match qs { [] => 0, _ :: rest => 1 + count_q(rest) } }
+
+pure func count_j(xs: [Json]) -> int { match xs { [] => 0, _ :: rest => 1 + count_j(rest) } }
+
+export func main() -> () ! {IO} {
+  let _ = println("finalize consumer (DecisionSolverJudge, example.completion_guard):");
+  let f = finalize_cases();
+  let _ = println("tool-policy consumer (DecisionToolPolicy, example.repeat_failure_policy):");
+  let t = tool_cases();
+  if f + t == 0 then println("scripted backend PASS")
+  else {
+    let _ = println("scripted backend FAIL count=${show(f + t)}");
+    exit(1)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The DescribeTools consumer: the pure catalog's call, `f(entry.config)`
+-- ---------------------------------------------------------------------------
+
+pure func catalog_size(config: Json, caps: [Capability]) -> int {
+  match caps {
+    [] => 0,
+    DescribeTools(f) :: rest => count_s(f(config)) + catalog_size(config, rest),
+    _ :: rest => catalog_size(config, rest)
+  }
+}
+
+pure func count_s(xs: [a]) -> int { match xs { [] => 0, _ :: rest => 1 + count_s(rest) } }
+
+export func catalog_main() -> () ! {IO, Env} {
+  let reg = register_catalog(());
+  println("catalog=${show(catalog_size(reg.config, reg.caps))}")
+}

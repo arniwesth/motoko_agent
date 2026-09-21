@@ -1,0 +1,248 @@
+-- 031 PLAN-001 P0.6 -- the FINALIZE consumer on ABI 8.0 (ADR-001 freeze
+-- evidence 2(c), "ordinary success"): the completion-guard skeleton as a
+-- `DecisionSolverJudge`.
+--
+-- What it shows, and where each rule lives:
+--   * EVIDENCE SELECTION from the typed views: `prepare` reads
+--     `ctx.verification` and the last `max_tool_records` of
+--     `ctx.tool_evidence`, and asks nothing when verification passed.
+--   * ONE REQUEST: a `JudgeQuery` carries one `DecisionRequest` holding every
+--     question for this state (here, one binary question).
+--   * THE VOTE: `NoDecision`, or a `ContinueWithFeedback` built from this
+--     module's own template and BOUNDED twice -- by the host's intervention
+--     limit on `decision_state`, and by `max_feedback_chars`.
+--   * CONFIGURATION ONLY THROUGH THE CHANNEL: evidence selection and question
+--     text read `question_config`; the threshold, the feedback bound and the
+--     abstentions read `interpretation_config` -- the two descriptor
+--     projections the host hands back on `decision_state` (D3). Nothing is
+--     hard-coded: a missing threshold abstains. The conformance obligation
+--     (D2) is met by construction: nothing here reads `ext_config` itself.
+--   * THE REGISTRATION BOUNDARY (D2): both callbacks are named, unshadowed,
+--     top-level functions bound directly in a literal `caps` list under the
+--     `{ config, caps }` head.
+--
+-- The template is code, identified by `interpretation_version`; a template
+-- change is a version change (D2). Everything here is synthetic.
+module sunholo/motoko_ext_conformance/examples/completion_guard
+
+import std/json (Json, jo, ja, kv, js, jb, jint, getInt, getString)
+import std/option (Option, Some, None)
+import std/string (length, substring)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx, ExtRegistration, DecisionSolverJudge,
+  DecisionPolicyDescriptor, DecisionRequest, DecisionObservation, DecisionInvocationState,
+  NamedQuestion, Binary, DecisionAnswer, BinaryAnswer, Answered, Unavailable,
+  VerificationEvidence, VerificationRun, NotReached, Disabled, Passed, Failed, VerificationUnavailable,
+  ToolEvidence, ObservedToolOutcome, CommandExit, ToolSucceeded, ToolFailed, ToolDenied, ToolPending,
+  ToolOutcomeUnknown,
+  FinalizeDecision, ContinueWithFeedback, NoDecision,
+  JudgePreparation, JudgeImmediate, JudgeQuery
+)
+
+-- ---------------------------------------------------------------------------
+-- Registration
+-- ---------------------------------------------------------------------------
+
+export pure func completion_question_config() -> Json {
+  jo([
+    kv("backend_binding", js("completion-judge")),
+    kv("question_id", js("task_complete")),
+    kv("max_tool_records", jint(3)),
+    kv("candidate_chars", jint(200))
+  ])
+}
+
+export pure func completion_interpretation_config() -> Json {
+  jo([
+    kv("min_complete_bp", jint(6000)),
+    kv("max_feedback_chars", jint(240))
+  ])
+}
+
+export pure func completion_descriptor() -> DecisionPolicyDescriptor {
+  {
+    local_id: "example.completion_guard",
+    question_version: "completion-question/1",
+    question_config: completion_question_config(),
+    interpretation_version: "completion-interpretation/1",
+    interpretation_config: completion_interpretation_config(),
+    max_interventions: 2
+  }
+}
+
+-- `config` is disclosed data only; the callbacks read the descriptor
+-- projections, which is where the conformance obligation puts every value
+-- that shapes the question or the vote.
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  {
+    config: jo([kv("example", js("completion-guard"))]),
+    caps: [DecisionSolverJudge(completion_descriptor(), completion_prepare, completion_interpret)]
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- prepare: evidence selection, one request
+-- ---------------------------------------------------------------------------
+
+func completion_prepare(ctx: PureCtx, candidate: string) -> JudgePreparation {
+  match ctx.decision_state {
+    None => JudgeImmediate(NoDecision),
+    Some(st) =>
+      if st.interventions_used >= st.intervention_limit then JudgeImmediate(NoDecision)
+      else match ctx.verification {
+        Passed(_) => JudgeImmediate(NoDecision),
+        _ => JudgeQuery(completion_request(ctx, st, candidate))
+      }
+  }
+}
+
+func completion_request(ctx: PureCtx, st: DecisionInvocationState, candidate: string) -> DecisionRequest {
+  let qc = st.question_config;
+  let keep = opt_int(getInt(qc, "max_tool_records"), 0);
+  let excerpt = clip(candidate, opt_int(getInt(qc, "candidate_chars"), 0));
+  {
+    backend_binding: opt_str(getString(qc, "backend_binding"), ""),
+    state: jo([
+      kv("candidate_excerpt", js(excerpt)),
+      kv("verification", verification_json(ctx.verification)),
+      kv("tool_evidence", ja(records_json(last_n(ctx.tool_evidence.records, keep)))),
+      kv("tool_window_complete", jb(ctx.tool_evidence.complete_from_session_start))
+    ]),
+    questions: [{
+      id: opt_str(getString(qc, "question_id"), "task_complete"),
+      prompt: "Given the verification result and the recent tool outcomes, is the task complete?",
+      guidance: jo([]),
+      kind: Binary
+    }]
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- interpret: threshold and bounds from interpretation_config
+-- ---------------------------------------------------------------------------
+
+func completion_interpret(ctx: PureCtx, _candidate: string, req: DecisionRequest,
+    obs: DecisionObservation) -> FinalizeDecision {
+  match ctx.decision_state {
+    None => NoDecision,
+    Some(st) =>
+      if st.interventions_used >= st.intervention_limit then NoDecision
+      else match obs.result {
+        Unavailable(_) => NoDecision,
+        Answered(resp) => match first_question_id(req.questions) {
+          None => NoDecision,
+          Some(qid) => match binary_for(resp.answers, qid) {
+            None => NoDecision,
+            Some(p) => completion_vote(ctx, st, qid, p)
+          }
+        }
+      }
+  }
+}
+
+func completion_vote(ctx: PureCtx, st: DecisionInvocationState, qid: string, p: int) -> FinalizeDecision {
+  let ic = st.interpretation_config;
+  match getInt(ic, "min_complete_bp") {
+    None => NoDecision,
+    Some(min_bp) =>
+      if p >= min_bp then NoDecision
+      else ContinueWithFeedback(
+        clip(completion_feedback(qid, p, min_bp, ctx.verification),
+             opt_int(getInt(ic, "max_feedback_chars"), 0)))
+  }
+}
+
+-- THE TEMPLATE (code; `completion-interpretation/1`).
+pure func completion_feedback(qid: string, p: int, min_bp: int, v: VerificationEvidence) -> string {
+  "Completion guard: '${qid}' puts completion at ${show(p)} bp, below the ${show(min_bp)} bp threshold. Verification: ${verification_line(v)}. Keep working, and verify before finishing."
+}
+
+-- ---------------------------------------------------------------------------
+-- helpers (pure, named)
+-- ---------------------------------------------------------------------------
+
+pure func verification_line(v: VerificationEvidence) -> string {
+  match v {
+    NotReached => "not reached",
+    Disabled => "disabled",
+    Passed(r) => "passed (${r.command})",
+    Failed(r) => "failed (${r.command}): ${r.output}",
+    VerificationUnavailable(reason, _) => "unavailable (${reason})"
+  }
+}
+
+pure func verification_json(v: VerificationEvidence) -> Json {
+  match v {
+    NotReached => jo([kv("status", js("not_reached"))]),
+    Disabled => jo([kv("status", js("disabled"))]),
+    Passed(r) => jo([kv("status", js("passed")), kv("run", run_json(r))]),
+    Failed(r) => jo([kv("status", js("failed")), kv("run", run_json(r))]),
+    VerificationUnavailable(reason, _) => jo([kv("status", js("unavailable")), kv("reason", js(reason))])
+  }
+}
+
+pure func run_json(r: VerificationRun) -> Json {
+  jo([
+    kv("occurrence", js(r.occurrence)),
+    kv("command", js(r.command)),
+    kv("exit_code", match r.exit_code { Some(n) => jint(n), None => js("unknown") }),
+    kv("truncated", jb(r.truncated))
+  ])
+}
+
+pure func records_json(rs: [ToolEvidence]) -> [Json] {
+  match rs {
+    [] => [],
+    r :: rest => jo([
+      kv("call_id", js(r.call_id)),
+      kv("step", jint(r.step)),
+      kv("tool", js(r.tool_name)),
+      kv("outcome", js(outcome_line(r.outcome))),
+      kv("truncated", jb(r.truncated))
+    ]) :: records_json(rest)
+  }
+}
+
+pure func outcome_line(o: ObservedToolOutcome) -> string {
+  match o {
+    CommandExit(n) => "exit ${show(n)}",
+    ToolSucceeded => "succeeded",
+    ToolFailed(m) => "failed: ${m}",
+    ToolDenied(m) => "denied: ${m}",
+    ToolPending => "pending",
+    ToolOutcomeUnknown => "unknown"
+  }
+}
+
+pure func first_question_id(qs: [NamedQuestion]) -> Option[string] {
+  match qs { [] => None, q :: _ => Some(q.id) }
+}
+
+pure func binary_for(answers: [DecisionAnswer], qid: string) -> Option[int] {
+  match answers {
+    [] => None,
+    a :: rest =>
+      if a.question_id == qid then (match a.answer { BinaryAnswer(p) => Some(p), _ => None })
+      else binary_for(rest, qid)
+  }
+}
+
+pure func last_n(xs: [ToolEvidence], n: int) -> [ToolEvidence] {
+  drop_n(xs, count(xs) - n)
+}
+
+pure func drop_n(xs: [ToolEvidence], k: int) -> [ToolEvidence] {
+  if k <= 0 then xs else match xs { [] => [], _ :: rest => drop_n(rest, k - 1) }
+}
+
+pure func count(xs: [ToolEvidence]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + count(rest) }
+}
+
+pure func clip(s: string, n: int) -> string {
+  if n <= 0 then "" else if length(s) <= n then s else substring(s, 0, n)
+}
+
+pure func opt_int(o: Option[int], d: int) -> int { match o { Some(n) => n, None => d } }
+
+pure func opt_str(o: Option[string], d: string) -> string { match o { Some(s) => s, None => d } }

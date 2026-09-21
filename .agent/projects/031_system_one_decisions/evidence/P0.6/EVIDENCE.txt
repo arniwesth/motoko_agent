@@ -1,0 +1,103 @@
+031 PLAN-001 P0.6 -- evidence record (AILANG v0.33.0 ae36986, the pin). HEAD before: 4c36a34d.
+ADR-001 freeze evidence 2(c), "ordinary success". All fixtures, evidence and backends are synthetic.
+
+== What was built (packages/motoko_ext_conformance/examples/) =============
+completion_guard.ail       DecisionSolverJudge "example.completion_guard" -- the completion-guard skeleton.
+  callbacks  completion_prepare, completion_interpret (named, top-level, bound directly)
+  question_config        backend_binding, question_id, max_tool_records=3, candidate_chars=200
+  interpretation_config  min_complete_bp=6000, max_feedback_chars=240
+  prepare: no decision_state / interventions exhausted / verification Passed -> JudgeImmediate(NoDecision);
+           otherwise JudgeQuery(ONE DecisionRequest: one Binary question; state = verification +
+           last max_tool_records of tool_evidence + window completeness + candidate excerpt).
+  interpret: Unavailable -> NoDecision; Answered below min_complete_bp -> ContinueWithFeedback from its
+           own template, BOUNDED by the host's intervention limit (checked again at interpret) and clipped
+           to max_feedback_chars; a missing threshold abstains (nothing hard-coded).
+repeat_failure_policy.ail  DecisionToolPolicy "example.repeat_failure_policy" -- a no-progress guard.
+  callbacks  repeat_prepare, repeat_interpret
+  question_config        backend_binding, question_id, window=4, min_failures=2
+  interpretation_config  deny_min_bp=7000, max_feedback_chars=200
+  prepare: typed failures (CommandExit(n != 0), ToolFailed) of the proposed tool in the last `window`
+           records; fewer than min_failures -> ToolImmediate(NoOpinion), else ToolQuery(one request).
+  interpret: Unavailable -> NoOpinion; Answered >= deny_min_bp -> Deny(bounded template); else NoOpinion.
+config_catalog.ail         DescribeTools consumer (grown from v7_describe_config).
+  callback   describe_tools(cfg: Json) -- advertises exactly the names in config.tools
+  config     {"tools": [<MOTOKO_EXAMPLE_CATALOG_TOOL>]} or {"tools": []}; the setting is read from the
+             environment AT REGISTRATION (as the in-tree extensions read theirs) and reaches the callback
+             ONLY through ExtRegistration.config -> the catalog's f(entry.config).
+scripted_backend.ail       the scripted backend + host half: register, find the atom in caps, stamp
+             ext_config from reg.config, hand back the descriptor projections on decision_state, prepare,
+             answer THAT request per question id (usage None: no manufactured zero), interpret with the
+             exact prepared request; each vote checked; `catalog_main` for DescribeTools.
+
+Every register_with_config returns ExtRegistration { config, caps } with a literal caps list. The
+decision consumers read ONLY the two descriptor projections on decision_state (the D2 conformance
+obligation met by construction: nothing reads ext_config for question or vote); the catalog reads only
+its (Json) argument, which is ExtEntry.config.
+
+== Stand-ins for the two unreachable exits (brief; P0.5's §9 record) ======
+`make conformance` and `make ext_hook_scope_selftest` are red on the red tree (7.4 compaction_ai; 18
+7.4 extension roots) and were not chased. Stand-ins: p06_scripted_run.sh (the examples checked and run
+against this checkout's 8.0 ABI and kit in a throwaway workspace, using the kit's neutrality predicates),
+p06_shape_gate.py (P0.3's shape pass over the examples). Re-run unchanged: p05_conformance_check.sh -> 0;
+hook_scope.py --gate-fixtures -> 0 (29 ok). The kit's repo manifest (P0.5's file) is not edited: the
+workspace copy lists the example modules in [exports].
+
+== Exit 1 + 2: p06_scripted_run.sh -> exit 0 ==============================
+   p06: ailang check examples/completion_guard ok
+   p06: ailang check examples/repeat_failure_policy ok
+   p06: ailang check examples/config_catalog ok
+   p06: ailang check examples/scripted_backend ok
+   finalize consumer (DecisionSolverJudge, example.completion_guard):
+     ok   finalize Answered(1500 bp): prepare JudgeQuery(1 request, 1 question) -> interpret -> ContinueWithFeedback(240 chars: "Completion guard: 'task_complete' puts completion at 1500 bp, below the 6000 bp threshold. Verification: failed (make test): FAIL example_test: expected 3, got 2 (synthetic output long enough that the feedback template would exceed its conf")
+     ok   finalize Answered(9000 bp): prepare JudgeQuery(1 request, 1 question) -> interpret -> NoDecision
+     ok   finalize Unavailable(Timeout): prepare JudgeQuery(1 request, 1 question) -> interpret -> NoDecision
+     ok   finalize verification Passed: prepare JudgeImmediate -> NoDecision
+     ok   finalize interventions exhausted: prepare JudgeImmediate -> NoDecision
+     ok   finalize Answered(1500 bp), interpretation_config min_complete_bp=1000: prepare JudgeQuery(1 request, 1 question) -> interpret -> NoDecision
+     ok   finalize Answered(1500 bp), interpretation_config {}: prepare JudgeQuery(1 request, 1 question) -> interpret -> NoDecision
+     ok   finalize Answered(1500 bp) at the intervention limit: interpret -> NoDecision
+     ok   finalize evidence selection: request.state.tool_evidence -> 3 of 5 records
+     ok   finalize kit: judge_preparation_neutral(query)=false, finalize_vote_neutral(Unavailable vote)=true, (intervention)=false -> false/true/false
+   tool-policy consumer (DecisionToolPolicy, example.repeat_failure_policy):
+     ok   tool_policy Answered(9000 bp), bash failed twice in window: prepare ToolQuery(1 request, 1 question) -> interpret -> Deny(163 chars: "No-progress guard: 'bash' has failed repeatedly and this call is judged likely (9000 bp) to fail the same way. Change the approach or gather new information first.")
+     ok   tool_policy Unavailable(ProviderFailure): prepare ToolQuery(1 request, 1 question) -> interpret -> NoOpinion
+     ok   tool_policy Answered(3000 bp): prepare ToolQuery(1 request, 1 question) -> interpret -> NoOpinion
+     ok   tool_policy one typed failure: prepare ToolImmediate -> NoOpinion
+     ok   tool_policy failures outside the window: prepare ToolImmediate -> NoOpinion
+     ok   tool_policy untyped outcomes only (exit 0, unknown, 'error' text): prepare ToolImmediate -> NoOpinion
+   scripted backend PASS
+   describe_tools (config_catalog): configured=1 empty=0
+   p06: scripted run PASS
+
+== Exit 3: p06_shape_gate.py -> exit 0 =====================================
+hook_scope.py's Scope.locate() + registration_shape_result() -- the field `make ext_hook_scope` exits
+on -- over each example module, closure built with ext_ambient_inventory/derive.py's module_resolver
+and closure through the root ailang.toml (as `make ext_hook_scope` builds it; the ABI is in each
+closure). Two-sided in the same run: each module re-scanned with its first payload inlined must FAIL.
+     ok   completion_guard         shape=pass head=config-caps atoms=1 reasons=- closure=2 (ABI in closure: True)
+     ok   completion_guard         control (payload `completion_prepare` inlined): shape=fail reasons=['payload-inline-lambda']
+     ok   repeat_failure_policy    shape=pass head=config-caps atoms=1 reasons=- closure=2 (ABI in closure: True)
+     ok   repeat_failure_policy    control (payload `repeat_prepare` inlined): shape=fail reasons=['payload-inline-lambda']
+     ok   config_catalog           shape=pass head=config-caps atoms=1 reasons=- closure=2 (ABI in closure: True)
+     ok   config_catalog           control (payload `describe_tools` inlined): shape=fail reasons=['payload-inline-lambda']
+   
+   shape gate on the examples: pass 3/3; controls 3/3 rejected
+
+== Exit 4: mutgate (p06_mutgate_spec.tsv, 11 rows) =========================
+Pre-commit, in a scratch copy carrying this diff: 11/11 discriminate, bytes same. Why each went red
+(mutated logs):
+  p06_catalog_inline_capture          gate: config_catalog shape=fail [payload-inline-lambda]; compiler rc=0
+  p06_policy_interpret_captures_local gate: repeat_failure_policy shape=fail [payload-inline-lambda]; compiler rc=0
+  p06_catalog_module_env_let          compiler: "Missing effects: Env" on module-level `let catalog_env_tool`
+  p06_catalog_empty_still_advertises  scripted: configured=2 empty=1
+  p06_finalize_bound_removed          scripted: at the intervention limit interpret -> ContinueWithFeedback
+  p06_finalize_feedback_unclipped     scripted: ContinueWithFeedback(320 chars) > 240
+  p06_finalize_threshold_hardcoded    scripted: min_complete_bp=1000 and {} cases -> ContinueWithFeedback
+  p06_finalize_selection_reads_ext_config  scripted: request.state.tool_evidence 0 of 5 (want 3)
+  p06_finalize_unavailable_intervenes scripted: Unavailable(Timeout) -> ContinueWithFeedback; kit neutrality red
+  p06_policy_unavailable_denies       scripted: Unavailable(ProviderFailure) -> Deny
+  p06_policy_untyped_counts           scripted: untyped outcomes -> ToolQuery -> Deny
+The plan's row ("a consumer reads a value not in ext_config -> the gate or the compiler rejects") is the
+first three: two inline lambdas closing over a value are compiler-CLEAN and gate-rejected (the gate does
+the work), and a named callback reading an Env-initialised module `let` is compiler-rejected.
+The fresh-clone run after the commit is reported in the RESULT P0.6 envelope (it writes nothing here).
