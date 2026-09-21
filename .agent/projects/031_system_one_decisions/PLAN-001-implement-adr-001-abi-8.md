@@ -816,6 +816,17 @@ delegates did exactly what the brief required.
 | Pre-existing | exa-search 2 test failures, identical at `181051d0` |
 | Intake defects | 0 |
 
+### P1.2c — 2026-09-21, attempt 1 `9b2dfa2c` rejected on one row; attempt 2 `c8db0e6a` accepted (batch C)
+
+| | |
+|---|---|
+| Items | **9 sites** (not 11) and **3 `DescribeTools`** (not 4 — the fourth is herdr's) in 5 packages, + masked `conformance_selftest.ail`, `long_qwen_compaction_dst.ail` |
+| Commit | named payloads in `register.ail`; 8 captures in 5 configs, environment values disclosed (Amendment 3); `DescribeTools` configured vs `{}`: a2a 1/0, agentcli 2/0, ailang-docs 23/0; compaction-ai's chain on `AiCtx`, its `src/core` import dropped with a 12-line usage calibration and a parity probe; ceilings per Amendment 2 (compaction-ai narrowed to `[AI, IO, Trace, Env, FS]`); `make_hooks` removed — `examples/smoke_a2a_delegate` and `smoke_registry_roundtrip` import it and were already red (for P1.6r's read-through) |
+| **Found: P1.3r regression** | `ext/runtime.ail:40` (P1.3r) imports the conformance harness for tests only; its `Scenario` collides with core `dst_harness.Scenario` on the pin, cold-cache and order dependent (`scenario_collision_probe/`, red at `4109827b`, clean at `a7aa68a8`). The orchestrator's P1.3r intake swept modules one by one and could not see it. Follow-up **P1.3r·a2** queued after P1.4r |
+| a1 rejected | mutgate 50/51: row `tree_11_23` asserted whole-tree gate totals measured before P1.2b landed; C committed after B, so the row was red at its own commit |
+| **Intake (orchestrator)** | gate at `9b2dfa2c` **16 of 18, 9 bindings** — exact; own-root **5/5**; a2 `mutgate.sh --clone-from` fresh clone **51/51** (`batch_c_shape` asserts C's own five rows) |
+| Intake defects | **1** (a1, a mutgate spec row; the migration itself had none) |
+
 ## 10. Estimates
 
 | phase | delegate-days |
