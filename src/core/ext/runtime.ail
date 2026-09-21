@@ -37,7 +37,7 @@ import src/core/ext_world (stamp_holder, clear_holder)
 import src/core/ext/registry_generated (parse_core_ext_order)
 import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
-import pkg/sunholo/motoko_ext_conformance/harness (neutral_registration) -- P1.3r: P0.5's no-op profile, dispatched through the cursor in the tests; in place of a blank line so the :199 anchor holds
+
 export type StageOutcome = StageApplied(string) | StageRejected(string) | StageObserved(string, [DiagnosticField]) | StagePassed
 export type PreStepStage = { ext_id: string, atom: int, outcome: StageOutcome } -- B6: atom identity is TYPED here (index within the Compactor kind, B8), never stamped into `ext_id`
 export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage], artifacts: Json, next_state: ExtWorld } -- WI-B2b: `next_state` is the chain's successor world, threaded stage to stage
@@ -1735,20 +1735,9 @@ func finalize_legacy_vs_declared_precedence_test() -> bool ! {Process, IO, Clock
     continue_legacy_first && continue_declared_first && continue_queried_first && accept_then_continue && declared_accept_over_noop
   }
 
--- THE NO-OP PROFILE THROUGH THE CURSOR (P0.5's `neutral_registration`: a
--- `DescribeTools` plus one neutral atom of each decision variant). Both
--- dispatchers stay neutral and the world is untouched.
-func neutral_registration_is_neutral_through_the_cursor_test() -> bool ! {Process, IO, Clock}
-  tests [((), true)]
-  {
-    let reg = neutral_registration();
-    let rt = stamp_rt([{ id: "neutral", config: reg.config, caps: reg.caps }]);
-    let w: ExtWorld = { token: jo([kv("trace", js("n;"))]) };
-    let ctx = { smoke_ctx() | world: w };
-    let tool = tool_tag(dispatch_tool_policy(rt, ctx, probe_call())) == "noop;";
-    let out = dispatch_solver_candidate(rt, ctx, "c");
-    tool && judge_tag(out.decision) == "noop;" && encode(out.next_state.token) == encode(clear_holder(w).token)
-  }
+-- P0.5's `neutral_registration` through the cursor: src/core/test/ext_neutral_registration.ail
+-- (P1.3r-a2: production core does not import the conformance harness; its `Scenario`
+-- collides with dst_harness.Scenario on a cold cache).
 
 -- ============================================================================
 -- 8.0 (031 ADR-001 D3), PLAN-001 P1.4r: TRUTHFUL EVIDENCE DEFAULTS, AND THE
