@@ -25,12 +25,13 @@ module scripts/verify_mot131_early_answer
 import std/io (println, exit)
 import std/json (Json, jo, kv, js, jnum, encode, ja)
 import std/string (contains)
+import std/option (None)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtClockReading,
+  ExtCtx, NotReached, ProviderCtx, provider_ctx, pure_ctx_of, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtClockReading,
   ToolCallEnvelope, ToolResultEnvelope, ToolHandleOutcome, ToolHandleDecision,
   Handled, Delegate, BudgetPlan, empty_ext_world
 )
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle)
 
 -- ---------------------------------------------------------------------------
@@ -76,7 +77,7 @@ func ports_with(read: (ExtWorld, string) -> ExtFileRead ! {FS}) -> ExtPorts {
     env_get: base.env_get }
 }
 
-func mk_ctx(ports: ExtPorts) -> ExtCtx {
+func mk_ext_ctx(ports: ExtPorts) -> ExtCtx {
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
   { task: "verify-mot131", step: 0, model: "test-model", cwd: "/tmp",
     hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
@@ -86,7 +87,14 @@ func mk_ctx(ports: ExtPorts) -> ExtCtx {
     work_in_flight: [],
     open_waits: ja([]),
     artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
-    world: empty_ext_world() }
+    verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() }
+}
+
+-- ABI 8.0: `on_tool_handle` takes the ToolProvider view. The config is empty:
+-- these cases pass their `HerdrConfig` to the handler directly.
+func mk_ctx(ports: ExtPorts) -> ProviderCtx {
+  let c = mk_ext_ctx(ports);
+  provider_ctx(pure_ctx_of(c, jo([])), c.ports, c.world)
 }
 
 func mk_cfg() -> HerdrConfig {

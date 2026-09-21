@@ -54,7 +54,7 @@ module sunholo/motoko_ext_herdr/orchestrator
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (contains, startsWith, endsWith, trim, toLower, split, splitAny, join, words, intToStr, length, substring)
-import std/json (Json, get, asString, asArray, decode, getString, getObject, getInt, getStringArray)
+import std/json (Json, get, asString, asArray, decode, getString, getObject, getInt, getStringArray, getBool, jo, ja, kv, js, jb, jnum)
 import pkg/sunholo/motoko_ext_abi/types (ToolCallEnvelope, ToolPolicyDecision, Deny, NoOpinion, PromptPatch, Msg)
 
 -- ---------------------------------------------------------------------------
@@ -642,4 +642,49 @@ export pure func decide(m: OrchestratorMode, workdir: string, history: [Msg], ca
     if v == "" || operator_lifted(history) then NoOpinion
     else Deny(deny_reason(m, v))
   }
+}
+
+-- ABI 8.0 (031 ADR-001 D2, Amendment 3): `orch` is resolved once at registration,
+-- as in 7.4, and now reaches the PromptShaper and ToolPolicy (both `PureCtx`, no
+-- ports) through `config` instead of by capture. It holds this pane's id and the
+-- run-file paths: registration values, not credentials, disclosed per Amendment 3.
+pure func strs_json(xs: [string]) -> [Json] {
+  match xs { [] => [], x :: rest => js(x) :: strs_json(rest) }
+}
+
+export pure func mode_json(m: OrchestratorMode) -> Json {
+  jo([
+    kv("on", jb(m.on)),
+    kv("run_paths", ja(strs_json(m.run_paths))),
+    kv("pane", js(m.pane)),
+    kv("max_in_flight", jnum(intToFloat(m.max_in_flight))),
+    kv("guarded", ja(strs_json(m.guarded)))
+  ])
+}
+
+pure func strs_at(j: Json, k: string, fallback: [string]) -> [string] {
+  match getStringArray(j, k) { Some(xs) => xs, None => fallback }
+}
+
+-- A missing or malformed document decodes to `orchestrator_off()`: no opinion
+-- and an empty patch, the fail-safe direction.
+export pure func mode_of(j: Json) -> OrchestratorMode {
+  let off = orchestrator_off();
+  match getBool(j, "on") {
+    Some(true) => {
+      on: true,
+      run_paths: strs_at(j, "run_paths", []),
+      pane: str_or(getString(j, "pane")),
+      max_in_flight: match getInt(j, "max_in_flight") { Some(n) => n, None => off.max_in_flight },
+      guarded: strs_at(j, "guarded", off.guarded)
+    },
+    _ => off
+  }
+}
+
+pure func mode_roundtrip(on: bool) -> bool
+  tests [(true, true), (false, true)]
+{
+  let m = if on then orchestrator_on_for_tests() else orchestrator_off();
+  show_mode(mode_of(mode_json(m))) == show_mode(m)
 }

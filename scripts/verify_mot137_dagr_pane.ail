@@ -50,11 +50,11 @@ import std/string (contains, join)
 import std/option (Some, None)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtClockReading,
+  ExtCtx, NotReached, ProviderCtx, provider_ctx, pure_ctx_of, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtClockReading,
   ToolCallEnvelope, ToolHandleOutcome, ToolHandleDecision,
   Handled, Delegate, BudgetPlan, empty_ext_world
 )
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, on_tool_handle)
 import src/core/test/herdr_fixture (all_contained, argv_text, envelope, herdr_error, log_lines, log_of, log_text, none_contained, record, strings_of)
 
@@ -161,7 +161,7 @@ func ports_for(open_ok: bool, read: (ExtWorld, string) -> ExtFileRead ! {FS}) ->
     env_get: base.env_get }
 }
 
-func mk_ctx(ports: ExtPorts) -> ExtCtx {
+func mk_ext_ctx(ports: ExtPorts) -> ExtCtx {
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
   { task: "verify-mot137", step: 0, model: "test-model", cwd: "/tmp",
     hybrid_tools: false, budget: budget, mode: "v2", workdir: "/tmp",
@@ -171,7 +171,14 @@ func mk_ctx(ports: ExtPorts) -> ExtCtx {
     work_in_flight: [],
     open_waits: ja([]),
     artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
-    world: empty_ext_world() }
+    verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() }
+}
+
+-- ABI 8.0: `on_tool_handle` takes the ToolProvider view. The config is empty:
+-- these cases pass their `HerdrConfig` to the handler directly.
+func mk_ctx(ports: ExtPorts) -> ProviderCtx {
+  let c = mk_ext_ctx(ports);
+  provider_ctx(pure_ctx_of(c, jo([])), c.ports, c.world)
 }
 
 -- own pane w1:p1, session 200 -> run file `/tmp/.dagr/run-w1-p1-200.json`.

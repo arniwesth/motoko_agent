@@ -27,11 +27,11 @@ module sunholo/motoko_ext_herdr/herdr
 import std/option (Option, Some, None)
 import std/string (length, substring, contains)
 import std/crypto (sha256Hex)
-import std/json (Json, jo, kv, js, jnum, jb, get, asString, decode, encode)
+import std/json (Json, jo, ja, kv, js, jnum, jb, get, asString, decode, encode, getString, getInt, getBool, getStringArray)
 
 import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
-  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
+  PureCtx, FsCtx, ProviderCtx, ExtRegistration, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
   ExitAction, ExitIntentOutcome, ClosePane, PaneCloseAction, PublishFile, PublishFileAction,
   WorkInFlight, WorkItem, WorkOutcome,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
@@ -48,7 +48,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   abandoned_ids, settle_abandoned, sweep_tmp, prunable_scratch, prune_report,
   open_delegate_panes
 )
-import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, prompt_patch, decide)
+import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, prompt_patch, decide, mode_json, mode_of)
 import pkg/sunholo/motoko_ext_herdr/types (
   delegate_name, owns_name, task_path, answer_path, task_wrapper_prompt,
   known_kind, kind_allowed, grants_relaxation, kind_model_args,
@@ -137,6 +137,86 @@ export type HerdrConfig = {
 }
 
 export func tool_names() -> [string] { ["Delegate", "DelegateCheck"] }
+
+-- ---------------------------------------------------------------------------
+-- ABI 8.0 (031 ADR-001 D2, Amendment 3): THE CONFIGURATION CHANNEL.
+--
+-- 7.4 captured `cfg`, `tools` and `orch` in registration lambdas. A named
+-- callback captures nothing, so `register_with_config` now discloses all three
+-- as `config`, ENCODED ONCE (`herdr_config_json`), and each callback decodes the
+-- part it reads from `ext_config`. The `{FS}` renders and the pure atoms have no
+-- environment route (their views carry no `env_get`), so the values themselves
+-- travel: this pane's id, the session time, the bin path, the delegate and dagr
+-- directories. NONE IS A CREDENTIAL (Amendment 3's rule). CONSEQUENCE, BY
+-- CONSTRUCTION: `own_pane` and `session_ms` differ per session, so herdr's config
+-- digest does too, and a resume records a new policy epoch for it.
+-- Every field is written, so decode(encode(c)) == c; a missing field decodes to
+-- the empty/zero/false value, which every guard below reads as "do nothing".
+-- ---------------------------------------------------------------------------
+pure func i_json(n: int) -> Json { jnum(intToFloat(n)) }
+
+pure func strs_json(xs: [string]) -> [Json] {
+  match xs { [] => [], x :: rest => js(x) :: strs_json(rest) }
+}
+
+export pure func cfg_json(c: HerdrConfig) -> Json {
+  jo([
+    kv("bin", js(c.bin)), kv("own_pane", js(c.own_pane)), kv("work_dir", js(c.work_dir)),
+    kv("kind", js(c.kind)), kv("allowed_kinds", js(c.allowed_kinds)),
+    kv("depth", i_json(c.depth)), kv("max_depth", i_json(c.max_depth)),
+    kv("motoko_script", js(c.motoko_script)), kv("session_ms", js(c.session_ms)),
+    kv("sweep_stale", jb(c.sweep_stale)), kv("dagr_dir", js(c.dagr_dir)), kv("dagr_pane", jb(c.dagr_pane)),
+    kv("start_timeout_ms", i_json(c.start_timeout_ms)), kv("check_wait_ms", i_json(c.check_wait_ms)),
+    kv("max_output_chars", i_json(c.max_output_chars)),
+    kv("reap_on_exit", jb(c.reap_on_exit)), kv("settle_on_exit", jb(c.settle_on_exit)),
+    kv("sweep_settle", jb(c.sweep_settle)), kv("dagr_bin", js(c.dagr_bin)), kv("dagr_plan", js(c.dagr_plan))
+  ])
+}
+
+pure func s_at(j: Json, k: string) -> string { match getString(j, k) { Some(v) => v, None => "" } }
+pure func i_at(j: Json, k: string) -> int { match getInt(j, k) { Some(v) => v, None => 0 } }
+pure func b_at(j: Json, k: string) -> bool { match getBool(j, k) { Some(v) => v, None => false } }
+
+export pure func cfg_of(j: Json) -> HerdrConfig {
+  {
+    bin: s_at(j, "bin"), own_pane: s_at(j, "own_pane"), work_dir: s_at(j, "work_dir"),
+    kind: s_at(j, "kind"), allowed_kinds: s_at(j, "allowed_kinds"),
+    depth: i_at(j, "depth"), max_depth: i_at(j, "max_depth"),
+    motoko_script: s_at(j, "motoko_script"), session_ms: s_at(j, "session_ms"),
+    sweep_stale: b_at(j, "sweep_stale"), dagr_dir: s_at(j, "dagr_dir"), dagr_pane: b_at(j, "dagr_pane"),
+    start_timeout_ms: i_at(j, "start_timeout_ms"), check_wait_ms: i_at(j, "check_wait_ms"),
+    max_output_chars: i_at(j, "max_output_chars"),
+    reap_on_exit: b_at(j, "reap_on_exit"), settle_on_exit: b_at(j, "settle_on_exit"),
+    sweep_settle: b_at(j, "sweep_settle"), dagr_bin: s_at(j, "dagr_bin"), dagr_plan: s_at(j, "dagr_plan")
+  }
+}
+
+-- The whole disclosed configuration: `cfg`, the advertised `tools`, `orch`.
+export pure func herdr_config_json(cfg: HerdrConfig, tools: [string], orch: OrchestratorMode) -> Json {
+  jo([kv("cfg", cfg_json(cfg)), kv("tools", ja(strs_json(tools))), kv("orch", mode_json(orch))])
+}
+
+pure func part(j: Json, k: string) -> Json { match get(j, k) { Some(v) => v, None => jo([]) } }
+
+export pure func herdr_cfg_of(j: Json) -> HerdrConfig { cfg_of(part(j, "cfg")) }
+
+export pure func herdr_tools_of(j: Json) -> [string] { match getStringArray(j, "tools") { Some(xs) => xs, None => [] } }
+
+export pure func herdr_orch_of(j: Json) -> OrchestratorMode { mode_of(part(j, "orch")) }
+
+pure func cfg_roundtrip(u: int) -> bool
+  tests [(0, true)]
+{
+  let c: HerdrConfig = {
+    bin: "/b/herdr", own_pane: "w1:p1", work_dir: "/w/.motoko/herdr-delegates", kind: "claude",
+    allowed_kinds: "claude,codex", depth: 1, max_depth: 3, motoko_script: "./scripts/run-agent.sh",
+    session_ms: "1756000000000", sweep_stale: true, dagr_dir: "/w/.dagr", dagr_pane: true,
+    start_timeout_ms: 20000, check_wait_ms: 45000, max_output_chars: 16000 + u,
+    reap_on_exit: true, settle_on_exit: false, sweep_settle: true, dagr_bin: "dagr", dagr_plan: "p.json"
+  };
+  let d = herdr_cfg_of(herdr_config_json(c, tool_names(), orchestrator_off()));
+  encode(cfg_json(d)) == encode(cfg_json(c)) && d.depth == 1 && d.max_output_chars == 16000 && d.reap_on_exit && d.dagr_pane
+}
 
 -- The schema names the ALLOWED set, not every kind herdr knows. Advertising a
 -- kind the operator has not permitted costs the model a turn to discover it
@@ -1129,7 +1209,7 @@ func scan_abandoned(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string,
 -- The clock is read ONCE, after the pane enumeration, so every task this sweep
 -- settles across every file carries the same instant -- which is true (they were
 -- all observed by one `pane list`) and reads correctly in the run file.
-func sweep_once(cfg: HerdrConfig, ctx: ExtCtx)
+func sweep_once(cfg: HerdrConfig, ctx: ProviderCtx)
   -> { note: string, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
   -- No run identity means no ownership test, and without the test the only
@@ -1185,7 +1265,7 @@ func with_note(r: ToolResultEnvelope, note: string) -> ToolResultEnvelope {
 -- Delegate
 -- ---------------------------------------------------------------------------
 
-func do_delegate(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+func do_delegate(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
   -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
   let prompt = arg_str(call.arguments, "prompt", "");
@@ -1486,7 +1566,7 @@ func motoko_finished(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string
     next_state: rec.next_state }
 }
 
-func do_check_motoko(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope, handle: string)
+func do_check_motoko(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope, handle: string)
   -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
   let pane = handle_pane(handle);
@@ -1591,7 +1671,7 @@ func do_check_motoko(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope, hand
   }
 }
 
-func do_check(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+func do_check(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
   -> { result: ToolResultEnvelope, next_state: ExtWorld } ! {IO, Process, FS, Clock} {
   let p = ctx.ports;
   let name = arg_str(call.arguments, "name", "");
@@ -1865,7 +1945,7 @@ export pure func fixture_check_arg_error() -> string
 -- Hooks
 -- ---------------------------------------------------------------------------
 
-export func on_tool_handle(cfg: HerdrConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+export func on_tool_handle(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
   -> ToolHandleOutcome ! {IO, Process, FS, Clock} {
   -- THE SWEEP RUNS BEFORE EITHER TOOL, not only before `Delegate`. A session
   -- that only ever polls an existing delegate is still a session that should
@@ -1932,7 +2012,7 @@ func close_actions(cfg: HerdrConfig, panes: [string]) -> [ExitAction] {
 -- read would type-check and would be the WI-D1 shape: an effect performed with
 -- no cursor to hand on. `ExtFileRead.present` also answers the missing-file
 -- case without a second `fileExists` call.
-export func exit_actions(cfg: HerdrConfig, ctx: ExtCtx) -> ExitIntentOutcome ! {FS} {
+export func exit_actions(cfg: HerdrConfig, ctx: FsCtx) -> ExitIntentOutcome ! {FS} {
   if cfg.bin == "" || cfg.own_pane == "" || cfg.session_ms == "" then
     { actions: [], next_state: ctx.world }
   else {
@@ -1987,7 +2067,7 @@ export func exit_actions(cfg: HerdrConfig, ctx: ExtCtx) -> ExitIntentOutcome ! {
 --
 -- EVERY FAILURE ANSWERS "NOTHING", which is the safe direction: it costs a
 -- nudge, never a wrong permission to stop.
-export func work_in_flight(cfg: HerdrConfig, ctx: ExtCtx) -> WorkOutcome ! {FS} {
+export func work_in_flight(cfg: HerdrConfig, ctx: FsCtx) -> WorkOutcome ! {FS} {
   if cfg.session_ms == "" || cfg.own_pane == "" then { items: [], next_state: ctx.world }
   else {
     let path = run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms);
@@ -2006,52 +2086,79 @@ export func work_in_flight(cfg: HerdrConfig, ctx: ExtCtx) -> WorkOutcome ! {FS} 
   }
 }
 
-export func make_hooks(cfg: HerdrConfig, tools: [string]) -> [Capability] ! {IO, Process, FS, Clock} {
+export func make_hooks(cfg: HerdrConfig, tools: [string]) -> ExtRegistration ! {IO, Process, FS, Clock} {
   make_hooks_with(cfg, tools, orchestrator_off())
+}
+
+-- ABI 8.0: THE SIX PAYLOADS, NAMED. Each reads what 7.4 captured from
+-- `ext_config` (see `herdr_config_json`), and each declares its slot's row.
+func herdr_describe(config: Json) -> [ToolSchema] {
+  let cfg = herdr_cfg_of(config);
+  -- The handler's condition, verbatim: several permitted kinds and no
+  -- operator default is the case where `kind` has to come from the model.
+  match herdr_tools_of(config) { [] => [], _ => describe_tools(cfg.allowed_kinds, cfg.kind == "" && allowed_kind_count(cfg.allowed_kinds) > 1) }
+}
+
+func herdr_prompt(ctx: PureCtx) -> PromptPatch {
+  prompt_patch(herdr_orch_of(ctx.ext_config))
+}
+
+func herdr_policy(ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  decide(herdr_orch_of(ctx.ext_config), ctx.workdir, ctx.history_slice, call)
+}
+
+func herdr_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  on_tool_handle(herdr_cfg_of(ctx.ext_config), ctx, call)
+}
+
+func herdr_exit(ctx: FsCtx) -> ExitIntentOutcome ! {FS} {
+  exit_actions(herdr_cfg_of(ctx.ext_config), ctx)
+}
+
+func herdr_waiting(ctx: FsCtx) -> WorkOutcome ! {FS} {
+  work_in_flight(herdr_cfg_of(ctx.ext_config), ctx)
 }
 
 -- `orch` is resolved ONCE, at registration (`register.ail`), because both atoms
 -- that read it are pure: a PromptShaper or ToolPolicy cannot reach `FS` to look
 -- at a run file per step. A run file that gains `mode: "delegate"` mid-session
 -- therefore takes effect at the next session, which is also when a handoff is
--- read. See `orchestrator.ail`.
-export func make_hooks_with(cfg: HerdrConfig, tools: [string], orch: OrchestratorMode) -> [Capability] ! {IO, Process, FS, Clock} {
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
-    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-      on_tool_handle(cfg, ctx, call)
-    };
-  let describe = func(_u: ()) -> [ToolSchema] {
-    -- The handler's condition, verbatim: several permitted kinds and no
-    -- operator default is the case where `kind` has to come from the model.
-    match tools { [] => [], _ => describe_tools(cfg.allowed_kinds, cfg.kind == "" && allowed_kind_count(cfg.allowed_kinds) > 1) }
-  };
-  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
-  let at_exit = func(ctx: ExtCtx) -> ExitIntentOutcome ! {FS} { exit_actions(cfg, ctx) };
-  let waiting = func(ctx: ExtCtx) -> WorkOutcome ! {FS} { work_in_flight(cfg, ctx) };
-  [
-    DescribeTools(describe),
-    -- ORCHESTRATOR MODE. REGISTERED IN EVERY CONFIGURATION, for `ExitIntent`'s
-    -- reason below: an atom that exists only in one environment changes the
-    -- coverage disclosure with it. Off, the patch is empty and the policy has
-    -- no opinion.
-    PromptShaper(\_ctx. prompt_patch(orch)),
-    ToolPolicy(\ctx call. decide(orch, ctx.workdir, ctx.history_slice, call)),
-    -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this list only
-    -- carries the decision, so the two can never disagree.
-    ToolProvider(tools, handle),
-    -- REGISTERED EVEN WHEN THE KNOB IS OFF, and even outside a herdr pane. An
-    -- atom that appears only under one configuration is an atom whose coverage
-    -- disclosure changes with the environment, and the manifest is where "off"
-    -- becomes visible: `enabled: false` with an empty action list says the
-    -- extension is there and was asked, which "no atom at all" cannot say.
-    -- ENABLED BY EITHER KNOB. `enabled: false` publishes an empty action list
-    -- and the host honours it, so an intent disabled here can do nothing at
-    -- all -- which would silently disable the settlement for anyone who turned
-    -- only that one on.
-    ExitIntent("delegate-panes", cfg.reap_on_exit || cfg.settle_on_exit, at_exit),
-    -- NO KNOB. Unlike the reap and the settle this performs nothing and changes
-    -- nothing — it answers a question — and an extension that answers only when
-    -- configured to is an extension whose answer cannot be relied on.
-    WorkInFlight("delegate", waiting)
-  ]
+-- read. See `orchestrator.ail`. 8.0: it reaches them through `config`.
+export func make_hooks_with(cfg: HerdrConfig, tools: [string], orch: OrchestratorMode) -> ExtRegistration ! {IO, Process, FS, Clock} {
+  { config: herdr_config_json(cfg, tools, orch), caps: herdr_caps(tools, cfg.reap_on_exit || cfg.settle_on_exit) }
+}
+
+-- The capability list, a literal of named payloads. Its two arguments are the
+-- constructor DATA positions (the advertised tool names, the exit intent's
+-- `enabled`), which the host reads without invoking anything and digests beside
+-- `config` (ADR D2, N58). `register.ail` writes `{ config, caps }` at its tail
+-- and delegates here.
+export func herdr_caps(tools: [string], exit_enabled: bool) -> [Capability] {
+    [
+      DescribeTools(herdr_describe),
+      -- ORCHESTRATOR MODE. REGISTERED IN EVERY CONFIGURATION, for `ExitIntent`'s
+      -- reason below: an atom that exists only in one environment changes the
+      -- coverage disclosure with it. Off, the patch is empty and the policy has
+      -- no opinion.
+      PromptShaper(herdr_prompt),
+      ToolPolicy(herdr_policy),
+      -- EMPTY OUTSIDE A HERDR PANE. `register.ail` decides; this list only
+      -- carries the decision, so the two can never disagree.
+      ToolProvider(tools, herdr_tool_handle),
+      -- REGISTERED EVEN WHEN THE KNOB IS OFF, and even outside a herdr pane. An
+      -- atom that appears only under one configuration is an atom whose coverage
+      -- disclosure changes with the environment, and the manifest is where "off"
+      -- becomes visible: `enabled: false` with an empty action list says the
+      -- extension is there and was asked, which "no atom at all" cannot say.
+      -- ENABLED BY EITHER KNOB. `enabled: false` publishes an empty action list
+      -- and the host honours it, so an intent disabled here can do nothing at
+      -- all -- which would silently disable the settlement for anyone who turned
+      -- only that one on.
+      ExitIntent("delegate-panes", exit_enabled, herdr_exit),
+      -- NO KNOB. Unlike the reap and the settle this performs nothing and changes
+      -- nothing — it answers a question — and an extension that answers only when
+      -- configured to is an extension whose answer cannot be relied on.
+      WorkInFlight("delegate", herdr_waiting)
+    ]
 }

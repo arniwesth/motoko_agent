@@ -35,14 +35,15 @@ import std/io (println, exit)
 import std/fs (writeFile, mkdirAll)
 import std/json (jo, ja, kv, js)
 import std/string (contains, join)
+import std/option (None)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtPorts, BudgetPlan, Msg, Capability, ToolCallEnvelope, ToolPolicyDecision,
+  ExtCtx, PureCtx, ExtRegistration, pure_ctx_of, NotReached, ExtPorts, BudgetPlan, Msg, Capability, ToolCallEnvelope, ToolPolicyDecision,
   DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider,
   ResponseInterceptor, SolverJudge, ExitIntent, WorkInFlight,
   Allow, Deny, NoOpinion, Pending, PromptPatch,
   ExtEntry, ExtRegistry, ExtRuntime, empty_ext_world
 )
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 import src/core/ext/runtime (dispatch_tool_policy)
 import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, make_hooks_with)
 import pkg/sunholo/motoko_ext_herdr/register (orchestrator_mode)
@@ -74,7 +75,7 @@ func mk_ctx(history: [Msg]) -> ExtCtx {
     state_key: "test", context_limit: 0, ports: noop_ext_ports(),
     finish_reason: "", work_in_flight: [], open_waits: ja([]),
     artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
-    world: empty_ext_world() }
+    verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() }
 }
 
 func edit_call(path: string) -> ToolCallEnvelope {
@@ -120,22 +121,32 @@ func kinds_list(caps: [Capability]) -> [string] {
   match caps { [] => [], c :: rest => kind_of(c) :: kinds_list(rest) }
 }
 
-func patch_of(caps: [Capability], ctx: ExtCtx) -> PromptPatch {
+-- ABI 8.0: the atoms read `orch` from `ext_config`, so these call them the way
+-- the host does -- on the `PureCtx` view with the registration's `config` stamped.
+func patch_of(r: ExtRegistration, ctx: ExtCtx) -> PromptPatch {
+  patch_in(r.caps, pure_ctx_of(ctx, r.config))
+}
+
+func patch_in(caps: [Capability], ctx: PureCtx) -> PromptPatch {
   match caps {
     [] => { prepend: [], append: [] },
     c :: rest => match c {
       PromptShaper(f) => f(ctx),
-      _ => patch_of(rest, ctx)
+      _ => patch_in(rest, ctx)
     }
   }
 }
 
-func policy_of(caps: [Capability], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+func policy_of(r: ExtRegistration, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  policy_in(r.caps, pure_ctx_of(ctx, r.config), call)
+}
+
+func policy_in(caps: [Capability], ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
   match caps {
     [] => NoOpinion,
     c :: rest => match c {
       ToolPolicy(f) => f(ctx, call),
-      _ => policy_of(rest, ctx, call)
+      _ => policy_in(rest, ctx, call)
     }
   }
 }
@@ -165,7 +176,7 @@ func check(label: string, ok: bool, detail: string) -> int ! {IO} {
   else { println("FAIL: ${label} — ${detail}"); 1 }
 }
 
-func hooks_on() -> [Capability] ! {IO, Process, FS, Clock} {
+func hooks_on() -> ExtRegistration ! {IO, Process, FS, Clock} {
   make_hooks_with(mk_cfg("w1:p18", 0), ["Delegate", "DelegateCheck"], orchestrator_on_for_tests())
 }
 
@@ -175,13 +186,13 @@ func hooks_on() -> [Capability] ! {IO, Process, FS, Clock} {
 
 func case_atoms() -> int ! {IO, Process, FS, Clock} {
   let expected = "describe_tools,prompt_shaper,tool_policy,tool_provider,exit_intent,work_in_flight";
-  let on = kinds(hooks_on());
+  let on = kinds(hooks_on().caps);
   let legacy = make_hooks(mk_cfg("w1:p18", 0), []);
   let ctx = mk_ctx([]);
   let legacy_patch = patch_of(legacy, ctx);
   let legacy_policy = policy_of(legacy, ctx, edit_call("src/core/session.ail"));
   check("atoms are registered in canonical order", on == expected, on)
-  + check("atoms are registered through the old make_hooks too", kinds(legacy) == expected, kinds(legacy))
+  + check("atoms are registered through the old make_hooks too", kinds(legacy.caps) == expected, kinds(legacy.caps))
   + check("off: the old make_hooks appends no note and has no opinion on an edit",
           length_of(legacy_patch.append) == 0 && length_of(legacy_patch.prepend) == 0 && is_noop(legacy_policy),
           show_decision(legacy_policy))
@@ -239,8 +250,9 @@ func case_hatch() -> int ! {IO, Process, FS, Clock} {
 }
 
 func case_host_merge() -> int ! {IO, Clock, Process, FS} {
-  let other: ExtEntry = { id: "permissive#0", caps: [ToolPolicy(\_ctx _call. Allow)] };
-  let herdr: ExtEntry = { id: "herdr#1", caps: hooks_on() };
+  let other: ExtEntry = { id: "permissive#0", config: jo([]), caps: [ToolPolicy(\_ctx _call. Allow)] };
+  let on = hooks_on();
+  let herdr: ExtEntry = { id: "herdr#1", config: on.config, caps: on.caps };
   let rt: ExtRuntime = {
     registry: { entries: [other, herdr] },
     strict_mode: false,
