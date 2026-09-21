@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# 031 PLAN-001 P1.1: type-check / test src/core modules against THIS checkout's
-# ABI 8.0 package in a throwaway workspace. Run from a repo root:
-#   p11_core_check.sh check <module.ail>...   ailang check each; exit 1 on any failure
+# 031 PLAN-001 P1.1: type-check / test src/core modules -- and, for the
+# type-driven inventory, any tracked .ail under scripts/ or tools/ -- against
+# THIS checkout's ABI 8.0 package in a throwaway workspace. Run from a repo root:
+#   p11_core_check.sh check <module.ail>...   ailang check each; exit 1 on any failure;
+#                                             a failure line carries the FIRST error
 #   p11_core_check.sh test  <module.ail>...   ailang test each; the count line is
 #                                             parsed and "0 failed" is required
+#   P11_RELAX=1     sets AILANG_RELAX_MODULES=1 (scripts/ and tools/ fixtures declare
+#                   module names that do not match their paths; without it the
+#                   check stops at MOD010 before the ABI is ever reached)
+#   P11_ALLOW_SKIPS=1   `ailang test --allow-skips` (see below)
 #
 # WHY A WORKSPACE, AND WHY IT IS IMMUNE TO THE ailang.lock TRAP. The repo's
 # ailang.lock pins every path dependency to the PRIMARY checkout's absolute
@@ -40,8 +46,14 @@ cp packages/motoko-ext-abi/types.ail packages/motoko-ext-abi/ailang.toml "$T/dep
 cp packages/motoko_ext_conformance/ailang.toml packages/motoko_ext_conformance/invariants.ail \
    packages/motoko_ext_conformance/harness.ail "$T/deps/motoko_ext_conformance/"
 cp packages/motoko_ext_conformance/fixtures/reject_fixtures.ail "$T/deps/motoko_ext_conformance/fixtures/"
-( cd src && find core -name '*.ail' -print0 | while IFS= read -r -d '' f; do
-    mkdir -p "$T/src/$(dirname "$f")"; cp "$f" "$T/src/$f"; done )
+( cd src && find core eval -name '*.ail' -print0 2>/dev/null | while IFS= read -r -d '' f; do
+    mkdir -p "$T/src/$(dirname "$f")"; cp "$f" "$T/src/$f"; done )  # src/eval: scripts/eval imports it
+# scripts/ and tools/ .ail files, so the type-driven inventory can check them in
+# the same workspace; nothing under src/core imports them
+for top in scripts tools; do
+  [ -d "$top" ] && find "$top" -name '*.ail' -print0 | while IFS= read -r -d '' f; do
+    mkdir -p "$T/$(dirname "$f")"; cp "$f" "$T/$f"; done
+done
 
 cat > "$T/deps/motoko-ext-p11stub/ailang.toml" <<'TOML'
 [package]
@@ -133,13 +145,17 @@ python3 "$R/tools/ext_registry_gen/generate.py" --config ailang.toml > gen.log 2
   || { tail -5 gen.log; echo "p11: registry generation failed"; exit 1; }
 
 strip() { sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -v -E '^(Warning: dependency|Run .ailang lock.)'; }
+[ -n "${P11_RELAX:-}" ] && export AILANG_RELAX_MODULES=1
 fail=0
 for m in "$@"; do
   [ -f "$m" ] || { echo "p11: no such module in the workspace: $m"; fail=1; continue; }
   if [ "$mode" = check ]; then
     out=$(ailang check "$m" 2>&1); rc=$?
     if [ $rc -eq 0 ]; then echo "p11: check $m ok"
-    else echo "$out" | strip | tail -8; echo "p11: check $m FAILED (exit $rc)"; fail=1; fi
+    else
+      first=$(echo "$out" | strip | grep -m1 -E 'Error|PAT_|PAR_|LDR0|MOD0|TC0|EFF' | cut -c1-400)
+      echo "$out" | strip | tail -8; echo "p11: check $m FAILED (exit $rc): ${first}"; fail=1
+    fi
   else
     # P11_ALLOW_SKIPS=1 passes --allow-skips: a module whose contract
     # properties have no generator (exit_manifest.ail, pre-existing) otherwise

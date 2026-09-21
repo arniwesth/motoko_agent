@@ -112,3 +112,30 @@ literal; `{ id: …, caps:` for an entry literal): **ExtCtx literals 29 in 25 fi
 outside `packages/`, 3 in 2 in `src/core`** (plan said 37 in 28); **ExtEntry literals 11 in 3
 `src/core` files** (plan said 8 — it missed `smoke_hook_b`, `chain_base_hook`, `pending_hook`), 44 in
 13 files outside `packages/` and `.agent/`.
+
+## Attempt 2 (intake send-back)
+
+**The defect.** `src/core/rpc.ail:131-152` builds the budget-plan `ExtCtx` INLINE, with no type
+annotation, so the name search that scoped attempt 1 never saw it; 8.0's `ExtCtx` has 23 fields and
+the literal had 20. `supervisor.ail` fell with it (it imports `rpc`). Migrated the same way as
+`session.ail`'s two literals: the three D3 fields with truthful defaults on the existing `telemetry`
+line (`NotReached`, `empty_tool_evidence()`, `None`), line count unchanged. Mutgate row
+`rpc_inline_ext_ctx_literal` drops them and expects `ailang check src/core/rpc.ail` red.
+
+**The method flaw, and the repair.** Scope and inventory were both NAME-driven. Attempt 2 adds a
+TYPE-driven sweep, `p11_type_sweep.sh`: `ailang check` of every tracked `.ail` under `src/core`,
+`scripts/` and `tools/` in the P1.1 workspace against the 8.0 ABI and this core, recorded per file
+with the first error line (`TYPE-SWEEP-{core,scripts,tools}.tsv`, raw logs beside them).
+`scripts/` and `tools/` run with `AILANG_RELAX_MODULES=1` because their fixtures declare module
+names that do not match their paths and the check would otherwise stop at `MOD010` before the ABI
+is reached. The 18 extension packages are NOT in the workspace, so a file that imports one stops at
+`LDR001 … pkg/sunholo/motoko_ext_<x>`: recorded as `pkg-7.4 (<x>)`, which masks that file's own
+sites (P1.2 makes them visible; the name-derived findings still stand).
+
+**Exit check 1, exhaustive** — `p11_type_sweep.sh core`: **71/72 tracked `src/core` modules check clean** against the 8.0 ABI (`TYPE-SWEEP-core.tsv`, raw log beside it). The one failure is `src/core/test/integration_tests.ail`, which imports `pkg/sunholo/motoko_ext_compaction_structural` — a 7.4 package until P1.2a, not this part's. Before the rpc fix the same sweep read 69/72 (rpc.ail on its inline literals; supervisor.ail as a cascade through `import src/core/rpc`). rpc.ail had THREE such literals (`:131`, `:365`, `:473`), not one; all three are migrated. Note that `ext/registry_generated.ail` is checked as the workspace regenerates it (the P0.5 template over one stub extension); the committed file is what `make registry_gen_check` verifies against the 18-package manifest, exit 0.
+
+**Inventory, re-derived** — `INVENTORY.tsv` gains a `check8` column (the sweep verdict, classified
+from the first error line) and a row for every `.ail` the name search never saw but the sweep fails
+on 8.0 grounds or masks behind a 7.4 package. Sweep totals: core 71/72, scripts 111/202, tools 41/67 check clean standalone. **160 rows** (P1.1 18, P1.2a 3, P1.5r 14, P0.5 8, UNOWNED 117). The name search missed exactly four files that matter: `src/core/rpc.ail` (three inline literals — the defect, now P1.1 done), `src/core/test/integration_tests.ail` and two smoke scripts, all three of which have no site of their own and fail only on a 7.4 `compaction_structural` import (owner P1.2a). Of the 117 UNOWNED rows, 22 are non-AILANG prose/data and 95 are code: **13 fail on 8.0 grounds outside any gate** (10 `FixtureOverrides` literals without `config`, 2 context-shape, 1 `DescribeTools (Json)`), 18 are MASKED behind a 7.4 package import (their name-derived findings stand), 8 check clean, and 56 are gate fixtures (33 clean, 23 rejected — 4 of those by the 8.0 context shape, the rest by design or because they were never meant to compile standalone; their verdict belongs to the ADR boundary section runner and to `hook_scope.py --gate-fixtures`). P1.5r's 14 files: 7 fail on the `FixtureOverrides` shape beside their pin. Every cause is in `check8`; the raw first error is in the `TYPE-SWEEP-*.tsv` files.
+
+**mutgate, fresh clone** — run from a fresh `git clone --shared` of the commit that carries this fix; the verdict table is recorded in the follow-up evidence commit (`mutgate-result.tsv`).

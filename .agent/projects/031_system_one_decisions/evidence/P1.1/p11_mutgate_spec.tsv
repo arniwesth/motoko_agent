@@ -46,3 +46,8 @@ work_in_flight_bootstrap	src/core/ext/runtime.ail	s/f(fs_ctx({ base | work_in_fl
 # --- precedence unchanged --------------------------------------------------
 precedence_tool_policy	src/core/ext/runtime.ail	s/        Deny(msg) => Deny(msg),/        Deny(_) => merge_tool_decisions(rest, seen_allow, seen_pending),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
 precedence_finalize	src/core/ext/runtime.ail	s/    ContinueWithFeedback(msg) :: _ => Some(msg),/    ContinueWithFeedback(_) :: rest => first_continue(rest),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+#
+# --- attempt 2: the inline literal the name search missed --------------------
+# rpc.ail builds the budget-plan ExtCtx inline; drop the three D3 fields -> the
+# 20-field literal no longer matches 8.0's 23-field ExtCtx -> `ailang check` red
+rpc_inline_ext_ctx_literal	src/core/rpc.ail	s/verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, //	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh check src/core/rpc.ail

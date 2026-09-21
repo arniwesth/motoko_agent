@@ -21,6 +21,14 @@ One row per TRACKED file outside packages/ and .agent/ that names `ExtCtx`,
                 hook_scope.py) -- stated rather than miscounted as UNOWNED
   status        for P1.1 rows what was done; for every other row what the
                 sites are, so an UNOWNED row reads as a finding
+  check8        (attempt 2, TYPE-DRIVEN) the workspace `ailang check` verdict
+                against the 8.0 ABI and this core, from TYPE-SWEEP-*.tsv:
+                `ok`; `FAIL: <cause>` classified from the first error line;
+                `pkg-7.4 (<name>)` when the check stops at an extension package
+                import that is 7.4 until P1.2, which MASKS the file's own
+                sites (the name-derived findings still stand); `not checked`
+                for a non-.ail row. A .ail file the name search never saw but
+                the sweep fails on 8.0 grounds gets a row of its own.
 
 Derivations, not guesses: the touched set is `git diff --name-only HEAD` over
 src/core plus the regenerated registry; P1.5r's set is the pin sweep's own
@@ -186,6 +194,60 @@ def owner_of(f: str, kinds: str, text: str, lines: list[str]) -> tuple[str, str]
     detail = findings_of(text) if f.endswith(".ail") else ""
     return "UNOWNED", (f"8.0 breakage: {detail}" if detail else f"sites: {kinds}")
 
+# ---- the type sweep (attempt 2) ---------------------------------------------
+EVID = REPO / ".agent/projects/031_system_one_decisions/evidence/P1.1"
+def load_sweeps() -> dict[str, tuple[str, str]]:
+    seen = {}
+    for lab in ("core", "scripts", "tools"):
+        f = EVID / f"TYPE-SWEEP-{lab}.tsv"
+        if not f.exists(): continue
+        for line in f.read_text().split("\n")[1:]:
+            if not line.strip(): continue
+            parts = line.split("\t")
+            seen[parts[0]] = (parts[1], parts[2] if len(parts) > 2 else "")
+    return seen
+SWEEP = load_sweeps()
+
+def classify(err: str) -> str:
+    m = re.search(r"pkg/sunholo/motoko_ext_(\w+)", err)
+    if m and m.group(1) not in ("abi", "conformance", "p11stub"):
+        return f"pkg-7.4 ({m.group(1)})"
+    e = err
+    # a fixture's own 23-field context record, or a callback typed with one,
+    # against 8.0's 23-field ExtCtx / 24-field views (`ext_config` added)
+    if re.search(r"record field 'ext_config' not found|expected 2[034] fields, got 2[034]|extra fields:.*ports|missing fields:.*ext_config", e): return "FAIL: 8.0 context shape (ExtCtx literal / view record)"
+    if re.search(r"expected 10 fields, got 9|expected 9 fields, got 10", e): return "FAIL: 8.0 FixtureOverrides literal without config"
+    if re.search(r"record field mismatch", e): return f"FAIL: record shape, needs a look — {e[:140]}"
+    # gate fixtures written to be rejected or never compiled: not 8.0
+    if re.search(r"incompatible closed rows|Effect checking failed|TC_ARITY_001|unexpandable type constructor ToolPolicyDecision", e): return f"FAIL: fixture by design (effect row / arity), not 8.0 — {e[:100]}"
+    if re.search(r"undefined variable|parse errors|PAR_|stdlib module not found|IMP010|LDR001: module not found: (stub_step|registry/)", e): return f"FAIL: pre-existing (fixture not meant to compile standalone) — {e[:100]}"
+    if re.search(r"not found in ailang.lock", e): return "FAIL: needs its own fixture root (p05_registry_fixture_check.sh checks it there), not 8.0"
+    if re.search(r"Json vs \(\)|\(\) vs Json", e): return "FAIL: 8.0 DescribeTools takes (Json)"
+    if re.search(r"normalize_registration", e): return "FAIL: 8.0 normalize_registration(id, config, caps)"
+    if re.search(r"\bTrace\b", e): return "FAIL: 8.0 ToolProvider row +Trace"
+    if re.search(r"\bAccept\b", e): return "FAIL: 8.0 Accept nullary"
+    if re.search(r"ExtRegistration|\{caps, config, id\}|caps, id", e): return "FAIL: 8.0 registration shape ({config, caps} / ExtEntry.config)"
+    if re.search(r"PureCtx|ProcessCtx|FsCtx|AiCtx|InterceptCtx|ProviderCtx|ExtCtx", e): return "FAIL: 8.0 view types"
+    if re.search(r"LDR001", e): return f"FAIL: import not found (pre-existing) — {e[:120]}"
+    if re.search(r"MOD0", e): return f"FAIL: module path (pre-existing) — {e[:120]}"
+    return f"FAIL: other — {e[:160]}"
+
+# Two fixture families are GATE INPUTS whose compile verdict belongs to the gate
+# that reads them, not to a standalone check: the ADR-001 boundary suite (rows in
+# run_declared_vs_performed.sh; ADR section 72/0 at P0G) and hook_scope.py's
+# gate fixtures (expected.json; --gate-fixtures --ailang-check 29 ok at P0.3/P0.5).
+# Many are WRITTEN to be rejected. The sweep verdict is recorded, prefixed.
+GATE_FIXTURE_DIRS = ("scripts/dst/fixtures/adr001_boundary/", "tools/ext_ambient_inventory/fixtures/")
+
+def check8_of(f: str) -> str:
+    if not f.endswith(".ail"): return "not checked"
+    if f not in SWEEP: return "not swept"
+    res, err = SWEEP[f]
+    verdict = "ok" if res == "ok" else classify(err)
+    if f.startswith(GATE_FIXTURE_DIRS):
+        return f"gate fixture (verdict owned by its gate): {verdict}"
+    return verdict
+
 # ---- rows -----------------------------------------------------------------
 rows = []
 extctx_literals = {}
@@ -205,15 +267,42 @@ for f in tracked:
         continue
     kinds = kinds_of(f, lines)
     owner, status = owner_of(f, kinds, text, lines)
-    rows.append((f, len(lines), kinds, exercised_by(f), owner, status))
+    rows.append((f, len(lines), kinds, exercised_by(f), owner, status, check8_of(f)))
     if f.endswith(".ail"):
         n = len(EXTCTX_LITERAL.findall(text)); m = len(EXTENTRY_LITERAL.findall(text))
         if n: extctx_literals[f] = n
         if m: extentry_literals[f] = m
 
+# attempt 2: files the NAME search never saw but the TYPE sweep fails on 8.0
+# grounds (or masks behind a 7.4 package import) get their own row
+named = {r[0] for r in rows}
+for f, (res, err) in sorted(SWEEP.items()):
+    if f in named or f.startswith(("packages/", ".agent/")):
+        continue
+    c8 = check8_of(f)
+    if f in touched and f.startswith("src/core/"):
+        rows.append((f, 0, "inline literal / type-only", exercised_by(f), "P1.1",
+                     "done: three INLINE ExtCtx literals (:131, :365, :473) migrated (attempt 2); no name site", c8))
+        continue
+    if res == "ok":
+        continue
+    if c8.startswith("FAIL: 8.0") or c8.startswith("pkg-7.4"):
+        text = (REPO / f).read_text(errors="replace")
+        own = findings_of(text)
+        if c8.startswith("pkg-7.4") and not own:
+            # the ONLY thing wrong is a 7.4 package import: P1.2's (batch a for
+            # compaction_structural, per the intake note on integration_tests)
+            owner = "P1.2a" if "compaction_structural" in c8 else "P1.2"
+            status = f"TYPE-DRIVEN: no site of its own; imports a 7.4 package ({c8}); green once P1.2 migrates it"
+        else:
+            owner = "P1.1" if f.startswith("src/core/") else "UNOWNED"
+            status = f"TYPE-DRIVEN finding (no name site): {own or 'see check8'}"
+        rows.append((f, 0, "inline literal / type-only", exercised_by(f), owner, status, c8))
+rows.sort()
+
 out = REPO / ".agent/projects/031_system_one_decisions/evidence/P1.1/INVENTORY.tsv"
 with out.open("w") as fh:
-    fh.write("file\tsites\tkind\texercised_by\towner\tstatus\n")
+    fh.write("file\tsites\tkind\texercised_by\towner\tstatus\tcheck8\n")
     for r in rows:
         fh.write("\t".join(str(x) for x in r) + "\n")
 
@@ -223,7 +312,21 @@ for r in rows:
 print(f"INVENTORY.tsv: {len(rows)} rows")
 for o, rs in sorted(by_owner.items()):
     code = sum(1 for r in rs if r[2] not in ("document", "data", "text") and set(r[2].split(";")) - {"comment"})
+    c8 = {}
+    for r in rs:
+        v = r[6]
+        gate = v.startswith("gate fixture")
+        v = v.split("): ", 1)[1] if gate else v
+        v = v.split(" — ")[0].split(" (")[0] if v.startswith(("FAIL", "pkg")) else v
+        k = ("gate fixture: " if gate else "") + v
+        c8[k] = c8.get(k, 0) + 1
     print(f"  {o}: {len(rs)} (code {code}, prose/data {len(rs) - code})")
+    for k, v in sorted(c8.items(), key=lambda kv: -kv[1]): print(f"      {v:3d}  {k}")
+print("type sweep:", {lab: (sum(1 for f, (r, _) in SWEEP.items() if f.startswith(pre) and r == 'ok'), sum(1 for f in SWEEP if f.startswith(pre))) for lab, pre in (("core", "src/core/"), ("scripts", "scripts/"), ("tools", "tools/"))})
+causes = {}
+for f, (r, e) in SWEEP.items():
+    if r != "ok": causes[classify(e).split(" — ")[0]] = causes.get(classify(e).split(" — ")[0], 0) + 1
+for k, v in sorted(causes.items(), key=lambda kv: -kv[1]): print(f"    {v:3d}  {k}")
 print(f"ExtCtx literals (construction sites, tracked, outside packages/): {sum(extctx_literals.values())} in {len(extctx_literals)} files")
 for f, n in sorted(extctx_literals.items()): print(f"    {n}  {f}")
 print(f"ExtEntry literals (outside packages/): {sum(extentry_literals.values())} in {len(extentry_literals)} files")
