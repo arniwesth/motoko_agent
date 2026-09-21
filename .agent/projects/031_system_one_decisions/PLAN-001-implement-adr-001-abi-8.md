@@ -567,6 +567,26 @@ plan's P0.2 premise ("every source is quoted in a review appendix") is false for
 `P0G`: a numbered amendment citing review 5's table, or reconstructing the 16 from their shapes as new
 rows.
 
+### P0.3 — 2026-09-21, commit `19139488`
+
+| | |
+|---|---|
+| Commit | `19139488` (`hook_scope.py`, `derive.py` docstring/help, one `DST_TARGETS` line, 29 gate fixtures + `expected.json` + `mutgate.tsv` under `adr001_boundary/gate/`) |
+| Model | `claude-fable-5-1` (design-sensitive part) |
+| Fixtures | pass **5/5** green, fail **24/24** red; all 15 `SHAPE_REASONS` exercised; group-4 import shadows rejected by design (N62) |
+| Tree | `make ext_hook_scope` exit 2 (expected red): shape pass 0 of 18; **35 binding rejections** (inline-lambda 19, let-bound 16) — the plan's 35, measured site for site against D2's migration table; 18 head rejections (the 7.4 bare list) |
+| Unmoved | `closure_port_mediated` 4 of 15; `derive.py --json` default verdicts identical before and after |
+| **Intake (orchestrator)** | `make ext_hook_scope_selftest` exit 0, 0 failures; `hook_scope.py --gate-fixtures --ailang-check` 29 ok, 0 failures; `make ext_hook_scope` exit 2 with the 35; `mutgate.sh --clone-from` fresh clone **7/7 discriminate**, bytes same |
+| Intake defects | 0 |
+
+### P0.4 — ADR-001 Amendment 1 (2026-09-21, `62bd3a83`)
+
+P0.4 stopped before committing on a compile error in D2: `JudgePreparation` and `ToolPreparation`
+share the constructors `Immediate`/`Query`, and a consumer's `Immediate(Accept)` fails on the pin with
+`cannot unify type constructors: ToolPolicyDecision vs FinalizeDecision`. Of three readings compiled,
+only distinct names passed; Amendment 1 adopts `JudgeImmediate`/`JudgeQuery` and
+`ToolImmediate`/`ToolQuery`, evidence at `evidence/P0.4-amendment-1/`. P0.4 resumed under it.
+
 ## 10. Estimates
 
 | phase | delegate-days |
