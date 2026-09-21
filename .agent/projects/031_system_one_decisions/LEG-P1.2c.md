@@ -18,8 +18,8 @@ method gap — its check workspace never applied each package's own `[effects].m
 2. `ADR-001-extension-owned-structured-decisions.md` — acceptance rule and **"## Amendments"**: Amendment 1
    (`JudgeImmediate`/`JudgeQuery`, `ToolImmediate`/`ToolQuery`) and **Amendment 2** (a package's
    `[effects].max` admits the full row of every slot it registers); D2: payloads are **named, unshadowed,
-   top-level functions bound directly**, `{ config, caps }`, the configuration channel and its
-   **names-not-values** rule for environment captures (`:370-372`), no dummy ports (`:333-339`).
+   top-level functions bound directly**, `{ config, caps }`, the configuration channel, and **Amendment 3** (non-credential registration
+   values, environment values included, go through `config`; credentials travel as names only), no dummy ports (`:333-339`).
 3. `REVIEW-adr001-v0.6-verdicts-codex.md` **§Q-1** — the 45-row site ledger (your 11 rows).
 4. **Batch A as the worked example**: `git show df2df96e` and `evidence/P1.2a/` (`p12a_ws.sh`,
    `p12a_core_check.sh`, the mutgate spec) — reuse its workspace scripts rather than rebuild them.
@@ -43,7 +43,8 @@ never check inside a `git clone` against the root lock — use a workspace, as b
 For each site: the payload becomes a **named top-level function bound directly** in a literal `caps`;
 `register_with_config` returns **`ExtRegistration = { config, caps }`**; each callback takes its row's
 **view**; every captured registration value goes through **`config`** (encoded once if several callbacks
-share it), and no environment **value** is captured into config; the package's `ailang.toml` pins ABI
+share it) — environment values included (**Amendment 3**); a **credential** never enters config and travels
+as a name only; the package's `ailang.toml` pins ABI
 **8.0**; its **`[effects].max` admits the full row of every slot it registers** and nothing beyond what
 its code performs (Amendment 2 — say per package what you added). No dummy ports: a helper a narrower
 view no longer fits takes `PureCtx` or the smallest ports record it uses.

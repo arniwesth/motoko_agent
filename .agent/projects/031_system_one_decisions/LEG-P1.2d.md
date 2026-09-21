@@ -6,7 +6,7 @@ the ADR or the plan, you do not write the dagr run file, and you do not touch ot
 ## What this is
 
 `P1.2d` in `PLAN-001-implement-adr-001-abi-8.md` §3 — batch D of the four batches migrating the 45
-extension registration sites onto the frozen ABI 8.0. **Batch D:** `motoko-ext-compose`, `motoko-ext-herdr` — **11 sites**; compose's `runtime_cfg`, `snippet_caps`, `composition_mode`; herdr's `cfg`, `tools`, `orch`.
+extension registration sites onto the frozen ABI 8.0. **Batch D:** `motoko-ext-compose`, `motoko-ext-herdr` — **10 sites**; compose's `runtime_cfg`, `snippet_caps`, `composition_mode`; herdr's `cfg`, `tools`, `orch`.
 Batch A (the calibration) came back with **no independent defects**; its one intake finding was a
 method gap — its check workspace never applied each package's own `[effects].max` — now closed by
 **ADR Amendment 2** and an exit below. So this batch runs at its planned size, beside the others.
@@ -20,8 +20,8 @@ This is the largest cross-view helper migration and carries **the ADR's one meas
 2. `ADR-001-extension-owned-structured-decisions.md` — acceptance rule and **"## Amendments"**: Amendment 1
    (`JudgeImmediate`/`JudgeQuery`, `ToolImmediate`/`ToolQuery`) and **Amendment 2** (a package's
    `[effects].max` admits the full row of every slot it registers); D2: payloads are **named, unshadowed,
-   top-level functions bound directly**, `{ config, caps }`, the configuration channel and its
-   **names-not-values** rule for environment captures (`:370-372`), no dummy ports (`:333-339`).
+   top-level functions bound directly**, `{ config, caps }`, the configuration channel, and **Amendment 3** (non-credential registration
+   values, environment values included, go through `config`; credentials travel as names only), no dummy ports (`:333-339`).
 3. `REVIEW-adr001-v0.6-verdicts-codex.md` **§Q-1** — the 45-row site ledger (your 11 rows).
 4. **Batch A as the worked example**: `git show df2df96e` and `evidence/P1.2a/` (`p12a_ws.sh`,
    `p12a_core_check.sh`, the mutgate spec) — reuse its workspace scripts rather than rebuild them.
@@ -45,11 +45,12 @@ never check inside a `git clone` against the root lock — use a workspace, as b
 For each site: the payload becomes a **named top-level function bound directly** in a literal `caps`;
 `register_with_config` returns **`ExtRegistration = { config, caps }`**; each callback takes its row's
 **view**; every captured registration value goes through **`config`** (encoded once if several callbacks
-share it), and no environment **value** is captured into config; the package's `ailang.toml` pins ABI
+share it) — environment values included (**Amendment 3**); a **credential** never enters config and travels
+as a name only; the package's `ailang.toml` pins ABI
 **8.0**; its **`[effects].max` admits the full row of every slot it registers** and nothing beyond what
 its code performs (Amendment 2 — say per package what you added). No dummy ports: a helper a narrower
 view no longer fits takes `PureCtx` or the smallest ports record it uses.
-compose's interceptor passes `ctx.ports` to three helpers typed `ExtPorts` (`:312,326,921,1018` at `2062605` — re-find at HEAD): re-type them to the smallest ports record each uses, no dummy ports. herdr's `ExitIntent`/`WorkInFlight` renderers take `FsCtx` (`file_read` only). herdr's `register_with_config` reads `HERDR_ENV`, `HERDR_BIN_PATH`, `HERDR_PANE_ID` today: disclose **names** (or what the ADR's names-not-values rule permits), never a pane id or path **value**, in config.
+compose's interceptor passes `ctx.ports` to three helpers typed `ExtPorts` (`:312,326,921,1018` at `2062605` — re-find at HEAD): re-type them to the smallest ports record each uses, no dummy ports. herdr's `ExitIntent`/`WorkInFlight` renderers take `FsCtx` (`file_read` only). herdr's registration values — pane id, session time, run-file paths, bin — are disclosed through `config` under **Amendment 3**; its config digest is per-session by construction, and that is stated, not avoided.
 
 **The measurement (ADR D2's cost expectation).** Hook latency **before and after** for compose's interceptor and herdr's prompt shaper, and the **retained `config` size** per extension. "Before" is 7.4: build it in a lock-free workspace from `181051d0` (7.4 ABI, 7.4 compose/herdr), never in a clone against the root lock. Same inputs, same repetitions, report median and spread. If the result does not survive the ADR's sentence that per-call decoding is cheap against a hook's cost, **stop and report the numbers** — that is an amendment with the artifact attached.
 
@@ -77,7 +78,7 @@ Do not run `make dst`.
 ## Your last act: the commit, then the envelope
 
 ```
-ADR-001 (031) P1.2d: batch D onto ABI 8.0 — 11 sites named, config through the channel
+ADR-001 (031) P1.2d: batch D onto ABI 8.0 — 10 sites named, config through the channel
 ```
 
 ```
@@ -85,7 +86,7 @@ RESULT P1.2d
 head_before: <sha>
 commit: <sha>
 files_touched: [<paths>]
-items: 11 sites in 2 packages (captures: <n>)
+items: 10 sites in 2 packages (captures: <n>)
 per_package: [<pkg>: own-root check <exit>, tests <exit>, shape <pass|fail>, ceiling added <effects>, ...]
 gate_tree: shape pass <n>/18, binding rejections <n> (at <sha>)
 masked: [<file>: <status>, ...]

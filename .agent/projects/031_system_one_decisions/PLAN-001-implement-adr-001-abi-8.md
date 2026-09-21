@@ -311,7 +311,7 @@ package registers), the package's own tests, and the **intake count** for §0 it
 | **A** (calibration) | compaction-structural, decision-framework, empty-stop-guard, microrag, omnigraph, progress-contract-guard | 9 | 1 (omnigraph's cached prompt) | already named or trivially so; sets the per-item defect rate |
 | **B** | repetition-guard, test-dummy, scratchpad, exa-search, context-mode | 14 | ints, strings, one config record | `let`-bound and inline forms with simple data |
 | **C** | a2a, agentcli, ailang-docs, mcp, compaction-ai | 11 | records, lists, four `DescribeTools` | the configuration channel and `DescribeTools(config)` under load |
-| **D** | compose, herdr | 11 | `runtime_cfg`, `snippet_caps`, `composition_mode`; `cfg`, `tools`, `orch` | largest cross-view helper migration (compose's three `ExtPorts` helpers, `:312,326,921,1018`) and the FS renderers; **measure per-call decode cost here** (ADR D2 "cost") |
+| **D** | compose, herdr | 10 | `runtime_cfg`, `snippet_caps`, `composition_mode`; `cfg`, `tools`, `orch` | largest cross-view helper migration (compose's three `ExtPorts` helpers, `:312,326,921,1018`) and the FS renderers; **measure per-call decode cost here** (ADR D2 "cost") |
 
 **Masked files** (operator ruling on P1.1's inventory, 2026-09-21): each batch also owns the files that
 cannot be checked until its packages migrate, because they import them — A: `scripts/dst/compaction_policy_dst.ail`,
@@ -776,6 +776,22 @@ regeneration (P1.5r's finding) goes to **whichever P1.2 batch lands last**, assi
 both guards to `[Process, Env, FS]`); left unchanged — Amendment 2 requires only admitting the rows.
 **Intake (orchestrator):** own-root check **6/6** (was 2/6); gate unchanged 6/18, 32; mutgate fresh
 clone **28/28**. Batch A complete: 0 intake defects on either attempt.
+
+### ADR-001 Amendment 3 — 2026-09-21, batches B and D stopped on D2 `:370-372`
+
+Batches B and D stopped before editing any package, on the brief's "if the ADR turns out to be wrong"
+exit (`evidence/P1.2b/STOP-env-captures.md`, `evidence/P1.2d/STOP.md`, each with a compile probe against
+the committed 8.0 ABI). D2's clause "the in-tree captures hold environment-variable *names*, not values"
+is false: batch B's settings (7 of 14 sites) and herdr's pane id, session time and run-file paths (4 of 6
+sites) are environment **values** needed by callbacks on port-less views, and only `config` reaches them.
+**The orchestrator's briefs had turned that descriptive clause into a prohibition** ("no environment
+value in config"); the ADR's actual rule is D1's "no credentials". The same over-reading was half of
+P0.6 a1's rejection (its other half — registration ignoring its input — stands). **Operator ruling,
+adopting the orchestrator's recommendation:** Amendment 3 — non-credential registration values,
+environment values included, go through `config`; credentials travel as names; herdr's digest is
+per-session by construction and stated. B, C and D briefs corrected; B and D resumed on their existing
+attempts. Batch D is **10** sites (compose 4, herdr 6), not 11. Not counted as intake defects: both
+delegates did exactly what the brief required.
 
 ## 10. Estimates
 

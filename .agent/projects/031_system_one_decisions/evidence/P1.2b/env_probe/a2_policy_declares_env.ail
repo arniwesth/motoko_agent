@@ -1,0 +1,8 @@
+-- A named ToolPolicy (slot row {}, view PureCtx) declares ! {Env} to read the environment; the slot row is {}.
+module local/@V@/@V@
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (Capability, ToolPolicy, PureCtx, ToolCallEnvelope, ToolPolicyDecision, NoOpinion, Deny)
+func policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision ! {Env} {
+  if getEnvOr("MOTOKO_REPEAT_CALL_BUDGET", "3") == "0" then NoOpinion else Deny("x")
+}
+export func caps() -> [Capability] { [ToolPolicy(policy)] }

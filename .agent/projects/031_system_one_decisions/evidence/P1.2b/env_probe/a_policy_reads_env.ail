@@ -1,0 +1,8 @@
+-- A named ToolPolicy (slot row {}, view PureCtx) reads its budget from the environment itself.
+module local/@V@/@V@
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (Capability, ToolPolicy, PureCtx, ToolCallEnvelope, ToolPolicyDecision, NoOpinion, Deny)
+func policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  if getEnvOr("MOTOKO_REPEAT_CALL_BUDGET", "3") == "0" then NoOpinion else Deny("x")
+}
+export func caps() -> [Capability] { [ToolPolicy(policy)] }

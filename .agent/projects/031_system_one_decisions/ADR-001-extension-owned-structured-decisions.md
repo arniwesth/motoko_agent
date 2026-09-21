@@ -1245,6 +1245,37 @@ compiler's effect pass. **Scope:** no make target or CI step checks an extension
 ceiling at 7.4 with the sweep green), so this binds **registry publication (033 G8) and every external
 8.0 consumer**, and PLAN-001's batches check each package as its own root from P1.2a on.
 
+### Amendment 3 (2026-09-21) — non-credential registration values, environment values included, go through `config`
+
+**Corrects** D2 `:370-372`, the clause "the in-tree captures hold environment-variable *names*, not
+values". **The rule is unchanged**: configuration carries **no credentials** (D1), a reviewed
+serialization rule checked on each migrated `register_with_config` (PLAN-001 §0 item 9).
+
+**The artifact: two batches stopped on it.** PLAN-001 P1.2b and P1.2d measured the clause false at HEAD
+`eebc4d13` (`evidence/P1.2b/STOP-env-captures.md` with `env_probe/`; `evidence/P1.2d/STOP.md` with
+`fs_view_probe/`). Batch B's settings captures are environment **values** read at registration —
+repetition-guard's budgets, test-dummy's marker, budget and decisions, context-mode's `CtxConfig`,
+exa-search's and scratchpad's timeouts; herdr's `ExitIntent`, `WorkInFlight`, orchestrator `PromptShaper` and
+`ToolPolicy` need its pane id, session time and run-file paths at call time. Compiled against the committed
+8.0 ABI in a lock-free workspace: a named callback on a port-less view (`PureCtx`, `FsCtx`, `ProcessCtx`)
+that reads the environment is rejected (`Missing effects: Env`); declaring `Env` is rejected at the slot's
+closed row (`incompatible closed rows … extra labels [Env]`) — by design, `env_get` survives only on
+`ProviderCtx`; the same value **read from `ext_config` checks clean**. None of the blocked values is a
+credential; exa-search's key already travels as a name (`auth_env_var: "EXA_API_KEY"`).
+
+**The rule, restated.** A value an extension reads at registration and a callback needs — environment
+values included — is **disclosed through `config`** unless it is a **credential**, which travels as a
+*name* only and is resolved where a port allows it. That is the channel's purpose: registration state is
+stamped, hashed and recorded rather than hidden. Sites on `ProviderCtx` take the value at registration too,
+keeping 7.4's one-read-at-registration behaviour rather than adding a recorded port read per call.
+**Consequence, stated:** an extension whose disclosed configuration includes per-session identity —
+herdr's pane id and session time, its run-file paths — has a **config digest that differs per session by
+construction**, so a resume records a new policy epoch for it; no refusal follows, since the dry-`prepare`
+detector (N57) applies only to extensions with decision atoms. Those values are recorded in session
+journals, which the existing corpus privacy rules (013 ADR-004 D6) govern. **Rejected alternatives:** a
+host-stamped identity field on the views (a change to the frozen contract for one package), and an
+exemption for herdr's atoms (the registration-shape gate requires every site).
+
 ## Related records
 
 - [First review: Claude Fable](REVIEW-adr001-v0.1-verdicts-fable.md)
