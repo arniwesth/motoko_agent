@@ -861,6 +861,19 @@ classifier 2 — `tools/ext_call_inventory/derive.py` never taught the 8.0 view 
 view constructors, 8 compose, 1 agentcli). D7 names the edit; P0.5 covered the other classifiers but not this
 one; **assigned to P1.7r**.
 
+### P1.6r — 2026-09-21, commit `6d668fdd`
+
+| | |
+|---|---|
+| A — 13 scripts | onto 8.0 changing only what 8.0 requires, every assertion kept (views, `DescribeTools(Json)`, config on fixtures and entries, the three D3 fields, `Trace` on the ToolProvider row, three-argument `normalize_registration`, `AiPorts`) |
+| B — 22 non-`.ail` files | needs change 1 (`check_no_op_profile.py` required the 7.4 `capability-list` head and failed closed on every 8.0 package; now `config-caps`), comment only 6, fine 15 (`evidence/P1.6r/B-CLASSIFICATION.tsv`) |
+| C — root `ailang.lock` | regenerated with `ailang lock` (not `sync_packages`, which rsyncs the in-flight `src/core`): ABI 7.4 → **8.0**, conformance 5.0.0 → 6.0.0, stale `motoko_core` dropped; identical to a lock generated from `git archive HEAD` |
+| D — `examples/` | both on 8.0 via exported pieces and the config channel |
+| Green | `world_state`, `compaction_dst`, `registry_gen_check`, `hook_guard`, `registry_multiplicity`, `ledger_parity`, `park_resume`, `ext_call_inventory_selftest` |
+| Finding, assigned | `driver_plus_no_ops` stops at `tools/ext_ambient_inventory/derive.py` — the twin of the `ext_call_inventory` gap (15 hits in the ABI's own 8.0 port projections) → **P1.7r**. Also: two mcp parse rows fail only under `ailang test` (an AILANG test-harness `intToFloat` issue in `std/json`; correct under `ailang run`) — an upstream candidate |
+| **Intake (orchestrator)** | `p16r_lock_check.py` GREEN; lock scanned (no credentials or tailnet addresses); `mutgate.sh --clone-from` fresh clone **17/17** |
+| Intake defects | 0 |
+
 ## 10. Estimates
 
 | phase | delegate-days |
