@@ -906,6 +906,32 @@ rows 17→16, `Env` 17→16, `FS` 15→13, `Process` 9→3) — all three to a *
 `cd src/tui && bun run test` (420/420 tests pass, 5 suites fail on a Jest teardown import from
 `env-server.test.ts`) — **identical at `2f3ee4d1`, pre-existing**, for the operator's ruling.
 
+### P1.5r third follow-up — 2026-09-21, commit `d059223d`
+
+`check_fixtures.py:166` `check_omission_basis()` re-pointed at `BudgetShaper((PureCtx, BudgetPlan)` asserting
+the same (return type with no successor, row absent); a sweep of every ABI-text regex in `tools/`, `scripts/`
+and the `Makefile` found it the last one on a 7.4 context (six context-free readers listed). The B8 block's
+probes now name `AiCtx`; `named-wide` pins the exact closed-row message; `named-exact` and an 8.0-context row
+added. Measured on the pin: an inline lambda's parameter annotation in constructor-argument position is not
+unified at all (the `fb_30e82f6bdc5fc8c3` gap). **Absorption re-pins, measured by hand at `bff0948f`:** rows
+17→16, `Env` 17→16, `FS` 15→13, `Process` 9→3 — 8.0 moved effectful payloads into named functions carrying
+their slot rows, so a registration row now covers only what building config reads; the counts measure only
+the record-field smuggle, which the 8.0 shape rule closes one level up; the three remaining `Process`
+registrations over-declare (recorded, not fixed). **Intake (orchestrator):** the full R-G pre-gate at
+`d059223d` — `profile_definition`, `driver_only` green, `declared_vs_performed` **137/0**; `mutgate.sh
+--clone-from` fresh clone **7/7**.
+
+### Line R — work complete, 2026-09-21
+
+Every delegate task settled `done`, evidence `verified` by the orchestrator's own receipt: **24 attempts, 3
+rejected at intake** (P0.6 a1, P1.1 a1, P1.2c a1), all fixed on a second attempt. Four ADR amendments, each
+artifact-backed (1: preparation constructor names; 2: package effect ceilings; 3: non-credential values
+through config; 4: the decode cost stated against the step). Four tooling gaps found that no part owned —
+the manifest pins, the ABI-text probes, the script/fixture inventory, the classifier view shapes — all of
+the class *tools that read the ABI's text or shapes*; a future ABI major should inventory that class first.
+**R-G pre-gate at `d059223d`: 15 of 16 green**; the one red, `cd src/tui && bun run test` (420/420 tests, 5
+suites fail on a Jest teardown import), is identical at `2f3ee4d1`.
+
 ## 10. Estimates
 
 | phase | delegate-days |
