@@ -1,0 +1,90 @@
+AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/invariants.ail
+→ Type checking packages/motoko_ext_conformance/invariants.ail...
+→ Effect checking...
+
+✓ No errors found!
+AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/harness.ail
+→ Type checking packages/motoko_ext_conformance/harness.ail...
+→ Effect checking...
+
+✓ No errors found!
+ailang check scripts/dst/conformance_selftest.ail
+→ Type checking scripts/dst/conformance_selftest.ail...
+→ Effect checking...
+
+✓ No errors found!
+ailang check scripts/dst/conformance_registry_probe.ail
+→ Type checking scripts/dst/conformance_registry_probe.ail...
+→ Effect checking...
+
+✓ No errors found!
+ailang test packages/motoko_ext_conformance/invariants.ail
+→ Running tests in packages/motoko_ext_conformance/invariants.ail
+
+[1mTest Results[0m
+Module: All Tests
+
+[1mTests:[0m
+  [32m✓[0m test_validate_compactor_output_accepts_identity_test_1 (206.351188ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:268:10[0m
+  [32m✓[0m test_validate_compactor_output_accepts_orphan_identity_test_1 (176.260419ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:275:10[0m
+  [32m✓[0m test_validate_compactor_output_rejects_bad_shapes_test_1 (182.380091ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:282:10[0m
+  [32m✓[0m test_named_predicates_partition_bad_shapes_test_1 (182.300924ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:293:10[0m
+  [32m✓[0m test_dropped_complete_pair_is_accepted_test_1 (178.942708ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:304:10[0m
+  [32m✓[0m test_wrapper_equivalent_to_named_predicates_test_1 (176.385463ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:315:10[0m
+  [32m✓[0m test_no_tools_advertises_nothing_test_1 (190.527667ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:353:10[0m
+  [32m✓[0m test_neutral_judge_is_neutral_test_1 (175.937248ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:359:10[0m
+  [32m✓[0m test_neutral_tool_policy_is_neutral_test_1 (180.580773ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:366:10[0m
+  [32m✓[0m test_neutrality_predicates_reject_every_intervention_test_1 (185.969267ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:376:10[0m
+  [32m✓[0m test_neutral_descriptor_never_intervenes_test_1 (199.861885ms)
+      at [2mpackages/motoko_ext_conformance/invariants.ail:389:10[0m
+
+──────────────────────────────────────────────────
+[32m✓[0m [1mAll tests passed![0m
+
+11 tests: 11 passed, 0 failed, 0 skipped (2.035497633s)
+  [32m✓ Passed:[0m 11
+  [31m✗ Failed:[0m 0
+
+ailang run --caps IO,Env,FS --entry main scripts/dst/conformance_selftest.ail
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/conformance_selftest.ail
+conformance self-test PASS
+ailang run --caps IO,Env,FS --entry main scripts/dst/conformance_registry_probe.ail
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/conformance_registry_probe.ail
+conformance entry=test_dummy#0 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=omnigraph#1 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=context_mode#2 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=mcp#3 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=exa_search#4 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=ailang_docs#5 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=compose#6 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=a2a#7 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=decision_framework#8 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=microrag#9 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=compaction_ai#10 compactor=yes
+conformance kit 6.0.0 ABI 8.0 caps=1
+scenario=conformance.compactor.system_prefix_preserved ok
+scenario=conformance.compactor.tool_pairing_preserved ok
+scenario=conformance.compactor.deterministic_replay ok
+scenario=conformance.compactor.artifact_cache_effective ok
+conformance entry=scratchpad#11 compactor=no -- skipped (no Compactor atom registered)
+conformance entry=compaction_structural#12 compactor=yes
+conformance kit 6.0.0 ABI 8.0 caps=1
+scenario=conformance.compactor.system_prefix_preserved ok
+scenario=conformance.compactor.tool_pairing_preserved ok
+scenario=conformance.compactor.deterministic_replay ok
+scenario=conformance.compactor.artifact_cache_effective ok
+conformance registry probe PASS

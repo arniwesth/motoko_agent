@@ -1,0 +1,44 @@
+driver leaf inventory (26 sites, 0 unresolved, 0 out of order):
+  src/core/context_usage.ail:60    r.env_get                    EnvRead    returned  [catalog_path]
+  src/core/context_usage.ail:65    r.file_read                  FileRead   returned  [catalog_path]
+  src/core/context_usage.ail:70    r.env_get                    EnvRead    returned  [catalog_path]
+  src/core/context_usage.ail:110   r.file_read                  FileRead   returned  [catalogue_read]
+  src/core/context_usage.ail:140   r.env_get                    EnvRead    returned  [profile_dir_path]
+  src/core/context_usage.ail:145   r.env_get                    EnvRead    returned  [profile_dir_path]
+  src/core/context_usage.ail:146   r.env_get                    EnvRead    returned  [profile_dir_path]
+  src/core/context_usage.ail:180   r.file_read                  FileRead   returned  [config_context_limit_override]
+  src/core/session.ail:1727  ports.env_get                EnvRead    returned  [derive_session_id]
+  src/core/session.ail:1730  ports.clock_now              ClockRead  returned  [derive_session_id]
+  src/core/session.ail:1842  ports.clock_now              ClockRead  clean  [c2_finalize]
+  src/core/session.ail:2352  ports.env_get                EnvRead    returned  [session_policy_init]
+  src/core/session.ail:2353  ports.env_get                EnvRead    returned  [session_policy_init]
+  src/core/session.ail:2354  ports.env_get                EnvRead    returned  [session_policy_init]
+  src/core/session.ail:2355  ports.env_get                EnvRead    returned  [session_policy_init]
+  src/core/session.ail:3531  st.provider.wake_read        WakeRead   clean  [c2_loop]
+  src/core/session.ail:3580  st.provider.approval_read    ToolExec   clean  [c2_loop]
+  src/core/session.ail:3878  st.provider.env_get          EnvRead    clean  [c2_loop]
+  src/core/session.ail:4302  provider.ports.clock_now     ClockRead  clean  [run_v2_traced_from_seed]
+  src/core/session.ail:4523  provider.ports.clock_now     ClockRead  clean  [run_v2_from_messages_with_policy_and_counts]
+  src/core/session.ail:5066  ports.env_get                EnvRead    clean  [publish_turn_exit_manifest]
+  src/core/session.ail:5514  ports.wake_read              WakeRead   clean  [consume_parked_wake]
+  src/core/test/stub_step.ail:798   ports.model_step             ModelStep  returned  [dispatch_step]
+  src/core/tool_phase.ail:484   ports.clock_now              ClockRead  returned  [execute_allowed_tool_call]
+  src/core/tool_phase.ail:485   ports.env_get                EnvRead    returned  [execute_allowed_tool_call]
+  src/core/tool_phase.ail:492   ports.tool_exec              ToolExec   returned  [execute_allowed_tool_call]
+
+receipts (6, 0 red):
+  src/core/session.ail:3824  dispatch_step              exchange.next_state  clean  [c2_loop]
+  src/core/session.ail:3616  execute_allowed_tool_call  executed.next_state  clean  [c2_loop]
+  src/core/session.ail:3692  execute_allowed_tool_call  done.world           clean  [c2_loop]
+  src/core/session.ail:3694  execute_allowed_tool_call  pending.world        clean  [c2_loop]
+  src/core/session.ail:4301  derive_session_id          derived.next_state   clean  [run_v2_traced_from_seed]
+  src/core/session.ail:4522  derive_session_id          derived.next_state   clean  [run_v2_from_messages_with_policy_and_counts]
+hand-maintained (cross-function; runtime-covered by make world_framed_wire):
+  - session_policy_init's successor -> `{ pp | world: init.next_state }` -> the traced entry's provider.world -> derive_session_id -> start clock -> witness (run_v2_traced_from_seed / run_v2_from_messages_with_policy_and_counts)
+  - context_usage's four functions -> resolve_context_limit_sum -> session_policy_init (above)
+  - execute_allowed_tool_call -> dispatch_tool_entries_with_builtin recursion -> ToolDispatchDone.world / ToolDispatchPending.world (RECEIPTS)
+
+by RequestClass: EnvRead=13, FileRead=3, ClockRead=5, ToolExec=2, ModelStep=1, WakeRead=2
+aggregate helpers (8): resolve_context_limit, session_policy_init, session_policy_with_model, derive_session_id, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, dispatch_pre_step_chain, dispatch_step
+exempt ExtPorts fields (10): ai_step, tool_handle, file_read, file_write, file_remove, path_stat, dir_list, dir_make, clock_now, env_get
+RequestClass frozen: EnvRead, FileRead, ClockRead, ToolExec, ModelStep, WakeRead
