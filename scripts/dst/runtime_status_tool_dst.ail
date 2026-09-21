@@ -21,7 +21,11 @@ import src/core/types (Msg)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
-  ExtCtx,
+  PureCtx,
+  AiCtx,
+  ProviderCtx,
+  InterceptCtx,
+  ProcessCtx,
   ExtRuntime,
   FinalizeDecision,
   NoDecision,
@@ -89,37 +93,37 @@ func status_then_bash_step() -> ScriptedStep {
   }
 }
 
-func no_describe() -> [ToolSchema] { [] }
+func no_describe(_config: Json) -> [ToolSchema] { [] }
 
-func no_prompt(_ctx: ExtCtx) -> PromptPatch {
+func no_prompt(_ctx: PureCtx) -> PromptPatch {
   { prepend: [], append: [] }
 }
 
-func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func no_budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+func pass_pre_step(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   PassThrough
 }, next_state: ctx.world } }
 
-func no_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+func no_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   NoOpinion
 }
 
-func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("approval required", DenyAfterTimeout)
 }
 
-func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
   Delegate
 }, next_state: ctx.world } }
 
-func no_intercept(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
+func no_intercept(ctx: InterceptCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   NoIntercept
 }, next_state: ctx.world } }
 
-func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: {
+func no_solver(ctx: ProcessCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   NoDecision
 }, next_state: ctx.world } }
 
@@ -127,6 +131,7 @@ func pending_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
     registry: { entries: [fixture_hooks("runtime-status-pending", {
+      config: jo([]),
       tools: [],
       describe: no_describe,
       prompt: no_prompt,

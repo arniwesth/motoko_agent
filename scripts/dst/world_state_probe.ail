@@ -93,14 +93,18 @@ import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   -- WI-D25: the ONE `ExtPorts` field `on_pre_step`'s row admits. See
-  -- `consume_steps` below.
-  ExtPorts,
+  -- `consume_steps` below. 8.0: the Compactor's `AiCtx` carries it as `AiPorts`.
+  AiPorts,
   ExtWorld,
   BudgetPlan,
   BudgetPatch,
   Compacted,
   Delegate,
-  ExtCtx,
+  PureCtx,
+  AiCtx,
+  ProviderCtx,
+  InterceptCtx,
+  ProcessCtx,
   ExtRuntime,
   FinalizeDecision,
   NoDecision,
@@ -156,18 +160,18 @@ func endless_script() -> [ScriptedStep] {
 -- Extension plumbing
 -- ---------------------------------------------------------------------------
 
-func no_describe() -> [ToolSchema] { [] }
-func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
-func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func no_describe(_config: Json) -> [ToolSchema] { [] }
+func no_prompt(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
-func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } }
-func no_intercept(ctx: ExtCtx, _text: string)
+func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: InterceptCtx, _text: string)
   -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }
-func no_solver(ctx: ExtCtx, _text: string)
+func no_solver(ctx: ProcessCtx, _text: string)
   -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
-func deny_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Deny("probe: tools denied") }
+func deny_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Deny("probe: tools denied") }
 
 pure func summary_msg() -> Msg {
   { role: "assistant", content: "[SUMMARY] folded", tool_calls: [], tool_call_id: "" }
@@ -183,14 +187,14 @@ pure func fold(msgs: [Msg]) -> [Msg] {
   if n <= 4 then msgs else summary_msg() :: drop_first(n - 2, msgs)
 }
 
-func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
+func folding_pre_step(ctx: AiCtx, msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   let folded = fold(msgs);
   if List.length(folded) == List.length(msgs) then PassThrough
   else Compacted(folded, "probe: folded older turns into one summary", jo([]))
 }, next_state: ctx.world } }
 
-func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+func passthrough_pre_step(ctx: AiCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 
 -- ---------------------------------------------------------------------------
@@ -220,7 +224,7 @@ func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
 -- what is LEFT in the terminal world is therefore a quantity the driver's own
 -- bookkeeping never writes, which is what makes the seal-terminal rows below
 -- evidence and not an identity.
-func consume_steps(n: int, w: ExtWorld, p: ExtPorts) -> ExtWorld ! {AI, IO, Trace} {
+func consume_steps(n: int, w: ExtWorld, p: AiPorts) -> ExtWorld ! {AI, IO, Trace} {
   if n <= 0 then w
   else consume_steps(n - 1, p.ai_step(w, "phase-c-model", []).next_state, p)
 }
@@ -230,20 +234,21 @@ func consume_steps(n: int, w: ExtWorld, p: ExtPorts) -> ExtWorld ! {AI, IO, Trac
 -- reused across both would let one crossed wire satisfy the pair. The counts (2
 -- and 3) are distinct from each other and from both scripts' lengths (6 and 5)
 -- and from both remainders (4 and 2), per S7.
-func consuming_pre_step_2(ctx: ExtCtx, _msgs: [Msg])
+func consuming_pre_step_2(ctx: AiCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: consume_steps(2, ctx.world, ctx.ports) } }
 
-func consuming_pre_step_3(ctx: ExtCtx, _msgs: [Msg])
+func consuming_pre_step_3(ctx: AiCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: consume_steps(3, ctx.world, ctx.ports) } }
 
-func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> FixtureHooks {
+func hooks(id: string, pre: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> FixtureHooks {
   hooks_with(id, pre, deny_policy)
 }
 
 -- B7: the policy is a parameter rather than a record update on the result, so
 -- no site outside ext_fixture.ail spells a slot name.
-func hooks_with(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
+func hooks_with(id: string, pre: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
   fixture_hooks(id, {
+    config: jo([]),
     tools: [],
     describe: no_describe,
     prompt: no_prompt,
@@ -256,7 +261,7 @@ func hooks_with(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Tr
   })
 }
 
-func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, id: string) -> ExtRuntime {
+func rt_with(pre: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { entries: [hooks(id, pre)] }, strict_mode: false, verification: v }
 }
@@ -690,7 +695,7 @@ func run_with(rt: ExtRuntime, steps: int, s: [ScriptedStep]) -> TracedSessionRes
 
 -- A policy that sends every tool call to the approval channel, so the driver
 -- performs one approval read per call.
-func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("probe: approval required", DenyAfterTimeout)
 }
 
@@ -698,7 +703,7 @@ func approval_hooks(id: string) -> FixtureHooks {
   hooks_with(id, passthrough_pre_step, pending_policy)
 }
 
-func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow }
+func allow_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow }
 
 func allow_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };

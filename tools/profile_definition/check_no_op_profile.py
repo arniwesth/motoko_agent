@@ -274,8 +274,9 @@ def hook_scope_atoms():
     called in-process.
 
     S16 enumeration — how an extension's entry can fail to yield atoms:
-      (a) `registration_shape` is not `capability-list` (the list head was not
-          located, or the registration is not a literal list) — FAIL; a
+      (a) `registration_shape` is not `config-caps` (the 8.0 `{ config, caps }`
+          head was not located, or `caps` is not a literal list; the 7.4 bare
+          `capability-list` head is not an 8.0 registration) — FAIL; a
           denominator nobody could count is not zero;
       (b) an atom whose constructor is not in the coverage artifact's kind
           table — FAIL, the ABI gained a variant this guard cannot classify;
@@ -321,9 +322,9 @@ def hook_scope_atoms():
 
     atoms = {}
     for ext, r in res.items():
-        if r.get("registration_shape") != "capability-list":
+        if r.get("registration_shape") != "config-caps":
             fail(f"B2 reads '{ext}'s registration as {r.get('registration_shape')!r}, not "
-                 "`capability-list`; its atom count cannot be enumerated, so the denominator "
+                 "`config-caps` (ABI 8.0); its atom count cannot be enumerated, so the denominator "
                  "for it is UNKNOWN rather than eight. Rejections: "
                  f"{[x.get('detail') for x in r.get('rejections', [])][:3]}")
         got = []

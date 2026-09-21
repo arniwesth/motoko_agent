@@ -21,12 +21,11 @@ emits the 8.0 wiring (031 ADR-001 D2; the 6.0 list wiring until 031 P0.5):
     an empty registration is omitted by name (D7)
   parse_core_ext_order -> ExtRegistry { entries }
 
-The emitted `normalize_registration` call is three-argument from 031 P0.5 on.
-`src/core/ext/registry_normalize.ail` moves to it at P1.1 (PLAN-001: the
-`ExtEntry` literal at `registry_normalize.ail:264`), and until then the real
-registry is red with the rest of the tree; `make registry_gen_check` is shown
-green against `tools/ext_registry_gen/fixtures/abi8/`, whose stub normalize has
-the 8.0 signature and whose generated file type-checks against the 8.0 ABI.
+The emitted `normalize_registration` call is three-argument from 031 P0.5 on;
+`src/core/ext/registry_normalize.ail` took the same signature at P1.1, and all
+18 packages register `{ config, caps }` from P1.2d on. The stub fixture
+`tools/ext_registry_gen/fixtures/abi8/` (its normalize has the 8.0 signature
+and its generated file type-checks against the 8.0 ABI) is kept.
 
 Usage:
   python3 tools/ext_registry_gen/generate.py            # write [extensions].output
