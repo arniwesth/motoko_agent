@@ -838,8 +838,8 @@ delegates did exactly what the brief required.
 | Not done here | the root `ailang.lock` ABI entry (still 7.4) — the orchestrator never told D it was the last batch; assigned to P1.6r |
 | Intake defects | 0 |
 
-**P1.2 totals.** 4 batches, **43 registration sites** (A 9, B 14, C 9 — plan said 11 —, D 10 — plan said 11;
-the plan's "45" counted two sites twice), 25 masked files; 7 attempts, **1 rejected** (C a1, a time-dependent
+**P1.2 totals.** 4 batches, **42 registration sites** (A 9, B 14, C 9, D 10). The plan said 45: batch C's and
+D's delegates recounted against the review-6 ledger and found 9 (not 11) and 10 (not 11). Masked files: 25; 7 attempts, **1 rejected** (C a1, a time-dependent
 mutgate row); **0 independent migration defects**; 3 ADR amendments (2, 3, 4) raised from batch artifacts.
 
 ### P1.3r follow-up — 2026-09-21, commit `6d81fbce`
