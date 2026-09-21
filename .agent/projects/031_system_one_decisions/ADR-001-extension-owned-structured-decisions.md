@@ -1218,6 +1218,33 @@ they mean `JudgeImmediate`/`ToolImmediate` and `JudgeQuery`/`ToolQuery` for the 
 the semantics, the D5 accounting of an immediate vote and the D6 records are unchanged. The two
 `Query` constructors carry the same `DecisionRequest`, so the host's decision path is untouched.
 
+### Amendment 2 (2026-09-21) — a package's effect ceiling admits the rows of the slots it registers
+
+**Adds to** D2 (the per-row context types and closed slot rows, `:320-339`) and D7's "Extensions and
+tooling" row. **Nothing in the contract moves**; this states a consequence the text did not.
+
+**The artifact: package checks on the pin.** An AILANG package may declare `[effects].max` in its
+`ailang.toml`, and `ailang check` run with that package as its root rejects any function whose
+**declared** row exceeds it. Two facts of 8.0 combine: a `Capability` payload's row must match its slot's
+row exactly (closed-row unification at the constructor on the imported sum — P0.4 measured a narrower
+row rejected as surely as a wider one), and every payload is a **named** top-level function (D2's
+boundary). So a package's handler now *declares its slot's whole row*, whatever it performs. PLAN-001
+P1.2a checked the six batch-A packages as their own roots at `181051d0` (7.4) and `df2df96e` (8.0)
+(`evidence/amendment-2/RESULT.txt`, `pkgcheck.sh`): omnigraph's named ToolProvider handler exceeds
+`max = [Process, FS, Env, SharedMem, IO]` by `[AI Net Clock Stream Rand Trace]` — at 7.4 the handler was
+an inline lambda the ceiling did not see; compaction-structural's Compactor exceeds by `Trace`. The class
+predates 8.0: at 7.4 two packages already exceeded their ceilings on a named stub declaring the
+`ai_step` port row. 8.0 extends it to every payload.
+
+**The rule.** A package's `[effects].max` must **admit the full row of every slot it registers** (the
+table at `:320-327`; a `ToolProvider` package admits all eleven), and no more on account of the ABI.
+The ceiling therefore bounds *which slots a package may occupy* rather than which effects its handlers
+perform; the performed effects remain bounded by the views (D2) and, for named functions, by the
+compiler's effect pass. **Scope:** no make target or CI step checks an extension package as its own root
+(the registry loads packages as dependencies, where ceilings are not enforced — microrag exceeded its
+ceiling at 7.4 with the sweep green), so this binds **registry publication (033 G8) and every external
+8.0 consumer**, and PLAN-001's batches check each package as its own root from P1.2a on.
+
 ## Related records
 
 - [First review: Claude Fable](REVIEW-adr001-v0.1-verdicts-fable.md)
