@@ -182,6 +182,22 @@ is **red by 35 bindings** — record that number in §6 as the expected state ("
 means those 35 moved). `make ext_hook_scope_selftest` green with the re-pinned yields. `mutgate` on the
 result field: break the shadow rejection → `fx_shadow` passes → restore.
 
+### P0.2b — the sixteen named-arm attacks, reconstructed from shape (½ day, `scripts/dst`) — added by the P0G ruling
+
+**Why.** ADR freeze 2(b) names "the 20 named-arm attacks reject at the compiler". Review 5 §A.3 records
+21 rows (20 attacks + 1 control) as a table of *shapes* and quotes full source for five, which P0.2
+committed. The sixteen others were measured but cannot go red on a compiler bump. The operator ruled to
+rebuild them rather than amend 2(b) down.
+**What.** One fixture and one group-1 row per unquoted row of review 5 §A.3, **labelled
+reconstructed-from-shape** and kept apart from P0.2's quoted-source fixtures, so the provenance check
+stays exact. Each is built from its row's *Shape* column and must reject **for the row's recorded reason**
+— closed-row unification at the application (`app`) versus the effect check on a named function
+(`eff(x)`), or at the `let` annotation — not merely reject. The control `q_dec_prepare_named_ok` goes to
+group 2.
+**Exit.** `make declared_vs_performed` green with group 1 at 27 + the new rows; each new row's rejection
+text matches its table reason; `mutgate`: make one reconstruction clean (drop its effect) → the row goes
+red → restore.
+
 ### P0.4 — ABI 8.0 types (1½ days, `packages/motoko-ext-abi` only)
 
 **What.** `types.ail` and `ailang.toml` at **8.0**, nothing else compiled against it yet. The D2/D3/D7 contract:
@@ -247,10 +263,18 @@ and green; `mutgate` on the orphan predicate. This is the artifact freeze item 3
 
 ### P0G — the operator gate: ADR-001 accepted, ABI frozen at 8.0
 
-Checklist, all artifacts, no prose: P0.2 rows green in four groups; P0.3 gate red/green on its fixtures and
-red-by-35 on the tree; P0.4 types at 8.0 with the stability rule; P0.5 tooling green; P0.6 consumers
-compiled and gated. (P0.7's fold fixtures are line X and are not waited for.) The release scope's G5a is met here; 033's D1 ("8.0 before
-the tag") becomes "8.0 landed" at `P1G`.
+Checklist, all artifacts, no prose: P0.2 rows green in four groups, **plus P0.2b's sixteen reconstructed
+named-arm attacks**; P0.3 gate red/green on its fixtures and red-by-35 on the tree; P0.4 types at 8.0 with
+the stability rule, **under ADR Amendment 1**; P0.5 tooling green **as its verified stand-ins** (`make
+conformance` and `make ext_hook_scope_selftest` need in-tree extensions compiled and are `R-G`'s); P0.6
+consumers compiled and gated. (P0.7's fold fixtures are line X and are not waited for.) The release
+scope's G5a — **as amended 2026-09-21 to freeze items 1, 2 and 8, item 3 being line X** — is met here;
+033's D1 ("8.0 before the tag") becomes "8.0 landed" at `P1G`.
+
+**Operator ruling (2026-09-21), adopting the orchestrator's four P0G recommendations:** accept Amendment
+1; rebuild review 5's sixteen unquoted named-arm attacks as regression rows (P0.2b) rather than amend 2(b)
+down; read "P0.5 tooling green" as the verified stand-ins and add `make ext_hook_scope_selftest` to
+`R-G`; amend 033's G5a so P0G does not claim freeze item 3, which v1.1 moved to line X.
 
 ## 3. P1 — core and packages to 8.0 (tree red until `P1G`)
 
@@ -355,7 +379,9 @@ red.
 ### P1G = R-G — the operator gate: 8.0 landed, tree green, the release line complete
 
 `make check_core`, `make test`, `make test_integration`, `make conformance`, `make declared_vs_performed`,
-`make ext_hook_scope` **green on the migrated tree**, `make profile_coverage`, `make driver_plus_no_ops`,
+`make ext_hook_scope` **green on the migrated tree**, **`make ext_hook_scope_selftest`** (added by the P0G
+ruling), **`make profile_definition` and `make driver_only`** (P1.5r's exit, so the `Q-SWEEP` ruling is
+enforced here), `make profile_coverage`, `make driver_plus_no_ops`,
 `make registry_gen_check`, `make anchors`, `make driver_leaf_inventory`, `make event_vocabulary` (still 1),
 `cd src/tui && bun run test`; both CI workflows green on the commit. 033's D1 is met; the release doc's G5
 row records it. Registry publication (033 G8) may start from here.
@@ -622,7 +648,7 @@ red from P0.4, while P0.5's exit assumed it compiled), not an ADR one.
 
 | phase | delegate-days |
 |---|---|
-| **R** | **14½–18½** (SWEEP ½, P0.2 1, P0.3 2–2½, P0.4 1½, P0.5 1–1½, P0.6 1, P1.1 2–2½, P1.2 4–6, P1.3r 1–1½, P1.4r ½, **P1.5r ½**, gate ½) — P1.5r added by the `Q-SWEEP` ruling |
+| **R** | **15–19** (SWEEP ½, P0.2 1, **P0.2b ½**, P0.3 2–2½, P0.4 1½, P0.5 1–1½, P0.6 1, P1.1 2–2½, P1.2 4–6, P1.3r 1–1½, P1.4r ½, **P1.5r ½**, gate ½) — P1.5r added by the `Q-SWEEP` ruling, P0.2b by the P0G ruling |
 | P0 (X part) | 2–2½ (P0.7) |
 | P1 (X part) | 4–5½ (P1.3x 3–4, P1.4x 1½–2) |
 | P2 | 8–10 |
