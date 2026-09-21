@@ -364,7 +364,12 @@ vacuous test and is refused at intake. So the sweep gains an **explicit, named e
 literals built to differ, rather than being loosened; its `pins == 0` and `< 50 files` guards must still
 fire. The checker's current message ("the repair is to set each to" the live version) is corrected so it
 stops recommending the vacuous repair.
-**Exit.** `make profile_definition` and `make driver_only` green on the tree at 8.0; `mutgate`: remove
+**Also (P0G ruling, 2026-09-21):** the two ABI text probes in `scripts/dst/run_declared_vs_performed.sh`
+that grep literal 7.4 signatures — `:124` `BudgetShaper((ExtCtx, BudgetPlan)` and `:707`
+`Compactor((ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})` — re-pointed at the 8.0 text
+(`PureCtx`, `AiCtx`) while keeping what each asserts (the row, not the context name); their `bad`
+branches must still fire on a re-widened row.
+**Exit.** `make profile_definition` and `make driver_only` green on the tree at 8.0; producer 1/2 of `make declared_vs_performed` no longer red on `:124`/`:707`; `mutgate`: remove
 the exemption → the `7.3` fixture is swept again → red → restore → green, bytes identical.
 
 ### P1.4x — evidence construction and the invocation state (1½–2 days, `session.ail`) — **line X**
@@ -668,6 +673,17 @@ red from P0.4, while P0.5's exit assumed it compiled), not an ADR one.
 | Method note | a `git clone --shared` checked out at an older commit is **not** a valid "red before?" baseline for any target that compiles against the ABI: `ailang.lock` pins path dependencies to the primary checkout's absolute path, so the clone compiles against the primary's (8.0) ABI. The orchestrator's clone run at P0.4's parent `181051d0` was contaminated this way and is discarded. The P0.5 parent check stands: both sides were already on 8.0 |
 | **Intake (orchestrator)** | section runner exit 0, 72/0; reconstructed provenance exit 0 (18 of 19 unquoted rows, headers byte-for-byte); P0.2 provenance exit 0 (52 unchanged; `git diff af6b1d34..977fbf92` over P0.2's fixtures empty); `mutgate.sh --clone-from` fresh clone **8/8** — clean drop, app↔eff swaps, app at another site, let-annotation → app, control, header verbatim, unscored fixture |
 | Intake defects | 0 |
+
+### P0G — 2026-09-21, the operator's gate: **ADR-001 accepted on artifacts; ABI frozen at 8.0**
+
+Fan-in: P0.2 ✓, P0.2b ✓, P0.3 ✓, P0.4 ✓, P0.5 ✓, P0.6 ✓ (a2), every input verified by the orchestrator's
+own receipt (the entries above). Six parts, eight attempts, **one intake rejection** (P0.6 a1). **Operator
+ruling, adopting the orchestrator's recommendations:** accept (i) ADR-001 v0.8 with **Amendment 1**; (ii)
+"P0.2 rows green" on the ADR-section runner, since `make declared_vs_performed` is red on the 8.0 tree and
+is `R-G`'s; (iii) freeze 2(b) at **19 of review 5's 20** named-arm attacks as regression rows, the 20th
+(`q_named_toplevel_xmod`) recorded — it rejects at the compiler, at another application site — with no
+amendment; (iv) the two unowned ABI text probes (`:124`, `:707`) folded into **P1.5r**. 033 G5a (as amended:
+items 1, 2, 8) is met. ADR status set to Accepted. `P1.1` opens.
 
 ## 10. Estimates
 

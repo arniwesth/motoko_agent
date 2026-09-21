@@ -1,8 +1,10 @@
 # ADR-001: Extensions own structured decision questions; the host executes and records them
 
 Date: 2026-09-18 (v0.1, v0.2); 2026-09-20 (v0.3 … v0.8)
-Status: **Proposed, v0.8 — the last text-only revision; acceptance is artifact-gated from here (see
-"Acceptance rule" under Freeze evidence).** Seven reviews accepted the direction; findings per round
+Status: **Accepted on artifacts, 2026-09-21 (operator, at PLAN-001 `P0G`), with Amendment 1** — v0.8 was
+the last text-only revision; the freeze evidence (items 1, 2(a)(b)(c) and 8) is recorded in PLAN-001 §9.
+The ABI is frozen at 8.0 under the 8.x rule; further changes are numbered amendments (see
+"Acceptance rule" under Freeze evidence, and "Amendments"). Seven reviews accepted the direction; findings per round
 ran 13, 9, 8, 10, 8, 8, 9, and the seventh could not break the registration boundary as a rule. v0.8
 answers N57–N65: the question-dependency obligation gets a real detector, a dry `prepare` at the
 epoch boundary (N57); constructor data positions enter the epoch digest (N58); migration carries
@@ -25,7 +27,7 @@ the shadowing and parenthesized escapes), the sixth review's A.3 (the delegated-
 computed-list escapes, the registration-record shape) and the seventh review's A.3 (the
 parameter-shadow escapes, the import-precedence controls, the `DescribeTools` probe), the
 decisive ones re-run by the drafter on 2026-09-20 with identical results.
-Implementation status: Documentation only. None of the proposed ABI, runtime, or format changes is implemented.
+Implementation status: ABI 8.0 types landed (`packages/motoko-ext-abi`, PLAN-001 P0.4 `f7df893c`); core, the 45 registration sites and the dispatch cursor are PLAN-001 P1 (line R); formats, host service and the first consumer are line X.
 
 ## Context and established direction
 
