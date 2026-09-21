@@ -1,0 +1,30 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/profile_coverage_dst.ail
+=== profile_coverage_dst (D5/D6, coverage-rules/1) ===
+  -- profiles that must load --
+  ✓ driver_only (empty install list): accepted
+  ✓ fully covered (one atom per kind): accepted
+  ✓ gated atom excluded (tool_provider[0]): accepted
+  -- profiles that must be rejected --
+  ✓ all atoms excluded: rejected by [coverage-floor]
+  ✓ unconditional atom excluded: rejected by [unconditional-hook-excluded]
+  ✓ describe_tools[0] excluded (the seventh): rejected by [unconditional-hook-excluded]
+  ✓ atom classified nowhere: rejected by [atoms-covered-excluded-exhaustive]
+  ✓ covered and excluded overlap: rejected by [atoms-covered-excluded-disjoint]
+  ✓ extension disclosed twice: rejected by [duplicate-extension-id]
+  -- both defects reported, not just the first --
+  ✓ two defects: both rules named
+  -- atom ids, not counts --
+  ✓ ids: equal counts (3), distinguishable ids
+  ✓ unknown kind id: rejected by [unknown-capability-kind]
+  -- B3: the atom unit (extension, kind, index), N>1 --
+  ✓ two Compactor atoms + gated ToolProvider excluded (legal N>1, D4 signed): accepted
+  ✓ registers no capability (D7, recommended): rejected by [installed-with-no-capabilities]
+  ✓ second atom of a kind classified nowhere: rejected by [atoms-covered-excluded-exhaustive]
+  ✓ atom in both lists: rejected by [atoms-covered-excluded-disjoint]
+  ✓ atom the registration does not hold: rejected by [atom-not-registered]
+  ✓ control: the validator both accepts and rejects
+profile_coverage_dst PASS
+  ✓ all_capability_kinds() enumerates all 12 ABI capability kinds (type Capability variants)
+  ✓ src/core/dst_profile_coverage.ail

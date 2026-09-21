@@ -1,0 +1,242 @@
+  ✓ empty_stop_guard register_with_config
+  ✓ progress_contract_guard register_with_config
+  ✓ repetition_guard register_with_config
+  ✓ compaction_ai register_with_config
+  ✓ context_mode register_with_config
+  ✓ exa_search register_with_config
+  ✓ scratchpad register_with_config
+  ✓ compaction_structural register_with_config
+  ✓ herdr register_with_config
+verify_extensions (default): 9 booted, 0 failed
+OK: a call repeated 5 times with identical output is denied
+OK: the denial says how many times and tells the model to answer instead
+OK: four identical calls are not yet a loop
+OK: a poll whose output moves is never denied, at any depth
+OK: an unrelated call is untouched while another signature is denied
+OK: arguments differing only in whitespace are the same call
+OK: the guard abstains rather than allowing
+OK: a call attached to prose the model has already given twice is denied
+OK: the restatement denial says so rather than blaming the call
+OK: short repeated narration is not restatement
+OK: repeated identical commands with moving output are not a loop
+OK: a restatement budget of 0 disables rule B alone
+OK: an answer given twice before is accepted on the third emission
+OK: a first answer is not a repeat of itself
+OK: a second emission is still allowed to continue
+OK: a blank repeated candidate is left to the empty-stop guard
+OK: budget 0 disables the tool half
+OK: budget 0 disables the answer half
+OK: herdr advertises no tools outside a herdr pane (HERDR_ENV=<unset> HERDR_BIN_PATH=<unset> HERDR_PANE_ID=<unset>)
+OK: herdr advertises 2 tools inside a herdr pane (HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w3:p5X)
+OK: answer on disk + agent gone -> answer returned (MOT-131)
+OK: no answer + agent gone -> still an error
+OK: motoko Delegate carries wait {id=handle, kind, locator.pane, answer_path, run_key}
+OK: motoko Delegate's wait.id is the handle it returns
+OK: motoko launch runs one-shot with --answer-file (D1.3)
+OK: claude Delegate carries wait {id=name, kind, locator.pane, answer_path, run_key}
+OK: claude Delegate's wait.id is the name it returns
+OK: a failed launch carries no wait
+OK: a check's metadata.delegate equals the wait.id of the Delegate that returned the handle (motoko)
+OK: a check's metadata.delegate equals the wait.id of the Delegate that returned the handle (claude)
+OK: motoko early answer -> settled true
+OK: D1.4: answer lands between the early read and agent_not_found -> re-read settles done
+OK: D1.4: the re-read's result carries the answer
+OK: D1.4: gone and still no answer on the re-read -> lost, settled true (was jo([]))
+OK: motoko agent get fails, herdr unwell -> error-only, settled false (was jo([]))
+OK: motoko post-wait answer -> settled true
+OK: motoko post-wait lost -> settled true
+OK: motoko not yet -> settled false
+OK: R11: empty name -> pane_id "", delegate "", settled false
+OK: R11: a name this extension never issued -> pane_id "", raw delegate, settled false
+OK: claude early answer -> settled true
+OK: R11: claude wait says agent_not_found -> settled lost, pane_id "", settled true
+OK: R11: claude wait fails, herdr unwell -> pane_id "", settled false
+OK: claude agent get says agent_not_found after the wait -> settled true
+OK: claude agent get fails, herdr unwell -> settled false
+OK: claude post-wait answer -> settled true
+OK: claude blocked -> settled false
+OK: claude settled with no answer -> settled_unverified, settled true
+OK: claude still working -> settled false
+OK: fixture delegate_motoko matches herdr.ail's builder
+OK: fixture delegate_claude matches herdr.ail's builder
+OK: fixture check_done matches herdr.ail's builder
+OK: fixture check_pending matches herdr.ail's builder
+OK: fixture check_lost matches herdr.ail's builder
+OK: fixture check_error_only matches herdr.ail's builder
+OK: fixture check_arg_error matches herdr.ail's builder
+OK delegate_motoko
+OK delegate_claude
+OK check_done
+OK check_lost
+OK check_pending
+OK check_error_only
+OK check_arg_error
+OK: delegate pane is tagged with this session's ownership token
+OK: a failed tag degrades to a note and the delegation still succeeds (D1)
+OK: a stale-owner pane is reported and NOT closed by default (D3)
+OK: HERDR_SWEEP_STALE=1 closes the stale pane, by explicit id
+OK: a pane whose owner is still alive is left alone and unmentioned
+OK: an in-flight task in ANOTHER session's run file is reported when its pane is gone
+OK: HERDR_SWEEP_SETTLE=1 settles the foreign record and republishes only that file
+OK: dead sessions' scratch is reported and NOT removed by default
+OK: HERDR_SWEEP_STALE=1 removes the dead scratch, by name, and no record
+OK: the sweep is once per run: with the sentinel present nothing is enumerated
+OK: off by default: no view pane, and the result still says how to open one
+OK: HERDR_DAGR_PANE=1 opens the view on the run file, unfocused, and tags it
+OK: at most once per run: with the marker present, nothing is opened
+OK: a refused open does not fail the delegation and falls back to the script
+OK: no run identity, no view: without MOTOKO_SESSION_MS nothing is opened
+OK: an operator dagr view is already open: the extension yields, silently
+  orchestrator.ail: 90 tests: 90 passed, 0 failed, 0 skipped (16.799018693s)
+OK: atoms are registered in canonical order
+OK: atoms are registered through the old make_hooks too
+OK: off: the old make_hooks appends no note and has no opinion on an edit
+OK: on: one note is appended, nothing prepended
+OK: on: the note names Delegate, the run file and the operator's marker
+OK: on: EditFile under src/ is denied
+OK: on: the denial names Delegate and the plan
+OK: on: a sed -i into scripts/ is denied
+OK: on: a detached make dst is the orchestrator's own verification
+OK: on: reading source is allowed
+OK: on: writing a handoff is allowed
+OK: the operator's marker lifts the policy
+OK: a later guard injection does not re-impose it
+OK: a later operator message without the marker re-imposes it
+OK: the model cannot lift it by writing the marker itself
+OK: the host merge: another extension's Allow does not outvote herdr's Deny
+OK: from disk: the named pane is on, from EVERY run file that says delegate, the legacy one skipped
+OK: from disk: each pane gets its own run
+OK: from disk: a pane no run names is off
+OK: from disk: a delegate (depth 1) is off even in the named pane
+OK: from disk: outside a herdr pane is off
+OK: several runs: the note names every run file
+OK: several runs: the note says to use the run file that holds the task, not the first
+OK: several runs: the refusal names every run file and the same rule
+OK: several kinds allowed, no default, no kind on the call: refused before a pane is split
+OK: several kinds allowed and the model named one: proceeds
+OK: one kind allowed, no kind on the call: still defaults to it (the shipped configuration)
+OK: several allowed but HERDR_DELEGATE_KIND is set: the operator's choice is not a guess
+OK: the schema requires `kind` exactly when the handler does
+OK: Delegate opens one task with one attempt
+OK: the first delegation of a run says how to open the dagr view
+OK: the run file carries a contract version and a task id that is not a pane id
+OK: a working check latches prompt_acknowledged and settles nothing
+OK: a blocked delegate blocks the task and names its unblocker
+OK: an answer on disk settles done at tier reported, receipted by path
+OK: settling clears the unblock line the blocked check wrote
+OK: a second check on a finished delegate appends no second settlement
+OK: later delegations do not repeat the view pointer
+OK: retry_of appends attempt a2 to the existing task, cause followup
+OK: agent_not_found settles the attempt lost and the task failed
+OK: a delegation that fails its setup appends no task at all
+OK: a spawn that fails after the split is recorded as a failed task
+OK: the model still gets the full failure explanation
+OK: that failed task is never observable as working
+OK: the failed spawn carries a mechanical receipt, not a claim
+OK: a refused retry_of link is stated in the tool result, not only the run file
+OK: a requested model is passed to agent start after --
+OK: a requested model is recorded verbatim on the attempt
+OK: a model with metacharacters is refused from agent start
+OK: the refused model ask is still recorded verbatim
+OK: a refused model is described as refused, not as the model in use
+OK: a motoko delegate's model rides the pane split as MODEL
+OK: a motoko model with metacharacters is refused from the split
+OK: a claude delegate's split carries no MODEL: its transport is the flag
+OK: a prompt refused once with agent_not_ready is retried and the delegation succeeds
+OK: a prompt refused every time still fails, and the receipt counts the attempts
+OK: agent_prompt_stalled is never retried: it says the input was accepted
+OK: a refusal is NOT retried once the agent has moved: it may have been delivered
+OK: a candidate dagr rejects is NOT published, and the previous version stands
+OK: a validator that cannot run does not stop the publish (§6: never require the binary)
+OK: the operator's plan is seeded: declared tasks, their deps, and the hand-done one settled
+OK: a delegation naming a plan task attaches to it, and opens no second task
+OK: the plan file itself is never written
+OK: re-reading the plan does not reset a task this producer has observed
+OK: a plan named by the model seeds and attaches, with no HERDR_DAGR_PLAN set
+OK: the declaration is recorded in the session's plan marker
+OK: a later delegation inherits the declared plan without naming it again
+OK: a plan in effect with no file behind it is reported, and the work is opened as new
+OK: a plan outside the working directory is refused with its reason, and nothing is recorded
+OK: a plan path relative to the working directory resolves and attaches
+OK: a plan path containing `..` is refused and the previous declaration stands
+OK: a blocked plan task keeps its unblock owner, so --strict does not refuse the publish
+OK: projects are seeded with the tasks that name them, and the plain fields survive
+  ✓ every published document passes dagr 0.3.1 (contract v3; reads v1/v2) check --strict
+OK: the exit intent is registered whether the knob is on or off
+OK: with the knob off: no actions, and the intent is still disclosed
+OK: with the knob on: one close, by pane id, carrying this session's token
+OK: a settled task holds no pane, and the producer's own pane is never closed
+OK: an absent or unreadable run file produces nothing
+OK: without MOTOKO_SESSION_MS the intent produces nothing
+OK: the published manifest is the shape exit-actions.ts parses
+OK: the render reads through the port and only the port, and a blind port renders nothing
+OK: the manifest env var is MOTOKO_EXIT_MANIFEST
+OK: the decoy file is removed so a passing run leaves no scratch state
+OK: with settle on: one publish, naming the candidate, the run file, and the digest of what was read
+OK: the precondition is the digest of the live run file, not of anything else
+OK: reap and settle are independent: neither, either, or both
+OK: nothing in flight: no publish, and no close either
+OK: the intent is enabled by either knob, and disclosed when neither is set
+OK: a session with delegates in flight declares them as work
+OK: no in-flight task, no run file, and an unreadable one all declare nothing
+  ✓ src/core/agent_loop_v2.ail
+  ✓ src/core/agents_md.ail
+  ✓ src/core/ai_compat.ail
+  ✓ src/core/backend.ail
+  ✓ src/core/compaction.ail
+  ✓ src/core/compress.ail
+  ✓ src/core/config.ail
+  ✓ src/core/context_limit.ail
+  ✓ src/core/context_usage.ail
+  ✓ src/core/context_usage_test.ail
+  ✓ src/core/cost_phase.ail
+  ✓ src/core/dst_attribution_table.ail
+  ✓ src/core/dst_corpus.ail
+  ✓ src/core/dst_discovery.ail
+  ✓ src/core/dst_driver_only.ail
+  ✓ src/core/dst_driver_plus_compose.ail
+  ✓ src/core/dst_driver_plus_herdr.ail
+  ✓ src/core/dst_driver_plus_no_ops.ail
+  ✓ src/core/dst_event_vocabulary.ail
+  ✓ src/core/dst_execution.ail
+  ✓ src/core/dst_fault_catalogue.ail
+  ✓ src/core/dst_generator.ail
+  ✓ src/core/dst_hook_guard.ail
+  ✓ src/core/dst_interaction.ail
+  ✓ src/core/dst_invariants.ail
+  ✓ src/core/dst_persistence.ail
+  ✓ src/core/dst_profile.ail
+  ✓ src/core/dst_profile_coverage.ail
+  ✓ src/core/dst_program.ail
+  ✓ src/core/dst_replay.ail
+  ✓ src/core/dst_result.ail
+  ✓ src/core/dst_run_report.ail
+  ✓ src/core/dst_secrets.ail
+  ✓ src/core/env_client.ail
+  ✓ src/core/ext_world.ail
+  ✓ src/core/fs_node.ail
+  ✓ src/core/hook_phase.ail
+  ✓ src/core/journal.ail
+  ✓ src/core/model_phase.ail
+  ✓ src/core/parse.ail
+  ✓ src/core/parse_test.ail
+  ✓ src/core/phase_vocab.ail
+  ✓ src/core/ports.ail
+  ✓ src/core/prompts.ail
+  ✓ src/core/prompts_test.ail
+  ✓ src/core/recovery.ail
+  ✓ src/core/rpc.ail
+  ✓ src/core/session.ail
+  ✓ src/core/step_machine.ail
+  ✓ src/core/supervisor.ail
+  ✓ src/core/tool_catalog.ail
+  ✓ src/core/tool_contract.ail
+  ✓ src/core/tool_dispatch_adapter.ail
+  ✓ src/core/tool_envelope_dispatch.ail
+  ✓ src/core/tool_phase.ail
+  ✓ src/core/tool_runtime.ail
+  ✓ src/core/tool_stream_phase.ail
+  ✓ src/core/types.ail
+  ✓ src/core/version.ail
+  ✓ src/core/world_ordinal.ail
+src/core/ type-check: 60 passed, 0 failed

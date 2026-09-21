@@ -1,0 +1,88 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/profile_definition_dst.ail
+profile_definition_dst  (profile-rules/3)
+  -- the NEGATIVE CONTROL, first --
+  ✓ a well-formed empty-install definition: loads clean
+  -- required fields: every one, named --
+  ✓ missing 'profile_id': rejected, and the rejection NAMES the field
+  ✓ missing 'profile_version': rejected, and the rejection NAMES the field
+  ✓ missing 'adapter_boundaries': rejected, and the rejection NAMES the field
+  ✓ missing 'resource_models': rejected, and the rejection NAMES the field
+  ✓ missing 'diagnostic_projections': rejected, and the rejection NAMES the field
+  ✓ missing 'forbidden_capabilities': rejected, and the rejection NAMES the field
+  ✓ missing 'attribution_ref.source_revision': rejected, and the rejection NAMES the field
+  ✓ missing 'attribution_ref.content_hash': rejected, and the rejection NAMES the field
+  ✓ missing 'scan_roots': rejected, and the rejection NAMES the field
+  -- the coverage floor and the disclosure (delegated to A6) --
+  ✓ an installed extension with ZERO covered hooks: rejected by [coverage-floor]
+  ✓ an unknown capability kind: rejected by [unknown-capability-kind]
+  ✓ covered and excluded not DISJOINT per atom: rejected by [atoms-covered-excluded-disjoint]
+  ✓ SET COMPLETENESS: eight entries, seven atoms: rejected by [atoms-covered-excluded-exhaustive]
+  -- the seven/one dispatch split, swept rather than restated --
+  ✓ 'describe_tools[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'prompt_shaper[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'budget_shaper[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'compactor[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'tool_policy[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'tool_provider[0]' is GATED: excluding it loads clean
+  ✓ 'response_interceptor[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'solver_judge[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'exit_intent[0]' is LIFECYCLE: excluding it loads clean (the boundary claim is not checked -- see capability_dispatch)
+  ✓ 'work_in_flight[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'decision_solver_judge[0]' unconditionally dispatched: excluding it is rejected
+  ✓ 'decision_tool_policy[0]' unconditionally dispatched: excluding it is rejected
+  ✓ all TEN unconditionally-dispatched slots reject exclusion (D5's prose says six)
+  -- the attribution reference --
+  ✓ a load against a DIFFERENT source revision: rejected by [stale-source-revision]
+  ✓ a profile recording a STALE table identity: rejected by [attribution-identity-stale]
+  ✓ a DISCOVERED core site in neither list: rejected by [site-unaccounted]
+  -- classifier 2 and the scan roots --
+  ✓ an INSTALLED extension calling a classifier-2 field: rejected by [classifier-2-extension-installed]
+  ✓ a package whose AILANG source is OUTSIDE the scan roots: rejected by [package-outside-scan-roots]
+  -- decision 1: unrouted reachable core sites --
+  ✓ an unrouted reachable site left UNDECLARED: rejected by [unrouted-site-undeclared]
+  ✓ a declared unrouted site with NO INSTRUMENT: rejected by [unrouted-site-without-instrument]
+  ✓ a declaration for a site that is no longer reachable-and-unrouted: rejected by [declared-site-not-reachable]
+  -- D3 waivers, read back from the catalogue --
+  ✓ a conditional class neither waived nor claimed exercised: rejected by [conditional-class-unaccounted]
+  ✓ waiving an UNCONDITIONAL class: rejected by [waived-class-not-conditional]
+  -- WI-D13: a classification's evidentiary basis --
+  ✓ WorldMediated on NO producer — the entry that passed the gate until WI-D13: rejected by [classification-basis-not-recorded]
+  ✓ a real producer, UNDATED — a measurement that cannot be dated cannot be told from a stale one: rejected by [classification-basis-not-recorded]
+  ✓ a producer this tree does not have: rejected by [classification-basis-unrecognised]
+  ✓ WorldMediated MEASURED by classifier 3, dated: loads clean
+  -- WI-D14: the basis KIND, and criterion 2's three clauses --
+  ✓ WorldMediated read off a DECLARED ROW — recognised, and an assumption: rejected by [world-mediated-on-an-assumed-basis]
+  ✓ the SAME read basis on an EffectFree entry — criterion 1's own basis IS an assumption: loads clean
+  ✓ a criterion-2 entry leaving the origin-tag clause unrecorded: rejected by [criterion-2-clause-unrecorded]
+  ✓ a criterion-1 entry carrying criterion-2 clause evidence: rejected by [criterion-2-clauses-not-applicable]
+  ✓ a NO-OP criterion-2 hook and a MEDIATING one carry the same covered ids and different substance
+      no-op:     extension-model coverage is NON-ZERO and ENTIRELY OF NO-OPS: 1 hook(s) covered across 1 installed extension(s) — 0 on criterion 1 and 1 on criterion 2, of which 1 satisfy criterion 2's port and origin-tag clauses VACUOUSLY, i.e. over an empty set of performed effects. ZERO covered hooks mediate the world substantively, so this coverage exercises NONE of the world-mediation machinery. It is a weaker claim than the number implies and a stronger one than zero.
+  -- decision 2: the routed-set claim is computed --
+  ✓ routed-set claim is a partition of the table: 7 reachable = 6 routed + 1 declared-unrouted
+  -- the execution manifest (D5's separate list) --
+  ✓ NEGATIVE CONTROL: the clean manifest validates
+  ✓ a blank toolchain axis: rejected by [manifest-field-missing]
+  ✓ a blank normalized configuration: rejected by [manifest-field-missing]
+  ✓ no scan-root commit: rejected by [manifest-field-missing]
+  ✓ an empty classifier-2 set: rejected by [manifest-field-missing]
+  ✓ an EMPTY unrouted-field set is ACCEPTED — legitimate since WI-C5, and weaker than the rule it replaced
+  ✓ a manifest naming a different profile version: rejected by [manifest-profile-mismatch]
+  ✓ a TRANSCRIBED event-vocabulary version: rejected by [manifest-version-drifted]
+  ✓ a TRANSCRIBED attribution-rules version: rejected by [manifest-version-drifted]
+  ✓ a TRANSCRIBED fault-catalogue version: rejected by [manifest-version-drifted]
+  -- runtime routing's fail-closed exclusion check --
+  ✓ dispatch reaching an EXCLUDED hook returns a typed HarnessFailure (routing_violation)
+  ✓ dispatch reaching a COVERED hook proceeds (the guard is not fail-closed on everything)
+  ✓ an empty install list cannot violate: vacuous for driver_only, binding from C5
+  i the D6.6 complement (a raw capability bypass stays a non-zero run, NOT a typed
+    HarnessFailure) is asserted from OUTSIDE by make world_state / make terminal_trace;
+    a denied effect terminates evaluation, so no in-process assertion can observe it
+profile_definition_dst PASS
+  ✓ ProfileDefinition declares all 15 fields (D5's ten as 12, plus A10's three)
+  ✓ classifier-2 set matches the tool: ['env_get']
+  ✓ unrouted-field set matches the tool: [] (a DISTINCT state, not a non-member)
+  ✓ every installable classifier-2 caller is omitted by name in the profile: []
+FAIL: could not read `Capability.BudgetShaper`'s payload in packages/motoko-ext-abi/types.ail — the omission basis cannot be checked
+make: *** [Makefile:833: profile_definition] Error 1
