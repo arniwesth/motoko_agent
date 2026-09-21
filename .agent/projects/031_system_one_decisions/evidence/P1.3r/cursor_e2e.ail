@@ -1,0 +1,222 @@
+-- 031 PLAN-001 P1.3r -- END TO END, PER VARIANT: P0.6's two scripted
+-- consumers dispatched through the line-R decision cursor in
+-- `src/core/ext/runtime.ail`, exactly as the host dispatches them.
+--
+-- Built into the P1.3r workspace (`p13r_check.sh e2e`) at
+-- `src/p13r/cursor_e2e.ail`; it imports the real runtime and the real example
+-- consumers (`packages/motoko_ext_conformance/examples/`), registered through
+-- their own `register_with_config`. Nothing here is a copy of a consumer.
+--
+-- For each variant it shows, in order:
+--   1. the consumer's `prepare` QUERIES on this context (so the stub is
+--      reached, not an immediate vote);
+--   2. dispatched ALONE through the runtime, the merged vote is the consumer's
+--      abstention on `Unavailable(UnconfiguredBackend)` -- `NoDecision` /
+--      `NoOpinion` per P0.6's scripts;
+--   3. dispatched with a legacy atom BEHIND it, the next atom runs and its vote
+--      merges (`Accept` / `Pending`);
+--   4. the control: the SAME interpreter handed a scripted `Answered` votes to
+--      intervene (`ContinueWithFeedback` / `Deny`), so the abstention in 2 is
+--      the stub's doing and not an inert consumer.
+-- Plus the finalize successor world is the input world (no ordinal advanced),
+-- and the context's `clock_now` port is a TRIPWIRE: if anything calls it the
+-- run faults and exits nonzero (it is the only port the two dispatchers' rows
+-- could reach; every other port needs AI, FS or Env).
+--
+-- `decision_state` is `Some` with the consumer's own projections: which state
+-- the HOST hands a decision atom is P1.4r's, and P0.6's consumers abstain
+-- without it. Everything here is synthetic. Exit 1 on any mismatch.
+module src/p13r/cursor_e2e
+
+import std/io (println, exit)
+import std/json (Json, jo, ja, kv, js, getObject, encode)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtEntry, ExtRuntime, ExtWorld, ExtClockReading, ExtRegistration, Capability, PureCtx, pure_ctx_of,
+  DecisionSolverJudge, DecisionToolPolicy, SolverJudge, ToolPolicy, ProcessCtx, FinalizeOutcome,
+  DecisionInvocationState, EnforcingDecision, DecisionObservation, DecisionRequest, Answered, BinaryAnswer,
+  JudgePreparation, JudgeImmediate, JudgeQuery, ToolPreparation, ToolImmediate, ToolQuery,
+  FinalizeDecision, Accept, ContinueWithFeedback, NoDecision,
+  ToolPolicyDecision, Allow, Deny, NoOpinion, Pending, DenyAfterTimeout,
+  ToolCallEnvelope, VerificationEvidence, Failed, ToolEvidence, CommandExit
+)
+import src/core/config (VerificationConfig)
+import src/core/ext_world (clear_holder)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
+import src/core/ext/runtime (dispatch_solver_candidate, dispatch_tool_policy, stub_decision_answer, DecisionCursor, FinalizeSite, ToolPolicySite)
+import pkg/sunholo/motoko_ext_conformance/examples/completion_guard (register_with_config as register_completion)
+import pkg/sunholo/motoko_ext_conformance/examples/repeat_failure_policy (register_with_config as register_repeat)
+
+-- ---------------------------------------------------------------------------
+-- The host's context: full ExtCtx, tripwire clock
+-- ---------------------------------------------------------------------------
+
+-- The port's row is closed at `{Clock}`, so the tripwire cannot print: it
+-- FAULTS instead (integer division by zero), which aborts the run nonzero.
+func tripwire_clock(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  let zero = length_of(world.token);
+  { now_ms: 1 / zero, next_state: world }
+}
+
+pure func length_of(_j: Json) -> int { 0 }
+
+pure func e2e_world() -> ExtWorld { { token: jo([kv("trace", js("e2e;"))]) } }
+
+pure func failed_verification() -> VerificationEvidence {
+  Failed({ occurrence: "v1", step: 3, command: "make test", exit_code: Some(2), output: "1 failed", truncated: false, workspace_revision: None })
+}
+
+pure func failure(call_id: string, step: int) -> ToolEvidence {
+  { call_id: call_id, step: step, tool_name: "Bash", outcome: CommandExit(1), output: "", truncated: false, workspace_revision: None }
+}
+
+pure func state_for(reg: ExtRegistration, id: string) -> DecisionInvocationState {
+  {
+    invocation_id: id,
+    mode: EnforcingDecision,
+    interventions_used: 0,
+    intervention_limit: 2,
+    question_config: proj(reg.config, "question_config"),
+    interpretation_config: proj(reg.config, "interpretation_config"),
+    allowance_millicents: 0,
+    known_spend_millicents: 0,
+    outstanding_millicents: 0,
+    run_cost_millicents: 0,
+    run_cap_millicents: None
+  }
+}
+
+pure func proj(cfg: Json, key: string) -> Json { match getObject(cfg, key) { Some(v) => v, None => jo([]) } }
+
+func e2e_ctx(st: DecisionInvocationState) -> ExtCtx {
+  {
+    task: "e2e",
+    step: 4,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: true,
+    budget: { total: 10, solver: 6, verifier: 4 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 10,
+    history_slice: [],
+    state_key: "k",
+    finish_reason: "",
+    work_in_flight: [],
+    open_waits: ja([]),
+    context_limit: 0,
+    ports: { noop_ext_ports() | clock_now: tripwire_clock },
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(),
+    verification: failed_verification(),
+    tool_evidence: { records: [failure("c1", 1), failure("c2", 2)], complete_from_session_start: true, omitted_count: Some(0) },
+    decision_state: Some(st),
+    world: e2e_world()
+  }
+}
+
+pure func rt_of(entries: [ExtEntry]) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make test" };
+  { registry: { entries: entries }, strict_mode: false, verification: v }
+}
+
+pure func entry_of(id: string, reg: ExtRegistration) -> ExtEntry { { id: id, config: reg.config, caps: reg.caps } }
+
+func accept_after(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: Accept, next_state: ctx.world } }
+
+pure func pending_after(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Pending("next atom ran", DenyAfterTimeout) }
+
+pure func answered(qid: string, bp: int) -> DecisionObservation {
+  { result: Answered({ answers: [{ question_id: qid, answer: BinaryAnswer(bp) }] }), usage: { input_tokens: None, output_tokens: None, cost_millicents: None } }
+}
+
+-- ---------------------------------------------------------------------------
+-- Labels
+-- ---------------------------------------------------------------------------
+
+pure func judge_label(d: FinalizeDecision) -> string {
+  match d { Accept => "Accept", NoDecision => "NoDecision", ContinueWithFeedback(_) => "ContinueWithFeedback" }
+}
+
+pure func tool_label(d: ToolPolicyDecision) -> string {
+  match d { Allow => "Allow", NoOpinion => "NoOpinion", Deny(_) => "Deny", Pending(r, _) => "Pending(${r})" }
+}
+
+func check(label: string, got: string, want: string) -> bool ! {IO} {
+  let ok = got == want;
+  let _ = println("  ${if ok then "ok  " else "FAIL"} ${label}: ${got}${if ok then "" else " (want ${want})"}");
+  ok
+}
+
+-- ---------------------------------------------------------------------------
+-- Finalize: the completion guard
+-- ---------------------------------------------------------------------------
+
+func finalize_case() -> bool ! {Process, IO, Clock} {
+  let _ = println("finalize (completion_guard, DecisionSolverJudge):");
+  let reg = register_completion(jo([]));
+  let ctx = e2e_ctx(state_for(reg, "e2e-finalize"));
+  let view = pure_ctx_of(ctx, reg.config);
+  let candidate = "Done: all tests pass.";
+  match reg.caps {
+    DecisionSolverJudge(_d, prepare, interpret) :: _ => {
+      let q = match prepare(view, candidate) {
+        JudgeQuery(req) => {
+          let c1 = check("prepare", "JudgeQuery(${req.backend_binding})", "JudgeQuery(completion-judge)");
+          let cursor: DecisionCursor = { ext_id: "completion_guard", atom: 0, site: FinalizeSite, request: req };
+          let stub = check("interpret on the stub's observation", judge_label(interpret(view, candidate, req, stub_decision_answer(cursor))), "NoDecision");
+          let control = check("control: interpret on Answered(1500 bp)", judge_label(interpret(view, candidate, req, answered("task_complete", 1500))), "ContinueWithFeedback");
+          c1 && stub && control
+        },
+        JudgeImmediate(v) => check("prepare", "JudgeImmediate(${judge_label(v)})", "JudgeQuery(completion-judge)")
+      };
+      let alone = dispatch_solver_candidate(rt_of([entry_of("completion_guard", reg)]), ctx, candidate);
+      let a = check("dispatched alone, merged vote", judge_label(alone.decision), "NoDecision");
+      let w = check("successor world is the input world", encode(alone.next_state.token), encode(clear_holder(e2e_world()).token));
+      let legacy: ExtEntry = { id: "after", config: jo([]), caps: [SolverJudge(accept_after)] };
+      let behind = dispatch_solver_candidate(rt_of([entry_of("completion_guard", reg), legacy]), ctx, candidate);
+      let b = check("with a legacy Accept behind it, merged vote", judge_label(behind.decision), "Accept");
+      q && a && w && b
+    },
+    _ => check("registration", "no DecisionSolverJudge first", "DecisionSolverJudge")
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Tool policy: the repeat-failure policy
+-- ---------------------------------------------------------------------------
+
+func tool_case() -> bool ! {IO, Clock} {
+  let _ = println("tool_policy (repeat_failure_policy, DecisionToolPolicy):");
+  let reg = register_repeat(jo([]));
+  let ctx = e2e_ctx(state_for(reg, "e2e-tool"));
+  let view = pure_ctx_of(ctx, reg.config);
+  let call: ToolCallEnvelope = { id: "c3", tool: "Bash", arguments: jo([kv("cmd", js("make test"))]) };
+  match reg.caps {
+    DecisionToolPolicy(_d, prepare, interpret) :: _ => {
+      let q = match prepare(view, call) {
+        ToolQuery(req) => {
+          let c1 = check("prepare", "ToolQuery(${req.backend_binding})", "ToolQuery(repeat-failure-judge)");
+          let cursor: DecisionCursor = { ext_id: "repeat_failure_policy", atom: 0, site: ToolPolicySite, request: req };
+          let stub = check("interpret on the stub's observation", tool_label(interpret(view, call, req, stub_decision_answer(cursor))), "NoOpinion");
+          let control = check("control: interpret on Answered(9000 bp)", tool_label(interpret(view, call, req, answered("repeats_failure", 9000))), "Deny");
+          c1 && stub && control
+        },
+        ToolImmediate(v) => check("prepare", "ToolImmediate(${tool_label(v)})", "ToolQuery(repeat-failure-judge)")
+      };
+      let a = check("dispatched alone, merged vote", tool_label(dispatch_tool_policy(rt_of([entry_of("repeat_failure_policy", reg)]), ctx, call)), "NoOpinion");
+      let legacy: ExtEntry = { id: "after", config: jo([]), caps: [ToolPolicy(pending_after)] };
+      let b = check("with a legacy Pending behind it, merged vote", tool_label(dispatch_tool_policy(rt_of([entry_of("repeat_failure_policy", reg), legacy]), ctx, call)), "Pending(next atom ran)");
+      q && a && b
+    },
+    _ => check("registration", "no DecisionToolPolicy first", "DecisionToolPolicy")
+  }
+}
+
+export func main() -> () ! {Process, IO, Clock} {
+  let f = finalize_case();
+  let t = tool_case();
+  let _ = println("END_TO_END finalize=${if f then "PASS" else "FAIL"} tool_policy=${if t then "PASS" else "FAIL"}");
+  if f && t then () else exit(1)
+}
