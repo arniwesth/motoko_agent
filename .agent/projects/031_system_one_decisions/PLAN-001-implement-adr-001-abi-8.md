@@ -75,6 +75,12 @@ review finding. There is **one review**, of the evidence, at the end (ADR accept
     number of items and how many came back defective at intake; the next batch is capped so that the
     whole set has a plausible chance of passing (rule 4: at a 60% per-item defect rate a five-item batch
     passes with probability ≈1%). Batch A is the calibration.
+13. **One writer per surface, and checks against a stable surface** (operator ruling, 2026-09-21). All
+    delegates share one checkout. At most one delegate writes a surface (`src/core`, a package, `scripts/`,
+    `tools/`) at a time, each stages only its own paths, and a part whose checks **compile against** a
+    surface starts only when nobody is writing it. Worktrees were weighed and not taken: the lanes below
+    make them unnecessary, since the core lane (P1.3r → P1.4r) and the scripts lane (P1.5r → P1.6r, P1.7r)
+    both finish inside the P1.2 batches' window.
 
 ## 1. Phases (by source surface; freeze artifacts first)
 
@@ -306,6 +312,15 @@ item 12.
 | **C** | a2a, agentcli, ailang-docs, mcp, compaction-ai | 11 | records, lists, four `DescribeTools` | the configuration channel and `DescribeTools(config)` under load |
 | **D** | compose, herdr | 11 | `runtime_cfg`, `snippet_caps`, `composition_mode`; `cfg`, `tools`, `orch` | largest cross-view helper migration (compose's three `ExtPorts` helpers, `:312,326,921,1018`) and the FS renderers; **measure per-call decode cost here** (ADR D2 "cost") |
 
+**Masked files** (operator ruling on P1.1's inventory, 2026-09-21): each batch also owns the files that
+cannot be checked until its packages migrate, because they import them — A: `scripts/dst/compaction_policy_dst.ail`,
+`compaction_seeded_dst.ail`, `scripts/smoke_v2_compaction_full_loop.ail` (compaction_structural),
+`scripts/dst/phase_c2_wiring_scenarios.ail` (empty_stop_guard), plus `src/core/test/integration_tests.ail`;
+B: `scripts/verify_repetition_guard.ail`; C: `scripts/dst/conformance_selftest.ail`,
+`long_qwen_compaction_dst.ail` (compaction_ai); D: `scripts/dst/compose_live_exec.ail`,
+`declared_vs_performed.ail` (compose), `herdr_graded_dst.ail` and the eight `scripts/verify_*` herdr files.
+A batch's intake checks its masked files on 8.0.
+
 Batch D also records the ADR's cost expectation as a measurement: hook latency before/after for compose's
 interceptor and herdr's prompt shaper, and the retained `config` size per extension. A result the ADR's
 sentence does not survive is an amendment with the numbers attached.
@@ -321,6 +336,28 @@ is added; **anchors stay neutral**. `Immediate` votes are applied through the ex
 `make check_core`, `make test`, `make driver_plus_no_ops` with a neutral decision atom in the no-op profile;
 `make profile_coverage` classifying the two pure slots; mutation: make the stub return `Answered` → the
 conformance consumer's interpreter must not be reachable with fabricated answers → red.
+
+### P1.6r — scripts and non-`.ail` code onto 8.0 (about 1 day, `scripts/`, `tools/`, host mentions) — **line R**, added by the operator's ruling on P1.1's inventory
+
+**What.** The 13 `UNOWNED` rows that fail on 8.0 grounds (`evidence/P1.1/INVENTORY.tsv`, `check8 = FAIL`):
+8 `scripts/dst` files that feed **`R-G`'s own targets** (`driver_plus_no_ops`, `profile_definition`,
+`driver_only`, `world_state`, `compaction_dst`) and 5 `scripts/smoke_v2_*`; plus a read-through of the
+non-`.ail` code the type sweep cannot see (`tools/ext_registry_gen/generate.py`,
+`tools/profile_definition/check_{compose,no_op}_profile.py`, `src/tui/src/runtime-process.ts`,
+`herdr-child-env.test.ts`, `scripts/dst/run_depth_canary.sh`, the `Makefile`, `ailang.toml`,
+`.github/workflows/verify-extensions.yml`), each classified *needs change / comment only / fine* and
+changed where it must. **Starts after P1.4r** (§0 item 13). **Exit.** every changed `.ail` checks on 8.0;
+the `R-G` targets these files feed no longer fail on them; mutgate per changed file.
+
+### P1.7r — tool and gate fixtures onto 8.0 (1–1½ days, `tools/ext_*_inventory/fixtures`, `scripts/dst` gate fixtures) — **line R**, same ruling
+
+**What.** The 56 `UNOWNED` rows marked *gate fixture (verdict owned by its gate)*. Each fixture's expected
+verdict is pinned in a self-test (`ext_hook_scope_selftest` is an `R-G` target;
+`ext_ambient_inventory_selftest`, `ext_call_inventory_selftest` are DST targets). Per fixture: migrate
+to 8.0, **or keep its 7.4 shape deliberately** when the gate is testing the old form, recorded with the
+reason. `claude-fable-5-1`. **Starts after P1.2a** (P1.2 changes which in-tree forms pass the gate)
+**and P1.4r** (§0 item 13). **Exit.** the three self-tests green; every kept-7.4 fixture named with its
+reason; mutgate on at least one migrated and one kept fixture.
 
 ### P1.3x — the live leaves, the mirror, accounting (3–4 days, `session.ail`, `tool_phase.ail`, `ports.ail`) — **line X**
 
@@ -697,11 +734,20 @@ items 1, 2, 8) is met. ADR status set to Accepted. `P1.1` opens.
 | Delegate exits | `make anchors` 0; `make driver_leaf_inventory` 0, byte-identical; `make registry_gen_check` 0; runtime 24/24, registry 17/17, catalog 5/5 |
 | Intake defects | **1** (a1) |
 
+### Ruling on P1.1's inventory and on isolation — 2026-09-21
+
+The operator adopted the orchestrator's recommendations: the 117 `UNOWNED` rows are owned as follows —
+18 masked files to their P1.2 batch (§3 P1.2), 13 failing scripts plus the non-`.ail` read-through to new
+**P1.6r**, 56 gate fixtures to new **P1.7r**, about 10 prose/data rows to 033 G4 (no line-R work), 8 already
+clean. Isolation: **no worktrees**; §0 item 13, one writer per surface, with the lanes core
+(P1.3r → P1.4r), packages (P1.2a → B, C, D) and scripts/tools (P1.5r → P1.6r, P1.7r). R: 17–21½
+delegate-days.
+
 ## 10. Estimates
 
 | phase | delegate-days |
 |---|---|
-| **R** | **15–19** (SWEEP ½, P0.2 1, **P0.2b ½**, P0.3 2–2½, P0.4 1½, P0.5 1–1½, P0.6 1, P1.1 2–2½, P1.2 4–6, P1.3r 1–1½, P1.4r ½, **P1.5r ½**, gate ½) — P1.5r added by the `Q-SWEEP` ruling, P0.2b by the P0G ruling |
+| **R** | **17–21½** (SWEEP ½, P0.2 1, **P0.2b ½**, P0.3 2–2½, P0.4 1½, P0.5 1–1½, P0.6 1, P1.1 2–2½, P1.2 4–6, P1.3r 1–1½, P1.4r ½, **P1.5r ½**, **P1.6r 1**, **P1.7r 1–1½**, gate ½) — P1.5r added by the `Q-SWEEP` ruling, P0.2b by the P0G ruling, P1.6r/P1.7r by the P1.1-inventory ruling |
 | P0 (X part) | 2–2½ (P0.7) |
 | P1 (X part) | 4–5½ (P1.3x 3–4, P1.4x 1½–2) |
 | P2 | 8–10 |
