@@ -655,6 +655,20 @@ red from P0.4, while P0.5's exit assumed it compiled), not an ADR one.
 | **Intake (orchestrator)** | scripted run exit 0; shape gate pass 3/3, inline-lambda controls 3/3 rejected; `mutgate.sh --clone-from` fresh clone **16/16 discriminate** (three register-ignores-input rows, two config-not-disclosed) |
 | Intake defects | **1** (a1), fixed in a2 — the line's first |
 
+### P0.2b — 2026-09-21, commit `977fbf92`
+
+| | |
+|---|---|
+| Commit | `977fbf92` — `reconstructed/` (17 attacks + the control, 2 local type modules), 106 lines of rows, `adr001_boundary_reconstructed_provenance.py`, `evidence/P0.2b/` |
+| Count, corrected | the brief said sixteen; the table's own rule gives **eighteen** unquoted attacks (20 attacks − the 2 quoted cases that are table rows; the other 3 quoted cases are escapes outside the 21). **17 reconstructed**, each rejecting for its row's recorded reason; `q_named_toplevel_xmod` **not forced** — every shape-faithful build rejects with the `app` labels but at `apply(ctx, w)`, not at `Pure(body)`; recorded in `NOT_RECONSTRUCTED` with its evidence |
+| Freeze 2(b) coverage | of review 5's 20 named-arm attacks: 2 quoted + 17 reconstructed = **19 as regression rows**; the 20th still rejects at the compiler (at a different application site), measured in the review and recorded here |
+| Groups | ADR section **72/0**: g1 44 = 27 + 17, g2 6 = 5 + 1, others unchanged |
+| **Target red on the 8.0 tree** | `make declared_vs_performed` exit 2 at HEAD: the script aborts in producer 1/2 before the ADR section runs. The orchestrator's brief said "green at HEAD, 114/0" — true at P0.2's intake, stale after P0.4; the delegate caught it. Stand-in: `evidence/P0.2b/run_adr001_section.sh` runs the committed ADR section alone |
+| Attribution of that red | **4 by design** — `compose_{pre_step,budget,solver,intercept_noninline}` die: the 7.4 compose extension against the 8.0 ABI (P1.2d). **2 with no owner** — ABI text probes in `run_declared_vs_performed.sh` that grep literal 7.4 signatures P0.4 correctly changed: `:124` `BudgetShaper((ExtCtx, BudgetPlan)` (now `PureCtx`) and `:707` `Compactor((ExtCtx, [Msg]) …` (now `AiCtx`; hidden behind `:124`'s abort). P1 does not touch detectors, so these do not heal |
+| Method note | a `git clone --shared` checked out at an older commit is **not** a valid "red before?" baseline for any target that compiles against the ABI: `ailang.lock` pins path dependencies to the primary checkout's absolute path, so the clone compiles against the primary's (8.0) ABI. The orchestrator's clone run at P0.4's parent `181051d0` was contaminated this way and is discarded. The P0.5 parent check stands: both sides were already on 8.0 |
+| **Intake (orchestrator)** | section runner exit 0, 72/0; reconstructed provenance exit 0 (18 of 19 unquoted rows, headers byte-for-byte); P0.2 provenance exit 0 (52 unchanged; `git diff af6b1d34..977fbf92` over P0.2's fixtures empty); `mutgate.sh --clone-from` fresh clone **8/8** — clean drop, app↔eff swaps, app at another site, let-annotation → app, control, header verbatim, unscored fixture |
+| Intake defects | 0 |
+
 ## 10. Estimates
 
 | phase | delegate-days |
