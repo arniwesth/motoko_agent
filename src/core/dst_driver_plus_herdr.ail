@@ -128,13 +128,13 @@ export pure func measured_at() -> string { "8470c3f" }
 -- THE ABI VERSION THIS PROFILE IS PINNED TO, exported so the acceptance script
 -- builds its manifest from the record rather than from a second literal.
 --
--- IT IS GUARDED, and only because of the sentence next to it: `check_abi_version`
--- re-derives the live version from `packages/motoko-ext-abi/ailang.toml` and
--- compares it against every `ABI x.y` occurrence in `src/core/dst_driver*.ail`,
--- so the `extension.abi` adapter boundary below says "ABI 7.4" in prose and that
--- is what goes red the day the package moves. A bare string constant matches
--- neither of the guard's two patterns and would have been invisible to it.
-export pure func herdr_abi_version() -> string { "7.4" }
+-- IT IS GUARDED DIRECTLY since 031 P1.5r-a2: `check_abi_pins` (rule 2) reads
+-- the body of every `*abi_version()` function against the live version in
+-- `packages/motoko-ext-abi/ailang.toml`. Before that only the prose next to it
+-- was guarded, and this said 7.4 at ABI 8.0: a version reaching a manifest by
+-- CALL matched neither literal pattern. No single source exists to reference
+-- instead: no AILANG module can read the package's version.
+export pure func herdr_abi_version() -> string { "8.0" }
 
 -- D5 field 8. The attribution table's live identity, RECORDED rather than
 -- restated: `Attr.table_identity()` is the producer and the acceptance script
@@ -330,7 +330,7 @@ export pure func driver_plus_herdr() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test. The graded run makes zero approval reads and the discovery witness says so" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface at ABI 7.4 (ExtCtx.open_waits; 7.3 added WorkInFlight, 7.1 PublishFile, 7.0 ExitIntent, 6.0 the Capability list at B8). INCLUDED: herdr's four atoms are dispatched across it, and what crosses includes EFFECTS rather than only dispatch" },
+        note: "the motoko-ext-abi hook surface at ABI 8.0 (8.0 every callback on its row's context view and the two decision variants; 7.4 ExtCtx.open_waits; 7.3 added WorkInFlight, 7.1 PublishFile, 7.0 ExitIntent, 6.0 the Capability list at B8). INCLUDED: herdr's four atoms are dispatched across it, and what crosses includes EFFECTS rather than only dispatch" },
       { boundary_id: "extension.ext_ports", included: true,
         note: "the ExtPorts surface an extension uses to reach the world. INCLUDED, and this profile's claim on it is stronger than driver_plus_compose's: classifier 3 reports 46 ExtPorts field calls in herdr's closure against ONE ambient source anywhere in it, and that source is a registration env read rather than a hook path. The graded session records nine of those calls as origin-tagged interactions and the replay reproduces all nine" }
     ],

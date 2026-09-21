@@ -914,7 +914,11 @@ def check_abi_version():
     `packages/motoko-ext-abi/ailang.toml`, so it is read from there.
     """
     live = live_abi_version()
+    check_abi_prose(live)
+    check_abi_pins(live)
 
+
+def check_abi_prose(live):
     # ---- rule 1: PROSE, in profile records only ---------------------------
     #
     # EVERY profile, not only `driver_only`. One fact deserves one guard, and a
@@ -965,8 +969,6 @@ def check_abi_version():
     print(f"  ✓ the ABI version every profile record's prose names is the one the package "
           f"declares: {live} ({seen} site(s) across "
           f"{len([p for p in subjects if p.exists()])} file(s))")
-
-    check_abi_pins(live)
 
 
 def live_abi_version():
@@ -1019,7 +1021,15 @@ def check_abi_pins(live):
     #     `driver_only_manifest`'s signature — `source_revision` ("HEAD") and
     #     `toolchain` ("ailang 0.33.0") are never bare version literals.
     #   * an `abi_version: "..."` record field.
-    # Both are claims about the ABI this tree HAS. Prose is a claim about when
+    #   * the body of a function named `*abi_version()` returning a bare
+    #     version literal (031 P1.5r-a2). `dst_driver_plus_herdr.ail`'s
+    #     `herdr_abi_version()` fed `herdr_graded_dst.ail`'s manifest its
+    #     `abi_version` through a CALL, so the first pattern never saw a
+    #     literal there, and it said 7.4 at ABI 8.0 until P1.5r reported it.
+    #     The source is read at the definition, where the literal is, rather
+    #     than at each call site; `conformance_abi_version()` is the other
+    #     member of the class.
+    # All three are claims about the ABI this tree HAS. Prose is a claim about when
     # something landed, and rule 1 says why that must not be swept.
     #
     # THE DEEPER HOLE THIS DOES NOT CLOSE, stated because a gate that hides its
@@ -1049,7 +1059,9 @@ def check_abi_pins(live):
         text = path.read_text()
         rel = str(path.relative_to(REPO))
         found = [m.start(1) for m in re.finditer(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S)] \
-            + [m.start(1) for m in re.finditer(r'abi_version:\s*"([0-9]+\.[0-9]+)"', text)]
+            + [m.start(1) for m in re.finditer(r'abi_version:\s*"([0-9]+\.[0-9]+)"', text)] \
+            + [m.start(1) for m in re.finditer(
+                r'func\s+\w*abi_version\(\)\s*->\s*string\s*\{\s*"([0-9]+\.[0-9]+)"', text)]
         for pos in found:
             arg = re.match(r'[0-9]+\.[0-9]+', text[pos:]).group(0)
             lineno = text.count("\n", 0, pos) + 1
@@ -1099,6 +1111,10 @@ if __name__ == "__main__":
         # 031 P0.5: the kind list alone, without the producers the full run
         # provisions (classifier 3 compiles every extension).
         check_capability_kinds()
+    elif sys.argv[1:] == ["--abi-prose"]:
+        # 031 P1.5r-a2: rule 1 of check_abi_version alone (profile-record
+        # prose), without `derive()`, for the same reason as `--abi-pins`.
+        check_abi_prose(live_abi_version())
     elif sys.argv[1:] == ["--abi-pins"]:
         # 031 P1.5r: rule 2 of check_abi_version alone (the pin sweep), without
         # `derive()`, which exits 1 on the tree while P1.2 is open.

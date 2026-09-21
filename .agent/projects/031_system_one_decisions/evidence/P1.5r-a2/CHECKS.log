@@ -1,0 +1,47 @@
+# P1.5r-a2 CHECKS.log — primary checkout at HEAD 73c1464f plus this part's uncommitted diff; AILANG AILANG v0.33.0
+
+$ python3 tools/profile_definition/check_fixtures.py --abi-prose   # rule 1 alone
+  ✓ the ABI version every profile record's prose names is the one the package declares: 8.0 (4 site(s) across 7 file(s))
+exit 0
+
+$ python3 tools/profile_definition/check_fixtures.py --abi-pins    # rule 2 alone
+  ✓ every manifest ABI pin in the tree is the declared one: 8.0 (33 pin(s) across 548 tracked .ail file(s))
+  ✓ exempted, a fixture literal built to differ: src/eval/journal/admission.ail:993 pins '7.3' != 8.0 — the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers
+exit 0
+
+$ p11_core_check.sh check|test  (the four touched src/core modules; lock-free workspace)
+p11: check src/core/dst_driver_only.ail ok
+p11: check src/core/dst_driver_plus_compose.ail ok
+p11: check src/core/dst_driver_plus_no_ops.ail ok
+p11: check src/core/dst_driver_plus_herdr.ail ok
+exit 0
+p11: test src/core/dst_driver_only.ail ok -- 6 tests: 6 passed, 0 failed, 0 skipped (23.794169839s)
+p11: test src/core/dst_driver_plus_compose.ail ok -- 9 tests: 9 passed, 0 failed, 0 skipped (11.708756783s)
+p11: test src/core/dst_driver_plus_no_ops.ail ok -- 7 tests: 7 passed, 0 failed, 0 skipped (8.259141921s)
+p11: test src/core/dst_driver_plus_herdr.ail ok -- 3 tests: 3 passed, 0 failed, 0 skipped (3.952066228s)
+exit 0
+
+$ make anchors / make driver_leaf_inventory — output before vs after this diff, compared with cmp
+make anchors: byte-identical (exit 0)
+make driver_leaf_inventory: byte-identical (exit 0)
+
+$ make profile_definition   (tail; ailang script PASS, then check_fixtures main() -> derive())
+Traceback (most recent call last):
+subprocess.CalledProcessError: Command '['/usr/bin/python3', '/workspaces/motoko_agent/tools/ext_call_inventory/derive.py', '--json']' returned non-zero exit status 1.
+make: *** [Makefile:833: profile_definition] Error 1
+exit 2
+
+$ make driver_only          (tail)
+driver_only_dst PASS
+Traceback (most recent call last):
+subprocess.CalledProcessError: Command '['/usr/bin/python3', '/workspaces/motoko_agent/tools/ext_call_inventory/derive.py', '--json']' returned non-zero exit status 1.
+make: *** [Makefile:1344: driver_only] Error 1
+exit 2
+
+$ python3 tools/ext_call_inventory/derive.py --json  -> exit 1; unresolved (24):
+   15 packages/motoko-ext-abi/types.ail — ExtPorts field taken as a VALUE, not called
+   6 packages/motoko-ext-compose/compose.ail — ExtPorts field taken as a VALUE, not called
+   2 packages/motoko-ext-compose/compose.ail — receiver `ctx.ports` resolves to `None`, not an ABI port type
+   1 packages/motoko-ext-agentcli/agentcli.ail — receiver `p` resolves to `Provider`, not an ABI port type
+
+# mutgate (fresh git clone --shared of HEAD 73c1464f + this diff): 4/4 discriminate — see mutgate-result.tsv
