@@ -302,8 +302,9 @@ Site list: the sixth review's 45-row ledger (`REVIEW-adr001-v0.6-verdicts-codex.
 seventh (A.5). Every site becomes a **named top-level function bound directly**; every captured value goes
 through `config` (all 30 are data; none is a function). A captured registration value used by several
 callbacks is encoded once. Per batch: the gate green on the batch's packages (P0.3 fixtures flip
-fail → pass), `ailang check` on each package, the package's own tests, and the **intake count** for §0
-item 12.
+fail → pass), `ailang check` on each package **as its own root with its own `ailang.toml`**, so its
+`[effects].max` is enforced (ADR **Amendment 2**: the ceiling admits the full row of every slot the
+package registers), the package's own tests, and the **intake count** for §0 item 12.
 
 | batch | packages | sites | captures | why this order |
 |---|---|---|---|---|
@@ -752,6 +753,20 @@ delegate-days.
 | **Intake (orchestrator)** | `--abi-pins` exit 0 (31 at 8.0; `admission.ail:993` exempted at 7.3); `run_abi_probes.sh` 2/2; `mutgate.sh --clone-from` fresh clone **7/7** |
 | Findings, assigned | (1) four rule-1 profile-record notes "ABI 7.4" in `src/core/dst_driver_{only,plus_compose,plus_no_ops,plus_herdr}.ail` — the same checker's other rule, red at 8.0; (2) `herdr_abi_version() -> "7.4"` (`dst_driver_plus_herdr.ail:137`), a pin through a call. Both → a **P1.5r follow-up after P1.4r** (src/core lane). (3) the root `ailang.lock` records the ABI at 7.4 → regenerated at **P1.2d** |
 | Intake defects | 0 |
+
+### P1.2a — 2026-09-21, commit `df2df96e` (batch A, the calibration)
+
+| | |
+|---|---|
+| Items | **9 sites in 6 packages**, 1 capture (omnigraph's cached prompt), plus 5 masked files |
+| Commit | every `register_with_config` returns `{ config, caps }` with a literal `caps`; inline payloads (omnigraph's PromptShaper and ToolProvider, progress-contract-guard's SolverJudge) now named; omnigraph's prompt disclosed as `config` and read back from `ext_config`, its `workdir` registration-only; helpers onto `ProcessCtx`/`PureCtx`, the ten-port test stubs removed; each `ailang.toml` pins ABI 8.0; compaction-structural drops a test-only `src/core` import; masked files changed only where 8.0 requires |
+| **Intake (orchestrator)** | gate `derive.py --hook-scope --no-provision`: **shape pass 6 of 18, binding rejections 32** — the predicted numbers, exact; omnigraph's capture correct (prompt through config, tools through the digested ToolProvider data position); the one compaction-structural test failure verified pre-existing at `181051d0` in a lock-free workspace (`make test` is `test_core` only, so it does not gate `R-G`); `mutgate.sh --clone-from` fresh clone **19/19** |
+| **Finding → Amendment 2** | checked as their own roots with their own `ailang.toml`, omnigraph (its named ToolProvider handler declares the full slot row), compaction-structural (`Trace`) and microrag (`Rand`, pre-existing at 7.4) exceed `[effects].max`. The delegate's workspace never applied the package's own toml. No `R-G` target checks packages as roots; it binds registry publication (G8) and external consumers. ADR **Amendment 2** (`6a6041d2`) states the rule; batch exits now include the own-root check; batch A's three packages are fixed in a follow-up attempt |
+| **Rule 4 calibration** | **0 independent defects in 9 items**; **1 systematic method gap** (the check workspace), closed in every later brief. Operator ruling: B, C and D run at their planned sizes, in parallel on disjoint packages, at most four delegates at once |
+
+Two packages under `packages/` are in no batch — `motoko-ext-ai-compat`, `motoko-ext-autoresearch` — and
+need none: neither imports the ABI, registers, or is in the generated registry. The root `ailang.lock`
+regeneration (P1.5r's finding) goes to **whichever P1.2 batch lands last**, assigned at its intake.
 
 ## 10. Estimates
 
