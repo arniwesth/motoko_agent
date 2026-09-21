@@ -7,7 +7,8 @@
 --   "The runner applies reusable invariants to the returned outcome and
 --    complete trace."
 --
--- The twelve families below are each a runnable function over ONE execution —
+-- The thirteen families below — D7's twelve, plus ADR-003 v6.1 D4's
+-- `JournalFold` — are each a runnable function over ONE execution —
 -- outcome plus complete trace, never per step. D7's thirteenth statement ("the
 -- discovery contract is itself an invariant") is over a PAIR of executions and
 -- is `discovery_contract_findings` at the bottom, kept separate rather than
@@ -66,8 +67,12 @@
 --      evidence that the event is in `LedgerTrace`".
 --
 -- WI-A14 CLOSED ONE OF THE FIFTEEN; WI-C3 CLOSED A SECOND (`StreamDelta`);
--- **WI-D2 CLOSED ELEVEN MORE, and the register is now TWO.** See
--- `d64_gap_register`.
+-- **WI-D2 CLOSED ELEVEN MORE, and the register went to TWO. PLAN-003 P3 Part 1
+-- took it to SEVEN**, the one move that added rather than closed: ADR-003 D1's
+-- five journal-class variants are declared before the part that emits them,
+-- because the vocabulary gate (§0.3) will not let a variant land without its
+-- row and golden and the fold that names them cannot compile until they exist.
+-- See `d64_gap_register`.
 --
 --   AND THE THREE CHECKS ABOVE WERE NOT ENOUGH ON THEIR OWN, which WI-D2
 --   measured rather than argued. Checks 1 and 2 both compare the register
@@ -122,8 +127,9 @@
 
 module src/core/dst_invariants
 
-import std/list as List (length)
-import std/string as Str (startsWith)
+import std/list as List (length, foldl, map)
+import std/crypto (sha256Hex)
+import std/string as Str (startsWith, contains)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 
@@ -132,6 +138,8 @@ import src/core/phase_vocab (
   LedgerRecord, WireRecord, CompactionStageRecord, DecisionRecord,
   LedgerEvent, RunSummary, TotalsUpdated, CostExhausted, DoneEvent, CheckpointTaken,
   StreamDelta,
+  -- ADR-003 D1's journal class, read by the payload-equality rows below.
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, ParkEntered, WakeReceived, ParkEnteredInfo, OperatorWait, wait_id,
   CheckpointInfo,
   is_run_summary,
   count_run_summaries,
@@ -187,6 +195,21 @@ import src/core/dst_generator (
   generator_installed
 )
 
+-- ADR-003 v6.1 D4. `journal.ail` is a leaf (it imports no `session` and no
+-- `dst_*`), so this edge is acyclic in the direction the plan states.
+import src/core/journal (
+  FinalState,
+  RunIdentity, default_run_identity,
+  SessionState, Refusal, refusal_id,
+  harness_header, journal_lines_of_records, journal_leaf, fold_journal,
+  messages_json,
+  -- PLAN-003 P3 Part 3's payload-equality rows. The chain functions are
+  -- IMPORTED and not restated for the reason `journal.ail` states at their
+  -- declaration: the chain digest has exactly one definition, and a second one
+  -- here would be an invariant that agrees with itself.
+  chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base, messages_of_json
+)
+import std/json (Json, encode)
 import src/core/ports (
   WorldState,
   ToolOutcomeRecord, ToolRecordDecoded, ToolRecordUndecodable,
@@ -199,7 +222,7 @@ import src/core/ports (
 export pure func invariant_set_version() -> string { "invariant-set/1" }
 
 -- ============================================================================
--- PART 1 — the twelve families, and D7's own words for each
+-- PART 1 — the thirteen families, and D7's own words for its twelve
 -- ============================================================================
 
 export type InvariantFamily
@@ -215,6 +238,13 @@ export type InvariantFamily
   | WorldTransitions
   | VirtualTime
   | HarnessHygiene
+  -- ADR-003 v6.1 D4's family, and the THIRTEENTH — D7 named twelve. It is here
+  -- rather than folded into `CheckpointHistory` because the two check different
+  -- artifacts: that family validates the checkpoint chain the framework already
+  -- owns, and this one folds the SESSION JOURNAL and compares the result with
+  -- what the run ended holding. A family that did both would report one verdict
+  -- for two obligations.
+  | JournalFold
 
 export pure func family_id(f: InvariantFamily) -> string {
   match f {
@@ -229,13 +259,15 @@ export pure func family_id(f: InvariantFamily) -> string {
     ReplayConsistency => "replay-consistency",
     WorldTransitions => "world-transitions",
     VirtualTime => "virtual-time",
-    HarnessHygiene => "harness-hygiene"
+    HarnessHygiene => "harness-hygiene",
+    JournalFold => "journal-fold"
   }
 }
 
--- D7's twelve bullets, transcribed. Carried as data rather than as comments so
--- the acceptance script can assert that every family it runs is a family D7
--- names, and so a family added here without an obligation is visible.
+-- D7's twelve bullets, transcribed, plus ADR-003 v6.1 D4's sentence for the
+-- thirteenth. Carried as data rather than as comments so the acceptance script
+-- can assert that every family it runs has an obligation behind it, and so a
+-- family added here without one is visible.
 export pure func family_obligation(f: InvariantFamily) -> string {
   match f {
     TerminalSummary =>
@@ -261,7 +293,9 @@ export pure func family_obligation(f: InvariantFamily) -> string {
     VirtualTime =>
       "monotonic virtual time and deadline derivation",
     HarnessHygiene =>
-      "zero discovery-generator failures, matcher mismatches, forbidden effects, and ambient RNG reads"
+      "zero discovery-generator failures, matcher mismatches, forbidden effects, and ambient RNG reads",
+    JournalFold =>
+      "a fold of the run's journal-class records reproduces the state the run ended holding, field by field"
   }
 }
 
@@ -273,7 +307,8 @@ export pure func family_obligation(f: InvariantFamily) -> string {
 export pure func all_families() -> [InvariantFamily] {
   [TerminalSummary, EmissionParity, PhaseTransitions, ToolPairing,
    BudgetAccounting, BoundedProgress, CheckpointHistory, OutcomeAgreement,
-   ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene]
+   ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene,
+   JournalFold]
 }
 
 -- ============================================================================
@@ -330,6 +365,18 @@ export type Violation
   | HarnessFailureObserved(string, int)
   | AmbientRngRead(int)
   | ForbiddenEffectSite(string)
+  -- F13 journal fold (ADR-003 v6.1 D4)
+  | JournalFoldDisagrees(string)
+  -- F2 emission parity, ADR-003 v6.1 D2's payload half (PLAN-003 P3 Part 3).
+  -- It is an EmissionParity rule and not a JournalFold one on purpose: D2 puts
+  -- the journal class's payload obligation in the emission-parity family, which
+  -- until now compared PRESENCE only, and the fold is a different reading of a
+  -- different input (the entries the twin builds, not the wire records the
+  -- driver appended).
+  | JournalPayloadDisagrees(string)
+  -- PLAN-002 W4 Part 3: a park/wake record's payload disagrees with itself or
+  -- with the park it answers.
+  | ParkPayloadDisagrees(string)
 
 export pure func violation_family(v: Violation) -> InvariantFamily {
   match v {
@@ -369,7 +416,10 @@ export pure func violation_family(v: Violation) -> InvariantFamily {
     GeneratorBoundFailure(_, _, _) => HarnessHygiene,
     HarnessFailureObserved(_, _) => HarnessHygiene,
     AmbientRngRead(_) => HarnessHygiene,
-    ForbiddenEffectSite(_) => HarnessHygiene
+    ForbiddenEffectSite(_) => HarnessHygiene,
+    JournalFoldDisagrees(_) => JournalFold,
+    JournalPayloadDisagrees(_) => EmissionParity,
+    ParkPayloadDisagrees(_) => EmissionParity
   }
 }
 
@@ -411,7 +461,10 @@ export pure func violation_rule(v: Violation) -> string {
     GeneratorBoundFailure(_, _, _) => "generator-bound-failure",
     HarnessFailureObserved(_, _) => "harness-failure-observed",
     AmbientRngRead(_) => "ambient-rng-read",
-    ForbiddenEffectSite(_) => "forbidden-effect-site"
+    ForbiddenEffectSite(_) => "forbidden-effect-site",
+    JournalFoldDisagrees(_) => "journal-fold-disagrees",
+    JournalPayloadDisagrees(_) => "journal-payload-disagrees",
+    ParkPayloadDisagrees(_) => "park-payload-disagrees"
   }
 }
 
@@ -490,7 +543,13 @@ export pure func violation_message(v: Violation) -> string {
     AmbientRngRead(n) =>
       "[ambient-rng-read] the run performed ${n} ambient RNG read(s); D7 requires zero, because an unrouted source of randomness is a determinism failure that no seed can reproduce",
     ForbiddenEffectSite(site) =>
-      "[forbidden-effect-site] the run reached '${site}', which the profile declares forbidden; D5's exclusion is the profile's whole claim and a reached exclusion retires it"
+      "[forbidden-effect-site] the run reached '${site}', which the profile declares forbidden; D5's exclusion is the profile's whole claim and a reached exclusion retires it",
+    JournalFoldDisagrees(field) =>
+      "[journal-fold-disagrees] a fold of the run's journal-class records disagrees with what the run ended holding at '${field}'; ADR-003 D4 makes resume a PURE FOLD of the journal, so the fold over a run's own trace must reproduce that run's final state exactly — a field that differs is a resume that would open on a different conversation than the one that was suspended, and a 'refusal:' field is the fold declining to read the journal at all",
+    ParkPayloadDisagrees(field) =>
+      "[park-payload-disagrees] a `park_entered` or `wake_received` record's payload disagrees at '${field}'; PLAN-002 W4 Part 3 asks for PAYLOAD assertions and not presence only: a park names a `<run_id>.p<n>` request, a step and at least one wait and is entered once, and a wake answers the open park's `request_id`, carries a known outcome, names one of that park's waits when the outcome settles, loses or times out one, and carries the cancelling command when it aborts",
+    JournalPayloadDisagrees(field) =>
+      "[journal-payload-disagrees] a journal-class record's payload disagrees with itself or with its neighbours at '${field}'; ADR-003 D2 asks the emission-parity family for PAYLOAD equality and not only presence, and these are the three claims no other reading makes — the seed's `digest` against its own `messages`, a `state_delta`'s `ext_artifacts_digest` against the artifacts it inlined, and one `run_id` across every journal-class record of one run"
   }
 }
 
@@ -530,7 +589,7 @@ export pure func violations_in(vs: [Violation], f: InvariantFamily) -> [Violatio
 -- ============================================================================
 --
 -- D7: "the returned outcome and complete trace". Both live in `DstResult`. The
--- rest of this record is the context the twelve families need that the result
+-- rest of this record is the context the families need that the result
 -- type does not carry, and every field is something a runner HAS rather than
 -- something it would have to derive.
 
@@ -592,7 +651,19 @@ export type ExecutionUnderTest = {
   -- zero, and a family that recomputed them would be a second opinion about
   -- somebody else's artifact.
   ambient_rng_reads: int,
-  forbidden_effect_sites: [string]
+  forbidden_effect_sites: [string],
+
+  -- ADR-003 v6.1 D4's comparand: what the run ended holding — history, counts,
+  -- telemetry, artifacts. `dst_execution.execution_of` fills it from
+  -- `TracedSessionResult.final`; a hand-authored fixture fills it with
+  -- `empty_final_state`, which is honest because a fixture ran nothing.
+  --
+  -- NO FAMILY READS IT YET, and that is the plan's shape rather than an
+  -- oversight: `JournalFold` (P3 Part 2) is the reader, and it is red from this
+  -- commit until P3's journal-class events land, because a fold over a trace
+  -- carrying no journal-class records yields an empty history against a
+  -- non-empty `final.history`.
+  final: FinalState
 }
 
 -- ============================================================================
@@ -673,8 +744,8 @@ export pure func display_only_baseline() -> [string] {
 -- decidable over the returned trace alone" depends on their interleaving. The
 -- driver is the sole appender and that is load-bearing.
 --
--- The remaining two are NOT waived and are NOT reclassified. They are what is
--- left of the work list, and `parity_register_findings` pins this list against
+-- The registered entries are NOT waived and are NOT reclassified. They are what
+-- is left of the work list, and `parity_register_findings` pins this list against
 -- the vocabulary's gap in BOTH directions: a gap nobody registered is
 -- `parity-gap-register-missing`, and a registered variant that is no longer a
 -- gap is `parity-gap-register-stale`. Closing one without editing this list is
@@ -701,6 +772,40 @@ export pure func display_only_baseline() -> [string] {
 -- run at HEAD before this item. A variant emitted 47 times is not a variant no
 -- run reaches, so it is closed and witnessed by `make ledger_parity`'s `handled`
 -- subject rather than excused.
+--
+-- THREE AT PLAN-003 P3 PART 3, AND THE SHRINK IS THE SHRINK-ONLY RULE WORKING
+-- AS WRITTEN. Part 1 grew this list from two to seven by DECLARING five
+-- variants nothing constructed; Part 3 emits four of them — `HistorySeeded` at
+-- the traced entry, `HistoryAppended` at every site where `st.msgs` grows or its
+-- tail is replaced, `HistoryReplaced` at the checkpoint, `StateDelta` at every
+-- step end — each APPENDED where it is emitted, so all four leave the
+-- vocabulary's gap and leave this register in the same commit, which is exactly
+-- what the rule demands and what `parity_register_findings` pins in both
+-- directions. `SessionResumed` stayed, because only a child spawned with
+-- `--resume` emits it, and P3 PART 5 CLOSES IT: `session.run_v2_session_resumed_traced`
+-- emits it AND appends it as the first record of the resumed frame, which is the
+-- same move that took the four out. Its wire comparison is made by `make
+-- journal_resume`, out of process, because `run_ledger_parity_wire.sh`'s eight
+-- subjects never resume.
+--
+-- WHAT THE SHRINK BUYS, and it is not bookkeeping:
+-- `scripts/dst/run_ledger_parity_wire.sh` reads this register and, for every
+-- Logical variant NOT in it, compares the count the driver PROJECTED on stdout
+-- with the count it APPENDED to the returned trace, out of process. Removing
+-- these four names is what makes that gate demand the append for them.
+--
+-- SEVEN AT PLAN-003 P3 PART 1, AND THAT GROWTH WAS THE DECLARATION ITSELF.
+-- ADR-003 v6.1 D1's five journal-class variants entered `LedgerEvent` with
+-- their rows and goldens and NO EMIT SITE — §0.3's vocabulary gate requires a
+-- variant, its row and its golden in one commit, and P3 Part 2's fold family
+-- cannot compile against a variant that does not exist, so the vocabulary is
+-- two parts ahead of the driver by construction. The shrink-only rule survives
+-- intact in the direction it was written for: a variant may not LEAVE this list
+-- without leaving the vocabulary's gap, and may not leave the gap by being
+-- reclassified DisplayOnly. What it never said, because the case had not
+-- arisen, is that a variant may not be DECLARED before it is emitted. Declaring
+-- it here is the alternative to writing `reaches_trace_today: true` for an
+-- event nothing constructs, which would be a false survey kept flat by a lie.
 export pure func d64_gap_register() -> [string] {
   ["ScratchpadResult",
    "SessionSuspend"]
@@ -733,7 +838,8 @@ export pure func parity_gap_reasons() -> [ParityGap] {
   [{ variant: "ScratchpadResult",
      why: "MEASURED 0 `scratchpad_result` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Its two emission sites are in `tool_phase.execute_allowed_tool_call` and both are now inside the returned `emitted` log, so this is a REACHABILITY gap and not a parity one: if a run emits it, it reaches the trace. Closing it needs a run that emits it, and the only such run is one where a tool named `scratchpad` is served by a hook returning `Handled` with a `cells` key in its metadata. WI-D2 declined to construct one — a constructed scenario would close this register entry while establishing nothing about a profile." },
    { variant: "SessionSuspend",
-     why: "MEASURED 0 `session_suspend` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Emitted on the suspend control path; no profile in this tree has a suspend trigger, so the count is 0 rather than small. Same shape as ScratchpadResult: a coverage gap, not a parity one." }]
+     why: "MEASURED 0 `session_suspend` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Emitted on the suspend control path; no profile in this tree has a suspend trigger, so the count is 0 rather than small. Same shape as ScratchpadResult: a coverage gap, not a parity one." }
+]
 }
 
 -- ============================================================================
@@ -943,11 +1049,217 @@ pure func stream_order(a: [string], b: [string], pos: int) -> [Violation] {
   }
 }
 
+
+-- ============================================================================
+-- FAMILY 2, ADR-003 v6.1 D2's PAYLOAD HALF (PLAN-003 P3 Part 3)
+-- ============================================================================
+--
+-- D2 lands the journal class "each APPENDED to the trace and EMITTED, with
+-- payload equality asserted in the emission-parity family (`parity_findings`,
+-- which today compares presence, not payload)". This is that assertion, and it
+-- is deliberately NOT a second copy of the fold's chain check.
+--
+-- WHAT THE FOLD ALREADY SEES, and therefore what is not repeated here: every
+-- `HistoryAppended.digest_after` and every `HistoryReplaced.digest_after` is
+-- recomputed by `journal.fold_append` / `fold_replace` from the entries, and
+-- `journal_fold_findings` runs that fold over exactly these records. Restating
+-- it would be a rule whose red is always another rule's red.
+--
+-- WHAT NOTHING ELSE SEES, and it is three things — this is the whole argument
+-- for the rule existing:
+--
+--   1. THE SEED'S `digest` AGAINST ITS OWN `messages`. P3 Part 2 recorded this
+--      as the one place the chain is not checking a child-computed value: D1's
+--      host expands a `history_seeded` into N `history_appended` ENTRIES, and
+--      `journal_lines_of_records` computes those N digests itself, so the
+--      child's `digest` field never reaches the fold. A child that emitted the
+--      right running chain and the wrong seed digest is green everywhere else
+--      and breaks D1's third host arm (compare the seed's `digest` with the
+--      last history entry's `digest_after`, and drop) on the second run of
+--      every session.
+--   2. A `state_delta`'s `ext_artifacts_digest` AGAINST THE ARTIFACTS IT
+--      INLINED. The fold reads the inline value and ignores the digest; the
+--      HOST reads the digest to decide whether the value is there at all.
+--   3. ONE `run_id` ACROSS EVERY JOURNAL-CLASS RECORD OF ONE RUN. The fold
+--      attributes by entry, not by `run_id`, so it never reads the field; D1
+--      makes it the child's statement of which run an entry belongs to and the
+--      host writes it through unexamined.
+--
+-- AND ONE ORDERING CLAIM, which is D2's own sentence: `HistorySeeded` is the
+-- FIRST journal-class record of every run. A seed that arrived after an append
+-- would make the chain's base a value that entry could not have chained from.
+
+type JournalPayloadAcc = {
+  vs: [Violation],
+  seen_seed: bool,
+  run_id: string,
+  pos: int
+}
+
+pure func journal_class_id(e: LedgerEvent) -> string {
+  match e {
+    HistorySeeded(_) => "HistorySeeded",
+    HistoryAppended(_) => "HistoryAppended",
+    HistoryReplaced(_) => "HistoryReplaced",
+    StateDelta(_) => "StateDelta",
+    _ => ""
+  }
+}
+
+pure func journal_run_id_of(e: LedgerEvent) -> string {
+  match e {
+    HistorySeeded(i) => i.run_id,
+    HistoryAppended(i) => i.run_id,
+    HistoryReplaced(i) => i.run_id,
+    StateDelta(i) => i.run_id,
+    _ => ""
+  }
+}
+
+pure func journal_payload_rows(acc: JournalPayloadAcc, e: LedgerEvent) -> [Violation] {
+  match e {
+    HistorySeeded(i) =>
+      (if acc.seen_seed then [JournalPayloadDisagrees("seed.order/second HistorySeeded at record ${show(acc.pos)}")] else [])
+      ++ (match messages_of_json(i.messages) {
+            Err(why) => [JournalPayloadDisagrees("seed.messages/${why}")],
+            Ok(ms) =>
+              (if i.digest == chain_digest_over(chain_empty_base(), ms) then []
+               else [JournalPayloadDisagrees("seed.digest")])
+              -- P3 Part 4. THE SEED'S PREFIX CHAIN, which the HOST copies into the
+              -- N `history_appended` entries it expands this event into. Nothing
+              -- else sees it: the fold reads the entries and never the event, and
+              -- the AILANG twin recomputes the same values rather than reading
+              -- them — which is exactly why the field needs a rule here. A child
+              -- that reported a chain disagreeing with its own `messages` would
+              -- write a journal that refuses at its first history entry, and the
+              -- first place that could be noticed would be a live resume.
+              -- Compared through `encode`, because `Json` has no `Eq` instance and the
+              -- projection is a byte surface anyway: the host reads these values out
+              -- of a JSON line, so JSON is the form the comparison should be in.
+              ++ (if encode(chain_digests_json(chain_digests_over(chain_empty_base(), ms))) == encode(i.digests) then []
+                  else [JournalPayloadDisagrees("seed.digests")])
+          }),
+    StateDelta(i) =>
+      match i.ext_artifacts {
+        None => [],
+        Some(v) =>
+          if i.ext_artifacts_digest == "sha256:${sha256Hex(encode(v))}" then []
+          else [JournalPayloadDisagrees("state_delta.ext_artifacts_digest at record ${show(acc.pos)}")]
+      },
+    _ => []
+  }
+}
+
+pure func journal_payload_step(acc: JournalPayloadAcc, r: LedgerRecord) -> JournalPayloadAcc {
+  match r {
+    WireRecord(e) => {
+      let id = journal_class_id(e);
+      if id == "" then { acc | pos: acc.pos + 1 }
+      else {
+        let rid = journal_run_id_of(e);
+        let order =
+          if acc.seen_seed then []
+          else match e {
+            HistorySeeded(_) => [],
+            _ => [JournalPayloadDisagrees("seed.order/${id} at record ${show(acc.pos)} precedes the run's HistorySeeded")]
+          };
+        let ids =
+          if acc.run_id == "" then (if rid == "" then [JournalPayloadDisagrees("run_id/empty on ${id} at record ${show(acc.pos)}")] else [])
+          else if rid == acc.run_id then []
+          else [JournalPayloadDisagrees("run_id/'${rid}' on ${id} at record ${show(acc.pos)} after '${acc.run_id}'")];
+        {
+          vs: acc.vs ++ order ++ ids ++ journal_payload_rows(acc, e),
+          seen_seed: acc.seen_seed || id == "HistorySeeded",
+          run_id: if acc.run_id == "" then rid else acc.run_id,
+          pos: acc.pos + 1
+        }
+      }
+    },
+    _ => { acc | pos: acc.pos + 1 }
+  }
+}
+
+export pure func journal_payload_findings(trace: LedgerTrace) -> [Violation] {
+  let acc0: JournalPayloadAcc = { vs: [], seen_seed: false, run_id: "", pos: 0 };
+  List.foldl(journal_payload_step, acc0, trace.records).vs
+}
+
 export pure func parity_findings(x: ExecutionUnderTest) -> [Violation] {
   let trace = trace_of(x.result);
   parity_register_findings()
     ++ display_only_in(trace.records, event_vocabulary(), 0)
     ++ stream_parity_findings(x.emissions, trace)
+    ++ journal_payload_findings(trace)
+    ++ park_payload_findings(trace)
+}
+
+-- ============================================================================
+-- PLAN-002 W4 Part 3: the park class's PAYLOAD rows (ADR-002 D2).
+-- ============================================================================
+--
+-- Presence is `make ledger_parity`'s; these are the claims only the payload
+-- makes, read over one returned trace in record order:
+--   park_entered.request_id   non-empty and `<run_id>.p<n>`-shaped
+--   park_entered.step         non-negative
+--   park_entered.waits        at least one wait (`decide` parks only on waits)
+--   park_entered.reentered    a park is entered ONCE: a re-issue of the same
+--                             `request_id` appends no second record (§8.3)
+--   wake_received.request_id  answers the park that is open
+--   wake_received.outcome     one of the six arm ids
+--   wake_received.wait_id     names one of that park's waits for settled /
+--                             lost / timed_out; carries the command for aborted
+-- A wake closes its park, so a second wake for one park is the `request_id`
+-- row's red.
+
+type ParkPayloadAcc = {
+  vs: [Violation],
+  open: [ParkEnteredInfo],
+  entered: [string],
+  pos: int
+}
+
+pure func park_ids_of(i: ParkEnteredInfo) -> [string] {
+  List.map(\w. wait_id(w), i.waits)
+}
+
+pure func park_request_shaped(id: string) -> bool {
+  id != "" && Str.contains(id, ".p")
+}
+
+pure func park_payload_step(acc: ParkPayloadAcc, r: LedgerRecord) -> ParkPayloadAcc {
+  match r {
+    WireRecord(ParkEntered(i)) => {
+      let at = " at record ${show(acc.pos)}";
+      let vs =
+        (if park_request_shaped(i.request_id) then [] else [ParkPayloadDisagrees("park_entered.request_id${at}")])
+        ++ (if i.step >= 0 then [] else [ParkPayloadDisagrees("park_entered.step${at}")])
+        ++ (if List.length(i.waits) > 0 then [] else [ParkPayloadDisagrees("park_entered.waits${at}")])
+        ++ (if contains_str(acc.entered, i.request_id) then [ParkPayloadDisagrees("park_entered.reentered '${i.request_id}'${at}")] else []);
+      { vs: acc.vs ++ vs, open: [i], entered: i.request_id :: acc.entered, pos: acc.pos + 1 }
+    },
+    WireRecord(WakeReceived(i)) => {
+      let at = " at record ${show(acc.pos)}";
+      let known = i.outcome == "settled" || i.outcome == "lost" || i.outcome == "operator_input"
+        || i.outcome == "timed_out" || i.outcome == "host_error" || i.outcome == "aborted";
+      let names_wait = i.outcome == "settled" || i.outcome == "lost" || i.outcome == "timed_out";
+      let vs = match acc.open {
+        [] => [ParkPayloadDisagrees("wake_received.request_id '${i.request_id}' answers no open park${at}")],
+        p :: _ =>
+          (if p.request_id == i.request_id then [] else [ParkPayloadDisagrees("wake_received.request_id '${i.request_id}' against open '${p.request_id}'${at}")])
+          ++ (if names_wait && not contains_str(park_ids_of(p), i.wait_id) then [ParkPayloadDisagrees("wake_received.wait_id '${i.wait_id}'${at}")] else [])
+      };
+      let shape =
+        (if known then [] else [ParkPayloadDisagrees("wake_received.outcome '${i.outcome}'${at}")])
+        ++ (if i.outcome == "aborted" && i.wait_id == "" then [ParkPayloadDisagrees("wake_received.wait_id aborted with no command${at}")] else []);
+      { vs: acc.vs ++ vs ++ shape, open: [], entered: acc.entered, pos: acc.pos + 1 }
+    },
+    _ => { acc | pos: acc.pos + 1 }
+  }
+}
+
+export pure func park_payload_findings(trace: LedgerTrace) -> [Violation] {
+  let acc0: ParkPayloadAcc = { vs: [], open: [], entered: [], pos: 0 };
+  List.foldl(park_payload_step, acc0, trace.records).vs
 }
 
 -- ============================================================================
@@ -1611,12 +1923,88 @@ export pure func hygiene_findings(x: ExecutionUnderTest) -> [Violation] {
 }
 
 -- ============================================================================
+-- FAMILY 13 — the journal fold (ADR-003 v6.1 D4)
+-- ============================================================================
+--
+-- Take the journal-class `WireRecord`s of the returned trace, give them the ids
+-- and parents the HOST would give them, fold, and compare the result with
+-- `x.final` field by field.
+--
+-- THE ID ASSIGNMENT IS NOT HERE. It is `journal.journal_lines_of_records`, and
+-- it is there rather than here for one reason: PLAN-003 P3 Part 5's resume
+-- script folds a journal built the same way, and two copies of "as the host
+-- would" would be two notions of the journal — the second copy being where a
+-- fold quietly starts agreeing with itself. `journal.ail` is a leaf, so the
+-- resume script can reach it without importing the invariant set.
+--
+-- WHY THE COMPARISON IS FIELD BY FIELD AND NOT A RECORD EQUALITY. A single
+-- boolean would say "the fold disagrees" and nothing else; the field name is
+-- what turns a red row into a repair. `history` is compared through the codec's
+-- encoding rather than by length, because two histories of the same length that
+-- differ in one message are exactly what a broken replacement rule produces.
+--
+-- WHY A REFUSAL IS A DISAGREEMENT AND NOT ITS OWN RULE. A fold that refuses has
+-- not reproduced `final`, which is the obligation; the field carries
+-- `refusal:<id>` so the message still says which rule refused. One rule for one
+-- obligation, which is what `sample_violations` counts.
+--
+-- RED AT THIS COMMIT, BY CONSTRUCTION. Nothing emits a journal-class event yet
+-- (PLAN-003 P3 Part 3 does), so on a real run the fold sees a header and no
+-- history and reports `history` against a `final.history` that has at least the
+-- seed. That red is the check that this family reads the trace at all — a family
+-- that were green here would be green because it was never asked.
+pure func journal_final_findings(s: SessionState, f: FinalState) -> [Violation] {
+  let hist = if encode(messages_json(s.history)) == encode(messages_json(f.history)) then []
+             else [JournalFoldDisagrees("history")];
+  let counts =
+    (if s.cumulative.provider_calls_started == f.cumulative.provider_calls_started then []
+     else [JournalFoldDisagrees("cumulative.provider_calls_started")])
+    ++ (if s.cumulative.provider_calls_completed == f.cumulative.provider_calls_completed then []
+        else [JournalFoldDisagrees("cumulative.provider_calls_completed")])
+    ++ (if s.cumulative.stage_applied_total == f.cumulative.stage_applied_total then []
+        else [JournalFoldDisagrees("cumulative.stage_applied_total")])
+    ++ (if s.cumulative.stage_rejected_total == f.cumulative.stage_rejected_total then []
+        else [JournalFoldDisagrees("cumulative.stage_rejected_total")])
+    ++ (if s.cumulative.compaction_ai_applied == f.cumulative.compaction_ai_applied then []
+        else [JournalFoldDisagrees("cumulative.compaction_ai_applied")]);
+  let tel =
+    (if s.telemetry.last_input_tokens == f.telemetry.last_input_tokens then []
+     else [JournalFoldDisagrees("telemetry.last_input_tokens")])
+    ++ (if s.telemetry.last_output_tokens == f.telemetry.last_output_tokens then []
+        else [JournalFoldDisagrees("telemetry.last_output_tokens")])
+    ++ (if s.telemetry.last_estimated_input_tokens == f.telemetry.last_estimated_input_tokens then []
+        else [JournalFoldDisagrees("telemetry.last_estimated_input_tokens")]);
+  let art = if encode(s.ext_artifacts) == encode(f.ext_artifacts) then []
+            else [JournalFoldDisagrees("ext_artifacts")];
+  hist ++ counts ++ tel ++ art
+}
+
+-- The identity the twin stamps the synthesized header with. It is the DEFAULT
+-- one (`r0.0`, profile ""), because a bridged execution carries no `RunIdentity`
+-- — `TracedSessionResult` does not return one — and the fold reads nothing off
+-- it that the comparison uses. When P3 Part 5 folds a real journal it uses the
+-- header the HOST wrote, which is the only place those fields are known.
+pure func journal_twin_identity() -> RunIdentity {
+  default_run_identity("dst")
+}
+
+export pure func journal_fold_findings(x: ExecutionUnderTest) -> [Violation] {
+  let records = trace_of(x.result).records;
+  let lines = journal_lines_of_records(harness_header(journal_twin_identity(), ""), records);
+  match fold_journal(lines, journal_leaf(lines)) {
+    Err(r) => [JournalFoldDisagrees("refusal:${refusal_id(r)}")],
+    Ok(s) => journal_final_findings(s, x.final)
+  }
+}
+
+-- ============================================================================
 -- PART 6 — the whole set
 -- ============================================================================
 
--- Every family, in D7's order, over one execution. The order is D7's rather
--- than a dependency order because nothing here depends on anything else here:
--- twelve independent readings of one execution, which is what makes "the first
+-- Every family, in D7's order with ADR-003 D4's last, over one execution. The
+-- order is D7's rather than a dependency order because nothing here depends on
+-- anything else here: thirteen independent readings of one execution, which is
+-- what makes "the first
 -- failed invariant" (D8) a meaningful field rather than an artefact of
 -- evaluation order.
 export pure func evaluate(x: ExecutionUnderTest) -> [Violation] {
@@ -1632,6 +2020,7 @@ export pure func evaluate(x: ExecutionUnderTest) -> [Violation] {
     ++ world_transition_findings(x)
     ++ virtual_time_findings(x)
     ++ hygiene_findings(x)
+    ++ journal_fold_findings(x)
 }
 
 export pure func invariants_ok(x: ExecutionUnderTest) -> bool {
@@ -1668,7 +2057,13 @@ export pure func family_evidence(x: ExecutionUnderTest) -> [FamilyEvidence] {
    { family: family_id(ReplayConsistency), evaluated: obligation_id(x.replay) != "no-replay", inputs: log },
    { family: family_id(WorldTransitions), evaluated: log > 0, inputs: log },
    { family: family_id(VirtualTime), evaluated: true, inputs: log },
-   { family: family_id(HarnessHygiene), evaluated: true, inputs: log }]
+   { family: family_id(HarnessHygiene), evaluated: true, inputs: log },
+   -- ALWAYS EVALUATED, and its inputs are the trace's records: the fold runs on
+   -- an empty journal too, and an empty fold against a non-empty `final` is the
+   -- disagreement this family exists to report. A row that called itself
+   -- un-evaluated when the trace carried no journal-class record would hide
+   -- exactly the state PLAN-003 P3 Part 2 lands in.
+   { family: family_id(JournalFold), evaluated: true, inputs: records }]
 }
 
 -- ============================================================================
@@ -1681,9 +2076,12 @@ export pure func family_evidence(x: ExecutionUnderTest) -> [FamilyEvidence] {
 --  normalized trace."
 --
 -- This is an invariant over a PAIR of executions and cannot be evaluated by a
--- runner holding one, which is why it is not a thirteenth family: a family that
+-- runner holding one, which is why it is not a family AT ALL: a family that
 -- silently passed whenever it had only one run would be a vacuous green of
--- exactly the kind S8's complement describes.
+-- exactly the kind S8's complement describes. (The thirteenth FAMILY is
+-- ADR-003 v6.1 D4's `JournalFold`, which is over one execution like the other
+-- twelve; D7's thirteenth STATEMENT below is a different thing with an
+-- unfortunately equal ordinal.)
 
 export type DeterminismFinding
   = LogLengthDiffers(int, int)
@@ -1789,7 +2187,7 @@ export pure func has_determinism_rule(fs: [DeterminismFinding], rule: string) ->
 pure func test_every_family_has_a_rule_and_an_obligation() -> bool
   tests [((), true)]
   {
-    List.length(all_families()) == 12
+    List.length(all_families()) == 13
       && all_families_distinct(all_families(), [])
       && all_obligations_nonempty(all_families())
   }
@@ -1816,7 +2214,12 @@ pure func all_obligations_nonempty(fs: [InvariantFamily]) -> bool {
 -- wrong answer, and the module header says why it is wrong.
 --
 -- 14 at WI-A14, 13 at WI-C3 which closed StreamDelta, **TWO at WI-D2** which
--- closed the other eleven. The literal is
+-- closed the other eleven, **SEVEN at PLAN-003 P3 Part 1** — the one move that
+-- was not a closure, ADR-003 D1's five journal-class variants declared two parts
+-- before the commit that emits them — and **THREE at P3 Part 3**, which emits
+-- four of the five and leaves `SessionResumed` for Part 5's `--resume` — and
+-- **TWO at P3 Part 5**, whose resumed traced entry appends it. The
+-- literal is
 -- deliberately not derived from `d64_gap_register()`: a row asserting the
 -- register equals itself is green after any edit, and shrinking the register is
 -- exactly the move that has to be a deliberate, recorded change.
@@ -1884,7 +2287,7 @@ pure func test_rules_are_distinct_across_families() -> bool
   tests [((), true)]
   {
     let vs = sample_violations();
-    List.length(vs) == 37 && rules_distinct(vs, [])
+    List.length(vs) == 40 && rules_distinct(vs, [])
   }
 
 pure func rules_distinct(vs: [Violation], seen: [string]) -> bool {
@@ -1915,7 +2318,9 @@ pure func sample_violations() -> [Violation] {
    NegativeAdvance(0, -1), ChunkOffsetRegression(0, 1, 0), DeadlineDerivation(0, "d"),
    ClockBalance(1, 0),
    GeneratorBoundFailure("b", 1, 2), HarnessFailureObserved("k", 0), AmbientRngRead(1),
-   ForbiddenEffectSite("s")]
+   ForbiddenEffectSite("s"),
+   JournalFoldDisagrees("history"), JournalPayloadDisagrees("seed.digest"),
+   ParkPayloadDisagrees("park_entered.step")]
 }
 
 -- Every sample must map to a family D7 names, and every family must be reached
@@ -1955,3 +2360,31 @@ pure func messages_name_their_rule(vs: [Violation]) -> bool {
 pure func starts_with_bracketed(msg: string, rule: string) -> bool {
   Str.startsWith(msg, "[${rule}] ")
 }
+
+-- PLAN-002 W4 Part 3: the park rows bite. A well-formed park and its wake are
+-- silent; each malformed field is named.
+pure func w4_park(rid: string, ids: [string]) -> LedgerRecord {
+  WireRecord(ParkEntered({ request_id: rid, step: 2, waits: List.map(\i. OperatorWait({ id: i }), ids) }))
+}
+
+pure func w4_wake_rec(rid: string, wid: string, outcome: string) -> LedgerRecord {
+  WireRecord(WakeReceived({ request_id: rid, wait_id: wid, outcome: outcome, detail: "" }))
+}
+
+pure func test_park_payload_findings_accept_a_park_and_name_each_bad_field() -> bool
+  tests [((), true)]
+  {
+    let good = { records: [w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p0", "h1", "settled"),
+                           w4_park("s.r0.0.p1", ["h1"]), w4_wake_rec("s.r0.0.p1", "", "host_error"),
+                           w4_park("s.r0.0.p2", ["h1"]), w4_wake_rec("s.r0.0.p2", "abort", "aborted")] };
+    let rules = \rs. List.length(park_payload_findings({ records: rs }));
+    List.length(park_payload_findings(good)) == 0
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p9", "h1", "settled")]) == 1
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p0", "h2", "settled")]) == 1
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p0", "h1", "bogus")]) == 1
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_wake_rec("s.r0.0.p0", "", "aborted")]) == 1
+      && rules([w4_park("s.r0.0.p0", ["h1"]), w4_park("s.r0.0.p0", ["h1"])]) == 1
+      && rules([w4_park("s.r0.0.p0", [])]) == 1
+      && rules([w4_park("", ["h1"])]) == 1
+      && rules([w4_wake_rec("s.r0.0.p0", "h1", "settled")]) == 1
+  }

@@ -1,0 +1,483 @@
+-- src/eval/journal/source_checks_live_test.ail
+--
+-- PLAN-004 M10 (the run-bearing half), P1.7a's verdict over whole entries,
+-- and the first-finding-and-location assertions of M15's A-rows. `ailang
+-- test` grants no Process/SharedMem, so this is a runner:
+--
+--   ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+--     --ai-stub --entry main src/eval/journal/source_checks_live_test.ail < /dev/null
+--
+-- One `PASS <check>` / `FAIL <check>` line per check; exit 1 on any failure.
+-- Every run is a real `admission_run` over a synthetic journal world; an
+-- observation is mutated only where a check says so.
+--
+--   p17a_clean_suspended / p17a_clean_finalize
+--     m3_selector_end and m4_stop_call_last through `admit_entry`: A1–A4
+--     clean, `SourceFaithful(calls=3, EndSuspended(3) / EndFinalize)`.
+--   p17a_source_refusal
+--     m4_hybrid_predicate_false: `Refused(Refusal(HybridPredicate))` at
+--     entry:9, nothing run.
+--   p17a_preflight_refusal
+--     a real entry before P1G: `Refused(AdmissionCheck(A9b))` at
+--     `aggregate:provenance:toolchain`, nothing run.
+--   m10_a1_seed_digest_tamper
+--     the clean run checked against a snapshot whose prefix entry (e12)
+--     records another `digest_after`: first finding A1 SeedDigestDiffers at
+--     snapshot:12 — against the RECORDED value. The reader itself refuses that
+--     snapshot (ChainBreak at entry 12, M1), which is why A1 is exercised on
+--     its own input here.
+--   m10_a2_one_byte_append_change
+--     one byte of the run's history at the first tool result (e14), and one
+--     byte of its HistoryAppended digest: A2 at snapshot:14; the raw trace
+--     holds one HistorySeeded and one HistoryAppended per recorded append.
+--   m10_a3_payload_digest / m10_a3_model_conversion / m10_a3_msg_count_and_count
+--     the program's call 2 payload; m5_config_window's
+--     `openrouter/openai/fx-model` served as `openai/fx-model` (clean), and
+--     an identity left unconverted (A3 ModelDiffers at call:1); call 3's
+--     msg_count, and call 3 dropped (CallCountDiffers at call:3).
+--   m10_a4_json_inequal / m10_a4_count
+--     a JSON-inequal dispatched argument at call 1 (A4 ArgumentsDiffer at
+--     snapshot:13) while a JSON-equal re-serialisation passes; the program's
+--     args digest changed (A4 is then the FIRST finding of all); the last
+--     tool record dropped (InvocationCountDiffers at snapshot:20) and an
+--     extra one (at its interaction ordinal).
+--   m15_* (M15's A-rows, on the family's fixtures)
+--     each near-miss journal (asserted equal to the family's fixture) with
+--     the live excerpt of its unaltered twin: it passes its family's refusal
+--     (the world reads), then the admission's first finding and its typed
+--     location are pinned; for the A3 rows the call equals the generator's
+--     independent `first_request_divergence`, and A1, A2 pass.
+--
+-- Synthetic fixtures only (§0.6).
+
+module src/eval/journal/source_checks_live_test
+
+import std/io (println, exit)
+import std/json (Json)
+import std/list as List (length, map, foldl, filter)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join, replace)
+import src/core/dst_interaction (Interaction, ProviderIdentity, ToolIdentity, OutcomeFault)
+import src/core/phase_vocab (LedgerRecord, WireRecord, HistorySeeded, HistoryAppended)
+import src/core/dst_driver_only (driver_only_manifest)
+import src/core/session (TracedSessionResult)
+import src/eval/journal/reader (RunSelector, EndAt, CutoffBefore, parse_lines)
+import src/eval/journal/configuration (RecordedEnv)
+import src/eval/journal/digests (eval_arguments_digest_json)
+import src/eval/journal/stopping (JournalWorld, read_journal_world)
+import src/eval/journal/world (journal_world_state, fixture_journal_world)
+import src/eval/journal/admission (
+  AdmissionFinding, Identities, Comparators, EntryKind, SyntheticEntry, RealEntry,
+  finding_label, first_label, check_label, profile_scan_roots, normalized_configuration
+)
+import src/eval/journal/admission_run (admission_run)
+import src/eval/journal/source_checks (
+  Admission, InvocationObservation,
+  source_chain, check_a1, transcript_expectation, check_a2, request_expectations, request_observations, check_a3,
+  invocation_expectations, invocation_observations, dispatched_calls, check_a4, projection_field,
+  admission_verdict, admission_label, admission_verdict_word, admission_first_finding, admission_first_finding_name, admission_position,
+  ordered_findings
+)
+import src/eval/journal/source_checks_run (AdmissionOutcome, transcript_observation, run_source_findings, admit_entry)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_all, fxw_m3_selector_end, fxw_m4_stop_call_last, fxw_m4_hybrid_predicate_false, fxw_m5_config_window)
+import src/eval/journal/testdata/admission_fixtures (fxa_all)
+import src/eval/journal/testdata/journal_fixtures (fxj_near_miss_chain_break, fxj_near_miss_malformed_entry, fxj_clean)
+import src/eval/journal/testdata/association_fixtures (fxr_m2_clean, fxr_m15_unexpected_tool_result, fxr_m15_malformed_tool_arguments, fxr_m15_duplicate_call_id_swap, fxr_m15_association)
+import src/eval/journal/testdata/source_check_fixtures (SourceCheckFixture, fxs_clean_base, fxs_clean_m2, fxs_near_miss_chain_break, fxs_near_miss_malformed_entry, fxs_m15_unexpected_tool_result, fxs_m15_malformed_tool_arguments, fxs_m15_duplicate_call_id_swap, fxs_m15_association)
+
+type Case = { name: string, journal: [string], log: [string], sel: RunSelector, env: RecordedEnv, rederived: string }
+
+func lt_report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = println("${if ok then "PASS" else "FAIL"} ${name}");
+  ok
+}
+
+pure func lt_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && lt_strs_eq(xs, ys) }
+  }
+}
+
+pure func lt_labels(fs: [AdmissionFinding]) -> [string] { List.map(finding_label, fs) }
+
+pure func lt_epoch() -> int { 1789000000000 }
+
+pure func lt_workdir() -> string { ".motoko/eval-admission-workdir" }
+
+pure func lt_env(f: WorldFixture) -> RecordedEnv {
+  { headless: f.env_headless, openai_base_url: f.env_base_url, retry_stream_error: f.env_retry,
+    tool_timeout_ms: if f.env_has_timeout then Some(f.env_timeout) else None }
+}
+
+pure func lt_sel(leaf: string, run_id: string, start: string, kind: string, end_id: string) -> RunSelector {
+  { leaf: leaf, run_id: run_id, start: start, end: if kind == "EndAt" then EndAt(end_id) else CutoffBefore(end_id) }
+}
+
+pure func lt_rederived(name: string) -> string {
+  List.foldl(\acc a. if a.name == name then a.normalized_configuration else acc, "", fxa_all())
+}
+
+pure func world_case(f: WorldFixture) -> Case {
+  { name: f.name, journal: f.journal, log: f.log, sel: lt_sel(f.leaf, f.run_id, f.start, f.end_kind, f.end_id),
+    env: lt_env(f), rederived: lt_rederived(f.name) }
+}
+
+-- The P1.7a fixtures are served with the default environment (the
+-- generator's ENV_DEFAULT, m3_selector_end's).
+pure func source_case(f: SourceCheckFixture) -> Case {
+  { name: f.name, journal: f.journal, log: f.log, sel: lt_sel(f.leaf, f.run_id, f.start, f.end_kind, f.end_id),
+    env: lt_env(fxw_m3_selector_end()), rederived: f.normalized_configuration }
+}
+
+pure func lt_world_fixture(f: SourceCheckFixture) -> WorldFixture {
+  { fxw_m3_selector_end() | name: f.name, journal: f.journal, log: f.log, leaf: f.leaf, run_id: f.run_id,
+                            start: f.start, end_kind: f.end_kind, end_id: f.end_id }
+}
+
+pure func lt_lines(journal: [string]) -> [Json] {
+  match parse_lines(journal) { Ok(ls) => ls, Err(_) => [] }
+}
+
+pure func lt_ids(nc: string, generator: string) -> Identities {
+  let b = driver_only_manifest("", "", "", "", [], [], "");
+  {
+    source_revision: "a0a0a0", scan_root_commit: "a0a0a0", tracked_changes: [],
+    toolchain: "AILANG fx", toolchain_sha256: "sha256:fxbin", abi_version: "7.4",
+    classifier_2_set: ["env_get"], unrouted_fields: [], scan_roots: ["src", "packages"],
+    packages: [], lock_sha256: "sha256:fxlock",
+    normalized_configuration: nc,
+    profile_id: b.profile_id, profile_version: b.profile_version,
+    event_vocabulary_version: b.event_vocabulary_version,
+    profile_rules_version: b.profile_rules_version, coverage_rules_version: b.coverage_rules_version,
+    attribution_rules_version: b.attribution_rules_version, fault_catalogue_version: b.fault_catalogue_version,
+    generator_version: generator, extension_packages: []
+  }
+}
+
+pure func lt_cmp(rederived: string) -> Comparators {
+  {
+    revision_is_commit: true, assembled_tree: "t0", revision_tree: "t0",
+    lock_abi_version: "7.4", pinned_classifier_2_set: ["env_get"], pinned_unrouted_fields: [],
+    profile_scan_roots: profile_scan_roots(),
+    leaf_files: ["src/core/session.ail", "src/core/tool_phase.ail", "src/core/context_usage.ail", "src/core/test/stub_step.ail"],
+    rederived_configuration: rederived, e_pin: None, registry_used: []
+  }
+}
+
+-- The gathered identity is the evaluator's own normalized configuration of
+-- the world the reader builds; the comparator is the generator's.
+pure func lt_nc(c: Case) -> string {
+  match read_journal_world(lt_lines(c.journal), c.log, c.sel, c.env) {
+    Ok(jw) => normalized_configuration(jw),
+    Err(_) => ""
+  }
+}
+
+func admit_case(c: Case, kind: EntryKind) -> Result[AdmissionOutcome, Admission] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  admit_entry(c.name, "fx:${c.name}", kind, lt_ids(lt_nc(c), "a0a0a0-dev"), lt_cmp(c.rederived),
+              lt_lines(c.journal), c.log, c.sel, c.env, lt_epoch(), lt_workdir(), [])
+}
+
+func lt_print(name: string, r: Result[AdmissionOutcome, Admission]) -> () ! {IO} {
+  match r {
+    Err(a) => println("${name}: ${admission_label(a)} (not run)"),
+    Ok(o) => println("${name}: ${admission_label(o.admission)} ran=${if o.report.ran then "true" else "false"} observed=${o.report.observed_end} interactions=${show(o.report.interactions)} source=[${join(";", lt_labels(o.source))}] all=[${join(";", lt_labels(o.findings))}]")
+  }
+}
+
+pure func lt_outcome_label(r: Result[AdmissionOutcome, Admission]) -> string {
+  match r { Err(a) => admission_label(a), Ok(o) => admission_label(o.admission) }
+}
+
+pure func lt_source_empty(r: Result[AdmissionOutcome, Admission]) -> bool {
+  match r { Ok(o) => List.length(o.source) == 0, Err(_) => false }
+}
+
+func p17a_clean(name: string, f: WorldFixture, want: string) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let r = admit_case(world_case(f), SyntheticEntry);
+  let _ = lt_print(name, r);
+  lt_report(name, lt_source_empty(r) && lt_outcome_label(r) == want
+                    && (match r { Ok(o) => admission_verdict_word(o.admission) == "admitted" && admission_position(o.admission) == "-", Err(_) => false }))
+}
+
+func p17a_source_refusal() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let r = admit_case(world_case(fxw_m4_hybrid_predicate_false()), SyntheticEntry);
+  let _ = lt_print("p17a_source_refusal", r);
+  lt_report("p17a_source_refusal", match r {
+    Err(a) => admission_label(a) == "Refused(Refusal(HybridPredicate)@entry:9)"
+                && admission_first_finding(a) == "HybridPredicate" && admission_position(a) == "entry:9",
+    Ok(_) => false
+  })
+}
+
+func p17a_preflight_refusal() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let r = admit_case(world_case(fxw_m3_selector_end()), RealEntry);
+  let _ = lt_print("p17a_preflight_refusal", r);
+  lt_report("p17a_preflight_refusal", match r {
+    Ok(o) => not o.report.ran && o.report.interactions == 0
+               && admission_label(o.admission) == "Refused(AdmissionCheck(A9b):ToolchainUnpinned@aggregate:provenance:toolchain)",
+    Err(_) => false
+  })
+}
+
+-- ----------------------------------------------------------------------------
+-- M10 over one clean run.
+-- ----------------------------------------------------------------------------
+
+type Ran = { jw: JournalWorld, lines: [Json], run: TracedSessionResult }
+
+func lt_run_world(f: WorldFixture) -> Option[Ran] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => None,
+    Ok(jw) => {
+      let w0 = journal_world_state(jw, lt_epoch());
+      Some({ jw: jw, lines: lt_lines(f.journal), run: admission_run(jw, w0, lt_workdir()) })
+    }
+  }
+}
+
+pure func lt_first(fs: [AdmissionFinding]) -> string { first_label(ordered_findings(fs)) }
+
+pure func lt_tamper_line(journal: [string], old: string, new: string) -> [string] {
+  List.map(\l. replace(l, old, new), journal)
+}
+
+func m10_a1(r: Ran, f: WorldFixture) -> bool ! {IO} {
+  let chain = source_chain(r.lines, r.jw);
+  let tampered = lt_tamper_line(f.journal, chain.prefix_digest, "sha256:0000000000000000000000000000000000000000000000000000000000000000");
+  let fs = run_source_findings(lt_lines(tampered), r.jw, r.run, r.run.world.log);
+  let reader_refuses = match fixture_journal_world({ f | journal: tampered }) { Err(_) => true, Ok(_) => false };
+  let verdict = admission_verdict("fx", r.jw, [], fs, true, []);
+  let _ = println("a1: prefix=${show(chain.prefix_seq)} clean=[${join(";", lt_labels(run_source_findings(r.lines, r.jw, r.run, r.run.world.log)))}] tampered=[${join(";", lt_labels(fs))}] verdict=${admission_label(verdict)} reader_refuses=${if reader_refuses then "true" else "false"}");
+  lt_report("m10_a1_seed_digest_tamper",
+    chain.prefix_seq == 12
+      && List.length(run_source_findings(r.lines, r.jw, r.run, r.run.world.log)) == 0
+      && lt_first(fs) == "A1:SeedDigestDiffers@snapshot:12"
+      && admission_label(verdict) == "Refused(AdmissionCheck(A1):SeedDigestDiffers@snapshot:12)"
+      && reader_refuses)
+}
+
+pure func lt_is_seeded(r: LedgerRecord) -> bool { match r { WireRecord(HistorySeeded(_)) => true, _ => false } }
+pure func lt_is_appended(r: LedgerRecord) -> bool { match r { WireRecord(HistoryAppended(_)) => true, _ => false } }
+
+-- The i-th history message (0-based) with a byte appended to its content.
+pure func lt_touch_history[m](xs: [m], i: int, f: (m) -> m) -> [m] {
+  let step = List.foldl(\acc x. { n: acc.n + 1, out: acc.out ++ [if acc.n == i then f(x) else x] }, { n: 0, out: [] }, xs);
+  step.out
+}
+
+func m10_a2(r: Ran) -> bool ! {IO} {
+  let chain = source_chain(r.lines, r.jw);
+  let e = transcript_expectation(chain);
+  let o = transcript_observation(r.run);
+  let seed_n = List.length(r.jw.seed);
+  let one_byte = { o | final_history: lt_touch_history(o.final_history, seed_n + 1, \m. { m | content: "${m.content}!" }) };
+  let one_byte_record = { o | appended: lt_touch_history(o.appended, 1, \a. { a | digest_after: "${a.digest_after}0" }) };
+  let x = lt_labels(check_a2(e, one_byte));
+  let y = lt_labels(check_a2(e, one_byte_record));
+  let run_mutated = { r.run | final: { r.run.final | history: one_byte.final_history } };
+  let whole = lt_first(run_source_findings(r.lines, r.jw, run_mutated, r.run.world.log));
+  let seeded = List.length(List.filter(lt_is_seeded, r.run.trace.records));
+  let appended = List.length(List.filter(lt_is_appended, r.run.trace.records));
+  let _ = println("a2: seed=${show(seed_n)} history=${show(List.length(o.final_history))} seeded=${show(seeded)} appended=${show(appended)} recorded=${show(List.length(chain.appends))} history_change=${join(",", x)} record_change=${join(",", y)} whole=${whole}");
+  lt_report("m10_a2_one_byte_append_change",
+    List.length(check_a2(e, o)) == 0 && seeded == 1 && appended == List.length(chain.appends)
+      && lt_strs_eq(x, ["A2:MessageDiffers@snapshot:14"])
+      && lt_strs_eq(y, ["A2:ChainDiffers@snapshot:14"])
+      && whole == "A2:MessageDiffers@snapshot:14")
+}
+
+-- The k-th provider interaction (1-based), rewritten.
+pure func lt_map_provider(log: [Interaction], k: int, f: (Interaction) -> Interaction) -> [Interaction] {
+  let step = List.foldl(\acc i. match i.identity.body {
+    ProviderIdentity(_, _, _) => { n: acc.n + 1, out: acc.out ++ [if acc.n + 1 == k then f(i) else i] },
+    _ => { acc | out: acc.out ++ [i] }
+  }, { n: 0, out: [] }, log);
+  step.out
+}
+
+pure func lt_drop_provider(log: [Interaction], k: int) -> [Interaction] {
+  let step = List.foldl(\acc i. match i.identity.body {
+    ProviderIdentity(_, _, _) => { n: acc.n + 1, out: if acc.n + 1 == k then acc.out else acc.out ++ [i] },
+    _ => { acc | out: acc.out ++ [i] }
+  }, { n: 0, out: [] }, log);
+  step.out
+}
+
+pure func lt_set_field(projection: string, key: string, value: string) -> string {
+  replace(projection, "${key}=${projection_field(projection, key)}", "${key}=${value}")
+}
+
+func m10_a3_payload(r: Ran) -> bool ! {IO} {
+  let log = lt_map_provider(r.run.world.log, 2, \i. { i | request_projection: lt_set_field(i.request_projection, "payload", "sha256:fx-changed") });
+  let got = lt_first(run_source_findings(r.lines, r.jw, r.run, log));
+  let _ = println("a3 payload: ${got}");
+  lt_report("m10_a3_payload_digest", got == "A3:PayloadDiffers@call:2")
+}
+
+pure func lt_set_model(i: Interaction, m: string) -> Interaction {
+  match i.identity.body {
+    ProviderIdentity(o, k, _) => { i | identity: { i.identity | body: ProviderIdentity(o, k, m) } },
+    _ => i
+  }
+}
+
+func m10_a3_model(r: Ran) -> bool ! {IO} {
+  let es = request_expectations(r.jw);
+  let os = request_observations(r.run.world.log);
+  let logical = match es { e :: _ => e.logical_model, [] => "" };
+  let api = match es { e :: _ => e.api_model, [] => "" };
+  let observed = match os { o :: _ => "${o.model}|${o.projected_model}", [] => "" };
+  let unconverted = lt_map_provider(r.run.world.log, 1, \i. lt_set_model(i, logical));
+  let got = lt_first(run_source_findings(r.lines, r.jw, r.run, unconverted));
+  let clean = lt_labels(check_a3(es, os));
+  let _ = println("a3 model: logical=${logical} pinned=${api} observed=${observed} clean=[${join(";", clean)}] unconverted=${got}");
+  lt_report("m10_a3_model_conversion",
+    logical == "openrouter/openai/fx-model" && api == "openai/fx-model" && observed == "openai/fx-model|openai/fx-model"
+      && List.length(clean) == 0 && List.length(run_source_findings(r.lines, r.jw, r.run, r.run.world.log)) == 0
+      && got == "A3:ModelDiffers@call:1")
+}
+
+func m10_a3_counts(r: Ran) -> bool ! {IO} {
+  let log_n = lt_map_provider(r.run.world.log, 3, \i. { i | request_projection: lt_set_field(i.request_projection, "msg_count", "99") });
+  let n = lt_first(run_source_findings(r.lines, r.jw, r.run, log_n));
+  let dropped = lt_first(run_source_findings(r.lines, r.jw, r.run, lt_drop_provider(r.run.world.log, 3)));
+  let _ = println("a3 counts: msg_count=${n} dropped=${dropped}");
+  lt_report("m10_a3_msg_count_and_count", n == "A3:MsgCountDiffers@call:3" && dropped == "A3:CallCountDiffers@call:3")
+}
+
+pure func lt_tool_ordinals(log: [Interaction]) -> [int] {
+  List.foldl(\acc i. match i.identity.body { ToolIdentity(_, _, _) => acc ++ [i.identity.ordinal], _ => acc }, [], log)
+}
+
+pure func lt_last_int(xs: [int]) -> int { List.foldl(\acc x. x, -1, xs) }
+
+pure func lt_max_ordinal(log: [Interaction]) -> int {
+  List.foldl(\acc i. if i.identity.ordinal > acc then i.identity.ordinal else acc, -1, log)
+}
+
+func m10_a4(r: Ran) -> bool ! {IO} {
+  let es = invocation_expectations(r.jw);
+  let seed_n = List.length(r.jw.seed);
+  let dispatched = dispatched_calls(r.run.final.history, seed_n);
+  let log = r.run.world.log;
+  let clean = invocation_observations(log, dispatched);
+  let first_call = match dispatched { d :: _ => d.arguments, [] => "" };
+  -- a JSON-inequal dispatched value (its digest kept consistent), and a
+  -- JSON-equal re-serialisation of the same value
+  let inequal_args = replace(first_call, "ls c2a", "ls c2A");
+  let spaced_args = replace(replace(first_call, ":", " : "), "{", "{ ");
+  let with_args = \s. List.map(\o. if o.call_id == "c2a" then { o | arguments: match parse_lines([s]) { Ok([j]) => Some(j), _ => None },
+                                                                    args_digest: match parse_lines([s]) { Ok([j]) => eval_arguments_digest_json(j), _ => "" } } else o, clean);
+  let inequal = lt_labels(check_a4(es, with_args(inequal_args)));
+  let equal = lt_labels(check_a4(es, with_args(spaced_args)));
+  -- the program's digest alone: A4 is the first finding of all
+  let digest_log = List.map(\i. match i.identity.body {
+    ToolIdentity(_, cid, _) => if cid == "c2a" then { i | request_projection: lt_set_field(i.request_projection, "args", "sha256:fx-other") } else i,
+    _ => i
+  }, log);
+  let digest_first = lt_first(run_source_findings(r.lines, r.jw, r.run, digest_log));
+  let _ = println("a4: expected=${show(List.length(es))} observed=${show(List.length(clean))} dispatched=${show(List.length(dispatched))} clean=[${join(";", lt_labels(check_a4(es, clean)))}] inequal=[${join(";", inequal)}] equal=[${join(";", equal)}] digest_first=${digest_first} spaced_differs=${if spaced_args != first_call then "true" else "false"}");
+  lt_report("m10_a4_json_inequal",
+    List.length(check_a4(es, clean)) == 0 && List.length(es) == 4 && List.length(clean) == 4
+      && lt_strs_eq(inequal, ["A4:ArgumentsDiffer@snapshot:13"])
+      && List.length(equal) == 0 && spaced_args != first_call
+      && digest_first == "A4:ArgumentsDigestDiffers@snapshot:13")
+}
+
+func m10_a4_count(r: Ran) -> bool ! {IO} {
+  let log = r.run.world.log;
+  let last_tool = lt_last_int(lt_tool_ordinals(log));
+  let short = List.filter(\i. i.identity.ordinal != last_tool, log);
+  let got_short = lt_first(run_source_findings(r.lines, r.jw, r.run, short));
+  let extra_ordinal = lt_max_ordinal(log) + 1;
+  let extra_tool = List.foldl(\acc i. if i.identity.ordinal == last_tool then [{ i | identity: { i.identity | ordinal: extra_ordinal } }] else acc, [], log);
+  let got_long = lt_first(run_source_findings(r.lines, r.jw, r.run, log ++ extra_tool));
+  let _ = println("a4 count: last_tool=${show(last_tool)} short=${got_short} long=${got_long}");
+  lt_report("m10_a4_count",
+    got_short == "A4:InvocationCountDiffers@snapshot:20"
+      && got_long == "A4:InvocationCountDiffers@interaction:${show(extra_ordinal)}")
+}
+
+-- ----------------------------------------------------------------------------
+-- M15's A-rows.
+-- ----------------------------------------------------------------------------
+
+pure func lt_has_fault_tool(r: Result[AdmissionOutcome, Admission]) -> bool {
+  match r {
+    Err(_) => false,
+    Ok(o) => match o.report.program {
+      None => false,
+      Some(p) => List.foldl(\acc i. acc || (match i.identity.body {
+        ToolIdentity(_, _, _) => (match i.outcome.status { OutcomeFault => true, _ => false }),
+        _ => false
+      }), false, p.interactions)
+    }
+  }
+}
+
+pure func lt_source_of(r: Result[AdmissionOutcome, Admission]) -> [AdmissionFinding] {
+  match r { Ok(o) => o.source, Err(_) => [] }
+}
+
+-- No finding of the named checks.
+pure func lt_none_of(fs: [AdmissionFinding], checks: [string]) -> bool {
+  List.foldl(\acc f. acc && List.foldl(\a c. a && check_label(f.check) != c, true, checks), true, fs)
+}
+
+func m15_row(name: string, f: SourceCheckFixture, family_journal: [string], family_log: Option[[string]], want_first: string, want_verdict: string, want_position: string, divergence: bool) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let c = source_case(f);
+  let family_ok = lt_strs_eq(f.journal, family_journal)
+                    && (match family_log { None => true, Some(l) => lt_strs_eq(f.log, l) });
+  let reads = match fixture_journal_world(lt_world_fixture(f)) { Ok(_) => true, Err(_) => false };
+  let r = admit_case(c, SyntheticEntry);
+  let _ = lt_print(name, r);
+  let a = match r { Ok(o) => o.admission, Err(x) => x };
+  let src = lt_source_of(r);
+  -- an A3 row: its call is the generator's, and A1, A2 are clean
+  let at_divergence = if divergence then want_position == "call:${show(f.first_request_divergence)}" && lt_none_of(src, ["A1", "A2"]) else true;
+  let _ = println("${name}: family_journal=${if family_ok then "equal" else "DIFFERS"} reads=${if reads then "true" else "false"} verdict=${admission_verdict_word(a)} first=${admission_first_finding_name(a)} position=${admission_position(a)} generator_divergence=call:${show(f.first_request_divergence)} fault_tool=${if lt_has_fault_tool(r) then "true" else "false"}");
+  lt_report(name,
+    family_ok && reads && at_divergence
+      && admission_verdict_word(a) == want_verdict
+      && admission_first_finding_name(a) == want_first
+      && admission_position(a) == want_position)
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let c1 = p17a_clean("p17a_clean_suspended", fxw_m3_selector_end(), "SourceFaithful(calls=3,end=EndSuspended(3))");
+  let c2 = p17a_clean("p17a_clean_finalize", fxw_m4_stop_call_last(), "SourceFaithful(calls=3,end=EndFinalize(model_stop))");
+  let c3 = p17a_source_refusal();
+  let c4 = p17a_preflight_refusal();
+  let m10 = match (lt_run_world(fxw_m3_selector_end()), lt_run_world(fxw_m5_config_window())) {
+    (Some(r), Some(cfg)) => {
+      let a = m10_a1(r, fxw_m3_selector_end());
+      let b = m10_a2(r);
+      let d = m10_a3_payload(r);
+      let e = m10_a3_model(cfg);
+      let g = m10_a3_counts(r);
+      let h = m10_a4(r);
+      let i = m10_a4_count(r);
+      a && b && d && e && g && h && i
+    },
+    _ => lt_report("m10 runs", false)
+  };
+  let t1 = m15_row("m15_clean_base", fxs_clean_base(), fxj_clean().lines, None, "-", "admitted", "-", false);
+  let t2 = m15_row("m15_clean_m2", fxs_clean_m2(), fxr_m2_clean().journal, Some(fxr_m2_clean().log), "-", "admitted", "-", false);
+  let n1 = m15_row("m15_chain_break", fxs_near_miss_chain_break(), fxj_near_miss_chain_break().lines, None,
+                   "A3:PayloadDiffers", "refused", "call:2", true);
+  let n2 = m15_row("m15_malformed_entry", fxs_near_miss_malformed_entry(), fxj_near_miss_malformed_entry().lines, None,
+                   "A3:PayloadDiffers", "refused", "call:2", true);
+  let n3 = m15_row("m15_unexpected_tool_result", fxs_m15_unexpected_tool_result(), fxr_m15_unexpected_tool_result().journal,
+                   Some(fxr_m2_clean().log), "A3:PayloadDiffers", "refused", "call:2", true);
+  let n4 = m15_row("m15_malformed_tool_arguments", fxs_m15_malformed_tool_arguments(), fxr_m15_malformed_tool_arguments().journal,
+                   Some(fxr_m2_clean().log), "A3:PayloadDiffers", "refused", "call:2", true);
+  let n5 = m15_row("m15_duplicate_call_id_swap", fxs_m15_duplicate_call_id_swap(), fxr_m15_duplicate_call_id_swap().journal,
+                   Some(fxr_m2_clean().log), "A2:MessageDiffers", "refused", "snapshot:14", false);
+  let n6 = m15_row("m15_association", fxs_m15_association(), fxr_m15_association().journal,
+                   Some(fxr_m15_association().log), "A3:PayloadDiffers", "refused", "call:1", true);
+  if c1 && c2 && c3 && c4 && m10 && t1 && t2 && n1 && n2 && n3 && n4 && n5 && n6 then println("source_checks_live_test: all checks passed")
+  else { let _ = println("source_checks_live_test: FAILED"); exit(1) }
+}

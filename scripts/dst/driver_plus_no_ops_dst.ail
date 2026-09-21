@@ -107,7 +107,7 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 389 }, effect: "Process",
           routed: false, note: "" }]
 }
 
@@ -481,7 +481,7 @@ func scenario_exclusion_check() -> bool ! {IO} {
 }
 
 func scenario_manifest() -> bool ! {IO} {
-  let m = no_ops_manifest("HEAD", "ailang 0.33.0", "7.3", "{}",
+  let m = no_ops_manifest("HEAD", "ailang 0.33.0", "7.4", "{}",
                           ["env_get"], [], "HEAD");
   let rs = validate_manifest(m, driver_plus_no_ops());
   let ok = List.length(rs) == 0 && List.length(m.extension_packages) == 4;

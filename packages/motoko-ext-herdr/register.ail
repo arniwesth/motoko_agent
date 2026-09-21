@@ -27,8 +27,11 @@ import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/option (Some, None)
 import pkg/sunholo/motoko_ext_abi/types (Capability)
-import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_allowed_kinds, default_max_depth)
-import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks, tool_names)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready, default_allowed_kinds, default_max_depth, path_within)
+import std/fs (listDir, isDir, readFileResult)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks_with, tool_names)
+import pkg/sunholo/motoko_ext_herdr/orchestrator (RunDoc, OrchestratorMode, resolve_mode, should_scan, is_run_doc_name)
 
 func parse_int_or(s: string, fallback: int) -> int {
   match stringToInt(s) {
@@ -134,12 +137,40 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
     -- unset is the trap 021 §3.1 named. Measured starts take ~3.9s, so 20s is
     -- generous.
     start_timeout_ms: parse_int_or(getEnvOr("HERDR_START_TIMEOUT_MS", "20000"), 20000),
-    -- Same 30s wall, same reasoning, and measured with the same caveat: a
-    -- herdr `--timeout` is not a hard wall-clock bound (a 4000ms wait returned
-    -- at 4201ms; M3 saw a 25s bound overrun to 28.3s), so 20000 leaves ~10s of
-    -- margin rather than cutting it fine. One blocking call at this bound
-    -- replaces roughly twenty busy-polls at M6's median.
-    check_wait_ms: parse_int_or(getEnvOr("HERDR_CHECK_WAIT_MS", "20000"), 20000),
+    -- 45s, RAISED FROM 20s ON 2026-09-08 BECAUSE THE WALL IT WAS SIZED AGAINST
+    -- DOES NOT EXIST ON THIS PATH.
+    --
+    -- The old value read "same 30s wall as `start_timeout_ms`, so 20000 leaves
+    -- ~10s of margin". That premise is wrong, and it is wrong in the direction
+    -- that costs the operator money. `DelegateCheck`'s wait is a `BashExec`
+    -- reached through `ExtPorts.tool_handle`, whose `ToolInvocation` is built
+    -- with `timeout_ms: 0` hardcoded (`session.ail:1115`), and 0 means NO
+    -- DEADLINE (`ports.ail:544`). The deadline is a post-hoc comparison against
+    -- `duration_ms` anyway (`ports.ail:1476`), not a kill. Nothing on this path
+    -- stops a longer wait.
+    --
+    -- WHAT THE 20s ACTUALLY COST, measured 2026-09-08. A step is spent on the
+    -- provider call that ASKS to wait, not on the waiting — the tool phase does
+    -- not advance `step_idx` — so the budget buys 20 seconds of patience per
+    -- step. A session driving PLAN-003 by delegation spent 299 steps in 88
+    -- minutes and roughly 120 of them were heartbeats, then died mid-part with
+    -- the work uncommitted. At 45s the same session spends fewer than half the
+    -- checks for the same delegates.
+    --
+    -- THE COST OF THE TRADE, stated so it is chosen rather than discovered: a
+    -- delegate that finishes just after a check goes unnoticed for up to 45s
+    -- instead of 20s, ~22s of added latency per part on average — about 3% of a
+    -- 13-minute delegate for slightly more than half the steps. And the
+    -- orchestrator is unresponsive for the length of one wait, which is why
+    -- this is not raised further: past a minute an operator cannot tell a
+    -- blocking wait from a hang.
+    --
+    -- The overrun caveat still holds and is why this is not cut fine: a herdr
+    -- `--timeout` is not a hard wall-clock bound (a 4000ms wait returned at
+    -- 4201ms; M3 saw a 25s bound overrun to 28.3s), so expect ~50s at this
+    -- setting. `HERDR_CHECK_WAIT_MS` still overrides, and a deployment that
+    -- DOES set a positive `MOTOKO_TOOL_TIMEOUT_MS` must keep it above this.
+    check_wait_ms: parse_int_or(getEnvOr("HERDR_CHECK_WAIT_MS", "45000"), 45000),
     max_output_chars: parse_int_or(getEnvOr("HERDR_MAX_OUTPUT_CHARS", "16000"), 16000),
     -- F-5 D2, MOVED HERE FROM THE TUI AT ABI 7.0. The exit-time reap used to be
     -- host-side TypeScript that read this variable for itself
@@ -179,6 +210,37 @@ export func register_with_config(_cfg: a) -> [Capability] ! {Clock, Env, FS, IO,
 
   -- The whole gate. Empty tools is a silent, correct no-op; it is not an error
   -- and must not be reported as one.
-  let tools = if herdr_env_ready(herdr_env, bin_path, pane_id) then tool_names() else [];
-  make_hooks(cfg, tools)
+  let gate_open = herdr_env_ready(herdr_env, bin_path, pane_id);
+  let tools = if gate_open then tool_names() else [];
+  make_hooks_with(cfg, tools, orchestrator_mode(workdir, cfg, gate_open))
+}
+
+-- ORCHESTRATOR MODE, resolved once (`orchestrator.ail` says why and what it does).
+-- `HERDR_ORCHESTRATOR=off` is the operator's switch; anything else means "read
+-- the run files". NO FILE IS READ unless the mode could apply — gate open, depth
+-- 0, switch not off — so the DST recipes that pin HERDR_ORCHESTRATOR=off keep
+-- the call sequence they had. The dagr directory is `path_within`-guarded for
+-- `work_dir`'s reason: a read outside AILANG_FS_SANDBOX is fatal, not an error.
+export func orchestrator_mode(workdir: string, cfg: HerdrConfig, gate_open: bool) -> OrchestratorMode ! {Env, FS} {
+  let switch = getEnvOr("HERDR_ORCHESTRATOR", "");
+  let docs =
+    if should_scan(switch, gate_open, cfg.depth) && path_within(workdir, cfg.dagr_dir) && isDir(cfg.dagr_dir)
+    then read_run_docs(cfg.dagr_dir, listDir(cfg.dagr_dir))
+    else [];
+  resolve_mode(switch, gate_open, cfg.depth, cfg.own_pane, docs)
+}
+
+export func read_run_docs(dir: string, names: [string]) -> [RunDoc] ! {FS} {
+  match names {
+    [] => [],
+    n :: rest =>
+      if is_run_doc_name(n) == false then read_run_docs(dir, rest)
+      else match readFileResult("${dir}/${n}") {
+        Ok(c) => {
+          let doc: RunDoc = { path: "${dir}/${n}", content: c };
+          doc :: read_run_docs(dir, rest)
+        },
+        Err(_) => read_run_docs(dir, rest)
+      }
+  }
 }

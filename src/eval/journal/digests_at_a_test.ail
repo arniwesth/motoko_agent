@@ -1,0 +1,84 @@
+-- src/eval/journal/digests_at_a_test.ail
+--
+-- PLAN-004 M6, second half: each private digest copy in `digests.ail` equals
+-- the candidate function it copies, on the synthetic fixtures (an image
+-- payload and a `make[N]` payload included).
+--
+-- This is the ONE evaluator module that imports the candidate functions, and
+-- it is a test module: nothing in the evaluator's run path imports it. It
+-- compares against the `src/core` of the tree it is run in. At the commit that
+-- lands it `src/core` is A's (65003110, P1.1), so it is the at-A equality; run
+-- in a candidate's tree it is a drift probe, and a failure there is a report
+-- (D5), not a refusal.
+
+module src/eval/journal/digests_at_a_test
+
+import std/ai (ToolCall)
+import std/crypto (sha256Hex)
+import std/json (encode)
+import std/list as List (length, foldl)
+import std/result (Ok, Err)
+import src/core/phase_vocab (payload_digest, system_prefix_digest_for, take_system_prefix)
+import src/core/journal (chain_digest_over, chain_empty_base)
+import src/core/tool_dispatch_adapter (tool_call_to_envelope)
+import src/eval/journal/digests (eval_payload_digest, eval_system_prefix_digest, eval_system_prefix_digest_for, eval_raw_frame_digest, eval_arguments_digest)
+import src/eval/journal/testdata/digest_fixtures (MessageFixture, ArgumentFixture, fx_message_fixtures, fx_argument_fixtures)
+
+pure func has_fixture(name: string) -> bool {
+  List.foldl(\acc f. acc || f.name == name, false, fx_message_fixtures())
+}
+
+pure func covers_required_shapes() -> bool {
+  List.length(fx_message_fixtures()) == 10
+    && has_fixture("image") && has_fixture("image_swapped")
+    && has_fixture("make_n") && has_fixture("make_n_renumbered")
+}
+
+pure func payload_at_a(f: MessageFixture) -> bool {
+  eval_payload_digest(f.msgs) == payload_digest(f.msgs)
+}
+
+-- Both forms: the copy over a pinned prefix, and over a whole payload
+-- against the live call shape `system_prefix_digest_for(take_system_prefix(_))`.
+pure func system_at_a(f: MessageFixture) -> bool {
+  eval_system_prefix_digest_for(f.msgs) == system_prefix_digest_for(f.msgs)
+    && eval_system_prefix_digest(f.msgs) == system_prefix_digest_for(take_system_prefix(f.msgs))
+}
+
+pure func raw_at_a(f: MessageFixture) -> bool {
+  eval_raw_frame_digest(f.msgs) == chain_digest_over(chain_empty_base(), f.msgs)
+}
+
+pure func arguments_at_a(f: ArgumentFixture) -> bool {
+  let c: ToolCall = { id: "call_fx", name: "BashExec", arguments: f.source };
+  let live = "sha256:${sha256Hex(encode(tool_call_to_envelope(c).arguments))}";
+  match eval_arguments_digest(f.source) {
+    Ok(d) => d == live,
+    Err(_) => false
+  }
+}
+
+pure func test_payload_copy_equals_candidate_at_a() -> bool
+  tests [((), true)]
+  {
+    covers_required_shapes() && List.foldl(\acc f. acc && payload_at_a(f), true, fx_message_fixtures())
+  }
+
+pure func test_system_prefix_copy_equals_candidate_at_a() -> bool
+  tests [((), true)]
+  {
+    covers_required_shapes() && List.foldl(\acc f. acc && system_at_a(f), true, fx_message_fixtures())
+  }
+
+pure func test_raw_frame_copy_equals_candidate_at_a() -> bool
+  tests [((), true)]
+  {
+    covers_required_shapes() && List.foldl(\acc f. acc && raw_at_a(f), true, fx_message_fixtures())
+  }
+
+pure func test_arguments_copy_equals_candidate_at_a() -> bool
+  tests [((), true)]
+  {
+    List.length(fx_argument_fixtures()) == 6
+      && List.foldl(\acc f. acc && arguments_at_a(f), true, fx_argument_fixtures())
+  }

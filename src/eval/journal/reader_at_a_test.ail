@@ -1,0 +1,102 @@
+-- src/eval/journal/reader_at_a_test.ail
+--
+-- PLAN-004 P1.2a, M1: the reader's fold copy equals `journal.ail`'s
+-- `fold_journal` (:1679) — same refusal (id, entry, field) or the same folded
+-- state (history, dangling calls, counts, telemetry, artifacts, model,
+-- profile, boundary, world ordinal, header) — on every synthetic journal,
+-- folded at its leaf and at every entry of the file as a leaf.
+--
+-- Like `digests_at_a_test.ail`, this is the ONE reader module that imports the
+-- candidate function, and it is a test module: nothing in the evaluator's run
+-- path imports it. It compares against the `src/core` of the tree it runs in.
+-- At the commit that lands it `src/core` is A's (65003110, P1.1), so it is the
+-- at-A equality; run in a candidate's tree it is a drift probe, and a failure
+-- there is a report (v5 D5), not a refusal.
+
+module src/eval/journal/reader_at_a_test
+
+import std/json (Json, encode, getString)
+import std/list as List (length, map, foldl)
+import std/option (Some, None)
+import std/result (Result, Ok, Err)
+import src/core/journal (fold_journal, SessionState, Refusal, Entry, Digest, Pairing, refusal_id, boundary_id, messages_json)
+import src/eval/journal/reader (eval_fold_journal, eval_refusal_label, eval_boundary_id, parse_lines, EvSessionState, EvRefusal)
+import src/eval/journal/testdata/journal_fixtures (JournalFixture, fxj_all)
+
+pure func live_label(r: Refusal) -> string {
+  match r {
+    Entry(seq, field) => "entry:${show(seq)}:${field}",
+    Digest(seq) => "digest:${show(seq)}:",
+    Pairing(seq) => "pairing:${show(seq)}:",
+    _ => "${refusal_id(r)}:-1:"
+  }
+}
+
+pure func strings_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && strings_eq(xs, ys) }
+  }
+}
+
+pure func same_state(c: EvSessionState, l: SessionState) -> bool {
+  encode(messages_json(c.history)) == encode(messages_json(l.history))
+    && strings_eq(c.dangling, l.dangling)
+    && c.cumulative.provider_calls_started == l.cumulative.provider_calls_started
+    && c.cumulative.provider_calls_completed == l.cumulative.provider_calls_completed
+    && c.cumulative.stage_applied_total == l.cumulative.stage_applied_total
+    && c.cumulative.stage_rejected_total == l.cumulative.stage_rejected_total
+    && c.cumulative.compaction_ai_applied == l.cumulative.compaction_ai_applied
+    && c.telemetry.last_input_tokens == l.telemetry.last_input_tokens
+    && c.telemetry.last_output_tokens == l.telemetry.last_output_tokens
+    && c.telemetry.last_estimated_input_tokens == l.telemetry.last_estimated_input_tokens
+    && encode(c.ext_artifacts) == encode(l.ext_artifacts)
+    && c.model == l.model
+    && c.profile == l.profile
+    && eval_boundary_id(c.last) == boundary_id(l.last)
+    && c.world_ordinal == l.world_ordinal
+    && c.header.schema_version == l.header.schema_version
+    && c.header.session_id == l.header.session_id
+    && c.header.model == l.header.model
+    && c.header.boot.task == l.header.boot.task
+    && c.header.boot.step_budget == l.header.boot.step_budget
+    && c.header.boot.budget.total == l.header.boot.budget.total
+    && c.header.boot.cost_rates.input_per_1m_millicents == l.header.boot.cost_rates.input_per_1m_millicents
+}
+
+pure func same_fold(lines: [Json], leaf: string) -> bool {
+  match eval_fold_journal(lines, leaf) {
+    Err(c) => (match fold_journal(lines, leaf) { Err(l) => eval_refusal_label(c) == live_label(l), Ok(_) => false }),
+    Ok(c) => (match fold_journal(lines, leaf) { Err(_) => false, Ok(l) => same_state(c, l) })
+  }
+}
+
+pure func lines_of(f: JournalFixture) -> [Json] {
+  match parse_lines(f.lines) { Ok(ls) => ls, Err(_) => [] }
+}
+
+pure func line_id(j: Json) -> string {
+  match getString(j, "id") { Some(s) => s, None => "" }
+}
+
+-- Every entry of the file as a leaf, plus the fixture's leaf and one id that
+-- names nothing.
+pure func every_leaf_agrees(f: JournalFixture) -> bool {
+  let ls = lines_of(f);
+  List.length(ls) == List.length(f.lines)
+    && same_fold(ls, f.leaf)
+    && same_fold(ls, "no-such-entry")
+    && List.foldl(\acc j. acc && same_fold(ls, line_id(j)), true, ls)
+}
+
+pure func test_fold_copy_equals_fold_journal_at_a() -> bool
+  tests [((), true)]
+  {
+    List.length(fxj_all()) == 24 && List.foldl(\acc f. acc && same_fold(lines_of(f), f.leaf), true, fxj_all())
+  }
+
+pure func test_fold_copy_equals_fold_journal_at_every_leaf() -> bool
+  tests [((), true)]
+  {
+    List.length(fxj_all()) == 24 && List.foldl(\acc f. acc && every_leaf_agrees(f), true, fxj_all())
+  }

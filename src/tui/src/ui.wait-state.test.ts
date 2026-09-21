@@ -1,5 +1,33 @@
 import { describe, it, expect } from "@jest/globals";
-import { applyToolProgressCounters, computeMissingDoneResultIds, shouldLockPlainInput, type ToolBatchCounters } from "./ui.js";
+import {
+  applyToolProgressCounters,
+  computeMissingDoneResultIds,
+  operatorInputReply,
+  plainInputRoute,
+  shouldLockPlainInput,
+  type ToolBatchCounters,
+} from "./ui.js";
+
+describe("parked input route (PLAN-002 W4 Part 5)", () => {
+  it("while a wake_request is outstanding, plain input bypasses shouldLockPlainInput and answers it", () => {
+    // Mid-task: the lock applies...
+    expect(shouldLockPlainInput(false, false, "keep going")).toBe(true);
+    expect(plainInputRoute(false, false, null, "keep going")).toBe("locked");
+    // ...unless the runtime is parked.
+    expect(plainInputRoute(false, false, "s.r0.1.p1", "keep going")).toBe("wake_reply");
+    expect(operatorInputReply("s.r0.1.p1", "keep going")).toEqual({
+      request_id: "s.r0.1.p1", wait_id: "", outcome: "operator_input", detail: "keep going",
+    });
+  });
+
+  it("slash commands and empty lines are not operator input, and the unparked routes are unchanged", () => {
+    expect(plainInputRoute(false, false, "s.r0.1.p1", "/abort")).toBe("other");
+    expect(plainInputRoute(false, false, "s.r0.1.p1", "")).toBe("other");
+    expect(plainInputRoute(true, false, null, "new task")).toBe("initial_task");
+    expect(plainInputRoute(false, true, null, "follow up")).toBe("follow_up");
+    expect(plainInputRoute(false, false, null, "/abort")).toBe("other");
+  });
+});
 
 describe("ui wait-state helpers", () => {
   it("locks plain text input only during active runs", () => {

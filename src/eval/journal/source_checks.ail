@@ -1,0 +1,894 @@
+-- src/eval/journal/source_checks.ail
+--
+-- ADR-004 v5 D3 A1–A4 and "The verdict"; PLAN-004 §3 P1.7a (graph id
+-- P1.7a-v2): the source checks and the admission verdict. The pure half:
+--
+--   source_chain(lines, jw)                -> SourceChain          (A1's input)
+--   check_a1(chain)                        -> [AdmissionFinding]
+--   transcript_expectation(chain)          -> TranscriptExpectation
+--   transcript_findings(expect, observed)  -> [SourceFinding]      (A2; K7 in P1.9b)
+--   check_a2(expect, observed)             -> [AdmissionFinding]
+--   request_expectations(jw) / request_observations(log) / check_a3
+--   invocation_expectations(jw) / invocation_observations(log, dispatched) / check_a4
+--   admission_verdict(entry, jw, scan, findings, ran, unchecked) -> Admission
+--
+-- The observations taken from a `TracedSessionResult` and the composed
+-- admission are `source_checks_run.ail` (a module that imports
+-- `src/core/session` cannot run `std/json` getters under `ailang test`,
+-- admission.ail's header). Built on P1.6 (`admission.ail`, imported): its
+-- `Location`, `AdmissionCheckId` and `AdmissionFinding` are the ones used
+-- here, so every finding of every check has one shape.
+--
+-- COMPARANDS. At admission every check below compares the PARENT's run (the
+-- admission run, P1.6) with the SOURCE — the snapshot or the live excerpt —
+-- never with a value the admission derived.
+--
+--   A1  source chain, against the snapshot. The seed (P1.2a's fold copy, the
+--       history up to the entry before `start`) chained from the empty base
+--       must equal the RECORDED `digest_after` of the last history entry
+--       before `start` (`SeedDigestDiffers` at `Source(Snapshot, <that seq>)`).
+--       Then every kept append's recorded `digest_after` must recompute as
+--       `chain_digest_after(<the previous RECORDED digest>, message)` — from
+--       `digest_prev` for a `replaces_previous` append, as the fold does
+--       (`ChainDiffers` at `Source(Snapshot, <seq>)`). Chaining from recorded
+--       values makes each step independent of the seed step, so a tampered
+--       entry is located at itself. The recorded values are read from the
+--       snapshot's lines (`source_chain`), not from the reader's summary.
+--   A2  source transcript, against the snapshot. `final.history` equals seed
+--       ++ every recorded append, message for message on every field (role,
+--       content, tool_call_id, each call's id/name/arguments, each image's
+--       source/mime); the trace holds exactly one `HistorySeeded` whose
+--       digest is the recorded prefix digest, and one `HistoryAppended` per
+--       recorded append, none `replaces_previous`, each `digest_after` equal
+--       to the recorded one. Walked by position: a seed finding at
+--       `Source(Snapshot, <prefix seq>)`, an append finding at
+--       `Source(Snapshot, <append seq>)`; the walk stops at the first missing
+--       message or record (`HistoryShort`, `AppendCountDiffers` at the first
+--       recorded append with no counterpart). Observed messages or records
+--       BEYOND the recorded appends have no snapshot position: one
+--       `AppendCountDiffers` at `Aggregate("transcript")`.
+--       `transcript_findings` carries no check tag, so P1.9b reuses it
+--       unchanged as K7 against the entry's seed digest and recorded chain.
+--   A3  requests, against the live excerpt. Per call k (1-based), the k-th
+--       provider interaction of the program: its projection's `payload=` and
+--       `system=` equal the associated `provider_call_prepared`'s
+--       `payload_digest` and `system_prefix_digest`; its identity's model AND
+--       its projection's `model=` equal the pinned conversion
+--       (`eval_provider_api_model`) of that event's logical model under the
+--       recorded `OPENAI_BASE_URL`; `msg_count=` equals `msg_count`. Order per
+--       call: payload, system, model, msg_count. Then the exact count
+--       (`CallCountDiffers` at `Call(<first call without a counterpart>)`).
+--       An exhausted record has no `payload=` and is `PayloadDiffers`.
+--   A4  invocations, against the snapshot. The program's tool interactions,
+--       in order, against the kept calls' decoded tool calls in the
+--       assistants' call order: `ToolIdentity`'s call id and name equal
+--       (`InvocationDiffers`); the arguments the run DISPATCHED (the tool
+--       calls of the run's own post-seed assistant messages, decoded, by
+--       position) are JSON-equal to the journal's (`ArgumentsDiffer`; a key
+--       reorder is equal, P1.2b's `arguments_equal`); and the program's
+--       `args=` digest is the digest of those dispatched arguments
+--       (`ArgumentsDigestDiffers`: the program does not record what the run
+--       dispatched). Findings at `Source(Snapshot, <assistant seq>)`; a
+--       missing invocation at the first unmatched call's assistant; an extra
+--       one, which has no snapshot position, at `Interaction(<its ordinal>)`.
+--
+-- THE VERDICT (v5 D3):
+--
+--   Admission = SourceFaithful { entry, calls: N, end, envelope }
+--             | Refused { Refusal(<D1 refusal>) | AdmissionCheck(Ak, location) | ScanRefusal }
+--
+-- A D1 refusal first (no world exists), then a scan refusal (P1.8's; a list
+-- of hit labels here), then the first admission finding in check order
+-- A1 < A2 < A3 < A4 < A5 < A6 < A7 < A8 < A9 < A9b, a stable order, so
+-- within one check the check's own order stands. P1.6's preflight findings
+-- (A9's manifest shape, A9b) are the only findings when nothing ran. A run
+-- with no finding is `SourceFaithful`. A7 and A8 are P1.7b's: until they land
+-- the envelope lists them under `unchecked`, beside A9b's unchecked rows.
+--
+-- Privacy (§0.6): findings carry positions, counts, identities and digests —
+-- never message content. Synthetic fixtures only.
+
+module src/eval/journal/source_checks
+
+import std/ai (Message, ToolCall, ImagePart)
+import std/json (Json, jo, kv, js, jint, decode, get, getString, getInt)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (split, startsWith, substring, join)
+import std/string as Str (length)
+import src/core/dst_interaction (Interaction, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity, OutcomeOk)
+import src/eval/journal/digests (eval_chain_digest_over, eval_chain_digest_after, eval_chain_empty_base, eval_arguments_digest_json)
+import src/eval/journal/reader (RunSelector, SegAppended, parse_lines)
+import src/eval/journal/association (arguments_equal)
+import src/eval/journal/configuration (eval_provider_api_model)
+import src/eval/journal/stopping (JournalWorld, ExpectedEnd, EndSuspended, EndFinalize, WorldRefusal, end_id, end_value, world_refusal_family, world_refusal_position, t0_omissions)
+import src/eval/journal/world (fixture_journal_world)
+import src/eval/journal/admission (
+  Location, Interaction, Call, Source, Aggregate, SourceSide, Snapshot,
+  AdmissionCheckId, A1, A2, A3, A4, A5, A6, A7, A8, A9, A9b,
+  AdmissionFinding, check_label, location_label, finding_label, first_label
+)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_m3_selector_end, fxw_m5_config_window, fxw_m4_hybrid_predicate_false)
+import src/eval/journal/testdata/source_check_fixtures (SourceCheckFixture, fxs_all, fxs_clean_m2)
+
+-- ============================================================================
+-- Findings without a check tag (A2's are K7's too).
+-- ============================================================================
+
+export type SourceFinding = { location: Location, finding: string, detail: string }
+
+pure func sc_f(l: Location, finding: string, detail: string) -> SourceFinding {
+  { location: l, finding: finding, detail: detail }
+}
+
+export pure func tagged(c: AdmissionCheckId, fs: [SourceFinding]) -> [AdmissionFinding] {
+  List.map(\f. { check: c, location: f.location, finding: f.finding, detail: f.detail }, fs)
+}
+
+pure func snap(seq: int) -> Location { Source(Snapshot, seq) }
+
+-- `Location`'s `Interaction(ordinal)` (the constructor; `Interaction` in a
+-- type position is `dst_interaction`'s record, as in admission.ail).
+pure func at_interaction(o: int) -> Location { Interaction(o) }
+
+-- Local list helpers (`std/list`'s take/drop call a `length` that resolves to
+-- the importing module's `Str.length` under v0.33.0; admission.ail's note).
+pure func sc_drop[a](n: int, xs: [a]) -> [a] {
+  if n <= 0 then xs else match xs { [] => [], _ :: rest => sc_drop(n - 1, rest) }
+}
+
+pure func sc_take[a](n: int, xs: [a]) -> [a] {
+  if n <= 0 then [] else match xs { [] => [], x :: rest => x :: sc_take(n - 1, rest) }
+}
+
+-- ============================================================================
+-- Byte-exact message equality: every field of `std/ai`'s Message.
+-- ============================================================================
+
+pure func sc_calls_eq(a: [ToolCall], b: [ToolCall]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x.id == y.id && x.name == y.name && x.arguments == y.arguments && sc_calls_eq(xs, ys) }
+  }
+}
+
+pure func sc_images_eq(a: [ImagePart], b: [ImagePart]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x.source == y.source && x.mime == y.mime && sc_images_eq(xs, ys) }
+  }
+}
+
+export pure func message_eq(a: Message, b: Message) -> bool {
+  a.role == b.role && a.content == b.content && a.tool_call_id == b.tool_call_id
+    && sc_calls_eq(a.tool_calls, b.tool_calls) && sc_images_eq(a.images, b.images)
+}
+
+-- ============================================================================
+-- A1 — the source chain.
+-- ============================================================================
+
+export type RecordedAppend = { seq: int, message: Message, replaces_previous: bool, digest_after: string }
+
+-- `prefix_seq`/`prefix_digest`: the last history entry on the path before
+-- `start` and its RECORDED `digest_after` (the empty base when there is none,
+-- located at the run's `run_started`).
+export type SourceChain = { seed: [Message], prefix_seq: int, prefix_digest: string, appends: [RecordedAppend] }
+
+pure func sc_line_id(j: Json) -> string {
+  match getString(j, "id") { Some(s) => s, None => "" }
+}
+
+pure func sc_find_line(lines: [Json], id: string) -> Option[Json] {
+  List.foldl(\acc j. match acc { Some(_) => acc, None => if sc_line_id(j) == id then Some(j) else None }, None, lines)
+}
+
+pure func sc_is_history(j: Json) -> bool {
+  match getString(j, "type") { Some(t) => t == "history_appended" || t == "history_replaced", None => false }
+}
+
+-- Up the path from `id` (inclusive); `fuel` bounds the walk (the reader has
+-- already refused cycles).
+pure func sc_prefix_entry(lines: [Json], id: string, fuel: int) -> Option[{ seq: int, digest: string }] {
+  if fuel <= 0 then None
+  else match sc_find_line(lines, id) {
+    None => None,
+    Some(j) =>
+      if sc_is_history(j) then
+        Some({ seq: match getInt(j, "seq") { Some(n) => n, None => -1 },
+               digest: match getString(j, "digest_after") { Some(d) => d, None => "" } })
+      else match getString(j, "parent_id") {
+        Some(p) => sc_prefix_entry(lines, p, fuel - 1),
+        None => None
+      }
+  }
+}
+
+pure func sc_start_parent(lines: [Json], start: string) -> string {
+  match sc_find_line(lines, start) {
+    None => "",
+    Some(j) => match getString(j, "parent_id") { Some(p) => p, None => "" }
+  }
+}
+
+export pure func recorded_appends(jw: JournalWorld) -> [RecordedAppend] {
+  List.foldl(\acc x. match x {
+    SegAppended(seq, e) => acc ++ [{ seq: seq, message: e.message, replaces_previous: e.replaces_previous, digest_after: e.digest_after }],
+    _ => acc
+  }, [], jw.run.source.segment)
+}
+
+export pure func source_chain(lines: [Json], jw: JournalWorld) -> SourceChain {
+  let src = jw.run.source;
+  let prefix = sc_prefix_entry(lines, sc_start_parent(lines, src.selector.start), List.length(lines));
+  match prefix {
+    Some(p) => { seed: jw.seed, prefix_seq: p.seq, prefix_digest: p.digest, appends: recorded_appends(jw) },
+    None => { seed: jw.seed, prefix_seq: src.run_started_seq, prefix_digest: eval_chain_empty_base(), appends: recorded_appends(jw) }
+  }
+}
+
+type ChainAcc = { at: string, prev: string, out: [SourceFinding] }
+
+export pure func chain_findings(c: SourceChain) -> [SourceFinding] {
+  let folded = eval_chain_digest_over(eval_chain_empty_base(), c.seed);
+  let seed = if folded == c.prefix_digest then []
+             else [sc_f(snap(c.prefix_seq), "SeedDigestDiffers", "folded prefix ${folded} != recorded ${c.prefix_digest}")];
+  let acc = List.foldl(\a x. {
+    let base = if x.replaces_previous then a.prev else a.at;
+    let d = eval_chain_digest_after(base, x.message);
+    let out = if d == x.digest_after then a.out
+              else a.out ++ [sc_f(snap(x.seq), "ChainDiffers", "recomputed ${d} != recorded ${x.digest_after}")];
+    { at: x.digest_after, prev: base, out: out }
+  }, { at: c.prefix_digest, prev: c.prefix_digest, out: [] }, c.appends);
+  seed ++ acc.out
+}
+
+export pure func check_a1(c: SourceChain) -> [AdmissionFinding] {
+  tagged(A1, chain_findings(c))
+}
+
+-- ============================================================================
+-- A2 — the source transcript (K7 reuses `transcript_findings` unchanged).
+-- ============================================================================
+
+export type TranscriptExpectation = { seed: [Message], seed_digest: string, seed_position: int, appends: [RecordedAppend] }
+
+export type AppendedRecord = { digest_after: string, replaces_previous: bool }
+
+export type TranscriptObservation = { final_history: [Message], seeded: [string], appended: [AppendedRecord] }
+
+export pure func transcript_expectation(c: SourceChain) -> TranscriptExpectation {
+  { seed: c.seed, seed_digest: c.prefix_digest, seed_position: c.prefix_seq, appends: c.appends }
+}
+
+pure func sc_seed_messages(i: int, seed: [Message], hist: [Message]) -> Option[string] {
+  match seed {
+    [] => None,
+    s :: ss => match hist {
+      [] => Some("final history ends at seed message ${show(i)}"),
+      h :: hs => if message_eq(s, h) then sc_seed_messages(i + 1, ss, hs) else Some("seed message ${show(i)} differs")
+    }
+  }
+}
+
+pure func sc_walk(e: TranscriptExpectation, appends: [RecordedAppend], tail: [Message], records: [AppendedRecord], i: int) -> [SourceFinding] {
+  match appends {
+    [] =>
+      if List.length(tail) == 0 && List.length(records) == 0 then []
+      else [sc_f(Aggregate("transcript"), "AppendCountDiffers",
+                 "${show(List.length(e.appends))} recorded appends; ${show(List.length(tail))} further history message(s), ${show(List.length(records))} further HistoryAppended record(s)")],
+    a :: rest => {
+      let at = snap(a.seq);
+      let msg = match tail {
+        [] => [sc_f(at, "HistoryShort", "final history has no message for append ${show(i)}")],
+        m :: _ => if message_eq(m, a.message) then [] else [sc_f(at, "MessageDiffers", "append ${show(i)}")]
+      };
+      let rec = match records {
+        [] => [sc_f(at, "AppendCountDiffers", "${show(i)} HistoryAppended record(s) for ${show(List.length(e.appends))} recorded appends")],
+        r :: _ =>
+          (if r.replaces_previous then [sc_f(at, "ReplacesPrevious", "append ${show(i)}")] else [])
+            ++ (if r.digest_after == a.digest_after then []
+                else [sc_f(at, "ChainDiffers", "record ${r.digest_after} != recorded ${a.digest_after}")])
+      };
+      match (tail, records) {
+        (_ :: ts, _ :: rs) => msg ++ rec ++ sc_walk(e, rest, ts, rs, i + 1),
+        _ => msg ++ rec
+      }
+    }
+  }
+}
+
+export pure func transcript_findings(e: TranscriptExpectation, o: TranscriptObservation) -> [SourceFinding] {
+  let at = snap(e.seed_position);
+  let seeded = match o.seeded {
+    [d] => if d == e.seed_digest then [] else [sc_f(at, "SeedDigestDiffers", "HistorySeeded ${d} != recorded ${e.seed_digest}")],
+    ds => [sc_f(at, "SeededRecordCount", "${show(List.length(ds))} HistorySeeded record(s)")]
+  };
+  let seed_msgs = match sc_seed_messages(0, e.seed, o.final_history) {
+    None => [],
+    Some(why) => [sc_f(at, "SeedMessageDiffers", why)]
+  };
+  let n = List.length(e.seed);
+  seeded ++ seed_msgs ++ sc_walk(e, e.appends, sc_drop(n, o.final_history), o.appended, 0)
+}
+
+export pure func check_a2(e: TranscriptExpectation, o: TranscriptObservation) -> [AdmissionFinding] {
+  tagged(A2, transcript_findings(e, o))
+}
+
+-- ============================================================================
+-- A3 — requests, against the live excerpt.
+-- ============================================================================
+
+export type RequestExpectation = { k: int, event: int, payload: string, system: string, logical_model: string, api_model: string, msg_count: int }
+
+export type RequestObservation = { ordinal: int, model: string, projected_model: string, msg_count: string, payload: string, system: string }
+
+export pure func request_expectations(jw: JournalWorld) -> [RequestExpectation] {
+  List.map(\c. {
+    k: c.k, event: c.prepared.index, payload: c.prepared.payload_digest, system: c.prepared.system_prefix_digest,
+    logical_model: c.prepared.model,
+    api_model: eval_provider_api_model(c.prepared.model, jw.config.env.openai_base_url),
+    msg_count: c.prepared.msg_count
+  }, jw.calls)
+}
+
+-- `key=value` from a space-separated projection; "" when absent.
+export pure func projection_field(projection: string, key: string) -> string {
+  let p = "${key}=";
+  List.foldl(\acc t. if acc != "" then acc
+                     else if startsWith(t, p) then substring(t, Str.length(p), Str.length(t))
+                     else acc, "", split(projection, " "))
+}
+
+export pure func request_observations(log: [Interaction]) -> [RequestObservation] {
+  List.foldl(\acc i. match i.identity.body {
+    ProviderIdentity(_, _, m) => acc ++ [{
+      ordinal: i.identity.ordinal, model: m,
+      projected_model: projection_field(i.request_projection, "model"),
+      msg_count: projection_field(i.request_projection, "msg_count"),
+      payload: projection_field(i.request_projection, "payload"),
+      system: projection_field(i.request_projection, "system")
+    }],
+    _ => acc
+  }, [], log)
+}
+
+pure func sc_request(e: RequestExpectation, o: RequestObservation) -> [SourceFinding] {
+  let at = Call(e.k);
+  (if o.payload == e.payload then [] else [sc_f(at, "PayloadDiffers", "program ${if o.payload == "" then "<none>" else o.payload} != excerpt ${e.payload} (event ${show(e.event)})")])
+    ++ (if o.system == e.system then [] else [sc_f(at, "SystemDiffers", "program ${o.system} != excerpt ${e.system}")])
+    ++ (if o.model == e.api_model && o.projected_model == e.api_model then []
+        else [sc_f(at, "ModelDiffers", "identity ${o.model}, projection ${o.projected_model} != pinned conversion ${e.api_model} of ${e.logical_model}")])
+    ++ (if o.msg_count == show(e.msg_count) then [] else [sc_f(at, "MsgCountDiffers", "program ${o.msg_count} != excerpt ${show(e.msg_count)}")])
+}
+
+pure func sc_requests(es: [RequestExpectation], os: [RequestObservation], k: int, n_e: int, n_o: int) -> [SourceFinding] {
+  match es {
+    [] => (match os {
+      [] => [],
+      _ => [sc_f(Call(k), "CallCountDiffers", "${show(n_o)} provider records for ${show(n_e)} excerpt calls")]
+    }),
+    e :: erest => match os {
+      [] => [sc_f(Call(k), "CallCountDiffers", "${show(n_o)} provider records for ${show(n_e)} excerpt calls")],
+      o :: orest => sc_request(e, o) ++ sc_requests(erest, orest, k + 1, n_e, n_o)
+    }
+  }
+}
+
+export pure func request_findings(es: [RequestExpectation], os: [RequestObservation]) -> [SourceFinding] {
+  sc_requests(es, os, 1, List.length(es), List.length(os))
+}
+
+export pure func check_a3(es: [RequestExpectation], os: [RequestObservation]) -> [AdmissionFinding] {
+  tagged(A3, request_findings(es, os))
+}
+
+-- ============================================================================
+-- A4 — invocations, against the snapshot.
+-- ============================================================================
+
+export type InvocationExpectation = { seq: int, call_id: string, name: string, arguments: Option[Json] }
+
+export type InvocationObservation = { ordinal: int, call_id: string, name: string, args_digest: string, arguments: Option[Json] }
+
+pure func sc_decoded(source: string) -> Option[Json] {
+  match decode(source) { Ok(j) => Some(j), Err(_) => None }
+}
+
+export pure func invocation_expectations(jw: JournalWorld) -> [InvocationExpectation] {
+  List.foldl(\acc c. acc ++ List.map(\t. { seq: c.assistant_seq, call_id: t.id, name: t.name, arguments: sc_decoded(t.arguments) },
+                                     c.assistant.tool_calls), [], jw.calls)
+}
+
+-- The calls the run dispatched: every tool call of the run's own assistant
+-- messages after the seed, in order.
+export pure func dispatched_calls(final_history: [Message], seed_count: int) -> [ToolCall] {
+  List.foldl(\acc m. if m.role == "assistant" then acc ++ m.tool_calls else acc, [], sc_drop(seed_count, final_history))
+}
+
+type ObsAcc = { rest: [ToolCall], out: [InvocationObservation] }
+
+export pure func invocation_observations(log: [Interaction], dispatched: [ToolCall]) -> [InvocationObservation] {
+  let acc = List.foldl(\a i. match i.identity.body {
+    ToolIdentity(_, cid, name) => {
+      let args = match a.rest { [] => None, d :: _ => sc_decoded(d.arguments) };
+      let rest = match a.rest { [] => [], _ :: ds => ds };
+      { rest: rest, out: a.out ++ [{ ordinal: i.identity.ordinal, call_id: cid, name: name,
+                                     args_digest: projection_field(i.request_projection, "args"), arguments: args }] }
+    },
+    _ => a
+  }, { rest: dispatched, out: [] }, log);
+  acc.out
+}
+
+pure func sc_invocation(e: InvocationExpectation, o: InvocationObservation, i: int) -> [SourceFinding] {
+  let at = snap(e.seq);
+  let ident = if o.call_id == e.call_id && o.name == e.name then []
+              else [sc_f(at, "InvocationDiffers", "invocation ${show(i)}: ${o.call_id}|${o.name} != journal ${e.call_id}|${e.name}")];
+  let args = match o.arguments {
+    None => [sc_f(at, "ArgumentsUnobserved", "invocation ${show(i)}: no dispatched arguments")],
+    Some(oa) =>
+      (if o.args_digest == eval_arguments_digest_json(oa) then []
+       else [sc_f(at, "ArgumentsDigestDiffers", "invocation ${show(i)}: args=${o.args_digest} != dispatched ${eval_arguments_digest_json(oa)}")])
+        ++ (match e.arguments {
+              None => [sc_f(at, "ArgumentsDiffer", "invocation ${show(i)}: journal arguments undecodable")],
+              Some(ea) => if arguments_equal(oa, ea) then []
+                          else [sc_f(at, "ArgumentsDiffer", "invocation ${show(i)}: dispatched ${eval_arguments_digest_json(oa)} is not JSON-equal to journal ${eval_arguments_digest_json(ea)}")]
+            })
+  };
+  ident ++ args
+}
+
+pure func sc_invocations(es: [InvocationExpectation], os: [InvocationObservation], i: int, n_e: int, n_o: int) -> [SourceFinding] {
+  match es {
+    [] => (match os {
+      [] => [],
+      o :: _ => [sc_f(at_interaction(o.ordinal), "InvocationCountDiffers", "${show(n_o)} tool records for ${show(n_e)} journal calls")]
+    }),
+    e :: erest => match os {
+      [] => [sc_f(snap(e.seq), "InvocationCountDiffers", "${show(n_o)} tool records for ${show(n_e)} journal calls")],
+      o :: orest => sc_invocation(e, o, i) ++ sc_invocations(erest, orest, i + 1, n_e, n_o)
+    }
+  }
+}
+
+export pure func invocation_findings(es: [InvocationExpectation], os: [InvocationObservation]) -> [SourceFinding] {
+  sc_invocations(es, os, 0, List.length(es), List.length(os))
+}
+
+export pure func check_a4(es: [InvocationExpectation], os: [InvocationObservation]) -> [AdmissionFinding] {
+  tagged(A4, invocation_findings(es, os))
+}
+
+-- ============================================================================
+-- The verdict.
+-- ============================================================================
+
+export type Envelope = {
+  checked: [string],
+  unchecked: [string],
+  pinned: [string],
+  unreproduced: [string],
+  not_observed: [string],
+  omissions: [string]
+}
+
+export type Faithful = { entry: string, calls: int, end: ExpectedEnd, envelope: Envelope }
+
+export type AdmissionReason
+  = Refusal(WorldRefusal)
+  | AdmissionCheck(AdmissionCheckId, Location, string)
+  | ScanRefusal([string])
+
+export type Admission = SourceFaithful(Faithful) | Refused(AdmissionReason)
+
+export pure func check_rank(c: AdmissionCheckId) -> int {
+  match c {
+    A1 => 1, A2 => 2, A3 => 3, A4 => 4, A5 => 5, A6 => 6, A7 => 7, A8 => 8, A9 => 9, A9b => 10
+  }
+}
+
+pure func sc_insert_ranked(f: AdmissionFinding, xs: [AdmissionFinding]) -> [AdmissionFinding] {
+  match xs {
+    [] => [f],
+    y :: rest => if check_rank(f.check) < check_rank(y.check) then f :: xs else y :: sc_insert_ranked(f, rest)
+  }
+}
+
+-- Stable: equal ranks keep their order (each check's own order).
+export pure func ordered_findings(fs: [AdmissionFinding]) -> [AdmissionFinding] {
+  List.foldl(\acc f. sc_insert_ranked(f, acc), [], fs)
+}
+
+-- A7/A8 are P1.7b's (v2 graph `P1.7b-v2`, landed in 3ff4dbd); the envelope no
+-- longer lists them as pending — `admit_source` runs the full A1–A9 suite.
+export pure func pending_checks() -> [string] { [] }
+
+export pure func envelope_of(jw: JournalWorld, unchecked: [string]) -> Envelope {
+  {
+    checked: ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A9b"],
+    unchecked: pending_checks() ++ unchecked,
+    pinned: ["recorded_config", "t0_settings", "registry:empty", "execution_provenance"],
+    unreproduced: ["prior_counts", "cumulative", "cache_usage:${show(List.length(jw.unreproduced.cache_usage))}",
+                   "tool_exit_status", "context_limit_source"],
+    not_observed: ["model_parameters", "tool_schemas", "request_encoding", "real_tool_execution", "streaming",
+                   "extensions", "compaction", "live_gc_timing", "path_stat", "dir_list"],
+    omissions: jw.omissions
+  }
+}
+
+export pure func admission_verdict(entry: string, jw: JournalWorld, scan: [string], findings: [AdmissionFinding], ran: bool, unchecked: [string]) -> Admission {
+  match scan {
+    _ :: _ => Refused(ScanRefusal(scan)),
+    [] => match ordered_findings(findings) {
+      f :: _ => Refused(AdmissionCheck(f.check, f.location, f.finding)),
+      [] =>
+        if ran then SourceFaithful({ entry: entry, calls: List.length(jw.calls), end: jw.end.expected, envelope: envelope_of(jw, unchecked) })
+        else Refused(AdmissionCheck(A5, Aggregate("frame"), "NotRun"))
+    }
+  }
+}
+
+export pure func refused_at_source(r: WorldRefusal) -> Admission { Refused(Refusal(r)) }
+
+export pure func admission_label(a: Admission) -> string {
+  match a {
+    SourceFaithful(s) => "SourceFaithful(calls=${show(s.calls)},end=${end_id(s.end)}(${end_value(s.end)}))",
+    Refused(Refusal(r)) => "Refused(Refusal(${world_refusal_family(r)})@${world_refusal_position(r)})",
+    Refused(AdmissionCheck(c, l, name)) => "Refused(AdmissionCheck(${check_label(c)}):${name}@${location_label(l)})",
+    Refused(ScanRefusal(hits)) => "Refused(ScanRefusal(${join(",", hits)}))"
+  }
+}
+
+-- The MATRIX.expected.tsv fields: verdict, first finding, position.
+export pure func admission_verdict_word(a: Admission) -> string {
+  match a { SourceFaithful(_) => "admitted", Refused(_) => "refused" }
+}
+
+export pure func admission_first_finding(a: Admission) -> string {
+  match a {
+    SourceFaithful(_) => "-",
+    Refused(Refusal(r)) => world_refusal_family(r),
+    Refused(AdmissionCheck(c, _, _)) => "AdmissionCheck(${check_label(c)})",
+    Refused(ScanRefusal(_)) => "ScanRefusal"
+  }
+}
+
+-- The FINDING-level first finding (P1R C1, ruled 2026-09-17): `Ak:<name>`
+-- for a check's refusal — the form every row that asserts which check caught
+-- what uses. `admission_first_finding`'s verdict-level `AdmissionCheck(Ak)`
+-- is kept for the verdict-mapping rows (M10.verdict.*, P17a.*).
+export pure func admission_first_finding_name(a: Admission) -> string {
+  match a {
+    Refused(AdmissionCheck(c, _, name)) => "${check_label(c)}:${name}",
+    _ => admission_first_finding(a)
+  }
+}
+
+export pure func admission_position(a: Admission) -> string {
+  match a {
+    SourceFaithful(_) => "-",
+    Refused(Refusal(r)) => world_refusal_position(r),
+    Refused(AdmissionCheck(_, l, _)) => location_label(l),
+    Refused(ScanRefusal(_)) => "aggregate:scan"
+  }
+}
+
+-- ============================================================================
+-- Tests (M10, the pure half). The run-bearing cases, and M15's A-rows, are in
+-- `source_checks_live_test.ail`.
+-- ============================================================================
+
+pure func sx_labels(fs: [AdmissionFinding]) -> [string] { List.map(finding_label, fs) }
+
+pure func sx_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && sx_strs_eq(xs, ys) }
+  }
+}
+
+pure func sx_ints_eq(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && sx_ints_eq(xs, ys) }
+  }
+}
+
+pure func sx_world(f: SourceCheckFixture) -> WorldFixture {
+  { fxw_m3_selector_end() | name: f.name, journal: f.journal, log: f.log, leaf: f.leaf, run_id: f.run_id,
+                            start: f.start, end_kind: f.end_kind, end_id: f.end_id }
+}
+
+pure func sx_lines(f: SourceCheckFixture) -> [Json] {
+  match parse_lines(f.journal) { Ok(ls) => ls, Err(_) => [] }
+}
+
+pure func sx_msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+-- The source chain equals the generator's (recorded prefix and appends) on
+-- every P1.7a fixture, and A1 is clean on each: the near-misses are
+-- consistently re-chained.
+pure func test_m10_source_chain_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fxs_all()) == 8
+      && List.foldl(\acc f. acc && (match fixture_journal_world(sx_world(f)) {
+           Err(_) => false,
+           Ok(jw) => {
+             let c = source_chain(sx_lines(f), jw);
+             c.prefix_seq == f.prefix_seq && c.prefix_digest == f.prefix_digest
+               && sx_ints_eq(List.map(\a. a.seq, c.appends), f.append_seqs)
+               && sx_strs_eq(List.map(\a. a.digest_after, c.appends), f.append_digests)
+               && sx_strs_eq(List.map(\a. a.digest_after, c.appends), jw.expected.chain)
+               && sx_ints_eq(List.map(\c2. c2.assistant_seq, jw.calls), f.call_seqs)
+               && List.length(check_a1(c)) == 0
+           }
+         }), true, fxs_all())
+  }
+
+-- M10 A1: the seed-digest tamper, against the snapshot's RECORDED digests —
+-- the recorded prefix digest changed, then the folded prefix (the seed)
+-- changed by one byte; a recorded segment digest changed; `replaces_previous`
+-- chains from `digest_prev`. Each at its typed `Source(Snapshot, seq)`.
+pure func test_m10_a1_seed_digest_tamper() -> bool
+  tests [((), true)]
+  {
+    match fixture_journal_world(sx_world(fxs_clean_m2())) {
+      Err(_) => false,
+      Ok(jw) => {
+        let c = source_chain(sx_lines(fxs_clean_m2()), jw);
+        let tampered_record = { c | prefix_digest: "sha256:00" };
+        let seed_changed = { c | seed: match c.seed { [] => [], m :: rest => [{ m | content: "${m.content}." }] ++ rest } };
+        let seg_changed = { c | appends: List.map(\a. if a.seq == 17 then { a | digest_after: "sha256:11" } else a, c.appends) };
+        let a = { seq: 30, message: sx_msg("assistant", "x"), replaces_previous: false, digest_after: eval_chain_digest_after("sha256:p", sx_msg("assistant", "x")) };
+        let b = { seq: 31, message: sx_msg("assistant", "y"), replaces_previous: true, digest_after: eval_chain_digest_after("sha256:p", sx_msg("assistant", "y")) };
+        let replacing = { seed: [], prefix_seq: 29, prefix_digest: "sha256:p", appends: [a, b] };
+        List.length(check_a1(c)) == 0
+          -- the first append chains from the tampered recorded value too
+          && sx_strs_eq(sx_labels(check_a1(tampered_record)), ["A1:SeedDigestDiffers@snapshot:12", "A1:ChainDiffers@snapshot:13"])
+          && sx_strs_eq(sx_labels(check_a1(seed_changed)), ["A1:SeedDigestDiffers@snapshot:12"])
+          -- the entry after a tampered one chains from the tampered value: both are reported, the first first
+          && sx_strs_eq(sx_labels(check_a1(seg_changed)), ["A1:ChainDiffers@snapshot:17", "A1:ChainDiffers@snapshot:18"])
+          && sx_strs_eq(sx_labels(check_a1(replacing)), ["A1:SeedDigestDiffers@snapshot:29"])
+          && List.length(chain_findings({ replacing | prefix_digest: eval_chain_empty_base(), appends: [
+               { a | digest_after: eval_chain_digest_after(eval_chain_empty_base(), a.message) },
+               { b | digest_after: eval_chain_digest_after(eval_chain_empty_base(), b.message) }] })) == 0
+      }
+    }
+  }
+
+-- A2 on a synthetic transcript: clean; a one-byte append change (history and
+-- record); the seed; counts both ways; the typed locations.
+pure func sx_append(seq: int, m: Message, d: string) -> RecordedAppend {
+  { seq: seq, message: m, replaces_previous: false, digest_after: d }
+}
+
+pure func sx_transcript() -> TranscriptExpectation {
+  { seed: [sx_msg("system", "s"), sx_msg("user", "u")], seed_digest: "sha256:seed", seed_position: 12,
+    appends: [sx_append(13, sx_msg("assistant", "a1"), "sha256:d13"), sx_append(14, sx_msg("tool", "t1"), "sha256:d14"),
+              sx_append(16, sx_msg("assistant", "a2"), "sha256:d16")] }
+}
+
+pure func sx_observed(e: TranscriptExpectation) -> TranscriptObservation {
+  { final_history: e.seed ++ List.map(\a. a.message, e.appends), seeded: [e.seed_digest],
+    appended: List.map(\a. { digest_after: a.digest_after, replaces_previous: false }, e.appends) }
+}
+
+pure func test_m10_a2_transcript() -> bool
+  tests [((), true)]
+  {
+    let e = sx_transcript();
+    let o = sx_observed(e);
+    let one_byte = { o | final_history: sc_take(3, o.final_history) ++ [sx_msg("tool", "t2")] ++ sc_drop(4, o.final_history) };
+    let one_byte_record = { o | appended: List.map(\r. if r.digest_after == "sha256:d14" then { r | digest_after: "sha256:d14x" } else r, o.appended) };
+    let dropped = { o | final_history: sc_take(4, o.final_history), appended: sc_take(2, o.appended) };
+    let extra = { o | final_history: o.final_history ++ [sx_msg("tool", "t3")] };
+    let seeded_twice = { o | seeded: [e.seed_digest, e.seed_digest] };
+    let seed_changed = { o | final_history: [sx_msg("system", "S")] ++ sc_drop(1, o.final_history) };
+    let replaced = { o | appended: List.map(\r. { r | replaces_previous: r.digest_after == "sha256:d16" }, o.appended) };
+    List.length(check_a2(e, o)) == 0
+      && sx_strs_eq(sx_labels(check_a2(e, one_byte)), ["A2:MessageDiffers@snapshot:14"])
+      && sx_strs_eq(sx_labels(check_a2(e, one_byte_record)), ["A2:ChainDiffers@snapshot:14"])
+      && sx_strs_eq(sx_labels(check_a2(e, dropped)), ["A2:HistoryShort@snapshot:16", "A2:AppendCountDiffers@snapshot:16"])
+      && sx_strs_eq(sx_labels(check_a2(e, extra)), ["A2:AppendCountDiffers@aggregate:transcript"])
+      && sx_strs_eq(sx_labels(check_a2(e, seeded_twice)), ["A2:SeededRecordCount@snapshot:12"])
+      && sx_strs_eq(sx_labels(check_a2(e, { o | seeded: ["sha256:other"] })), ["A2:SeedDigestDiffers@snapshot:12"])
+      && sx_strs_eq(sx_labels(check_a2(e, seed_changed)), ["A2:SeedMessageDiffers@snapshot:12"])
+      && sx_strs_eq(sx_labels(check_a2(e, replaced)), ["A2:ReplacesPrevious@snapshot:16"])
+      -- the function K7 reuses carries no tag
+      && List.length(transcript_findings(e, one_byte)) == 1
+  }
+
+-- A3 on synthetic requests: payload digest, system, model conversion,
+-- msg_count, count both ways.
+pure func sx_provider(o: int, k: int, model: string, projection: string) -> Interaction {
+  { identity: { ordinal: o, body: ProviderIdentity("loop_v2", k, model) }, request_projection: projection, deadline_ms: -1,
+    outcome: { advance_ms: 0, chunks: [], payload: "{}", status: OutcomeOk, fault_class_id: "" } }
+}
+
+pure func sx_tool(o: int, cid: string, name: string, args: string) -> Interaction {
+  { identity: { ordinal: o, body: ToolIdentity("loop_v2", cid, name) }, request_projection: "tool_exec call_id=${cid} tool=${name} args=${args} workdir=w timeout_ms=1 started_at_ms=0", deadline_ms: 1,
+    outcome: { advance_ms: 0, chunks: [], payload: "{}", status: OutcomeOk, fault_class_id: "" } }
+}
+
+pure func sx_proj(model: string, n: int, d: string, s: string) -> string {
+  "model_step model=${model} msg_count=${show(n)} payload=${d} system=${s} raw=sha256:r"
+}
+
+pure func sx_requests() -> [RequestExpectation] {
+  let base = "http://127.0.0.1:8000/v1";
+  [ { k: 1, event: 16, payload: "sha256:p1", system: "sha256:s", logical_model: "openrouter/openai/fx-model",
+      api_model: eval_provider_api_model("openrouter/openai/fx-model", base), msg_count: 6 },
+    { k: 2, event: 21, payload: "sha256:p2", system: "sha256:s", logical_model: "openrouter/openai/fx-model",
+      api_model: eval_provider_api_model("openrouter/openai/fx-model", base), msg_count: 9 } ]
+}
+
+pure func sx_request_log(m: string) -> [Interaction] {
+  [ { sx_provider(4, 0, m, sx_proj(m, 6, "sha256:p1", "sha256:s")) | outcome: { advance_ms: 0, chunks: [], payload: "{}", status: OutcomeOk, fault_class_id: "" } },
+    { identity: { ordinal: 5, body: EnvironmentReadIdentity("MOTOKO_TOOL_TIMEOUT_MS") }, request_projection: "env", deadline_ms: -1,
+      outcome: { advance_ms: 0, chunks: [], payload: "", status: OutcomeOk, fault_class_id: "" } },
+    sx_provider(9, 1, m, sx_proj(m, 9, "sha256:p2", "sha256:s")) ]
+}
+
+pure func test_m10_a3_requests() -> bool
+  tests [((), true)]
+  {
+    let es = sx_requests();
+    let api = "openai/fx-model";
+    let os = request_observations(sx_request_log(api));
+    let at_ord = \k f. List.map(\o. if o.ordinal == k then f(o) else o, os);
+    -- the conversion is not the identity on this model: an unconverted identity is a finding
+    let unconverted = request_observations(sx_request_log("openrouter/openai/fx-model"));
+    api == eval_provider_api_model("openrouter/openai/fx-model", "http://127.0.0.1:8000/v1")
+      && List.length(check_a3(es, os)) == 0
+      && sx_strs_eq(sx_labels(check_a3(es, at_ord(9, \o. { o | payload: "sha256:px" }))), ["A3:PayloadDiffers@call:2"])
+      && sx_strs_eq(sx_labels(check_a3(es, at_ord(4, \o. { o | system: "sha256:sx" }))), ["A3:SystemDiffers@call:1"])
+      && sx_strs_eq(sx_labels(check_a3(es, unconverted)), ["A3:ModelDiffers@call:1", "A3:ModelDiffers@call:2"])
+      && sx_strs_eq(sx_labels(check_a3(es, at_ord(9, \o. { o | projected_model: "x" }))), ["A3:ModelDiffers@call:2"])
+      && sx_strs_eq(sx_labels(check_a3(es, at_ord(9, \o. { o | msg_count: "8" }))), ["A3:MsgCountDiffers@call:2"])
+      && sx_strs_eq(sx_labels(check_a3(es, sc_take(1, os))), ["A3:CallCountDiffers@call:2"])
+      && sx_strs_eq(sx_labels(check_a3(sc_take(1, es), os)), ["A3:CallCountDiffers@call:2"])
+      -- an exhausted record has no payload
+      && sx_strs_eq(sx_labels(check_a3(es, request_observations([sx_provider(4, 0, api, sx_proj(api, 6, "sha256:p1", "sha256:s")),
+                                                                  sx_provider(9, 1, api, "model_step model=${api} msg_count=9 replay=exhausted")]))),
+                    ["A3:PayloadDiffers@call:2", "A3:SystemDiffers@call:2"])
+      && projection_field("model_step model=m msg_count=3 payload=sha256:x", "payload") == "sha256:x"
+      && projection_field("model_step model=m", "payload") == ""
+  }
+
+-- A4 on synthetic invocations: a JSON-equal reorder passes; a JSON-inequal
+-- change is a finding; the program digest must be the dispatched arguments';
+-- identities; counts both ways (a missing one at the snapshot, an extra one
+-- at its interaction ordinal).
+pure func sx_json(text: string) -> Json {
+  match decode(text) { Ok(j) => j, Err(_) => jo([]) }
+}
+
+pure func sx_invocations() -> [InvocationExpectation] {
+  [ { seq: 13, call_id: "c2a", name: "BashExec", arguments: Some(sx_json("{\"command\":\"ls\",\"cwd\":\"/fx\"}")) },
+    { seq: 13, call_id: "c2b", name: "BashExec", arguments: Some(sx_json("{\"command\":\"wc\"}")) },
+    { seq: 17, call_id: "c3", name: "BashExec", arguments: Some(sx_json("{\"command\":\"ls c3\"}")) } ]
+}
+
+pure func sx_call(id: string, args: string) -> ToolCall { { id: id, name: "BashExec", arguments: args } }
+
+pure func sx_invocation_log(a1: string, a2: string, a3: string) -> [Interaction] {
+  [ sx_tool(6, "c2a", "BashExec", eval_arguments_digest_json(sx_json(a1))),
+    sx_provider(7, 1, "m", "x"),
+    sx_tool(8, "c2b", "BashExec", eval_arguments_digest_json(sx_json(a2))),
+    sx_tool(12, "c3", "BashExec", eval_arguments_digest_json(sx_json(a3))) ]
+}
+
+pure func sx_history(a1: string, a2: string, a3: string) -> [Message] {
+  [ sx_msg("system", "s"), sx_msg("user", "u"),
+    { sx_msg("assistant", "") | tool_calls: [sx_call("c2a", a1), sx_call("c2b", a2)] },
+    sx_msg("tool", "r1"), sx_msg("tool", "r2"),
+    { sx_msg("assistant", "") | tool_calls: [sx_call("c3", a3)] }, sx_msg("tool", "r3") ]
+}
+
+pure func sx_obs(a1: string, a2: string, a3: string) -> [InvocationObservation] {
+  invocation_observations(sx_invocation_log(a1, a2, a3), dispatched_calls(sx_history(a1, a2, a3), 2))
+}
+
+pure func test_m10_a4_invocations() -> bool
+  tests [((), true)]
+  {
+    let es = sx_invocations();
+    let a1 = "{\"command\":\"ls\",\"cwd\":\"/fx\"}";
+    let reordered = "{\"cwd\":\"/fx\",\"command\":\"ls\"}";
+    let changed = "{\"command\":\"ls\",\"cwd\":\"/fy\"}";
+    let a2 = "{\"command\":\"wc\"}";
+    let a3 = "{\"command\":\"ls c3\"}";
+    let clean = sx_obs(a1, a2, a3);
+    let digest_lies = invocation_observations(sx_invocation_log(a1, a2, a3), dispatched_calls(sx_history(a1, a2, reordered), 2));
+    let renamed = List.map(\o. if o.ordinal == 8 then { o | name: "ReadFile" } else o, clean);
+    let log_short = invocation_observations(sc_take(3, sx_invocation_log(a1, a2, a3)), dispatched_calls(sx_history(a1, a2, a3), 2));
+    let log_long = invocation_observations(sx_invocation_log(a1, a2, a3) ++ [sx_tool(15, "c9", "BashExec", "sha256:x")],
+                                           dispatched_calls(sx_history(a1, a2, a3), 2));
+    List.length(check_a4(es, clean)) == 0
+      -- JSON-equal reorder passes (the program's digest is of the reordered value it dispatched)
+      && List.length(check_a4(es, sx_obs(reordered, a2, a3))) == 0
+      && sx_strs_eq(sx_labels(check_a4(es, sx_obs(changed, a2, a3))), ["A4:ArgumentsDiffer@snapshot:13"])
+      && sx_strs_eq(sx_labels(check_a4(es, sx_obs(a1, a2, "{\"command\":\"ls c4\"}"))), ["A4:ArgumentsDiffer@snapshot:17"])
+      && sx_strs_eq(sx_labels(check_a4(es, digest_lies)), ["A4:ArgumentsDigestDiffers@snapshot:17", "A4:ArgumentsDiffer@snapshot:17"])
+      && sx_strs_eq(sx_labels(check_a4(es, renamed)), ["A4:InvocationDiffers@snapshot:13"])
+      && sx_strs_eq(sx_labels(check_a4(es, log_short)), ["A4:InvocationCountDiffers@snapshot:17"])
+      && sx_strs_eq(sx_labels(check_a4(es, log_long)), ["A4:InvocationCountDiffers@interaction:15"])
+      && sx_strs_eq(sx_labels(check_a4(es, invocation_observations(sx_invocation_log(a1, a2, a3), []))),
+                    ["A4:ArgumentsUnobserved@snapshot:13", "A4:ArgumentsUnobserved@snapshot:13", "A4:ArgumentsUnobserved@snapshot:17"])
+      && List.length(dispatched_calls(sx_history(a1, a2, a3), 2)) == 3
+  }
+
+-- The expectations read from a journal world: the A3 conversion under the
+-- recorded base URL, and A4's calls in the assistants' call order.
+pure func test_m10_expectations_from_world() -> bool
+  tests [((), true)]
+  {
+    match (fixture_journal_world(fxw_m5_config_window()), fixture_journal_world(sx_world(fxs_clean_m2()))) {
+      (Ok(cfg), Ok(m2)) => {
+        let r = request_expectations(cfg);
+        let inv = invocation_expectations(m2);
+        List.length(r) == 3
+          && List.foldl(\acc x. acc && x.logical_model == "openrouter/openai/fx-model" && x.api_model == "openai/fx-model", true, r)
+          && sx_strs_eq(List.map(\x. x.api_model, r), cfg.expected.api_models)
+          && sx_ints_eq(List.map(\x. x.msg_count, r), cfg.expected.msg_counts)
+          && sx_strs_eq(List.map(\x. x.call_id, inv), ["c2a", "c2b", "c3", "c4"])
+          && sx_ints_eq(List.map(\x. x.seq, inv), [13, 13, 17, 20])
+          && sx_strs_eq(List.map(\x. match x.arguments { Some(j) => eval_arguments_digest_json(j), None => "" }, inv),
+                        List.map(\k. k.arguments_digest, m2.expected.tool_invocations))
+      },
+      _ => false
+    }
+  }
+
+-- The verdict: order across checks (stable within one), each constructor,
+-- and each finding's typed Location in the label.
+pure func sx_finding(c: AdmissionCheckId, l: Location, name: string) -> AdmissionFinding {
+  { check: c, location: l, finding: name, detail: "" }
+}
+
+pure func test_m10_verdict_mapping() -> bool
+  tests [((), true)]
+  {
+    match fixture_journal_world(sx_world(fxs_clean_m2())) {
+      Err(_) => false,
+      Ok(jw) => {
+        let fs = [sx_finding(A9, Aggregate("program"), "x"), sx_finding(A3, Call(2), "PayloadDiffers"),
+                  sx_finding(A3, Call(1), "SystemDiffers"), sx_finding(A2, snap(14), "MessageDiffers"),
+                  sx_finding(A4, at_interaction(15), "InvocationCountDiffers")];
+        let ok = admission_verdict("fx", jw, [], [], true, []);
+        let a2 = admission_verdict("fx", jw, [], fs, true, []);
+        let a3 = admission_verdict("fx", jw, [], sc_drop(4, fs) ++ sc_take(3, fs), true, []);
+        let scan = admission_verdict("fx", jw, ["JsonWebToken@snapshot:14"], fs, true, []);
+        let pre = admission_verdict("fx", jw, [], [sx_finding(A9b, Aggregate("provenance:toolchain"), "ToolchainUnpinned")], false, []);
+        let notrun = admission_verdict("fx", jw, [], [], false, []);
+        admission_label(ok) == "SourceFaithful(calls=3,end=EndSuspended(3))"
+          && (match ok { SourceFaithful(s) => s.entry == "fx" && sx_strs_eq(s.envelope.unchecked, pending_checks())
+                                                && sx_strs_eq(s.envelope.omissions, t0_omissions()), _ => false })
+          && admission_label(a2) == "Refused(AdmissionCheck(A2):MessageDiffers@snapshot:14)"
+          && admission_first_finding(a2) == "AdmissionCheck(A2)" && admission_position(a2) == "snapshot:14"
+          -- stable within one check: call 2 was reported before call 1
+          && admission_label(a3) == "Refused(AdmissionCheck(A3):PayloadDiffers@call:2)"
+          && admission_label(admission_verdict("fx", jw, [], sc_drop(3, fs), true, [])) == "Refused(AdmissionCheck(A2):MessageDiffers@snapshot:14)"
+          && admission_label(admission_verdict("fx", jw, [], [sx_finding(A9, Aggregate("program"), "x")] ++ sc_take(2, sc_drop(1, fs)), true, [])) == "Refused(AdmissionCheck(A3):PayloadDiffers@call:2)"
+          && admission_position(ok) == "-" && admission_first_finding(ok) == "-"
+          && (match fixture_journal_world(fxw_m4_hybrid_predicate_false()) {
+                Err(r) => admission_label(refused_at_source(r)) == "Refused(Refusal(HybridPredicate)@entry:9)"
+                            && admission_first_finding(refused_at_source(r)) == "HybridPredicate"
+                            && admission_position(refused_at_source(r)) == "entry:9",
+                Ok(_) => false
+              })
+          && admission_label(admission_verdict("fx", jw, [], sc_drop(4, fs), true, [])) == "Refused(AdmissionCheck(A4):InvocationCountDiffers@interaction:15)"
+          && admission_label(scan) == "Refused(ScanRefusal(JsonWebToken@snapshot:14))"
+          && admission_position(scan) == "aggregate:scan"
+          && admission_label(pre) == "Refused(AdmissionCheck(A9b):ToolchainUnpinned@aggregate:provenance:toolchain)"
+          && admission_label(notrun) == "Refused(AdmissionCheck(A5):NotRun@aggregate:frame)"
+          && admission_verdict_word(ok) == "admitted" && admission_verdict_word(a2) == "refused"
+      }
+    }
+  }

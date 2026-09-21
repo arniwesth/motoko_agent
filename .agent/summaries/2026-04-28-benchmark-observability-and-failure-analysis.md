@@ -8,7 +8,7 @@ Follow-up work on the Motoko Polyglot benchmark run (`openai/google/gemma-4-26B-
 ### 1) Local model routing clarified and stabilized
 - Confirmed `openai/google/gemma-4-26B-A4B-it` is a local OpenAI-compatible model route.
 - Verified successful benchmark execution requires local endpoint override:
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1`
 - Added benchmark CLI support for explicit endpoint override:
   - `--openai-base-url` in `benchmarks/aider_polyglot.py`.
 

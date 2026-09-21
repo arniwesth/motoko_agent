@@ -39,7 +39,7 @@ import src/core/dst_generator (GeneratorBounds)
 import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_interaction (
   IdentityBody,
-  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, WakeIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
   FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   CausalIdentity,
@@ -115,7 +115,21 @@ import src/core/dst_interaction (
 --                             different program — one that never draws chunks —
 --                             and would type-check. `project` therefore does not
 --                             let `int_at` answer this; see `chunk_draw_hi_of`.
-export pure func program_schema_version() -> string { "execution-program/3" }
+--
+-- PLAN-002 W4 MOVED THIS TO `execution-program/4`, and ONE payload travels
+-- with the move: the `WakeIdentity` class (`expect_wake`), the approval
+-- class's twin (`ports.recording_wake` records one interaction per read, an
+-- exhausted queue as `OutcomeMissing` exactly as an end-of-input approval
+-- read). The pre-v4 bytes carry no `expect_wake` line (eleven classes, not
+-- twelve), and absence decodes to no interaction at all — which is a DEFAULT
+-- admissible by the rule above: the old versions had no `wake_read` port, so
+-- their semantics fixed every program they ever wrote at zero wake reads.
+-- Contrast a regenerated v3 file, which WOULD carry the line and claim a
+-- content v3 never had — that is why the v3 fixture bytes are untouched and
+-- the v3 row now reads those bytes as a v3 program (a permitted
+-- backward-compatible decode), while the strict byte-identity assertion moves
+-- to v4, frozen BY this encoder.
+export pure func program_schema_version() -> string { "execution-program/4" }
 
 -- Every schema version this build can decode. A migration extends this list
 -- and keeps the old decode path, or it does not extend it and old programs
@@ -135,7 +149,7 @@ export pure func program_schema_version() -> string { "execution-program/3" }
 -- is the first; `test_current_schema_is_decodable_and_an_unknown_one_is_not`
 -- pins the relationship between them.
 export pure func decodable_schema_versions() -> [string] {
-  ["execution-program/1", "execution-program/2", program_schema_version()]
+  ["execution-program/1", "execution-program/2", "execution-program/3", program_schema_version()]
 }
 
 -- ---------------------------------------------------------------------------
@@ -373,6 +387,11 @@ pure func validate_identity(id: CausalIdentity) -> [ProgramRejection] {
       (if blank(origin) then [IdentityComponentMissing(o, "approval origin")] else [])
         ++ (if blank(call_id) then [IdentityComponentMissing(o, "approval call_id")] else [])
         ++ (if blank(name) then [IdentityComponentMissing(o, "approval name")] else []),
+    -- PLAN-002 W4 Part 4. `wait_id` may be blank: the unbound default, an
+    -- operator input and an abort name no wait (review change 12).
+    WakeIdentity(origin, request_id, _wait_id) =>
+      (if blank(origin) then [IdentityComponentMissing(o, "wake origin")] else [])
+        ++ (if blank(request_id) then [IdentityComponentMissing(o, "wake request_id")] else []),
     ExtensionEffectIdentity(ext_id, class_id, _call_id) =>
       (if blank(ext_id) then [IdentityComponentMissing(o, "extension_effect ext_id")] else [])
         ++ (if blank(class_id) then [IdentityComponentMissing(o, "extension_effect class_id")] else []),
@@ -467,6 +486,10 @@ pure func validate_outcome(i: Interaction, known_class_ids: [string]) -> [Progra
                     -- those has a "the world declined to answer" state that is
                     -- not already a fault class in A7's catalogue.
                     ApprovalIdentity(_, _, _) => [],
+                    -- PLAN-002 W4: a wake read that found the queue empty fell
+                    -- through to the unbound default, the approval queue's
+                    -- drained read in the same sense (reading B).
+                    WakeIdentity(_, _, _) => [],
                     -- WI-D17 WIDENED IT A SECOND TIME, to `file_remove` ONLY,
                     -- and reading B is what decides it rather than a preference
                     -- for a smaller diff. A remove of a path the world does not
@@ -685,9 +708,13 @@ pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
       -- the reason the list is written out oldest-first — a second bump that kept
       -- the length at two by dropping v1 would satisfy a count.
       && contains_str(decodable_schema_versions(), "execution-program/2")
-      && List.length(decodable_schema_versions()) == 3
-      -- And the bump actually happened: this build does not WRITE v2.
-      && program_schema_version() == "execution-program/3"
+      -- PLAN-002 W4: and so does ITS successor across the second bump, for the
+      -- same reason — a third bump that kept the length at three by dropping
+      -- v1 would satisfy a count.
+      && contains_str(decodable_schema_versions(), "execution-program/3")
+      && List.length(decodable_schema_versions()) == 4
+      -- And the bump actually happened: this build does not WRITE v3.
+      && program_schema_version() == "execution-program/4"
   }
 
 -- WI-D21. THE `ExtPorts.tool_handle` BRIDGE BUILDS AN INVOCATION THIS VALIDATOR

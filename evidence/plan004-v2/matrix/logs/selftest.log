@@ -1,0 +1,70 @@
+eval_protected selftest: A=65003110ff5a scratch=/tmp/eval-protected-selftest-5t9qtryr
+FLAG unlisted callee ambient_dir_list@src/core/ports.ail (via live_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee ambient_dir_make@src/core/ports.ail (via live_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee ambient_env@src/core/ports.ail (via live_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee ambient_file@src/core/ports.ail (via live_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee ambient_file_remove@src/core/ports.ail (via live_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee ambient_file_write@src/core/ports.ail (via live_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee ambient_path_stat@src/core/ports.ail (via live_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee generated_provider_entry@src/core/ports.ail (via generating_model_step@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee generating_approval@src/core/ports.ail (via generating_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee generating_tool@src/core/ports.ail (via generating_ports@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee repeat_chunk@src/core/ports.ail (via generated_provider_entry@src/core/ports.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee wait_descriptor_to_json@src/core/phase_vocab.ail (via wait_descriptors_json@src/core/phase_vocab.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee wait_descriptors_json@src/core/phase_vocab.ail (via wake_request_json@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+FLAG unlisted callee wake_outcome_of@src/core/ports.ail (via live_wake_await@src/core/test/stub_step.ail): recorded in closure_flags (--allow-flags)
+  crosscheck src/core/dst_interaction.ail OutcomeStatus L254-254: ok (moved=ok, removed=ok)
+  crosscheck src/core/ports.ail RequestClass L522-522: ok (moved=ok, removed=ok)
+  crosscheck src/core/ports.ail ToolOutcome L647-651: ok (moved=ok, removed=ok)
+  crosscheck src/core/ports.ail PathKind L738-738: ok (moved=ok, removed=ok)
+  crosscheck src/core/ports.ail WakeOutcome L788-788: ok (moved=ok, removed=ok)
+  crosscheck src/core/ports.ail ProviderOutcome L2477-2480: ok (moved=ok, removed=ok)
+  crosscheck src/core/ports.ail ToolOutcomeRecord L2561-2563: ok (moved=ok, removed=ok)
+  crosscheck src/core/test/stub_step.ail StepProvider L69-69: ok (moved=ok, probe-baseline=ok, probe:GeneratedWorld=ok, probe:LiveAI=ok, probe:Ported=ok, probe:PortedWorld=ok, probe:RecordingWorld=ok, probe:Scripted=ok, probe:ScriptedWorld=ok, probe:StepProvider=ok, removed=ok)
+eval_protected gen: 119 spans in 7 files at 65003110ff5a; crosscheck ok; 137 unlisted callees, 14 flagged
+  ok   M7.clean: A's own tree -> allowed -
+  ok   M7.ws_in_literal: whitespace inside a projection string literal -> refused changed:encode_tool_outcome
+  ok   M7.ws_doubled_in_literal: an existing space doubled inside a codec string literal -> refused changed:decode_tool_outcome
+  ok   M7.token_tool_outcome_record: one token in tool_outcome_record -> refused changed:tool_outcome_record
+  ok   M7.import_paren_name: a name added inside a multi-line import's parentheses -> refused changed:<imports:1>
+  ok   M7.import_joined: a second import joined onto an import line -> refused changed:<imports:1>
+  ok   M7.import_alias: an `as` alias changed -> refused changed:<imports:1>
+  ok   M7.comment_in_span: a comment inside a span -> refused changed:recording_tool
+  ok   M7.unbraced_last_line: a multi-line non-braced type changed on its last line -> refused changed:ToolOutcome
+  ok   M7.deriving: a deriving clause changed -> refused changed:ToolCallEnvelope
+  ok   M7.moved_other_file: a protected function moved to another file -> refused moved:scripted_step_faults
+  ok   M7.renamed_missing: a protected function renamed -> refused missing:recording_tool
+  ok   M7.renamed_readded: renamed, and re-added under its name elsewhere in the file (moved within file) -> allowed -
+  ok   M7.moved_within_file: a protected function moved within its file -> allowed -
+  ok   M7.outside_every_span: a change outside every span (not detected, by design) -> allowed -
+  ok   M7.interp_brace: `${` inside a string containing `}` (spans unchanged; a new declaration between spans) -> allowed -
+  ok   M7.new_decl_dup_name: a new declaration duplicating a protected name -> refused duplicate:tool_calls_json
+  ok   M7.dup_in_other_protected_file: a protected name declared in another protected file -> refused duplicate:bool_field
+  ok   M7.call_site_changed: the dispatch_step call site changed -> refused changed:dispatch_step@call
+  ok   M7.call_site_duplicated: a second dispatch_step call site -> refused duplicate:dispatch_step@call
+  ok   M7.unterminated_string: an unterminated string literal -> hard_error SpanError
+  ok   M7.unbalanced_paren: an unbalanced parenthesis -> hard_error SpanError
+  ok   M7.token_has_key: one token in has_key (a P1R R2 member) -> refused changed:has_key
+  ok   M7.token_world_ordinal_advance: one token in world_ordinal.advance (a P1R R2 member) -> refused changed:advance
+  ok   M7.world_ordinal_imports: an alias changed in world_ordinal.ail's imports region -> refused changed:<imports:1>
+  ok   M7.pin_drift_reported: a pinned copy's source changed: drift reported, not refused -> allowed -
+  ok   M7.diff_names_only: diff names the spans a hunk overlaps, exit 0 -> allowed encode_tool_outcome
+  ok   M7.gen_missing_symbol: gen: a missing symbol -> hard_error protected symbol zz_no_such_symbol is missing
+  ok   M7.gen_overlap: gen: two protected spans overlap (a call site inside a protected declaration) -> hard_error spans overlap
+  ok   M7.gen_flags_direct_callee: gen flags an unlisted direct callee (has_key removed) -> flagged FLAG unlisted callee has_key@src/core/ports.ail
+  ok   M7.gen_flags_transitive_callee: gen flags a callee reached only through an unlisted callee (tool_calls_json, tool_call_json removed) -> flagged FLAG unlisted callee tool_call_json@src/core/ports.ail (via tool_calls_json@
+  ok   M7.gen_path_refused_not_flagged: gen does not flag an unlisted callee in a path-refused file (advance's file refused) -> flagged closure not closed: 14 flagged
+  ok   M7.closure_flags_at_a: A's transitive closure: 137 unlisted callees, exactly the 14 recorded flags open, the rest path-refused -> pass -
+  ok   M7.path_refused_glob: path_refused patterns: `*` stays in a segment, `**` crosses, anchored -> pass -
+  ok   M7.committed_manifest_current: the committed manifest-A.json equals gen --at A -> pass -
+  ok   M7.gen_duplicate_symbol: gen: a duplicate symbol -> hard_error protected symbol recording_tool is declared 2 times
+  ok   M7.overlap_two_declarations: overlap of two different declarations (guard, direct) -> hard_error spans overlap
+  ok   M7.crosscheck_every_nonbraced_span: parser cross-check on every non-braced span (8/8) -> pass -
+  crosscheck src/core/ports.ail ToolOutcome L647-650: FAILED (moved=FAIL, removed=FAIL)
+    moved: src/core/ports.ail ERROR: module loading error: failed to load src/core/ports.ail: parse errors in src/core/ports.ail:
+    removed: src/core/ports.ail ERROR: module loading error: failed to load src/core/ports.ail: parse errors in src/core/ports.ail:
+  ok   M7.crosscheck_detects_short_span: cross-check fails a span one line short -> fail crosscheck:ToolOutcome
+  ok   M7.pins_at_a: the 19 P1.4a SOURCE pins verify against A (19 ok) -> allowed -
+  ok   M7.pins_at_a_with_reader: P1.4a's and P1.2a's 127 SOURCE pins verify against A (127 ok) -> allowed -
+  ok   M7.pins_corrupted: one corrupted pin is reported -> refused BAD
+eval_protected selftest: 42/42 cases ok in 111s

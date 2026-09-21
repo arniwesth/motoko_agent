@@ -1,0 +1,155 @@
+-- src/eval/journal/testdata/scan_fixtures.ail
+--
+-- PLAN-004 M12 (P1.8): synthetic inputs for the scan policy, the program
+-- artifact and the entry writer. HAND-WRITTEN, not generated: the scan
+-- carries no digest, so there is nothing for `gen_fixtures.py` to compute
+-- independently, and the artifact test is a round trip through
+-- `load_program`, which verifies its own digest.
+--
+-- Every credential-shaped value is ASSEMBLED FROM PARTS at run time
+-- (`fxs_prefix_body`, `fxs_pem`, `fxs_jwt`, `fxs_url`), so no complete shaped
+-- literal sits in the source, and each is visibly synthetic: bodies are runs
+-- of one letter ("Q"), hosts are `.invalid`. None is a credential. Privacy
+-- (§0.6): nothing here was copied from a session.
+
+module src/eval/journal/testdata/scan_fixtures
+
+import std/string (repeat, concat)
+import src/core/fs_node (FsNode, FsFile, FsDir)
+import src/core/dst_interaction (
+  Interaction, CausalIdentity, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity,
+  StreamChunkRecord, OutcomeOk
+)
+import src/core/dst_program (ExecutionProgram, program_schema_version)
+import src/core/dst_driver_only (driver_only_manifest)
+
+-- ---------------------------------------------------------------------------
+-- Shapes, assembled.
+-- ---------------------------------------------------------------------------
+
+-- `<prefix><n × Q>`: a prefix hit whose body is exactly n characters of the
+-- credential alphabet. Single-case, no digit, so `OpaqueHighEntropy` never
+-- fires on it and the prefix rule is tested alone.
+export pure func fxs_prefix_body(prefix: string, n: int) -> string {
+  "${prefix}${repeat("Q", n)}"
+}
+
+-- The provider prefix used throughout, split so the literal never appears.
+export pure func fxs_sk() -> string { concat(["s", "k-"]) }
+
+export pure func fxs_pem() -> string {
+  concat(["-----", "BEGIN FIXTURE ", "PRIVATE", " KEY-----"])
+}
+
+export pure func fxs_jwt() -> string {
+  concat(["ey", "Jfixturehdr", ".", "fixturepayload", ".", "fixturesignature"])
+}
+
+-- A JWT inside a JSON string, after a dot. `has_jwt`'s rule
+-- (dst_secrets.ail:261-272) does not see it: it needs the FIRST dot-segment
+-- to start with `eyJ` (its recursion keeps only two segments). Pinned as a
+-- false negative in scan.ail.
+export pure func fxs_jwt_in_json() -> string {
+  concat(["{\"auth\":\"v1.", fxs_jwt(), "\"}"])
+}
+
+export pure func fxs_url() -> string {
+  concat(["https://", "fxuser", ":", "fxpass", "@host.invalid/v1"])
+}
+
+-- A body-16 hit on a LATER occurrence: the first occurrence of the same
+-- prefix carries a 2-character body, the second 16. `dst_secrets.scan_text`
+-- reports the prefix once and says nothing about either body.
+export pure func fxs_later_body16() -> string {
+  "first ${fxs_sk()}ab then later ${fxs_prefix_body(fxs_sk(), 16)} end"
+}
+
+-- A later PREFIX: the first listed prefix carries a short body, a prefix
+-- further down the list carries the long one.
+export pure func fxs_later_prefix_body16() -> string {
+  "a ${fxs_sk()}ab and ${fxs_prefix_body(concat(["np", "m_"]), 17)} end"
+}
+
+export pure func fxs_body6() -> string { "see ${fxs_prefix_body(fxs_sk(), 6)} here" }
+
+export pure func fxs_body15() -> string { "see ${fxs_prefix_body(fxs_sk(), 15)} here" }
+
+-- The marker every body above contains. The report test asserts it never
+-- appears in a report.
+export pure func fxs_body_marker() -> string { "QQQQQQ" }
+
+-- ---------------------------------------------------------------------------
+-- A clean synthetic program, and its per-component poisoned twins.
+-- ---------------------------------------------------------------------------
+
+export pure func fxs_interaction_provider(ord: int, projection: string, payload: string, chunk: string) -> Interaction {
+  {
+    identity: { ordinal: ord, body: ProviderIdentity("provider", 1, "fx/model-b") },
+    request_projection: projection,
+    deadline_ms: -1,
+    outcome: { advance_ms: 1, chunks: [{ offset_ms: 0, text: chunk }], payload: payload,
+               status: OutcomeOk, fault_class_id: "" }
+  }
+}
+
+export pure func fxs_interaction_tool(ord: int, call_id: string) -> Interaction {
+  {
+    identity: { ordinal: ord, body: ToolIdentity("tool", call_id, "read_file") },
+    request_projection: "tool read_file",
+    deadline_ms: 0,
+    outcome: { advance_ms: 0, chunks: [], payload: "ok", status: OutcomeOk, fault_class_id: "" }
+  }
+}
+
+export pure func fxs_interaction_env(ord: int, key: string) -> Interaction {
+  {
+    identity: { ordinal: ord, body: EnvironmentReadIdentity(key) },
+    request_projection: "env ${key}",
+    deadline_ms: -1,
+    outcome: { advance_ms: 0, chunks: [], payload: "1", status: OutcomeOk, fault_class_id: "" }
+  }
+}
+
+export type ProgramParts = {
+  call_id: string, projection: string, payload: string, chunk: string,
+  env_value: string, file_content: string, toolchain: string
+}
+
+export pure func fxs_clean_parts() -> ProgramParts {
+  { call_id: "call_1", projection: "payload=sha256:fx system=sha256:fx", payload: "{\"served\":true}",
+    chunk: "hello", env_value: "1", file_content: "{\"agent\":{\"context_limit\":4096}}",
+    toolchain: "AILANG fx" }
+}
+
+export pure func fxs_program(p: ProgramParts) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    generator_id: "journal_admission",
+    generator_version: "fx-dev",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{\"session\":\"sess_fx\"}",
+      synthetic_environment: [{ key: "MOTOKO_HEADLESS", value: p.env_value },
+                              { key: "MOTOKO_SESSION_ID", value: "sess_fx" }],
+      files: [{ path: ".motoko/eval-profile/config.json", node: FsFile(p.file_content) }],
+      clock_epoch: 1789000000000,
+      extension_profile: "driver_only/fx"
+    },
+    bounds: { max_interactions: 3, max_chunks_per_interaction: 1, max_payload_bytes: 16,
+              max_resource_size: 0, max_clock_advance_ms: 1, chunk_draw_hi: 0 },
+    manifest: driver_only_manifest("a0a0a0", p.toolchain, "7.4", "{}", ["env_get"], [], "a0a0a0"),
+    interactions: [fxs_interaction_env(1, "MOTOKO_HEADLESS"),
+                   fxs_interaction_provider(2, p.projection, p.payload, p.chunk),
+                   fxs_interaction_tool(3, p.call_id)]
+  }
+}
+
+-- A clean snapshot (three synthetic JSONL lines) and excerpt (two).
+export pure func fxs_clean_snapshot() -> [string] {
+  ["{\"type\":\"session_start\",\"seq\":0}", "{\"type\":\"user_message\",\"seq\":1,\"text\":\"hello\"}",
+   "{\"type\":\"assistant\",\"seq\":2,\"text\":\"hi\"}"]
+}
+
+export pure func fxs_clean_excerpt() -> [string] {
+  ["{\"event\":\"provider_call_prepared\",\"i\":0}", "{\"event\":\"tool_dispatch\",\"i\":1}"]
+}

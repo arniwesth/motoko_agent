@@ -1,0 +1,1062 @@
+-- src/eval/journal/scan.ail
+--
+-- ADR-004 v5 D6 "Scan policy", "An entry", "Location and handling";
+-- PLAN-004 §3 P1.8: the scan policy, the entry and the program artifact.
+--
+-- THE POLICY (reviewed and versioned with E; `scan_policy_version()`). Every
+-- string of every component is scanned:
+--
+--   snapshot            one site per line (`Source(Snapshot, line)`, 0-based)
+--   excerpt             one site per line (`Source(Excerpt, line)`)
+--   program identity    each identity component (`Interaction(ordinal)`)
+--   program projection  the request projection
+--   program payload     the outcome payload
+--   program chunks      each stream chunk (field `chunk:<n>`)
+--   environment         each entry's key and value (`Aggregate("env:<i>")`);
+--                       the key also through `name_axis`
+--   files               each file's path and content (`Aggregate("file:<i>")`)
+--   metadata            the program's generator, initial-world and manifest
+--                       strings (`Aggregate("program")`) and the entry's own
+--                       records (`Aggregate(<file name>)`)
+--   derived output      every file a run writes under `runs/`
+--
+-- and each site yields:
+--
+--   REFUSE  `PrivateKeyBlock`, `JsonWebToken`, `UrlUserinfo` (dst_secrets's
+--           shape rules, through `scan_text`, unchanged), and
+--           `ProviderTokenLiteral` when ANY occurrence of ANY of the 23
+--           prefixes is followed by >= `body_threshold()` (16) characters of
+--           the credential alphabet. Every occurrence is enumerated here;
+--           `scan_text` reports only the first prefix that matches and says
+--           nothing about what follows it, so its `ProviderTokenLiteral` is
+--           dropped and replaced by this enumeration.
+--   REPORT  everything else, by site, reason, count and body length:
+--           `OpaqueHighEntropy` (body length = the run), a prefix whose
+--           longest body is < 16, and `CredentialBearingName` on an
+--           environment key (and an environment read's key), which is
+--           REPORT-ONLY by this policy's explicit rule: `encode_artifact`'s
+--           name-axis refusal is not inherited, and the finding is not
+--           dropped.
+--
+-- A report row carries component, location, field, reason, count, body
+-- length and disposition; NEVER the body. The prefix and the name token are
+-- the published list entries, not content. For the shape rules the count is
+-- 1 (presence: `scan_text` reports each shape once per string).
+--
+-- BODY-16 IS A HEURISTIC (v5 D6), and its limits are stated, not fixed:
+--   false negatives  a short body can still be a credential: invented short
+--                    `Basic `/`Bearer `/`sk-`/`npm_` probes match the prefix
+--                    and pass body-16 (report only);
+--   false positives  a long body occurs in quoted examples and ordinary prose
+--                    (`sk-` inside a hyphenated word followed by 16 letters,
+--                    `ASIA` inside a longer upper-case word);
+--   and the prefixes are matched anywhere, not at a word boundary. The
+--   threshold lives in this copy, not in `dst_secrets` (which is unchanged);
+--   changing it is a policy change and re-admits the corpus.
+--
+-- THE ARTIFACT. `"<schema>\ndigest\t<digest>\n<body>\n"` from `encode_body`
+-- and `program_digest` (dst_persistence.ail:544, :591), loaded by
+-- `load_program` (:1344), which verifies the digest (:1113). No second codec:
+-- the bytes are `encode_artifact`'s for a program its gate admits; this
+-- policy, not that gate (which refuses an ordinary long repository path), is
+-- what decides whether the program is written.
+-- WHY `program_artifact` DOES NOT CALL `encode_artifact` (P1R C7):
+-- `encode_artifact` (dst_persistence.ail:663) is `scan_program` then the same
+-- frame; its gate refuses what D6's policy explicitly reports and admits — a
+-- credential-bearing environment NAME (report-only here) and the opaque-run
+-- heuristic on paths. Calling it would re-impose the gate D6 replaced (and
+-- `EncodeRefused` would leave no bytes to write). The frame is the only
+-- thing re-spelled, and `scan_live_test.ail` asserts both halves: equal
+-- bytes wherever the gate encodes, and a credential-bearing name that the
+-- gate refuses while this policy reports it.
+--
+-- THE ENTRY. `.motoko/eval-corpus/<entry>/`, directories 0700, files 0600:
+--   snapshot.jsonl, excerpt.jsonl, sources.sha256 (`sha256sum -c` format),
+--   selector.txt, expectations.json, t0_settings.json, expected_end.txt,
+--   program.artifact, witness.json, census.txt (family and census record),
+--   envelope.json, identities.json, scan_report.tsv, exposure.jsonl
+--   (pre-entry rows migrated first, each wrapped as
+--   `{"migrated_from": <log>, "row": <row>}`, then the entry's own rows),
+--   and an empty `runs/` for everything derived.
+-- `write_entry` scans first (a refusal writes nothing), then builds the whole
+-- entry in `<root>/.staging-<entry>` (install -d -m 0700; each file written
+-- then chmod 0600 inside the 0700 directory, so no file is readable by
+-- another user between the two), checks every mode with `stat`, and renames
+-- the staging directory onto `<root>/<entry>` (`mv -n -T`). Any failure
+-- removes the staging directory and is a REFUSAL; an existing entry or
+-- staging directory is never overwritten. So a permission failure is a
+-- refusal, not a partial entry.
+--
+-- WHAT IT DOES NOT DO. It renders none of the records it is given (witness,
+-- census, envelope, identities, selector, expectations, T0 settings, end):
+-- those are the runner's (P1.6/P1.7b/P1.9a), passed in as text and scanned as
+-- metadata here. `witness.json` and `census.txt` are the entry-comparand
+-- records K1–K7 read, and their one codec is `candidate_checks_run.
+-- entry_json` / `decode_entry` (P1R C6); the runner's admit mode writes them
+-- (EVAL_ENTRY_OUT), and an `EntryInputs` built for a real entry takes them
+-- from `entry_json` — the fixture texts below are scan-policy test data, not
+-- entry records. It does not scan the exposure log (agent records this code
+-- writes, not corpus content).
+--
+-- Privacy (§0.6): synthetic fixtures only; reports carry counts, lengths,
+-- sites and identities.
+--
+-- THE PINS. The copies below carry `SOURCE` pins at A
+-- (65003110ff5a15e2ae5b1f0e205e0ffa705d18dc), as in `digests.ail`; bodies are
+-- the source bodies with names prefixed `sc_`.
+
+module src/eval/journal/scan
+
+import std/bytes (toString)
+import std/crypto (sha256Hex)
+import std/fs as FS (fileExists, isDir, writeFileResult)
+import std/json (Json, jo, kv, js, encode, decode)
+import std/list as List (length, map, foldl, filter)
+import std/option (Option, Some, None)
+import std/process (exec, ProcessError, NotAllowed, NotFound, PermissionDenied, Timeout, OutputLimitExceeded, SpawnFailed, AbnormalExit)
+import std/result (Result, Ok, Err)
+import std/string (join, split, find, substring, contains, foldChars, concat, repeat)
+import std/string as Str (length, toUpper, contains, startsWith, substring, find, foldChars, split)
+import src/core/fs_node (FsNode, FsFile, FsDir, fs_content_of)
+import src/core/dst_interaction (
+  Interaction, CausalIdentity, IdentityBody, StreamChunkRecord,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, WakeIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity
+)
+import src/core/dst_program (ExecutionProgram, program_schema_version)
+import src/core/dst_profile (ExecutionManifest, PackageVersion)
+import src/core/dst_persistence (encode_body, program_digest)
+import src/eval/journal/admission (SourceSide, Snapshot, Excerpt, Location, Interaction, Source, Aggregate, location_label)
+import src/eval/journal/testdata/scan_fixtures (
+  ProgramParts, fxs_prefix_body, fxs_sk, fxs_pem, fxs_jwt, fxs_url,
+  fxs_jwt_in_json, fxs_later_body16, fxs_later_prefix_body16, fxs_body6, fxs_body15, fxs_body_marker,
+  fxs_clean_parts, fxs_program, fxs_clean_snapshot, fxs_clean_excerpt
+)
+
+-- ============================================================================
+-- The policy's identity.
+-- ============================================================================
+
+export pure func scan_policy_version() -> string { "journal-scan/1" }
+
+export pure func body_threshold() -> int { 16 }
+
+-- ============================================================================
+-- Sites, reasons, findings.
+-- ============================================================================
+
+export type ScanComponent
+  = CSnapshot | CExcerpt
+  | CProgramIdentity | CProgramProjection | CProgramPayload | CProgramChunks
+  | CEnvironment | CFiles | CMetadata | CDerived
+
+export pure func component_id(c: ScanComponent) -> string {
+  match c {
+    CSnapshot => "snapshot",
+    CExcerpt => "excerpt",
+    CProgramIdentity => "program.identity",
+    CProgramProjection => "program.projection",
+    CProgramPayload => "program.payload",
+    CProgramChunks => "program.chunks",
+    CEnvironment => "environment",
+    CFiles => "files",
+    CMetadata => "metadata",
+    CDerived => "derived"
+  }
+}
+
+export type ScanReason
+  = ShapePrivateKeyBlock
+  | ShapeJsonWebToken
+  | ShapeUrlUserinfo
+  | PrefixBody(string)      -- the published prefix
+  | OpaqueRun               -- body_len = the run's length
+  | NameToken(string)       -- the credential-name token
+
+export pure func reason_id(r: ScanReason) -> string {
+  match r {
+    ShapePrivateKeyBlock => "PrivateKeyBlock",
+    ShapeJsonWebToken => "JsonWebToken",
+    ShapeUrlUserinfo => "UrlUserinfo",
+    PrefixBody(p) => "ProviderTokenLiteral:${p}",
+    OpaqueRun => "OpaqueHighEntropy",
+    NameToken(t) => "CredentialBearingName:${t}"
+  }
+}
+
+export type ScanSite = { component: ScanComponent, location: Location, field: string }
+
+export type ScanFinding = { site: ScanSite, reason: ScanReason, count: int, body_len: int, refused: bool }
+
+export pure func site_label(s: ScanSite) -> string {
+  "${component_id(s.component)}:${location_label(s.location)}"
+}
+
+pure func sc_finding(site: ScanSite, r: ScanReason, count: int, body_len: int, refused: bool) -> ScanFinding {
+  { site: site, reason: r, count: count, body_len: body_len, refused: refused }
+}
+
+export pure func refusals(fs: [ScanFinding]) -> [ScanFinding] {
+  List.filter(\f. f.refused, fs)
+}
+
+export pure func scan_refused(fs: [ScanFinding]) -> bool {
+  List.length(refusals(fs)) > 0
+}
+
+-- `ScanRefusal:<reason>` of the first refusal, or "-".
+export pure func first_refusal_label(fs: [ScanFinding]) -> string {
+  match refusals(fs) { [] => "-", f :: _ => "ScanRefusal:${reason_id(f.reason)}" }
+}
+
+export pure func first_refusal_site(fs: [ScanFinding]) -> string {
+  match refusals(fs) { [] => "-", f :: _ => "${site_label(f.site)}/${f.site.field}" }
+}
+
+-- ============================================================================
+-- The evaluator's copies (pinned at A).
+-- ============================================================================
+
+-- SOURCE src/core/dst_secrets.ail L217-223 B11925-12223 sha256:a3f4a5a6b392ab38e0bfdab27a6368c5f115a42770f0fefc031c7f1c96f75e76 symbol=credential_value_prefixes
+pure func sc_credential_value_prefixes() -> [string] {
+  ["sk-", "sk_live_", "sk_test_", "pk_live_", "rk_live_",
+   "ghp_", "gho_", "ghu_", "ghs_", "github_pat_",
+   "xoxb-", "xoxp-", "xapp-",
+   "AKIA", "ASIA", "AIza", "ya29.",
+   "Bearer ", "Basic ", "glpat-", "npm_", "dop_v1_", "shpat_"]
+}
+
+-- SOURCE src/core/dst_secrets.ail L292-295 B14965-15141 sha256:0c884605206ad43f3eb59b2411c934d19c1c9700336000286ddce6e92efb5268 symbol=in_credential_alphabet
+pure func sc_in_credential_alphabet(c: string) -> bool {
+  sc_is_upper(c) || sc_is_lower(c) || sc_is_digit(c) || c == "+" || c == "/" || c == "="
+    || c == "_" || c == "-" || c == "."
+}
+
+-- SOURCE src/core/dst_secrets.ail L297-297 B15142-15205 sha256:b0bdfd9b04578c84f660e7c9c170ec34728ecc63cd49d5abb9886ab9843fbcce symbol=is_upper
+pure func sc_is_upper(c: string) -> bool { c >= "A" && c <= "Z" }
+-- SOURCE src/core/dst_secrets.ail L298-298 B15205-15268 sha256:40cba8630b9bede46edf018adb40ccecbb132233f45fa24026d47578572e7e69 symbol=is_lower
+pure func sc_is_lower(c: string) -> bool { c >= "a" && c <= "z" }
+-- SOURCE src/core/dst_secrets.ail L299-299 B15268-15331 sha256:9feee56ca403cdc6c3de82eb517cd4d066da52dbafe1cc7b8f478a6759ce6524 symbol=is_digit
+pure func sc_is_digit(c: string) -> bool { c >= "0" && c <= "9" }
+
+-- SOURCE src/core/dst_secrets.ail L191-195 B10796-11042 sha256:e9d776428a19d2e584b3ba86ce94e198b474194434c46dcc176df8ebd8f6d6c2 symbol=credential_name_tokens
+pure func sc_credential_name_tokens() -> [string] {
+  ["SECRET", "TOKEN", "PASSWORD", "PASSWD", "CREDENTIAL", "APIKEY", "API_KEY",
+   "PRIVATE_KEY", "ACCESS_KEY", "SECRET_KEY", "AUTH", "BEARER", "SIGNATURE",
+   "SESSION_KEY", "PASSPHRASE"]
+}
+
+-- SOURCE src/core/dst_secrets.ail L197-202 B11043-11241 sha256:48d8bb7a25cd18ec036f07c48f298399035699983e85f5b7778009adb5677f38 symbol=first_name_token
+pure func sc_first_name_token(tokens: [string], upper: string) -> [string] {
+  match tokens {
+    [] => [],
+    t :: rest => if Str.contains(upper, t) then [t] else sc_first_name_token(rest, upper)
+  }
+}
+
+-- SOURCE src/core/dst_secrets.ail L207-209 B11467-11586 sha256:14237bfc9f78a0591738401139eb8ea9f53799e90b6b98c2f13f3ee1ff7baa79 symbol=name_axis
+pure func sc_name_axis(key: string) -> [string] {
+  sc_first_name_token(sc_credential_name_tokens(), Str.toUpper(key))
+}
+
+-- SOURCE src/core/dst_secrets.ail L236-252 B12705-13319 sha256:67c266661c61a86d84591e85b5202b8cc053c9379554b8b70a68cd1563b43255 symbol=has_url_userinfo
+pure func sc_has_url_userinfo(s: string) -> bool {
+  let i = Str.find(s, "://");
+  if i < 0 then false
+  else {
+    let after = Str.substring(s, i + 3, Str.length(s));
+    let slash = Str.find(after, "/");
+    let authority = if slash < 0 then after else Str.substring(after, 0, slash);
+    let at = Str.find(authority, "@");
+    if at < 0 then false
+    else {
+      let userinfo = Str.substring(authority, 0, at);
+      -- `user:token@host` carries a credential; a bare `user@host` is a
+      -- username, which D8 does not protect and which appears in ordinary URLs.
+      Str.find(userinfo, ":") >= 0
+    }
+  }
+}
+
+-- SOURCE src/core/dst_secrets.ail L254-256 B13320-13441 sha256:41568e437e21716c76ae1402456b4a51ec7cc60e1f40dacac8250bc824a867c7 symbol=has_private_key_block
+pure func sc_has_private_key_block(s: string) -> bool {
+  Str.contains(s, "-----BEGIN") && Str.contains(s, "PRIVATE KEY")
+}
+
+-- SOURCE src/core/dst_secrets.ail L261-263 B13677-13752 sha256:bd1b0b58858e99c9b3d78033a94b37e70c97d1931edcd4824a5c916df6eea1a0 symbol=has_jwt
+pure func sc_has_jwt(s: string) -> bool {
+  sc_jwt_in_parts(Str.split(s, "."))
+}
+
+-- SOURCE src/core/dst_secrets.ail L265-272 B13753-13991 sha256:f6886d77862b533c96efd5fcfeba33b9ca00b89c33aabb741405ab51d7e8acc0 symbol=jwt_in_parts
+pure func sc_jwt_in_parts(parts: [string]) -> bool {
+  match parts {
+    a :: b :: c :: _ =>
+      if Str.startsWith(a, "eyJ") && Str.length(b) >= 8 && Str.length(c) >= 8 then true
+      else sc_jwt_in_parts(b :: c :: []),
+    _ => false
+  }
+}
+
+-- SOURCE src/core/dst_secrets.ail L287-287 B14771-14825 sha256:ea372ac11747623941a9e8c84ed6a4ed2bda527504b2732d3a58b7c9960e20b6 symbol=opaque_run_threshold
+pure func sc_opaque_run_threshold() -> int { 32 }
+
+-- SOURCE src/core/dst_secrets.ail L289-290 B14826-14964 sha256:799d0136b3419804131ef40474789b1a7043ad35f53af102b6f65403448ff227 symbol=Run
+type ScRun = { best: int, cur: int, upper: bool, lower: bool, digit: bool,
+               cur_upper: bool, cur_lower: bool, cur_digit: bool }
+
+-- SOURCE src/core/dst_secrets.ail L301-317 B15332-16028 sha256:ea956ccde145fb09352e93c447d9be7a976591df76c4ddb6b3e63af8a94d2f38 symbol=run_step
+pure func sc_run_step(a: ScRun, c: string) -> ScRun {
+  if sc_in_credential_alphabet(c) then {
+    let n = a.cur + 1;
+    let u = a.cur_upper || sc_is_upper(c);
+    let l = a.cur_lower || sc_is_lower(c);
+    let d = a.cur_digit || sc_is_digit(c);
+    -- The run is only a CANDIDATE while all three classes are present; a run
+    -- that is long but single-class (a hex digest) never becomes the best.
+    if n > a.best && u && l && d then
+      { a | cur: n, best: n, upper: u, lower: l, digit: d,
+            cur_upper: u, cur_lower: l, cur_digit: d }
+    else
+      { a | cur: n, cur_upper: u, cur_lower: l, cur_digit: d }
+  } else {
+    { a | cur: 0, cur_upper: false, cur_lower: false, cur_digit: false }
+  }
+}
+
+-- SOURCE src/core/dst_secrets.ail L323-328 B16288-16582 sha256:439338435fc4dbfc94174882b62b1fd25184814bce8e96ce48775c08f6a0beba symbol=longest_opaque_run
+pure func sc_longest_opaque_run(s: string) -> int {
+  let r = Str.foldChars(sc_run_step, { best: 0, cur: 0, upper: false, lower: false,
+                                       digit: false, cur_upper: false,
+                                       cur_lower: false, cur_digit: false }, s);
+  r.best
+}
+
+export pure func credential_prefix_count() -> int { List.length(sc_credential_value_prefixes()) }
+
+-- ============================================================================
+-- One string.
+-- ============================================================================
+
+type BodyScan = { n: int, open: bool }
+
+pure func body_step(a: BodyScan, c: string) -> BodyScan {
+  if a.open && sc_in_credential_alphabet(c) then { n: a.n + 1, open: true }
+  else { n: a.n, open: false }
+}
+
+-- The leading credential-alphabet run of `s`.
+export pure func leading_body(s: string) -> int {
+  foldChars(\a c. body_step(a, c), { n: 0, open: true }, s).n
+}
+
+-- The body length behind every occurrence of `p` in `s`, in order.
+export pure func prefix_bodies(s: string, p: string) -> [int] {
+  prefix_bodies_from(s, p, 0, [])
+}
+
+pure func prefix_bodies_from(s: string, p: string, from: int, acc: [int]) -> [int] {
+  let n = Str.length(s);
+  let i = find(substring(s, from, n), p);
+  if i < 0 then acc
+  else {
+    let start = from + i + Str.length(p);
+    prefix_bodies_from(s, p, start, acc ++ [leading_body(substring(s, start, n))])
+  }
+}
+
+pure func max_of(xs: [int]) -> int { List.foldl(\m x. if x > m then x else m, 0, xs) }
+
+pure func prefix_findings(site: ScanSite, s: string, ps: [string]) -> [ScanFinding] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let bodies = prefix_bodies(s, p);
+      let here = match bodies {
+        [] => [],
+        _ => {
+          let mx = max_of(bodies);
+          [sc_finding(site, PrefixBody(p), List.length(bodies), mx, mx >= body_threshold())]
+        }
+      };
+      here ++ prefix_findings(site, s, rest)
+    }
+  }
+}
+
+-- `scan_text`'s other rules, in its order, re-dispositioned. Its
+-- `ProviderTokenLiteral` (first prefix only, no body) is not used:
+-- `prefix_findings` enumerates every occurrence instead.
+pure func shape_findings(site: ScanSite, s: string) -> [ScanFinding] {
+  let run = sc_longest_opaque_run(s);
+  (if sc_has_url_userinfo(s) then [sc_finding(site, ShapeUrlUserinfo, 1, 0, true)] else [])
+    ++ (if sc_has_private_key_block(s) then [sc_finding(site, ShapePrivateKeyBlock, 1, 0, true)] else [])
+    ++ (if sc_has_jwt(s) then [sc_finding(site, ShapeJsonWebToken, 1, 0, true)] else [])
+    ++ (if run >= sc_opaque_run_threshold() then [sc_finding(site, OpaqueRun, 1, run, false)] else [])
+}
+
+-- The policy on one string at one site.
+export pure func policy_text(site: ScanSite, s: string) -> [ScanFinding] {
+  if s == "" then []
+  else shape_findings(site, s)
+         ++ prefix_findings(site, s, sc_credential_value_prefixes())
+}
+
+-- `CredentialBearingName`, report-only.
+export pure func name_finding(site: ScanSite, key: string) -> [ScanFinding] {
+  match sc_name_axis(key) {
+    [] => [],
+    t :: _ => [sc_finding(site, NameToken(t), 1, 0, false)]
+  }
+}
+
+-- ============================================================================
+-- Components.
+-- ============================================================================
+
+pure func site(c: ScanComponent, l: Location, field: string) -> ScanSite {
+  { component: c, location: l, field: field }
+}
+
+pure func concat_all(xss: [[ScanFinding]]) -> [ScanFinding] {
+  List.foldl(\acc xs. acc ++ xs, [], xss)
+}
+
+-- Lines of a snapshot or excerpt, 0-based.
+export pure func scan_lines(c: ScanComponent, side: SourceSide, lines: [string]) -> [ScanFinding] {
+  scan_lines_from(c, side, lines, 0)
+}
+
+pure func scan_lines_from(c: ScanComponent, side: SourceSide, lines: [string], i: int) -> [ScanFinding] {
+  match lines {
+    [] => [],
+    l :: rest => policy_text(site(c, Source(side, i), "line"), l) ++ scan_lines_from(c, side, rest, i + 1)
+  }
+}
+
+pure func identity_fields(b: IdentityBody) -> [{ field: string, value: string }] {
+  match b {
+    ProviderIdentity(origin, _, model) => [{ field: "origin", value: origin }, { field: "model", value: model }],
+    ToolIdentity(origin, call_id, name) =>
+      [{ field: "origin", value: origin }, { field: "call_id", value: call_id }, { field: "name", value: name }],
+    ApprovalIdentity(origin, call_id, name) =>
+      [{ field: "origin", value: origin }, { field: "call_id", value: call_id }, { field: "name", value: name }],
+    WakeIdentity(origin, request_id, wait_id) =>
+      [{ field: "origin", value: origin }, { field: "request_id", value: request_id }, { field: "wait_id", value: wait_id }],
+    ExtensionEffectIdentity(ext_id, class_id, call_id) =>
+      [{ field: "ext_id", value: ext_id }, { field: "class_id", value: class_id }, { field: "call_id", value: call_id }],
+    EnvironmentReadIdentity(key) => [{ field: "key", value: key }],
+    RandomDrawIdentity(bounds) => [{ field: "bounds", value: bounds }],
+    ClockAdvanceIdentity => [],
+    FileWriteIdentity(path) => [{ field: "path", value: path }],
+    FileRemoveIdentity(path) => [{ field: "path", value: path }],
+    DirMakeIdentity(path) => [{ field: "path", value: path }]
+  }
+}
+
+pure func scan_chunks(l: Location, cs: [StreamChunkRecord], n: int) -> [ScanFinding] {
+  match cs {
+    [] => [],
+    c :: rest => policy_text(site(CProgramChunks, l, "chunk:${show(n)}"), c.text) ++ scan_chunks(l, rest, n + 1)
+  }
+}
+
+pure func scan_one_interaction(i: Interaction) -> [ScanFinding] {
+  let loc = interaction_location(i.identity.ordinal);
+  let ids = concat_all(List.map(\f. policy_text(site(CProgramIdentity, loc, "identity.${f.field}"), f.value),
+                                identity_fields(i.identity.body)));
+  let names = match i.identity.body {
+    EnvironmentReadIdentity(key) => name_finding(site(CProgramIdentity, loc, "identity.key"), key),
+    _ => []
+  };
+  names ++ ids
+    ++ policy_text(site(CProgramProjection, loc, "request_projection"), i.request_projection)
+    ++ policy_text(site(CProgramPayload, loc, "payload"), i.outcome.payload)
+    ++ scan_chunks(loc, i.outcome.chunks, 0)
+}
+
+pure func interaction_location(o: int) -> Location { Interaction(o) }
+
+pure func scan_env(es: [{ key: string, value: string }], i: int) -> [ScanFinding] {
+  match es {
+    [] => [],
+    e :: rest => {
+      let l = Aggregate("env:${show(i)}");
+      name_finding(site(CEnvironment, l, "key"), e.key)
+        ++ policy_text(site(CEnvironment, l, "key"), e.key)
+        ++ policy_text(site(CEnvironment, l, "value"), e.value)
+        ++ scan_env(rest, i + 1)
+    }
+  }
+}
+
+pure func scan_files(fs: [{ path: string, node: FsNode }], i: int) -> [ScanFinding] {
+  match fs {
+    [] => [],
+    f :: rest => {
+      let l = Aggregate("file:${show(i)}");
+      policy_text(site(CFiles, l, "path"), f.path)
+        ++ policy_text(site(CFiles, l, "content"), fs_content_of(f.node))
+        ++ scan_files(rest, i + 1)
+    }
+  }
+}
+
+pure func manifest_fields(m: ExecutionManifest) -> [{ field: string, value: string }] {
+  [{ field: "manifest.source_revision", value: m.source_revision },
+   { field: "manifest.toolchain", value: m.toolchain },
+   { field: "manifest.abi_version", value: m.abi_version },
+   { field: "manifest.profile_id", value: m.profile_id },
+   { field: "manifest.profile_version", value: m.profile_version },
+   { field: "manifest.event_vocabulary_version", value: m.event_vocabulary_version },
+   { field: "manifest.normalized_configuration", value: m.normalized_configuration },
+   { field: "manifest.scan_root_commit", value: m.scan_root_commit },
+   { field: "manifest.profile_rules_version", value: m.profile_rules_version },
+   { field: "manifest.coverage_rules_version", value: m.coverage_rules_version },
+   { field: "manifest.attribution_rules_version", value: m.attribution_rules_version },
+   { field: "manifest.fault_catalogue_version", value: m.fault_catalogue_version }]
+    ++ List.map(\p. { field: "manifest.extension_package", value: "${p.package_id} ${p.version}" }, m.extension_packages)
+    ++ List.map(\s. { field: "manifest.classifier_2", value: s }, m.classifier_2_set)
+    ++ List.map(\s. { field: "manifest.unrouted_field", value: s }, m.unrouted_fields)
+    ++ List.map(\s. { field: "manifest.scan_root", value: s }, m.scan_roots)
+}
+
+pure func program_metadata_fields(p: ExecutionProgram) -> [{ field: string, value: string }] {
+  [{ field: "generator_id", value: p.generator_id },
+   { field: "generator_version", value: p.generator_version },
+   { field: "initial_world.messages_and_policy", value: p.initial_world.messages_and_policy },
+   { field: "initial_world.extension_profile", value: p.initial_world.extension_profile }]
+    ++ manifest_fields(p.manifest)
+}
+
+-- The whole program: identity, projection, payload, chunks, environment,
+-- files and metadata.
+export pure func scan_program(p: ExecutionProgram) -> [ScanFinding] {
+  let meta = Aggregate("program");
+  concat_all(List.map(scan_one_interaction, p.interactions))
+    ++ scan_env(p.initial_world.synthetic_environment, 0)
+    ++ scan_files(p.initial_world.files, 0)
+    ++ concat_all(List.map(\f. policy_text(site(CMetadata, meta, f.field), f.value), program_metadata_fields(p)))
+}
+
+export type NamedText = { name: string, text: string }
+
+-- Named texts (entry records, derived output), one site each.
+export pure func scan_named(c: ScanComponent, xs: [NamedText]) -> [ScanFinding] {
+  concat_all(List.map(\x. policy_text(site(c, Aggregate(x.name), "text"), x.text), xs))
+}
+
+-- Derived output under `runs/`: the runner calls this on every file a run
+-- writes before it is kept.
+export pure func scan_derived(xs: [NamedText]) -> [ScanFinding] { scan_named(CDerived, xs) }
+
+-- ============================================================================
+-- The report.
+-- ============================================================================
+
+export pure func report_header() -> string {
+  "component\tlocation\tfield\treason\tcount\tbody_len\tdisposition"
+}
+
+export pure func finding_row(f: ScanFinding) -> string {
+  "${component_id(f.site.component)}\t${location_label(f.site.location)}\t${f.site.field}\t${reason_id(f.reason)}\t${show(f.count)}\t${show(f.body_len)}\t${if f.refused then "refuse" else "report"}"
+}
+
+export pure func scan_report(fs: [ScanFinding]) -> string {
+  concat([
+    "# scan-policy ${scan_policy_version()} body_threshold=${show(body_threshold())} prefixes=${show(credential_prefix_count())}\n",
+    "${report_header()}\n",
+    concat(List.map(\f. "${finding_row(f)}\n", fs)),
+    "# findings=${show(List.length(fs))} refused=${show(List.length(refusals(fs)))}\n"
+  ])
+}
+
+-- ============================================================================
+-- The program artifact.
+-- ============================================================================
+
+export pure func program_artifact(p: ExecutionProgram) -> string {
+  let body = encode_body(p);
+  "${program_schema_version()}\ndigest\t${program_digest(body)}\n${body}\n"
+}
+
+export pure func artifact_digest(p: ExecutionProgram) -> string { program_digest(encode_body(p)) }
+
+-- The digest line's value, or "".
+export pure func recorded_digest(bytes: string) -> string {
+  match split(bytes, "\n") {
+    _ :: d :: _ => match split(d, "\t") { "digest" :: v :: [] => v, _ => "" },
+    _ => ""
+  }
+}
+
+-- ============================================================================
+-- The entry.
+-- ============================================================================
+
+export pure func corpus_root() -> string { ".motoko/eval-corpus" }
+
+export pure func entry_dirs() -> [string] { ["runs"] }
+
+export pure func entry_file_names() -> [string] {
+  ["snapshot.jsonl", "excerpt.jsonl", "sources.sha256",
+   "selector.txt", "expectations.json", "t0_settings.json", "expected_end.txt",
+   "program.artifact", "witness.json", "census.txt", "envelope.json", "identities.json",
+   "scan_report.tsv", "exposure.jsonl"]
+}
+
+export type EntryInputs = {
+  name: string,
+  snapshot: [string],
+  excerpt: [string],
+  selector: string,
+  expectations: string,
+  t0_settings: string,
+  expected_end: string,
+  program: ExecutionProgram,
+  witness: string,
+  census: string,
+  envelope: string,
+  identities: string,
+  exposure: [string],
+  pre_entry_exposure: [NamedText]    -- name: the pre-entry log, text: one row
+}
+
+-- An entry name: [a-z0-9_-], 1..64, not starting with `_` (reserved:
+-- `_archive`, `_scan0`) or `-`.
+export pure func entry_name_ok(name: string) -> bool {
+  let n = Str.length(name);
+  n >= 1 && n <= 64
+    && not (substring(name, 0, 1) == "_") && not (substring(name, 0, 1) == "-")
+    && foldChars(\ok c. ok && name_char_ok(c), true, name)
+}
+
+pure func name_char_ok(c: string) -> bool {
+  (c >= "a" && c <= "z") || (c >= "0" && c <= "9") || c == "_" || c == "-"
+}
+
+export pure func entry_metadata(i: EntryInputs) -> [NamedText] {
+  [{ name: "selector.txt", text: i.selector },
+   { name: "expectations.json", text: i.expectations },
+   { name: "t0_settings.json", text: i.t0_settings },
+   { name: "expected_end.txt", text: i.expected_end },
+   { name: "witness.json", text: i.witness },
+   { name: "census.txt", text: i.census },
+   { name: "envelope.json", text: i.envelope },
+   { name: "identities.json", text: i.identities }]
+}
+
+-- Every component of an entry, plus any derived output already present.
+export pure func scan_entry(i: EntryInputs, derived: [NamedText]) -> [ScanFinding] {
+  scan_lines(CSnapshot, Snapshot, i.snapshot)
+    ++ scan_lines(CExcerpt, Excerpt, i.excerpt)
+    ++ scan_program(i.program)
+    ++ scan_named(CMetadata, entry_metadata(i))
+    ++ scan_derived(derived)
+}
+
+-- Pre-entry exposure rows, wrapped. Err(k): row k (0-based) is not JSON.
+export pure func migrate_exposure(rows: [NamedText]) -> Result[[string], int] {
+  migrate_from(rows, 0, [])
+}
+
+pure func migrate_from(rows: [NamedText], k: int, acc: [string]) -> Result[[string], int] {
+  match rows {
+    [] => Ok(acc),
+    r :: rest => match decode(r.text) {
+      Err(_) => Err(k),
+      Ok(j) => migrate_from(rest, k + 1, acc ++ [encode(jo([kv("migrated_from", js(r.name)), kv("row", j)]))])
+    }
+  }
+}
+
+pure func lines_text(ls: [string]) -> string { concat(List.map(\l. "${l}\n", ls)) }
+
+export pure func entry_files(i: EntryInputs, report: string, migrated: [string]) -> [NamedText] {
+  let snap = lines_text(i.snapshot);
+  let exc = lines_text(i.excerpt);
+  [{ name: "snapshot.jsonl", text: snap },
+   { name: "excerpt.jsonl", text: exc },
+   { name: "sources.sha256", text: "${sha256Hex(snap)}  snapshot.jsonl\n${sha256Hex(exc)}  excerpt.jsonl\n" },
+   { name: "selector.txt", text: i.selector },
+   { name: "expectations.json", text: i.expectations },
+   { name: "t0_settings.json", text: i.t0_settings },
+   { name: "expected_end.txt", text: i.expected_end },
+   { name: "program.artifact", text: program_artifact(i.program) },
+   { name: "witness.json", text: i.witness },
+   { name: "census.txt", text: i.census },
+   { name: "envelope.json", text: i.envelope },
+   { name: "identities.json", text: i.identities },
+   { name: "scan_report.tsv", text: report },
+   { name: "exposure.jsonl", text: lines_text(migrated ++ i.exposure) }]
+}
+
+export type EntryRefusal
+  = ScanRefusal([ScanFinding])
+  | EntryNameInvalid
+  | ExposureRowUndecodable(int)
+  | EntryExists(string)
+  | EntryIo(string, string)     -- step, detail
+
+export pure func refusal_label(r: EntryRefusal) -> string {
+  match r {
+    ScanRefusal(fs) => first_refusal_label(fs),
+    EntryNameInvalid => "Entry:NameInvalid",
+    ExposureRowUndecodable(k) => "Entry:ExposureRowUndecodable:${show(k)}",
+    EntryExists(n) => "Entry:Exists:${n}",
+    EntryIo(step, _) => "Entry:Io:${step}"
+  }
+}
+
+export type EntryReceipt = {
+  path: string, files: int, artifact_digest: string,
+  snapshot_sha256: string, excerpt_sha256: string, findings: int
+}
+
+export type EntryOutcome = EntryWritten(EntryReceipt) | EntryRefused(EntryRefusal)
+
+-- ============================================================================
+-- Writing (FS, Process).
+-- ============================================================================
+
+pure func process_error_label(e: ProcessError) -> string {
+  match e {
+    NotAllowed(c) => "not allowed: ${c}",
+    NotFound(c) => "not found: ${c}",
+    PermissionDenied(m) => "permission denied: ${m}",
+    Timeout(ms) => "timeout ${show(ms)}ms",
+    OutputLimitExceeded(n) => "output limit ${show(n)}",
+    SpawnFailed(m) => "spawn failed: ${m}",
+    AbnormalExit(n, s) => "signal ${show(n)} ${s}"
+  }
+}
+
+func run_cmd(cmd: string, args: [string]) -> Result[string, string] ! {Process} {
+  match exec(cmd, args) {
+    Err(e) => Err(process_error_label(e)),
+    Ok(o) =>
+      if o.exitCode == 0 then Ok(toString(o.stdout))
+      else Err("${cmd} exit ${show(o.exitCode)}: ${toString(o.stderr)}")
+  }
+}
+
+func path_exists(p: string) -> bool ! {FS} { FS.fileExists(p) || FS.isDir(p) }
+
+func cleanup(staging: string) -> () ! {Process} {
+  let _ = run_cmd("rm", ["-rf", "--", staging]);
+  ()
+}
+
+func write_files(dir: string, fs: [NamedText]) -> Result[int, EntryRefusal] ! {FS, Process} {
+  match fs {
+    [] => Ok(0),
+    f :: rest => {
+      let p = "${dir}/${f.name}";
+      match FS.writeFileResult(p, f.text) {
+        Err(e) => Err(EntryIo("write:${f.name}", e)),
+        Ok(_) => match run_cmd("chmod", ["0600", "--", p]) {
+          Err(e) => Err(EntryIo("chmod:${f.name}", e)),
+          Ok(_) => match write_files(dir, rest) {
+            Err(r) => Err(r),
+            Ok(n) => Ok(n + 1)
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func modes_ok(out: string, want: [string]) -> bool {
+  let got = List.filter(\l. l != "", split(out, "\n"));
+  modes_eq(got, want)
+}
+
+pure func modes_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && modes_eq(xs, ys) }
+  }
+}
+
+-- The layout itself: staging, files, modes, rename. Exported so the live test
+-- can inject a failing file; `write_entry` is the only production caller.
+export func write_layout(root: string, name: string, dirs: [string], files: [NamedText]) -> Result[string, EntryRefusal] ! {FS, Process} {
+  let final = "${root}/${name}";
+  let staging = "${root}/.staging-${name}";
+  if not FS.isDir(root) then Err(EntryIo("root", "not a directory"))
+  else if path_exists(final) then Err(EntryExists(name))
+  else if path_exists(staging) then Err(EntryExists(".staging-${name}"))
+  else {
+    let dir_paths = List.map(\d. "${staging}/${d}", dirs);
+    match run_cmd("install", ["-d", "-m", "0700", "--", staging] ++ dir_paths) {
+      Err(e) => { cleanup(staging); Err(EntryIo("mkdir", e)) },
+      Ok(_) => match write_files(staging, files) {
+        Err(r) => { cleanup(staging); Err(r) },
+        Ok(_) => {
+          let paths = [staging] ++ dir_paths ++ List.map(\f. "${staging}/${f.name}", files);
+          let want = List.map(\_. "700", [staging] ++ dir_paths) ++ List.map(\_. "600", files);
+          match run_cmd("stat", ["-c", "%a", "--"] ++ paths) {
+            Err(e) => { cleanup(staging); Err(EntryIo("stat", e)) },
+            Ok(out) =>
+              if not modes_ok(out, want) then { cleanup(staging); Err(EntryIo("modes", "a mode is not 0700/0600")) }
+              else match run_cmd("mv", ["-n", "-T", "--", staging, final]) {
+                Err(e) => { cleanup(staging); Err(EntryIo("rename", e)) },
+                Ok(_) =>
+                  if path_exists(staging) || not FS.isDir(final) then { cleanup(staging); Err(EntryIo("rename", "the staging directory was not moved")) }
+                  else Ok(final)
+              }
+          }
+        }
+      }
+    }
+  }
+}
+
+export func write_entry(root: string, i: EntryInputs) -> EntryOutcome ! {FS, Process} {
+  if not entry_name_ok(i.name) then EntryRefused(EntryNameInvalid)
+  else {
+    let fs = scan_entry(i, []);
+    if scan_refused(fs) then EntryRefused(ScanRefusal(refusals(fs)))
+    else match migrate_exposure(i.pre_entry_exposure) {
+      Err(k) => EntryRefused(ExposureRowUndecodable(k)),
+      Ok(rows) => {
+        let files = entry_files(i, scan_report(fs), rows);
+        match write_layout(root, i.name, entry_dirs(), files) {
+          Err(r) => EntryRefused(r),
+          Ok(path) => EntryWritten({
+            path: path, files: List.length(files), artifact_digest: artifact_digest(i.program),
+            snapshot_sha256: sha256Hex(lines_text(i.snapshot)), excerpt_sha256: sha256Hex(lines_text(i.excerpt)),
+            findings: List.length(fs)
+          })
+        }
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- Tests (pure; the FS half is scan_live_test.ail).
+-- ============================================================================
+
+pure func st_site() -> ScanSite { site(CMetadata, Aggregate("fx"), "text") }
+
+pure func st_strs_eq(a: [string], b: [string]) -> bool { modes_eq(a, b) }
+
+pure func st_rows(fs: [ScanFinding]) -> [string] {
+  List.map(\f. "${site_label(f.site)}/${f.site.field} ${reason_id(f.reason)} n=${show(f.count)} body=${show(f.body_len)} ${if f.refused then "refuse" else "report"}", fs)
+}
+
+-- The three shapes, each refused on its own; a clean twin is empty.
+pure func test_m12_shape_refusals() -> bool
+  tests [((), true)]
+  {
+    st_strs_eq(st_rows(policy_text(st_site(), "x ${fxs_pem()} y")),
+               ["metadata:aggregate:fx/text PrivateKeyBlock n=1 body=0 refuse"])
+      && st_strs_eq(st_rows(policy_text(st_site(), fxs_jwt())),
+                    ["metadata:aggregate:fx/text JsonWebToken n=1 body=0 refuse"])
+      -- The JWT rule's stated false negative (dst_secrets.ail:261-272, copied
+      -- unchanged): only a string that STARTS with the token is seen. After a
+      -- space: nothing; inside JSON after a dot: only the opaque run, reported.
+      && List.length(policy_text(st_site(), "token ${fxs_jwt()}")) == 0
+      && st_strs_eq(st_rows(policy_text(st_site(), fxs_jwt_in_json())),
+                    ["metadata:aggregate:fx/text OpaqueHighEntropy n=1 body=48 report"])
+      && st_strs_eq(st_rows(policy_text(st_site(), "base ${fxs_url()}")),
+                    ["metadata:aggregate:fx/text UrlUserinfo n=1 body=0 refuse"])
+      && List.length(policy_text(st_site(), "a plain line with https://host.invalid/v1 and user@host")) == 0
+      && List.length(policy_text(st_site(), "")) == 0
+  }
+
+-- Body-16 on a LATER occurrence of the same prefix, and on a later prefix;
+-- the boundary; multi-byte text before the occurrence.
+pure func test_m12_body16_later_occurrence() -> bool
+  tests [((), true)]
+  {
+    let sk = fxs_sk();
+    st_strs_eq(st_rows(policy_text(st_site(), fxs_later_body16())),
+               ["metadata:aggregate:fx/text ProviderTokenLiteral:${sk} n=2 body=16 refuse"])
+      && st_strs_eq(st_rows(policy_text(st_site(), "é → ${fxs_later_body16()}")),
+                    ["metadata:aggregate:fx/text ProviderTokenLiteral:${sk} n=2 body=16 refuse"])
+      && st_strs_eq(st_rows(policy_text(st_site(), fxs_later_prefix_body16())),
+                    ["metadata:aggregate:fx/text ProviderTokenLiteral:${sk} n=1 body=2 report",
+                     "metadata:aggregate:fx/text ProviderTokenLiteral:npm_ n=1 body=17 refuse"])
+      && st_strs_eq(st_rows(policy_text(st_site(), fxs_prefix_body(sk, 16))),
+                    ["metadata:aggregate:fx/text ProviderTokenLiteral:${sk} n=1 body=16 refuse"])
+      && st_strs_eq(List.map(\n. show(n), prefix_bodies(fxs_later_body16(), sk)), ["2", "16"])
+      && leading_body("ab+/=_.-9 rest") == 9
+  }
+
+-- A 6-character body is reported, not refused; so is 15 (M15's near-miss).
+pure func test_m12_short_body_reported() -> bool
+  tests [((), true)]
+  {
+    let sk = fxs_sk();
+    st_strs_eq(st_rows(policy_text(st_site(), fxs_body6())),
+               ["metadata:aggregate:fx/text ProviderTokenLiteral:${sk} n=1 body=6 report"])
+      && st_strs_eq(st_rows(policy_text(st_site(), fxs_body15())),
+                    ["metadata:aggregate:fx/text ProviderTokenLiteral:${sk} n=1 body=15 report"])
+      && not scan_refused(policy_text(st_site(), fxs_body15()))
+  }
+
+pure func st_parts_env_key(key: string) -> ExecutionProgram {
+  let p = fxs_program(fxs_clean_parts());
+  { p | initial_world: { p.initial_world | synthetic_environment: [{ key: key, value: "plain" }] } }
+}
+
+-- CredentialBearingName is report-only: on an environment key and on an
+-- environment read's key.
+pure func test_m12_credential_bearing_name_report_only() -> bool
+  tests [((), true)]
+  {
+    let p = st_parts_env_key("FX_API_TOKEN");
+    let fs = scan_program(p);
+    st_strs_eq(st_rows(fs), ["environment:aggregate:env:0/key CredentialBearingName:TOKEN n=1 body=0 report"])
+      && not scan_refused(fs)
+      && st_strs_eq(st_rows(name_finding(site(CProgramIdentity, interaction_location(4), "identity.key"), "FX_SECRET")),
+                    ["program.identity:interaction:4/identity.key CredentialBearingName:SECRET n=1 body=0 report"])
+      && List.length(name_finding(st_site(), "MOTOKO_HEADLESS")) == 0
+  }
+
+-- A synthetic entry (exported for scan_live_test.ail).
+export pure func fixture_entry(name: string, p: ExecutionProgram) -> EntryInputs {
+  {
+    name: name,
+    snapshot: fxs_clean_snapshot(),
+    excerpt: fxs_clean_excerpt(),
+    selector: "EndAt(3)", expectations: "{\"calls\":3}", t0_settings: "{}", expected_end: "EndSuspended(3)",
+    program: p,
+    witness: "{\"provider_calls\":3}", census: "decisions 7\n", envelope: "{\"entry\":\"fx-entry\"}",
+    identities: "{\"source_revision\":\"a0a0a0\"}",
+    exposure: ["{\"agent\":\"fx-agent\",\"action\":\"admit\"}"],
+    pre_entry_exposure: [{ name: "_scan0/exposure.jsonl", text: "{\"agent\":\"fx-scan0\",\"action\":\"scan\"}" }]
+  }
+}
+
+pure func st_clean() -> EntryInputs { fixture_entry("fx-entry", fxs_program(fxs_clean_parts())) }
+
+pure func st_body16() -> string { fxs_prefix_body(fxs_sk(), 20) }
+
+export pure func fixture_poisoned_entry(c: string) -> EntryInputs { st_poisoned(c) }
+
+pure func st_poisoned(c: string) -> EntryInputs {
+  let cp = fxs_clean_parts();
+  let e = st_clean();
+  if c == "snapshot" then { e | snapshot: ["{}", "{\"text\":\"${fxs_pem()}\"}", "{}"] }
+  else if c == "excerpt" then { e | excerpt: ["{\"base\":\"${fxs_url()}\"}", "{}"] }
+  else if c == "identity" then fixture_entry("fx-entry", fxs_program({ cp | call_id: st_body16() }))
+  else if c == "projection" then fixture_entry("fx-entry", fxs_program({ cp | projection: "base=${fxs_url()}" }))
+  else if c == "payload" then fixture_entry("fx-entry", fxs_program({ cp | payload: "{\"k\":\"${st_body16()}\"}" }))
+  else if c == "chunks" then fixture_entry("fx-entry", fxs_program({ cp | chunk: fxs_pem() }))
+  else if c == "env" then fixture_entry("fx-entry", fxs_program({ cp | env_value: fxs_url() }))
+  else if c == "files" then fixture_entry("fx-entry", fxs_program({ cp | file_content: fxs_jwt() }))
+  else if c == "metadata" then fixture_entry("fx-entry", fxs_program({ cp | toolchain: "AILANG ${st_body16()}" }))
+  else if c == "record" then { e | envelope: "{\"note\":\"${fxs_pem()}\"}" }
+  else e
+}
+
+pure func st_derived_hit() -> [NamedText] {
+  [{ name: "runs/r1/clean.txt", text: "ok" }, { name: "runs/r1/out.txt", text: "x ${st_body16()} y" }]
+}
+
+pure func st_one_hit(e: EntryInputs, derived: [NamedText], want: string) -> bool {
+  let fs = scan_entry(e, derived);
+  st_strs_eq(List.map(\f. "${site_label(f.site)}/${f.site.field} ${reason_id(f.reason)}", refusals(fs)), [want])
+}
+
+-- One hit per component, each refused at its own site; the clean entry has
+-- no finding at all.
+pure func test_m12_one_hit_per_component() -> bool
+  tests [((), true)]
+  {
+    let sk = fxs_sk();
+    List.length(scan_entry(st_clean(), [])) == 0
+      && List.length(scan_entry(st_clean(), [{ name: "runs/r1/clean.txt", text: "ok" }])) == 0
+      && st_one_hit(st_poisoned("snapshot"), [], "snapshot:snapshot:1/line PrivateKeyBlock")
+      && st_one_hit(st_poisoned("excerpt"), [], "excerpt:excerpt:0/line UrlUserinfo")
+      && st_one_hit(st_poisoned("identity"), [], "program.identity:interaction:3/identity.call_id ProviderTokenLiteral:${sk}")
+      && st_one_hit(st_poisoned("projection"), [], "program.projection:interaction:2/request_projection UrlUserinfo")
+      && st_one_hit(st_poisoned("payload"), [], "program.payload:interaction:2/payload ProviderTokenLiteral:${sk}")
+      && st_one_hit(st_poisoned("chunks"), [], "program.chunks:interaction:2/chunk:0 PrivateKeyBlock")
+      && st_one_hit(st_poisoned("env"), [], "environment:aggregate:env:0/value UrlUserinfo")
+      && st_one_hit(st_poisoned("files"), [], "files:aggregate:file:0/content JsonWebToken")
+      && st_one_hit(st_poisoned("metadata"), [], "metadata:aggregate:program/manifest.toolchain ProviderTokenLiteral:${sk}")
+      && st_one_hit(st_poisoned("record"), [], "metadata:aggregate:envelope.json/text PrivateKeyBlock")
+      && st_one_hit(st_clean(), st_derived_hit(), "derived:aggregate:runs/r1/out.txt/text ProviderTokenLiteral:${sk}")
+  }
+
+pure func st_all_poisoned_findings() -> [ScanFinding] {
+  concat_all(List.map(\c. scan_entry(st_poisoned(c), []),
+    ["snapshot", "excerpt", "identity", "projection", "payload", "chunks", "env", "files", "metadata", "record"]))
+    ++ scan_derived(st_derived_hit())
+    ++ policy_text(st_site(), fxs_body6())
+    ++ policy_text(st_site(), fxs_later_prefix_body16())
+    ++ scan_program(st_parts_env_key("FX_API_TOKEN"))
+}
+
+-- The report carries sites, reasons, counts and lengths, never a body.
+pure func test_m12_report_contains_no_body() -> bool
+  tests [((), true)]
+  {
+    let fs = st_all_poisoned_findings();
+    let r = scan_report(fs);
+    List.length(fs) == 15
+      && List.length(refusals(fs)) == 12
+      && contains(r, "# findings=15 refused=12")
+      && contains(r, "body_threshold=16 prefixes=23")
+      && not contains(r, fxs_body_marker())
+      && not contains(r, fxs_pem())
+      && not contains(r, fxs_jwt())
+      && not contains(r, "fxpass")
+      && not contains(r, "fixturesignature")
+      && not contains(r, "${fxs_sk()}Q")
+      && List.length(split(r, "\n")) == 15 + 4
+  }
+
+-- The artifact's frame: schema line, digest line over the body, body, final
+-- newline. The decode half (`load_program`, `encode_artifact`'s bytes, a
+-- tampered byte) is `scan_live_test.ail`: under `ailang test` (v0.33.0) a
+-- module whose closure holds `reader.ail` cannot call dst_secrets's or
+-- dst_persistence's private helpers (same-named private functions collide).
+pure func test_m12_artifact_frame() -> bool
+  tests [((), true)]
+  {
+    let p = fxs_program(fxs_clean_parts());
+    let a = program_artifact(p);
+    let body = encode_body(p);
+    a == concat([program_schema_version(), "\ndigest\t", program_digest(body), "\n", body, "\n"])
+      && recorded_digest(a) == artifact_digest(p)
+      && Str.length(artifact_digest(p)) == 64
+      && program_schema_version() == "execution-program/4"
+  }
+
+-- The layout: the D6 file set, the sources' SHA-256, the migrated exposure.
+pure func test_m12_entry_layout() -> bool
+  tests [((), true)]
+  {
+    let e = st_clean();
+    let fs = scan_entry(e, []);
+    let files = match migrate_exposure(e.pre_entry_exposure) {
+      Ok(rows) => entry_files(e, scan_report(fs), rows),
+      Err(_) => []
+    };
+    let by = \n. List.foldl(\acc f. if f.name == n then f.text else acc, "<missing>", files);
+    let snap = lines_text(fxs_clean_snapshot());
+    st_strs_eq(List.map(\f. f.name, files), entry_file_names())
+      && by("snapshot.jsonl") == snap
+      && by("sources.sha256") == "${sha256Hex(snap)}  snapshot.jsonl\n${sha256Hex(lines_text(fxs_clean_excerpt()))}  excerpt.jsonl\n"
+      && by("program.artifact") == program_artifact(e.program)
+      && by("scan_report.tsv") == scan_report(fs)
+      && by("envelope.json") == e.envelope
+      && by("exposure.jsonl") == "{\"migrated_from\":\"_scan0/exposure.jsonl\",\"row\":{\"agent\":\"fx-scan0\",\"action\":\"scan\"}}\n{\"agent\":\"fx-agent\",\"action\":\"admit\"}\n"
+      && (match migrate_exposure([{ name: "a", text: "{}" }, { name: "a", text: "not json" }]) { Err(k) => k == 1, Ok(_) => false })
+      && st_strs_eq(entry_dirs(), ["runs"])
+  }
+
+pure func test_m12_entry_name() -> bool
+  tests [((), true)]
+  {
+    entry_name_ok("fx-entry") && entry_name_ok("dev_01")
+      && not entry_name_ok("") && not entry_name_ok("_scan0") && not entry_name_ok("-x")
+      && not entry_name_ok("../x") && not entry_name_ok("a/b") && not entry_name_ok("A")
+      && not entry_name_ok(".staging-x") && not entry_name_ok(repeat("a", 65))
+  }

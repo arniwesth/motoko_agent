@@ -119,7 +119,7 @@ import src/core/dst_interaction (
   Interaction,
   CausalIdentity,
   IdentityBody,
-  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, WakeIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
   FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   StreamChunkRecord,
@@ -144,23 +144,27 @@ import src/core/dst_interaction (
 -- `tools/profile_definition/check_fixtures.py`'s pattern, applied to a list
 -- that is otherwise very easy to let drift.
 pure func synthetic_env() -> [{ key: string, value: string }] {
-  [{ key: "MOTOKO_SESSION_ID", value: "dst-session-0001" },
-   { key: "MOTOKO_PERSIST_RETRIES", value: "3" },
-   { key: "MOTOKO_RETRY_STREAM_ERROR", value: "0" },
-   { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
-   { key: "MOTOKO_HEADLESS", value: "1" },
-   { key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", value: "0" },
-   { key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
-   -- WI-D3's four. They are here because scenario 3 asserts this list IS
-   -- `driver_env_keys()` — routing `context_usage` put four more keys into the
-   -- recorded interaction log, and therefore into every persisted artifact, so
-   -- they are part of the surface the redaction detector has to cover. Values
-   -- are paths by nature and carry no credential shape, which is what the
-   -- name-axis row below then confirms rather than assumes.
-   { key: "MOTOKO_PROFILE_DIR", value: "/srv/motoko/.motoko/config/default" },
+  -- ORDER IS POSITIONAL: `scenario_the_surface_is_the_drivers` compares this
+  -- list against `driver_env_keys()` with `str_eq_list`, so the entries follow
+  -- the declared list's own (sorted) order, not source order.
+  [{ key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", value: "0" },
    { key: "MOTOKO_CONFIG", value: "default" },
+   { key: "MOTOKO_HEADLESS", value: "1" },
+   { key: "MOTOKO_MODELS_FILE", value: "/srv/motoko/.motoko/model-catalog.json" },
+   { key: "MOTOKO_PERSIST_RETRIES", value: "3" },
+   { key: "MOTOKO_PROFILE_DIR", value: "/srv/motoko/.motoko/config/default" },
    { key: "MOTOKO_REPO", value: "/srv/motoko" },
-   { key: "MOTOKO_MODELS_FILE", value: "/srv/motoko/.motoko/model-catalog.json" }]
+   { key: "MOTOKO_RETRY_STREAM_ERROR", value: "0" },
+   { key: "MOTOKO_SESSION_ID", value: "dst-session-0001" },
+   { key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
+   { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
+   -- P2T Part 5(a): the exit-manifest name read (`publish_turn_exit_manifest`,
+   -- session.ail:4582, key via `manifest_path_var()`). Its recorded value is
+   -- a MANIFEST PATH, not a credential: like the four path-valued keys above
+   -- it carries no credential shape, which the name-axis row confirms rather
+   -- than assumes. Empty here (no TUI names a file under DST) — and the empty
+   -- string is what `scan_text` skips, so the negative control holds.
+   { key: "MOTOKO_EXIT_MANIFEST", value: "" }]
 }
 
 pure func chunk(offset: int, text: string) -> StreamChunkRecord {
@@ -184,7 +188,7 @@ pure func streamed(advance: int, payload: string, cs: [StreamChunkRecord]) -> Ti
 -- chunks between them.
 --
 -- S7's no-two-equal rule, applied to the quantities this suite reads:
--- 9 interactions, 7 environment entries, 5 distinct kinds, 3 stream chunks.
+-- 9 interactions, 12 environment entries, 5 distinct kinds, 3 stream chunks.
 -- Pairwise distinct on purpose, and asserted below — a fixture whose counts
 -- coincide cannot distinguish a check that reads "how many interactions" from
 -- one that reads "how many chunks", and both type-check.
@@ -786,43 +790,21 @@ pure func specimen_interactions() -> [Interaction] {
 }
 
 pure func post_v1_interactions() -> [Interaction] {
-  [-- WI-D17's two filesystem mutators. The specimen carries every identity class
-   -- so that each one's codec path is frozen by something, and the completeness
-   -- check that names the omission is derived from `all_interaction_kinds()` —
-   -- which is why adding the classes reddened this file without anyone pointing
-   -- at it.
-   --
-   -- The write's path carries a SPACE and the remove's carries a BACKSLASH,
-   -- deliberately: a path is the one identity component that routinely holds
-   -- characters the line-oriented encoding has to escape, and a specimen whose
-   -- paths are all `/w/tmp/x.ail` would freeze the codec without freezing the
-   -- escaping. `PATH_WITH_BACKSLASH` above makes the same point for the env key.
-   inter(8, FileWriteIdentity("/w/tmp/dir with space/snippet.ail"),
-         "rq.file_write.eight", -1,
-         { advance_ms: 37, chunks: [], payload: "", status: OutcomeOk,
-           fault_class_id: "" }),
-   inter(9, FileRemoveIdentity("/w/tmp/back\\slash/snippet.ail"),
-         "rq.file_remove.nine", -1,
-         { advance_ms: 38, chunks: [], payload: "", status: OutcomeMissing,
-           fault_class_id: "" }),
-   -- WI-D18's directory create, added to the SAME post-freeze list rather than
-   -- to `frozen_v1_interactions()`, for the reason that split exists: a class
-   -- added after the freeze cannot be in the frozen bytes.
-   --
-   -- Its path carries a TRAILING-SEGMENT UNICODE character where the two above
-   -- carry a space and a backslash. A directory path is the identity component
-   -- most likely to hold a byte the line-oriented encoding has to think about,
-   -- and three specimens covering three different awkward characters freeze more
-   -- of the escaping than three copies of `/w/tmp` would.
-   --
-   -- `OutcomeOk` and not `OutcomeMissing`: `dst_program.validate_outcome` admits
-   -- `missing` for `file_remove` and for nothing else, and `mkdirAll` has no
-   -- missing state because it is idempotent. A `dir_make`/`missing` specimen
-   -- would be rejected by the validator, which is what mutant 12e asserts.
-   inter(10, DirMakeIdentity("/w/tmp/naïve dir"),
-         "rq.dir_make.ten", -1,
-         { advance_ms: 39, chunks: [], payload: "", status: OutcomeOk,
-           fault_class_id: "" })]
+  pre_wake_post_v1_interactions() ++ [
+   -- PLAN-002 W4 Part 4 (ADR-002 D2). The wake class, added to the SAME
+   -- post-freeze list for the reason the split exists: a class added after
+   -- the freeze cannot be in the frozen bytes. `OutcomeMissing`, not `ok`:
+   -- `recording_wake` records a queue-empty read that fell through to the
+   -- unbound default exactly as an end-of-input approval read, so a replay
+   -- drains at the same position; `dst_program.validate_outcome` admits
+   -- `missing` for `wake` only (reading B, the approval queue's drained read
+   -- in the same sense). `wait_id` is blank: the unbound default names no
+   -- wait (review change 12). Deadline 0: `class_has_deadline` is true for
+   -- `wake` — no wake deadline is routed (timeouts are "Not decided").
+   inter(11, WakeIdentity("origin.epsilon", "rq.wake.eleven", ""),
+         "rq.wake.eleven", 0,
+         { advance_ms: 40, chunks: [], payload: "",
+           status: OutcomeMissing, fault_class_id: "" })]
 }
 
 pure func specimen_program() -> ExecutionProgram {
@@ -871,14 +853,66 @@ pure func encoded_frozen_v1() -> string {
   match encode_artifact(frozen_v1_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
 }
 
--- What the frozen v2 bytes hold: `specimen_program()` entire — the v2 freeze was
--- taken at the full eleven interactions — with the two facts the bytes carry that
+-- What the frozen v2 bytes hold: `specimen_program()` at the v2 freeze — the
+-- ten classes that existed then — with the two facts the bytes carry that
 -- this build no longer writes. WI-1's `bounds` override is the substantive one; see
--- `bounds_before_v3`.
+-- `bounds_before_v3`. PLAN-002 W4: the same shape as the v1 freeze one layer
+-- up — `specimen_program()` has since grown the `WakeIdentity` class
+-- (execution-program/4), which the v2 bytes cannot contain.
+pure func frozen_v2_interactions() -> [Interaction] {
+  frozen_v1_interactions() ++ pre_wake_post_v1_interactions()
+}
+
+-- The v2 freeze's own post-v1 tail: the three classes WI-D17/WI-D18 added
+-- (`file_write`, `file_remove`, `dir_make`), WITHOUT the `wake` class
+-- PLAN-002 W4 added after that freeze. `post_v1_interactions()` below is the
+-- live specimen's tail and grows; this one is pinned forever at what the v2
+-- bytes actually contain.
+pure func pre_wake_post_v1_interactions() -> [Interaction] {
+  [-- WI-D17's two filesystem mutators. The specimen carries every identity class
+   -- so that each one's codec path is frozen by something, and the completeness
+   -- check that names the omission is derived from `all_interaction_kinds()` —
+   -- which is why adding the classes reddened this file without anyone pointing
+   -- at it.
+   --
+   -- The write's path carries a SPACE and the remove's carries a BACKSLASH,
+   -- deliberately: a path is the one identity component that routinely holds
+   -- characters the line-oriented encoding has to escape, and a specimen whose
+   -- paths are all `/w/tmp/x.ail` would freeze the codec without freezing the
+   -- escaping. `PATH_WITH_BACKSLASH` above makes the same point for the env key.
+   inter(8, FileWriteIdentity("/w/tmp/dir with space/snippet.ail"),
+         "rq.file_write.eight", -1,
+         { advance_ms: 37, chunks: [], payload: "", status: OutcomeOk,
+           fault_class_id: "" }),
+   inter(9, FileRemoveIdentity("/w/tmp/back\\slash/snippet.ail"),
+         "rq.file_remove.nine", -1,
+         { advance_ms: 38, chunks: [], payload: "", status: OutcomeMissing,
+           fault_class_id: "" }),
+   -- WI-D18's directory create, added to the SAME post-freeze list rather than
+   -- to `frozen_v1_interactions()`, for the reason that split exists: a class
+   -- added after the freeze cannot be in the frozen bytes.
+   --
+   -- Its path carries a TRAILING-SEGMENT UNICODE character where the two above
+   -- carry a space and a backslash. A directory path is the identity component
+   -- most likely to hold a byte the line-oriented encoding has to think about,
+   -- and three specimens covering three different awkward characters freeze more
+   -- of the escaping than three copies of `/w/tmp` would.
+   --
+   -- `OutcomeOk` and not `OutcomeMissing`: `dst_program.validate_outcome` admits
+   -- `missing` for `file_remove` and for nothing else, and `mkdirAll` has no
+   -- missing state because it is idempotent. A `dir_make`/`missing` specimen
+   -- would be rejected by the validator, which is what mutant 12e asserts.
+   inter(10, DirMakeIdentity("/w/tmp/naïve dir"),
+         "rq.dir_make.ten", -1,
+         { advance_ms: 39, chunks: [], payload: "", status: OutcomeOk,
+           fault_class_id: "" })]
+}
+
 pure func frozen_v2_program() -> ExecutionProgram {
   { specimen_program() |
     schema_version: "execution-program/2",
-    bounds: bounds_before_v3() }
+    bounds: bounds_before_v3(),
+    interactions: frozen_v2_interactions() }
 }
 
 -- The same shape as `encoded_frozen_v1`, and it will not match the v2 file: this
@@ -932,6 +966,8 @@ pure func encoded_frozen_v2() -> string {
 -- that reads them asserts they equal `encoded_specimen()` — so the file is checked
 -- against the encoder rather than trusted. That is the same discipline WI-D22 used
 -- for these bytes and stage 5 uses for its canary pins.
+pure func v4_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v4.artifact" }
+
 pure func v3_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v3.artifact" }
 
 pure func v2_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v2.artifact" }
@@ -1412,8 +1448,14 @@ func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
         ProgramDecoded(back) => {
           let diff = program_diff(frozen_v2_program(), back);
           let ok = List.length(diff) == 0;
-          let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
-          let none_unfrozen = List.length(unfrozen) == 0;
+          -- PLAN-002 W4: the unfrozen count is run against the classes in the
+          -- FROZEN bytes (`frozen_v2_program().interactions`), not the decoded
+          -- ones — the v2 bytes predate `expect_wake` (execution-program/4),
+          -- so it is absent there by construction and excluded from this
+          -- count rather than asserted absent. The v4 row is where the live
+          -- zero-unfrozen assertion lives now.
+          let unfrozen = kinds_absent(all_interaction_kinds(), frozen_v2_program().interactions);
+          let none_unfrozen = List.length(unfrozen) == 1 && contains_str(unfrozen, "expect_wake");
           -- WI-1. The migration's one substantive claim, asserted on real historical
           -- bytes rather than on a hand-built record: a five-field bounds line
           -- decodes its absent sixth field to the value v2 MEANT.
@@ -1424,8 +1466,8 @@ func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
                   else println("    ✗ the v2 bounds line decoded to chunk_draw_hi = ${show(back.bounds.chunk_draw_hi)}, and 3 is what v2 MEANT: choose_provider drew from a literal 0,3 at that version. A 0 here is int_at answering a migration question — see dst_persistence.chunk_draw_hi_of");
           let _ = if matches_encoder then println("    ✓ this build can still write these exact bytes")
                   else println("    ⓘ the current encoder produces different bytes from the frozen v2 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v3 row, at the version this build writes");
-          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen — WI-D17's two-tier compatibility surface is CLOSED (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes)")
-                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are still frozen by nothing: ${join_keys(unfrozen)} — a class added after this freeze reopens WI-D17 §7b's two-tier surface, and the fix is a further schema version, not an edit to these bytes");
+          let _ = if none_unfrozen then println("    ✓ the only round-tripped-but-not-frozen class is expect_wake (added after this freeze at execution-program/4; the v4 row freezes it)")
+                  else println("    ✗ unexpected unfrozen set: ${join_keys(unfrozen)} — expect exactly [expect_wake]");
           ok && ok_default && none_unfrozen
         }
       }
@@ -1433,19 +1475,46 @@ func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
   }
 }
 
--- WI-1'S FROZEN v3 BYTES, AND WHY THEY ARE NOT A CONVENIENCE.
+-- PLAN-002 W4: the v2 unfrozen count moved with the bump — see the row body.
 --
--- This carries the assertion the v2 row can no longer make: that the encoder in
--- this tree produces these exact bytes. Both readings of a mismatch here are
--- defects — an encoding change that did not move `program_schema_version()`, or a
--- regenerated fixture — so it is a `✗` and not an `ⓘ`, exactly as the v2 row was
--- before the bump moved it.
+-- WI-1'S FROZEN v3 BYTES, NOW A PREDECESSOR ROW (PLAN-002 W4).
+--
+-- This carried the strict assertion the v2 row could no longer make: that the
+-- encoder in this tree produces these exact bytes. PLAN-002 W4's bump to
+-- execution-program/4 — one payload, the `expect_wake` line — made that
+-- sentence false the same way WI-1's bump falsified it for v2: this build
+-- writes a /4 header and a twelve-interaction body, so it can no longer
+-- produce these bytes, and the difference is the permitted
+-- backward-compatible change the v1/v2 rows already report as ⓘ. The strict
+-- byte-identity assertion therefore moves to v4 (frozen BY this encoder, next
+-- row), and this row keeps the half that matters more: that a v3 artifact
+-- decodes to THE PROGRAM ITS OWN BYTES HOLD. Its `frozen_v3_program()` is the
+-- eleven-interaction specimen WITHOUT the wake class — the same
+-- `frozen_v1`/`frozen_v2` shape one layer up, because a class added after a
+-- freeze cannot be in the frozen bytes.
 --
 -- It is also what makes the pair non-vacuous in the other direction. The v2 row
 -- proves this build reads bytes it cannot write; this one proves it writes the
 -- bytes it reads. Neither alone catches an encoder and decoder that drifted
 -- together, which is the failure this module exists for and the reason there is no
 -- regeneration target for any of these four files.
+--
+-- WHAT THIS ROW STILL ASSERTS, stated so the next bump can move it again: the
+-- v3 bytes decode to `frozen_v3_program()` field by field; the current encoder
+-- producing different bytes is the permitted ⓘ (not a ✗); and the unfrozen
+-- count is run against the classes in the FROZEN bytes — `expect_wake` is
+-- absent there by construction, so it is EXCLUDED from that count rather than
+-- asserted absent. The v4 row is where the zero-unfrozen assertion lives now.
+pure func frozen_v3_interactions() -> [Interaction] {
+  frozen_v1_interactions() ++ pre_wake_post_v1_interactions()
+}
+
+pure func frozen_v3_program() -> ExecutionProgram {
+  { specimen_program() |
+    schema_version: "execution-program/3",
+    interactions: frozen_v3_interactions() }
+}
+
 func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
   match FS.readFileResult(v3_fixture_path()) {
     Err(e) => { let _ = println("  ✗ the frozen v3 specimen could not be read (${e}); nothing then asserts that this build's encoder produces the bytes it claims to"); false },
@@ -1455,7 +1524,49 @@ func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
         ProgramDecodeRefused(rs) => {
           let _ = println("  ✗ THE FROZEN v3 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
           let _ = println("      This build changed the encoding without moving program_schema_version().");
-          let _ = println("      Add a decode path and bump to execution-program/4. Do NOT regenerate this file.");
+          let _ = println("      Add a decode path and bump to execution-program/5. Do NOT regenerate this file.");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(frozen_v3_program(), back);
+          let ok = List.length(diff) == 0;
+          let unfrozen = kinds_absent(all_interaction_kinds(), frozen_v3_program().interactions);
+          let none_unfrozen = List.length(unfrozen) == 1 && contains_str(unfrozen, "expect_wake");
+          let _ = if ok then println("  ✓ the frozen v3 specimen decodes to the program its own bytes hold, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v3 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if matches_encoder then println("    ⓘ note: the current encoder still produces the frozen v3 bytes (unexpected after the /4 bump — the wake line should have moved them)")
+                  else println("    ⓘ the current encoder produces different bytes from the frozen v3 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v4 row, at the version this build writes");
+          let _ = if none_unfrozen then println("    ✓ the only round-tripped-but-not-frozen class is expect_wake (added after this freeze at execution-program/4; the v4 row freezes it)")
+                  else println("    ✗ unexpected unfrozen set: ${join_keys(unfrozen)} — expect exactly [expect_wake]");
+          ok && none_unfrozen
+        }
+      }
+    }
+  }
+}
+
+-- PLAN-002 W4'S FROZEN v4 BYTES, AND WHY THEY ARE NOT A CONVENIENCE.
+--
+-- This carries the assertion the v3 row can no longer make: that the encoder in
+-- this tree produces these exact bytes. Both readings of a mismatch here are
+-- defects — an encoding change that did not move `program_schema_version()`, or a
+-- regenerated fixture — so it is a `✗` and not an `ⓘ`, exactly as the v3 row was
+-- before the bump moved it.
+--
+-- The v4 bytes were produced once, by a throwaway outside the tree, and the row
+-- that reads them asserts they equal `encoded_specimen()` — so the file is checked
+-- against the encoder rather than trusted. That is the same discipline WI-D22 used
+-- for these bytes and stage 5 uses for its canary pins.
+func scenario_the_frozen_v4_specimen_still_decodes() -> bool ! {IO, FS} {
+  match FS.readFileResult(v4_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen v4 specimen could not be read (${e}); nothing then asserts that this build's encoder produces the bytes it claims to"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_specimen();
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN v4 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          let _ = println("      This build changed the encoding without moving program_schema_version().");
+          let _ = println("      Add a decode path and bump to execution-program/5. Do NOT regenerate this file.");
           false
         },
         ProgramDecoded(back) => {
@@ -1463,10 +1574,10 @@ func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
           let ok = List.length(diff) == 0;
           let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
           let none_unfrozen = List.length(unfrozen) == 0;
-          let _ = if ok then println("  ✓ the frozen v3 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
-                  else println("  ✗ the frozen v3 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if ok then println("  ✓ the frozen v4 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v4 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
           let _ = if matches_encoder then println("    ✓ the current encoder still produces those exact bytes")
-                  else println("    ✗ the current encoder no longer produces the frozen v3 bytes; these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/4 rather than regenerating the file");
+                  else println("    ✗ the current encoder no longer produces the frozen v4 bytes; these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/5 rather than regenerating the file");
           let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes at the version this build writes)")
                   else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are frozen by nothing: ${join_keys(unfrozen)} — the fix is a further schema version, not an edit to these bytes");
           ok && matches_encoder && none_unfrozen
@@ -1801,6 +1912,7 @@ export func main() -> () ! {IO, FS} {
   let l = scenario_the_frozen_v1_specimen_still_decodes();
   let l2 = scenario_the_frozen_v2_specimen_still_decodes();
   let l3 = scenario_the_frozen_v3_specimen_still_decodes();
+  let l4 = scenario_the_frozen_v4_specimen_still_decodes();
   let m = scenario_an_unknown_schema_fails_closed();
   let _ = println("  decode mutation rows — one corruption at a time");
   let n = scenario_decode_mutants();
@@ -1810,7 +1922,7 @@ export func main() -> () ! {IO, FS} {
   let q = scenario_the_store_round_trips_and_refuses_a_collision();
   let _ = println("  regression replay over the frozen program");
   let r = scenario_regression_replay_consumes_the_frozen_program();
-  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && l3 && m && n && o && q && r
+  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && l3 && l4 && m && n && o && q && r
   then println("program_persistence_dst PASS")
   else {
     let _ = println("program_persistence_dst FAIL");

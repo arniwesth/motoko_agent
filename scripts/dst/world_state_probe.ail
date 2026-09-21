@@ -82,7 +82,10 @@ import src/core/ports (ScriptedStep, WorldState, empty_world_state,
   scripted_path_stat, scripted_dir_list, scripted_dir_make, recording_dir_make,
   -- WI-D23's exit-code witness — see `exit_code_witness` at the bottom.
   world_tool, ToolInvocation, ToolCompleted, ScriptedTool)
-import src/core/ext_world (world_to_token)
+import src/core/ext_world (world_to_token, token_to_world)
+-- PLAN-001 P2 Part 1's ordinal row — see `assert_ordinal_class`.
+import src/core/context_usage (resolve_context_limit_sum)
+import src/core/world_ordinal (request_class_id)
 import src/core/tool_dispatch_adapter (dispatch_one, dispatch_one_typed)
 import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_interaction (Interaction, interaction_kind, count_kind)
@@ -116,6 +119,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolSchema
 )
 import src/core/test/ext_fixture (fixture_hooks, FixtureHooks)
+import src/core/ports (RequestWitness, ToolExec, ModelStep, context_reader_of)
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -766,6 +770,50 @@ pure func finish_from_trace(records: [LedgerRecord]) -> string {
   }
 }
 
+-- PLAN-001 P2 Part 1: THE ORDINAL CROSSES THE TOKEN, AND THE NEXT HELPED
+-- REQUESTS COUNT ON FROM IT.
+--
+-- `ext_world`'s unit row proves the codec keeps both fields when the next
+-- `advance` is pure. This row puts REAL helped leaves after the round trip:
+-- `resolve_context_limit_sum` through `scripted_ports`, against an empty world,
+-- makes WI-D3's measured eight requests — profile dir (MOTOKO_PROFILE_DIR,
+-- MOTOKO_CONFIG, MOTOKO_REPO), the profile's config.json, then the catalogue
+-- (MOTOKO_MODELS_FILE, the repo-relative catalogue probe, MOTOKO_REPO, the
+-- catalogue read). Each must number on from the token's 263, behind the two
+-- witnesses the token carried, in request order.
+--
+-- The control is the same resolve on a world that never crossed a token and
+-- starts at 0: it must make the same eight requests in the same class order.
+-- A codec that reset the ordinal passes the control and fails the subject; a
+-- leaf that stopped advancing fails both.
+pure func witness_labels(ws: [RequestWitness]) -> string {
+  match ws {
+    [] => "",
+    w :: [] => "${show(w.ordinal)}:${request_class_id(w.request_class)}",
+    w :: rest => "${show(w.ordinal)}:${request_class_id(w.request_class)},${witness_labels(rest)}"
+  }
+}
+
+func assert_ordinal_class() -> bool ! {Env, FS, IO, Trace} {
+  let seeded: WorldState = { empty_world_state() |
+    ordinal: 263,
+    pending: [{ ordinal: 262, request_class: ToolExec }, { ordinal: 263, request_class: ModelStep }] };
+  let crossed = token_to_world(world_to_token(seeded));
+  let subject = resolve_context_limit_sum(context_reader_of(scripted_ports()), crossed, "ordinal-probe-model").next_state;
+  let control = resolve_context_limit_sum(context_reader_of(scripted_ports()), empty_world_state(), "ordinal-probe-model").next_state;
+  let want_subject = "262:tool_exec,263:model_step,264:env_read,265:env_read,266:env_read,267:file_read,268:env_read,269:file_read,270:env_read,271:file_read";
+  let want_control = "1:env_read,2:env_read,3:env_read,4:file_read,5:env_read,6:file_read,7:env_read,8:file_read";
+  let _ = println("ordinal: subject=${show(subject.ordinal)} [${witness_labels(subject.pending)}]");
+  let _ = println("ordinal: control=${show(control.ordinal)} [${witness_labels(control.pending)}]");
+  let ok_subject = check("ordinal: a token round trip keeps ordinal 263 and both witnesses, and eight helped reads number on from it",
+                         subject.ordinal == 271 && witness_labels(subject.pending) == want_subject,
+                         "expected 271 [${want_subject}] — a reset codec numbers these reads from 1, a non-advancing leaf leaves a gap");
+  let ok_control = check("ordinal: control — the same resolve from a fresh world makes the same eight requests from 1",
+                         control.ordinal == 8 && witness_labels(control.pending) == want_control,
+                         "expected 8 [${want_control}]");
+  ok_subject && ok_control
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("world_state_probe: WI-A12 advancement + trace completeness");
 
@@ -1029,6 +1077,9 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- path_stat / dir_list / dir_make: WI-D18's class, at the adapter.
   let ok_dir = assert_directory_class();
 
+  -- ordinal / pending: PLAN-001 P2 Part 1, through the token and real leaves.
+  let ok_ordinal = assert_ordinal_class();
+
   -- determinism: same world twice.
   let again = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
   let ok_det = assert_deterministic("repeat", advance, again);
@@ -1036,7 +1087,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
      && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_files && ok_files_ctl && ok_write && ok_dir
      && ok_sp_reached && ok_sp_thread && ok_sp_ctl && ok_ex_reached && ok_ex_thread && ok_ex_ctl
-     && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det then
+     && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det && ok_ordinal then
     println("world_state_probe PASS")
   else {
     let _ = println("world_state_probe FAIL");

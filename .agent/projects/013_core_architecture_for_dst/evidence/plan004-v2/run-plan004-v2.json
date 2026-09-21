@@ -1,0 +1,896 @@
+{
+ "dagr": 3,
+ "run": {
+  "id": "run-plan004-v02",
+  "title": "PLAN-004 v2 \u00b7 implement ADR-004 v5 (Accepted) \u2014 journal as evaluation source (fresh session after the v01 handoff: P0 tail \u2192 PLAN2G \u2192 P1 \u2192 P2 \u2192 P3)",
+  "started_at": "2026-09-16T07:27:24Z",
+  "orchestrator": {
+   "pane": "w1:p18",
+   "mode": "delegate",
+   "max_in_flight": 2
+  }
+ },
+ "generated_at": "2026-09-16T07:27:24Z",
+ "supersedes": {
+  "run": "run-plan004-v01",
+  "file": ".dagr/run-plan004.json",
+  "rule": "PLAN-004 v2 \u00a79: a part got a new id when v5 changed what it must build or test; it kept its id when v5 confirmed v1.2's proposal. A dependency on a renamed predecessor is the same predecessor. History (attempts, events, policies) stays in v01; terminal tasks carry one summary attempt here.",
+  "tasks": {
+   "P1.2a-v2": "P1.2a",
+   "P1.2b-v2": "P1.2b",
+   "P1.3-v2": "P1.3",
+   "P1.7a-v2": "P1.7a",
+   "P1.7b-v2": "P1.7b",
+   "P1.9b-v2": "P1.9b",
+   "P1R-v2": "P1R",
+   "P3.2-v2": "P3.2",
+   "P3.3-v2": "P3.3"
+  }
+ },
+ "projects": [
+  {
+   "id": "P0",
+   "title": "P0 \u00b7 retention, preserve, sweep, heuristic pre-scan (D8 step 1)",
+   "owner": "operator"
+  },
+  {
+   "id": "PLAN",
+   "title": "PLAN \u00b7 PLAN-004 v1\u2013v1.2 reviews and PLAN1G (done in v01)",
+   "owner": "operator"
+  },
+  {
+   "id": "ADR",
+   "title": "ADR \u00b7 ADR-004 v5 accepted at V5G \u2192 PLAN-004 v2 on this graph (PSYNC \u2192 PREV \u2192 PLAN2G)",
+   "owner": "operator"
+  },
+  {
+   "id": "P1",
+   "title": "P1 \u00b7 build (D8 step 2; 18\u00bd\u201322 delegate-days; nine parts under -v2 ids)",
+   "owner": "operator"
+  },
+  {
+   "id": "P2",
+   "title": "P2 \u00b7 guard + calibrate (D8 step 3)",
+   "owner": "operator"
+  },
+  {
+   "id": "P3",
+   "title": "P3 \u00b7 the gate: journal_replay_budget (D8 step 4)",
+   "owner": "operator"
+  },
+  {
+   "id": "AFTER",
+   "title": "P4\u2013P6 \u00b7 held-out, long admission, T1",
+   "owner": "operator"
+  }
+ ],
+ "tasks": [
+  {
+   "id": "QRET",
+   "title": "question: corpus retention \u2014 duration, deletion rule, covered paths (D6 leaves it to PLAN-004)",
+   "kind": "question",
+   "owner": "operator",
+   "project": "P0",
+   "state": "done",
+   "deps": [],
+   "attempts": [
+    {
+     "id": "QRET\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "operator",
+     "state": "done",
+     "started_at": "2026-09-15T20:00:11Z",
+     "ended_at": "2026-09-15T20:00:11Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 QRET\u00b7a1 (QRET\u00b7a1 done): operator: \"I will follow your recommendations\" - QRET answered: adopt S0.11 default - retain until 90 days after P3G or ADR-004 supersession, whichever first; on supersession delete by default or migrate under reviewed re-admission; deletion removes every copy, recorded in S6, leaving counts/digests/identities."
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (QRET\u00b7a1); one summary attempt here, no history copied. PLAN-004 v1.2 \u00a70.11. Proposed: 90 days after P3G or supersession (then delete by default, or migrate under reviewed re-admission). Blocks PRESERVE and P2.2.",
+   "criteria": "A directive event quoting the ruling: duration; supersession handling (delete or reviewed migration); deletion rule; _archive/, _scan0/, entries + runs/, scratchpad//tmp evidence with real content, backups. Ruling copied into PLAN-004 \u00a76."
+  },
+  {
+   "id": "PRESERVE",
+   "title": "preserve: ignore rule first, archive prototypes + evidence with relative SHA-256 manifest (\u00bdd)",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P0",
+   "state": "queued",
+   "deps": [
+    "QRET"
+   ],
+   "attempts": [],
+   "criteria": "git check-ignore exits 0 before any copy; no clobber of an existing archive; missing sources recorded; `cd <archive> && sha256sum -c` clean; every created dir 0700 / file 0600; tracked manifest (relative paths) at evidence/adr004-p0/; exposure.jsonl row; nothing run or deleted.",
+   "note": "PLAN-004 v2 \u00a72 PRESERVE (id unchanged). QRET answered 2026-09-15 (\u00a70.11): ready."
+  },
+  {
+   "id": "SWEEP",
+   "title": "sweep: make dst DST_JOBS=1 at HEAD (ADR-001 D6 precondition for P1.1) \u2014 heavy, record",
+   "kind": "test",
+   "owner": "claude",
+   "project": "P0",
+   "state": "queued",
+   "deps": [
+    "PLAN1G"
+   ],
+   "attempts": [],
+   "criteria": "\u00a76 record: HEAD, exit, closing summary, every target incl. listed-and-passing; Makefile:697 treated as a register. memory.current < 12 GiB at start. A new unexplained red: settle done with it recorded; P1.1 waits for an operator directive.",
+   "note": "PLAN-004 v2 \u00a70.1, \u00a72 SWEEP (id unchanged). No commit. Was running in the v01 session when v2 was written; the fresh session reconciles from \u00a76 before re-delegating."
+  },
+  {
+   "id": "SCAN0",
+   "title": "heuristic pre-scan: r2.1 recount + session 2's first 57 turns \u2014 counts only, never admission",
+   "kind": "test",
+   "owner": "claude",
+   "project": "P0",
+   "state": "queued",
+   "deps": [
+    "PRESERVE"
+   ],
+   "attempts": [],
+   "criteria": "Per-component counts per reason incl. body16 over ALL prefix occurrences and the report-only sites; r2.1 vs review \u00a73.10 (seed 1,78,86,98; tool 0,96,195,228) confirmed or differences reported; unscannable components named with reason; _scan0/ 0700/0600 with exposure.jsonl; \u00a76 holds counts only.",
+   "note": "PLAN-004 v2 \u00a72 SCAN0 (id unchanged). Heuristic under v5 D6's body-16 rule over every occurrence of the 23 prefixes, CredentialBearingName report-only; v5 confirmed the reading."
+  },
+  {
+   "id": "PLANW",
+   "title": "PLAN-004 revisions (author task): v1, v1.1, v1.2 \u2026",
+   "kind": "docs",
+   "owner": "claude",
+   "project": "PLAN",
+   "state": "done",
+   "deps": [],
+   "attempts": [
+    {
+     "id": "PLANW\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "claude",
+     "model": "opus5",
+     "state": "done",
+     "started_at": "2026-09-15T18:04:52Z",
+     "ended_at": "2026-09-15T19:46:48Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 PLANW\u00b7a1, PLANW\u00b7a2, PLANW\u00b7a3 (PLANW\u00b7a3 done): accepted by REV2\u00b7a2 (REVIEW-plan004-v1.2-delta-verdicts-codex.md sha256:943a59d264ef770dbe89e23120d1a8e3f5e9e66ec61c486e5483f56bc7a99f46, ACCEPT WITH CORRECTIONS); corrections applied in PLAN-004 sha256:7d272108ab7fb0e2cf8481b878115b0bab2b78d0802774ed2c7a86440268c4ff: (1) \u00a70.10 (a) manual review opening, directive-bound fourth round removing \u00b7ask + rounds_max, (b) aggregate P1R preserving done attempts; prompt REVIEWS block; (2) receipt labels producer_run/producer_state/plan_state, producer_run=absent only before first Delegate, mismatch ruled by directive; (3) M15 provisional until V5G, Association/ProgramUndecodable rows replaced, A3 rows need a next call, inapplicables justified, MATRIX.expected.tsv vs observed-only MATRIX.tsv; (4) P1.4b aggregate import span, as-aliases, deriving, parser cross-check, coordinates; P1.6 derive.py --json, reviewed-record classifier comparator, like-for-like scan roots, consistency-only versions; (5) P1.9a compiled set from -debug-compile + manifest, runner-resolved paths, closure minus prelude, stated residual gap, assembly-only effective lock; installed ae36986 citations; (6) P3.2 calibrated \u2264150-call escalation, 38\u00bd conditional max, skeleton submission arrows"
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (PLANW\u00b7a1, PLANW\u00b7a2, PLANW\u00b7a3); one summary attempt here, no history copied. Added at v1.2. a1 and a2 recorded retroactively at 2026-09-15T19:13:37Z from the plan file's history and the review documents; a3 is the live round. This is round 3 of rounds_max 3: a further RETURN blocks for an operator directive (no a4 forecast). 2026-09-15T19:28:58Z: REV2\u00b7a2 verdict ACCEPT WITH CORRECTIONS \u2014 a3 stays in review until the 6 corrections are applied and named in its receipt; no further review round required. 2026-09-15T19:46:48Z: a3 settled done \u2014 corrections applied (receipt); loop ended, ask future removed.",
+   "criteria": "Settles done only by an accepting REV2 verdict (\u00a70.10). Rounds: a1 v1, a2 v1.1, a3 v1.2."
+  },
+  {
+   "id": "REV1",
+   "title": "review: PLAN-004 v1 + run-plan004.json, adversarial (Codex sol, read-only)",
+   "kind": "review",
+   "owner": "codex",
+   "project": "PLAN",
+   "state": "done",
+   "deps": [],
+   "attempts": [
+    {
+     "id": "REV1\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "plan004-reviewer",
+     "model": "sol5.6\u00b7high",
+     "state": "done",
+     "started_at": "2026-09-15T18:16:49Z",
+     "ended_at": "2026-09-15T18:33:00Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 REV1\u00b7a1, REV1\u00b7a2, REV1\u00b7a3 (REV1\u00b7a3 done): REVIEW-plan004-v1-verdicts-codex.md (43,597 bytes, HEAD 3920814): RETURN for v1.1, 8 required changes; dagr check --strict [] re-run by reviewer; plan + graph mtimes unchanged by the review"
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (REV1\u00b7a1, REV1\u00b7a2, REV1\u00b7a3); one summary attempt here, no history copied. Verdict RETURN for v1.1. Blocking findings: \u00a78 has the producer write its own dagr_plan input (DESIGN \u00a710.5 one-writer/idempotent seeding); PSYNC edits to seeded tasks would not propagate; no edge REV1\u2192PSYNC; review/gate tasks settle done even on RETURN; QRET/P4/P5/P6 lack criteria and P6 is ready after P3G; D8 P1 matrix incomplete; P1.4/P1.6/P1.7/P1.9 contracts too loose; P3.2 reverse-de4b4f5 control not admissible by construction.",
+   "criteria": "REVIEW-plan004-v1-verdicts-codex.md written per BRIEF-plan004-v1-review.md: central split judged, fidelity to ADR-004 v4 + v4 review's nine changes, code facts at HEAD, per-part verdicts, D8 matrix gaps, graph consistency, 'Required changes for v1.1'. No commit, no heavy execution."
+  },
+  {
+   "id": "REV2",
+   "title": "review: PLAN-004 rounds after v1 (a1 v1.1 \u2192 RETURN; a2 v1.2) \u2014 Codex sol",
+   "kind": "review",
+   "owner": "codex",
+   "project": "PLAN",
+   "state": "done",
+   "deps": [],
+   "attempts": [
+    {
+     "id": "REV2\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "plan004-reviewer",
+     "model": "sol5.6\u00b7high",
+     "state": "done",
+     "started_at": "2026-09-15T18:49:09Z",
+     "ended_at": "2026-09-15T19:27:00Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 REV2\u00b7a1, REV2\u00b7a2 (REV2\u00b7a2 done): REVIEW-plan004-v1.2-delta-verdicts-codex.md sha256:943a59d264ef770dbe89e23120d1a8e3f5e9e66ec61c486e5483f56bc7a99f46 \u2014 verdict ACCEPT WITH CORRECTIONS (6 corrections, 'Verdict for PLAN1G' items 1\u20136)"
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (REV2\u00b7a1, REV2\u00b7a2); one summary attempt here, no history copied. a1 (v1.1): RETURN for v1.2, 5 required changes. Policy removed at v1.1's settlement; policies now live on author tasks (PLANW). a2 (v1.2): ACCEPT WITH CORRECTIONS, 6 corrections; PLANW\u00b7a3 settles done only when they are applied and named (\u00a70.10).",
+   "criteria": "Per round: REVIEW-plan004-v1.N-delta-verdicts-codex.md; receipt carries doc path, sha256 and verdict; the verdict settles PLANW's attempt (\u00a70.10)."
+  },
+  {
+   "id": "PLAN1G",
+   "title": "gate: PLAN-004 accepted \u2014 Motoko may start",
+   "kind": "gate",
+   "owner": "operator",
+   "project": "PLAN",
+   "state": "done",
+   "deps": [
+    "PLANW",
+    "REV1",
+    "REV2"
+   ],
+   "attempts": [
+    {
+     "id": "PLAN1G\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "operator",
+     "state": "done",
+     "started_at": "2026-09-15T20:00:11Z",
+     "ended_at": "2026-09-15T20:00:11Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 PLAN1G\u00b7a1 (PLAN1G\u00b7a1 done): operator: \"I will follow your recommendations\" - PLAN1G settled ACCEPTED: PLANW done by REV2.a2 ACCEPT WITH CORRECTIONS (REVIEW-plan004-v1.2-delta-verdicts-codex.md sha256:943a59d264ef770dbe89e23120d1a8e3f5e9e66ec61c486e5483f56bc7a99f46), six corrections applied per plan S9 (plan sha256:7d272108ab7fb0e2cf8481b878115b0bab2b78d0802774ed2c7a86440268c4ff). Motoko may start provisional work (SWEEP, V5, P2.1)."
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (PLAN1G\u00b7a1); one summary attempt here, no history copied. ",
+   "criteria": "PLANW done by REV2\u00b7a2's accepting verdict (ACCEPT WITH CORRECTIONS, review sha256:943a59d264ef770d\u2026) with all six corrections applied and named in PLANW\u00b7a3's receipt; strict graph lint rerun; the operator's receipt names the corrections and the review digest. No directive substitutes for the verdict."
+  },
+  {
+   "id": "V5",
+   "title": "ADR-004 v5: the nine required changes as decision text + contracts/tests; re-pinned to HEAD (2\u20133d)",
+   "kind": "docs",
+   "owner": "claude",
+   "project": "ADR",
+   "state": "done",
+   "deps": [
+    "PLAN1G"
+   ],
+   "attempts": [
+    {
+     "id": "V5\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "claude",
+     "model": "opus5",
+     "state": "done",
+     "started_at": "2026-09-15T20:01:33Z",
+     "ended_at": "2026-09-15T21:10:33Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 V5\u00b7a1 (V5\u00b7a1 done): accepted by V5R\u00b7a1 (.agent/projects/013_core_architecture_for_dst/REVIEW-adr004-v5-verdicts-claude.md sha256:b53604f8a769097e756ceb5b48b8fcf4a71d828d3fec6e9c17e1261e1c40410c, ACCEPT WITH CORRECTIONS, claude - Codex unavailable); corrections applied in 988a863ac947b930a1ec78d5449720e7a432dfa5: C1 Parked row, C2 provider seam, C3 digest span rule, C4 derive.py header, C5 closure members, C6 brace rule, cosmetic 488-505"
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (V5\u00b7a1); one summary attempt here, no history copied. PLAN-004 v1.2 \u00a72 V5.",
+   "criteria": "Nine required changes as decision text + contract/test; PLAN-004 \u00a75 v1.2's v5 questions answered (\u00a75) incl. D8's per-refusal-family wording (confirm M15 or revise); review \u00a74 citations repaired. Author task: settles done only by an accepting V5R verdict. Three commits by explicit path (8 named v4 files, then v5, then the corrections)."
+  },
+  {
+   "id": "V5R",
+   "title": "review: ADR-004 v5, adversarial (Codex sol, read-only)",
+   "kind": "review",
+   "owner": "codex",
+   "project": "ADR",
+   "state": "done",
+   "deps": [
+    "V5"
+   ],
+   "attempts": [
+    {
+     "id": "V5R\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "claude",
+     "model": "fable",
+     "state": "done",
+     "started_at": "2026-09-15T20:47:07Z",
+     "ended_at": "2026-09-15T21:02:24Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 V5R\u00b7a1 (V5R\u00b7a1 done): .agent/projects/013_core_architecture_for_dst/REVIEW-adr004-v5-verdicts-claude.md sha256:b53604f8a769097e756ceb5b48b8fcf4a71d828d3fec6e9c17e1261e1c40410c verdict ACCEPT WITH CORRECTIONS (7 corrections C1-C6+cosmetic, no v6)"
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (V5R\u00b7a1); one summary attempt here, no history copied. PLAN-004 v1.2 \u00a72 V5R \u2192 V5G. Orchestrator writes BRIEF-adr004-v5-review.md first.",
+   "criteria": "REVIEW-adr004-v5-verdicts-codex.md (-v5.n- for later rounds); receipt doc path + sha256 + verdict; the verdict settles V5's attempt in the same document (\u00a70.10)."
+  },
+  {
+   "id": "V5G",
+   "title": "gate: ADR-004 v5 accepted (latest V5R verdict)",
+   "kind": "gate",
+   "owner": "operator",
+   "project": "ADR",
+   "state": "done",
+   "deps": [
+    "V5",
+    "V5R"
+   ],
+   "attempts": [
+    {
+     "id": "V5G\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "operator",
+     "state": "done",
+     "started_at": "2026-09-16T06:30:00Z",
+     "ended_at": "2026-09-16T06:30:00Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 V5G\u00b7a1 (V5G\u00b7a1 done): operator: \"V5G settled ACCEPTED: V5 done by V5R\u00b7a1 ACCEPT WITH CORRECTIONS (claude, sha256:b53604f8\u2026); corrections C1\u2013C6 + cosmetic accepted as applied in 988a863; D8/M15 ruling recorded \u2014 AdmissionCheck near-misses satisfy the per-check requirement, inapplicable rows stand as reasoned; ADR-004 v5 status Accepted (flip now / PSYNC flips)\" V5 commits 9615bb4+21c1728+988a863; V5R REVIEW-adr004-v5-verdicts-claude.md sha256:b53604f8a769097e756ceb5b48b8fcf4a71d828d3fec6e9c17e1261e1c40410c; status flip tasked to PSYNC."
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (V5G\u00b7a1); one summary attempt here, no history copied. ",
+   "criteria": "V5 done by an accepting V5R verdict; remaining corrections ruled (never a RETURN override); the D8 ruling on M15 recorded (whether AdmissionCheck near-misses and inapplicable rows satisfy the per-family sentence); ADR-004 status Accepted."
+  },
+  {
+   "id": "PSYNC",
+   "title": "PLAN-004 v2 (this graph's author task): every v1.2 v5 marker decided; this new graph file with new ids for changed parts (1d)",
+   "kind": "docs",
+   "owner": "claude",
+   "project": "ADR",
+   "state": "review",
+   "deps": [
+    "V5G",
+    "PLAN1G"
+   ],
+   "attempts": [
+    {
+     "id": "PSYNC\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "claude",
+     "model": "opus5",
+     "state": "queued"
+    }
+   ],
+   "policy": {
+    "rounds_max": 3,
+    "futures": [
+     {
+      "on": "pass",
+      "ref": "PLAN2G"
+     },
+     {
+      "on": "fail",
+      "node": {
+       "id": "PSYNC\u00b7a2",
+       "title": "revision round (\u00a70.10)",
+       "actor": "claude"
+      },
+      "loop_back": true,
+      "source": "\u00a70.10: RETURN \u2192 rejected + sent_back"
+     },
+     {
+      "on": "fail",
+      "streak": 3,
+      "node": {
+       "id": "PLAN2G\u00b7ask",
+       "title": "operator directive before a fourth round",
+       "actor": "operator",
+       "attribution": "predicted"
+      },
+      "source": "\u00a70.10 (a)4: rounds_max 3"
+     }
+    ]
+   },
+   "criteria": "No v1.2 marker left; \u00a79 deltas + the id map; v2 operator graph in a NEW file .dagr/run-plan004-v2.json (run id run-plan004-v02) with new ids for changed parts and the superseded-id map (file 'supersedes' object, opening note, task notes); history carried in run-plan004-v01 only (one summary attempt per terminal task here); dagr check --strict \u2192 []; copy of the graph in evidence/plan004-v2/; ADR-004 status line flipped to Accepted citing V5G. Author task: done only by an accepting PREV verdict.",
+   "note": "PLAN-004 v2 \u00a72 PSYNC: this graph's author task. Author attempt open in effect (\u00a70.10 (a)1, queued here); settled in run-plan004-v01 by the running session on PREV's verdict and mirrored here by the fresh session as one summary attempt before PLAN2G."
+  },
+  {
+   "id": "PREV",
+   "title": "review: PLAN-004 v2 against ADR-004 v5, and the v2 graph against v2's text (Codex sol)",
+   "kind": "review",
+   "owner": "codex",
+   "project": "ADR",
+   "state": "queued",
+   "deps": [
+    "PSYNC"
+   ],
+   "attempts": [],
+   "criteria": "REVIEW-plan004-v2-verdicts-codex.md; receipt doc path + sha256 + verdict; the verdict settles PSYNC's attempt (\u00a70.10).",
+   "note": "PLAN-004 v2 \u00a72 PREV. Codex gpt-5.6-sol if available, else claude with the file named -claude- (as V5R's was), stated in the receipt. Opened by hand by the orchestrator while PSYNC is in review."
+  },
+  {
+   "id": "PLAN2G",
+   "title": "gate: PLAN-004 v2 accepted \u2014 end this session, start a fresh one on run-plan004-v2.json",
+   "kind": "gate",
+   "owner": "operator",
+   "project": "ADR",
+   "state": "queued",
+   "deps": [
+    "PSYNC",
+    "PREV"
+   ],
+   "attempts": [],
+   "criteria": "PSYNC done by an accepting PREV verdict; v2 graph strict-clean; running session ended with a handoff; fresh-session receipt: marker names the v2 file, first Delegate shows dagr_task linked, producer run file contains v2 task ids.",
+   "note": "PLAN-004 v2 \u00a72 PLAN2G. Settled in THIS graph by the operator on the fresh-session receipt (marker names the v2 file, first Delegate shows dagr_task linked, producer file holds v2 ids); the v01 session ends with its handoff. Every P1 part except P1.1/P1.1R/P1.1G waits on it by design."
+  },
+  {
+   "id": "P1.1",
+   "title": "P1.1 (\u00bdd): PortedWorld variant \u2014 five joined lines, line-neutral (D2)",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "SWEEP"
+   ],
+   "attempts": [],
+   "policy": {
+    "rounds_max": 3,
+    "futures": [
+     {
+      "on": "pass",
+      "ref": "P1.1G"
+     },
+     {
+      "on": "fail",
+      "node": {
+       "id": "P1.1\u00b7a2",
+       "title": "revision round (\u00a70.10)",
+       "actor": "claude"
+      },
+      "loop_back": true,
+      "source": "\u00a70.10: RETURN \u2192 rejected + sent_back"
+     },
+     {
+      "on": "fail",
+      "streak": 3,
+      "node": {
+       "id": "P1.1G\u00b7ask",
+       "title": "operator directive before a fourth round",
+       "actor": "operator",
+       "attribution": "predicted"
+      },
+      "source": "\u00a70.10 (a)4: rounds_max 3"
+     }
+    ]
+   },
+   "criteria": "wc -l 915/6320/642 unchanged; git diff --unified=0 = exactly 5 '-' + 5 '+' content lines at the five sites; sha256 of session.ail 1085\u20131474 unchanged; ailang check on the edited files; make anchors (all pins incl. stub_step:203), driver_leaf_inventory, ledger_parity, strict_replay green.",
+   "note": "PLAN-004 v2 \u00a73 P1.1 (id unchanged; v5 D2/D5 and the v5 review \u00a73.9 verified the five joins and every anchor pin). stub_step:69, session:195, session:1545 (ported_provider starts :1532), ledger_parity_dst:73, :435. Post-variant source is A's D5 basis."
+  },
+  {
+   "id": "P1.1R",
+   "title": "review: the variant commit (Codex sol, read-only)",
+   "kind": "review",
+   "owner": "codex",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.1"
+   ],
+   "attempts": [],
+   "criteria": "Verdict document (diff = five joins; line counts; every anchors.sh pin; bridge-span bytes; type-check); receipt doc path + sha256 + verdict; settles P1.1's attempt (\u00a70.10).",
+   "note": "PLAN-004 v2 \u00a73 P1.1R \u2192 P1.1G (id unchanged). Codex if available, else claude, stated."
+  },
+  {
+   "id": "P1.1G",
+   "title": "gate: variant accepted (latest P1.1R verdict ACCEPT)",
+   "kind": "gate",
+   "owner": "motoko",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.1",
+    "P1.1R"
+   ],
+   "attempts": [],
+   "criteria": "P1.1 done by an accepting P1.1R verdict (\u00a70.10). Orchestrator-checked.",
+   "note": "PLAN-004 v2 \u00a73 P1.1G (id unchanged)."
+  },
+  {
+   "id": "P1.2a-v2",
+   "title": "P1.2a (1d): reader \u2014 path, strict decoding, seed fold as hashed evaluator COPIES; stray wake = MalformedEntry (D1) \u2014 v2",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "PLAN2G"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M1 (ChainBreak, MalformedEntry incl. a stray wake, UnknownEntryType, UnknownSchema; entry positions; clean twins) + M15 rows for M1 (near-miss or inapplicable with its reason): this part lands the fixture, its MATRIX.expected.tsv row and the passes-M1-refusal assertion; the first-finding-and-location assertion is P1.7a-v2's; leading-user seed (r2.1-shaped); decoders and fold are hashed evaluator COPIES of journal.ail's at A (v5 D5), fold equality vs journal.ail fold_journal and vs gen_fixtures.py; source-span SHA-256 on every copy; red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.2a (graph id P1.2a-v2). Supersedes v1.2's P1.2a: park/wake refusal row left M1 for M3 (Parked is a cutoff); stray-wake MalformedEntry case added; decoders and fold are copies, not imports (v5 D1, D5).",
+   "supersedes": "P1.2a"
+  },
+  {
+   "id": "P1.2b-v2",
+   "title": "P1.2b (1d): excerpt reader, ordered association, canonical JSON arguments; wake-opened start = ContinuationStart (D1) \u2014 v2",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.2a-v2"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M2 (DuplicateOrAmbiguousCallId, UnexpectedToolResult, MalformedToolArguments, Association x3, ContinuationStart for a suspended continuation AND a wake-opened run, EmptySegment; positions; clean twins) + M15 rows for M2: this part lands the fixture, its MATRIX.expected.tsv row and the passes-M2-refusal assertion; the first-finding-and-location assertion is P1.7a-v2's; both session_start shapes; canonical JSON arguments (compact, source order); red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.2b (graph id P1.2b-v2). Supersedes v1.2's P1.2b: wake-opened ContinuationStart case added (v5 D1, SeedParked).",
+   "supersedes": "P1.2b"
+  },
+  {
+   "id": "P1.3-v2",
+   "title": "P1.3 (1\u00bdd): six-shape stopping contract, the full cutoff table incl. Parked/CallFree/Blank/Hybrid, T0 settings as v5 pins them, provider_api_model copy (D1) \u2014 v2",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.2b-v2"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M3 (every D1 cutoff incl. Parked, CallFreeToolCallsFinish, BlankStop, HybridExtraction, RuntimeStatusCall and the post-turn StopBeforeEnd \u2014 each asserts selector, N, expected end, genuine/synthetic), M4 (the six shapes; hybrid predicate true admits, false \u2192 Refused(HybridPredicate)), M5 (v5 D1's settings table: MOTOKO_EXIT_MANIFEST and MOTOKO_CAPTURE_FAILED_PAYLOAD \"\", MOTOKO_PERSIST_RETRIES \"0\", explicit MOTOKO_PROFILE_DIR + FsFile config, context limit n>0 / \"disabled\" / ProfileMissed encoded (its witness refusal asserted by P1.7b-v2, M11); provider_api_model copy incl. non-idempotence); expected.decisions = 2N+1 / 2N; red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.3 (graph id P1.3-v2). Supersedes v1.2's P1.3: six-shape stopping procedure; cutoffs Parked, CallFreeToolCallsFinish, BlankStop, HybridExtraction and the HybridPredicate refusal added; T0 settings values pinned; expected.decisions 2N+1/2N (v5 D1, D3).",
+   "supersedes": "P1.3"
+  },
+  {
+   "id": "P1.4a",
+   "title": "P1.4a (1d): private digests \u2014 payload, system prefix, raw frame, JSON args (D2/D5)",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "PLAN2G"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M6: each copy equals the candidate function at A on fixtures incl. image + make[N]; source-span SHA-256 recorded. Red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.4a (id unchanged; v5 D2/D5 confirm the four private digests)."
+  },
+  {
+   "id": "P1.4b",
+   "title": "P1.4b (1\u00bd\u20132d): tools/eval_protected \u2014 statement-level imports, spans, original-byte hashes, C-side check (D5)",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "PLAN2G"
+   ],
+   "attempts": [],
+   "criteria": "make eval_protected_selftest on mutated scratch copies with an independently generated manifest: one aggregate import span per contiguous run (no nesting); as-alias, name inside multi-line import, joined import, deriving clause, in-span comment, multi-line non-braced type, moved and renamed symbols detected; move within file allowed; out-of-span not; parser cross-check on every non-braced span; unterminated/unbalanced/missing/duplicate/overlap of different declarations exit 2. check at C decides. Red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.4b (id unchanged: the tool's contract is v1.2's, adopted by v5 D5 incl. the literal-aware lexer, C6). Symbol list = v5 D5's reviewed starting set incl. the v5 review \u00a73.8 transitive names (C5); the manifest is the closure the entry pins, reviewed at P1R-v2/P1G."
+  },
+  {
+   "id": "P1.5",
+   "title": "P1.5 (1\u00bd\u20132d): journal world builder + guarded-delegation seams (D2)",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.1G",
+    "P1.3-v2",
+    "P1.4a",
+    "P1.4b"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M8: complete fail-closed records on both empty arms exactly as v5 D2 writes them (provider: the harness's exhausted record, non-retryable Err; tool: tool_outcome_record's ToolFailed arm field for field, fault_class_tool_failed(), code replay_unrecorded_invocation) and its returned { outcome: o, next_state } (code replay_unrecorded_invocation, clock unadvanced); k = the seam's own ProviderIdentity count; no live effect (sentinel absent); correlation mismatch; old log + exactly one interaction (structurally equal prefix), projection-only replacement; world_state_of rebuilds script + tools. Red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.5 (id unchanged: contract confirmed, values pinned by v5 D2 \u2014 the harness's exhausted record, the ToolFailed arm mirror, k = the seam's own ProviderIdentity count (C2), { base | ... }, structurally equal prefix; world env/files as D2 builds them)."
+  },
+  {
+   "id": "P1.6",
+   "title": "P1.6 (2\u20132\u00bdd): admission run, /4 program, provenance checked against independent sources (A9b); A5, A6, A9 (D2/D3)",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.5"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M9 incl. an A9 known-failing round-trip case (validate_program / world_state_of / reconstitution_balance) with its pinned Location; EndSuspended(3) with RunSuspended; stop \u2192 EndFinalize(model_stop); identities.json from journal_replay.sh (python3 tools/ext_call_inventory/derive.py --json) checked per \u00a73's table against its comparator \u2014 a different path where one exists, the reviewed profile_definition_dst.ail record for classifier sets, like-for-like scan roots, consistency only for profile/rule versions; -dev generator refuses real admission; synthetic only. Red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.6 (id unchanged; v5 A9b adopts the identities table by reference; no fresh interface_hash recomputation \u2014 the lock's recorded value is compared with the entry's pin at K0)."
+  },
+  {
+   "id": "P1.7a-v2",
+   "title": "P1.7a (1\u00bdd): A1\u2013A4 source checks, typed Location, admission verdict (D3) \u2014 v2",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.6"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M10 (incl. an A3 msg_count/count mismatch and an A4 count mismatch) + for M15's A-rows the first-finding-and-location assertion (fixtures and expected rows landed by the family's part); A1 against the snapshot's recorded digest_after values; every finding carries v5 D3's typed Location (Interaction(ordinal) | Call(k) | Source{snapshot|excerpt, position} | Aggregate(name)), AdmissionCheck(Ak, A9b, location); A2 function reused unchanged as K7. Red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.7a (graph id P1.7a-v2). Supersedes v1.2's P1.7a: two-shape location proposal became v5 D3's four-variant Location; AdmissionCheck carries A9b and the location.",
+   "supersedes": "P1.7a"
+  },
+  {
+   "id": "P1.7b-v2",
+   "title": "P1.7b (1\u00bd\u20132d): A7 runner-built witness, A8 bridge (NoReplay, derived decision budget), thirteen-row census (D3) \u2014 v2",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.6"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M11: witness under/over-count; the ProfileMissed configuration's MOTOKO_MODELS_FILE read refused by the witness; a fault-path env read (MOTOKO_CAPTURE_FAILED_PAYLOAD) in its own column; wrong obligation (NoReplay at admission) or metadata (replay_metadata_of(manifest)); decision count asserted = 2N+1 (EndSuspended) / 2N (stop) and used as decision_budget, retry_budget 0; every row of v5 D3's census table asserted zero by name on the T0 fixture with a non-zero twin; family_evidence recorded unchanged with CheckpointHistory evaluated-but-vacuous. Red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.7b (graph id P1.7b-v2). Supersedes v1.2's P1.7b: obligation NoReplay, replay_metadata_of(manifest), derived decision budget, retry 0, decision-count assertion and the thirteen-row census decided (v5 D3).",
+   "supersedes": "P1.7b"
+  },
+  {
+   "id": "P1.8",
+   "title": "P1.8 (1\u20131\u00bdd): contextual scan policy, entry layout, program artifact (D6)",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.6"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M12; artifact \u2192 load_program \u2192 same digest; permission failure refuses without a partial entry; no second codec; dst_secrets.ail untouched. Red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.8 (id unchanged; v5 D6 confirms the contextual policy verbatim)."
+  },
+  {
+   "id": "P1.9a",
+   "title": "P1.9a (1\u00bd\u20132d): assembly, refusals, execution provenance (fresh AILANG_CACHE_DIR, std/pkg roots), K0 (D3/D5)",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.4b",
+    "P1.8"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M13; as the family's part, M15's candidate-row fixtures, expected rows and passes-own-refusal assertions; fresh empty AILANG_CACHE_DIR, AILANG_NO_CACHE unset, -debug-compile: summary present, 0 hits, MISS set = compile/manifest.json entries; runner-resolved selected paths (project root / -trace-loader stdlib search / embedded / effective lock) all hashed and inside allowed roots; statement import closure = compiled set minus listed prelude; evaluator-pinned assembly-only effective lock (only path fields rewritten, packages copied from A); residual gap in the envelope. Red-first or mutation record.",
+   "note": "PLAN-004 v2 \u00a73 P1.9a (id unchanged; v5 D5 'Execution provenance' adopts this part's contract by reference; ailang.lock/ailang.toml/packages/** refusal confirmed by D3/D5)."
+  },
+  {
+   "id": "P1.9b-v2",
+   "title": "P1.9b (1\u00bd\u20132d): K1\u2013K7 (K3 from C's own run, then counts), typed candidate verdict (D3) \u2014 v2",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.9a",
+    "P1.7a-v2",
+    "P1.7b-v2"
+   ],
+   "attempts": [],
+   "criteria": "Matrix M14 + for M15's K-rows (candidate rows) the first-finding-and-location assertion on the fixtures and expected rows the family's part (P1.9a) landed (first finding + typed Location; direct log-length mutations; the exhausted-marker case's ACTUAL first finding with the marker's position in the envelope); K3: witness_C built from C's own trace/queues/worlds, THEN C's three runtime counts vs the entry; K4: family_evidence and the census recomputed from C equal the entry's; comparands are the entry, never the admission manifest; C=P \u2192 Reproduced; no score after any K failure.",
+   "note": "PLAN-004 v2 \u00a73 P1.9b (graph id P1.9b-v2). Supersedes v1.2's P1.9b: K3 two-step comparison (witness_C from C's run, then the three counts), K4 census comparand, typed Location verdict (v5 D3).",
+   "supersedes": "P1.9b"
+  },
+  {
+   "id": "P1R-v2",
+   "title": "review: P1 code \u2014 suites run, MATRIX vs expected, D8 contract coverage, closure review, symbol inventory (Codex sol / claude) \u2014 v2",
+   "kind": "review",
+   "owner": "codex",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.9b-v2"
+   ],
+   "attempts": [],
+   "criteria": "REVIEW-plan004-p1-verdicts-codex.md (or -claude-, stated in the receipt): make eval_matrix + every suite + eval_protected_selftest run; MATRIX.tsv joined with MATRIX.expected.tsv on case_id (verdict, first finding, location equal); coverage of v5 D8's revised test contract clause by clause, every inapplicable M15 row carrying its recorded reason; the closure review (manifest members vs D5's starting set and the seams' actual delegations, any missing member named); symbol inventory with call sites; red-first/mutation records. On RETURN: implicated parts keep their done attempts and get sent_back attempts (\u00a70.10 (b)).",
+   "note": "PLAN-004 v2 \u00a73 P1R (graph id P1R-v2). Supersedes v1.2's P1R: coverage of v5 D8's revised test contract clause by clause and the closure review (v5 D5) added.",
+   "supersedes": "P1R"
+  },
+  {
+   "id": "P1G",
+   "title": "gate: P1 built \u2014 latest P1R accepts, harness green, E pinned",
+   "kind": "gate",
+   "owner": "operator",
+   "project": "P1",
+   "state": "queued",
+   "deps": [
+    "P1.1G",
+    "P1.2a-v2",
+    "P1.2b-v2",
+    "P1.3-v2",
+    "P1.4a",
+    "P1.4b",
+    "P1.5",
+    "P1.6",
+    "P1.7a-v2",
+    "P1.7b-v2",
+    "P1.8",
+    "P1.9a",
+    "P1.9b-v2",
+    "P1R-v2"
+   ],
+   "attempts": [],
+   "criteria": "Every P1 part's latest attempt done and P1R-v2's latest verdict accepting (\u00a70.10 (b)), the closure review included; MATRIX.tsv = MATRIX.expected.tsv; anchors, driver_leaf_inventory, strict_replay, event_vocabulary green without re-baseline; E commit + ailang binary sha256 in \u00a76; ../motoko_agent-eval at E after the collision check.",
+   "note": "PLAN-004 v2 \u00a73 P1G (id unchanged; P1R-v2's accepting verdict now includes the closure review, v5 D5)."
+  },
+  {
+   "id": "P2.1",
+   "title": "P2.1 (1d): scripts/eval/mem_guard.py \u2014 declared peak, flock, preflight, monitor, reap, atomic record",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P2",
+   "state": "done",
+   "deps": [
+    "PLAN1G"
+   ],
+   "attempts": [
+    {
+     "id": "P2.1\u00b7a1",
+     "n": 1,
+     "cause": {
+      "type": "initial"
+     },
+     "actor": "claude",
+     "model": "fable",
+     "state": "done",
+     "started_at": "2026-09-15T20:23:45Z",
+     "ended_at": "2026-09-15T20:40:10Z",
+     "outcome": {
+      "result": "done",
+      "evidence": "reported",
+      "receipt": "summary of run-plan004-v01 P2.1\u00b7a1 (P2.1\u00b7a1 done): commit 55f110093835c8081cc5ee2b669db94970224fd8 ADR-004 D8 P2: the cgroup memory guard (scripts/eval/mem_guard.py 812 + test_mem_guard.py 695); pytest 55 passed re-run by orchestrator; red-first (ModuleNotFoundError) + 3 mutation checks in message"
+     }
+    }
+   ],
+   "note": "Settled in run-plan004-v01 (P2.1\u00b7a1); one summary attempt here, no history copied. PLAN-004 v1.2 \u00a74 P2.1. Defaults margin 2 GiB, poll 1 s \u2014 overridable in review.",
+   "criteria": "test_mem_guard.py with scratch EVAL_LOCK_PATH/EVAL_CGROUP_ROOT: refusals (\u226512 GiB, headroom, max absent/malformed/zero, unlimited without a positive finite EVAL_MEM_MAX_BYTES); trip with group reaped; lock contention; immediate child exit still writes a complete record; clean exit trip:false; caller rejects trip:true; guard.json atomic on every exit path."
+  },
+  {
+   "id": "P2.2",
+   "title": "P2.2 (1\u00bd\u20132d): calibrate repeatability + verdict path on admissible \u2264100-call prefixes \u2014 heavy, record",
+   "kind": "test",
+   "owner": "claude",
+   "project": "P2",
+   "state": "queued",
+   "deps": [
+    "P1G",
+    "P2.1",
+    "QRET",
+    "SCAN0"
+   ],
+   "attempts": [],
+   "criteria": "Maximal admissible CutoffBefore(call N+1) prefix \u2264100 (EndSuspended(N)) and an independently checked \u2248N/2 prefix; admitted under the guard; exact profiling argv + profiler/binary identity + D4 scope recorded; counts from the entry cross-checked against journal/host-log receipts; 1 warm-up + 3\u00d7 Reproduced + 3\u00d7 Diverged per segment, all exposure rows; \u00a76: deviation, proposed tolerance, peak, gate length. No \u226520-call prefix \u2192 stop and escalate.",
+   "note": "PLAN-004 v2 \u00a74 P2.2 (id unchanged; v5 D8 P2 confirms: \u2264100 calls, both verdicts, fold inside the profiled process). Not the regression (that is P3.2-v2). Prototype numbers are not inputs."
+  },
+  {
+   "id": "P3.1",
+   "title": "P3.1 (\u00bd\u20131d): admit the finite dev entry \u2014 scan, A1\u2013A9, A9b \u2192 SourceFaithful \u2014 heavy, record",
+   "kind": "test",
+   "owner": "claude",
+   "project": "P3",
+   "state": "queued",
+   "deps": [
+    "P2.2"
+   ],
+   "attempts": [],
+   "criteria": "SourceFaithful receipt; permissions find clean; identities/digests in \u00a76; exposure log complete incl. migrated rows; a refusal recorded with its scan report and the next candidate scanned.",
+   "note": "PLAN-004 v2 \u00a74 P3.1 (id unchanged)."
+  },
+  {
+   "id": "P3.2-v2",
+   "title": "P3.2 (1\u00bd\u20132d): the same-basis regression control (revert de4b4f5 on A) \u2014 K1\u2013K7 pass AND budget fails \u2014 heavy \u2014 v2",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P3",
+   "state": "queued",
+   "deps": [
+    "P3.1"
+   ],
+   "attempts": [],
+   "criteria": "Provisional budget = P2.2's proposed tolerance, P and control in the same session under the guard. PRIMARY same-basis control (v5 D5/D8: a candidate diff on A reverting de4b4f5): (i) reviewed admissible, canonical_messages byte-identical on the digest fixtures and the entry's seed; (ii) eval_protected check passes at C; (iii) K1\u2013K7 pass on the entry; (iv) allocation exceeds the provisional budget. One escalation inside P3.2 to a \u2264150-call dev/exposed entry, calibrated first (own peak, counts, tolerance) before (iii)\u2013(iv); then stop and escalate \u2014 the historical a6abda4 route only by operator directive with D5's control-basis manifest. K0/refusal never counts; never depends on P5.",
+   "note": "PLAN-004 v2 \u00a74 P3.2 (graph id P3.2-v2). Supersedes v1.2's P3.2: control class decided: same-basis revert of de4b4f5 primary, historical a6abda4 optional by directive with its own manifest (v5 D5, D8).",
+   "supersedes": "P3.2"
+  },
+  {
+   "id": "P3.3-v2",
+   "title": "P3.3 (1d): make journal_replay_budget \u2014 guarded, exact counts incl. decisions, fail closed, repin by directive \u2014 v2",
+   "kind": "impl",
+   "owner": "claude",
+   "project": "P3",
+   "state": "queued",
+   "deps": [
+    "P3.2-v2"
+   ],
+   "attempts": [],
+   "criteria": "Guard wraps parent/control/candidate; pins GiB (P2.2 tolerance) + calls, appends, tool invocations, interactions by class, env reads by key, decisions; each fail-closed arm tested on the synthetic entry; repin needs reason + operator directive; not in make dst.",
+   "note": "PLAN-004 v2 \u00a74 P3.3 (graph id P3.3-v2). Supersedes v1.2's P3.3: decisions joined the pinned counts (v5 D8 P3).",
+   "supersedes": "P3.3"
+  },
+  {
+   "id": "P3G",
+   "title": "gate: ADR-004 T0 measured \u2014 parent passes, reviewed control rejected by budget with K1\u2013K7 passing",
+   "kind": "gate",
+   "owner": "operator",
+   "project": "P3",
+   "state": "queued",
+   "deps": [
+    "P3.1",
+    "P3.2-v2",
+    "P3.3-v2"
+   ],
+   "attempts": [],
+   "criteria": "\u00a76 command receipts: A1\u2013A9 + A9b; K0\u2013K7 for P; control K1\u2013K7 pass; make journal_replay_budget exit 0 on P and non-zero on the control by the allocation budget; budget + segment length pinned; ADR-004 Consequences 'measured' line cites finite-entry results.",
+   "note": "PLAN-004 v2 \u00a74 P3G (id unchanged)."
+  },
+  {
+   "id": "P4",
+   "title": "P4: held-out process \u2014 exposure classes, collection authority, storage outside the repo (operator)",
+   "kind": "docs",
+   "owner": "operator",
+   "project": "AFTER",
+   "state": "queued",
+   "deps": [
+    "P3G"
+   ],
+   "attempts": [],
+   "criteria": "Written process outside the repo: dev/exposed/held-out classes and who reclassifies; operator collects; ~/.motoko-heldout/ 0700 with own pins/results; per-entry outcomes incl. refusals; no held-out identity or result reaches Motoko or any candidate-producing agent. Settled by directive.",
+   "note": "PLAN-004 v2 \u00a74 P4 (id unchanged). Not delegated through Motoko."
+  },
+  {
+   "id": "P5",
+   "title": "P5 (1\u20133d): long admission \u2014 a 300-call-class dev/exposed entry under guard, exclusive \u2014 heavy, record",
+   "kind": "test",
+   "owner": "claude",
+   "project": "AFTER",
+   "state": "queued",
+   "deps": [
+    "P3G"
+   ],
+   "attempts": [],
+   "criteria": "Dev or exposed entry only; SourceFaithful or named refusal; valid guard record (a trip is a recorded result, not a retry loop); exposure rows; \u00a76 record.",
+   "note": "PLAN-004 v2 \u00a74 P5 (id unchanged). 6,969\u20137,058 MiB RSS was a terminal-augmented prototype figure: scale only."
+  },
+  {
+   "id": "P6",
+   "title": "P6: T1 \u2014 chunks, prior counts, continuation starts, /5 cache fields",
+   "kind": "impl",
+   "owner": "operator",
+   "project": "AFTER",
+   "state": "canceled",
+   "deps": [
+    "P3G"
+   ],
+   "attempts": [],
+   "note": "Canceled from this run (PLAN-004 v2 \u00a74 P6): T1 needs its own ADR revision or plan (ADR-004 D7)."
+  }
+ ],
+ "events": [
+  {
+   "at": "2026-09-16T07:27:24Z",
+   "type": "note",
+   "detail": "v2 graph written by PSYNC from PLAN-004 v2 (HEAD 988a863; ADR-004 v5 Accepted at V5G 2026-09-16T06:30:00Z; QRET ruled). Supersedes run-plan004-v01 for everything from PLAN2G on; v01 keeps the settled history up to PLAN2G. Nine parts under new ids (v2 \u2190 v1.2): P1.2a-v2 \u2190 P1.2a, P1.2b-v2 \u2190 P1.2b, P1.3-v2 \u2190 P1.3, P1.7a-v2 \u2190 P1.7a, P1.7b-v2 \u2190 P1.7b, P1.9b-v2 \u2190 P1.9b, P1R-v2 \u2190 P1R, P3.2-v2 \u2190 P3.2, P3.3-v2 \u2190 P3.3. Terminal tasks (QRET, PLANW, REV1, REV2, PLAN1G, V5, V5R, V5G, P2.1) carry one summary attempt each; PSYNC is in review with PSYNC\u00b7a1 queued pending PREV; PLAN2G is settled here by the operator on the fresh-session receipt. run.orchestrator.pane is v01's until the operator's planning session sets the fresh session's pane."
+  }
+ ]
+}

@@ -27,6 +27,20 @@ src/tui/dist/
 
 # Session data
 .motoko/logfile/
+# ADR-003 v6.1 D1's session journal, beside the log and ignored for the same
+# reason with one more: the JSONL log carries digests, and THIS carries the
+# conversation verbatim — every prompt, every tool output, every file the model
+# read. It is per-session runtime state, its directory is created 0700, and
+# committing one would publish a transcript.
+.motoko/sessions/
+# ADR-004 D6's evaluation corpus (PLAN-004 PRESERVE, D8 P0). Private, local-only,
+# directories 0700 and files 0600: the archive of the memory prototypes and their
+# evidence, the SCAN0 output, and every admitted entry with its snapshot, excerpt,
+# program and derived runs. Retention is PLAN-004 §0.11's ruling, not git. Only
+# the tracked MANIFEST.sha256 files under
+# .agent/projects/013_core_architecture_for_dst/evidence/ name what is here —
+# digests and paths, never content.
+.motoko/eval-corpus/
 .motoko-store/
 .omp
 
@@ -46,6 +60,12 @@ tmp/*
 eval_results/*
 logs/*
 .motoko/logfile/
+# ADR-003 v6.1 D1's session journal, beside the log and ignored for the same
+# reason with one more: the JSONL log carries digests, and THIS carries the
+# conversation verbatim — every prompt, every tool output, every file the model
+# read. It is per-session runtime state, its directory is created 0700, and
+# committing one would publish a transcript.
+.motoko/sessions/
 polyglot_logs/
 benchmark_generared_files/
 benchmarks/results/
@@ -110,3 +130,7 @@ deepseek-harness/
 # Generated Z3 classification probes (tools/verify_classify/classify.py).
 # The register they produce IS tracked; the probe modules are rebuilt each run.
 tools/verify_classify/generated/
+
+.motoko/eval-tmp/
+.motoko/eval-tmp-twodoor/
+.motoko/ab/

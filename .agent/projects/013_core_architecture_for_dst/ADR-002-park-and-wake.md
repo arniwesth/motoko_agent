@@ -1,8 +1,9 @@
 # ADR-002: Waiting is a step-machine state served by a port, and task completion is a runtime act
 
-Date: 2026-09-06 (v1 through v3), 2026-09-07 (v4, v4.1)
-Status: **Proposed (v4.1 — v4 folds the v2.1 review's outstanding corrections to D1–D5; v4.1
-applies the v4 review's six line edits, unreviewed. PLAN-002 may be written against this
+Date: 2026-09-06 (v1 through v3), 2026-09-07 (v4, v4.1), 2026-09-08 (v4.2)
+Status: **Proposed (v4.2 — v4 folds the v2.1 review's outstanding corrections to D1–D5; v4.1
+applies the v4 review's six line edits; v4.2 adds one Consequences paragraph, the testability
+argument, and takes no decision. Both unreviewed. PLAN-002 may be written against this
 version.)** v4 was reviewed by Claude Fable
 ([`REVIEW-adr002-v4-verdicts-fable.md`](REVIEW-adr002-v4-verdicts-fable.md), HEAD `3ee3d03`):
 *accept with corrections; PLAN-002 steps 1–2 writable now, steps 3–5 after four line decisions*;
@@ -175,6 +176,15 @@ re-cited from ADR-003 D5. Nothing else.
    `session.ail` at HEAD — only a test sets it. `classify_candidate` is effectful
    (`{Process, IO, Clock, Trace}`), since solver dispatch is (`ext/runtime.ail:676–677`); the
    pure part is `decide`.
+
+**v4.1 → v4.2.** One paragraph in Consequences ("What becomes testable"), no decision changed.
+It records an argument for D2 that the ADR had not made: waiting is a duration today, DST erases
+duration by construction, and so the polling cost this ADR exists to remove is invisible to
+`make dst` and would stay invisible under any fixture the harness could hold. Under D2 a park is
+a discrete transition and the four-call metric becomes a fixture assertion rather than a live
+measurement. Prompted by a measured exhaustion on 2026-09-08 — a 300-step budget spent in 88
+minutes, roughly 120 of the steps `DelegateCheck` heartbeats — which `make dst` was green
+throughout.
 
 Not retracted: the direction; the answer-first branch of `do_check_motoko` really does settle
 `done` when the agent is already gone (`herdr.ail:1066–1087`, `agent get` confined to the
@@ -590,6 +600,44 @@ this ADR makes cheap.
 **What gets simpler.** The orchestrator stops polling. `DelegateCheck` is called when there is
 something to collect. The guard stops refereeing waiting once it reads wait state. DP7 judges
 every complete candidate, not only the ones solver policy let through.
+
+**What becomes testable, and this is an argument for D2 independent of the cost one.**
+Waiting is a DURATION today, and duration is the one thing DST erases by construction — so the
+failure that motivates this ADR cannot be caught by any fixture the harness could hold.
+
+Measured 2026-09-08 against `herdr_graded_dst.ail`, the only DST script that reaches the
+extension. Every process call the extension makes is an entry in an ordered `ext_effects`
+queue — `eff(duration_ms, exit_code, stdout)` (`:151–155`) — served IN ORDER rather than
+matched by argv, and consuming one advances the world clock by its `duration_ms`. The file's
+determinism assertion is exactly that: `"Starting it took 0.6s"` is 97+101+103+107+109+113 =
+630 ms of its own scripted durations, read back through the extension's two `clock_now`
+readings (`:748–758`). So a `herdr agent wait --timeout 20000` — twenty seconds of real
+patience — is one queue entry costing ~100 ms of logical time. The clock witnesses queue
+CONSUMPTION, not elapsed time, and the file already says so: a 1 ms change leaves the
+assertion green because `format_ms` rounds, so it pins the count and the order of the queue and
+nothing about the wait.
+
+The consequence is sharper than "not covered yet". `DelegateCheck` appears in no DST fixture at
+all — the L1 gates exercise the check's own behaviour against a scripted herdr, which is a
+different claim from the loop's cost — and no fixture could be added that catches N provider
+calls buying N x 20 s of waiting without giving the harness a notion of real duration, which is
+the property it exists to lack. The measured failure of 2026-09-08 (a 300-step budget consumed
+in 88 minutes, ~120 of the steps heartbeats) is invisible to `make dst` and always would be.
+
+D2 changes the category. A park is a TRANSITION, not a duration: `Park` with a request id out
+of `decide`, a wake with an outcome back through `wake_read`, both discrete and both scripted
+the way `approvals` already is (`ports.ail:979–983`, bound at `:2558`) and the way the `wakes`
+cursor will be (D5 step 3). The metric above then stops being a live measurement and becomes a
+fixture assertion: that no provider call occurs between the park and the wake is a property of
+a recorded program, checkable on every run of `make dst`.
+
+**What still is not testable, stated so the claim is not read as larger than it is.** DST gains
+no wall clock. `TimerWait`'s bounds, real latency, and how long a park actually took stay
+outside it; what becomes checkable is the COUNT and ORDER of provider calls across a park. And
+one half of waiting is already modelled — `WorkInFlight` (7.3) is a criterion-2 slot of
+`driver_plus_herdr/1` (`dst_driver_plus_herdr.ail:194`), unconditionally dispatched and covered
+on every step of the graded run. That is the DECLARATION that work is outstanding; D2 adds the
+state the declaration is about.
 
 **What does not.** Motoko's external `idle` stays ambiguous for interactive panes. The dagr
 run file is still written only by the extension, on the settle call. A parked session holds a

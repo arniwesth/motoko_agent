@@ -649,6 +649,46 @@ than carried: a plan task declared in a terminal state is emitted with ONE attem
 observe it. That shape is not a preference; `dagr check` rejects a `done` task with no attempts as
 E150 ("nothing settled it"), measured against v0.3.1 before the code was written.
 
+### 10.5.1 The second channel, and why the first one was not enough (2026-09-08, same day)
+
+`HERDR_DAGR_PLAN` shipped as the only way to name the plan, and it was measured failing the first
+time it was used for real. The operator said *"start implementing this dagr graph
+`.dagr/run-plan003.json`"*; the model understood that well enough to pass `dagr_task: "P1P1"`
+unprompted on its first `Delegate`; the linkage was refused, the delegation was recorded as
+parallel work, and the operator got the delegation view instead of the graph they had just written.
+Nothing was broken. The variable was simply not set, and **could not be set from inside**: this
+repo's `.devcontainer` is mounted read-only precisely so the agent cannot rewrite its own
+confinement, and that is the file the other three `HERDR_` knobs live in.
+
+The variable was the wrong granularity, not the wrong mechanism. `HERDR_DAGR_PANE` and
+`HERDR_REAP_ON_EXIT` describe a CONTAINER — disposable, no operator layout to protect, true for
+every session it ever runs. Which plan is being implemented is true for one session and changes
+with the next sentence.
+
+So `Delegate` gained **`dagr_plan`**, and the operator's own words are now the configuration. It is
+remembered for the session in `.dagr/.plan-<pane>-<session>` (`dagr.plan_marker`), keyed by producer
+pane and session like every other path here, so it is asked for once and every later `Delegate` and
+`DelegateCheck` inherits it. Precedence is declaration over variable: the variable says what this
+container usually works on, the declaration says what this session was actually asked to do.
+
+Three things the failure taught, each pinned by a case in `verify_mot136_dagr_producer.ail`:
+
+- **A plan that seeds nothing must say which nothing it is** (case 26). `seed_from_plan` treats an
+  absent or unparseable plan as "no plan", which is right for the document — a producer does not
+  guess at an operator's file — and is exactly what made this invisible for a whole session. So
+  `dagr_record` now reports a plan in effect that it could not read, on every write point, until it
+  is fixed. And the `dagr_task` refusal names the repair rather than only the symptom.
+- **An unreadable plan does not un-seed what a readable one already seeded** (case 26 again). Those
+  tasks carry this producer's observations by then; the plan describes intent, and §10.5's
+  one-directional rule runs in this direction too.
+- **A declared path is sandbox-checked before it is read** (case 27), not around the read: a path
+  outside `AILANG_FS_SANDBOX` terminates the run rather than returning an error a handler could
+  report, so the check cannot be a `catch`. A refused declaration leaves the previous one standing.
+
+What did NOT change: the plan file is still read and never written, the child of §10.4's A1/A2 split
+is unmoved, and no new pane, view or file is introduced. The model may name the plan; it still
+cannot write it.
+
 The recommendation as it stood before the decision:
 
 **A2, or B+ if the operator's hand-editing of the live document is not negotiable.** A1 is the

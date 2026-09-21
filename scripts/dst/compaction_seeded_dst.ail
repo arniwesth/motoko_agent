@@ -5,6 +5,7 @@
 
 module scripts/dst/compaction_seeded_dst
 
+import std/json (ja)
 import std/ai (ToolCall)
 import std/env (getEnvOr)
 import std/io (println, exit)
@@ -65,6 +66,7 @@ func ctx(limit: int) -> ExtCtx {
     state_key: "k",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(), world: empty_ext_world()

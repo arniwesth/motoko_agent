@@ -1,0 +1,312 @@
+-- src/eval/journal/configuration.ail
+--
+-- ADR-004 D1 "Configuration", PLAN-004 §3 P1.3 (graph id P1.3-v2): the
+-- logical and API models, the recorded configuration and the T0 settings as
+-- v5 pins them, served — never ambient.
+--
+--   eval_provider_api_model(model, openai_base_url) -> string
+--   context_encoding(limits, run_id)                -> ContextLimitEncoding
+--   t0_settings(header, env, encoding, predicate)   -> T0Settings
+--
+-- THE MODELS. The logical model is the `settings` model on the path, falling
+-- back to the header (the reader's seed fold carries it: `stopping.ail`). The
+-- entry receives it and converts it once at dispatch (session.ail:3824); the
+-- seam receives the API model. `eval_provider_api_model` is the evaluator's
+-- copy of the WHOLE of `provider_api_model` (session.ail:272–293), pinned by
+-- hash: `openrouter/auto` kept; `openrouter/`, `openai/`, `anthropic/`,
+-- `google/` stripped once; not idempotent (`openrouter/openai/x` -> `openai/x`
+-- -> `x`). It is private in session.ail, so its equality with the live
+-- function is shown three ways: the copy is A's span with the one rename
+-- (`gen_fixtures.py --check` compares the bytes, read with `git show A:`); the
+-- live function's own eight vectors (session.ail:1854–1899, passing at A) are
+-- asserted on the copy here; and the generator's independent reading agrees on
+-- every fixture's model.
+--
+-- THE T0 SETTINGS (v5 D1's table), served through the world's environment and
+-- file table in the order policy init and dispatch read them:
+--
+--   MOTOKO_PERSIST_RETRIES          "0"          the persist-nudge arm unreachable
+--   MOTOKO_RETRY_STREAM_ERROR       recorded     read once at policy init
+--   OPENAI_BASE_URL                 recorded     read once at policy init
+--   MOTOKO_HEADLESS                 recorded     read once at policy init
+--   MOTOKO_PROFILE_DIR              ".motoko/eval-profile", explicit and
+--                                                non-empty: `profile_dir_path`
+--                                                never reads MOTOKO_CONFIG or
+--                                                MOTOKO_REPO (context_usage.ail:139–150)
+--   MOTOKO_SESSION_ID               the header's session id
+--   MOTOKO_TOOL_TIMEOUT_MS          recorded, else "0"
+--   MOTOKO_EXIT_MANIFEST            ""           no publication, no `exec("mv")`
+--   MOTOKO_CAPTURE_FAILED_PAYLOAD   ""           no ambient capture write
+--   not served: MOTOKO_CONFIG, MOTOKO_REPO, MOTOKO_MODELS_FILE
+--   files: ONE `FsFile` at exactly `.motoko/eval-profile/config.json`
+--   rt.verification { enabled: false }; checkpoint_enabled false;
+--   max_cost_millicents 0 (a recorded non-zero cap is served 0 and named as
+--   an omission); ohmy_pi and hybrid_tools as recorded; the hybrid predicate.
+--
+-- THE CONTEXT LIMIT (the recorded `context_limit_resolved` of the run, the
+-- excerpt's first for its run id), encoded in that file:
+--   arm `bounded`, n > 0  -> `{"agent":{"context_limit":n}}`         ProfileWindow(n)
+--   arm `disabled`        -> `{"agent":{"context_limit":"disabled"}}` ProfileDisabledDeclared
+--   otherwise             -> ProfileMissed, ENCODED here and admitted by the
+--     reader: arm `unknown`, no event, or arm `bounded` with n <= 0 (which the
+--     live resolvers never construct) -> `{"agent":{}}`, `ProfileKeyAbsent`.
+--     Such an entry reaches the catalogue and `MOTOKO_MODELS_FILE`; its refusal
+--     is the witness's, asserted by P1.7b-v2 (M11), not here.
+--   Declared: a catalogue-resolved window is served as a profile override, so
+--   the replay's resolution source reads `ProfileOverride`; the raw window is
+--   equal. The recorded source is `unreproduced.context_limit_source`.
+--   That each encoding resolves as named through the live resolver is
+--   `configuration_at_a_test.ail`.
+--
+-- Nothing here imports `src/core`. Privacy (§0.6): model names, env keys and
+-- counts only; the recorded env values are the entry's.
+
+module src/eval/journal/configuration
+
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/string (startsWith, substring)
+import std/string as Str (length)
+import src/eval/journal/excerpt (ContextLimit)
+
+-- ============================================================================
+-- Copies.
+-- ============================================================================
+
+-- SOURCE src/core/session.ail L272-293 B12937-13766 sha256:daa0d33465795b6d6b1877da5cd30355aa0827b287a8cc1af5b52c8b8a61757e symbol=provider_api_model
+pure func ev_provider_api_model(model: string, openai_base_url: string) -> string {
+  if model == "openrouter/auto" then
+    model
+  else if startsWith(model, "openrouter/") then
+    let prefix_len = Str.length("openrouter/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "openai/") then
+    let prefix_len = Str.length("openai/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "anthropic/") then
+    let prefix_len = Str.length("anthropic/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "google/") then
+    let prefix_len = Str.length("google/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else
+    model
+}
+
+-- SOURCE src/core/context_limit.ail L145-145 B6708-6775 sha256:3e90c2452c6b1bee030599d85b31f529ae435c094cb9a2bff8250bb55f813acf symbol=disabled_profile_value
+pure func ev_disabled_profile_value() -> string { "disabled" }
+
+export pure func eval_provider_api_model(model: string, openai_base_url: string) -> string {
+  ev_provider_api_model(model, openai_base_url)
+}
+
+export pure func eval_disabled_profile_value() -> string {
+  ev_disabled_profile_value()
+}
+
+-- ============================================================================
+-- Recorded values and the T0 settings.
+-- ============================================================================
+
+-- The entry's recorded environment values (never read here from the host).
+export type RecordedEnv = {
+  headless: string,
+  openai_base_url: string,
+  retry_stream_error: string,
+  tool_timeout_ms: Option[string]
+}
+
+export type EnvPair = { key: string, value: string }
+
+export type ServedFile = { path: string, content: string }
+
+-- `EncMissed`'s detail: `no_event`, `non_positive`, or the recorded arm.
+export type ContextLimitEncoding = EncWindow(int) | EncDisabled | EncMissed(string)
+
+export type T0Settings = {
+  verification_enabled: bool,
+  env: [EnvPair],
+  unserved_env: [string],
+  profile_dir: string,
+  files: [ServedFile],
+  context_limit: ContextLimitEncoding,
+  ohmy_pi: bool,
+  hybrid_tools: bool,
+  hybrid_predicate: bool,
+  checkpoint_enabled: bool,
+  max_cost_millicents: int
+}
+
+export pure func eval_profile_dir() -> string { ".motoko/eval-profile" }
+
+export pure func eval_profile_config_path() -> string { "${eval_profile_dir()}/config.json" }
+
+export pure func encoding_id(e: ContextLimitEncoding) -> string {
+  match e { EncWindow(_) => "EncWindow", EncDisabled => "EncDisabled", EncMissed(_) => "EncMissed" }
+}
+
+export pure func encoding_detail(e: ContextLimitEncoding) -> string {
+  match e { EncWindow(n) => show(n), EncDisabled => "", EncMissed(d) => d }
+}
+
+export pure func profile_config_content(e: ContextLimitEncoding) -> string {
+  match e {
+    EncWindow(n) => "{\"agent\":{\"context_limit\":${show(n)}}}",
+    EncDisabled => "{\"agent\":{\"context_limit\":\"${ev_disabled_profile_value()}\"}}",
+    EncMissed(_) => "{\"agent\":{}}"
+  }
+}
+
+pure func cf_first_limit(limits: [ContextLimit], run_id: string) -> Option[ContextLimit] {
+  List.foldl(\acc c. match acc { Some(_) => acc, None => if c.run_id == run_id then Some(c) else None }, None, limits)
+}
+
+export pure func context_encoding(limits: [ContextLimit], run_id: string) -> ContextLimitEncoding {
+  match cf_first_limit(limits, run_id) {
+    None => EncMissed("no_event"),
+    Some(c) =>
+      if c.arm == "bounded" && c.context_limit > 0 then EncWindow(c.context_limit)
+      else if c.arm == "disabled" then EncDisabled
+      else if c.arm == "bounded" then EncMissed("non_positive")
+      else EncMissed(c.arm)
+  }
+}
+
+-- `<arm>:<origin>` of the recorded resolution, "" without one.
+export pure func context_limit_source(limits: [ContextLimit], run_id: string) -> string {
+  match cf_first_limit(limits, run_id) { None => "", Some(c) => "${c.arm}:${c.origin}" }
+}
+
+export pure func served_env(session_id: string, env: RecordedEnv) -> [EnvPair] {
+  [
+    { key: "MOTOKO_PERSIST_RETRIES", value: "0" },
+    { key: "MOTOKO_RETRY_STREAM_ERROR", value: env.retry_stream_error },
+    { key: "OPENAI_BASE_URL", value: env.openai_base_url },
+    { key: "MOTOKO_HEADLESS", value: env.headless },
+    { key: "MOTOKO_PROFILE_DIR", value: eval_profile_dir() },
+    { key: "MOTOKO_SESSION_ID", value: session_id },
+    { key: "MOTOKO_TOOL_TIMEOUT_MS", value: match env.tool_timeout_ms { Some(v) => v, None => "0" } },
+    { key: "MOTOKO_EXIT_MANIFEST", value: "" },
+    { key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", value: "" }
+  ]
+}
+
+export pure func unserved_env() -> [string] {
+  ["MOTOKO_CONFIG", "MOTOKO_REPO", "MOTOKO_MODELS_FILE"]
+}
+
+export pure func t0_settings(session_id: string, ohmy_pi: bool, hybrid_tools: bool, env: RecordedEnv, enc: ContextLimitEncoding, predicate: bool) -> T0Settings {
+  {
+    verification_enabled: false,
+    env: served_env(session_id, env),
+    unserved_env: unserved_env(),
+    profile_dir: eval_profile_dir(),
+    files: [{ path: eval_profile_config_path(), content: profile_config_content(enc) }],
+    context_limit: enc,
+    ohmy_pi: ohmy_pi,
+    hybrid_tools: hybrid_tools,
+    hybrid_predicate: predicate,
+    checkpoint_enabled: false,
+    max_cost_millicents: 0
+  }
+}
+
+export pure func env_value(pairs: [EnvPair], key: string) -> Option[string] {
+  List.foldl(\acc p. match acc { Some(_) => acc, None => if p.key == key then Some(p.value) else None }, None, pairs)
+}
+
+-- ============================================================================
+-- Tests (M5, the pure half; the world-level half is `stopping.ail`'s).
+-- ============================================================================
+
+-- The live function's own vectors (session.ail:1854–1899), on the copy.
+pure func test_api_model_copy_live_vectors() -> bool
+  tests [((), true)]
+  {
+    eval_provider_api_model("openrouter/deepseek/deepseek-v4-flash", "") == "deepseek/deepseek-v4-flash"
+      && eval_provider_api_model("openrouter/auto", "") == "openrouter/auto"
+      && eval_provider_api_model("openai/deepseek-v4-flash", "http://127.0.0.1:8000/v1") == "deepseek-v4-flash"
+      && eval_provider_api_model("openai/google/gemma-4-26B-A4B-it", "http://127.0.0.1:8000/v1") == "google/gemma-4-26B-A4B-it"
+      && eval_provider_api_model("openai/gpt-4o", "") == "gpt-4o"
+      && eval_provider_api_model("anthropic/claude-sonnet-4-6", "") == "claude-sonnet-4-6"
+      && eval_provider_api_model("google/gemini-2.5-flash", "") == "gemini-2.5-flash"
+      && eval_provider_api_model("ollama/qwen3.5:35b-a3b-mxfp8", "") == "ollama/qwen3.5:35b-a3b-mxfp8"
+  }
+
+-- Not idempotent: converting twice strips a second prefix. The base URL is
+-- not read.
+pure func test_api_model_copy_is_not_idempotent() -> bool
+  tests [((), true)]
+  {
+    let once = eval_provider_api_model("openrouter/openai/fx-model", "");
+    let twice = eval_provider_api_model(once, "");
+    once == "openai/fx-model" && twice == "fx-model" && once != twice
+      && eval_provider_api_model("openrouter/google/fx", "http://x") == "google/fx"
+      && eval_provider_api_model(eval_provider_api_model("openrouter/openrouter/auto", ""), "") == "openrouter/auto"
+      && eval_provider_api_model("fx/model-b", "") == "fx/model-b"
+  }
+
+pure func cf_limit(arm: string, origin: string, n: int, run_id: string) -> ContextLimit {
+  { index: 0, run_id: run_id, context_limit: n, arm: arm, origin: origin, profile_miss: "", catalogue_miss: "", model: "" }
+}
+
+pure func cf_enc_is(e: ContextLimitEncoding, id: string, detail: string) -> bool {
+  encoding_id(e) == id && encoding_detail(e) == detail
+}
+
+pure func test_context_encoding() -> bool
+  tests [((), true)]
+  {
+    let r = "run";
+    cf_enc_is(context_encoding([cf_limit("bounded", "profile_override", 4096, r)], r), "EncWindow", "4096")
+      && cf_enc_is(context_encoding([cf_limit("bounded", "catalogue", 200000, r)], r), "EncWindow", "200000")
+      && cf_enc_is(context_encoding([cf_limit("disabled", "", 0, r)], r), "EncDisabled", "")
+      && cf_enc_is(context_encoding([cf_limit("unknown", "", 0, r)], r), "EncMissed", "unknown")
+      && cf_enc_is(context_encoding([cf_limit("bounded", "profile_override", 0, r)], r), "EncMissed", "non_positive")
+      && cf_enc_is(context_encoding([cf_limit("bounded", "", -1, r)], r), "EncMissed", "non_positive")
+      && cf_enc_is(context_encoding([], r), "EncMissed", "no_event")
+      && cf_enc_is(context_encoding([cf_limit("bounded", "", 4096, "other")], r), "EncMissed", "no_event")
+      -- the run's FIRST resolution
+      && cf_enc_is(context_encoding([cf_limit("disabled", "", 0, r), cf_limit("bounded", "", 9, r)], r), "EncDisabled", "")
+      && context_limit_source([cf_limit("bounded", "catalogue", 9, r)], r) == "bounded:catalogue"
+  }
+
+pure func test_profile_config_contents() -> bool
+  tests [((), true)]
+  {
+    profile_config_content(EncWindow(4096)) == "{\"agent\":{\"context_limit\":4096}}"
+      && profile_config_content(EncDisabled) == "{\"agent\":{\"context_limit\":\"disabled\"}}"
+      && profile_config_content(EncMissed("unknown")) == "{\"agent\":{}}"
+      && profile_config_content(EncMissed("no_event")) == "{\"agent\":{}}"
+      && eval_profile_config_path() == ".motoko/eval-profile/config.json"
+  }
+
+-- Every served value, by name, and the three keys never served.
+pure func test_t0_settings_served_values() -> bool
+  tests [((), true)]
+  {
+    let env: RecordedEnv = { headless: "1", openai_base_url: "http://b", retry_stream_error: "0", tool_timeout_ms: None };
+    let s = t0_settings("sess_fx", false, true, env, EncWindow(4096), true);
+    let v = \k. match env_value(s.env, k) { Some(x) => x, None => "<unserved>" };
+    List.length(s.env) == 9
+      && v("MOTOKO_PERSIST_RETRIES") == "0"
+      && v("MOTOKO_RETRY_STREAM_ERROR") == "0"
+      && v("OPENAI_BASE_URL") == "http://b"
+      && v("MOTOKO_HEADLESS") == "1"
+      && v("MOTOKO_PROFILE_DIR") == ".motoko/eval-profile"
+      && v("MOTOKO_SESSION_ID") == "sess_fx"
+      && v("MOTOKO_TOOL_TIMEOUT_MS") == "0"
+      && v("MOTOKO_EXIT_MANIFEST") == ""
+      && v("MOTOKO_CAPTURE_FAILED_PAYLOAD") == ""
+      && v("MOTOKO_CONFIG") == "<unserved>" && v("MOTOKO_REPO") == "<unserved>" && v("MOTOKO_MODELS_FILE") == "<unserved>"
+      && List.length(s.unserved_env) == 3
+      && List.length(s.files) == 1
+      && List.foldl(\acc f. acc && f.path == ".motoko/eval-profile/config.json" && f.content == "{\"agent\":{\"context_limit\":4096}}", true, s.files)
+      && s.verification_enabled == false && s.checkpoint_enabled == false && s.max_cost_millicents == 0
+      && s.ohmy_pi == false && s.hybrid_tools && s.hybrid_predicate
+      && (match env_value(served_env("s", { env | tool_timeout_ms: Some("30000") }), "MOTOKO_TOOL_TIMEOUT_MS") { Some(x) => x == "30000", None => false })
+  }

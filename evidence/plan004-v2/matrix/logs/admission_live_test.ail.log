@@ -1,0 +1,322 @@
+→ Type checking...
+→ Effect checking...
+✓ Running src/eval/journal/admission_live_test.ail
+WORLD_RUN_BEGIN p16_three_continuations_end_suspended 0
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c4","name":"BashExec","arguments":"{\"command\":\"ls c4\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:490d515df9fa186bcb4808fe2efc79ee887b964c84d2ada2866fafc898dbf31f"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"c4","tool":"BashExec","arguments":{"command":"ls c4"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":2,"stream_id":"step-2","tool":"BashExec","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":2,"stream_id":"step-2","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":23,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"c4","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"tool","content":"done","tool_calls":[],"tool_call_id":"c4","images":[]},"replaces_previous":false,"digest_after":"sha256:b3a2d16a4a119a328e59b54abf5296a47b27fa2ff050fcadba7f1c6916ab7603"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_suspended","session_id":"sess_fx","run_id":"sess_fx.r0.0","reason":"budget_exhausted","step":3}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":24,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":5,"error":"step budget exhausted","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":24}
+WORLD_RUN_END p16_three_continuations_end_suspended 24
+p16_three_continuations_end_suspended: ran=true calls=3 expected=EndSuspended(3) observed=EndSuspended(3) interactions=23 program=sha256:b950134eca814b316bb3c59fa04c503af0b05f0be5caa751466117a636d4b634 preflight=[] findings=[] unchecked=3
+PASS p16_three_continuations_end_suspended
+WORLD_RUN_BEGIN p16_stop_call_end_finalize 0
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"Done: seven lines.","finish_reason":"stop","tool_calls":0,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"Done: seven lines.","tool_calls":[],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:3569d7976b301c94c35c051d09080911dc07ce36146743203de284142c94bce4"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"stop","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":4,"error":"","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":22}
+{"schema_version":"1","session_id":"sess_fx","type":"done","step":2,"output":"Done: seven lines."}
+WORLD_RUN_END p16_stop_call_end_finalize 22
+p16_stop_call_end_finalize: ran=true calls=3 expected=EndFinalize(model_stop) observed=EndFinalize(model_stop) interactions=21 program=sha256:65688bc3ff8148ef5ba449ac6e6fd07d6aa356212b6c6744f06e3445e39cfd5c preflight=[] findings=[] unchecked=3
+PASS p16_stop_call_end_finalize
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c4","name":"BashExec","arguments":"{\"command\":\"ls c4\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:490d515df9fa186bcb4808fe2efc79ee887b964c84d2ada2866fafc898dbf31f"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"c4","tool":"BashExec","arguments":{"command":"ls c4"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":2,"stream_id":"step-2","tool":"BashExec","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":2,"stream_id":"step-2","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":23,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"c4","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"tool","content":"done","tool_calls":[],"tool_call_id":"c4","images":[]},"replaces_previous":false,"digest_after":"sha256:b3a2d16a4a119a328e59b54abf5296a47b27fa2ff050fcadba7f1c6916ab7603"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_suspended","session_id":"sess_fx","run_id":"sess_fx.r0.0","reason":"budget_exhausted","step":3}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":24,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":5,"error":"step budget exhausted","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":24}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"Done: seven lines.","finish_reason":"stop","tool_calls":0,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"Done: seven lines.","tool_calls":[],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:3569d7976b301c94c35c051d09080911dc07ce36146743203de284142c94bce4"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"stop","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":4,"error":"","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":22}
+{"schema_version":"1","session_id":"sess_fx","type":"done","step":2,"output":"Done: seven lines."}
+shapes: cont ok=f code=StepBudgetExhausted suspended=t run_suspended=1 finish=max_steps providers=3; stop ok=t code= suspended=f run_suspended=0 finish=stop providers=3
+PASS p16_continuations_raw_shape
+PASS p16_stop_call_raw_shape
+wrong_end: stop-as-suspended=A6:EndMismatch@call:3 cont-as-stop=A6:EndMismatch@call:3
+PASS m9_wrong_end_budget_vs_stop
+a9: first provider ordinal=7 clean=0 mutated first=A9:replay-refused-provider-outcome-undecodable@interaction:7
+PASS m9_a9_known_failing_round_trip
+a5: requests=24 final=24 clean=0 pending=A5:PendingNotEmpty@aggregate:frame dropped=A5:FrameFinalMismatch@aggregate:frame malformed=A5:FrameMalformed@aggregate:frame
+PASS m9_a5_live_frame
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"errored"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"error","steps_executed":2,"usage":{"input_tokens":300,"output_tokens":30,"total_tokens":330},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":4,"error":"replay exhausted: the program has no step for provider call 2","cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":22}
+exhausted_marker: script=2 a6=A6:EndMismatch@call:3,A6:ExhaustedMarker@call:3
+PASS m9_wrong_end_exhausted_marker
+real: ran=false calls=3 expected=EndSuspended(3) observed=- interactions=0 program= preflight=[A9b:ToolchainUnpinned@aggregate:provenance:toolchain;A9b:PackagesUnpinned@aggregate:provenance:packages;A9b:DevGeneratorRealEntry@aggregate:provenance:generator_version] findings=[] unchecked=0
+PASS m9_preflight_refuses_real_entry_without_running
+admission_live_test: all checks passed
+Warning: dependency sunholo/motoko_core content changed (locked: sha256:fcc98136e2e8b3a2b..., current: sha256:655f83c48772ef126...)
+Run 'ailang lock' to update

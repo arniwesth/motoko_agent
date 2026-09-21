@@ -1,0 +1,147 @@
+-- src/eval/journal/bridge.ail
+--
+-- ADR-004 v5 D3 "The bridge (A8, K4)"; PLAN-004 §3 P1.7b. A7 and A8 over a
+-- finished admission run:
+--
+--   admission_execution(run, epoch, jw, m) -> ExecutionUnderTest
+--   check_bridge_inputs(x, epoch, jw, m)   -> [AdmissionFinding]
+--   a7_of_run(run, w0, jw)                 -> [AdmissionFinding]
+--   a8_of_run(run, w0, jw, m, epoch)       -> A8Result
+--
+-- THE BRIDGE. `execution_of(run, epoch, NoReplay, decision_budget, 0, 0, [],
+-- replay_metadata_of(manifest))` (`dst_execution.ail:100–126`):
+--   obligation       NoReplay: the admission run IS the discovery run, its
+--                    comparands are A1–A4. ReplayConsistency is then the one
+--                    family whose `evaluated` is false, and the evidence lines
+--                    say so.
+--   decision_budget  the entry's derived count, `jw.expected.decisions`
+--                    (2N + 1 for EndSuspended(N), 2N for a stop at N), checked
+--                    against `derived_decisions` and, by the census, against
+--                    the run's DecisionRecord count. Not N.
+--   retry_budget     0 (a retry inside a segment is a cutoff)
+--   ambient_rng_reads 0, forbidden_effect_sites []: supplied observations
+--                    under cooperative trust, not proof.
+--   metadata         `replay_metadata_of(manifest)` (`dst_profile.ail:1582–1588`)
+--
+-- A8 = the bridge inputs as the entry fixes them (a wrong obligation, budget,
+-- metadata or epoch is a finding at `Aggregate("bridge:<field>")`), then
+-- `evaluate(x)` empty (each violation at `Aggregate("invariants:<family>")`),
+-- then no family other than ReplayConsistency unevaluated, then the census
+-- (`witness.check_census`). `family_evidence(x)` is RECORDED UNCHANGED in the
+-- result beside the census; CheckpointHistory reads evaluated with positive
+-- inputs and is reported vacuous when the census counts no checkpoint.
+--
+-- Privacy (§0.6): synthetic fixtures only.
+
+module src/eval/journal/bridge
+
+import std/list as List (length, map, filter)
+import src/core/ports (WorldState)
+import src/core/session (TracedSessionResult)
+import src/core/dst_result (ReplayMetadata, DstResult, RunCompleted, RunFailed)
+import src/core/dst_execution (execution_of)
+import src/core/dst_invariants (
+  ExecutionUnderTest, ReplayObligation, NoReplay, FamilyEvidence,
+  evaluate, family_evidence, obligation_id, violation_rule, violation_family, family_id
+)
+import src/core/dst_profile (ExecutionManifest, replay_metadata_of)
+import src/core/dst_discovery (DiscoveryWitness)
+import src/eval/journal/stopping (JournalWorld)
+import src/eval/journal/admission (AdmissionFinding, A8, Aggregate)
+import src/eval/journal/witness (
+  CensusRow, admission_column, build_witness, check_a7, census_of, check_census,
+  derived_decisions, unevaluated_families, vacuous_families, evidence_lines
+)
+
+export pure func admission_decision_budget(jw: JournalWorld) -> int {
+  jw.expected.decisions
+}
+
+export pure func admission_execution(run: TracedSessionResult, epoch: int, jw: JournalWorld, m: ExecutionManifest) -> ExecutionUnderTest {
+  execution_of(run, epoch, NoReplay, admission_decision_budget(jw), 0, 0, [], replay_metadata_of(m))
+}
+
+pure func br_metadata(r: DstResult) -> ReplayMetadata {
+  match r { RunCompleted(s) => s.replay_metadata, RunFailed(h) => h.replay_metadata }
+}
+
+pure func br_metadata_eq(a: ReplayMetadata, b: ReplayMetadata) -> bool {
+  a.source_revision == b.source_revision && a.toolchain_version == b.toolchain_version
+    && a.profile_id == b.profile_id && a.profile_version == b.profile_version
+    && a.event_vocabulary_version == b.event_vocabulary_version
+}
+
+pure func br_finding(field: string, finding: string, detail: string) -> AdmissionFinding {
+  { check: A8, location: Aggregate("bridge:${field}"), finding: finding, detail: detail }
+}
+
+pure func br_when(cond: bool, f: AdmissionFinding) -> [AdmissionFinding] {
+  if cond then [f] else []
+}
+
+-- The bridge's inputs against what the entry fixes.
+export pure func check_bridge_inputs(x: ExecutionUnderTest, epoch: int, jw: JournalWorld, m: ExecutionManifest) -> [AdmissionFinding] {
+  let n = List.length(jw.calls);
+  let derived = derived_decisions(jw.end.expected, n);
+  br_when(obligation_id(x.replay) != "no-replay",
+          br_finding("obligation", "ObligationNotNoReplay", obligation_id(x.replay)))
+    ++ br_when(not br_metadata_eq(br_metadata(x.result), replay_metadata_of(m)),
+               br_finding("metadata", "MetadataDiffers", "replay_metadata_of(manifest)"))
+    ++ br_when(x.decision_budget != derived || jw.expected.decisions != derived,
+               br_finding("decision_budget", "DecisionBudgetDiffers",
+                          "budget ${show(x.decision_budget)} entry ${show(jw.expected.decisions)} derived ${show(derived)}"))
+    ++ br_when(x.retry_budget != 0, br_finding("retry_budget", "RetryBudgetNonZero", "${show(x.retry_budget)}"))
+    ++ br_when(x.ambient_rng_reads != 0, br_finding("ambient_rng_reads", "AmbientRngNonZero", "${show(x.ambient_rng_reads)}"))
+    ++ br_when(List.length(x.forbidden_effect_sites) != 0,
+               br_finding("forbidden_effect_sites", "ForbiddenSitesNonEmpty", "${show(List.length(x.forbidden_effect_sites))}"))
+    ++ br_when(x.initial_clock_ms != epoch, br_finding("epoch", "EpochDiffers", "${show(x.initial_clock_ms)} != ${show(epoch)}"))
+}
+
+export pure func evaluate_findings(x: ExecutionUnderTest) -> [AdmissionFinding] {
+  List.map(\v. { check: A8, location: Aggregate("invariants:${family_id(violation_family(v))}"),
+                 finding: violation_rule(v), detail: "" },
+           evaluate(x))
+}
+
+-- Only ReplayConsistency may read unevaluated under NoReplay.
+export pure func family_findings(fe: [FamilyEvidence]) -> [AdmissionFinding] {
+  List.map(\f. { check: A8, location: Aggregate("family:${f}"), finding: "FamilyUnevaluated", detail: f },
+           List.filter(\f. f != "replay-consistency", unevaluated_families(fe)))
+}
+
+export type A8Result = {
+  findings: [AdmissionFinding],
+  execution: ExecutionUnderTest,
+  family_evidence: [FamilyEvidence],
+  census: [CensusRow],
+  unevaluated: [string],
+  vacuous: [string],
+  lines: [string]
+}
+
+-- A8 over a given execution (the tests hand it a mutated one).
+export pure func a8_of_execution(x: ExecutionUnderTest, run: TracedSessionResult, w0: WorldState, jw: JournalWorld, m: ExecutionManifest, epoch: int) -> A8Result {
+  let fe = family_evidence(x);
+  let census = census_of(jw.end.expected, List.length(jw.calls), run.trace, run.world.log, w0, run.world);
+  {
+    findings: check_bridge_inputs(x, epoch, jw, m) ++ evaluate_findings(x) ++ family_findings(fe) ++ check_census(census),
+    execution: x,
+    family_evidence: fe,
+    census: census,
+    unevaluated: unevaluated_families(fe),
+    vacuous: vacuous_families(fe, census),
+    lines: evidence_lines(fe, census)
+  }
+}
+
+export pure func a8_of_run(run: TracedSessionResult, w0: WorldState, jw: JournalWorld, m: ExecutionManifest, epoch: int) -> A8Result {
+  a8_of_execution(admission_execution(run, epoch, jw, m), run, w0, jw, m, epoch)
+}
+
+export pure func run_witness(run: TracedSessionResult, w0: WorldState, jw: JournalWorld) -> DiscoveryWitness {
+  build_witness(admission_column(jw.end.expected), run.trace, w0, run.world)
+}
+
+export pure func a7_of_run(run: TracedSessionResult, w0: WorldState, jw: JournalWorld) -> [AdmissionFinding] {
+  check_a7(run.world.log, run_witness(run, w0, jw))
+}

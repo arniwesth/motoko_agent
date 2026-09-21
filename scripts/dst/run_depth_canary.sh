@@ -33,19 +33,81 @@
 # The pins, and what would move them
 # =============================================================================
 #
-# Measured 2026-08-17, AILANG v0.33.0 ae36986, tolerance-1 bisection of the
-# driver phase, with and without the #160 fix:
+# Measured 2026-09-15, AILANG v0.33.0 ae36986, motoko 298bec5, tolerance-1
+# bisection of the driver phase (the lowest ceiling that passes; the ceiling
+# one below it aborts with RT_REC_003), with and without the #160 fault:
 #
 #   seed  records   depth FIXED   depth WITH FAULT   ceiling here
-#   7     79        58            86                 70
-#   11    126       87            153                104
-#   23    96        75            114                90
+#   7     123       63            150                76
+#   11    191       92            237                110
+#   23    217       105           265                126
 #
 # Ceilings are floor + ~20%. Every one of them is comfortably below the
 # fault-present depth, so reintroducing the traversal fails all three — this is
-# not a guard that has never been shown to fire. The house caveat applies and is
-# met: the fault-present column is a real measurement of a real regression, not
-# a hypothetical.
+# not a guard that has never been shown to fire. The fault-present column was
+# RE-MEASURED at this commit, not carried forward: the hand-written recursion
+# that b1ad13ba replaced with `foldl` was put back into `runtime_status_counts`
+# in a scratch worktree of this same tree (tier 0 goes red there too), and the
+# record counts and trajectories are identical with and without it. The house
+# caveat applies and is met.
+#
+# WHAT MOVED THE PINS SINCE 2026-08-17. The previous table was 79/126/96
+# records, floors 58/87/75, fault-present 86/153/114, ceilings 70/104/90. Each
+# step below is the same bisection in a clean worktree at the default lever,
+# "records / floor" per seed:
+#
+#   commit    seed 7      seed 11     seed 23     what changed
+#   650f0e0   79 / 60     126 / 88    96 / 76     last bisected-green tree; +2/+1/+1 on the
+#                                                 August floors is drift that predates it
+#   8980ba6   79 / 60     126 / 88    139 / 101   PLAN-001 fix 1: refuse undecodable tool args
+#   d72fff1   79 / 61     126 / 89    139 / 102   merge of the PLAN-003 P1 (journal) branch
+#   bd0eac7   96 / 62     154 / 91    169 / 104   ADR-003 P3 emits + PLAN-001 P2A: state_delta,
+#                                                 history_seeded/appended, context_limit_resolved
+#   6b33f36   122 / 62    190 / 90    216 / 103   PLAN-001 P2B: WorldRequest at every successor
+#   a2113e8   123 / 63    191 / 92    217 / 105   ADR-002 W2: open_waits, ExtCtx 7.4, classify_candidate
+#   298bec5   123 / 63    191 / 92    217 / 105   HEAD, unchanged since a2113e8
+#
+# Two different things are in that table and they must not be conflated:
+#
+#   1. SEED 23 IS A TRAJECTORY CHANGE, NOT A FRAME-COST CHANGE. Its generated
+#      world contains a native `Read` call whose argument string does not
+#      parse (raw_length 8). Before 8980ba6 that call was dispatched against
+#      `{}`; after it, `execute_allowed_tool_call` refuses it and tells the
+#      model, and the stub trajectory takes a longer path: 8 → 11 provider
+#      calls, 6 → 8 tool batches, 96 → 139 records, floor 76 → 101 (+25). The
+#      decode itself costs NOTHING in depth: seeds 7 and 11, whose worlds have
+#      no such call, sit at 60/88 on both sides of 8980ba6; `decode` is the
+#      `_json_decode` builtin (frame-free, like every stdlib traversal); and
+#      `arguments_undecodable` is one transient frame on the tool-dispatch
+#      path, which is not the deepest path. Moving the decode off the
+#      per-step frame would move no pin — it would only undo the refusal. The
+#      Makefile's earlier reading of this as "a per-step frame-cost change on
+#      the tool-phase path" was the right commit and the wrong mechanism.
+#      Seeds 7 and 11 keep their August trajectories (6 and 9 provider calls,
+#      4 and 8 tool batches); seed 23's is constant from 8980ba6 onward.
+#
+#   2. THE REST IS THE SECOND CASE BELOW, a flat per-step frame-cost shift:
+#      +3/+4/+4 frames across the journal records, the WorldRequest witness
+#      and the ADR-002 loop restructuring, while records rose 79→123,
+#      126→191 and 139→217. Records nearly doubled and the floor moved by
+#      single frames — that is what a flat floor looks like. The fault-present
+#      column, +87/+145/+160 over the same records, is what a traversal looks
+#      like.
+#
+# THE LEVER WAS SWEPT AT THIS COMMIT AND THE FLOOR IS FLAT IN RECORDS.
+# CG_EXPORT_CHUNK_DRAW_HI=0/4/8 gives 107/112/140 records on seed 7 and
+# 199/221/245 on seed 23 at the unchanged floors, 63 and 105. Above 8 the
+# floor DOES move (seed 7: 68 at 16, 78 at 32; seed 23: 117 at 16, 130 at 32)
+# and that is NOT a traversal of accumulated state: step, provider-call and
+# tool-batch counts are constant, seed 11 gains 55 records for one frame, and
+# what the depth tracks is the chunk count of the single LARGEST RESPONSE
+# (`session.stream_chunk_events` is non-tail recursion over one response's
+# chunk log, and `max_chunks_per_interaction` follows the lever above 4). It
+# is present identically at 650f0e0 — 66/91/85 at lever 16 against 60/88/76 —
+# so it predates every commit above. It is a per-response cost, bounded by
+# one stream, not by the session; but WI-3's slope measurement must hold the
+# per-response chunk count fixed or subtract it, because a lever above 8 does
+# not vary "only records".
 #
 # IT FAILS CLOSED. A new traversal can only RAISE depth, so the failure mode of
 # the thing being guarded is the direction the gate is sensitive in.
@@ -107,7 +169,7 @@ fi
 echo "depth canary — tier 1: the real driver, out of process"
 
 # seed:ceiling:expected_records  — see the pin table in the header
-for row in "7:70:79" "11:104:126" "23:90:96"; do
+for row in "7:76:123" "11:110:191" "23:126:217"; do
   seed="${row%%:*}"; rest="${row#*:}"; ceiling="${rest%%:*}"; want_records="${rest##*:}"
 
   set +e

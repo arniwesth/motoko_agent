@@ -9,6 +9,8 @@ import std/io (println, exit)
 import std/json (jo)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
+import std/option (Some, None)
+import src/core/context_limit (ContextLimit, Unknown, ProfileKeyAbsent, CatalogueAbsent, resolve_bounded_from_catalogue)
 import src/core/phase_vocab (
   CallModel,
   Fail,
@@ -26,6 +28,17 @@ func msg(role: string, content: string) -> Message {
   { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
+-- PLAN-001 P1 (ADR-001 D1 rules 1 and 5): the policy carries the resolved SUM.
+-- This fixture's ints are windows it chose or computed, so they are labelled
+-- `Bounded` through the catalogue resolver (the only constructor path); a
+-- non-positive one is the unmeasured arm, which is what an int 0 meant here.
+func fixture_limit(n: int) -> ContextLimit {
+  match resolve_bounded_from_catalogue(n) {
+    Some(l) => l,
+    None => Unknown({ profile: ProfileKeyAbsent, catalogue: CatalogueAbsent })
+  }
+}
+
 func policy(context_limit: int) -> StepPolicy {
   {
     step_budget: 8,
@@ -38,7 +51,7 @@ func policy(context_limit: int) -> StepPolicy {
     provider_base_url: "",
     checkpoint_enabled: false,
     checkpoint_pct: 90,
-    compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+    compaction: { context_limit: fixture_limit(context_limit), elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
   }
 }
 
@@ -58,7 +71,8 @@ func state_with_pressure(context_limit: int) -> Result[StepState, string] {
       ext_artifacts: jo([]),
       pending_tool_calls: pending(),
       last_finish_reason: "",
-      last_response_text: ""
+      last_response_text: "",
+      open_waits: []
     })
   }
 }

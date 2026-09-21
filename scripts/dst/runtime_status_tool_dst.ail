@@ -2,17 +2,19 @@ module scripts/dst/runtime_status_tool_dst
 
 import std/ai (Message, ToolCall, ToolSchema)
 import std/io (println, exit)
-import std/json (jo)
+import std/json (Json, jo, encode)
 import std/list (length)
-import std/option (None)
+import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (contains)
+import std/string (contains, replace, split)
 import src/core/config (CostRates, VerificationConfig)
-import src/core/phase_vocab (DecisionRecord, LedgerRecord, LedgerTrace)
+import src/core/phase_vocab (DecisionRecord, WireRecord, CompactionStageRecord, LedgerRecord, LedgerTrace, HistorySeeded, ContextLimitResolved, WorldRequest, to_schema_v1_kvs)
+import src/core/context_limit (ContextLimit, Bounded, Disabled, Unknown, Catalogue, ProfileConfigAbsent, ModelNotInCatalogue, raw_window_of, limit_arm_id)
+import src/core/fs_node (FsNode, FsFile)
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
-import src/core/test/stub_step (Scripted, prose_step, empty_rt)
-import src/core/ports (ScriptedStep)
+import src/core/test/stub_step (Scripted, ScriptedWorld, prose_step, empty_rt, scripted_world_state)
+import src/core/ports (ScriptedStep, WorldState)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/types (Msg)
@@ -248,6 +250,351 @@ func scenario_runtime_status_mixed_pending() -> Result[(), ScenarioFailure] ! {A
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- PLAN-001 P1C: the THREE-ARM acceptance of ADR-001 D1 (P1 "Acceptance").
+--
+-- One history, one script, one seeded catalogue; the arms differ ONLY in the
+-- model asked for and in whether a profile declares `Disabled`. The world is
+-- seeded in code (no catalogue file on disk): the catalogue rides in
+-- `WorldState.files` at `.motoko/model-catalog.json`, the path `catalog_path`
+-- resolves when the env carries no `MOTOKO_MODELS_FILE` and the file probe finds
+-- it there. The profile rides in `WorldState.env` (`MOTOKO_PROFILE_DIR`) plus a
+-- `config.json` under that directory.
+--
+--   A  Unknown   `runtime-status-model`, not in the catalogue, no profile:
+--                BOTH misses named (profile_config_absent + model_not_in_catalogue).
+--   B  Bounded   `runtime-status-neighbour`, the one catalogue row (71): the
+--                liveness witness. Its trace equals A's under rule 4's
+--                projection (the `ContextLimitResolved` record out, and the one
+--                status tool result whose measured fields are the point).
+--   C  Disabled  `runtime-status-model` again, plus `{"agent":{"context_limit":
+--                "disabled"}}`: the DECOY. Same ABI int 0 as A and the same
+--                decisions; a different reason in BOTH witnesses, or the arm is
+--                not measuring the reason.
+--
+-- Each arm asserts two witnesses independently: the status message the real
+-- `MotokoRuntimeStatus` builtin returned (`context_window.context_limit_source`,
+-- as a LITERAL, so the wire shape is pinned rather than re-derived), and the
+-- returned trace's `ContextLimitResolved` record, matched on the SUM itself
+-- (second record, after `HistorySeeded`; exactly one per run).
+-- ---------------------------------------------------------------------------
+
+func neighbour_model() -> string { "runtime-status-neighbour" }
+
+func unknown_model() -> string { "runtime-status-model" }
+
+func profile_dir() -> string { "/w/runtime-status-profile" }
+
+func catalogue_entry() -> { path: string, node: FsNode } {
+  { path: ".motoko/model-catalog.json", node: FsFile("{\"context_limits\":{\"runtime-status-neighbour\":71}}") }
+}
+
+func arm_script() -> [ScriptedStep] {
+  [status_step("status-arm"), prose_step("done")]
+}
+
+pure func catalogue_world(script: [ScriptedStep]) -> WorldState {
+  { scripted_world_state(script) | files: [catalogue_entry()] }
+}
+
+pure func disabled_world(script: [ScriptedStep]) -> WorldState {
+  { scripted_world_state(script) |
+    env: [{ key: "MOTOKO_PROFILE_DIR", value: profile_dir() }],
+    files: [{ path: "${profile_dir()}/config.json", node: FsFile("{\"agent\":{\"context_limit\":\"disabled\"}}") }, catalogue_entry()] }
+}
+
+func run_arm(model: string, world: WorldState) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(empty_rt(), "task", "", false, budget(), model, history(), ".", 8, false, 0, zero_rates(), ScriptedWorld(world))
+}
+
+-- Witness 2: the returned trace. The limit record directly follows the seed,
+-- with only bootstrap `WorldRequest` witness records (the P2B prelude:
+-- session_policy_init, derive_session_id, start clock) allowed between them.
+-- P2B moved those witnesses ahead of the seed, so a strict first/second
+-- position check would reject every run; the seed stays the first
+-- JOURNAL-CLASS record (ADR-003 D2) and the limit stays the record after it.
+func second_record_limit(trace: LedgerTrace) -> Option[ContextLimit] {
+  match limit_after_seed(skip_to_seed(trace.records)) {
+    Some(l) => Some(l),
+    None => None
+  }
+}
+
+-- The record after the seed, skipping witness records. Returns None unless
+-- the seed is present and the next non-witness record resolves the limit.
+func limit_after_seed(records: [LedgerRecord]) -> Option[ContextLimit] {
+  match records {
+    [] => None,
+    r :: rest => match r {
+      WireRecord(e) => match e {
+        HistorySeeded(_) => limit_after_witnesses(rest),
+        _ => None
+      },
+      _ => None
+    }
+  }
+}
+
+func limit_after_witnesses(records: [LedgerRecord]) -> Option[ContextLimit] {
+  match records {
+    [] => None,
+    r :: rest => match r {
+      WireRecord(e) => match e {
+        WorldRequest(_) => limit_after_witnesses(rest),
+        ContextLimitResolved(i) => Some(i.limit),
+        _ => None
+      },
+      _ => None
+    }
+  }
+}
+
+-- Skip leading bootstrap witness records to the seed.
+func skip_to_seed(records: [LedgerRecord]) -> [LedgerRecord] {
+  match records {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(e) => match e {
+        HistorySeeded(_) => r :: rest,
+        WorldRequest(_) => skip_to_seed(rest),
+        _ => r :: rest
+      },
+      _ => r :: rest
+    }
+  }
+}
+
+-- (skip_to_seed above covers the pre-seed side; limit_after_witnesses above
+-- covers the seed-to-limit side.)
+
+func is_limit_record(r: LedgerRecord) -> bool {
+  match r {
+    WireRecord(e) => match e { ContextLimitResolved(_) => true, _ => false },
+    _ => false
+  }
+}
+
+func count_limit_records(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => (if is_limit_record(r) then 1 else 0) + count_limit_records(rest)
+  }
+}
+
+pure func is_arm_a(l: ContextLimit) -> bool {
+  match l {
+    Unknown(u) =>
+      (match u.profile { ProfileConfigAbsent => true, _ => false })
+        && (match u.catalogue { ModelNotInCatalogue(m) => m == unknown_model(), _ => false }),
+    _ => false
+  }
+}
+
+pure func is_arm_b(l: ContextLimit) -> bool {
+  match l {
+    Bounded(r) => r.raw_window == 71 && (match r.source { Catalogue => true, _ => false }),
+    _ => false
+  }
+}
+
+pure func is_arm_c(l: ContextLimit) -> bool {
+  match l { Disabled => true, _ => false }
+}
+
+func trace_limit_ok(trace: LedgerTrace, pred: (ContextLimit) -> bool) -> bool {
+  count_limit_records(trace.records) == 1
+    && match second_record_limit(trace) { Some(l) => pred(l), None => false }
+}
+
+func trace_limit_desc(trace: LedgerTrace) -> string {
+  match second_record_limit(trace) {
+    Some(l) => "second_record=ContextLimitResolved(${limit_arm_id(l)}, raw=${show(raw_window_of(l))}) count=${show(count_limit_records(trace.records))}",
+    None => "second_record=<not ContextLimitResolved after HistorySeeded> count=${show(count_limit_records(trace.records))}"
+  }
+}
+
+-- Witness 1: the status message, as literals.
+func source_a() -> string {
+  "\"context_limit\":0,\"context_limit_source\":{\"arm\":\"unknown\",\"origin\":\"\",\"profile_miss\":\"profile_config_absent\",\"catalogue_miss\":\"model_not_in_catalogue\",\"model\":\"runtime-status-model\"}"
+}
+
+func source_b() -> string {
+  "\"context_limit\":71,\"context_limit_source\":{\"arm\":\"bounded\",\"origin\":\"catalogue\",\"profile_miss\":\"\",\"catalogue_miss\":\"\",\"model\":\"\"}"
+}
+
+func source_c() -> string {
+  "\"context_limit\":0,\"context_limit_source\":{\"arm\":\"disabled\",\"origin\":\"\",\"profile_miss\":\"\",\"catalogue_miss\":\"\",\"model\":\"\"}"
+}
+
+func first_status(msgs: [Message]) -> string {
+  match tool_contents(msgs) { first :: _ => first, _ => "" }
+}
+
+func unmeasured_pcts(status: string) -> bool {
+  contains(status, "\"usage_pct\":0")
+    && contains(status, "\"estimated_pct\":0")
+    && contains(status, "\"calibrated_pct\":0")
+}
+
+func arm_decisions_ok(trace: LedgerTrace) -> bool {
+  names_equal(trace_decision_names(trace), ["CallModel", "RunTools", "CallModel", "Finalize"])
+}
+
+-- Rule 4's projection. Every record as its wire bytes (decision and stage
+-- records as their fields), with the one `ContextLimitResolved` record removed.
+func record_key(r: LedgerRecord) -> string {
+  match r {
+    WireRecord(e) => encode(jo(to_schema_v1_kvs(e))),
+    DecisionRecord(d) => "decision ${show(d.step)} ${d.decision}",
+    CompactionStageRecord(c) => "stage ${show(c.step)} ${c.ext_id}"
+  }
+}
+
+func projected_keys(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest => if is_limit_record(r) then projected_keys(rest) else record_key(r) :: projected_keys(rest)
+  }
+}
+
+func first_difference(a: [string], b: [string], i: int) -> string {
+  match a {
+    [] => match b { [] => "", y :: _ => "index ${show(i)}: A=<end> B=${y}" },
+    x :: xs => match b {
+      [] => "index ${show(i)}: A=${x} B=<end>",
+      y :: ys => if x == y then first_difference(xs, ys, i + 1) else "index ${show(i)}: A=${x} B=${y}"
+    }
+  }
+}
+
+func scenario_arm_a_unknown() -> Result[(), ScenarioFailure] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let traced = run_arm(unknown_model(), catalogue_world(arm_script()));
+  match traced.result {
+    Ok(history_after) => {
+      let status = first_status(history_after);
+      let status_ok = contains(status, source_a()) && unmeasured_pcts(status);
+      let trace_ok = trace_limit_ok(traced.trace, is_arm_a);
+      let decisions_ok = arm_decisions_ok(traced.trace);
+      ok_or_failure(status_ok && trace_ok && decisions_ok, "arm A: Unknown names both misses in both witnesses", [
+        "status_ok=${show(status_ok)} status=${status}",
+        trace_limit_desc(traced.trace),
+        "decisions=${join_names(trace_decision_names(traced.trace))}"
+      ])
+    },
+    Err(e) => Err({ failed_invariant: "arm A: the loop proceeds under Unknown", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+-- Rule 4's projection, stated once: the `ContextLimitResolved` record is
+-- removed (tested separately above), and the neighbour's model id is written as
+-- A's. The model is the arm's INPUT — it rides in `thinking_stream_start` and
+-- the run summary because the caller asked for it — not a decision or a payload
+-- the resolved limit produced.
+func rule4_keys(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest =>
+      if is_limit_record(r) then rule4_keys(rest)
+      else replace(record_key(r), neighbour_model(), unknown_model()) :: rule4_keys(rest)
+  }
+}
+
+func record_kind(key: string) -> string {
+  match split(key, ",") { h :: _ => h, [] => key }
+}
+
+func kinds(keys: [string]) -> [string] {
+  match keys { [] => [], k :: rest => record_kind(k) :: kinds(rest) }
+}
+
+-- The index at which two projected traces first differ, and the B-side record.
+func first_divergent(a: [string], b: [string]) -> string {
+  match a {
+    [] => match b { [] => "", y :: _ => y },
+    x :: xs => match b {
+      [] => "<end>",
+      y :: ys => if x == y then first_divergent(xs, ys) else y
+    }
+  }
+}
+
+-- Arm B is two comparisons, because the status run cannot be byte-compared past
+-- its tool result and it would be dishonest to pretend otherwise: the status
+-- message IS the measured quantity (71 and 281% against A's 0), it enters the
+-- history, and every chain digest after it moves by construction.
+--
+--   1. RULE 4 EXACTLY, on a tool-less pair: the same history and a one-step
+--      script, A's world against B's. Every decision and every existing record's
+--      wire bytes identical under the projection above.
+--   2. On the status pair: decisions identical, the projected record-KIND
+--      sequence identical, and the first byte difference is the status tool's
+--      own result — nothing the limit could have changed is reached earlier.
+func scenario_arm_b_bounded_neighbour() -> Result[(), ScenarioFailure] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let traced = run_arm(neighbour_model(), catalogue_world(arm_script()));
+  let control = run_arm(unknown_model(), catalogue_world(arm_script()));
+  let quiet_b = run_arm(neighbour_model(), catalogue_world([prose_step("done")]));
+  let quiet_a = run_arm(unknown_model(), catalogue_world([prose_step("done")]));
+  match traced.result {
+    Ok(history_after) => {
+      let status = first_status(history_after);
+      let status_ok = contains(status, source_b()) && not unmeasured_pcts(status);
+      let trace_ok = trace_limit_ok(traced.trace, is_arm_b) && trace_limit_ok(quiet_b.trace, is_arm_b);
+      let decisions_ok = arm_decisions_ok(traced.trace)
+        && names_equal(trace_decision_names(traced.trace), trace_decision_names(control.trace));
+      let quiet_diff = first_difference(rule4_keys(quiet_a.trace.records), rule4_keys(quiet_b.trace.records), 0);
+      let quiet_ok = quiet_diff == ""
+        && length(rule4_keys(quiet_b.trace.records)) > 0
+        && names_equal(trace_decision_names(quiet_a.trace), trace_decision_names(quiet_b.trace));
+      let keys_a = rule4_keys(control.trace.records);
+      let keys_b = rule4_keys(traced.trace.records);
+      let kinds_ok = names_equal(kinds(keys_a), kinds(keys_b));
+      let divergent = first_divergent(keys_a, keys_b);
+      let divergence_ok = contains(divergent, "context_limit_source") && contains(divergent, "\"arm\":\"bounded\"");
+      ok_or_failure(status_ok && trace_ok && decisions_ok && quiet_ok && kinds_ok && divergence_ok,
+        "arm B: Bounded neighbour is measured, and equal to A under rule 4", [
+        "status_ok=${show(status_ok)} status=${status}",
+        trace_limit_desc(traced.trace),
+        "decisions=${join_names(trace_decision_names(traced.trace))}",
+        "quiet_rule4_first_difference=${quiet_diff} quiet_records=${show(length(rule4_keys(quiet_b.trace.records)))}",
+        "kinds_ok=${show(kinds_ok)} status_first_difference=${first_difference(keys_a, keys_b, 0)}"
+      ])
+    },
+    Err(e) => Err({ failed_invariant: "arm B: the loop proceeds under Bounded", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func scenario_arm_c_disabled_decoy() -> Result[(), ScenarioFailure] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let traced = run_arm(unknown_model(), disabled_world(arm_script()));
+  let arm_a = run_arm(unknown_model(), catalogue_world(arm_script()));
+  match traced.result {
+    Ok(history_after) => {
+      let status = first_status(history_after);
+      let status_a = match arm_a.result { Ok(h) => first_status(h), Err(_) => "" };
+      let status_ok = contains(status, source_c()) && unmeasured_pcts(status);
+      let trace_ok = trace_limit_ok(traced.trace, is_arm_c);
+      let decisions_ok = arm_decisions_ok(traced.trace);
+      -- The decoy clause: same int, different reason, in BOTH witnesses.
+      let same_int = match second_record_limit(traced.trace) {
+        Some(lc) => match second_record_limit(arm_a.trace) { Some(la) => raw_window_of(lc) == 0 && raw_window_of(la) == 0, None => false },
+        None => false
+      };
+      let trace_differs = match second_record_limit(traced.trace) {
+        Some(lc) => match second_record_limit(arm_a.trace) { Some(la) => limit_arm_id(lc) != limit_arm_id(la), None => false },
+        None => false
+      };
+      let status_differs = status_a != "" && not contains(status, source_a()) && contains(status_a, source_a());
+      ok_or_failure(status_ok && trace_ok && decisions_ok && same_int && trace_differs && status_differs,
+        "arm C: Disabled is the same int as A with a different reason in both witnesses", [
+        "status_ok=${show(status_ok)} status=${status}",
+        trace_limit_desc(traced.trace),
+        "decisions=${join_names(trace_decision_names(traced.trace))}",
+        "same_int=${show(same_int)} trace_differs=${show(trace_differs)} status_differs=${show(status_differs)}"
+      ])
+    },
+    Err(e) => Err({ failed_invariant: "arm C: the loop proceeds under Disabled", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
 func runtime_status_basic_scenario() -> Scenario {
   { id: "runtime_status.basic", seed: "fixed", run: scenario_runtime_status_basic }
 }
@@ -259,7 +606,10 @@ func runtime_status_mixed_pending_scenario() -> Scenario {
 export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let scenarios = [
     runtime_status_basic_scenario(),
-    runtime_status_mixed_pending_scenario()
+    runtime_status_mixed_pending_scenario(),
+    { id: "runtime_status.arm_a_unknown", seed: "fixed", run: scenario_arm_a_unknown },
+    { id: "runtime_status.arm_b_bounded_neighbour", seed: "fixed", run: scenario_arm_b_bounded_neighbour },
+    { id: "runtime_status.arm_c_disabled_decoy", seed: "fixed", run: scenario_arm_c_disabled_decoy }
   ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then println("runtime_status_tool_dst PASS count=${show(length(scenarios))}")

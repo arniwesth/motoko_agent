@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { SessionLogger } from "./session-logger.js";
+import { sessionIdentity, __setSessionIdentityForTests } from "./session-identity.js";
 
 // M-MOTOKO-EVAL-HARNESS-HARDENING M4c (gap #4): regression tests for the
 // session_id filename unification. Three IDs MUST converge when the AILANG
@@ -16,6 +17,9 @@ describe("SessionLogger filename unification (M4a)", () => {
   beforeEach(() => {
     projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-logger-test-"));
     savedEnv = process.env.MOTOKO_SESSION_ID;
+    // The session id is memoized for the life of the process, which is the whole point of it —
+    // so every case here has to release it before it sets the environment it wants to test.
+    __setSessionIdentityForTests(null);
   });
 
   afterEach(async () => {
@@ -24,6 +28,7 @@ describe("SessionLogger filename unification (M4a)", () => {
     } else {
       process.env.MOTOKO_SESSION_ID = savedEnv;
     }
+    __setSessionIdentityForTests(null);
     // Give pending WriteStream open()/close() callbacks a chance to drain
     // before we yank their parent directory out from under them. Without
     // this, ENOENT errors from the streams' open() calls leak into the
@@ -53,25 +58,28 @@ describe("SessionLogger filename unification (M4a)", () => {
     }
   });
 
-  it("falls back to ISO timestamp when MOTOKO_SESSION_ID is unset", () => {
+  // ADR-003 v6.1 D5. The ISO-timestamp fallback is GONE, and what replaced it is stronger than
+  // what it asserted: the log is named by the session id this host minted and forwarded to the
+  // child as MOTOKO_SESSION_ID, so the log, the journal directory and every wire event of the
+  // session now carry ONE string. The old fallback named the log one thing while the child's
+  // `derive_session_id` minted another from its own clock — the two-ids failure ADR-003 exists to
+  // close, one level below the one the issue named.
+  it("names the log by the minted session id when MOTOKO_SESSION_ID is unset", () => {
     delete process.env.MOTOKO_SESSION_ID;
     const logger = new SessionLogger(projectRoot, "test-tui-version");
     try {
-      // Filename should match session_<ISO timestamp>.jsonl pattern. Avoid
-      // pinning the exact timestamp — just verify the shape.
-      const base = path.basename(logger.filePath);
-      expect(base).toMatch(/^session_\d{4}-\d{2}-\d{2}T.*\.jsonl$/);
+      expect(path.basename(logger.filePath)).toBe(`${sessionIdentity()}.jsonl`);
+      expect(path.basename(logger.filePath)).toMatch(/^session_\d+-[0-9a-f]{16}\.jsonl$/);
     } finally {
       void logger.close();
     }
   });
 
-  it("falls back to ISO timestamp when MOTOKO_SESSION_ID is empty string", () => {
+  it("names the log by the minted session id when MOTOKO_SESSION_ID is empty", () => {
     process.env.MOTOKO_SESSION_ID = "";
     const logger = new SessionLogger(projectRoot, "test-tui-version");
     try {
-      const base = path.basename(logger.filePath);
-      expect(base).toMatch(/^session_\d{4}-\d{2}-\d{2}T.*\.jsonl$/);
+      expect(path.basename(logger.filePath)).toBe(`${sessionIdentity()}.jsonl`);
     } finally {
       void logger.close();
     }
@@ -206,5 +214,70 @@ describe("SessionLogger filename unification (M4a)", () => {
     expect(markdown).toContain("export func main() -> () ! {IO}");
     expect(markdown).toContain("  66");
     expect(markdown).toContain("[ailang] check: passed | verify: verified | committed: yes | ran: yes");
+  });
+});
+
+// ADR-003 v6.1 D2 / PLAN-003 P1 Part 6. Two facts about the suspension the host has to keep, and
+// the second is the one a literal reading of the plan would have broken.
+describe("SessionLogger and the run_suspended record", () => {
+  let projectRoot: string;
+
+  beforeEach(() => {
+    projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-logger-suspend-"));
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  it("writes a transcript line that is not an error line", async () => {
+    const logger = new SessionLogger(projectRoot, "test-tui-version");
+    logger.log({
+      type: "run_suspended",
+      session_id: "session_0",
+      run_id: "session_0.r0.0",
+      reason: "budget_exhausted",
+      step: 5,
+    });
+    await logger.close();
+
+    const markdown = fs.readFileSync(logger.markdownPath, "utf8");
+    expect(markdown).toContain("Run suspended: budget_exhausted at step 5");
+    expect(markdown).toContain("session_0.r0.0");
+    // The whole point of D2 is that reaching the budget is no longer a failure. A transcript that
+    // said "Error:" here would be the old story told in a new place.
+    expect(markdown).not.toContain("Error:");
+  });
+
+  // THE REGRESSION THIS PINS. index.ts's non-TTY path drains the streams on `run_suspended` before
+  // handing the event to the logger UI. It must drain WITHOUT closing: in P1 the headless wire is
+  // `run_suspended`, `run_summary`, `error`, and `log()` returns early once `closed` is set — so a
+  // `close()` there would drop the `run_summary`, which is exactly the tail
+  // M-MOTOKO-EVAL-HARNESS-HARDENING gap #1 added the drain to protect.
+  it("flush() puts the record on disk and still accepts the run_summary that follows", async () => {
+    const logger = new SessionLogger(projectRoot, "test-tui-version");
+    logger.log({
+      type: "run_suspended",
+      session_id: "session_0",
+      run_id: "session_0.r0.0",
+      reason: "budget_exhausted",
+      step: 5,
+    });
+    await logger.flush();
+
+    // Everything written before the flush is on the fd, with the stream still open.
+    const afterFlush = fs.readFileSync(logger.filePath, "utf8");
+    expect(afterFlush).toContain('"type":"run_suspended"');
+
+    logger.log({ type: "run_summary", finish_reason: "max_steps", steps_executed: 5 } as never);
+    await logger.close();
+
+    const lines = fs
+      .readFileSync(logger.filePath, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => JSON.parse(l) as { type: string });
+    expect(lines.map((l) => l.type)).toEqual(["run_suspended", "run_summary"]);
   });
 });

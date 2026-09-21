@@ -1,0 +1,520 @@
+-- src/eval/journal/seams.ail
+--
+-- ADR-004 v5 D2 "The ports", PLAN-004 §3 P1.5: the two evaluator-owned seams,
+-- by GUARDED DELEGATION over the harness's recording adapters.
+--
+--   journal_ports(rt) = eval_ports(recording_ports(rt))
+--   eval_ports(base)  = { base | model_step: eval_model_step(base),
+--                                tool_exec:  eval_tool_exec(base) }
+--   journal_provider(rt, w) = PortedWorld(journal_ports(rt), w)
+--
+-- EMPTY ARMS DO NOT DELEGATE. The harness's empty provider arm returns
+-- `Ok(terminal_step())`, a fabricated assistant turn (stub_step.ail:488–505),
+-- and `world_tool`'s empty arm is the LIVE arm (ports.ail:1723–1749). Each
+-- seam builds the complete fail-closed record itself, from exported parts
+-- only, and appends it through `record_interaction` (ports.ail:1827):
+--
+--   provider  ProviderIdentity("loop_v2", k, <api model>) with k = the number
+--             of ProviderIdentity records already in `state.log`, counted
+--             HERE (`provider_calls_in` is private, stub_step.ail:561; C2);
+--             projection `model_step model=<m> msg_count=<n> replay=exhausted`;
+--             deadline -1; exactly the harness's exhausted record
+--             { advance_ms 0, chunks [], payload
+--               encode_exhausted_provider_outcome() (`{"served":false}`),
+--               OutcomeOk, fault_class_id "" };
+--             returns { emissions [], Err({ replay_exhausted, retryable
+--             false }) }. The Err is constructed, not decoded.
+--   tool      ToolIdentity("loop_v2", call_id, tool); projection
+--             `tool_exec call_id=… tool=… args=<A> workdir=… timeout_ms=…
+--             started_at_ms=… replay=unrecorded`; deadline inv.timeout_ms;
+--             `tool_outcome_record`'s ToolFailed arm field for field
+--             (ports.ail:2133–2145, private): { advance_ms 0, chunks [],
+--             payload encode_tool_outcome(o), OutcomeFault,
+--             fault_class_tool_failed() } with o = ToolFailed({ call_id,
+--             "replay_unrecorded_invocation", message }); returns
+--             { outcome: o, next_state } with the clock unadvanced.
+--
+-- NON-EMPTY ARMS DELEGATE to the base recorder, then ASSERT that the log it
+-- returns is the old log (structurally equal, element for element) plus
+-- exactly one interaction, and replace ONLY that interaction's
+-- `request_projection`:
+--
+--   provider  `model_step model=<m> msg_count=<n> payload=<D> system=<S> raw=<R>`
+--   tool      `tool_exec call_id=… tool=… args=<A> workdir=… timeout_ms=… started_at_ms=…`
+--
+-- D, S, R, A are the evaluator's private digests (`digests.ail`, pinned at A).
+-- Identity, outcome, chunks, emissions, cursors, clock, `ordinal` and
+-- `pending` are the recorder's.
+--
+-- WHEN THE ASSERTION FAILS (the recorder appended zero or two interactions,
+-- or rewrote the prefix) the seam fails CLOSED without a crash: the provider
+-- returns a non-retryable `Err(eval_seam_cardinality)`, the tool a
+-- `ToolFailed(eval_seam_cardinality)`, and the recorder's log is returned
+-- unaltered — its projection is not replaced, so the run also disagrees with
+-- any program at that position (K2). The run can never pass through it.
+--
+-- No private helper of `src/core` is used and nothing is exported from it.
+-- Privacy (§0.6): the tests use synthetic worlds; projections carry digests,
+-- counts and identities.
+
+module src/eval/journal/seams
+
+import std/ai (Message, ToolCall, StreamChunk, StepResult, AIError)
+import std/json (Json, jo, kv, js)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join, contains)
+import pkg/sunholo/motoko_ext_abi/types (ExtRuntime)
+import src/core/ports (
+  Ports, WorldState, ProviderExchange, ToolInvocation, ToolExecution, ToolOutcome,
+  ToolCompleted, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded,
+  ScriptedStep, ScriptedTool, empty_world_state, record_interaction,
+  encode_exhausted_provider_outcome, encode_tool_outcome
+)
+import src/core/dst_interaction (
+  Interaction, IdentityBody, TimedOutcome, StreamChunkRecord, OutcomeStatus,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, WakeIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  OutcomeOk, OutcomeFault, OutcomeMissing
+)
+import src/core/dst_fault_catalogue (fault_class_tool_failed, fault_class_tool_correlation_mismatch)
+import src/core/test/stub_step (StepProvider, PortedWorld, recording_ports, empty_rt)
+import src/eval/journal/digests (eval_payload_digest, eval_system_prefix_digest, eval_raw_frame_digest, eval_arguments_digest_json)
+
+-- ============================================================================
+-- Structural equality of interactions (the prefix assertion).
+-- ============================================================================
+
+pure func sm_body_eq(a: IdentityBody, b: IdentityBody) -> bool {
+  match a {
+    ProviderIdentity(o, s, m) => match b { ProviderIdentity(o2, s2, m2) => o == o2 && s == s2 && m == m2, _ => false },
+    ToolIdentity(o, c, n) => match b { ToolIdentity(o2, c2, n2) => o == o2 && c == c2 && n == n2, _ => false },
+    ApprovalIdentity(o, c, n) => match b { ApprovalIdentity(o2, c2, n2) => o == o2 && c == c2 && n == n2, _ => false },
+    WakeIdentity(o, r, w) => match b { WakeIdentity(o2, r2, w2) => o == o2 && r == r2 && w == w2, _ => false },
+    ExtensionEffectIdentity(e, k, c) => match b { ExtensionEffectIdentity(e2, k2, c2) => e == e2 && k == k2 && c == c2, _ => false },
+    EnvironmentReadIdentity(k) => match b { EnvironmentReadIdentity(k2) => k == k2, _ => false },
+    RandomDrawIdentity(l) => match b { RandomDrawIdentity(l2) => l == l2, _ => false },
+    ClockAdvanceIdentity => match b { ClockAdvanceIdentity => true, _ => false },
+    FileWriteIdentity(p) => match b { FileWriteIdentity(p2) => p == p2, _ => false },
+    FileRemoveIdentity(p) => match b { FileRemoveIdentity(p2) => p == p2, _ => false },
+    DirMakeIdentity(p) => match b { DirMakeIdentity(p2) => p == p2, _ => false }
+  }
+}
+
+pure func sm_status_eq(a: OutcomeStatus, b: OutcomeStatus) -> bool {
+  match a {
+    OutcomeOk => match b { OutcomeOk => true, _ => false },
+    OutcomeFault => match b { OutcomeFault => true, _ => false },
+    OutcomeMissing => match b { OutcomeMissing => true, _ => false }
+  }
+}
+
+pure func sm_chunks_eq(a: [StreamChunkRecord], b: [StreamChunkRecord]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x.offset_ms == y.offset_ms && x.text == y.text && sm_chunks_eq(xs, ys) }
+  }
+}
+
+pure func sm_outcome_eq(a: TimedOutcome, b: TimedOutcome) -> bool {
+  a.advance_ms == b.advance_ms && sm_chunks_eq(a.chunks, b.chunks) && a.payload == b.payload
+    && sm_status_eq(a.status, b.status) && a.fault_class_id == b.fault_class_id
+}
+
+export pure func interaction_eq(a: Interaction, b: Interaction) -> bool {
+  a.identity.ordinal == b.identity.ordinal && sm_body_eq(a.identity.body, b.identity.body)
+    && a.request_projection == b.request_projection && a.deadline_ms == b.deadline_ms
+    && sm_outcome_eq(a.outcome, b.outcome)
+}
+
+-- `after` is `before` (structurally, element for element) plus exactly one
+-- interaction: that interaction, else None.
+export pure func one_appended(before: [Interaction], after: [Interaction]) -> Option[Interaction] {
+  match before {
+    [] => (match after { [x] => Some(x), _ => None }),
+    b :: bs => match after {
+      [] => None,
+      a :: as_ => if interaction_eq(a, b) then one_appended(bs, as_) else None
+    }
+  }
+}
+
+-- ============================================================================
+-- Projections.
+-- ============================================================================
+
+pure func sm_provider_records(log: [Interaction]) -> int {
+  List.foldl(\acc i. match i.identity.body { ProviderIdentity(_, _, _) => acc + 1, _ => acc }, 0, log)
+}
+
+export pure func provider_projection(model: string, msgs: [Message]) -> string {
+  "model_step model=${model} msg_count=${show(List.length(msgs))} payload=${eval_payload_digest(msgs)} system=${eval_system_prefix_digest(msgs)} raw=${eval_raw_frame_digest(msgs)}"
+}
+
+export pure func provider_exhausted_projection(model: string, msgs: [Message]) -> string {
+  "model_step model=${model} msg_count=${show(List.length(msgs))} replay=exhausted"
+}
+
+export pure func tool_projection(inv: ToolInvocation) -> string {
+  "tool_exec call_id=${inv.call.id} tool=${inv.call.tool} args=${eval_arguments_digest_json(inv.call.arguments)} workdir=${inv.workdir} timeout_ms=${show(inv.timeout_ms)} started_at_ms=${show(inv.started_at_ms)}"
+}
+
+export pure func tool_unrecorded_projection(inv: ToolInvocation) -> string {
+  "${tool_projection(inv)} replay=unrecorded"
+}
+
+pure func sm_replace_last(log: [Interaction], i: Interaction, projection: string) -> [Interaction] {
+  log ++ [{ i | request_projection: projection }]
+}
+
+export pure func seam_cardinality_code() -> string { "eval_seam_cardinality" }
+
+export pure func replay_exhausted_code() -> string { "replay_exhausted" }
+
+export pure func replay_unrecorded_code() -> string { "replay_unrecorded_invocation" }
+
+-- ============================================================================
+-- The seams.
+-- ============================================================================
+
+export func eval_model_step(base: Ports) -> ((WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {AI, IO, Trace} {
+  func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  -> ProviderExchange ! {AI, IO, Trace} {
+    match state.script {
+      [] => {
+        let k = sm_provider_records(state.log);
+        {
+          emissions: [],
+          result: Err({
+            code: replay_exhausted_code(),
+            message: "replay exhausted: the program has no step for provider call ${show(k)}",
+            retryable: false
+          }),
+          next_state: record_interaction(
+            state,
+            ProviderIdentity("loop_v2", k, model),
+            provider_exhausted_projection(model, msgs),
+            -1,
+            { advance_ms: 0, chunks: [], payload: encode_exhausted_provider_outcome(),
+              status: OutcomeOk, fault_class_id: "" })
+        }
+      },
+      _ => {
+        let ex = base.model_step(state, model, msgs, on_chunk);
+        match one_appended(state.log, ex.next_state.log) {
+          None => {
+            emissions: ex.emissions,
+            result: Err({
+              code: seam_cardinality_code(),
+              message: "provider seam: the recorder did not append exactly one interaction to an equal prefix",
+              retryable: false
+            }),
+            next_state: ex.next_state
+          },
+          Some(i) => {
+            emissions: ex.emissions,
+            result: ex.result,
+            next_state: { ex.next_state | log: sm_replace_last(state.log, i, provider_projection(model, msgs)) }
+          }
+        }
+      }
+    }
+  }
+}
+
+export func eval_tool_exec(base: Ports) -> ((WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS}) ! {IO, Process, FS} {
+  func(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+    match state.tools {
+      [] => {
+        let o = ToolFailed({
+          tool_call_id: inv.call.id,
+          code: replay_unrecorded_code(),
+          message: "replay: no recorded result for tool call ${inv.call.id}"
+        });
+        {
+          outcome: o,
+          next_state: record_interaction(
+            state,
+            ToolIdentity("loop_v2", inv.call.id, inv.call.tool),
+            tool_unrecorded_projection(inv),
+            inv.timeout_ms,
+            { advance_ms: 0, chunks: [], payload: encode_tool_outcome(o),
+              status: OutcomeFault, fault_class_id: fault_class_tool_failed() })
+        }
+      },
+      _ => {
+        let ex = base.tool_exec(state, inv);
+        match one_appended(state.log, ex.next_state.log) {
+          None => {
+            outcome: ToolFailed({
+              tool_call_id: inv.call.id,
+              code: seam_cardinality_code(),
+              message: "tool seam: the recorder did not append exactly one interaction to an equal prefix"
+            }),
+            next_state: ex.next_state
+          },
+          Some(i) => {
+            outcome: ex.outcome,
+            next_state: { ex.next_state | log: sm_replace_last(state.log, i, tool_projection(inv)) }
+          }
+        }
+      }
+    }
+  }
+}
+
+export func eval_ports(base: Ports) -> Ports ! {AI, FS, IO, Process, Trace} {
+  { base | model_step: eval_model_step(base), tool_exec: eval_tool_exec(base) }
+}
+
+export func journal_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  eval_ports(recording_ports(rt))
+}
+
+export func journal_provider(rt: ExtRuntime, w: WorldState) -> StepProvider ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  PortedWorld(journal_ports(rt), w)
+}
+
+-- ============================================================================
+-- Tests (M8). The two checks that need real capabilities — no live effect on
+-- an empty tool queue (a sentinel file), and P1.1R's C2 run through
+-- `ported_provider` — are in `seams_live_test.ail`, run with
+-- `ailang run --caps …` (`ailang test` grants no FS/Process/SharedMem).
+--
+-- Synthetic worlds only. `base` is the harness's `recording_ports(empty_rt())`
+-- unless a test builds a misbehaving recorder to exercise the guard.
+-- ============================================================================
+
+pure func sm_msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func sm_msgs() -> [Message] { [sm_msg("system", "fx system"), sm_msg("user", "fx task")] }
+
+pure func sm_step(prose: string, ids: [string], error_code: string) -> ScriptedStep {
+  { prose: prose,
+    tool_calls: List.map(\i. { id: i, name: "BashExec", arguments: "{\"command\":\"true\"}" }, ids),
+    input_tokens: 11, output_tokens: 3, finish_reason: if List.length(ids) > 0 then "tool_calls" else "stop",
+    chunks: [], error_code: error_code, error_message: "", advance_ms: 0 }
+}
+
+-- A prior log: one provider record and one env read, so k = 1 and the next
+-- ordinal is 2.
+pure func sm_prior_log() -> [Interaction] {
+  [ { identity: { ordinal: 0, body: ProviderIdentity("loop_v2", 0, "fx-api") },
+      request_projection: "model_step model=fx-api msg_count=2 payload=x system=y raw=z",
+      deadline_ms: -1,
+      outcome: { advance_ms: 0, chunks: [], payload: "{}", status: OutcomeOk, fault_class_id: "" } },
+    { identity: { ordinal: 1, body: EnvironmentReadIdentity("MOTOKO_HEADLESS") },
+      request_projection: "env_get key=MOTOKO_HEADLESS",
+      deadline_ms: -1,
+      outcome: { advance_ms: 0, chunks: [], payload: "1", status: OutcomeOk, fault_class_id: "" } } ]
+}
+
+pure func sm_world(script: [ScriptedStep], tools: [ScriptedTool]) -> WorldState {
+  { empty_world_state() | script: script, tools: tools, log: sm_prior_log(), clock_ms: 500, ordinal: 4 }
+}
+
+pure func sm_prefix_kept(before: [Interaction], after: [Interaction]) -> bool {
+  match one_appended(before, after) { Some(_) => true, None => false }
+}
+
+pure func sm_last(log: [Interaction]) -> Option[Interaction] {
+  List.foldl(\acc i. Some(i), None, log)
+}
+
+func sm_noop_chunk(_c: StreamChunk) -> () ! {IO} { () }
+
+func sm_base() -> Ports ! {AI, Clock, Env, FS, IO, Process, Trace} { recording_ports(empty_rt()) }
+
+pure func sm_inv(id: string, command: string) -> ToolInvocation {
+  { call: { id: id, tool: "BashExec", arguments: jo([kv("command", js(command))]) },
+    workdir: ".", timeout_ms: 30000, started_at_ms: 500 }
+}
+
+pure func sm_tool(id: string, content: string, duration: int) -> ScriptedTool {
+  { tool_call_id: id, duration_ms: duration, code: "", message: "", content: content, exit_code: -1 }
+}
+
+-- M8 provider, empty script: the harness's exhausted record, exactly, and a
+-- non-retryable Err — where the harness's own empty arm would have served a
+-- fabricated `Ok` turn.
+func test_m8_provider_empty_script() -> bool ! {AI, Clock, Env, FS, IO, Process, Trace}
+  tests [((), true)]
+  {
+    let base = sm_base();
+    let w = sm_world([], []);
+    let ex = eval_ports(base).model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+    let harness = base.model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+    let err_ok = match ex.result {
+      Ok(_) => false,
+      Err(e) => e.code == "replay_exhausted" && e.retryable == false
+    };
+    let harness_fabricates = match harness.result { Ok(_) => true, Err(_) => false };
+    let rec_ok = match one_appended(w.log, ex.next_state.log) {
+      None => false,
+      Some(i) =>
+        i.identity.ordinal == 2
+          && sm_body_eq(i.identity.body, ProviderIdentity("loop_v2", 1, "fx-api"))
+          && i.request_projection == "model_step model=fx-api msg_count=2 replay=exhausted"
+          && i.deadline_ms == -1
+          && i.outcome.advance_ms == 0
+          && List.length(i.outcome.chunks) == 0
+          && i.outcome.payload == "{\"served\":false}"
+          && sm_status_eq(i.outcome.status, OutcomeOk)
+          && i.outcome.fault_class_id == ""
+    };
+    err_ok && harness_fabricates && rec_ok
+      && List.length(ex.emissions) == 0
+      && List.length(ex.next_state.script) == 0
+      && ex.next_state.clock_ms == 500
+      && ex.next_state.ordinal == 4
+      && List.length(ex.next_state.pending) == 0
+  }
+
+-- M8 provider, non-empty: exactly one append to an equal prefix; only the
+-- projection is the evaluator's; identity and outcome are the recorder's.
+func test_m8_provider_one_append() -> bool ! {AI, Clock, Env, FS, IO, Process, Trace}
+  tests [((), true)]
+  {
+    let base = sm_base();
+    let w = sm_world([sm_step("fx prose", ["c1"], ""), sm_step("later", [], "")], []);
+    let ex = eval_ports(base).model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+    let rec = base.model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+    let served = match ex.result { Ok(r) => r.message.content == "fx prose" && List.length(r.tool_calls) == 1, Err(_) => false };
+    match one_appended(w.log, ex.next_state.log) {
+      None => false,
+      Some(i) => match sm_last(rec.next_state.log) {
+        None => false,
+        Some(r) =>
+          served
+            && i.request_projection == provider_projection("fx-api", sm_msgs())
+            && contains(i.request_projection, "payload=sha256:")
+            && contains(i.request_projection, " system=sha256:")
+            && contains(i.request_projection, " raw=sha256:")
+            && r.request_projection == "model_step model=fx-api msg_count=2"
+            && interaction_eq({ i | request_projection: r.request_projection }, r)
+            && sm_body_eq(i.identity.body, ProviderIdentity("loop_v2", 1, "fx-api"))
+            && List.length(ex.next_state.script) == 1
+            && ex.next_state.clock_ms == rec.next_state.clock_ms
+            && ex.next_state.ordinal == 4
+      }
+    }
+  }
+
+-- A scripted provider fault is still exactly one append, and still a served
+-- (not exhausted) record.
+func test_m8_provider_fault_one_append() -> bool ! {AI, Clock, Env, FS, IO, Process, Trace}
+  tests [((), true)]
+  {
+    let w = sm_world([sm_step("", [], "rate_limited")], []);
+    let ex = eval_ports(sm_base()).model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+    let is_err = match ex.result { Ok(_) => false, Err(e) => e.code == "rate_limited" };
+    match one_appended(w.log, ex.next_state.log) {
+      None => false,
+      Some(i) => is_err && i.request_projection == provider_projection("fx-api", sm_msgs())
+                   && sm_status_eq(i.outcome.status, OutcomeFault)
+    }
+  }
+
+-- M8 tool, non-empty: served from the queue, one append, the evaluator's
+-- projection (no `replay=unrecorded`), the recorder's outcome and advance.
+func test_m8_tool_one_append() -> bool ! {AI, Clock, Env, FS, IO, Process, Trace}
+  tests [((), true)]
+  {
+    let base = sm_base();
+    let w = sm_world([], [sm_tool("c1", "fx out", 7), sm_tool("c2", "fx out 2", 0)]);
+    let inv = sm_inv("c1", "true");
+    let ex = eval_ports(base).tool_exec(w, inv);
+    let rec = base.tool_exec(w, inv);
+    let outcome_ok = match ex.outcome { ToolCompleted(c) => c.tool_call_id == "c1" && c.content == "fx out" && c.exit_code == -1, _ => false };
+    match one_appended(w.log, ex.next_state.log) {
+      None => false,
+      Some(i) => match sm_last(rec.next_state.log) {
+        None => false,
+        Some(r) =>
+          outcome_ok
+            && i.request_projection == tool_projection(inv)
+            && not contains(i.request_projection, "replay=")
+            && contains(i.request_projection, " args=sha256:")
+            && interaction_eq({ i | request_projection: r.request_projection }, r)
+            && i.outcome.advance_ms == 7
+            && ex.next_state.clock_ms == 507
+            && List.length(ex.next_state.tools) == 1
+      }
+    }
+  }
+
+-- M8 correlation mismatch: the queue head answers another call; the scripted
+-- arm's guard fires, one append, classified by the recorder.
+func test_m8_tool_correlation_mismatch() -> bool ! {AI, Clock, Env, FS, IO, Process, Trace}
+  tests [((), true)]
+  {
+    let w = sm_world([], [sm_tool("c2", "fx out", 0)]);
+    let inv = sm_inv("c1", "true");
+    let ex = eval_ports(sm_base()).tool_exec(w, inv);
+    let outcome_ok = match ex.outcome {
+      ToolCorrelationMismatch(m) => m.expected_id == "c1" && m.got_id == "c2",
+      _ => false
+    };
+    match one_appended(w.log, ex.next_state.log) {
+      None => false,
+      Some(i) =>
+        outcome_ok
+          && i.request_projection == tool_projection(inv)
+          && sm_body_eq(i.identity.body, ToolIdentity("loop_v2", "c1", "BashExec"))
+          && sm_status_eq(i.outcome.status, OutcomeFault)
+          && i.outcome.fault_class_id == fault_class_tool_correlation_mismatch()
+          && List.length(ex.next_state.tools) == 0
+    }
+  }
+
+-- Misbehaving recorders: zero appends, two appends, a rewritten prefix.
+pure func sm_extra(state: WorldState) -> WorldState {
+  record_interaction(state, EnvironmentReadIdentity("FX_EXTRA"), "env_get key=FX_EXTRA", -1,
+    { advance_ms: 0, chunks: [], payload: "", status: OutcomeMissing, fault_class_id: "" })
+}
+
+pure func sm_rewrite_head(state: WorldState) -> WorldState {
+  match state.log {
+    [] => state,
+    h :: rest => { state | log: ({ h | request_projection: "rewritten" }) :: rest }
+  }
+}
+
+func sm_bad_ports(base: Ports, mode: string) -> Ports ! {AI, FS, IO, Process, Trace} {
+  let ms = func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
+    let ex = base.model_step(state, model, msgs, on_chunk);
+    if mode == "zero" then { ex | next_state: { ex.next_state | log: state.log } }
+    else if mode == "two" then { ex | next_state: sm_extra(ex.next_state) }
+    else { ex | next_state: sm_rewrite_head(ex.next_state) }
+  };
+  let te = func(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+    let ex = base.tool_exec(state, inv);
+    if mode == "zero" then { ex | next_state: { ex.next_state | log: state.log } }
+    else if mode == "two" then { ex | next_state: sm_extra(ex.next_state) }
+    else { ex | next_state: sm_rewrite_head(ex.next_state) }
+  };
+  { base | model_step: ms, tool_exec: te }
+}
+
+func sm_guard_holds(mode: string) -> bool ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  let bad = sm_bad_ports(sm_base(), mode);
+  let w = sm_world([sm_step("fx", [], "")], [sm_tool("c1", "fx", 0)]);
+  let p = eval_ports(bad).model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+  let t = eval_ports(bad).tool_exec(w, sm_inv("c1", "true"));
+  let p_ok = match p.result { Ok(_) => false, Err(e) => e.code == "eval_seam_cardinality" && e.retryable == false };
+  let t_ok = match t.outcome { ToolFailed(f) => f.code == "eval_seam_cardinality" && f.tool_call_id == "c1", _ => false };
+  -- the recorder's log is returned unaltered: no evaluator projection in it
+  let p_raw = List.foldl(\acc i. acc && not contains(i.request_projection, "payload=sha256:"), true, p.next_state.log);
+  let t_raw = List.foldl(\acc i. acc && not contains(i.request_projection, "args=sha256:"), true, t.next_state.log);
+  p_ok && t_ok && p_raw && t_raw && not sm_prefix_kept(w.log, p.next_state.log) && not sm_prefix_kept(w.log, t.next_state.log)
+}
+
+func test_m8_exactly_one_append_guard() -> bool ! {AI, Clock, Env, FS, IO, Process, Trace}
+  tests [((), true)]
+  {
+    sm_guard_holds("zero") && sm_guard_holds("two") && sm_guard_holds("rewrite")
+  }

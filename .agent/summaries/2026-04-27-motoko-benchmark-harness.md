@@ -63,7 +63,7 @@ Created:
 ## Key debugging outcomes
 - `steps=0` across exercises was traced to invalid model routing when `OPENAI_BASE_URL` was not applied.
 - Verified local model works with endpoint override:
-  - `openai/google/gemma-4-26B-A4B-it` succeeded once `OPENAI_BASE_URL=http://100.79.48.75:8000/v1` was set.
+  - `openai/google/gemma-4-26B-A4B-it` succeeded once `OPENAI_BASE_URL=http://<dgx-host>:8000/v1` was set.
 - Confirmed current benchmark baseline run uses no core extensions unless explicitly set:
   - `session_start.loaded_extensions == []`.
 

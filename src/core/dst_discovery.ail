@@ -170,7 +170,18 @@ import src/core/dst_interaction (
 --   src/core/session.ail:1421   OPENAI_BASE_URL             session_policy_init
 --   src/core/session.ail:1422   MOTOKO_HEADLESS             session_policy_init
 --   src/core/session.ail:2018   MOTOKO_CAPTURE_FAILED_PAYLOAD  provider error path
---   src/core/tool_phase.ail:343 MOTOKO_TOOL_TIMEOUT_MS      native tool dispatch
+--   src/core/session.ail:4582   MOTOKO_EXIT_MANIFEST (via manifest_path_var())
+--                            publish_turn_exit_manifest — the exit-manifest
+--                            name read, once per run that reaches DoneEvent
+--                            (P2T Part 5(a)). The key arrives through the
+--                            `manifest_path_var()` indirection, so the Makefile
+--                            re-derivation (anchored to `.env_get(<world>, "KEY"`)
+--                            cannot see it; it is pinned here by the
+--                            `verify_exit_intent` literal instead (`manifest_path_var()
+--                            == "MOTOKO_EXIT_MANIFEST"). A run that never
+--                            publishes (cost cap, error, budget) never reads it,
+--                            so per-scenario expectations carry it, not the
+--                            always-lists.
 --
 -- session.ail:775 is deliberately NOT here. It is the extension bridge's
 -- `env_get` closure, whose key is supplied by an extension at call time and is
@@ -211,17 +222,18 @@ import src/core/dst_interaction (
 -- state a quantity instead of restating a total, and it is what would go red
 -- rather than stale if anything re-resolved per arm again.
 export pure func driver_env_keys() -> [string] {
-  ["MOTOKO_SESSION_ID",
-   "MOTOKO_PERSIST_RETRIES",
-   "MOTOKO_RETRY_STREAM_ERROR",
-   "OPENAI_BASE_URL",
-   "MOTOKO_HEADLESS",
-   "MOTOKO_CAPTURE_FAILED_PAYLOAD",
-   "MOTOKO_TOOL_TIMEOUT_MS",
-   "MOTOKO_PROFILE_DIR",
+  ["MOTOKO_CAPTURE_FAILED_PAYLOAD",
    "MOTOKO_CONFIG",
+   "MOTOKO_HEADLESS",
+   "MOTOKO_MODELS_FILE",
+   "MOTOKO_PERSIST_RETRIES",
+   "MOTOKO_PROFILE_DIR",
    "MOTOKO_REPO",
-   "MOTOKO_MODELS_FILE"]
+   "MOTOKO_RETRY_STREAM_ERROR",
+   "MOTOKO_SESSION_ID",
+   "MOTOKO_TOOL_TIMEOUT_MS",
+   "OPENAI_BASE_URL",
+   "MOTOKO_EXIT_MANIFEST"]
 }
 
 -- ---------------------------------------------------------------------------

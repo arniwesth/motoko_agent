@@ -40,7 +40,9 @@ import { spawn, spawnSync } from "child_process";
  * passes it a `RunState`, so a new `RunState` member that is absent here fails to typecheck at the
  * call site rather than silently reporting nothing.
  */
-export type MotokoRunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error";
+export type MotokoRunState =
+  | "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended" | "done"
+  | "parked" | "suspended_child" | "resuming";
 
 /** The four states herdr's `pane report-agent --state` accepts. */
 export type HerdrState = "idle" | "working" | "blocked" | "unknown";
@@ -67,7 +69,7 @@ export interface HerdrReport {
 /**
  * Motoko's run state -> herdr's lifecycle vocabulary.
  *
- * Four of the five are direct. `error` is a judgment call, recorded in ADR-001 D3: herdr defines
+ * Four of the six are direct. `error` is a judgment call, recorded in ADR-001 D3: herdr defines
  * `blocked` as "recognized an approval or question UI", and Motoko has no approval UI at all — that
  * absence is why project 018 runs delegates with permission bypass on. But `blocked` is the state
  * that turns the sidebar row red, rolls up to the tab and workspace, and satisfies
@@ -77,17 +79,48 @@ export interface HerdrReport {
  *
  * If Motoko ever grows a real approval prompt, that becomes the true `blocked` and this mapping
  * must be revisited — see ADR-001 Consequences.
+ *
+ * `suspended` (ADR-003 v6.1 D2, PLAN-003 P1 Part 6) is the one state where `blocked` needs no
+ * argument: a run that reached its step budget is stopped and WAITING FOR THE OPERATOR, which is
+ * what herdr's `blocked` means and what `herdr agent wait --until blocked` is for. It is not
+ * `idle` — an idle Motoko has nothing held and the next line starts a fresh run, where a suspended
+ * one holds the exhausted turn's history and the next line continues it. And it is not `error`:
+ * ADR-003's whole point is that reaching the budget is no longer a failure. The two therefore
+ * differ in the MESSAGE, which is the only thing herdr shows beside a blocked row, and the message
+ * says what to send.
+ *
+ * `done` (ADR-002 v4.2 D1.1, PLAN-002 W1b) is herdr `idle` with the message `done`: the task
+ * finished, where plain `idle` also means "started and has not begun". Whether herdr SHOWS an idle
+ * row's message is W1a's probe: herdr 0.8.2 accepts it and no CLI or socket read returns it, so
+ * outside Motoko's own status line the two still read alike until the answer/exit protocol is used.
+ *
+ * `parked` and `suspended_child` (ADR-003 D7, PLAN-003 P4 Part 6) are `blocked` for the reason
+ * `suspended` is: the run is stopped and waiting on something outside this process — its delegates,
+ * or a line at the parked prompt — and no model call is in flight, so `working` would be a lie and
+ * `idle` would say nothing is held. The messages differ in the one fact herdr cannot see, whether
+ * the runtime child is still alive. `resuming` is `working`: a respawned child is folding the journal
+ * and will run the wake's turn.
  */
 export function mapRunState(state: MotokoRunState): HerdrReport {
   switch (state) {
     case "idle":
       return { state: "idle" };
+    case "done":
+      return { state: "idle", message: "done" };
     case "thinking":
     case "tools_wait":
     case "tools_run":
       return { state: "working" };
     case "error":
       return { state: "blocked", message: "the run ended in an error — see the pane" };
+    case "suspended":
+      return { state: "blocked", message: "suspended: step budget — send continue" };
+    case "parked":
+      return { state: "blocked", message: "parked: waiting on its delegates or a line at the prompt" };
+    case "suspended_child":
+      return { state: "blocked", message: "parked, runtime exited: waiting on its delegates or a line at the prompt" };
+    case "resuming":
+      return { state: "working" };
   }
 }
 

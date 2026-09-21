@@ -537,7 +537,7 @@ EOF
 write_mutant ""
 if mout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
   bad "a body performing Env under the NARROWED row was ACCEPTED — the row is decorative and every 'MEASURED' row above rests on nothing"
-elif echo "$mout" | grep -q "Effect checking failed for function 'mutant_budget'"; then
+elif grep -q "Effect checking failed for function 'mutant_budget'" <<<"$mout"; then
   ok "mutant REJECTED by the effect checker: a body performing Env cannot carry the narrowed row"
 else
   bad "the mutant was rejected, but NOT by effect checking — it fails for an unrelated reason and establishes nothing: $(echo "$mout" | grep -E '^Error' | head -1)"
@@ -583,7 +583,7 @@ EOF
 write_mutant_register ""
 if mout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
   bad "mutant_register: an inline Compactor performing Env was ACCEPTED under a rowless register_with_config — the registration row is decorative and the absorption rows below measure nothing"
-elif echo "$mout" | grep -q "Effect checking failed for function 'register_with_config'"; then
+elif grep -q "Effect checking failed for function 'register_with_config'" <<<"$mout"; then
   ok "mutant_register: an inline Compactor atom performing Env is REJECTED at register_with_config's row — the enclosing registration row still bounds an inline binding at 6.0"
 else
   bad "mutant_register: rejected, but NOT at register_with_config's row — it fails elsewhere and establishes nothing about the registration row: $(echo "$mout" | grep -E '^Error' | head -1)"
@@ -591,7 +591,7 @@ fi
 write_mutant_register " ! {Env}"
 if mout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
   bad "mutant_register: the SAME registration with its row WIDENED to ! {Env} is ACCEPTED — the 5.x absorption is back: an annotated inline atom's Env escaped its own payload row in constructor-argument position. Re-measure the IMPORTED-SUM rows below"
-elif echo "$mout" | grep -q "uses effects not declared in its"; then
+elif grep -q "uses effects not declared in its" <<<"$mout"; then
   ok "mutant_register: the SAME registration WIDENED to ! {Env} is STILL rejected, at the LAMBDA'S OWN annotation — at 6.0 an annotated inline atom is bounded by its declared payload row, not by the registration row (5.x: accepted; B8 re-pinned)"
 else
   bad "mutant_register: the widened registration is rejected, but NOT at the lambda's annotation — the verdict moved and establishes nothing: $(echo "$mout" | grep -E '^Error' | head -1)"
@@ -1167,7 +1167,7 @@ control_pair() {  # $1 = label, $2 = ret, $3 = narrow row, $4 = wide row, $5 = i
   write_slot_mutant "$2" "$3" "$5" "$6"
   if mout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
     bad "$label: a performing body was ACCEPTED under the narrowed row — the row is decorative and the slot's measurement rests on nothing"
-  elif echo "$mout" | grep -q "Effect checking failed for function 'mutant_hook'"; then
+  elif grep -q "Effect checking failed for function 'mutant_hook'" <<<"$mout"; then
     ok "$label: mutant REJECTED by the effect checker under the narrowed row"
   else
     bad "$label: rejected, but NOT by effect checking — it fails for an unrelated reason and establishes nothing: $(echo "$mout" | grep -E '^Error' | head -1)"

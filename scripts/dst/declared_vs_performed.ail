@@ -83,7 +83,7 @@ module scripts/dst/declared_vs_performed
 import std/io (println)
 import std/env (getEnvOr)
 import std/fs (readFile)
-import std/json (Json, jo, kv, js, get, asString)
+import std/json (Json, jo, kv, js, get, asString, ja)
 import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -280,6 +280,7 @@ func probe_ctx(mode: string) -> ExtCtx {
     state_key: "probe",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     context_limit: 0,
     ports: probe_ports(),
     artifacts: jo([]),

@@ -1,0 +1,336 @@
+-- scripts/eval/journal_replay.ail
+--
+-- The evaluator's runner (PLAN-004 §0.5). Driven by `journal_replay.sh`, which
+-- gathers the identities first; configured through the environment because
+-- the shell owns the files:
+--
+--   EVAL_MODE=identities  print the build-derived identities as one JSON line
+--                         (`IDENTITIES {...}`): the build's profile, rule and
+--                         vocabulary versions, the empty extension set, and the
+--                         reader's normalized configuration of the entry.
+--   EVAL_MODE=admit       the admission (ADR-004 D3, A1–A9b): read
+--                         EVAL_IDENTITIES and EVAL_COMPARATORS, preflight (A9
+--                         manifest shape, A9b; nothing runs on a finding), then
+--                         the framed run and A1–A9 (`source_checks_run.
+--                         admit_source`: P1.6's run and A5/A6/A9, P1.7a's
+--                         A1–A4, P1.7b's A7/A8), the admission verdict.
+--                         Prints WORLD_RUN_BEGIN/END, `WORLD_RUN_FRAMES 1`
+--                         after a run, one `FINDING` line per finding (in
+--                         A-order), `VERDICT <Admission>`, `AVERDICT <word>\t
+--                         <finding-level first>\t<position>\t<verdict-level
+--                         first>` and one `ADMISSION <admitted|refused> ...`
+--                         line. With EVAL_ENTRY_OUT=<dir> an admitted entry's
+--                         records are written there: `program.artifact`
+--                         (P1.8's artifact), `witness.json` and `census.txt`
+--                         (`candidate_checks_run.entry_json`, the one
+--                         entry-comparand codec). Exit 0 only when admitted.
+--   EVAL_MODE=a9b         A9b alone over EVAL_IDENTITIES (the shell's
+--                         after-run collection) and EVAL_COMPARATORS.
+--   EVAL_MODE=candidate   the candidate run, K1–K7 (D3), run by
+--                         `candidate.py` inside the assembled tree after its
+--                         refusals and before its K0 comparison: load
+--                         EVAL_PROGRAM (the entry's program.artifact) with the
+--                         harness's `load_program`, then `validate_program`
+--                         and `world_state_of`; an unloadable program prints
+--                         `CANDIDATE refused ProgramUndecodable <refusal>`
+--                         and exits 1. Otherwise prints `K0BUILD {...}` (the
+--                         build's identities, EVAL_FIXTURE's normalized
+--                         configuration) and `PROGRAM {...}` for K0, reads
+--                         the entry records from EVAL_ENTRY_DIR, runs THIS
+--                         build as C against `world_state_of(program)`
+--                         (`candidate_checks_run.evaluate_candidate`) and
+--                         prints the verdict (`CANDIDATE <Candidate>`), its
+--                         envelope (`ENVELOPE ...`, identity evidence
+--                         EVAL_PROVENANCE), `KALL [<every K finding>]` and
+--                         `KVERDICT <word>\t<first finding>\t<position>`.
+--                         Exit 0 on a K verdict (reproduced or diverged; the
+--                         score is candidate.py's to permit, after K0), 1 on
+--                         a refusal, 2 when the inputs cannot be read
+--                         (`CANDIDATE error ...`).
+--
+--   EVAL_FIXTURE=<name>   a synthetic entry: a world fixture from
+--                         `src/eval/journal/testdata/world_fixtures.ail`, or a
+--                         source-check fixture from `source_check_fixtures.ail`
+--                         (served with m3_selector_end's environment, as
+--                         `source_checks_live_test.ail` serves it)
+--   EVAL_ENTRY=<path>     a REAL entry. Before P1G there is no E record, so
+--                         it is refused at preflight; its content is never
+--                         read here (no normalized configuration is derived,
+--                         so the preflight also reports the blank field). The
+--                         candidate mode likewise reads no real entry before
+--                         P1G (`CANDIDATE error`; candidate.py refuses a -dev
+--                         evaluator for a real entry before that).
+--   EVAL_EPOCH            the declared clock epoch (default 1789000000000)
+--   EVAL_WORKDIR          the throwaway workdir handed to the run (default
+--                         `.motoko/eval-admission-workdir`, relative to the
+--                         tree). The workdir string reaches the tool
+--                         projections, so an admission and its candidates
+--                         must be handed the SAME string: candidate.py leaves
+--                         it at the default, as the admission does.
+--   EVAL_LABEL            the frame label (default `admission`; `candidate`
+--                         in candidate mode)
+--
+-- Synthetic only before P1G (§0.6): nothing here reads corpus content.
+
+module scripts/eval/journal_replay
+
+import std/io (println, exit)
+import std/env (getEnvOr)
+import std/fs (readFileResult, writeFileResult)
+import std/json (Json)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join, stringToInt)
+import src/eval/journal/reader (parse_lines)
+import src/eval/journal/stopping (JournalWorld)
+import src/eval/journal/world (fixture_journal_world)
+import src/eval/journal/admission (
+  AdmissionFinding, EntryKind, SyntheticEntry, RealEntry, Identities, Comparators,
+  finding_label, check_a9b, a9b_unchecked, decode_identities, decode_comparators,
+  normalized_configuration, build_identities_json, preflight
+)
+import src/eval/journal/source_checks (
+  admission_label, admission_verdict_word, admission_first_finding, admission_first_finding_name, admission_position
+)
+import src/eval/journal/source_checks_run (AdmissionOutcome, admit_source)
+import src/eval/journal/candidate (load_entry_program, program_line, k0_build_line, replay_refusal_label)
+import src/eval/journal/candidate_checks (
+  Candidate, Refused, k_findings, k_finding_label, candidate_verdict_word, candidate_first_finding, candidate_position
+)
+import src/eval/journal/candidate_checks_run (entry_of_admission, entry_json, decode_entry, evaluate_candidate, print_verdict)
+import src/eval/journal/scan (program_artifact)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_all, fxw_m3_selector_end)
+import src/eval/journal/testdata/source_check_fixtures (SourceCheckFixture, fxs_all)
+
+pure func jr_world_fixture(name: string) -> Option[WorldFixture] {
+  List.foldl(\acc f. match acc { Some(_) => acc, None => if f.name == name then Some(f) else None }, None, fxw_all())
+}
+
+-- A source-check fixture as a world fixture: m3_selector_end's environment
+-- and expectations, the fixture's journal, log and selector (as
+-- `source_checks_live_test.ail`'s `lt_world_fixture`).
+pure func jr_source_fixture(name: string) -> Option[WorldFixture] {
+  List.foldl(\acc f. match acc {
+    Some(_) => acc,
+    None => if f.name == name
+      then Some({ fxw_m3_selector_end() | name: f.name, journal: f.journal, log: f.log, leaf: f.leaf,
+                                          run_id: f.run_id, start: f.start, end_kind: f.end_kind, end_id: f.end_id })
+      else None
+  }, None, fxs_all())
+}
+
+pure func jr_fixture(name: string) -> Option[WorldFixture] {
+  match jr_world_fixture(name) { Some(f) => Some(f), None => jr_source_fixture(name) }
+}
+
+func jr_fail(msg: string) -> () ! {IO} {
+  let _ = println("ADMISSION error ${msg}");
+  exit(2)
+}
+
+func jr_findings(tag: string, fs: [AdmissionFinding]) -> () ! {IO} {
+  let _ = List.foldl(\acc f. { let _ = println("FINDING ${tag} ${finding_label(f)} ${f.detail}"); acc }, (), fs);
+  ()
+}
+
+func jr_read(var: string) -> Result[string, string] ! {Env, FS} {
+  let path = getEnvOr(var, "");
+  if path == "" then Err("${var} is not set")
+  else match readFileResult(path) { Ok(t) => Ok(t), Err(e) => Err("${var}: ${e}") }
+}
+
+func jr_inputs() -> Result[{ ids: Identities, cmp: Comparators }, string] ! {Env, FS} {
+  match jr_read("EVAL_IDENTITIES") {
+    Err(e) => Err(e),
+    Ok(it) => match jr_read("EVAL_COMPARATORS") {
+      Err(e) => Err(e),
+      Ok(ct) => match decode_identities(it) {
+        Err(e) => Err(e),
+        Ok(ids) => match decode_comparators(ct) {
+          Err(e) => Err(e),
+          Ok(cmp) => Ok({ ids: ids, cmp: cmp })
+        }
+      }
+    }
+  }
+}
+
+func jr_kind() -> EntryKind ! {Env} {
+  if getEnvOr("EVAL_ENTRY", "") != "" then RealEntry else SyntheticEntry
+}
+
+export type FixtureInput = { name: string, jw: JournalWorld, lines: [Json] }
+
+func jr_input() -> Result[FixtureInput, string] ! {Env} {
+  let name = getEnvOr("EVAL_FIXTURE", "");
+  if name == "" then Err("EVAL_FIXTURE is not set")
+  else match jr_fixture(name) {
+    None => Err("no world or source-check fixture named ${name}"),
+    Some(f) => match (fixture_journal_world(f), parse_lines(f.journal)) {
+      (Ok(jw), Ok(lines)) => Ok({ name: name, jw: jw, lines: lines }),
+      _ => Err("fixture ${name} is refused by the reader")
+    }
+  }
+}
+
+func jr_world() -> Result[JournalWorld, string] ! {Env} {
+  match jr_input() { Ok(i) => Ok(i.jw), Err(e) => Err(e) }
+}
+
+func mode_identities() -> () ! {Env, IO} {
+  if getEnvOr("EVAL_ENTRY", "") != "" then println("IDENTITIES ${build_identities_json("")}")
+  else match jr_world() {
+    Err(e) => jr_fail(e),
+    Ok(jw) => println("IDENTITIES ${build_identities_json(normalized_configuration(jw))}")
+  }
+}
+
+func mode_a9b() -> () ! {Env, FS, IO} {
+  match jr_inputs() {
+    Err(e) => jr_fail(e),
+    Ok(inp) => {
+      let fs = check_a9b(jr_kind(), inp.ids, inp.cmp);
+      let _ = jr_findings("after", fs);
+      let _ = println("A9B ${if List.length(fs) == 0 then "clean" else "findings"} count=${show(List.length(fs))} unchecked=[${join(",", a9b_unchecked(jr_kind(), inp.cmp))}]");
+      if List.length(fs) == 0 then () else exit(1)
+    }
+  }
+}
+
+func jr_workdir() -> string ! {Env} {
+  getEnvOr("EVAL_WORKDIR", ".motoko/eval-admission-workdir")
+}
+
+func jr_epoch() -> int ! {Env} {
+  match stringToInt(getEnvOr("EVAL_EPOCH", "")) { Some(n) => n, None => 1789000000000 }
+}
+
+func jr_real_refused(inp: { ids: Identities, cmp: Comparators }) -> () ! {IO} {
+  -- A real entry is not read: the preflight alone decides, and before P1G it
+  -- cannot pass.
+  let fs = preflight(RealEntry, inp.ids, inp.cmp);
+  let _ = jr_findings("preflight", fs);
+  let _ = println("ADMISSION refused ran=false preflight=${show(List.length(fs))} kind=real");
+  exit(1)
+}
+
+-- The entry records of an admitted synthetic entry (EVAL_ENTRY_OUT).
+func jr_write_records(dir: string, i: FixtureInput, o: AdmissionOutcome) -> Result[string, string] ! {FS} {
+  match (o.report.program, o.witness, o.a8) {
+    (Some(p), Some(w), Some(a8)) => {
+      let r = entry_json(entry_of_admission(i.name, i.lines, i.jw, p, w, a8));
+      match (writeFileResult("${dir}/program.artifact", program_artifact(p)),
+             writeFileResult("${dir}/witness.json", r.witness),
+             writeFileResult("${dir}/census.txt", r.census)) {
+        (Ok(_), Ok(_), Ok(_)) => Ok("program.artifact,witness.json,census.txt"),
+        _ => Err("EVAL_ENTRY_OUT: a write failed")
+      }
+    },
+    _ => Err("no program, witness or A8 result: nothing ran")
+  }
+}
+
+func mode_admit() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match jr_inputs() {
+    Err(e) => jr_fail(e),
+    Ok(inp) => match jr_kind() {
+      RealEntry => jr_real_refused(inp),
+      SyntheticEntry => match jr_input() {
+        Err(e) => jr_fail(e),
+        Ok(i) => {
+          let label = getEnvOr("EVAL_LABEL", "admission");
+          let o = admit_source(label, "synthetic:${i.name}", SyntheticEntry, inp.ids, inp.cmp, i.lines, i.jw,
+                               jr_epoch(), jr_workdir(), []);
+          let r = o.report;
+          let a = o.admission;
+          let _ = if r.ran then println("WORLD_RUN_FRAMES 1") else ();
+          let _ = jr_findings(if r.ran then "run" else "preflight", o.findings);
+          let _ = println("VERDICT ${admission_label(a)}");
+          let _ = println("AVERDICT ${admission_verdict_word(a)}\t${admission_first_finding_name(a)}\t${admission_position(a)}\t${admission_first_finding(a)}");
+          let admitted = admission_verdict_word(a) == "admitted";
+          let out = getEnvOr("EVAL_ENTRY_OUT", "");
+          let _ = if out == "" || not admitted then () else match jr_write_records(out, i, o) {
+            Ok(files) => println("ENTRY_RECORDS ${files}"),
+            Err(e) => jr_fail(e)
+          };
+          let _ = println("ADMISSION ${admission_verdict_word(a)} ran=${if r.ran then "true" else "false"} calls=${show(r.calls)} expected=${r.expected_end} observed=${r.observed_end} interactions=${show(r.interactions)} program=${r.program_digest} preflight=${show(List.length(r.preflight))} findings=${show(List.length(o.findings))} unchecked=[${join(",", r.unchecked)}] checks=A1,A2,A3,A4,A5,A6,A7,A8,A9,A9b");
+          if admitted then () else exit(1)
+        }
+      }
+    }
+  }
+}
+
+func jr_cand_error(msg: string) -> () ! {IO} {
+  let _ = println("CANDIDATE error ${msg}");
+  exit(2)
+}
+
+func jr_records(dir: string) -> Result[{ witness: string, census: string }, string] ! {FS} {
+  match (readFileResult("${dir}/witness.json"), readFileResult("${dir}/census.txt")) {
+    (Ok(w), Ok(c)) => Ok({ witness: w, census: c }),
+    (Err(e), _) => Err("witness.json: ${e}"),
+    (_, Err(e)) => Err("census.txt: ${e}")
+  }
+}
+
+func mode_candidate() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let path = getEnvOr("EVAL_PROGRAM", "");
+  if path == "" then jr_cand_error("EVAL_PROGRAM is not set")
+  else match load_entry_program(path) {
+    Err(x) => {
+      let _ = println("CANDIDATE refused ProgramUndecodable ${replay_refusal_label(x)}");
+      exit(1)
+    },
+    Ok(p) => {
+      let fx = jr_input();
+      let nc = match fx { Ok(i) => normalized_configuration(i.jw), Err(_) => "" };
+      let _ = println("K0BUILD ${k0_build_line(nc)}");
+      let _ = println("PROGRAM ${program_line(p)}");
+      let dir = getEnvOr("EVAL_ENTRY_DIR", "");
+      if getEnvOr("EVAL_ENTRY", "") != "" then jr_cand_error("K1-K7: a real entry is not read before P1G")
+      else if dir == "" then jr_cand_error("EVAL_ENTRY_DIR is not set")
+      else match fx {
+        Err(e) => jr_cand_error(e),
+        Ok(i) => match jr_records(dir) {
+          Err(e) => jr_cand_error("entry records: ${e}"),
+          Ok(rec) => match decode_entry(rec, p, i.lines, i.jw) {
+            Err(e) => jr_cand_error("entry records: ${e}"),
+            Ok(e) => {
+              let o = evaluate_candidate(getEnvOr("EVAL_LABEL", "candidate"), e, i.jw,
+                                         jr_workdir(),
+                                         getEnvOr("EVAL_PROVENANCE", "(no provenance record named)"));
+              let v = o.verdict;
+              let _ = print_verdict(v);
+              let _ = match o.run {
+                Some(r) => match k_findings(e, r) {
+                  Ok(fs) => println("KALL [${join(";", List.map(k_finding_label, fs))}]"),
+                  Err(_) => println("KALL []")
+                },
+                None => println("KALL []")
+              };
+              let _ = println("KVERDICT ${candidate_verdict_word(v)}\t${candidate_first_finding(v)}\t${candidate_position(v)}");
+              match v {
+                Refused(_, _) => {
+                  let _ = println("CANDIDATE refused ${candidate_first_finding(v)}");
+                  exit(1)
+                },
+                _ => ()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let mode = getEnvOr("EVAL_MODE", "");
+  if mode == "identities" then mode_identities()
+  else if mode == "admit" then mode_admit()
+  else if mode == "a9b" then mode_a9b()
+  else if mode == "candidate" then mode_candidate()
+  else jr_fail("EVAL_MODE must be identities, admit, a9b or candidate (got '${mode}')")
+}

@@ -189,7 +189,7 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 389 }, effect: "Process",
           routed: false, note: "" }]
 }
 
@@ -735,7 +735,7 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       max_clock_advance_ms: 60000,
       chunk_draw_hi: 3
     },
-    manifest: compose_manifest("HEAD", "ailang 0.33.0", "7.3", "{}", ["env_get"], [], "HEAD"),
+    manifest: compose_manifest("HEAD", "ailang 0.33.0", "7.4", "{}", ["env_get"], [], "HEAD"),
     interactions: w.log
   }
 }
@@ -989,6 +989,13 @@ pure func env_reads_always(resolutions: int) -> [EnvExpectation] {
    { key: "MOTOKO_HEADLESS",           count: 1 },
    { key: "MOTOKO_SESSION_ID",         count: 1 }]
     ++ env_reads_per_context_resolution(resolutions)
+    -- P2T Part 5(a): the exit-manifest name read (`publish_turn_exit_manifest`,
+    -- session.ail:4582, key via `manifest_path_var()`), once per traced run
+    -- that reaches DoneEvent. The graded run terminates Ok through the success
+    -- arm, so the publish runs. Derived from the driver's control flow; pinned
+    -- in `driver_env_keys()` by the `verify_exit_intent` literal since the
+    -- Makefile grep cannot see the indirection.
+    ++ [{ key: "MOTOKO_EXIT_MANIFEST", count: 1 }]
 }
 
 pure func env_reads_per_context_resolution(resolutions: int) -> [EnvExpectation] {
@@ -1118,7 +1125,7 @@ func scenario_exclusion_check() -> bool ! {IO} {
 }
 
 func scenario_manifest() -> bool ! {IO} {
-  let m = compose_manifest("HEAD", "ailang 0.33.0", "7.3", "{}", ["env_get"], [], "HEAD");
+  let m = compose_manifest("HEAD", "ailang 0.33.0", "7.4", "{}", ["env_get"], [], "HEAD");
   let rs = validate_manifest(m, driver_plus_compose());
   let ok = List.length(rs) == 0 && List.length(m.extension_packages) == 1;
   let _ = if ok then {

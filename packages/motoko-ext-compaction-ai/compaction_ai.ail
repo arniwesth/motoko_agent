@@ -5,7 +5,7 @@ module sunholo/motoko_ext_compaction_ai/compaction_ai
 
 import std/ai (Message)
 import std/crypto (sha256Hex)
-import std/json (Json, jo, kv, js, jnum, get, getInt, asString)
+import std/json (Json, jo, kv, js, jnum, get, getInt, asString, ja)
 import std/list (length as list_length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
@@ -588,6 +588,7 @@ func test_ctx(step: int, limit: int, artifacts: Json) -> ExtCtx {
     state_key: "k",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     context_limit: limit,
     ports: noop_ext_ports(),
     artifacts: artifacts,

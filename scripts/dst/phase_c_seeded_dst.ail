@@ -13,6 +13,7 @@ import std/list (length, foldl)
 import std/option (Some, None)
 import std/rand (rand_seed, rand_int)
 import std/result (Result, Ok, Err)
+import src/core/context_limit (ContextLimit, Unknown, ProfileKeyAbsent, CatalogueAbsent, resolve_bounded_from_catalogue)
 import std/string (repeat, stringToInt)
 import src/core/compaction (
   estimate_tokens_messages,
@@ -119,6 +120,17 @@ func messages_equal(left: [Message], right: [Message]) -> bool {
   }
 }
 
+-- PLAN-001 P1 (ADR-001 D1 rules 1 and 5): the policy carries the resolved SUM.
+-- This fixture's ints are windows it chose or computed, so they are labelled
+-- `Bounded` through the catalogue resolver (the only constructor path); a
+-- non-positive one is the unmeasured arm, which is what an int 0 meant here.
+func fixture_limit(n: int) -> ContextLimit {
+  match resolve_bounded_from_catalogue(n) {
+    Some(l) => l,
+    None => Unknown({ profile: ProfileKeyAbsent, catalogue: CatalogueAbsent })
+  }
+}
+
 func policy(context_limit: int, checkpoint_pct: int, checkpoint_enabled: bool) -> StepPolicy {
   {
     step_budget: 8,
@@ -132,7 +144,7 @@ func policy(context_limit: int, checkpoint_pct: int, checkpoint_enabled: bool) -
     checkpoint_enabled: checkpoint_enabled,
     checkpoint_pct: checkpoint_pct,
     compaction: {
-      context_limit: context_limit,
+      context_limit: fixture_limit(context_limit),
       elide_tier_pct: 70,
       elide_hard_tier_pct: 85,
       emergency_pct: 95
@@ -161,7 +173,8 @@ func state_from_msgs(msgs: [Message]) -> Result[StepState, string] {
       ext_artifacts: jo([]),
       pending_tool_calls: [],
       last_finish_reason: "",
-      last_response_text: ""
+      last_response_text: "",
+      open_waits: []
     })
   }
 }

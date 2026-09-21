@@ -608,7 +608,15 @@ not shrink it; pruning is "Not decided"). `HistoryAppended` and `HistorySeeded` 
 on stdout; the host digests them into the log, but the pipe carries them, and the TUI's
 `readline` over the child's stdout has no line cap (`runtime-process.ts:588`). The eval-harness
 adapter reads the JSONL for `run_summary` (`env-server.ts:415–420`) and sees digests once the
-D3 rule exists. Hostless runs remain undurable.
+D3 rule exists. **The headless `error` after `run_suspended` stays** (PLAN-003 §5, "P3 Part 6:
+the eval-harness finding"): the external harness DOES key on the wire `error` —
+`benchmarks/motoko_rpc.py:213–216` ends its drain on it, `tb_adapter/motoko_agent.py:217` maps
+it to `UNKNOWN_AGENT_ERROR`, and `aider_polyglot.py`/`smoke.py` branch on it — so removing it
+would leave a budget-exhausted benchmark run with no terminal event at all. D2's "except in
+headless until the loggers switch" is therefore permanent for headless, not a stopgap: the
+plain and JSON loggers exit non-zero on `run_suspended` itself, and the headless wire keeps
+`run_suspended`, `run_summary`, `error` until every `terminal_event == "error"` consumer reads
+`run_suspended`. Hostless runs remain undurable.
 
 ## Not decided
 

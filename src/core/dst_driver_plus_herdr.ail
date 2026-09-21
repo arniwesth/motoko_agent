@@ -106,8 +106,21 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 
+-- v2 (2026-09-14, PLAN-003 task PINDH). RE-ISSUED under D4, and for two stale
+-- facts rather than a changed claim. (1) The attribution table was re-baselined
+-- at PLAN-003 P1 Part 4 and again at P3 Part 3, and this profile was missing from
+-- the cascade lists `tools/predicate-anchors/anchors.sh` carries, so its identity
+-- pair and its acceptance fixture's `tool_phase.ail:318` pin were left behind:
+-- `make driver_plus_herdr` answered [attribution-identity-stale] and
+-- [site-unaccounted] for `tool_phase.ail:318` (Process). The fixture now
+-- carries `:389`, the scratchpad row's re-baselined line, so the routing claim
+-- covers the site through the attribution row it always rested on. Bisected red
+-- before P3, at `d72fff1`. (2) PLAN-002 W2 bumped motoko-ext-abi 7.3 -> 7.4
+-- (ExtCtx.open_waits), and the `extension.abi` boundary prose still said 7.3.
+-- Neither changes what is installed, covered, excluded or routed.
+--
 -- v1. First issue; there is no predecessor to re-issue from.
-export pure func herdr_profile_version() -> string { "1" }
+export pure func herdr_profile_version() -> string { "2" }
 
 -- The revision the measurements below were taken at.
 export pure func measured_at() -> string { "8470c3f" }
@@ -118,17 +131,19 @@ export pure func measured_at() -> string { "8470c3f" }
 -- IT IS GUARDED, and only because of the sentence next to it: `check_abi_version`
 -- re-derives the live version from `packages/motoko-ext-abi/ailang.toml` and
 -- compares it against every `ABI x.y` occurrence in `src/core/dst_driver*.ail`,
--- so the `extension.abi` adapter boundary below says "ABI 7.3" in prose and that
+-- so the `extension.abi` adapter boundary below says "ABI 7.4" in prose and that
 -- is what goes red the day the package moves. A bare string constant matches
 -- neither of the guard's two patterns and would have been invisible to it.
-export pure func herdr_abi_version() -> string { "7.3" }
+export pure func herdr_abi_version() -> string { "7.4" }
 
 -- D5 field 8. The attribution table's live identity, RECORDED rather than
 -- restated: `Attr.table_identity()` is the producer and the acceptance script
 -- asserts equality, so a table correction that skipped this profile goes red.
 export pure func herdr_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
-    content_hash: "sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4" }
+    -- RE-RECORDED AT PINDH FOR v2, from
+    -- sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4.
+    content_hash: "sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583" }
 }
 
 export pure func installed_extension_ids() -> [string] { ["herdr"] }
@@ -315,7 +330,7 @@ export pure func driver_plus_herdr() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test. The graded run makes zero approval reads and the discovery witness says so" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface at ABI 7.3 (WorkInFlight; 7.1 added PublishFile, 7.0 ExitIntent, 6.0 the Capability list at B8). INCLUDED: herdr's four atoms are dispatched across it, and what crosses includes EFFECTS rather than only dispatch" },
+        note: "the motoko-ext-abi hook surface at ABI 7.4 (ExtCtx.open_waits; 7.3 added WorkInFlight, 7.1 PublishFile, 7.0 ExitIntent, 6.0 the Capability list at B8). INCLUDED: herdr's four atoms are dispatched across it, and what crosses includes EFFECTS rather than only dispatch" },
       { boundary_id: "extension.ext_ports", included: true,
         note: "the ExtPorts surface an extension uses to reach the world. INCLUDED, and this profile's claim on it is stronger than driver_plus_compose's: classifier 3 reports 46 ExtPorts field calls in herdr's closure against ONE ambient source anywhere in it, and that source is a registration env read rather than a hook path. The graded session records nine of those calls as origin-tagged interactions and the replay reproduces all nine" }
     ],

@@ -1,0 +1,95 @@
+-- src/eval/journal/candidate_live_test.ail
+--
+-- PLAN-004 §3 P1.9a, M13's `ProgramUndecodable` cases that need a file and
+-- `decode_artifact`'s success path (which `ailang test` cannot evaluate at
+-- v0.33.0; `candidate.ail` has the pure cases). Run:
+--
+--   ailang run --caps IO,FS,Process --entry main src/eval/journal/candidate_live_test.ail
+--
+--   m13_program_loads
+--     the synthetic program's artifact, written to a file: load_entry_program
+--     gives the same digest and the same PROGRAM line.
+--   m13_program_undecodable_file
+--     one changed body byte → ProgramStructurallyInvalid(artifact-digest-mismatch).
+--   m13_program_unreadable
+--     no file → ProgramStructurallyInvalid(artifact-unreadable).
+--   m13_program_undecodable_outcome
+--     a well-formed artifact whose provider outcome cannot be re-served →
+--     ProviderOutcomeUndecodable(1).
+--
+-- Synthetic only (§0.6).
+
+module src/eval/journal/candidate_live_test
+
+import std/bytes (toString)
+import std/fs as FS (writeFileResult)
+import std/io (println, exit)
+import std/list as List (length, map, filter)
+import std/process (exec)
+import std/result (Result, Ok, Err)
+import std/string (trim, replace)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_replay (ReplayRefusal)
+import src/core/dst_persistence (encode_body, program_digest)
+import src/eval/journal/scan (program_artifact)
+import src/eval/journal/candidate (synthetic_program, load_entry_program, program_line, replay_refusal_label)
+
+func lt_report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = println("${if ok then "PASS" else "FAIL"} ${name}");
+  ok
+}
+
+pure func lt_label(r: Result[ExecutionProgram, ReplayRefusal]) -> string {
+  match r { Ok(_) => "ok", Err(x) => replay_refusal_label(x) }
+}
+
+func m13_program_loads(tmp: string) -> bool ! {IO, FS} {
+  let p = synthetic_program();
+  let path = "${tmp}/program.artifact";
+  let _ = FS.writeFileResult(path, program_artifact(p));
+  let ok = match load_entry_program(path) {
+    Ok(q) => program_digest(encode_body(q)) == program_digest(encode_body(p)) && program_line(q) == program_line(p),
+    Err(_) => false
+  };
+  lt_report("m13_program_loads", ok)
+}
+
+func m13_program_undecodable_file(tmp: string) -> bool ! {IO, FS} {
+  let path = "${tmp}/tampered.artifact";
+  let _ = FS.writeFileResult(path, replace(program_artifact(synthetic_program()), "journal_admission", "journal_admissioN"));
+  lt_report("m13_program_undecodable_file",
+            lt_label(load_entry_program(path)) == "ProgramStructurallyInvalid(artifact-digest-mismatch)")
+}
+
+func m13_program_unreadable(tmp: string) -> bool ! {IO, FS} {
+  lt_report("m13_program_unreadable",
+            lt_label(load_entry_program("${tmp}/absent.artifact")) == "ProgramStructurallyInvalid(artifact-unreadable)")
+}
+
+func m13_program_undecodable_outcome(tmp: string) -> bool ! {IO, FS} {
+  let p = synthetic_program();
+  let bad = { p | interactions: List.map(\i. if i.identity.ordinal == 1 then { i | outcome: { i.outcome | payload: "not json" } } else i, p.interactions) };
+  let path = "${tmp}/outcome.artifact";
+  let _ = FS.writeFileResult(path, program_artifact(bad));
+  lt_report("m13_program_undecodable_outcome",
+            lt_label(load_entry_program(path)) == "ProviderOutcomeUndecodable(1)")
+}
+
+export func main() -> () ! {IO, FS, Process} {
+  match exec("mktemp", ["-d"]) {
+    Err(_) => { let _ = println("FAIL mktemp"); exit(1) },
+    Ok(o) => {
+      let tmp = trim(toString(o.stdout));
+      let results = [
+        m13_program_loads(tmp),
+        m13_program_undecodable_file(tmp),
+        m13_program_unreadable(tmp),
+        m13_program_undecodable_outcome(tmp)
+      ];
+      let _ = exec("rm", ["-rf", "--", tmp]);
+      let failed = List.length(List.filter(\r. not r, results));
+      let _ = println("candidate_live_test: ${show(List.length(results) - failed)} PASS, ${show(failed)} FAIL");
+      if failed == 0 then () else exit(1)
+    }
+  }
+}

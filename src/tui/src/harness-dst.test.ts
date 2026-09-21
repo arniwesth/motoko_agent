@@ -128,3 +128,29 @@ describe("harness.out_of_sandbox_or_missing_system_md_yields_empty", () => {
     expect(result).toBeNull();
   });
 });
+
+// PLAN-003 P3 Part 5: `--resume` reaches the child, before the task, and the workdir the header
+// records reaches it too.
+describe("resume.supervisor_args_and_workdir", () => {
+  it("emits --resume and --resume-force before the task, which stays last", () => {
+    const args = buildSupervisorArgs("p", "m", workdir, 1, "", "", { journalPath: "/s/journal.jsonl", force: true });
+    const i = args.indexOf("--resume");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe("/s/journal.jsonl");
+    expect(args[i + 2]).toBe("--resume-force");
+    expect(args[args.length - 1]).toBe("");
+    const unforced = buildSupervisorArgs("p", "m", workdir, 1, "", "", { journalPath: "/s/journal.jsonl" });
+    expect(unforced.indexOf("--resume-force")).toBe(-1);
+    const fresh = buildSupervisorArgs("p", "m", workdir, 1, "", "do a task");
+    expect(fresh.indexOf("--resume")).toBe(-1);
+    expect(fresh[fresh.length - 1]).toBe("do a task");
+  });
+
+  it("forwards the header's workdir string as MOTOKO_JOURNAL_WORKDIR, and leaves MOTOKO_WORKDIR alone", () => {
+    const env = buildChildEnv(workdir, "p", "", "");
+    expect(env.MOTOKO_JOURNAL_WORKDIR).toBe(workdir);
+    // Extensions read MOTOKO_WORKDIR with "." as the default and compare what they derive from
+    // it against the relative `--workdir`; setting it absolute refused every herdr Delegate.
+    expect(env.MOTOKO_WORKDIR).toBeUndefined();
+  });
+});

@@ -29,7 +29,7 @@ import src/core/phase_vocab (
   ToolDeniedInfo,
   LedgerEvent,
   ExecNative,
-  handled_tool_message,
+  handled_tool_message, WaitDescriptor, apply_tool_lifecycle, wait_diagnostic_event,
   tool_result_message
 )
 import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, WorldState, ToolInvocation, ToolExecution, ToolOutcome, ToolCompleted, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded)
@@ -42,7 +42,7 @@ import src/core/tool_contract (ToolResultEnvelope)
 -- WI-D20. The world token's codec, imported HERE because `on_tool_handle` is the
 -- second hook slot to perform world-threading effects and this is the site that
 -- both feeds it a world and receives its successor. See `execute_allowed_tool_call`.
-import src/core/ext_world (world_to_token, token_to_world)
+import src/core/ext_world (world_to_token, token_to_world) import src/core/world_ordinal (advance) import src/core/ports (ClockRead, EnvRead, ToolExec) -- PLAN-001 P2 Part 1, joined onto this line: tool_phase.ail:388/:389/:484 are attribution anchors
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for_v2)
 import src/core/types (ToolBackend)
@@ -176,8 +176,8 @@ export pure func native_plan(calls: [ToolCall]) -> ToolPlan {
 -- module returns events and appends nothing, deliberately, and there is no
 -- `ledger_append` anywhere below this line.
 export type ToolDispatchOutcome
-  = ToolDispatchDone({ msgs: [Message], world: WorldState, emitted: [LedgerEvent] })
-  | ToolDispatchPending({ request: ApprovalRequest, accumulated: [Message], world: WorldState, emitted: [LedgerEvent] })
+  = ToolDispatchDone({ msgs: [Message], world: WorldState, emitted: [LedgerEvent], open_waits: [WaitDescriptor] })
+  | ToolDispatchPending({ request: ApprovalRequest, accumulated: [Message], world: WorldState, emitted: [LedgerEvent], open_waits: [WaitDescriptor] })
 
 pure func policy_default_allow(default: PolicyDefault) -> bool {
   match default {
@@ -363,9 +363,9 @@ export func execute_allowed_tool_call(
   workdir: string,
   step_idx: int,
   stream_id: string,
-  ohmy_pi: bool,
+  ohmy_pi: bool, open_waits: [WaitDescriptor],
   emit: (LedgerEvent) -> () ! {IO, Trace}
-) -> { msg: Message, next_state: WorldState, emitted: [LedgerEvent] } ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+) -> { msg: Message, next_state: WorldState, emitted: [LedgerEvent], open_waits: [WaitDescriptor] } ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let envelope = tool_call_to_envelope(call);
   -- BEFORE ANY HOOK AND BEFORE ANY DISPATCH. The arguments are the call; a
   -- policy decision or an extension hook run against `{}` is a decision about a
@@ -383,7 +383,7 @@ export func execute_allowed_tool_call(
     let _ = emit(undecodable_event);
     { msg: undecodable_arguments_message(call, Str.length(call.arguments)),
       next_state: world,
-      emitted: [undecodable_event] }
+      emitted: [undecodable_event], open_waits: open_waits }
   }
   else if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
     let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
@@ -404,7 +404,7 @@ export func execute_allowed_tool_call(
     });
     let _ = emit(handled_event);
     let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
-    { msg: handled_tool_message(call.id, result_env), next_state: world, emitted: handled_event :: scratch }
+    { msg: handled_tool_message(call.id, result_env), next_state: world, emitted: handled_event :: scratch, open_waits: open_waits }
   } else {
     -- WI-D20. THE `on_tool_handle` SUCCESSOR, IN BOTH DIRECTIONS, AND THE TWO
     -- HALVES ARE INDEPENDENT DEFECTS THAT ONLY BECOME VISIBLE TOGETHER.
@@ -444,9 +444,9 @@ export func execute_allowed_tool_call(
           id: call.id,
           exit_code: result_env.exit_code
         });
-        let _ = emit(handled_event);
+        let _ = emit(handled_event); let waits = apply_tool_lifecycle(open_waits, call, result_env); let wait_diag = match wait_diagnostic_event(step_idx, call, result_env) { Some(d) => { let _ = emit(d); [d] }, None => [] }; -- PLAN-002 W2 Part 2 (ADR-002 D3): the wait is lifted from the ENVELOPE, before `handled_tool_message` caps the encoded message, and rides the fold as `open_waits`; an invalid one registers nothing and leaves its diagnostic in `emitted`. Joined onto this line so tool_phase.ail:484 does not move
         let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
-        { msg: handled_tool_message(call.id, result_env), next_state: handle_world, emitted: handled_event :: scratch }
+        { msg: handled_tool_message(call.id, result_env), next_state: handle_world, emitted: handled_event :: (wait_diag ++ scratch), open_waits: waits }
       },
       Delegate => {
         let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
@@ -464,7 +464,7 @@ export func execute_allowed_tool_call(
             -- `first_handle`'s own WI-B2b comment says so at the other end of the
             -- same seam. Only a hook that was never invoked passes the world
             -- through untouched, and `first_handle` already handles that case.
-            { msg: delegated_deferred_message(call), next_state: handle_world, emitted: [deferred_event] }
+            { msg: delegated_deferred_message(call), next_state: handle_world, emitted: [deferred_event], open_waits: open_waits }
           },
           Native => {
             let start_event = V2ToolDispatchStart({
@@ -482,14 +482,14 @@ export func execute_allowed_tool_call(
             -- native dispatch, so starting the clock from `world` would discard
             -- whatever it did and then overwrite it with this call's successor.
             let started = ports.clock_now(handle_world);
-            let budget = ports.env_get(started.next_state, "MOTOKO_TOOL_TIMEOUT_MS", "0");
+            let budget = ports.env_get(advance(started.next_state, ClockRead), "MOTOKO_TOOL_TIMEOUT_MS", "0");
             let invocation: ToolInvocation = {
               call: tool_call_to_envelope(call),
               workdir: workdir,
               timeout_ms: parse_timeout_ms(budget.value),
               started_at_ms: started.now_ms
             };
-            let execution = ports.tool_exec(budget.next_state, invocation);
+            let execution = ports.tool_exec(advance(budget.next_state, EnvRead), invocation);
             let complete_event = V2ToolDispatchComplete({
               step: step_idx,
               stream_id: stream_id,
@@ -498,11 +498,12 @@ export func execute_allowed_tool_call(
             let _ = emit(complete_event);
             {
               msg: tool_outcome_message(call, execution.outcome),
-              next_state: execution.next_state,
+              next_state: advance(execution.next_state, ToolExec),
               -- START then COMPLETE, which is the order they happened in. The
               -- driver appends this log positionally, so a reversal here is a
               -- reversal in the returned trace.
-              emitted: [start_event, complete_event]
+              emitted: [start_event, complete_event],
+              open_waits: open_waits
             }
           }
         }
@@ -522,9 +523,10 @@ export func dispatch_tool_entries(
   stream_id: string,
   ohmy_pi: bool,
   accumulated: [Message],
+  open_waits: [WaitDescriptor],
   emit: (LedgerEvent) -> () ! {IO, Trace}
 ) -> ToolDispatchOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  dispatch_tool_entries_with_builtin(ports, world, rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, [], emit, \_ . None)
+  dispatch_tool_entries_with_builtin(ports, world, rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, [], open_waits, emit, \_ . None)
 }
 
 export func dispatch_tool_entries_with_builtin(
@@ -545,16 +547,21 @@ export func dispatch_tool_entries_with_builtin(
   -- of defect as passing `world` where `executed.next_state` belongs, one
   -- channel over — and the wire gate is what sees it.
   emitted: [LedgerEvent],
+  -- PLAN-002 W2 Part 2. The typed waits, threaded like `world`: each executed
+  -- entry's `open_waits` is the next entry's, so a batch that delegates and then
+  -- checks sees its own registration. Passing the parameter past an executed
+  -- entry type-checks and drops what that entry registered.
+  open_waits: [WaitDescriptor],
   emit: (LedgerEvent) -> () ! {IO, Trace},
   builtin: (ToolCall) -> Option[Message]
 ) -> ToolDispatchOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match entries {
-    [] => ToolDispatchDone({ msgs: accumulated, world: world, emitted: emitted }),
+    [] => ToolDispatchDone({ msgs: accumulated, world: world, emitted: emitted, open_waits: open_waits }),
     entry :: rest => {
       let call = entry.call;
       match builtin(call) {
         Some(msg) =>
-          dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emitted, emit, builtin),
+          dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emitted, open_waits, emit, builtin),
         None => {
           let envelope = tool_call_to_envelope(call);
           let policy = dispatch_tool_policy(rt, ctx, envelope);
@@ -569,7 +576,7 @@ export func dispatch_tool_entries_with_builtin(
               });
               let _ = emit(denied_event);
               let denial_msg = denial_message(call, reason);
-              dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emitted ++ [denied_event], emit, builtin)
+              dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emitted ++ [denied_event], open_waits, emit, builtin)
             },
             Pending(reason, default) => {
               let pending_event = ToolPending({
@@ -594,7 +601,8 @@ export func dispatch_tool_entries_with_builtin(
                 -- `accumulated` and `world`: the batch resumes after the
                 -- approval, and events emitted before the interrupt are still
                 -- events this fold emitted.
-                emitted: emitted ++ [pending_event]
+                emitted: emitted ++ [pending_event],
+                open_waits: open_waits
               })
             },
             _ => {
@@ -603,8 +611,8 @@ export func dispatch_tool_entries_with_builtin(
               -- batch — the same defect cluster 1 measured on the provider
               -- cursor, one seam over. The probe's four-fault sequence is what
               -- catches it: a frozen queue serves the first outcome four times.
-              let executed = execute_allowed_tool_call(ports, world, rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, emit);
-              dispatch_tool_entries_with_builtin(ports, executed.next_state, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [executed.msg], emitted ++ executed.emitted, emit, builtin)
+              let executed = execute_allowed_tool_call(ports, world, rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, open_waits, emit);
+              dispatch_tool_entries_with_builtin(ports, executed.next_state, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [executed.msg], emitted ++ executed.emitted, executed.open_waits, emit, builtin)
             }
           }
         }

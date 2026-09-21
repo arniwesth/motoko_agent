@@ -1,0 +1,278 @@
+-- src/eval/journal/admission_live_test.ail
+--
+-- PLAN-004 M9, the run-bearing half, and P1.6's two end cases. `ailang test`
+-- grants no Process/SharedMem, so this is a runner:
+--
+--   ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+--     --ai-stub --entry main src/eval/journal/admission_live_test.ail < /dev/null
+--
+-- One `PASS <check>` / `FAIL <check>` line per check; exit 1 on any failure.
+-- Every run is a real `admission_run` over a synthetic journal world
+-- (`world_fixtures.ail`); the observations are mutated only where a check
+-- says so.
+--
+--   p16_three_continuations_end_suspended
+--     m3_selector_end (N = 3) through `admit`: preflight clean (synthetic, no E
+--     record: toolchain/packages/generator reported unchecked), A5/A6/A9 clean,
+--     `EndSuspended(3)`: result Err `StepBudgetExhausted`, `RunSuspended` once
+--     in the trace, `suspended: Some`; the program's interactions are the run's
+--     log.
+--   p16_stop_call_end_finalize
+--     m4_stop_call_last (N = 3, a stop call at 3): `EndFinalize(model_stop)`:
+--     result Ok, no `RunSuspended`, `suspended: None`, RunSummary `stop`.
+--   m9_wrong_end_budget_vs_stop
+--     the stop run checked against `EndSuspended(3)`, and the continuation run
+--     against `EndFinalize(model_stop)`: each `A6:EndMismatch@call:3`, alone.
+--   m9_wrong_end_exhausted_marker
+--     the continuation world with its last script step removed: call 3 finds
+--     the script empty, the seam records the exhausted marker and the run
+--     fails; A6 = [EndMismatch@call:3, ExhaustedMarker@call:3].
+--   m9_a9_known_failing_round_trip
+--     the continuation run's program with its FIRST provider record's payload
+--     made undecodable: A9's first finding is `world_state_of`'s
+--     `replay-refused-provider-outcome-undecodable` at the pinned
+--     `Interaction(7)`; the unmutated program is clean.
+--   m9_a5_live_frame
+--     the continuation run's frame is clean; the same run with a witness left
+--     pending, with its last `world_request` dropped, and with a malformed END
+--     marker each gives its A5 finding first.
+--   m9_preflight_refuses_real_entry_without_running
+--     a real entry before P1G (no E record, `-dev` generator): refused in
+--     preflight, nothing run.
+--
+-- Synthetic fixtures only (§0.6).
+
+module src/eval/journal/admission_live_test
+
+import std/io (println, exit)
+import std/list as List (length, map, foldl, filter)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join)
+import src/core/dst_interaction (Interaction, ProviderIdentity)
+import src/core/ports (EnvRead)
+import src/core/phase_vocab (LedgerTrace, LedgerRecord, WireRecord, WorldRequest)
+import src/core/dst_driver_only (driver_only_manifest)
+import src/core/session (TracedSessionResult)
+import src/eval/journal/stopping (JournalWorld, EndSuspended, EndFinalize)
+import src/eval/journal/world (journal_world_state, fixture_journal_world)
+import src/eval/journal/admission (
+  AdmissionFinding, AdmissionReport, Identities, Comparators, EntryKind, SyntheticEntry, RealEntry,
+  check_a5, check_a6, check_a9, first_label, finding_label, report_ok, admission_program, manifest_of,
+  normalized_configuration, profile_scan_roots
+)
+import src/eval/journal/admission_run (admission_run, admit, frame_observation, end_observation)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_m3_selector_end, fxw_m4_stop_call_last)
+import src/eval/journal/testdata/admission_fixtures (fxa_all)
+
+func lt_report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = println("${if ok then "PASS" else "FAIL"} ${name}");
+  ok
+}
+
+pure func lt_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && lt_strs_eq(xs, ys) }
+  }
+}
+
+pure func lt_labels(fs: [AdmissionFinding]) -> [string] { List.map(finding_label, fs) }
+
+pure func lt_epoch() -> int { 1789000000000 }
+
+-- The generator's normalized configuration for a fixture (A9b's comparator).
+pure func lt_rederived(name: string) -> string {
+  List.foldl(\acc a. if a.name == name then a.normalized_configuration else acc, "", fxa_all())
+}
+
+pure func lt_ids(jw: JournalWorld, generator: string) -> Identities {
+  let b = driver_only_manifest("", "", "", "", [], [], "");
+  {
+    source_revision: "a0a0a0", scan_root_commit: "a0a0a0", tracked_changes: [],
+    toolchain: "AILANG fx", toolchain_sha256: "sha256:fxbin", abi_version: "7.4",
+    classifier_2_set: ["env_get"], unrouted_fields: [], scan_roots: ["src", "packages"],
+    packages: [], lock_sha256: "sha256:fxlock",
+    normalized_configuration: normalized_configuration(jw),
+    profile_id: b.profile_id, profile_version: b.profile_version,
+    event_vocabulary_version: b.event_vocabulary_version,
+    profile_rules_version: b.profile_rules_version, coverage_rules_version: b.coverage_rules_version,
+    attribution_rules_version: b.attribution_rules_version, fault_catalogue_version: b.fault_catalogue_version,
+    generator_version: generator, extension_packages: []
+  }
+}
+
+pure func lt_cmp(fixture: string) -> Comparators {
+  {
+    revision_is_commit: true, assembled_tree: "t0", revision_tree: "t0",
+    lock_abi_version: "7.4", pinned_classifier_2_set: ["env_get"], pinned_unrouted_fields: [],
+    profile_scan_roots: profile_scan_roots(),
+    leaf_files: ["src/core/session.ail", "src/core/tool_phase.ail", "src/core/context_usage.ail", "src/core/test/stub_step.ail"],
+    rederived_configuration: lt_rederived(fixture), e_pin: None, registry_used: []
+  }
+}
+
+func lt_print_report(r: AdmissionReport) -> () ! {IO} {
+  println("${r.label}: ran=${if r.ran then "true" else "false"} calls=${show(r.calls)} expected=${r.expected_end} observed=${r.observed_end} interactions=${show(r.interactions)} program=${r.program_digest} preflight=[${join(";", lt_labels(r.preflight))}] findings=[${join(";", lt_labels(r.findings))}] unchecked=${show(List.length(r.unchecked))}")
+}
+
+func p16_end_case(name: string, f: WorldFixture, want_end: string) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => lt_report("${name} (fixture reads)", false),
+    Ok(jw) => {
+      let r = admit(name, SyntheticEntry, lt_ids(jw, "a0a0a0-dev"), lt_cmp(f.name), jw, lt_epoch(), ".motoko/eval-admission-workdir");
+      let _ = lt_print_report(r);
+      let program_ok = match r.program {
+        None => false,
+        Some(p) => p.generator_id == "journal_admission" && p.schema_version == "execution-program/4"
+                     && List.length(p.interactions) == r.interactions && p.initial_world.clock_epoch == lt_epoch()
+      };
+      lt_report(name, report_ok(r) && r.calls == 3 && r.observed_end == want_end && r.expected_end == want_end
+                        && program_ok && List.length(r.unchecked) == 3)
+    }
+  }
+}
+
+func lt_run(f: WorldFixture) -> Option[{ jw: JournalWorld, run: TracedSessionResult }] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => None,
+    Ok(jw) => {
+      let w0 = journal_world_state(jw, lt_epoch());
+      Some({ jw: jw, run: admission_run(jw, w0, ".motoko/eval-admission-workdir") })
+    }
+  }
+}
+
+func p16_run_shapes(cont: TracedSessionResult, stop: TracedSessionResult) -> bool ! {IO} {
+  let c = end_observation(cont);
+  let s = end_observation(stop);
+  let _ = println("shapes: cont ok=${if c.ok then "t" else "f"} code=${c.err_code} suspended=${if c.suspended then "t" else "f"} run_suspended=${show(c.run_suspended)} finish=${c.finish_reason} providers=${show(c.provider_records)}; stop ok=${if s.ok then "t" else "f"} code=${s.err_code} suspended=${if s.suspended then "t" else "f"} run_suspended=${show(s.run_suspended)} finish=${s.finish_reason} providers=${show(s.provider_records)}");
+  let a = lt_report("p16_continuations_raw_shape",
+    (match cont.result { Err(e) => e.code == "StepBudgetExhausted", Ok(_) => false })
+      && c.run_suspended == 1 && (match cont.suspended { Some(_) => true, None => false })
+      && c.provider_records == 3 && List.length(c.markers) == 0);
+  let b = lt_report("p16_stop_call_raw_shape",
+    (match stop.result { Ok(_) => true, Err(_) => false })
+      && s.run_suspended == 0 && (match stop.suspended { Some(_) => false, None => true })
+      && s.finish_reason == "stop" && s.provider_records == 3 && List.length(s.markers) == 0);
+  a && b
+}
+
+func m9_wrong_end(cont: TracedSessionResult, stop: TracedSessionResult) -> bool ! {IO} {
+  let x = lt_labels(check_a6(EndSuspended(3), 3, end_observation(stop)));
+  let y = lt_labels(check_a6(EndFinalize("model_stop"), 3, end_observation(cont)));
+  let _ = println("wrong_end: stop-as-suspended=${join(",", x)} cont-as-stop=${join(",", y)}");
+  lt_report("m9_wrong_end_budget_vs_stop",
+            lt_strs_eq(x, ["A6:EndMismatch@call:3"]) && lt_strs_eq(y, ["A6:EndMismatch@call:3"]))
+}
+
+pure func lt_drop_last[a](xs: [a]) -> [a] {
+  match xs {
+    [] => [],
+    [_] => [],
+    x :: rest => x :: lt_drop_last(rest)
+  }
+}
+
+func m9_exhausted_marker(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => lt_report("m9_wrong_end_exhausted_marker (fixture)", false),
+    Ok(jw) => {
+      let w0 = journal_world_state(jw, lt_epoch());
+      let short = { w0 | script: lt_drop_last(w0.script) };
+      let run = admission_run(jw, short, ".motoko/eval-admission-workdir");
+      let got = lt_labels(check_a6(EndSuspended(3), 3, end_observation(run)));
+      let _ = println("exhausted_marker: script=${show(List.length(short.script))} a6=${join(",", got)}");
+      lt_report("m9_wrong_end_exhausted_marker",
+                lt_strs_eq(got, ["A6:EndMismatch@call:3", "A6:ExhaustedMarker@call:3"]))
+    }
+  }
+}
+
+-- The first provider record's payload, made undecodable.
+pure func lt_corrupt_first_provider(log: [Interaction]) -> [Interaction] {
+  let step = List.foldl(\acc i. match i.identity.body {
+    ProviderIdentity(_, _, _) =>
+      if acc.done then { acc | out: acc.out ++ [i] }
+      else { done: true, out: acc.out ++ [{ i | outcome: { i.outcome | payload: "{not json" } }] },
+    _ => { acc | out: acc.out ++ [i] }
+  }, { done: false, out: [] }, log);
+  step.out
+}
+
+pure func lt_first_provider_ordinal(log: [Interaction]) -> int {
+  List.foldl(\acc i. if acc >= 0 then acc else (match i.identity.body { ProviderIdentity(_, _, _) => i.identity.ordinal, _ => -1 }), -1, log)
+}
+
+func m9_a9_known_failing(jw: JournalWorld, run: TracedSessionResult) -> bool ! {IO} {
+  let w0 = journal_world_state(jw, lt_epoch());
+  let ids = lt_ids(jw, "a0a0a0-dev");
+  let clean = admission_program(jw, w0, run.world.log, manifest_of(ids), ids.generator_version);
+  let bad = { clean | interactions: lt_corrupt_first_provider(clean.interactions) };
+  let got = first_label(check_a9(bad));
+  let _ = println("a9: first provider ordinal=${show(lt_first_provider_ordinal(run.world.log))} clean=${show(List.length(check_a9(clean)))} mutated first=${got}");
+  lt_report("m9_a9_known_failing_round_trip",
+            List.length(check_a9(clean)) == 0
+              && got == "A9:replay-refused-provider-outcome-undecodable@interaction:7")
+}
+
+pure func lt_is_request(r: LedgerRecord) -> bool {
+  match r { WireRecord(WorldRequest(_)) => true, _ => false }
+}
+
+pure func lt_drop_last_request(records: [LedgerRecord]) -> [LedgerRecord] {
+  let n = List.length(List.filter(lt_is_request, records));
+  let step = List.foldl(\acc r. if lt_is_request(r) then
+      (if acc.seen + 1 == n then { seen: acc.seen + 1, out: acc.out } else { seen: acc.seen + 1, out: acc.out ++ [r] })
+    else { acc | out: acc.out ++ [r] }, { seen: 0, out: [] }, records);
+  step.out
+}
+
+func m9_a5_live(run: TracedSessionResult) -> bool ! {IO} {
+  let f = frame_observation("adm", 0, run);
+  let clean = check_a5(f);
+  let pending = first_label(check_a5(frame_observation("adm", 0, { run | world: { run.world | pending: run.world.pending ++ [{ ordinal: 99, request_class: EnvRead }] } })));
+  let dropped = first_label(check_a5(frame_observation("adm", 0, { run | trace: { records: lt_drop_last_request(run.trace.records) } })));
+  let malformed = first_label(check_a5({ f | end_line: "WORLD_RUN_END adm" }));
+  let _ = println("a5: requests=${show(List.length(f.requests))} final=${show(f.final)} clean=${show(List.length(clean))} pending=${pending} dropped=${dropped} malformed=${malformed}");
+  lt_report("m9_a5_live_frame",
+    List.length(clean) == 0 && List.length(f.requests) > 0
+      && pending == "A5:PendingNotEmpty@aggregate:frame"
+      && dropped == "A5:FrameFinalMismatch@aggregate:frame"
+      && malformed == "A5:FrameMalformed@aggregate:frame")
+}
+
+func m9_preflight_real(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => lt_report("m9_preflight_refuses_real_entry_without_running (fixture)", false),
+    Ok(jw) => {
+      let r = admit("real", RealEntry, lt_ids(jw, "a0a0a0-dev"), lt_cmp(f.name), jw, lt_epoch(), ".motoko/eval-admission-workdir");
+      let _ = lt_print_report(r);
+      lt_report("m9_preflight_refuses_real_entry_without_running",
+        not r.ran && r.interactions == 0
+          && lt_strs_eq(lt_labels(r.preflight), [
+               "A9b:ToolchainUnpinned@aggregate:provenance:toolchain",
+               "A9b:PackagesUnpinned@aggregate:provenance:packages",
+               "A9b:DevGeneratorRealEntry@aggregate:provenance:generator_version"]))
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let a = p16_end_case("p16_three_continuations_end_suspended", fxw_m3_selector_end(), "EndSuspended(3)");
+  let b = p16_end_case("p16_stop_call_end_finalize", fxw_m4_stop_call_last(), "EndFinalize(model_stop)");
+  let rest = match (lt_run(fxw_m3_selector_end()), lt_run(fxw_m4_stop_call_last())) {
+    (Some(c), Some(s)) => {
+      let r1 = p16_run_shapes(c.run, s.run);
+      let r2 = m9_wrong_end(c.run, s.run);
+      let r3 = m9_a9_known_failing(c.jw, c.run);
+      let r4 = m9_a5_live(c.run);
+      r1 && r2 && r3 && r4
+    },
+    _ => lt_report("runs", false)
+  };
+  let m = m9_exhausted_marker(fxw_m3_selector_end());
+  let p = m9_preflight_real(fxw_m3_selector_end());
+  if a && b && rest && m && p then println("admission_live_test: all checks passed")
+  else { let _ = println("admission_live_test: FAILED"); exit(1) }
+}

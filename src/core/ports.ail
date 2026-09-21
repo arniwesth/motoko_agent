@@ -41,7 +41,7 @@ import std/env (getEnvOr)
 -- orders a listing — see `scripted_dir_list` for why the ordering is imposed at
 -- BOTH adapters rather than left to whichever filesystem answered.
 import std/string as Str (length, startsWith, split, compare, substring)
-import src/core/phase_vocab (ApprovalRequest)
+import src/core/phase_vocab (ApprovalRequest, WaitDescriptor)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/tool_dispatch_adapter (dispatch_one_typed)
 -- WI-D22. `FsNode` lived here through WI-D21 and moved down for the same reason
@@ -59,7 +59,7 @@ import src/core/fs_node (FsNode, FsFile, FsDir)
 -- `Interaction` was rejected.
 import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
-  ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
+  ToolIdentity, ApprovalIdentity, WakeIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
   FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   -- WI-D24. The eighth recording adapter's class; see `recording_ext_effect`.
   ExtensionEffectIdentity,
@@ -206,6 +206,19 @@ export type WorldState = {
   -- policy into the adapter, and let the live and deterministic worlds disagree
   -- about it.
   approvals: [string],
+
+  -- PLAN-002 W3 (ADR-002 D2): THE WAKE CURSOR. The remaining queue of wake
+  -- OBSERVATIONS a deterministic run's `wake_read` is served from, consumed
+  -- head-first like `approvals` once W4's scripted adapter lands. Empty means
+  -- no outstanding wake; an adapter serving from an exhausted queue falls
+  -- through to `wake_read_unbound`, a `HostError`, never a hang.
+  --
+  -- The element is `WakeObservation`, NOT `WakeInput` (PLAN-002 §1 row 8,
+  -- owner-signed §8.6). ADR-002 D2's table types it `[WakeInput]`, but
+  -- `WakeInput` carries `next_state: WorldState`, which would make this record
+  -- contain itself; the ADR's prose — "a fixture supplies observations, never
+  -- whole worlds" — is what is pinned. The adapter builds the `WakeInput`.
+  wakes: [WakeObservation],
 
   -- The synthetic environment: the key/value map a deterministic run reads
   -- instead of the process environment. A key that is absent falls back to the
@@ -467,7 +480,62 @@ export type WorldState = {
   -- only the
   -- GENERATING adapters do, which is what keeps adding this field
   -- behaviour-preserving for every existing target.
-  gen: GeneratorState
+  gen: GeneratorState,
+
+  -- PLAN-001 P2 Part 1 (ADR-001 D2 part 1): THE WORLD ORDINAL AND ITS PENDING
+  -- WITNESSES. `ordinal` counts the HELPED leaf requests this world has seen —
+  -- the direct `Ports`/`ContextReader` calls by driver-side code that
+  -- `tools/driver_leaf_inventory/derive.py` lists — and `pending` holds one
+  -- witness per request not yet written to the wire, in request order.
+  --
+  -- ONE WRITER: `world_ordinal.advance` (its body is `advance_ordinal` below,
+  -- PLAN-002 W3, because `wake_read_unbound` owes it and cannot import up),
+  -- called on the successor each helped
+  -- leaf's port returned. The adapters never touch either field, so a live
+  -- adapter's identity transition stays an identity, and the ten `ExtPorts`
+  -- forwarding closures (extension-initiated, exempt) never advance it.
+  --
+  -- NOT the interaction log's ordinal. `log`'s encounter ordinals exist only
+  -- under the recording adapters and number interactions; this one numbers
+  -- helped requests under every adapter. Subtracting one from the other gives
+  -- no census (cF2).
+  --
+  -- NOT PERSISTED IN THE PROGRAM. `InitialWorld` has no counterpart, and
+  -- `dst_replay.world_state_of` starts from `empty_world_state()`, so a replay
+  -- starts at ordinal 0 with nothing pending. The world TOKEN carries both
+  -- (`ext_world.world_json`), because a bridge call round-trips the driver's
+  -- world through it mid-run and a codec that dropped them would reset the count.
+  ordinal: int,
+  pending: [RequestWitness]
+}
+
+-- The kind of a helped leaf request. CLOSED: frozen at five by P-INV
+-- (`derive.py`'s `REQUEST_CLASS`), and SIX since PLAN-002 W3, where ADR-002 D2
+-- added `WakeRead` for `wake_read` — the one new helped kind, added the way
+-- this note always said one would be: a variant here, never a catch-all.
+-- `approval_read` is still `ToolExec` (the approval gate classes the dispatch
+-- it guards), and exemption is still structural rather than a variant.
+--
+-- `EnvRead` and `FileRead` share their spelling with the port RESULT records
+-- above them. The type and the constructor live in different namespaces and
+-- both import under the one name; the spelling is P-INV's, kept.
+export type RequestClass = EnvRead | FileRead | ClockRead | ToolExec | ModelStep | WakeRead
+
+-- One helped request not yet on the wire: the ordinal `advance` gave it and its
+-- class. `request_class` and not the plan's `class`, which AILANG reserves.
+export type RequestWitness = { ordinal: int, request_class: RequestClass }
+
+-- THE ONE WRITER of `ordinal` and `pending`, re-exported to the driver as
+-- `world_ordinal.advance` (read that module's header; every driver site calls
+-- it by that name). It lives here only because `wake_read_unbound`, below,
+-- owes one `advance` and `world_ordinal` imports this module: calling up would
+-- be a dependency cycle (LDR002). Nothing else in this module calls it.
+--
+-- The successor with the ordinal advanced by exactly one and this request's
+-- witness pushed at the TAIL of `pending`, carrying the NEW ordinal.
+export pure func advance_ordinal(w: WorldState, c: RequestClass) -> WorldState {
+  let next = w.ordinal + 1;
+  { w | ordinal: next, pending: w.pending ++ [{ ordinal: next, request_class: c }] }
 }
 
 -- One scripted tool outcome. The fields are ordered by the fault they express,
@@ -702,6 +770,39 @@ export type ApprovalInput = {
   next_state: WorldState
 }
 
+-- PLAN-002 W3 (ADR-002 D2): the park request `wake_read` is asked, beside the
+-- approval pair it generalises. `request_id` is the run id plus the park
+-- ordinal (built by the driver from `RunIdentity`, W4); `step` is the step the
+-- run parked at; `waits` are the open waits it parked on. `attempt` is 0 on a
+-- park's first issue and counts W4's re-issues of the same `request_id`
+-- (PLAN-002 §8.3, R2). The unbound default ignores everything but the id.
+export type ParkRequest = {
+  request_id: string,
+  step: int,
+  waits: [WaitDescriptor],
+  attempt: int
+}
+
+-- How a wait ended, as `wake_read` reports it. `HostError` leaves the wait open
+-- (ADR-002 D2); `Aborted` is also every in-turn cancel command (§8.7).
+export type WakeOutcome = Settled(string) | Lost(string) | OperatorInput(string) | TimedOut | HostError(string) | Aborted
+
+-- One wake as a fixture supplies it: the `WorldState.wakes` cursor element
+-- (§1 row 8, §8.6). An observation, never a world.
+export type WakeObservation = {
+  request_id: string,
+  wait_id: string,
+  outcome: WakeOutcome
+}
+
+-- One wake read and its successor world, which the ADAPTER builds.
+export type WakeInput = {
+  request_id: string,
+  wait_id: string,
+  outcome: WakeOutcome,
+  next_state: WorldState
+}
+
 -- A clock read and its successor world. Every port that observes an effect
 -- returns its successor explicitly — D1's `next_world_state` — because a read
 -- that advances a cursor without handing the successor back is the exact
@@ -722,8 +823,9 @@ export type PortedProvider = {
 -- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
-  { script: [], clock_ms: 0, approvals: [], env: [], files: [], tools: [],
-    ext_effects: [], holder_ext_id: "", log: [], gen: no_generator() }
+  { script: [], clock_ms: 0, approvals: [], wakes: [], env: [], files: [], tools: [],
+    ext_effects: [], holder_ext_id: "", log: [], gen: no_generator(),
+    ordinal: 0, pending: [] }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -787,6 +889,11 @@ export type Ports = {
   -- passed so a recorded world can correlate the read with the call it is
   -- approving (D8 causal identities); the live adapter ignores it.
   approval_read: (WorldState, ApprovalRequest) -> ApprovalInput ! {IO},
+  -- PLAN-002 W3 (ADR-002 D2): the wake class, `approval_read` generalised to a
+  -- park. State-threaded; a helped leaf of class `WakeRead`. Bound to
+  -- `wake_read_unbound` in every literal until W4 binds the real adapters, and
+  -- no driver site calls it before W4.
+  wake_read: (WorldState, ParkRequest) -> WakeInput ! {IO},
   -- WI-A12's clock class. State-threaded in and out, like `model_step`. The
   -- `{Clock}` effect stays in the row and that is expected: AILANG fails on a
   -- capability only when a read is PERFORMED, so the deterministic adapter
@@ -982,6 +1089,201 @@ export func scripted_approval(state: WorldState, _req: ApprovalRequest) -> Appro
     x :: rest => { raw: x, eof: false, next_state: { state | approvals: rest } }
   }
 }
+
+-- PLAN-002 W3 (ADR-002 D5 step 3): THE UNBOUND DEFAULT of `wake_read`. It never
+-- blocks: no port, no `readLine`, just the request id echoed back with a
+-- `HostError` whose message names the cause, so a run that reaches an unbound
+-- wake (or, from W4, an exhausted scripted `wakes` queue) sees a distinct error
+-- rather than a hang or a fabricated wake. `wait_id` is "" because no wait was
+-- observed.
+--
+-- The successor is `advance(world, WakeRead)` and not the world unchanged:
+-- PLAN-001 P2 has landed, so this is the one witness every helped leaf owes
+-- (PLAN-002 §1 row 1).
+--
+-- The `{IO}` row is DECLARED and never performed, exactly as `scripted_approval`
+-- above declares it: a `pure` function type-checks against the field in
+-- `ports_shape_probe` but not through `live_ports`' record update, which
+-- unifies the field's closed row `{IO}` against `{}` and fails (measured:
+-- `ailang check scripts/dst/long_qwen_compaction_dst.ail`, stub_step.ail:186).
+export func wake_read_unbound(world: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
+  { request_id: req.request_id, wait_id: "", outcome: HostError("wake_read unbound"),
+    next_state: advance_ordinal(world, WakeRead) }
+}
+
+-- PLAN-002 W3's outcome codec, MOVED here from `ext_world` at W4 so that
+-- `recording_wake` below can write the same ids the world token writes (this
+-- module cannot import `ext_world`, which imports it). One id per arm, `detail`
+-- "" for the two arms that carry none, and an unknown id decodes to `None`.
+export pure func wake_outcome_id(o: WakeOutcome) -> string {
+  match o {
+    Settled(_) => "settled",
+    Lost(_) => "lost",
+    OperatorInput(_) => "operator_input",
+    TimedOut => "timed_out",
+    HostError(_) => "host_error",
+    Aborted => "aborted"
+  }
+}
+
+export pure func wake_outcome_detail(o: WakeOutcome) -> string {
+  match o {
+    Settled(d) => d,
+    Lost(d) => d,
+    OperatorInput(d) => d,
+    TimedOut => "",
+    HostError(d) => d,
+    Aborted => ""
+  }
+}
+
+export pure func wake_outcome_of(id: string, detail: string) -> Option[WakeOutcome] {
+  if id == "settled" then Some(Settled(detail))
+  else if id == "lost" then Some(Lost(detail))
+  else if id == "operator_input" then Some(OperatorInput(detail))
+  else if id == "timed_out" then Some(TimedOut)
+  else if id == "host_error" then Some(HostError(detail))
+  else if id == "aborted" then Some(Aborted)
+  else None
+}
+
+-- PLAN-003 P4 Part 2 (ADR-003 v6.1 D7): THE CURSOR READ, factored out of
+-- `scripted_wake`'s head arm so that the LIVE binding can consult it first. The
+-- head of `WorldState.wakes` becomes the reply, `Some`, and the successor is
+-- the queue advanced past it, then ONE `advance` of class `WakeRead` (the port
+-- advances; the `Park` arm owes the witness). An empty queue is `None`, and
+-- the CALLER says what that means: `scripted_wake` falls through to
+-- `wake_read_unbound`, `live_ports`' `wake_read` asks the host. A durable
+-- park's answer arrives through the journal — the resumer (Part 3) seeds this
+-- cursor from the `wake` entry the host wrote (Part 5) — which is why the live
+-- binding reads it before it prints a `wake_request`. The request is taken and
+-- not consulted, exactly as the head arm never consulted it: matching a served
+-- observation against the request is the `Park` arm's (`wake_matches`).
+export pure func cursor_wake(state: WorldState, _req: ParkRequest) -> Option[WakeInput] {
+  match state.wakes {
+    [] => None,
+    w :: rest => Some({ request_id: w.request_id, wait_id: w.wait_id, outcome: w.outcome,
+                        next_state: advance_ordinal({ state | wakes: rest }, WakeRead) })
+  }
+}
+
+-- PLAN-002 W4 Part 4 (ADR-002 D2): THE SCRIPTED WAKE, `scripted_approval`'s
+-- twin. The head of `WorldState.wakes` becomes the reply, and the adapter
+-- builds the successor: the queue advanced past it, then ONE `advance` of
+-- class `WakeRead` (the port advances; the `Park` arm owes the witness). An
+-- EMPTY QUEUE FALLS THROUGH TO `wake_read_unbound`: a `HostError`, never a hang
+-- and never a fabricated wake. A fixture supplies observations, never worlds
+-- (§1 row 8). PLAN-003 P4 Part 2 moved the head arm to `cursor_wake` above;
+-- the behaviour is byte-identical.
+export func scripted_wake(state: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
+  match cursor_wake(state, req) {
+    Some(w) => w,
+    None => wake_read_unbound(state, req)
+  }
+}
+
+-- The reply as the program records it: every field a replay needs to rebuild
+-- the `WakeObservation`, plus `attempt`, which R2 makes a PAYLOAD field (it is
+-- not part of `WakeIdentity`, whose equality is unchanged).
+export pure func wake_payload(read: WakeInput, attempt: int) -> string {
+  encode(jo([kv("request_id", js(read.request_id)), kv("wait_id", js(read.wait_id)),
+             kv("outcome", js(wake_outcome_id(read.outcome))), kv("detail", js(wake_outcome_detail(read.outcome))),
+             kv("attempt", jnum(_int_to_float(attempt)))]))
+}
+
+-- PLAN-002 W4 Part 4: THE RECORDING WAKE, `recording_approval`'s twin. It
+-- serves through `scripted_wake` and records one `WakeIdentity` interaction per
+-- read. The identity is the REQUEST's `request_id` and the reply's `wait_id`; a
+-- read that found the queue empty and fell through to the unbound default is
+-- recorded `OutcomeMissing`, exactly as an end-of-input approval read is, so a
+-- replay drains at the same position. Deadline 0: no wake deadline is routed
+-- (timeouts are "Not decided", PLAN-002 §4).
+export func recording_wake(state: WorldState, req: ParkRequest) -> WakeInput ! {IO} {
+  let served = match state.wakes { [] => false, _ => true };
+  let read = scripted_wake(state, req);
+  {
+    request_id: read.request_id,
+    wait_id: read.wait_id,
+    outcome: read.outcome,
+    next_state: record_interaction(
+      read.next_state,
+      WakeIdentity("loop_v2", req.request_id, read.wait_id),
+      "wake_read request_id=${req.request_id} step=${show(req.step)} attempt=${show(req.attempt)} waits=${show(List.length(req.waits))}",
+      0,
+      { advance_ms: 0, chunks: [],
+        payload: if served then wake_payload(read, req.attempt) else "",
+        status: if served then OutcomeOk else OutcomeMissing,
+        fault_class_id: "" }
+    )
+  }
+}
+
+pure func test_park_request() -> ParkRequest {
+  { request_id: "s-7.r0.3#park-2", step: 11, waits: [], attempt: 0 }
+}
+
+-- W3 gate 1: the id is echoed, `wait_id` is empty, the outcome is the named
+-- `HostError`, and no other arm.
+func test_wake_read_unbound_echoes_the_request_and_reports_host_error() -> bool ! {IO}
+  tests [((), true)]
+  {
+    let r = wake_read_unbound(empty_world_state(), test_park_request());
+    r.request_id == "s-7.r0.3#park-2" && r.wait_id == ""
+      && (match r.outcome { HostError(m) => m == "wake_read unbound", _ => false })
+  }
+
+-- W3 gate 1: exactly one `advance`: the ordinal is +1, and `pending` keeps what
+-- it held and ends with exactly one new witness `{ ordinal + 1, WakeRead }`.
+func test_wake_read_unbound_advances_once_with_one_wake_read_witness() -> bool ! {IO}
+  tests [((), true)]
+  {
+    let world = { empty_world_state() | ordinal: 41, pending: [{ ordinal: 41, request_class: ModelStep }] };
+    let r = wake_read_unbound(world, { test_park_request() | attempt: 3 });
+    r.next_state.ordinal == 42
+      && (match r.next_state.pending {
+            a :: b :: [] =>
+              a.ordinal == 41 && (match a.request_class { ModelStep => true, _ => false })
+                && b.ordinal == 42 && (match b.request_class { WakeRead => true, _ => false }),
+            _ => false
+          })
+  }
+
+-- The successor is the input world advanced, not a fresh one: every other field
+-- (here the approvals and wakes cursors) passes through untouched.
+func test_wake_read_unbound_leaves_the_cursors_alone() -> bool ! {IO}
+  tests [((), true)]
+  {
+    let world = { empty_world_state() | approvals: ["y"],
+                  wakes: [{ request_id: "q", wait_id: "w", outcome: TimedOut }] };
+    let r = wake_read_unbound(world, test_park_request());
+    List.length(r.next_state.approvals) == 1 && List.length(r.next_state.wakes) == 1
+  }
+
+-- PLAN-003 P4 Part 2 (ADR-003 v6.1 D7): THE RECORDING BINDING, ASSERTED AND
+-- NOT CHANGED. Over a world seeded with the re-issued `<R'>.p0`, `recording_wake`
+-- serves the observation and records exactly ONE
+-- `WakeIdentity("loop_v2", "<R'>.p0", wait_id)` with `OutcomeOk`. The resumer
+-- (Part 3) seeds the cursor and relies on this; if it ever fails, the fault is
+-- W4 Part 4's, not P4's.
+func test_recording_wake_records_the_reissued_request_once_as_ok() -> bool ! {IO}
+  tests [((), true)]
+  {
+    let world = { empty_world_state() |
+                  wakes: [{ request_id: "p4.r1.0.p0", wait_id: "h1", outcome: Settled("the answer") }] };
+    let r = recording_wake(world, { request_id: "p4.r1.0.p0", step: 0, waits: [], attempt: 0 });
+    r.request_id == "p4.r1.0.p0" && r.wait_id == "h1"
+      && (match r.outcome { Settled(d) => d == "the answer", _ => false })
+      && List.length(r.next_state.wakes) == 0
+      && (match r.next_state.log {
+            i :: [] =>
+              (match i.identity.body {
+                 WakeIdentity(o, q, w) => o == "loop_v2" && q == "p4.r1.0.p0" && w == "h1",
+                 _ => false
+               })
+                && (match i.outcome.status { OutcomeOk => true, _ => false }),
+            _ => false
+          })
+  }
 
 -- The deterministic clock: serve the world's own value, advance it by one
 -- millisecond. Exported so every non-live adapter shares ONE implementation of
@@ -2556,6 +2858,12 @@ export func ports_shape_probe(
   {
     model_step: model_step,
     approval_read: scripted_approval,
+    -- PLAN-002 W3: the unbound default. W4 binds the real adapters.
+    -- PLAN-002 W4 Part 4: the deterministic default is the scripted wake,
+    -- as `approval_read` above is the scripted approval. Its empty queue falls
+    -- through to `wake_read_unbound`, so a world with no `wakes` behaves exactly
+    -- as W3's binding did.
+    wake_read: scripted_wake,
     clock_now: virtual_clock,
     env_get: scripted_env,
     file_read: scripted_file,
@@ -2567,7 +2875,11 @@ export func ports_shape_probe(
     tool_exec: world_tool,
     -- WI-D24. The DETERMINISTIC default, exactly as `tool_exec` takes
     -- `world_tool`: a live run reaches it through `live_ports`, which overrides
-    -- neither, and a recording run overrides both in `stub_step`.
+    -- neither, and a recording run overrides both in `stub_step`. Of the
+    -- bindings `live_ports` DOES override, `wake_read` is the one live binding
+    -- that consults a world cursor (`cursor_wake` first, the host second),
+    -- because a durable park's answer arrives through the journal (ADR-003 D7,
+    -- PLAN-003 P4 Part 2).
     ext_effect_exec: world_ext_effect
   }
 }

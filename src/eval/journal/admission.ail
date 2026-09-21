@@ -1,0 +1,1282 @@
+-- src/eval/journal/admission.ail
+--
+-- ADR-004 v5 D2 "The entry", "Framing", "The program" and D3 A5, A6, A9, A9b;
+-- PLAN-004 §3 P1.6: the admission run, the program, provenance. The pure half:
+--
+--   admission_program(jw, w0, log, m, gv)   -> ExecutionProgram
+--   preflight(kind, ids, cmp)               -> [AdmissionFinding]   (A9 manifest shape, A9b)
+--   check_a5(frame) / check_a6(end, n, obs) / check_a9(program)
+--   decode_identities / decode_comparators  (the shell's gathered files)
+--
+-- The run itself — `admission_run`, the observations taken from a
+-- `TracedSessionResult`, and `admit` — is `admission_run.ail`. The split is
+-- forced: in a module that imports `src/core/session`, `std/json`'s
+-- `getString`/`getBool` demand SharedMem under `ailang test` (AILANG v0.33.0,
+-- reproduced on a two-line probe), so this module, whose tests decode JSON,
+-- does not import it.
+--
+-- THE RUN. `run_v2_session_traced` (session.ail:4423) with the recorded
+-- `BootInputs` (task, env_url, hybrid_tools, budget, ohmy_pi, cost rates), the
+-- LOGICAL model, the seed, a throwaway `workdir`, `step_budget = N`,
+-- `max_cost_millicents: 0`, an `ExtRuntime` with an EMPTY registry and
+-- `verification.enabled = false`, and `PortedWorld(journal_ports(rt), w0)`
+-- (`seams.journal_provider`, P1.5). The caller frames it: `WORLD_RUN_BEGIN
+-- <label> <ordinal0>` before, `WORLD_RUN_END <label> <final>` after, and
+-- `WORLD_RUN_REFUSED <label> pending=<n>` instead of END when the returned
+-- world still holds witnesses (`ledger_parity_dst.ail:436–452`'s rule).
+--
+-- THE PROGRAM. Schema `program_schema_version()` (execution-program/4),
+-- `generator_id: "journal_admission"`, the generator version the runner
+-- gathered, seed 0, `initial_world` as D2 (messages_and_policy: canonical JSON
+-- of session, selector, seed digest, seed count, expected end, T0 settings;
+-- the world's env, the synthetic profile file, the declared epoch,
+-- `driver_only/<version>`), OBSERVED bounds as data (`chunk_draw_hi` 0; not a
+-- limit — `validate_program` does not call `validate_bounds`), the manifest
+-- `driver_only_manifest` builds from the gathered values, and
+-- `interactions = world.log`.
+--
+-- THE CHECKS LANDED HERE (P1.7a/P1.7b land A1–A4, A7, A8 and the verdict):
+--   A5  framing: the markers re-parsed (a malformed or mislabelled marker is a
+--       finding), >= 1 `world_request` in the frame, ordinals strictly
+--       ordinal0+1, ordinal0+2, … (from the trace's `WorldRequest` records),
+--       last == final, empty pending queue. Location `Aggregate("frame")`.
+--   A6  end: EndSuspended(N) = `result` Err code `StepBudgetExhausted`,
+--       `suspended: Some`, exactly one `RunSuspended` in the trace, N provider
+--       records; EndFinalize(model_stop) = `result` Ok, `suspended: None`, no
+--       `RunSuspended`, the `RunSummary` finish reason `stop`, N provider
+--       records. Then, independently, NO EXHAUSTED MARKER anywhere in the log
+--       (an explicit scan for `encode_exhausted_provider_outcome()`'s payload
+--       on provider records). Locations `Call(k)`, 1-based: the end mismatch at
+--       the observed provider-record count, a marker at its record's seq + 1.
+--   A9  round trip, in the ADR's order: `validate_program`,
+--       `validate_manifest(m, driver_only())`, `world_state_of`,
+--       `reconstitution_balance` against the world `world_state_of` built. A
+--       rejection naming an ordinal is at `Interaction(ordinal)`; a manifest,
+--       schema or balance finding at `Aggregate(...)`.
+--   A9b provenance: each gathered identity against the comparator PLAN-004
+--       §3 P1.6's table names, below. Before the run (here, `preflight`) and
+--       after it (the shell re-collects and re-runs the check; a changed
+--       identity between the two collections is its own finding there).
+--
+-- A9b's COMPARATORS, narrowed exactly as the table says:
+--   source_revision   the rev is a commit (`git cat-file -e <rev>^{commit}`),
+--                     no tracked change outside the corpus, and the assembled
+--                     tree's hash (computed from the files, not from git
+--                     status) equals `<rev>^{tree}`
+--   scan_root_commit  the same revision (both are A)
+--   toolchain         the binary SHA-256 and version pinned in E's record.
+--                     No record before P1G: a REAL entry is refused
+--                     (`ToolchainUnpinned`); a synthetic one is not, and the
+--                     report says the toolchain was not checked.
+--   abi_version       the `sunholo/motoko_ext_abi` version in `ailang.lock`
+--   classifier_2_set, unrouted_fields
+--                     NOT a second extractor: the reviewed pinned record, the
+--                     literals in `scripts/dst/profile_definition_dst.ail`
+--   scan_roots        the profile's `scan_roots` (`driver_only()`), root for
+--                     root, and every driver leaf (`SCAN_FILES`) inside them
+--   packages / lock   E's pinned package inputs (name, source, version,
+--                     interface hash — never the path) and lock SHA-256;
+--                     unpinned: a REAL entry is refused
+--   normalized_configuration
+--                     `gen_fixtures.py`'s config reader, re-derived
+--   profile/rule/vocabulary versions
+--                     CONSISTENCY ONLY with the same `driver_only_manifest`
+--                     builder `validate_manifest` compares against
+--   generator_version E's pinned commit; a `-dev` generator refuses a REAL
+--                     entry (before P1G it is always `-dev`)
+--   extension_packages the registry the run used: empty
+-- A BLANK gathered string (or an empty required list) is not A9b's finding:
+-- presence is `validate_manifest`'s, reported first as A9 on the manifest the
+-- preflight builds. `unrouted_fields` may legitimately be empty and is always
+-- compared. None of `validate_manifest`, `driver_only_manifest`'s caller
+-- inputs or `strict_replay_dst.ail:631–633`'s fixture literals is used as a
+-- truth source.
+--
+-- Privacy (§0.6): synthetic fixtures only; findings carry identities, counts,
+-- ordinals and digests.
+
+module src/eval/journal/admission
+
+import std/ai (Message)
+import std/crypto (sha256Hex)
+import std/json (Json, jo, ja, kv, js, jb, jint, encode, decode, get, getString, getBool, getArray, asString, asArray)
+import std/list as List (length, map, foldl, filter)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join, split, startsWith, endsWith, stringToInt, compare)
+import std/string as Str (length)
+import src/core/ports (WorldState, ScriptedStep, empty_world_state, encode_provider_outcome, encode_exhausted_provider_outcome)
+import src/core/fs_node (FsNode, FsFile, FsDir)
+import src/core/dst_interaction (
+  Interaction, IdentityBody, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity,
+  OutcomeOk, OutcomeFault
+)
+import src/core/phase_vocab (LedgerTrace, LedgerRecord, WireRecord, DecisionRecord, CompactionStageRecord, LedgerEvent, WorldRequest, RunSuspended, run_summary_finish_reason)
+import src/core/dst_program (
+  ExecutionProgram, ProgramRejection, validate_program, program_rule, program_schema_version,
+  SchemaFieldMissing, SchemaVersionUndecodable, InitialValueMissing, NegativeTime, DuplicateOrdinal,
+  OrdinalNotDense, ImpossibleReference, IdentityComponentMissing, DeadlineDisagreesWithClass,
+  StreamOnNonProvider, ChunkOffsetsNotMonotone, OutcomeStatusDisagreesWithFault, EmptyProgram
+)
+import src/core/dst_profile (ExecutionManifest, ManifestRejection, ManifestFieldMissing, ManifestProfileMismatch, ManifestVersionDrifted, validate_manifest, manifest_rule)
+import src/core/dst_driver_only (driver_only, driver_only_manifest, driver_only_version)
+import src/core/dst_replay (
+  world_state_of, reconstitution_balance, refusal_rule, reconstitution_rule,
+  ReplayRefusal, ProgramStructurallyInvalid, ProviderOutcomeUndecodable, ToolOutcomeUndecodable,
+  ReconstitutionFinding, QueueUnderfilled, QueueOverfilled, EpochNotCarried, EnvironmentNotCarried, FilesNotCarried
+)
+import src/core/dst_fault_catalogue (required_class_ids)
+import src/core/dst_persistence (encode_body, program_digest)
+import src/eval/journal/reader (RunSelector, EndAt, CutoffBefore)
+import src/eval/journal/configuration (encoding_id, encoding_detail)
+import src/eval/journal/stopping (JournalWorld, ExpectedEnd, EndSuspended, EndFinalize, end_id, end_value)
+import src/eval/journal/world (journal_world_state, fixture_journal_world)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_all, fxw_m3_selector_end, fxw_m4_stop_call_last)
+import src/eval/journal/testdata/admission_fixtures (AdmissionFixture, fxa_all)
+
+-- ============================================================================
+-- Findings and locations (v5 D3). P1.7a maps these into the verdict.
+-- ============================================================================
+
+export type SourceSide = Snapshot | Excerpt
+
+export type Location
+  = Interaction(int)          -- a program position (an interaction ordinal)
+  | Call(int)                 -- a provider call, 1-based
+  | Source(SourceSide, int)   -- an entry seq or an event index
+  | Aggregate(string)         -- a balance, frame or identity with no position
+
+export type AdmissionCheckId = A1 | A2 | A3 | A4 | A5 | A6 | A7 | A8 | A9 | A9b
+
+export type AdmissionFinding = { check: AdmissionCheckId, location: Location, finding: string, detail: string }
+
+export pure func check_label(c: AdmissionCheckId) -> string {
+  match c {
+    A1 => "A1", A2 => "A2", A3 => "A3", A4 => "A4", A5 => "A5",
+    A6 => "A6", A7 => "A7", A8 => "A8", A9 => "A9", A9b => "A9b"
+  }
+}
+
+export pure func location_label(l: Location) -> string {
+  match l {
+    Interaction(o) => "interaction:${show(o)}",
+    Call(k) => "call:${show(k)}",
+    Source(Snapshot, p) => "snapshot:${show(p)}",
+    Source(Excerpt, p) => "excerpt:${show(p)}",
+    Aggregate(n) => "aggregate:${n}"
+  }
+}
+
+export pure func finding_label(f: AdmissionFinding) -> string {
+  "${check_label(f.check)}:${f.finding}@${location_label(f.location)}"
+}
+
+pure func ad_finding(c: AdmissionCheckId, l: Location, finding: string, detail: string) -> AdmissionFinding {
+  { check: c, location: l, finding: finding, detail: detail }
+}
+
+export pure func first_finding(fs: [AdmissionFinding]) -> Option[AdmissionFinding] {
+  match fs { [] => None, f :: _ => Some(f) }
+}
+
+export pure func first_label(fs: [AdmissionFinding]) -> string {
+  match fs { [] => "-", f :: _ => finding_label(f) }
+}
+
+-- ============================================================================
+-- A5 — framing (ADR-001 D2).
+-- ============================================================================
+
+export type FrameObservation = {
+  label: string,
+  ordinal0: int,
+  begin_line: string,
+  end_line: string,
+  requests: [int],
+  final: int,
+  pending: int
+}
+
+export pure func begin_line(label: string, ordinal0: int) -> string {
+  "WORLD_RUN_BEGIN ${label} ${show(ordinal0)}"
+}
+
+export pure func end_line(label: string, final: int, pending: int) -> string {
+  if pending == 0 then "WORLD_RUN_END ${label} ${show(final)}"
+  else "WORLD_RUN_REFUSED ${label} pending=${show(pending)}"
+}
+
+pure func ad_request_ordinal(r: LedgerRecord) -> Option[int] {
+  match r {
+    WireRecord(WorldRequest(i)) => Some(i.ordinal),
+    _ => None
+  }
+}
+
+export pure func trace_request_ordinals(t: LedgerTrace) -> [int] {
+  List.foldl(\acc r. match ad_request_ordinal(r) { Some(o) => acc ++ [o], None => acc }, [], t.records)
+}
+
+-- A marker is exactly three space-separated words: keyword, label, integer.
+pure func ad_marker(line: string, keyword: string, label: string) -> Result[int, string] {
+  match split(line, " ") {
+    [k, l, n] =>
+      if k != keyword then Err("keyword")
+      else if l != label then Err("label")
+      else (match stringToInt(n) { Some(v) => Ok(v), None => Err("ordinal") }),
+    _ => Err("shape")
+  }
+}
+
+pure func ad_ordinal_steps(prev: int, xs: [int], i: int) -> [AdmissionFinding] {
+  match xs {
+    [] => [],
+    o :: rest =>
+      if o == prev + 1 then ad_ordinal_steps(o, rest, i + 1)
+      else [ad_finding(A5, Aggregate("frame"), "FrameOrdinalNotStrict",
+                       "request ${show(i)}: ordinal ${show(o)} after ${show(prev)}")]
+  }
+}
+
+pure func ad_last_int(xs: [int], d: int) -> int {
+  List.foldl(\acc x. x, d, xs)
+}
+
+export pure func check_a5(f: FrameObservation) -> [AdmissionFinding] {
+  let fa = \name detail. ad_finding(A5, Aggregate("frame"), name, detail);
+  match ad_marker(f.begin_line, "WORLD_RUN_BEGIN", f.label) {
+    Err(why) => [fa("FrameMalformed", "begin marker (${why})")],
+    Ok(o0) =>
+      if o0 != f.ordinal0 then [fa("FrameMalformed", "begin ordinal ${show(o0)} != world ordinal ${show(f.ordinal0)}")]
+      else if f.pending != 0 || startsWith(f.end_line, "WORLD_RUN_REFUSED ") then
+        [fa("PendingNotEmpty", "pending=${show(f.pending)}")]
+      else match ad_marker(f.end_line, "WORLD_RUN_END", f.label) {
+        Err(why) => [fa("FrameMalformed", "end marker (${why})")],
+        Ok(fin) =>
+          if fin != f.final then [fa("FrameMalformed", "end ordinal ${show(fin)} != world ordinal ${show(f.final)}")]
+          else if List.length(f.requests) == 0 then [fa("FrameEmpty", "no world_request inside the frame")]
+          else match ad_ordinal_steps(o0, f.requests, 1) {
+            [] =>
+              if ad_last_int(f.requests, o0) == fin then []
+              else [fa("FrameFinalMismatch", "last ${show(ad_last_int(f.requests, o0))} != final ${show(fin)}")],
+            fs => fs
+          }
+      }
+  }
+}
+
+-- ============================================================================
+-- A6 — the end, and the no-marker scan.
+-- ============================================================================
+
+export type EndObservation = {
+  ok: bool,
+  err_code: string,
+  suspended: bool,
+  run_suspended: int,
+  finish_reason: string,
+  provider_records: int,
+  markers: [int]
+}
+
+pure func ad_is_run_suspended(r: LedgerRecord) -> bool {
+  match r { WireRecord(RunSuspended(_)) => true, _ => false }
+}
+
+export pure func exhausted_markers(log: [Interaction]) -> [int] {
+  List.foldl(\acc i. match i.identity.body {
+    ProviderIdentity(_, seq, _) =>
+      if i.outcome.payload == encode_exhausted_provider_outcome() then acc ++ [seq + 1] else acc,
+    _ => acc
+  }, [], log)
+}
+
+export pure func provider_records(log: [Interaction]) -> int {
+  List.foldl(\acc i. match i.identity.body { ProviderIdentity(_, _, _) => acc + 1, _ => acc }, 0, log)
+}
+
+export pure func observed_end(o: EndObservation) -> string {
+  if not o.ok && o.err_code == "StepBudgetExhausted" && o.suspended && o.run_suspended == 1 then
+    "EndSuspended(${show(o.provider_records)})"
+  else if o.ok && not o.suspended && o.run_suspended == 0 && o.finish_reason == "stop" then
+    "EndFinalize(model_stop)"
+  else "Other(ok=${if o.ok then "true" else "false"},code=${o.err_code},suspended=${if o.suspended then "true" else "false"},run_suspended=${show(o.run_suspended)},finish=${o.finish_reason})"
+}
+
+pure func ad_end_kind_ok(e: ExpectedEnd, o: EndObservation) -> bool {
+  match e {
+    EndSuspended(_) => not o.ok && o.err_code == "StepBudgetExhausted" && o.suspended && o.run_suspended == 1,
+    EndFinalize(r) => r == "model_stop" && o.ok && not o.suspended && o.run_suspended == 0 && o.finish_reason == "stop"
+  }
+}
+
+export pure func check_a6(e: ExpectedEnd, n: int, o: EndObservation) -> [AdmissionFinding] {
+  let expected = "${end_id(e)}(${end_value(e)})";
+  let end_findings =
+    if not ad_end_kind_ok(e, o) then
+      [ad_finding(A6, Call(o.provider_records), "EndMismatch", "expected ${expected}, observed ${observed_end(o)}")]
+    else if o.provider_records != n then
+      [ad_finding(A6, Call(o.provider_records), "CallCountMismatch", "expected ${show(n)} provider calls, observed ${show(o.provider_records)}")]
+    else [];
+  end_findings
+    ++ List.map(\k. ad_finding(A6, Call(k), "ExhaustedMarker", "a { \"served\": false } provider record"), o.markers)
+}
+
+-- ============================================================================
+-- A9 — the round trip.
+-- ============================================================================
+
+pure func ad_rejection_location(r: ProgramRejection) -> Location {
+  let at = \o. if o >= 0 then Interaction(o) else Aggregate("program");
+  match r {
+    NegativeTime(o, _, _) => at(o),
+    DuplicateOrdinal(o) => at(o),
+    OrdinalNotDense(expected, _) => at(expected),
+    ImpossibleReference(o, _) => at(o),
+    IdentityComponentMissing(o, _) => at(o),
+    DeadlineDisagreesWithClass(o, _) => at(o),
+    StreamOnNonProvider(o) => at(o),
+    ChunkOffsetsNotMonotone(o) => at(o),
+    OutcomeStatusDisagreesWithFault(o, _) => at(o),
+    SchemaFieldMissing(_) => Aggregate("program"),
+    SchemaVersionUndecodable(_) => Aggregate("program"),
+    InitialValueMissing(_) => Aggregate("program"),
+    EmptyProgram => Aggregate("program")
+  }
+}
+
+pure func ad_manifest_detail(r: ManifestRejection) -> string {
+  match r {
+    ManifestFieldMissing(f) => f,
+    ManifestProfileMismatch(a, b) => "${a} != ${b}",
+    ManifestVersionDrifted(f, a, b) => "${f}: ${a} != ${b}"
+  }
+}
+
+export pure func manifest_findings(m: ExecutionManifest) -> [AdmissionFinding] {
+  List.map(\r. ad_finding(A9, Aggregate("manifest"), manifest_rule(r), ad_manifest_detail(r)),
+           validate_manifest(m, driver_only()))
+}
+
+pure func ad_refusal_location(r: ReplayRefusal) -> Location {
+  match r {
+    ProgramStructurallyInvalid(_) => Aggregate("program"),
+    ProviderOutcomeUndecodable(o, _) => Interaction(o),
+    ToolOutcomeUndecodable(o, _) => Interaction(o)
+  }
+}
+
+pure func ad_balance_location(f: ReconstitutionFinding) -> Location {
+  match f {
+    QueueUnderfilled(q, _, _) => Aggregate("reconstitution:${q}"),
+    QueueOverfilled(q, _, _) => Aggregate("reconstitution:${q}"),
+    EpochNotCarried(_, _) => Aggregate("reconstitution:clock"),
+    EnvironmentNotCarried(_, _) => Aggregate("reconstitution:env"),
+    FilesNotCarried(_, _) => Aggregate("reconstitution:files")
+  }
+}
+
+export pure func check_a9(p: ExecutionProgram) -> [AdmissionFinding] {
+  let structural = List.map(\r. ad_finding(A9, ad_rejection_location(r), program_rule(r), "validate_program"),
+                            validate_program(p, required_class_ids()));
+  let rebuilt = match world_state_of(p, required_class_ids()) {
+    Err(r) => [ad_finding(A9, ad_refusal_location(r), refusal_rule(r), "world_state_of")],
+    Ok(w) => List.map(\f. ad_finding(A9, ad_balance_location(f), reconstitution_rule(f), "reconstitution_balance"),
+                      reconstitution_balance(p, w))
+  };
+  structural ++ manifest_findings(p.manifest) ++ rebuilt
+}
+
+-- ============================================================================
+-- A9b — provenance.
+-- ============================================================================
+
+export type EntryKind = SyntheticEntry | RealEntry
+
+export type LockEntry = { name: string, source: string, path: string, version: string, interface_hash: string }
+
+export type Identities = {
+  source_revision: string,
+  scan_root_commit: string,
+  tracked_changes: [string],
+  toolchain: string,
+  toolchain_sha256: string,
+  abi_version: string,
+  classifier_2_set: [string],
+  unrouted_fields: [string],
+  scan_roots: [string],
+  packages: [LockEntry],
+  lock_sha256: string,
+  normalized_configuration: string,
+  profile_id: string,
+  profile_version: string,
+  event_vocabulary_version: string,
+  profile_rules_version: string,
+  coverage_rules_version: string,
+  attribution_rules_version: string,
+  fault_catalogue_version: string,
+  generator_version: string,
+  extension_packages: [string]
+}
+
+-- E's record, pinned at P1G. Absent before.
+export type EPin = {
+  toolchain: string,
+  toolchain_sha256: string,
+  generator_version: string,
+  packages: [LockEntry],
+  lock_sha256: string
+}
+
+export type Comparators = {
+  revision_is_commit: bool,
+  assembled_tree: string,
+  revision_tree: string,
+  lock_abi_version: string,
+  pinned_classifier_2_set: [string],
+  pinned_unrouted_fields: [string],
+  profile_scan_roots: [string],
+  leaf_files: [string],
+  rederived_configuration: string,
+  e_pin: Option[EPin],
+  registry_used: [string]
+}
+
+-- A local insertion sort: `std/list`'s `sortBy` calls its own `length`, which
+-- resolved to this module's `Str.length` import under v0.33.0 and failed at
+-- run time (`_str_len: expected String`).
+pure func ad_insert(x: string, xs: [string]) -> [string] {
+  match xs {
+    [] => [x],
+    y :: rest => if compare(x, y) <= 0 then x :: xs else y :: ad_insert(x, rest)
+  }
+}
+
+pure func ad_sorted(xs: [string]) -> [string] {
+  List.foldl(\acc x. ad_insert(x, acc), [], xs)
+}
+
+pure func ad_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && ad_strs_eq(xs, ys) }
+  }
+}
+
+pure func ad_set_eq(a: [string], b: [string]) -> bool {
+  ad_strs_eq(ad_sorted(a), ad_sorted(b))
+}
+
+pure func ad_list_label(xs: [string]) -> string { "[${join(",", xs)}]" }
+
+-- The package identity: never the path (a lock path is not an identity).
+pure func ad_package_key(p: LockEntry) -> string {
+  "${p.name}|${p.source}|${p.version}|${p.interface_hash}"
+}
+
+pure func ad_prov(field: string, finding: string, detail: string) -> AdmissionFinding {
+  ad_finding(A9b, Aggregate("provenance:${field}"), finding, detail)
+}
+
+pure func ad_when(cond: bool, f: AdmissionFinding) -> [AdmissionFinding] {
+  if cond then [f] else []
+}
+
+pure func a9b_revision(ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  if ids.source_revision == "" then []
+  else
+    ad_when(not cmp.revision_is_commit,
+            ad_prov("source_revision", "RevisionNotACommit", ids.source_revision))
+      ++ ad_when(List.length(ids.tracked_changes) > 0,
+                 ad_prov("source_revision", "TrackedChanges", "${show(List.length(ids.tracked_changes))} tracked path(s) changed: ${ad_list_label(ids.tracked_changes)}"))
+      ++ ad_when(cmp.assembled_tree != cmp.revision_tree,
+                 ad_prov("source_revision", "AssembledTreeDiffers", "assembled ${cmp.assembled_tree} != ${ids.source_revision}^{tree} ${cmp.revision_tree}"))
+}
+
+pure func a9b_scan_commit(ids: Identities) -> [AdmissionFinding] {
+  if ids.scan_root_commit == "" || ids.source_revision == "" then []
+  else ad_when(ids.scan_root_commit != ids.source_revision,
+               ad_prov("scan_root_commit", "ScanCommitDiffers", "${ids.scan_root_commit} != ${ids.source_revision}"))
+}
+
+pure func a9b_toolchain(kind: EntryKind, ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  if ids.toolchain == "" then []
+  else match cmp.e_pin {
+    None => match kind {
+      RealEntry => [ad_prov("toolchain", "ToolchainUnpinned", "no E record before P1G: real admission is refused")],
+      SyntheticEntry => []
+    },
+    Some(pin) =>
+      ad_when(ids.toolchain != pin.toolchain || ids.toolchain_sha256 != pin.toolchain_sha256,
+              ad_prov("toolchain", "ToolchainDiffers", "${ids.toolchain} ${ids.toolchain_sha256} != pinned ${pin.toolchain} ${pin.toolchain_sha256}"))
+  }
+}
+
+pure func a9b_abi(ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  if ids.abi_version == "" then []
+  else ad_when(ids.abi_version != cmp.lock_abi_version,
+               ad_prov("abi_version", "AbiVersionDiffers", "${ids.abi_version} != lock ${cmp.lock_abi_version}"))
+}
+
+pure func a9b_classifier(ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  (if List.length(ids.classifier_2_set) == 0 then []
+   else ad_when(not ad_set_eq(ids.classifier_2_set, cmp.pinned_classifier_2_set),
+                ad_prov("classifier_2_set", "ClassifierSetDiffers", "${ad_list_label(ids.classifier_2_set)} != pinned ${ad_list_label(cmp.pinned_classifier_2_set)}")))
+    ++ ad_when(not ad_set_eq(ids.unrouted_fields, cmp.pinned_unrouted_fields),
+               ad_prov("unrouted_fields", "UnroutedFieldsDiffer", "${ad_list_label(ids.unrouted_fields)} != pinned ${ad_list_label(cmp.pinned_unrouted_fields)}"))
+}
+
+pure func ad_inside_roots(roots: [string], f: string) -> bool {
+  List.foldl(\acc r. acc || startsWith(f, "${r}/"), false, roots)
+}
+
+pure func a9b_scan_roots(ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  if List.length(ids.scan_roots) == 0 then []
+  else
+    ad_when(not ad_strs_eq(ids.scan_roots, cmp.profile_scan_roots),
+            ad_prov("scan_roots", "ScanRootsDiffer", "${ad_list_label(ids.scan_roots)} != profile ${ad_list_label(cmp.profile_scan_roots)}"))
+      ++ List.map(\f. ad_prov("scan_roots", "LeafOutsideScanRoots", f),
+                  List.filter(\f. not ad_inside_roots(ids.scan_roots, f), cmp.leaf_files))
+}
+
+pure func a9b_packages(kind: EntryKind, ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  match cmp.e_pin {
+    None => match kind {
+      RealEntry => [ad_prov("packages", "PackagesUnpinned", "no pinned package inputs before P1G: real admission is refused")],
+      SyntheticEntry => []
+    },
+    Some(pin) =>
+      ad_when(not ad_strs_eq(List.map(ad_package_key, ids.packages), List.map(ad_package_key, pin.packages)),
+              ad_prov("packages", "PackagesDiffer", "${show(List.length(ids.packages))} gathered vs ${show(List.length(pin.packages))} pinned package identities"))
+        ++ ad_when(ids.lock_sha256 != "" && ids.lock_sha256 != pin.lock_sha256,
+                   ad_prov("packages", "LockDigestDiffers", "${ids.lock_sha256} != pinned ${pin.lock_sha256}"))
+  }
+}
+
+pure func a9b_configuration(ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  if ids.normalized_configuration == "" then []
+  else ad_when(ids.normalized_configuration != cmp.rederived_configuration,
+               ad_prov("normalized_configuration", "ConfigurationDiffers",
+                       "sha256:${sha256Hex(ids.normalized_configuration)} != re-derived sha256:${sha256Hex(cmp.rederived_configuration)}"))
+}
+
+-- Consistency only: the build's own builder, as `validate_manifest` uses it.
+pure func a9b_versions(ids: Identities) -> [AdmissionFinding] {
+  let b = driver_only_manifest("", "", "", "", [], [], "");
+  let pairs = [
+    ("profile_id", ids.profile_id, b.profile_id),
+    ("profile_version", ids.profile_version, b.profile_version),
+    ("event_vocabulary_version", ids.event_vocabulary_version, b.event_vocabulary_version),
+    ("profile_rules_version", ids.profile_rules_version, b.profile_rules_version),
+    ("coverage_rules_version", ids.coverage_rules_version, b.coverage_rules_version),
+    ("attribution_rules_version", ids.attribution_rules_version, b.attribution_rules_version),
+    ("fault_catalogue_version", ids.fault_catalogue_version, b.fault_catalogue_version)
+  ];
+  List.foldl(\acc p. match p {
+    (field, got, built) =>
+      if got == "" || got == built then acc
+      else acc ++ [ad_prov(field, "VersionInconsistent", "${got} != build ${built}")]
+  }, [], pairs)
+}
+
+pure func a9b_generator(kind: EntryKind, ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  if ids.generator_version == "" then []
+  else match kind {
+    SyntheticEntry => match cmp.e_pin {
+      None => [],
+      Some(pin) =>
+        if endsWith(ids.generator_version, "-dev") then []
+        else ad_when(ids.generator_version != pin.generator_version,
+                     ad_prov("generator_version", "GeneratorDiffers", "${ids.generator_version} != pinned ${pin.generator_version}"))
+    },
+    RealEntry =>
+      if endsWith(ids.generator_version, "-dev") then
+        [ad_prov("generator_version", "DevGeneratorRealEntry", "${ids.generator_version}: a -dev generator refuses real-entry admission")]
+      else match cmp.e_pin {
+        None => [ad_prov("generator_version", "GeneratorUnpinned", ids.generator_version)],
+        Some(pin) =>
+          ad_when(ids.generator_version != pin.generator_version,
+                  ad_prov("generator_version", "GeneratorDiffers", "${ids.generator_version} != pinned ${pin.generator_version}"))
+      }
+  }
+}
+
+pure func a9b_extensions(ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  ad_when(not ad_strs_eq(ids.extension_packages, cmp.registry_used),
+          ad_prov("extension_packages", "ExtensionPackagesDiffer", "${ad_list_label(ids.extension_packages)} != registry used ${ad_list_label(cmp.registry_used)}"))
+}
+
+export pure func check_a9b(kind: EntryKind, ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  a9b_revision(ids, cmp)
+    ++ a9b_scan_commit(ids)
+    ++ a9b_toolchain(kind, ids, cmp)
+    ++ a9b_abi(ids, cmp)
+    ++ a9b_classifier(ids, cmp)
+    ++ a9b_scan_roots(ids, cmp)
+    ++ a9b_packages(kind, ids, cmp)
+    ++ a9b_configuration(ids, cmp)
+    ++ a9b_versions(ids)
+    ++ a9b_generator(kind, ids, cmp)
+    ++ a9b_extensions(ids, cmp)
+}
+
+-- What the report says was NOT checked (synthetic entries, no E record).
+export pure func a9b_unchecked(kind: EntryKind, cmp: Comparators) -> [string] {
+  match cmp.e_pin {
+    Some(_) => [],
+    None => match kind {
+      SyntheticEntry => ["toolchain:unpinned", "packages:unpinned", "generator_version:unpinned"],
+      RealEntry => []
+    }
+  }
+}
+
+-- The manifest the program carries, from the gathered values. The binary hash
+-- travels with the toolchain string, so `replay_metadata_of` carries it.
+export pure func manifest_of(ids: Identities) -> ExecutionManifest {
+  let tool = if ids.toolchain == "" then "" else "${ids.toolchain} binary=${ids.toolchain_sha256}";
+  driver_only_manifest(ids.source_revision, tool, ids.abi_version, ids.normalized_configuration,
+                       ids.classifier_2_set, ids.unrouted_fields, ids.scan_root_commit)
+}
+
+-- Before the run: the manifest's shape (A9's `validate_manifest`, so a blank
+-- field is reported there), then A9b.
+export pure func preflight(kind: EntryKind, ids: Identities, cmp: Comparators) -> [AdmissionFinding] {
+  manifest_findings(manifest_of(ids)) ++ check_a9b(kind, ids, cmp)
+}
+
+-- The comparator the runner computes in-process (not from the gathered file).
+export pure func profile_scan_roots() -> [string] { driver_only().scan_roots }
+
+-- ============================================================================
+-- The normalized configuration (RecordedConfig ++ T0Settings), canonical JSON:
+-- keys sorted, compact.
+-- ============================================================================
+
+export pure func normalized_configuration(jw: JournalWorld) -> string {
+  let c = jw.config;
+  let s = jw.settings;
+  encode(jo([
+    kv("api_model", js(c.api_model)),
+    kv("checkpoint_enabled", jb(s.checkpoint_enabled)),
+    kv("context_limit", js("${encoding_id(s.context_limit)}:${encoding_detail(s.context_limit)}")),
+    kv("env", ja(List.map(\p. ja([js(p.key), js(p.value)]), s.env))),
+    kv("ext_set_digest", js(c.ext_set_digest)),
+    kv("files", ja(List.map(\f. ja([js(f.path), js(f.content)]), s.files))),
+    kv("header_model", js(c.header_model)),
+    kv("hybrid_predicate", jb(s.hybrid_predicate)),
+    kv("hybrid_tools", jb(s.hybrid_tools)),
+    kv("logical_model", js(c.logical_model)),
+    kv("max_cost_millicents", jint(s.max_cost_millicents)),
+    kv("ohmy_pi", jb(s.ohmy_pi)),
+    kv("profile", js(c.profile)),
+    kv("profile_dir", js(s.profile_dir)),
+    kv("session_id", js(c.session_id)),
+    kv("system_prefix_digest", js(c.system_prefix_digest)),
+    kv("unserved_env", ja(List.map(js, s.unserved_env))),
+    kv("verification_enabled", jb(s.verification_enabled)),
+    kv("workdir", js(c.workdir))
+  ]))
+}
+
+-- ============================================================================
+-- The program.
+-- ============================================================================
+
+pure func ad_selector_json(s: RunSelector) -> Json {
+  jo([
+    kv("leaf", js(s.leaf)),
+    kv("run_id", js(s.run_id)),
+    kv("start", js(s.start)),
+    kv("end", js(match s.end { EndAt(e) => "EndAt(${e})", CutoffBefore(e) => "CutoffBefore(${e})" }))
+  ])
+}
+
+export pure func messages_and_policy(jw: JournalWorld) -> string {
+  encode(jo([
+    kv("session", js(jw.config.session_id)),
+    kv("selector", ad_selector_json(jw.end.selector)),
+    kv("seed_digest", js(jw.seed_digest)),
+    kv("seed_messages", jint(List.length(jw.seed))),
+    kv("expected_end", js("${end_id(jw.end.expected)}(${end_value(jw.end.expected)})")),
+    kv("t0_settings", js(normalized_configuration(jw)))
+  ]))
+}
+
+pure func ad_max(xs: [int]) -> int {
+  List.foldl(\acc x. if x > acc then x else acc, 0, xs)
+}
+
+export pure func observed_bounds(log: [Interaction], w0: WorldState) -> { max_interactions: int, max_chunks_per_interaction: int, max_payload_bytes: int, max_resource_size: int, max_clock_advance_ms: int, chunk_draw_hi: int } {
+  {
+    max_interactions: List.length(log),
+    max_chunks_per_interaction: ad_max(List.map(\i. List.length(i.outcome.chunks), log)),
+    max_payload_bytes: ad_max(List.map(\i. Str.length(i.outcome.payload), log)),
+    max_resource_size: ad_max(List.map(\f. match f.node { FsFile(c) => Str.length(c), FsDir => 0 }, w0.files)),
+    max_clock_advance_ms: ad_max(List.map(\i. i.outcome.advance_ms, log)),
+    chunk_draw_hi: 0
+  }
+}
+
+export pure func admission_program(jw: JournalWorld, w0: WorldState, log: [Interaction], m: ExecutionManifest, generator_version: string) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    generator_id: "journal_admission",
+    generator_version: generator_version,
+    seed: 0,
+    initial_world: {
+      messages_and_policy: messages_and_policy(jw),
+      synthetic_environment: w0.env,
+      files: w0.files,
+      clock_epoch: w0.clock_ms,
+      extension_profile: "driver_only/${driver_only_version()}"
+    },
+    bounds: observed_bounds(log, w0),
+    manifest: m,
+    interactions: log
+  }
+}
+
+-- ============================================================================
+-- Admission (the P1.6 part of it).
+-- ============================================================================
+
+export type AdmissionReport = {
+  label: string,
+  preflight: [AdmissionFinding],
+  ran: bool,
+  calls: int,
+  expected_end: string,
+  observed_end: string,
+  findings: [AdmissionFinding],
+  program: Option[ExecutionProgram],
+  program_digest: string,
+  interactions: int,
+  unchecked: [string]
+}
+
+export pure func refused_report(label: string, jw: JournalWorld, pre: [AdmissionFinding], unchecked: [string]) -> AdmissionReport {
+  { label: label, preflight: pre, ran: false, calls: List.length(jw.calls),
+    expected_end: "${end_id(jw.end.expected)}(${end_value(jw.end.expected)})", observed_end: "-",
+    findings: [], program: None, program_digest: "", interactions: 0, unchecked: unchecked }
+}
+
+export pure func report_ok(r: AdmissionReport) -> bool {
+  r.ran && List.length(r.preflight) == 0 && List.length(r.findings) == 0
+}
+
+-- ============================================================================
+-- Reading the gathered files (identities.json, comparators.json).
+-- ============================================================================
+
+pure func ad_str(j: Json, key: string) -> Result[string, string] {
+  match getString(j, key) { Some(s) => Ok(s), None => Err(key) }
+}
+
+pure func ad_strs_of(xs: [Json]) -> Option[[string]] {
+  List.foldl(\acc x. match acc {
+    None => None,
+    Some(ys) => match asString(x) { Some(s) => Some(ys ++ [s]), None => None }
+  }, Some([]), xs)
+}
+
+pure func ad_str_list(j: Json, key: string) -> Result[[string], string] {
+  match getArray(j, key) {
+    None => Err(key),
+    Some(xs) => match ad_strs_of(xs) { Some(ss) => Ok(ss), None => Err(key) }
+  }
+}
+
+pure func ad_lock_entry(j: Json) -> Option[LockEntry] {
+  match (getString(j, "name"), getString(j, "source"), getString(j, "path"), getString(j, "version"), getString(j, "interface_hash")) {
+    (Some(n), Some(s), Some(p), Some(v), Some(h)) => Some({ name: n, source: s, path: p, version: v, interface_hash: h }),
+    _ => None
+  }
+}
+
+pure func ad_lock_list(j: Json, key: string) -> Result[[LockEntry], string] {
+  match getArray(j, key) {
+    None => Err(key),
+    Some(xs) => match List.foldl(\acc x. match acc {
+      None => None,
+      Some(ys) => match ad_lock_entry(x) { Some(e) => Some(ys ++ [e]), None => None }
+    }, Some([]), xs) {
+      Some(es) => Ok(es),
+      None => Err(key)
+    }
+  }
+}
+
+export pure func decode_identities(text: string) -> Result[Identities, string] {
+  match decode(text) {
+    Err(e) => Err("identities: ${e}"),
+    Ok(j) => match (ad_str(j, "source_revision"), ad_str(j, "scan_root_commit"), ad_str_list(j, "tracked_changes"),
+                    ad_str(j, "toolchain"), ad_str(j, "toolchain_sha256"), ad_str(j, "abi_version")) {
+      (Ok(rev), Ok(scan), Ok(tracked), Ok(tool), Ok(tool_sha), Ok(abi)) =>
+        match (ad_str_list(j, "classifier_2_set"), ad_str_list(j, "unrouted_fields"), ad_str_list(j, "scan_roots"),
+               ad_lock_list(j, "packages"), ad_str(j, "lock_sha256"), ad_str(j, "normalized_configuration")) {
+          (Ok(c2), Ok(unrouted), Ok(roots), Ok(pkgs), Ok(lock), Ok(nc)) =>
+            match (ad_str(j, "profile_id"), ad_str(j, "profile_version"), ad_str(j, "event_vocabulary_version"),
+                   ad_str(j, "profile_rules_version"), ad_str(j, "coverage_rules_version"), ad_str(j, "attribution_rules_version")) {
+              (Ok(pid), Ok(pver), Ok(vocab), Ok(prv), Ok(crv), Ok(arv)) =>
+                match (ad_str(j, "fault_catalogue_version"), ad_str(j, "generator_version"), ad_str_list(j, "extension_packages")) {
+                  (Ok(fcv), Ok(gen), Ok(exts)) => Ok({
+                    source_revision: rev, scan_root_commit: scan, tracked_changes: tracked,
+                    toolchain: tool, toolchain_sha256: tool_sha, abi_version: abi,
+                    classifier_2_set: c2, unrouted_fields: unrouted, scan_roots: roots,
+                    packages: pkgs, lock_sha256: lock, normalized_configuration: nc,
+                    profile_id: pid, profile_version: pver, event_vocabulary_version: vocab,
+                    profile_rules_version: prv, coverage_rules_version: crv,
+                    attribution_rules_version: arv, fault_catalogue_version: fcv,
+                    generator_version: gen, extension_packages: exts
+                  }),
+                  (Err(k), _, _) => Err("identities: ${k}"),
+                  (_, Err(k), _) => Err("identities: ${k}"),
+                  (_, _, Err(k)) => Err("identities: ${k}")
+                },
+              (Err(k), _, _, _, _, _) => Err("identities: ${k}"),
+              (_, Err(k), _, _, _, _) => Err("identities: ${k}"),
+              (_, _, Err(k), _, _, _) => Err("identities: ${k}"),
+              (_, _, _, Err(k), _, _) => Err("identities: ${k}"),
+              (_, _, _, _, Err(k), _) => Err("identities: ${k}"),
+              (_, _, _, _, _, Err(k)) => Err("identities: ${k}")
+            },
+          (Err(k), _, _, _, _, _) => Err("identities: ${k}"),
+          (_, Err(k), _, _, _, _) => Err("identities: ${k}"),
+          (_, _, Err(k), _, _, _) => Err("identities: ${k}"),
+          (_, _, _, Err(k), _, _) => Err("identities: ${k}"),
+          (_, _, _, _, Err(k), _) => Err("identities: ${k}"),
+          (_, _, _, _, _, Err(k)) => Err("identities: ${k}")
+        },
+      (Err(k), _, _, _, _, _) => Err("identities: ${k}"),
+      (_, Err(k), _, _, _, _) => Err("identities: ${k}"),
+      (_, _, Err(k), _, _, _) => Err("identities: ${k}"),
+      (_, _, _, Err(k), _, _) => Err("identities: ${k}"),
+      (_, _, _, _, Err(k), _) => Err("identities: ${k}"),
+      (_, _, _, _, _, Err(k)) => Err("identities: ${k}")
+    }
+  }
+}
+
+pure func ad_pin(j: Json) -> Result[Option[EPin], string] {
+  match get(j, "e_pin") {
+    None => Ok(None),
+    Some(p) =>
+      if encode(p) == "null" then Ok(None)
+      else match (ad_str(p, "toolchain"), ad_str(p, "toolchain_sha256"), ad_str(p, "generator_version"),
+                  ad_lock_list(p, "packages"), ad_str(p, "lock_sha256")) {
+        (Ok(t), Ok(ts), Ok(g), Ok(ps), Ok(l)) =>
+          Ok(Some({ toolchain: t, toolchain_sha256: ts, generator_version: g, packages: ps, lock_sha256: l })),
+        _ => Err("comparators: e_pin")
+      }
+  }
+}
+
+-- `profile_scan_roots` and `registry_used` are the runner's own (in-process:
+-- `driver_only()` and the empty registry), never read from the file.
+export pure func decode_comparators(text: string) -> Result[Comparators, string] {
+  match decode(text) {
+    Err(e) => Err("comparators: ${e}"),
+    Ok(j) => match (getBool(j, "revision_is_commit"), ad_str(j, "assembled_tree"), ad_str(j, "revision_tree"),
+                    ad_str(j, "lock_abi_version"), ad_str_list(j, "pinned_classifier_2_set"), ad_str_list(j, "pinned_unrouted_fields")) {
+      (Some(isc), Ok(at), Ok(rt), Ok(abi), Ok(c2), Ok(unrouted)) =>
+        match (ad_str_list(j, "leaf_files"), ad_str(j, "rederived_configuration"), ad_pin(j)) {
+          (Ok(leaves), Ok(nc), Ok(pin)) => Ok({
+            revision_is_commit: isc, assembled_tree: at, revision_tree: rt,
+            lock_abi_version: abi, pinned_classifier_2_set: c2, pinned_unrouted_fields: unrouted,
+            profile_scan_roots: profile_scan_roots(), leaf_files: leaves,
+            rederived_configuration: nc, e_pin: pin, registry_used: []
+          }),
+          (Err(k), _, _) => Err("comparators: ${k}"),
+          (_, Err(k), _) => Err("comparators: ${k}"),
+          (_, _, Err(k)) => Err(k)
+        },
+      (None, _, _, _, _, _) => Err("comparators: revision_is_commit"),
+      (_, Err(k), _, _, _, _) => Err("comparators: ${k}"),
+      (_, _, Err(k), _, _, _) => Err("comparators: ${k}"),
+      (_, _, _, Err(k), _, _) => Err("comparators: ${k}"),
+      (_, _, _, _, Err(k), _) => Err("comparators: ${k}"),
+      (_, _, _, _, _, Err(k)) => Err("comparators: ${k}")
+    }
+  }
+}
+
+-- The build-derived identities (the runner's `identities` mode prints them for
+-- the shell to merge): the build's versions and the reader's configuration.
+export pure func build_identities_json(nc: string) -> string {
+  let b = driver_only_manifest("", "", "", "", [], [], "");
+  encode(jo([
+    kv("normalized_configuration", js(nc)),
+    kv("profile_id", js(b.profile_id)),
+    kv("profile_version", js(b.profile_version)),
+    kv("event_vocabulary_version", js(b.event_vocabulary_version)),
+    kv("profile_rules_version", js(b.profile_rules_version)),
+    kv("coverage_rules_version", js(b.coverage_rules_version)),
+    kv("attribution_rules_version", js(b.attribution_rules_version)),
+    kv("fault_catalogue_version", js(b.fault_catalogue_version)),
+    kv("extension_packages", ja([]))
+  ]))
+}
+
+-- ============================================================================
+-- Tests (M9, the pure half). The run-bearing cases are in
+-- `admission_live_test.ail` (`ailang test` grants no Process/SharedMem).
+-- ============================================================================
+
+pure func ad_labels(fs: [AdmissionFinding]) -> [string] { List.map(finding_label, fs) }
+
+-- A clean synthetic identity set and its agreeing comparators.
+pure func tx_pkg(name: string, hash: string) -> LockEntry {
+  { name: name, source: "path", path: "/fx/packages/${name}", version: "1.0", interface_hash: hash }
+}
+
+pure func tx_ids() -> Identities {
+  let b = driver_only_manifest("", "", "", "", [], [], "");
+  {
+    source_revision: "a0a0a0", scan_root_commit: "a0a0a0", tracked_changes: [],
+    toolchain: "AILANG v0.33.0 fx", toolchain_sha256: "sha256:fxbin", abi_version: "7.4",
+    classifier_2_set: ["env_get"], unrouted_fields: [], scan_roots: ["src", "packages"],
+    packages: [tx_pkg("fx/abi", "sha256:i1"), tx_pkg("fx/core", "sha256:i2")], lock_sha256: "sha256:fxlock",
+    normalized_configuration: "{\"fx\":1}",
+    profile_id: b.profile_id, profile_version: b.profile_version,
+    event_vocabulary_version: b.event_vocabulary_version,
+    profile_rules_version: b.profile_rules_version, coverage_rules_version: b.coverage_rules_version,
+    attribution_rules_version: b.attribution_rules_version, fault_catalogue_version: b.fault_catalogue_version,
+    generator_version: "e0e0e0", extension_packages: []
+  }
+}
+
+pure func tx_pin() -> EPin {
+  { toolchain: "AILANG v0.33.0 fx", toolchain_sha256: "sha256:fxbin", generator_version: "e0e0e0",
+    packages: [{ tx_pkg("fx/abi", "sha256:i1") | path: "/elsewhere/abi" }, tx_pkg("fx/core", "sha256:i2")],
+    lock_sha256: "sha256:fxlock" }
+}
+
+pure func tx_cmp() -> Comparators {
+  {
+    revision_is_commit: true, assembled_tree: "t0t0", revision_tree: "t0t0",
+    lock_abi_version: "7.4", pinned_classifier_2_set: ["env_get"], pinned_unrouted_fields: [],
+    profile_scan_roots: profile_scan_roots(),
+    leaf_files: ["src/core/session.ail", "src/core/tool_phase.ail", "src/core/context_usage.ail", "src/core/test/stub_step.ail"],
+    rederived_configuration: "{\"fx\":1}", e_pin: Some(tx_pin()), registry_used: []
+  }
+}
+
+pure func tx_first(kind: EntryKind, ids: Identities, cmp: Comparators) -> string {
+  first_label(preflight(kind, ids, cmp))
+}
+
+-- The clean twin: no finding for either kind with E's record present; the
+-- lock path is not an identity (the pin's path differs).
+pure func test_m9_a9b_clean() -> bool
+  tests [((), true)]
+  {
+    List.length(preflight(SyntheticEntry, tx_ids(), tx_cmp())) == 0
+      && List.length(preflight(RealEntry, tx_ids(), tx_cmp())) == 0
+      && List.length(a9b_unchecked(SyntheticEntry, tx_cmp())) == 0
+  }
+
+-- M9: each A9b identity class false-but-nonblank -> its finding, first.
+pure func test_m9_a9b_each_identity_false() -> bool
+  tests [((), true)]
+  {
+    let i = tx_ids();
+    let c = tx_cmp();
+    let pin = tx_pin();
+    let cases = [
+      (tx_first(RealEntry, i, { c | revision_is_commit: false }), "A9b:RevisionNotACommit@aggregate:provenance:source_revision"),
+      (tx_first(RealEntry, { i | tracked_changes: ["ailang.lock"] }, c), "A9b:TrackedChanges@aggregate:provenance:source_revision"),
+      (tx_first(RealEntry, i, { c | assembled_tree: "t1t1" }), "A9b:AssembledTreeDiffers@aggregate:provenance:source_revision"),
+      (tx_first(RealEntry, { i | scan_root_commit: "b1b1b1" }, c), "A9b:ScanCommitDiffers@aggregate:provenance:scan_root_commit"),
+      (tx_first(RealEntry, { i | toolchain_sha256: "sha256:other" }, c), "A9b:ToolchainDiffers@aggregate:provenance:toolchain"),
+      (tx_first(SyntheticEntry, { i | toolchain: "AILANG v0.34.0" }, c), "A9b:ToolchainDiffers@aggregate:provenance:toolchain"),
+      (tx_first(RealEntry, { i | abi_version: "7.3" }, c), "A9b:AbiVersionDiffers@aggregate:provenance:abi_version"),
+      (tx_first(RealEntry, { i | classifier_2_set: ["env_get", "tool_handle"] }, c), "A9b:ClassifierSetDiffers@aggregate:provenance:classifier_2_set"),
+      (tx_first(RealEntry, { i | unrouted_fields: ["clock_now"] }, c), "A9b:UnroutedFieldsDiffer@aggregate:provenance:unrouted_fields"),
+      (tx_first(RealEntry, i, { c | profile_scan_roots: ["src"] }), "A9b:ScanRootsDiffer@aggregate:provenance:scan_roots"),
+      (tx_first(RealEntry, i, { c | leaf_files: ["tools/x.ail"] }), "A9b:LeafOutsideScanRoots@aggregate:provenance:scan_roots"),
+      (tx_first(RealEntry, { i | packages: [tx_pkg("fx/abi", "sha256:changed"), tx_pkg("fx/core", "sha256:i2")] }, c), "A9b:PackagesDiffer@aggregate:provenance:packages"),
+      (tx_first(RealEntry, { i | lock_sha256: "sha256:other" }, c), "A9b:LockDigestDiffers@aggregate:provenance:packages"),
+      (tx_first(RealEntry, { i | normalized_configuration: "{\"fx\":2}" }, c), "A9b:ConfigurationDiffers@aggregate:provenance:normalized_configuration"),
+      (tx_first(RealEntry, { i | profile_rules_version: "stale" }, c), "A9b:VersionInconsistent@aggregate:provenance:profile_rules_version"),
+      (tx_first(RealEntry, { i | profile_id: "not_driver_only" }, c), "A9b:VersionInconsistent@aggregate:provenance:profile_id"),
+      (tx_first(RealEntry, { i | generator_version: "f1f1f1" }, c), "A9b:GeneratorDiffers@aggregate:provenance:generator_version"),
+      (tx_first(RealEntry, { i | generator_version: "e0e0e0-dev" }, c), "A9b:DevGeneratorRealEntry@aggregate:provenance:generator_version"),
+      (tx_first(RealEntry, { i | extension_packages: ["fx/ext"] }, c), "A9b:ExtensionPackagesDiffer@aggregate:provenance:extension_packages")
+    ];
+    List.length(cases) == 19
+      && List.foldl(\acc p. match p { (got, want) => acc && got == want }, true, cases)
+  }
+
+-- M9: a blank field is not A9b's; `validate_manifest` reports it (A9, first).
+pure func test_m9_blank_to_validate_manifest() -> bool
+  tests [((), true)]
+  {
+    let i = tx_ids();
+    let c = tx_cmp();
+    let blank_tool = preflight(RealEntry, { i | toolchain: "" }, c);
+    let blank_rev = preflight(RealEntry, { i | source_revision: "" }, c);
+    let blank_abi = preflight(RealEntry, { i | abi_version: "" }, c);
+    let blank_nc = preflight(RealEntry, { i | normalized_configuration: "" }, c);
+    let empty_c2 = preflight(RealEntry, { i | classifier_2_set: [] }, c);
+    let blank_scan = preflight(RealEntry, { i | scan_root_commit: "" }, c);
+    ad_strs_eq(ad_labels(blank_tool), ["A9:manifest-field-missing@aggregate:manifest"])
+      && (match blank_tool { f :: _ => f.detail == "toolchain", _ => false })
+      && ad_strs_eq(ad_labels(blank_rev), ["A9:manifest-field-missing@aggregate:manifest"])
+      && (match blank_rev { f :: _ => f.detail == "source_revision", _ => false })
+      && ad_strs_eq(ad_labels(blank_abi), ["A9:manifest-field-missing@aggregate:manifest"])
+      && ad_strs_eq(ad_labels(blank_nc), ["A9:manifest-field-missing@aggregate:manifest"])
+      && ad_strs_eq(ad_labels(empty_c2), ["A9:manifest-field-missing@aggregate:manifest"])
+      && (match empty_c2 { f :: _ => f.detail == "classifier_2_set", _ => false })
+      && ad_strs_eq(ad_labels(blank_scan), ["A9:manifest-field-missing@aggregate:manifest"])
+  }
+
+-- Before P1G there is no E record: a real entry is refused (toolchain,
+-- packages, generator), a synthetic one is admitted with the three rows
+-- reported unchecked. A `-dev` generator refuses a real entry even with a pin.
+pure func test_m9_a9b_real_entry_refused_before_p1g() -> bool
+  tests [((), true)]
+  {
+    let i = { tx_ids() | generator_version: "a0a0a0-dev" };
+    let c = { tx_cmp() | e_pin: None };
+    ad_strs_eq(ad_labels(preflight(RealEntry, i, c)), [
+        "A9b:ToolchainUnpinned@aggregate:provenance:toolchain",
+        "A9b:PackagesUnpinned@aggregate:provenance:packages",
+        "A9b:DevGeneratorRealEntry@aggregate:provenance:generator_version"])
+      && List.length(preflight(SyntheticEntry, i, c)) == 0
+      && ad_strs_eq(a9b_unchecked(SyntheticEntry, c), ["toolchain:unpinned", "packages:unpinned", "generator_version:unpinned"])
+      && ad_strs_eq(ad_labels(preflight(RealEntry, i, tx_cmp())), ["A9b:DevGeneratorRealEntry@aggregate:provenance:generator_version"])
+  }
+
+-- The build-derived manifest from gathered values: the binary hash travels.
+pure func test_m9_manifest_of() -> bool
+  tests [((), true)]
+  {
+    let m = manifest_of(tx_ids());
+    m.toolchain == "AILANG v0.33.0 fx binary=sha256:fxbin"
+      && m.source_revision == "a0a0a0" && m.scan_root_commit == "a0a0a0"
+      && m.abi_version == "7.4" && List.length(m.extension_packages) == 0
+      && ad_strs_eq(m.scan_roots, ["src", "packages"])
+      && List.length(manifest_findings(m)) == 0
+  }
+
+-- The gathered-file decoders, round-tripped on synthetic JSON; a missing key
+-- is named.
+pure func test_m9_decoders() -> bool
+  tests [((), true)]
+  {
+    let ids_text = "{\"source_revision\":\"a0\",\"scan_root_commit\":\"a0\",\"tracked_changes\":[],\"toolchain\":\"T\",\"toolchain_sha256\":\"sha256:b\",\"abi_version\":\"7.4\",\"classifier_2_set\":[\"env_get\"],\"unrouted_fields\":[],\"scan_roots\":[\"src\",\"packages\"],\"packages\":[{\"name\":\"n\",\"source\":\"path\",\"path\":\"/p\",\"version\":\"1\",\"interface_hash\":\"sha256:i\"}],\"lock_sha256\":\"sha256:l\",\"normalized_configuration\":\"{}\",\"profile_id\":\"p\",\"profile_version\":\"1\",\"event_vocabulary_version\":\"v\",\"profile_rules_version\":\"r\",\"coverage_rules_version\":\"c\",\"attribution_rules_version\":\"a\",\"fault_catalogue_version\":\"f\",\"generator_version\":\"g-dev\",\"extension_packages\":[]}";
+    let cmp_text = "{\"revision_is_commit\":true,\"assembled_tree\":\"t\",\"revision_tree\":\"t\",\"lock_abi_version\":\"7.4\",\"pinned_classifier_2_set\":[\"env_get\"],\"pinned_unrouted_fields\":[],\"leaf_files\":[\"src/a.ail\"],\"rederived_configuration\":\"{}\",\"e_pin\":null}";
+    let pinned_text = "{\"revision_is_commit\":false,\"assembled_tree\":\"t\",\"revision_tree\":\"u\",\"lock_abi_version\":\"7.4\",\"pinned_classifier_2_set\":[],\"pinned_unrouted_fields\":[],\"leaf_files\":[],\"rederived_configuration\":\"\",\"e_pin\":{\"toolchain\":\"T\",\"toolchain_sha256\":\"sha256:b\",\"generator_version\":\"e\",\"packages\":[],\"lock_sha256\":\"sha256:l\"}}";
+    let ids_ok = match decode_identities(ids_text) {
+      Ok(i) => i.source_revision == "a0" && List.length(i.packages) == 1 && i.generator_version == "g-dev"
+                 && i.normalized_configuration == "{}" && ad_strs_eq(i.scan_roots, ["src", "packages"]),
+      Err(_) => false
+    };
+    let cmp_ok = match decode_comparators(cmp_text) {
+      Ok(c) => c.revision_is_commit && (match c.e_pin { None => true, Some(_) => false })
+                 && ad_strs_eq(c.profile_scan_roots, ["src", "packages"]) && List.length(c.registry_used) == 0,
+      Err(_) => false
+    };
+    let pin_ok = match decode_comparators(pinned_text) {
+      Ok(c) => not c.revision_is_commit && (match c.e_pin { Some(p) => p.generator_version == "e", None => false }),
+      Err(_) => false
+    };
+    let missing = match decode_identities("{\"source_revision\":\"a0\"}") { Err(e) => e == "identities: scan_root_commit", Ok(_) => false };
+    ids_ok && cmp_ok && pin_ok && missing
+  }
+
+-- A5 over synthetic observations: the clean frame, then each malformation's
+-- first finding.
+pure func tx_frame() -> FrameObservation {
+  { label: "adm", ordinal0: 0, begin_line: begin_line("adm", 0), end_line: end_line("adm", 4, 0),
+    requests: [1, 2, 3, 4], final: 4, pending: 0 }
+}
+
+pure func test_m9_a5_frames() -> bool
+  tests [((), true)]
+  {
+    let f = tx_frame();
+    let first = \g. first_label(check_a5(g));
+    let details = \g. match check_a5(g) { x :: _ => x.detail, [] => "" };
+    List.length(check_a5(f)) == 0
+      && List.length(check_a5({ f | ordinal0: 5, begin_line: begin_line("adm", 5), requests: [6, 7], final: 7, end_line: end_line("adm", 7, 0) })) == 0
+      && first({ f | end_line: "WORLD_RUN_END adm" }) == "A5:FrameMalformed@aggregate:frame"
+      && details({ f | end_line: "WORLD_RUN_END adm" }) == "end marker (shape)"
+      && first({ f | begin_line: "WORLD_RUN_BEGIN adm" }) == "A5:FrameMalformed@aggregate:frame"
+      && details({ f | end_line: "WORLD_RUN_END other 4" }) == "end marker (label)"
+      && details({ f | end_line: "WORLD_RUN_END adm four" }) == "end marker (ordinal)"
+      && details({ f | begin_line: "WORLD_RUN_START adm 0" }) == "begin marker (keyword)"
+      && details({ f | end_line: "WORLD_RUN_END adm 5" }) == "end ordinal 5 != world ordinal 4"
+      && first({ f | pending: 1, end_line: end_line("adm", 4, 1) }) == "A5:PendingNotEmpty@aggregate:frame"
+      && first({ f | requests: [] }) == "A5:FrameEmpty@aggregate:frame"
+      && first({ f | requests: [1, 2, 2, 3, 4] }) == "A5:FrameOrdinalNotStrict@aggregate:frame"
+      && details({ f | requests: [1, 3, 4] }) == "request 2: ordinal 3 after 1"
+      && first({ f | requests: [1, 2, 3] }) == "A5:FrameFinalMismatch@aggregate:frame"
+  }
+
+-- A6 over synthetic observations: budget vs stop both ways, the call count,
+-- and the exhausted marker (reported beside the end mismatch, at its call).
+pure func tx_suspended_obs() -> EndObservation {
+  { ok: false, err_code: "StepBudgetExhausted", suspended: true, run_suspended: 1, finish_reason: "max_steps",
+    provider_records: 3, markers: [] }
+}
+
+pure func tx_stop_obs() -> EndObservation {
+  { ok: true, err_code: "", suspended: false, run_suspended: 0, finish_reason: "stop", provider_records: 3, markers: [] }
+}
+
+pure func test_m9_a6_ends() -> bool
+  tests [((), true)]
+  {
+    let s = tx_suspended_obs();
+    let t = tx_stop_obs();
+    let failed = { ok: false, err_code: "replay_exhausted", suspended: false, run_suspended: 0, finish_reason: "error",
+                   provider_records: 3, markers: [3] };
+    List.length(check_a6(EndSuspended(3), 3, s)) == 0
+      && List.length(check_a6(EndFinalize("model_stop"), 3, t)) == 0
+      && ad_strs_eq(ad_labels(check_a6(EndSuspended(3), 3, t)), ["A6:EndMismatch@call:3"])
+      && ad_strs_eq(ad_labels(check_a6(EndFinalize("model_stop"), 3, s)), ["A6:EndMismatch@call:3"])
+      && ad_strs_eq(ad_labels(check_a6(EndSuspended(3), 3, { s | suspended: false })), ["A6:EndMismatch@call:3"])
+      && ad_strs_eq(ad_labels(check_a6(EndSuspended(3), 3, { s | run_suspended: 0 })), ["A6:EndMismatch@call:3"])
+      && ad_strs_eq(ad_labels(check_a6(EndFinalize("other"), 3, t)), ["A6:EndMismatch@call:3"])
+      && ad_strs_eq(ad_labels(check_a6(EndSuspended(3), 3, { s | provider_records: 2 })), ["A6:CallCountMismatch@call:2"])
+      && ad_strs_eq(ad_labels(check_a6(EndSuspended(3), 3, failed)), ["A6:EndMismatch@call:3", "A6:ExhaustedMarker@call:3"])
+      -- the marker scan is independent of the end: a right end with a marker still fails
+      && ad_strs_eq(ad_labels(check_a6(EndSuspended(3), 3, { s | markers: [2] })), ["A6:ExhaustedMarker@call:2"])
+  }
+
+-- The marker scan reads the log, not the end.
+pure func tx_interaction(o: int, body: IdentityBody, payload: string) -> Interaction {
+  { identity: { ordinal: o, body: body }, request_projection: "fx", deadline_ms: -1,
+    outcome: { advance_ms: 0, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" } }
+}
+
+pure func test_m9_exhausted_marker_scan() -> bool
+  tests [((), true)]
+  {
+    let log = [
+      tx_interaction(0, EnvironmentReadIdentity("MOTOKO_HEADLESS"), "1"),
+      tx_interaction(1, ProviderIdentity("loop_v2", 0, "fx"), "{\"served\":true}"),
+      tx_interaction(2, ProviderIdentity("loop_v2", 1, "fx"), encode_exhausted_provider_outcome()),
+      tx_interaction(3, EnvironmentReadIdentity("{\"served\":false}"), "{\"served\":false}")
+    ];
+    ad_ints_eq(exhausted_markers(log), [2]) && provider_records(log) == 2
+  }
+
+pure func ad_ints_eq(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && ad_ints_eq(xs, ys) }
+  }
+}
+
+-- A9 over a synthetic program: the clean twin, then the known-failing round
+-- trips with their pinned locations.
+
+pure func tx_program(log: [Interaction]) -> ExecutionProgram {
+  let w = { empty_world_state() | env: [{ key: "MOTOKO_HEADLESS", value: "1" }], clock_ms: 7 };
+  {
+    schema_version: program_schema_version(),
+    generator_id: "journal_admission",
+    generator_version: "fx-dev",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{}",
+      synthetic_environment: w.env,
+      files: [],
+      clock_epoch: 7,
+      extension_profile: "driver_only/${driver_only_version()}"
+    },
+    bounds: observed_bounds(log, w),
+    manifest: manifest_of(tx_ids()),
+    interactions: log
+  }
+}
+
+export pure func tx_log_from(served: string) -> [Interaction] {
+  [ tx_interaction(0, EnvironmentReadIdentity("MOTOKO_HEADLESS"), "1"),
+    tx_interaction(1, EnvironmentReadIdentity("MOTOKO_PROFILE_DIR"), "x"),
+    tx_interaction(2, ProviderIdentity("loop_v2", 0, "fx"), served) ]
+}
+
+pure func test_m9_a9_round_trip() -> bool
+  tests [((), true)]
+  {
+    let clean = tx_program(tx_log_from(served_step_payload()));
+    let undecodable = tx_program(tx_log_from("{not json"));
+    let dup = tx_program([ tx_interaction(0, EnvironmentReadIdentity("MOTOKO_HEADLESS"), "1"),
+                           tx_interaction(0, EnvironmentReadIdentity("MOTOKO_PROFILE_DIR"), "x") ]);
+    let blank_generator = { clean | generator_id: "" };
+    let stale_manifest = { clean | manifest: { clean.manifest | fault_catalogue_version: "stale" } };
+    let epoch = { clean | initial_world: { clean.initial_world | clock_epoch: -1 } };
+    List.length(check_a9(clean)) == 0
+      && first_label(check_a9(undecodable)) == "A9:replay-refused-provider-outcome-undecodable@interaction:2"
+      && first_label(check_a9(dup)) == "A9:program-duplicate-ordinal@interaction:0"
+      && first_label(check_a9(blank_generator)) == "A9:program-schema-field-missing@aggregate:program"
+      && first_label(check_a9(stale_manifest)) == "A9:manifest-version-drifted@aggregate:manifest"
+      && first_label(check_a9(epoch)) == "A9:program-negative-time@aggregate:program"
+  }
+
+-- A served step's payload, as the recorder's codec encodes it (so the clean
+-- twin is decodable by `world_state_of`).
+pure func served_step_payload() -> string {
+  let s: ScriptedStep = { prose: "fx", tool_calls: [], input_tokens: 1, output_tokens: 1, finish_reason: "stop",
+                          chunks: [], error_code: "", error_message: "", advance_ms: 0 };
+  encode_provider_outcome(s)
+}
+
+-- The program's shape (schema /4, generator, seed, bounds observed as data,
+-- interactions = the log, the initial world from w0).
+pure func test_m9_program_shape() -> bool
+  tests [((), true)]
+  {
+    match fixture_journal_world(fxw_m3_selector_end()) {
+      Err(_) => false,
+      Ok(jw) => {
+        let w0 = journal_world_state(jw, 11);
+        let log = tx_log_from("{\"served\":false}");
+        let p = admission_program(jw, w0, log, manifest_of(tx_ids()), "abc-dev");
+        p.schema_version == "execution-program/4"
+          && p.generator_id == "journal_admission"
+          && p.generator_version == "abc-dev"
+          && p.seed == 0
+          && List.length(p.interactions) == 3
+          && p.initial_world.clock_epoch == 11
+          && List.length(p.initial_world.synthetic_environment) == 9
+          && List.length(p.initial_world.files) == 1
+          && p.initial_world.extension_profile == "driver_only/${driver_only_version()}"
+          && p.bounds.max_interactions == 3
+          && p.bounds.max_payload_bytes == 16
+          && p.bounds.max_resource_size == 32
+          && p.bounds.chunk_draw_hi == 0
+          && p.bounds.max_chunks_per_interaction == 0
+          && messages_and_policy(jw) == encode(jo([
+               kv("session", js("sess_fx")),
+               kv("selector", jo([kv("leaf", js("e24")), kv("run_id", js("sess_fx.r0.1")), kv("start", js("e13")), kv("end", js("EndAt(e20)"))])),
+               kv("seed_digest", js(jw.seed_digest)),
+               kv("seed_messages", jint(6)),
+               kv("expected_end", js("EndSuspended(3)")),
+               kv("t0_settings", js(normalized_configuration(jw)))]))
+      }
+    }
+  }
+
+-- A9b's configuration comparator: the reader's normalized configuration
+-- equals the generator's on every admitted world fixture.
+pure func ad_fixture_nc(f: WorldFixture) -> Option[string] {
+  match fixture_journal_world(f) { Ok(jw) => Some(normalized_configuration(jw)), Err(_) => None }
+}
+
+pure func ad_nc_agrees(a: AdmissionFixture) -> bool {
+  List.foldl(\acc f. if f.name == a.name then (match ad_fixture_nc(f) { Some(nc) => nc == a.normalized_configuration, None => false }) else acc,
+             false, fxw_all())
+}
+
+pure func test_m9_normalized_configuration_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fxa_all()) == 31
+      && List.foldl(\acc a. acc && ad_nc_agrees(a), true, fxa_all())
+  }
+

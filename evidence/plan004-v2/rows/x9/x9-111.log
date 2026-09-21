@@ -1,0 +1,56 @@
+X9-1.11 legs at e397d957c38ffe59598bdfcd9c0bb4456a0c2e0a started 2026-09-19T13:12:28Z
+=== MUT-4 green ===
+.                                                                        [100%]
+1 passed in 11.24s
+mut4green=0
+=== MUT-5 probe-blinding red ===
+MUT-5 probe-blinding applied
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_p23_mut5_env_poison_refused_before_run __________________
+
+tmp_path = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-33/test_p23_mut5_env_poison_refus0')
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-33/cand0')
+
+    def test_p23_mut5_env_poison_refused_before_run(tmp_path, work):
+        # P2.3R R2e/MUT-5 named test (round 4, half i): a well-formed env poison
+        # (credential prefix + 16-char body inside recorded_env.json) refuses with
+        # ScanRefusal BEFORE the world runs (ran=false, exit 1, nothing written).
+        # Red when the pre-run scan is removed; green with it.
+        import pathlib
+        sys.path.insert(0, os.path.join(REPO, "src", "eval", "journal", "testdata"))
+        out = os.path.join(str(work), "p23-mut5-collect")
+        shutil.rmtree(out, ignore_errors=True)
+        os.makedirs(out, mode=0o700, exist_ok=True)
+        r = subprocess.run(["bash", os.path.join(HERE, "journal_replay.sh"), "collect",
+                            "--fixture", FIXTURE, "--out", out],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-500:] + r.stderr[-400:]
+        erec_path = os.path.join(out, "erec.json")
+        _p23_erecord_for(out, erec_path)
+        e = build_entry_from_fixture(work, "m3_selector_end")
+        envp = os.path.join(str(e), "env.json")
+        env = json.loads(open(envp).read())
+        env["headless"] = "sk-live-AAAAAAAAAAAAAAAA"
+        open(envp, "w").write(json.dumps(env) + "\n")
+        corpus = tmp_path / "corpus-mut5"
+        corpus.mkdir(exist_ok=True)
+        r = _p23_admit_entry(e, corpus, erec_path)
+        assert r.returncode == 1, r.stdout[-800:] + r.stderr[-400:]
+        # The shell indents wire lines two spaces (grep | sed 's/^/  /'): strip.
+        rows = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("AVERDICT ")]  # shell indents wire lines two spaces
+>       assert len(rows) == 1 and rows[0].split("\t")[0] == "AVERDICT refused", rows
+E       AssertionError: []
+E       assert (0 == 1)
+E        +  where 0 = len([])
+
+scripts/eval/test_candidate.py:1208: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/eval/test_candidate.py::test_p23_mut5_env_poison_refused_before_run
+1 failed in 34.84s
+mut5red=1
+=== MUT-5 restored green ===
+.                                                                        [100%]
+1 passed in 60.34s (0:01:00)
+mut5green=0
+X9-1.11 legs finished 2026-09-19T13:14:15Z

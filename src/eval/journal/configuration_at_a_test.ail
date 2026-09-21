@@ -1,0 +1,71 @@
+-- src/eval/journal/configuration_at_a_test.ail
+--
+-- PLAN-004 M5, the live half: each context-limit encoding `configuration.ail`
+-- serves resolves, through the harness's own resolver and the scripted file
+-- port, to the outcome v5 D1 names — and the served `MOTOKO_PROFILE_DIR` is
+-- what makes the profile file the one read.
+--
+--   EncWindow(n)  -> Bounded(n) with source ProfileOverride (ProfileWindow(n));
+--                    the catalogue is never reached
+--   EncDisabled   -> Disabled (ProfileDisabledDeclared)
+--   EncMissed(_)  -> ProfileMissed(ProfileKeyAbsent): the catalogue IS reached
+--                    (here it is absent: Unknown, catalogue_absent). The refusal
+--                    of that `MOTOKO_MODELS_FILE` read is the witness's (M11,
+--                    P1.7b-v2), not asserted here.
+--
+-- Like `digests_at_a_test.ail` this is a test module that imports `src/core`;
+-- nothing in the evaluator's run path imports it. At the commit that lands it
+-- `src/core` is A's (65003110); run in a candidate's tree it is a drift probe.
+
+module src/eval/journal/configuration_at_a_test
+
+import std/option (Some, None)
+import src/core/context_usage (resolve_context_limit_sum)
+import src/core/context_limit (limit_arm_id, limit_origin_id, limit_profile_miss_id, limit_catalogue_miss_id, raw_window_of, disabled_profile_value)
+import src/core/ports (context_reader_of)
+import src/core/fs_node (FsFile)
+import src/core/test/stub_step (scripted_ports, scripted_world_state)
+import src/eval/journal/configuration (ContextLimitEncoding, EncWindow, EncDisabled, EncMissed, RecordedEnv, EnvPair, profile_config_content, eval_profile_config_path, eval_disabled_profile_value, served_env)
+
+-- The resolution over a world serving `env` and the profile file.
+func cat_resolved(env: [EnvPair], enc: ContextLimitEncoding) -> string ! {Env, FS, IO, Trace} {
+  let w0 = scripted_world_state([]);
+  let w = { w0 | env: env, files: [{ path: eval_profile_config_path(), node: FsFile(profile_config_content(enc)) }] };
+  let r = resolve_context_limit_sum(context_reader_of(scripted_ports()), w, "fx/model");
+  "${limit_arm_id(r.limit)}|${limit_origin_id(r.limit)}|${limit_profile_miss_id(r.limit)}|${limit_catalogue_miss_id(r.limit)}|${show(raw_window_of(r.limit))}"
+}
+
+func cat_served() -> [EnvPair] {
+  let env: RecordedEnv = { headless: "1", openai_base_url: "", retry_stream_error: "1", tool_timeout_ms: None };
+  served_env("sess_fx", env)
+}
+
+func test_window_resolves_from_the_profile_at_a() -> bool ! {Env, FS, IO, Trace}
+  tests [((), true)]
+  {
+    cat_resolved(cat_served(), EncWindow(4096)) == "bounded|profile_override|||4096"
+      && cat_resolved(cat_served(), EncWindow(200000)) == "bounded|profile_override|||200000"
+  }
+
+func test_disabled_is_declared_at_a() -> bool ! {Env, FS, IO, Trace}
+  tests [((), true)]
+  {
+    cat_resolved(cat_served(), EncDisabled) == "disabled||||0"
+      && eval_disabled_profile_value() == disabled_profile_value()
+  }
+
+func test_missed_reaches_the_catalogue_at_a() -> bool ! {Env, FS, IO, Trace}
+  tests [((), true)]
+  {
+    cat_resolved(cat_served(), EncMissed("unknown")) == "unknown||profile_key_absent|catalogue_absent|0"
+      && cat_resolved(cat_served(), EncMissed("no_event")) == "unknown||profile_key_absent|catalogue_absent|0"
+  }
+
+-- The served MOTOKO_PROFILE_DIR is load-bearing: without it the resolver looks
+-- under `.motoko/config/default`, the served file is not the one read, and the
+-- window is lost.
+func test_the_served_profile_dir_selects_the_file_at_a() -> bool ! {Env, FS, IO, Trace}
+  tests [((), true)]
+  {
+    cat_resolved([], EncWindow(4096)) == "unknown||profile_config_absent|catalogue_absent|0"
+  }

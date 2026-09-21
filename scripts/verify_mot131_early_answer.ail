@@ -23,7 +23,7 @@
 module scripts/verify_mot131_early_answer
 
 import std/io (println, exit)
-import std/json (Json, jo, kv, js, jnum, encode)
+import std/json (Json, jo, kv, js, jnum, encode, ja)
 import std/string (contains)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx, ExtWorld, ExtPorts, ExtProcOutcome, ExtFileRead, ExtClockReading,
@@ -84,6 +84,7 @@ func mk_ctx(ports: ExtPorts) -> ExtCtx {
     state_key: "test", context_limit: 0, ports: ports,
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
     world: empty_ext_world() }
 }

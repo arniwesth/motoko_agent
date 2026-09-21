@@ -290,6 +290,37 @@ recorded_stream:
 # dropping adjacent repeats — leaves gate 1 fully GREEN and turns gate 2 red on
 # count, order and fixture adequacy. Neither gate subsumes the other, and gate 1
 # alone would ship a green check over the defect D6.4 exists to find.
+# PLAN-003 P3 Part 5: ADR-003 v6.1 D6's CROSS-PROCESS resume, through the harness.
+# A traced run to a 3-step budget, its journal built from its own trace with the
+# twin P3 Part 2 wrote for the `JournalFold` family, folded, planned with the
+# decision the live `--resume` child makes (`journal.plan_resume`), and resumed
+# through `c2_state_from_continuation` in a second traced run — asserting the
+# second run's `HistorySeeded.digest` equals the first run's last `digest_after`,
+# and a same-profile edited prompt refused, then forced.
+#
+# TWO PRODUCERS FOR `SessionResumed`, named as S16 requires: the PROJECTED count is
+# the `session_resumed` lines `ledger_emit` wrote to stdout; the APPENDED count is
+# the records the script found in the returned traces. `run_ledger_parity_wire.sh`
+# demands projected == appended for every Logical variant outside the gap
+# register, and its eight subjects cannot reach this one, so the comparison for
+# it is made here, and a zero on both sides is a RED (vacuity), not a pass.
+.PHONY: journal_resume
+journal_resume:
+	@set -eu; \
+	out="$$(mktemp)"; \
+	rc=0; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	  --entry main scripts/dst/journal_resume_dst.ail < /dev/null > "$$out" 2>&1 || rc=$$?; \
+	grep -v '^{' "$$out" | grep -v '^RESUME_TRACE_' || true; \
+	wire="$$(grep -c '"type":"session_resumed"' "$$out" || true)"; \
+	trace="$$(sed -n 's/^RESUME_TRACE_SESSION_RESUMED \([0-9]*\)$$/\1/p' "$$out" | tail -1)"; \
+	rm -f "$$out"; \
+	if [ "$$rc" -ne 0 ]; then echo "journal_resume FAIL (exit $$rc)"; exit 1; fi; \
+	if [ -z "$$trace" ] || [ "$$wire" = "0" ] || [ "$$wire" != "$$trace" ]; then \
+	  echo "  ✗ SessionResumed: projected $$wire, appended $${trace:-<unread>}"; exit 1; \
+	fi; \
+	echo "  ✓ SessionResumed: projected $$wire, returned $$trace (D6.4, out of process)"
+
 .PHONY: stream_parity
 stream_parity:
 	@set -eu; \
@@ -319,6 +350,46 @@ stream_parity:
 ledger_parity:
 	./scripts/dst/run_ledger_parity_wire.sh
 
+# PLAN-001 P2 Part 3 (ADR-001 D2 part 3). The world ordinal checked PER FRAMED
+# RUN on the stdout wire: `ledger_parity_dst.ail` prints WORLD_RUN_BEGIN/END
+# around each of its eight traced invocations, and the gate demands strict +1
+# ordinals from each frame's ordinal0 to its final, with every `world_request`
+# inside a frame. Its own target rather than a row of `ledger_parity`: a
+# different claim over the same run, so a red here names an ordinal, not a
+# parity count. `--selftest` first shows every red class on a synthetic wire,
+# so the green that follows is not a checker that cannot fail.
+# PLAN-002 W4 Parts 6-7 (ADR-002 D2/D3). The park-and-wake fixtures and the
+# 4-call metric, driven through the traced entry with scripted and recording
+# `wakes` queues. The shell reads what the trace cannot: one `warning` per
+# dropped reply, the mid-park `restart`'s `session_suspend`, and the
+# determinism pair's byte-identical wire frames.
+.PHONY: park_wake
+park_wake:
+	./scripts/dst/run_park_wake.sh
+
+# PLAN-003 P4 (ADR-003 v6.1 D7). The park-resume rows. Part 2's row: the live
+# `wake_read` serves a seeded `wakes` cursor without printing a `wake_request`
+# or reading stdin, because a durable park's answer arrives through the journal.
+# The shell runs it with stdin from /dev/null, so a binding that asks the host
+# gets `Aborted`/"eof" and the row is red rather than hung; the shell also
+# counts the `wake_request` lines the returned value cannot show. Part 3's rows:
+# one delegate run parks, its journal (the twin) is truncated after `park`,
+# after `wake`, and after `park` with a host `exit`; each is folded, planned and
+# resumed through `run_v2_session_park_resumed_traced` — `<R'>.p0` seeded from
+# the wake child and served from the cursor, the run opened at
+# `initial_park_ordinal(true)`, `run_started(R')` after the `wake` (exactly
+# once), the re-observation at T2 (`HostError`, waits kept), `Aborted` (no run,
+# `open:wake:aborted`) and a dropped reply (one warning, no run). The shell
+# counts the warning and checks the wire ORDER of `wake_received`/`session_start`.
+.PHONY: park_resume
+park_resume:
+	./scripts/dst/run_park_resume.sh
+
+.PHONY: world_framed_wire
+world_framed_wire:
+	./scripts/dst/run_world_framed_wire.sh --selftest
+	./scripts/dst/run_world_framed_wire.sh
+
 # The gate for motoko_agent#160. Two tiers, both using a deliberately LOW
 # `--max-recursion-depth` as the instrument, because AILANG has no depth counter
 # to read and no tail-call elimination: anything on the driver's per-step path
@@ -342,7 +413,7 @@ depth_canary:
 phase_c_l1: compaction_dst
 	ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
 	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
-	ailang run --caps IO,Env,Clock,FS,Trace --entry main scripts/dst/phase_c2_wiring_scenarios.ail
+	ailang run --caps IO,Env,Clock,FS,Process,Trace --entry main scripts/dst/phase_c2_wiring_scenarios.ail
 
 # WI-C5. D5's declared-versus-performed detector, which D5 itself names and
 # records as unavailable. Two producers, and S16 requires them named:
@@ -444,7 +515,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
   registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest \
-  herdr_graded
+  herdr_graded journal_resume world_framed_wire park_wake park_resume
 
 # The graded session for a herdr DST profile (021 step 2's demonstration half).
 #
@@ -460,6 +531,18 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
 # CLI calls that the fixture would then have to serve. A gate whose call sequence
 # depends on the operator's environment is not a deterministic gate.
 #
+# EVERY OTHER HERDR_* THE EXTENSION READS IS UNSET (`env -u`, here and in
+# `driver_plus_herdr`), for the same reason and measured: run from a herdr
+# delegate pane, the inherited HERDR_DELEGATE_DEPTH=1 made the scripted Delegate
+# refuse ("not permitted at this depth"), so the sweep went red on where it ran.
+# The list is every `getEnvOr("HERDR_…")` in packages/motoko-ext-herdr/register.ail
+# that this recipe does not set; a new one there belongs here too.
+#
+# HERDR_ORCHESTRATOR IS SET, TO off, rather than unset: unset, the extension
+# lists and reads the dagr directory at registration to look for orchestrator
+# mode, which is an ambient FS read this profile does not disclose. Off, no file
+# is read and the call sequence is the one the profile was measured on.
+#
 # HERDR_BIN_PATH names the real binary and NOTHING RUNS IT: every call is served
 # from WorldState.ext_effects, and the fixture carries one entry of slack so an
 # off-by-one produces a wrong answer rather than falling through to a live exec
@@ -468,7 +551,11 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
 herdr_graded:
 	@set -eu; \
 	out=$$(mktemp); \
-	if ! env HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	if ! env -u HERDR_DELEGATE_DEPTH -u HERDR_MAX_DELEGATE_DEPTH -u HERDR_DELEGATE_KIND -u HERDR_ALLOWED_KINDS \
+	       -u HERDR_REAP_ON_EXIT -u HERDR_CHECK_WAIT_MS -u HERDR_START_TIMEOUT_MS -u HERDR_MAX_OUTPUT_CHARS \
+	       -u HERDR_MOTOKO_SCRIPT -u HERDR_DAGR_PLAN -u HERDR_DAGR_SETTLE_ON_EXIT -u HERDR_SWEEP_SETTLE \
+	       -u HERDR_SWEEP_STALE \
+	       HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 HERDR_ORCHESTRATOR=off \
 	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
 	       HERDR_DELEGATE_DIR=./.tmp-herdr-graded/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-graded/dagr \
 	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
@@ -510,7 +597,11 @@ herdr_graded:
 driver_plus_herdr:
 	@set -eu; \
 	out=$$(mktemp); \
-	if ! env HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 \
+	if ! env -u HERDR_DELEGATE_DEPTH -u HERDR_MAX_DELEGATE_DEPTH -u HERDR_DELEGATE_KIND -u HERDR_ALLOWED_KINDS \
+	       -u HERDR_REAP_ON_EXIT -u HERDR_CHECK_WAIT_MS -u HERDR_START_TIMEOUT_MS -u HERDR_MAX_OUTPUT_CHARS \
+	       -u HERDR_MOTOKO_SCRIPT -u HERDR_DAGR_PLAN -u HERDR_DAGR_SETTLE_ON_EXIT -u HERDR_SWEEP_SETTLE \
+	       -u HERDR_SWEEP_STALE \
+	       HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w9:p0 HERDR_ORCHESTRATOR=off \
 	       HERDR_DAGR_PANE=0 MOTOKO_SESSION_MS=900 \
 	       HERDR_DELEGATE_DIR=./.tmp-herdr-profile/dlg MOTOKO_DAGR_DIR=./.tmp-herdr-profile/dagr \
 	     ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
@@ -567,16 +658,43 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # and a `stale_skip_record`) was dropped once it passed, per the summary's
 # reverse check.
 #
-# depth_canary -- listed 2026-09-07, PLAN-003 §5: tier 1, seed 23 exceeds its
-# ceiling of 90 (seeds 7 and 11 and tier 0 pass). Bisected to 8980ba6 (PLAN-001
-# live-run fix 1), which added a per-call `decode` of tool arguments before
-# dispatch: the canary header's SECOND case, a per-step frame-cost change on the
-# tool-phase path, not a new O(|trace|) traversal. Disposition pending the
-# owner's re-measure of seed 23's floor (run_depth_canary.sh header, tolerance-1
-# bisection with the fix in place) and a pin bump with the reason recorded, or
-# moving the decode off the per-step frame. Drop this entry when the summary
-# reports it PASSED.
-DST_KNOWN_RED := depth_canary
+# depth_canary -- REMOVED 2026-09-15: pins re-measured and bumped with the
+# reason recorded in run_depth_canary.sh's header (floors 63/92/105, ceilings
+# 76/110/126, records 123/191/217; fault-present re-measured at HEAD, 150/237/265;
+# lever sweep flat in records). The seed 23 red was the right commit and the wrong
+# mechanism: 8980ba6's refusal of undecodable tool arguments changes seed 23's
+# stub TRAJECTORY (8 -> 11 provider calls, 96 -> 139 records, floor 76 -> 101),
+# and the decode itself costs no frames -- seeds 7 and 11 are unmoved across it.
+# The later journal, WorldRequest and ADR-002 W2 records shifted all three floors
+# by +3/+4/+4. Green from a plain-shell run of the script and `make depth_canary`.
+# (Prior entry, kept for history: listed 2026-09-07, PLAN-003 §5: tier 1, seed
+# 23 exceeds its ceiling of 90 (seeds 7 and 11 and tier 0 pass). Bisected to
+# 8980ba6 (PLAN-001 live-run fix 1), which added a per-call `decode` of tool
+# arguments before dispatch: the canary header's SECOND case, a per-step
+# frame-cost change on the tool-phase path, not a new O(|trace|) traversal.
+# Disposition pending the owner's re-measure of seed 23's floor and a pin bump
+# with the reason recorded, or moving the decode off the per-step frame.)
+#
+# driver_plus_herdr, herdr_graded -- REMOVED 2026-09-14: PINDH re-issued the profile
+# (eba309c, driver_plus_herdr/1 -> /2): ABI 7.4 transcribed, attribution re-recorded
+# to the live identity, :318 -> :389 pin. Both targets green from a delegate pane
+# and plain-shell re-runs; drop confirmed by the post-sweep verdict.
+# (Prior entry, kept for history: listed 2026-09-12 on the owner's ruling at
+# PLAN-003 P3G. One cause, two targets (they run the same script and read its two
+# halves): driver_plus_herdr/1 does not load clean, 2 rejections --
+# [attribution-identity-stale], recorded (c0fbf10, sha256:eba3f47…) against live
+# (c0fbf10, sha256:2c86584…), and [site-unaccounted] tool_phase.ail:318 (Process).
+# herdr_graded's run clauses are green; its "profile record loads clean" clause
+# is this. Those run clauses regressed at PLAN-002 W4 (85ce0c7) for lack of a
+# seeded wake -- the graded Delegate parks the loop and the unbound wake re-parked
+# it to the step budget -- and are re-greened by seeding one Settled wake in
+# graded_world(); the PINDH attribution reasons are unchanged and still
+# operator-owned. Bisected in clean worktrees with HERDR_* unset: green at b48e2f2, red at
+# d72fff1 (2026-09-08 17:13, the merge of the PLAN-003 P1 branch into 013/021) --
+# before any P3 part. Disposition pending the owner's D4 re-issue of the profile
+# against the corrected table. Drop both entries when the summary reports them
+# PASSED.)
+DST_KNOWN_RED := driver_plus_herdr herdr_graded
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
@@ -826,9 +944,28 @@ execution_program:
 # required `ports.env_get(`, and it silently missed session.ail's
 # MOTOKO_CAPTURE_FAILED_PAYLOAD read, which goes through `st.provider.env_get(`.
 # The derivation caught that itself on its first run — which is the argument for
-# deriving rather than declaring, made by the derivation. A key literal is
-# required, so session.ail's extension-bridge closure (whose key is a variable
-# supplied by an extension) correctly does not match.
+# deriving rather than declaring, made by the derivation.
+#
+# THE WORLD ARGUMENT IS DELIBERATELY UNANCHORED TOO. P2A threaded every helped
+# leaf's successor through `advance(…)` before the port call, so the first
+# argument is `world` at some sites and `advance(….next_state, EnvRead)` at
+# others. Anchoring the receiver's shape (bare `world` vs `advance(`) would
+# silently drop whichever form was not named — the same fail-OPEN shape the
+# receiver anchoring had. The grep therefore matches any first argument that
+# ends at the comma before the key literal.
+#
+# ONE KEY ARRIVES THROUGH AN INDIRECTION, and the literal grep cannot see
+# it — session.ail's exit-manifest read calls `manifest_path_var()` instead
+# of naming the literal, so `MOTOKO_EXIT_MANIFEST` never matches the syntactic
+# form above. The second derivation line below recovers it structurally: it
+# matches an `env_get` call whose key argument is a call (rather than a string
+# literal), and resolves the value through `manifest_path_var()`'s own test
+# vector in `src/core/ext/exit_manifest.ail` (pinned by `verify_exit_intent`'s
+# literal assertion `manifest_path_var() == "MOTOKO_EXIT_MANIFEST"`, not by
+# this grep). A change of the var name without updating the call site still
+# fails LOUDLY: the derived set would lose the key while `driver_env_keys()`
+# keeps it. An `env_get` indirection through any OTHER function fails LOUDLY
+# too — the resolved value would disagree with the declared set.
 # WI-D26: the LIVE half of the routed subprocess seam, and it is a SEPARATE
 # target from `discovery` on S14's grounds rather than for convenience.
 #
@@ -887,9 +1024,18 @@ discovery:
 	else \
 		echo "  ✓ the interaction log matches the driver's own wire emissions (provider=$$w_prov, tool=$$w_tool)"; \
 	fi; \
-	derived=$$(grep -ohE '\.env_get\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*,\s*"[A-Z_]+"' \
+	derived=$$( { grep -ohE '\.env_get\([^;]*?"[A-Z_]+"' \
 	     src/core/session.ail src/core/tool_phase.ail src/core/context_usage.ail \
-	   | sed -E 's/.*"([A-Z_]+)"/\1/' | sort -u); \
+	   | sed -E 's/.*"([A-Z_]+)"/\1/'; \
+	   n_indirect=$$(grep -ohE '\.env_get\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*,\s*[a-zA-Z_][a-zA-Z0-9_.]*\(\)' \
+	     src/core/session.ail src/core/tool_phase.ail src/core/context_usage.ail | sort -u); \
+	   if [ -n "$$n_indirect" ]; then \
+	     fn=$$(printf '%s\n' "$$n_indirect" | sed -E 's/.*,\s*([a-zA-Z_][a-zA-Z0-9_.]*)\(\)/\1/'); \
+	     if [ "$$fn" = "manifest_path_var" ] \
+	       && grep -q 'manifest_path_var()' src/core/session.ail; then \
+	       sed -n 's/.*tests \[((), \(\"[A-Z_]*\"\)).*/\1/p' src/core/ext/exit_manifest.ail | tr -d '"'; \
+	     else printf '%s\n' "UNRESOLVED-ENV-INDIRECTION:$$fn"; fi; \
+	   fi; } | sort -u); \
 	declared=$$(sed -n '/^export pure func driver_env_keys/,/^}/p' src/core/dst_discovery.ail \
 	   | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u); \
 	if [ -z "$$derived" ]; then \
@@ -1149,6 +1295,7 @@ program_persistence:
 	for f in scripts/dst/fixtures/execution-program-v1.artifact \
 	         scripts/dst/fixtures/execution-program-v2.artifact \
 	         scripts/dst/fixtures/execution-program-v3.artifact \
+	         scripts/dst/fixtures/execution-program-v4.artifact \
 	         scripts/dst/fixtures/execution-program-v0.artifact; do \
 		if [ ! -s "$$f" ]; then \
 			echo "FAIL: the frozen specimen $$f is missing or empty."; \
@@ -1158,8 +1305,8 @@ program_persistence:
 			exit 1; \
 		fi; \
 	done; \
-	echo "  ✓ all four frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes and $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') of v2, both now predating this build's encoder, plus $$(wc -l < scripts/dst/fixtures/execution-program-v3.artifact | tr -d ' ') lines of v3 bytes carrying the byte-identity assertion at the version this build writes)"; \
-	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v3_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
+	echo "  ✓ all five frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes and $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') of v2 and $$(wc -l < scripts/dst/fixtures/execution-program-v3.artifact | tr -d ' ') of v3, all three now predating this build's encoder, plus $$(wc -l < scripts/dst/fixtures/execution-program-v4.artifact | tr -d ' ') lines of v4 bytes carrying the byte-identity assertion at the version this build writes)"; \
+	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v3_fixture_path\(\)\s*,|v4_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
 	     src scripts --include=*.ail || true); \
 	if [ -n "$$writers" ]; then \
 		echo "FAIL: something in the tree writes to the frozen fixtures:"; \
@@ -2265,7 +2412,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_owner_tag verify_herdr_dagr_pane verify_delegate_kind verify_dagr_producer verify_exit_intent
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2328,6 +2475,35 @@ verify_herdr_check_answer:
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_herdr_check_answer: DelegateCheck lost a delivered answer (MOT-131)" && exit 1)
 
+# PLAN-002 W1b (ADR-002 v4.2 D1.4 and D3's producer). `Delegate` carries a
+# `wait` whose id is the handle; every `DelegateCheck` return carries `settled`,
+# true exactly on the settle paths; a motoko check re-reads the answer before
+# settling `lost`. Scripted ports, no herdr. Then W2 gate 6's fixtures: each
+# committed JSON must equal what herdr.ail's builders print, byte for byte.
+# PLAN-002 W2 gate 6 (R7): the core half of the cross-producer check. W1b's
+# fixtures (above) are kept equal to herdr.ail's builder; this decodes the same
+# files with the core's strict WaitDescriptor decoder and apply_tool_lifecycle.
+.PHONY: verify_wait_descriptor_fixtures
+verify_wait_descriptor_fixtures:
+	@out=$$(ailang run --caps IO,FS --entry main scripts/verify_wait_descriptor_fixtures.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_wait_descriptor_fixtures: the core does not read W1b's Delegate/DelegateCheck envelopes as PLAN-002 W2 Part 3 does" && exit 1)
+
+.PHONY: verify_herdr_delegate_wait
+verify_herdr_delegate_wait:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_herdr_delegate_wait.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	[ $$rc -eq 0 ] || (echo "verify_herdr_delegate_wait: a Delegate wait or a DelegateCheck settled flag is wrong (PLAN-002 W1b)" && exit 1)
+	@fx=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry print_fixtures \
+		scripts/verify_herdr_delegate_wait.ail 2>/dev/null | grep '^FIXTURE '); \
+	[ -n "$$fx" ] || (echo "verify_herdr_delegate_wait: print_fixtures printed nothing" && exit 1); \
+	printf '%s\n' "$$fx" | while read -r _ name json; do \
+		printf '%s\n' "$$json" | cmp -s - packages/motoko-ext-herdr/fixtures/plan002-gate6/$$name.json \
+			|| { echo "FAIL: fixture $$name differs from herdr.ail's builder"; exit 1; }; \
+		echo "OK: fixture $$name matches herdr.ail's builder"; \
+	done
+
 # MOT-133 / F-5: every delegate pane carries an ownership token, and a pane
 # tagged by a session that is gone is REPORTED, not closed, unless the operator
 # set HERDR_SWEEP_STALE=1. Scripted ports record each herdr argv, so the tag is
@@ -2389,6 +2565,34 @@ verify_herdr_dagr_pane:
 # schema requires `kind` exactly when the handler does — a schema that advises
 # omitting it while the handler refuses the omission costs a turn every time and
 # the model can only learn it by being refused.
+.PHONY: verify_herdr_orchestrator
+# ORCHESTRATOR MODE (packages/motoko-ext-herdr/orchestrator.ail). The pane a dagr
+# run names with `run.orchestrator.mode: "delegate"` gets a standing role note in
+# its system prompt and a tool policy that refuses implementation edits, naming
+# `Delegate` instead. Measured failure it pins: the 2026-09-13 session resumed from
+# a handoff and made ZERO delegations after its predecessor made ten, because the
+# instruction to delegate had lived only in a chat turn.
+#
+# TWO HALVES, and each reads a COUNT or a line, never only an exit status (WI-A17's
+# rule: `ailang test` exits 0 when every test was skipped). The inline tests cover
+# the pure rules; the script covers the atoms as registered, the operator's escape
+# hatch, the host's policy merge, and registration from real run files under
+# ./.tmp-herdr-orch. HERDR_ORCHESTRATOR is unset so the script sees the default.
+verify_herdr_orchestrator:
+	@out=$$(ailang test packages/motoko-ext-herdr/orchestrator.ail 2>&1 | grep -E '^[0-9]+ tests:'); \
+	echo "  orchestrator.ail: $$out"; \
+	if ! echo "$$out" | grep -qE '^[1-9][0-9]* tests: [0-9]+ passed, 0 failed, 0 skipped'; then \
+		echo "verify_herdr_orchestrator: orchestrator.ail inline tests are not all passing"; exit 1; \
+	fi
+	@rm -rf ./.tmp-herdr-orch; \
+	out=$$(env -u HERDR_ORCHESTRATOR AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+		scripts/verify_herdr_orchestrator.ail 2>/dev/null); rc=$$?; \
+	rm -rf ./.tmp-herdr-orch; \
+	echo "$$out" | grep -E '^(OK|FAIL)'; \
+	if [ $$rc -ne 0 ] || echo "$$out" | grep -q '^FAIL' || ! echo "$$out" | grep -q '^OK'; then \
+		echo "verify_herdr_orchestrator: orchestrator mode regressed"; exit 1; \
+	fi
+
 .PHONY: verify_delegate_kind
 verify_delegate_kind:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
@@ -2893,6 +3097,30 @@ driver_leaf_inventory:
 
 driver_leaf_inventory_selftest:
 	@python3 tools/driver_leaf_inventory/derive.py --self-test
+
+# ---------------------------------------------------------------------------
+# PLAN-004 v2 §3 P1.4b (ADR-004 D5): the protected-source checker's self-test,
+# matrix row M7. Mutated scratch copies of A's tree checked against a manifest
+# generated independently from the commit (`gen --at A` reads `git show`), the
+# parser cross-check on every non-braced span (runs `ailang check`, ~2-3 min,
+# light on memory), and P1.4a's SOURCE pins verified against A.
+# ---------------------------------------------------------------------------
+.PHONY: eval_protected_selftest
+eval_protected_selftest:
+	@python3 tools/eval_protected/selftest.py
+
+# ---------------------------------------------------------------------------
+# PLAN-004 v2 §0.8 / §3 "The D8 P1 matrix" (P1R R1): run every suite a row of
+# src/eval/journal/testdata/MATRIX.expected.tsv names, write MATRIX.tsv with
+# OBSERVED fields only, and join the two on case_id (scripts/eval/candidate.py
+# `matrix`; its docstring states the two observation tiers). Sequential; the
+# test_candidate.py live compiles (~6, each under scripts/eval/mem_guard.py)
+# make this a ~25-40 min run — mind the 12 GiB memory.current rule.
+# EVAL_MATRIX_ARGS: e.g. --logs <dir>, or --no-live (never a clean matrix).
+# ---------------------------------------------------------------------------
+.PHONY: eval_matrix
+eval_matrix:
+	@bash scripts/eval/journal_replay.sh matrix $(EVAL_MATRIX_ARGS)
 
 # ---------------------------------------------------------------------------
 # ADR-001 Amendment A, WI-D12: CLASSIFIER 3 -- the extension-closure

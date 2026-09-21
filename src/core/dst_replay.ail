@@ -81,11 +81,11 @@ module src/core/dst_replay
 import std/list as List (length)
 import std/string as Str (contains)
 import std/option (Option, Some, None)
-import std/result (Result, Ok, Err)
+import std/result (Result, Ok, Err) import std/json (Json, decode, get, asString)
 import src/core/dst_interaction (
   Interaction,
   IdentityBody,
-  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, WakeIdentity, ExtensionEffectIdentity,
   ClockAdvanceIdentity,
   StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -97,7 +97,7 @@ import src/core/dst_interaction (
   interaction_kind,
   outcome_status_id,
   count_kind,
-  approvals_served
+  approvals_served, wakes_served
 )
 import src/core/dst_program (ExecutionProgram, validate_program, program_rule, program_schema_version)
 -- WI-D22: `InitialWorld.files` is kinded, so the fixtures here construct nodes.
@@ -110,7 +110,7 @@ import src/core/dst_result (
 )
 import src/core/phase_vocab (LedgerTrace)
 import src/core/dst_profile (ExecutionManifest)
-import src/core/ports (
+import src/core/ports (WakeObservation, wake_outcome_of, 
   WorldState, ScriptedStep, ScriptedTool, empty_world_state,
   ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable,
   ToolOutcome, ToolCompleted,
@@ -580,6 +580,8 @@ export pure func provider_steps_served(xs: [Interaction]) -> int {
 export pure func reconstitution_balance(p: ExecutionProgram, w: WorldState) -> [ReconstitutionFinding] {
   queue_balance("script", provider_steps_served(p.interactions), List.length(w.script))
     ++ queue_balance("approvals", approvals_served(p.interactions), List.length(w.approvals))
+    -- PLAN-002 W4 Part 4: the wake queue, on the approval queue's shape.
+    ++ queue_balance("wakes", wakes_served(p.interactions), List.length(w.wakes))
     ++ queue_balance("tools", count_kind(p.interactions, identity_kind(ToolIdentity("", "", ""))),
                      List.length(w.tools))
     -- WI-D24. The extension-effect queue, on the tool queue's shape and for a
@@ -700,6 +702,42 @@ pure func script_of(xs: [Interaction]) -> Result[[ScriptedStep], ReplayRefusal] 
   }
 }
 
+pure func wake_payload_str(j: Json, key: string) -> string {
+  match get(j, key) {
+    Some(v) => match asString(v) { Some(x) => x, None => "" },
+    None => ""
+  }
+}
+
+-- PLAN-002 W4 Part 4: the wake queue, `approvals_of`' twin. A read that fell
+-- through to the unbound default (`OutcomeMissing`) queues NOTHING, so the
+-- replay drains at the same position; a served read queues the observation its
+-- payload recorded (`ports.wake_payload`). A payload this module cannot decode
+-- queues nothing, and the queue balance above reports the shortfall.
+pure func wakes_of(xs: [Interaction]) -> [WakeObservation] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        WakeIdentity(_, _, _) =>
+          match i.outcome.status {
+            OutcomeMissing => wakes_of(rest),
+            _ => match decode(i.outcome.payload) {
+              Ok(j) => match wake_outcome_of(wake_payload_str(j, "outcome"), wake_payload_str(j, "detail")) {
+                Some(o) => {
+                  let wake: WakeObservation = { request_id: wake_payload_str(j, "request_id"), wait_id: wake_payload_str(j, "wait_id"), outcome: o };
+                  wake :: wakes_of(rest)
+                },
+                None => wakes_of(rest)
+              },
+              Err(_) => wakes_of(rest)
+            }
+          },
+        _ => wakes_of(rest)
+      }
+  }
+}
+
 -- The approval queue: the raw lines the world served, in order. An end-of-input
 -- read (`OutcomeMissing`) queues NOTHING, so a replay drains at the same
 -- position the discovery run did — which is what makes the `eof` shape
@@ -809,6 +847,8 @@ export pure func world_state_of(
                    script: script,
                    clock_ms: p.initial_world.clock_epoch,
                    approvals: approvals_of(p.interactions),
+                   -- PLAN-002 W4 Part 4: the wakes the discovery run served.
+                   wakes: wakes_of(p.interactions),
                    env: p.initial_world.synthetic_environment,
                    -- WI-D22. This read `files: []` by omission through WI-D21 —
                    -- `empty_world_state()`'s table, because `InitialWorld` had
@@ -1063,7 +1103,7 @@ pure func fixture_manifest() -> ExecutionManifest {
   { source_revision: "HEAD",
     toolchain: "ailang 0.33.0",
     extension_packages: [],
-    abi_version: "7.3",
+    abi_version: "7.4",
     profile_id: "fixture_only",
     profile_version: "1",
     event_vocabulary_version: "1",

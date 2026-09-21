@@ -2,7 +2,7 @@ module scripts/dst/long_qwen_compaction_dst
 
 import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
 import std/io (println, exit)
-import std/json (Json, jo, kv, js)
+import std/json (Json, jo, kv, js, ja)
 import std/list (length)
 import std/option (None)
 import std/result (Result, Ok, Err)
@@ -221,6 +221,7 @@ func headroom_direct_ctx(limit: int, msgs: [Msg]) -> ExtCtx {
     state_key: "issue-165",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(),
@@ -385,6 +386,9 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
   {
     model_step: base.model_step,
     approval_read: base.approval_read,
+    -- PLAN-002 W3 (ADR-002 D2): the unbound default, from `base` like
+    -- `approval_read`. This fixture never parks, so nothing reaches it.
+    wake_read: base.wake_read,
     clock_now: fixed_clock,
     env_get: fixed_env,
     file_read: fixed_file,
@@ -515,6 +519,9 @@ func strict_ports() -> Ports ! {AI, IO, Trace} {
   {
     model_step: base.model_step,
     approval_read: base.approval_read,
+    -- PLAN-002 W3 (ADR-002 D2): the unbound default, from `base` like
+    -- `approval_read`. This fixture never parks, so nothing reaches it.
+    wake_read: base.wake_read,
     clock_now: fixed_clock,
     env_get: fixed_env,
     file_read: fixed_file,
@@ -1231,6 +1238,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
     state_key: "k",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     ports: {
       -- S12: this shim PERFORMS a provider call, so it must return the world
       -- `model_step` advanced. It previously handed `empty_world_state()` in and

@@ -27,7 +27,7 @@
 module scripts/verify_repetition_guard
 
 import std/io (println, exit)
-import std/json (Json, jo, kv, js, decode)
+import std/json (Json, jo, kv, js, decode, ja)
 import std/string (contains, intToStr)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -54,6 +54,7 @@ func ctx_of(history: [Msg]) -> ExtCtx {
     state_key: "test", context_limit: 0, ports: noop_ext_ports(),
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
     world: empty_ext_world() }
 }

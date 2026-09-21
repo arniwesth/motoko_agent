@@ -217,7 +217,7 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- record is 4 entries (2 criterion 1, 1 criterion 2 mediating, 1 excluded)
 -- where v2 had 8. `check_compose_profile.py` cross-checks the claim against
 -- B2's enumeration, which is what turned v2 red — as B8 §5 said it would.
-export pure func compose_profile_version() -> string { "7" }
+export pure func compose_profile_version() -> string { "13" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -225,6 +225,86 @@ export pure func compose_profile_version() -> string { "7" }
 -- without re-deriving.
 export pure func compose_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- RE-RECORDED AT PLAN-003 P3 PART 3 FOR v10, from
+    -- sha256:c835675c447f5f1c56795a9cca5e1c0da50703f28add80d19ebcb3f746465b74.
+    -- THE ONE RE-ISSUE PLAN-003 §0.2 PRICED FOR P3, and like P1 Part 4's it
+    -- disposes of TWO items' drift rather than one commit's: `1206/1465/1577 ->
+    -- 1422/1681/1793` is this part's, and `3380/3494 -> 3884/4096` is this
+    -- part's PLUS P1 Part 5's, which moved them to `3504`/`3686` and deferred
+    -- on §0.2's "four re-issues or one". P3 Parts 1 and 2 each recorded the two
+    -- as red-at-HEAD and did not re-baseline, for the same reason.
+    --
+    -- THE CAUSE IS A RECORD FIELD, and it is the first in this file's history
+    -- that no placement can dodge. ADR-003 D1's chain digest is threaded through
+    -- `C2LoopState.history_digest`, and a field is declared inside the record,
+    -- which is declared at the top of `session.ail` above every anchor. WI-D19
+    -- bought neutrality by pairing edits onto existing lines and WI-D20 called
+    -- that a habit rather than a technique; a field plus its type plus the event
+    -- builders plus nine emit sites cannot be paired onto anything.
+    --
+    -- THE D4 JUDGEMENT WAS MADE AND HAS THE SAME ANSWER, by the same test the
+    -- v27 and v28 entries used: `grep -o 'clock_now.*' src/core/session.ail`
+    -- over `git show HEAD:` and over the working tree is IDENTICAL — thirteen
+    -- hits, same text, same order — so no clock site was added, removed,
+    -- re-argued or re-routed. All five anchored expressions are byte-identical
+    -- at their new offsets, and every function this part adds is `pure` except
+    -- the one that emits and appends, whose row is `! {IO, Trace}`: the journal
+    -- reads no clock, which is also why the fold's twin uses the seq for
+    -- `at_ms`. Pure offset drift.
+    -- RE-RECORDED AT THE 013/021 MERGE FOR v9, from
+    -- sha256:f60c93e70cecd653952a0fe501e8156df7a782a0e7c12e0c57ae8f5f8defe447.
+    -- FIVE anchors moved and NO SITE CHANGED: merging the 021 herdr lineage
+    -- into the PLAN-003 branch added 34 lines to `session.ail`, +1 above the
+    -- first three anchors and +28 above the last two
+    -- (`1205/1464/1576 -> 1206/1465/1577`, `3352/3466 -> 3380/3494`). This is
+    -- the SECOND re-issue in two hours and PLAN-003 §0.2 priced ONE, so the
+    -- cause is worth naming exactly: it is not the plan's drift but MERGE
+    -- ORDER. Part 4 re-baselined on the plan branch, and the 021 side was
+    -- merged afterwards; had the merge come first, its single re-baseline
+    -- would have covered both. The lesson is recorded rather than the bill
+    -- disputed — work continues on the merged branch, so there is no third.
+    --
+    -- THE D4 JUDGEMENT WAS MADE AND HAS THE SAME ANSWER, by the same test the
+    -- v27 entry used: `grep -o '"'"'clock_now.*'"'"' src/core/session.ail` over
+    -- `git show 06b07ca:` (the last re-baseline) and over the merged tree is
+    -- IDENTICAL — thirteen hits, same text, same order — so no clock site was
+    -- added, removed, re-argued or re-routed. All five anchored expressions
+    -- are byte-identical at their new offsets; the 021 lineage adds no clock
+    -- read to `session.ail` at all. Pure offset drift.
+    -- RE-RECORDED AT PLAN-003 P1 PART 4 FOR v8, from
+    -- sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4.
+    -- THE ONE RE-ISSUE PLAN-003 §0.2 PRICED, and it disposes of ALL EIGHT stale
+    -- anchors at once rather than of one commit's drift. P1 moves anchors in
+    -- three of its six commits; Parts 2 and 3 RECORDED their drift in their
+    -- commit messages and did not re-baseline, on the plan's explicit
+    -- "four re-issues or one" choice, so this pays for all three:
+    --
+    --   session.ail    1164/1423/1529 -> 1205/1464/1576   (+41, +41, +47)
+    --                  3016/3126      -> 3352/3466        (+336, +340)
+    --   tool_phase.ail  317/318/413   -> 388/389/484      (all +71)
+    --
+    -- THE tool_phase TRIO IS NOT THIS PLAN'S DRIFT AT ALL: `8980ba6` (PLAN-001
+    -- live-run fix 1) moved it before P1 began and PLAN-003 §0.1 recorded it as
+    -- red without an owner. It is disposed of here because a partial re-baseline
+    -- is what the 7.0 ABI-bump note above already had to learn not to do.
+    --
+    -- THE D4 JUDGEMENT WAS MADE AND HAS THE SAME ANSWER IT HAD BEFORE.
+    -- `grep -o 'clock_now.*' src/core/session.ail` over `git show 8c999f2:` (the
+    -- last re-baseline) and over the working tree is IDENTICAL — thirteen hits,
+    -- same text, same order — so no clock site was added, removed, re-argued or
+    -- re-routed. `c2_suspend`, the new terminal arm, reads NO clock: it finalises
+    -- through `c2_finalize`, whose read is the `:1529 -> :1576` anchor. All five
+    -- session expressions and two of the three tool_phase ones are byte-identical
+    -- at their new offsets. THE ONE LINE THAT CHANGED is the scratchpad row's
+    -- guard, `if` -> `else if` with the identical condition, because `8980ba6`
+    -- inserted a branch ahead of it in the same chain — same predicate, same
+    -- hook, same attribution — and it is recorded as a change in that row's own
+    -- note, the way WI-D20 recorded `:413`'s `handle_world` argument.
+    --
+    -- WIDTH: the TEN-file form, derived by the widened grep at the item.
+    -- `tool_phase.ail:318` is an anchor the four discovered-site fixtures pin, so
+    -- this is the wide cascade and not the six-file one. The list is in
+    -- `tools/predicate-anchors/anchors.sh`.
     -- RE-RECORDED AT 7.0 REVIEW FIX FOR v6, from
     -- sha256:853b11f460361eff10e2144a9a45cb5195d74923defc97bdc4fc88cd68993e33.
     -- TWO anchors moved, +4 (`3012/3122 -> 3016/3126`): the publish-before-`done`
@@ -281,7 +361,22 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +14, pushed by a Z3 contract on
     -- `trace_sensitive_key`. An anchor re-measurement, not a table correction.
     -- See `driver_only_attribution_ref`.
-    content_hash: "sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4" }
+    -- PLAN-001 P1C: re-recorded with both predecessors', from
+    -- sha256:2c86584ba403ff0501c01c887a4a41089b978b496ced23135dc86b05f12fbdbd.
+    -- All five session anchors moved +9/+9/+9/+9/+18, pushed by PLAN-001 P1B.
+    -- An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+        -- PLAN-002 W2: re-recorded with both predecessors', from
+    -- sha256:01f5ebc537f53e3487ee3d0180b72f7a3b774e6aa6f2cc77344887528d823f38.
+    -- All five session anchors moved +16/+16/+16/+119/+119, pushed by PLAN-002
+    -- W2. An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    -- PLAN-002 W4: re-recorded with both predecessors', from
+    -- sha256:2ec1e8dd776def8ce158ffcf3ccfc31dd06500cebcf6af8a306c95147f17009e.
+    -- All five session anchors moved +24/+24/+24/+290/+290, pushed by PLAN-002
+    -- W4. An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -636,7 +731,7 @@ export pure func driver_plus_compose() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: true,
-        note: "the motoko-ext-abi hook surface, ABI 7.3 (the WorkInFlight variant; 7.0 added ExitIntent; was 6.0 at B8, 5.0 before it). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
+        note: "the motoko-ext-abi hook surface, ABI 7.4 (ExtCtx.open_waits; 7.3 the WorkInFlight variant; 7.0 added ExitIntent; was 6.0 at B8, 5.0 before it). INCLUDED: compose's seven covered hooks are dispatched across it on every run, and unlike driver_plus_no_ops what crosses it includes EFFECTS and not only dispatch" },
       { boundary_id: "extension.ext_ports", included: true,
         note: "the ExtPorts surface an extension uses to reach the world. **INCLUDED, and this is the whole difference between this profile and both predecessors.** driver_only excluded it because it installs nothing; driver_plus_no_ops excluded it BY MEASUREMENT, classifier 3 reporting 0 ExtPorts field calls in each installed closure, and named it 'the boundary WI-C5's compose-bearing profile would have to include'. This is that profile and it includes it: classifier 3 reports 36 ExtPorts field calls in compose's closure, and the graded session records one of them — a tool_handle — as an origin-tagged interaction in the recorded program" }
     ],
@@ -971,7 +1066,7 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
 pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
   tests [((), true)]
   {
-    -- SIX SINCE ABI 7.3, five before it. This is the third hand-pinned count in
+    -- SIX SINCE the 7.3 ABI bump, five before it. This is the third hand-pinned count in
     -- the tree that has to move when a row-declaring kind is added — the
     -- barrier count and `EXPECTED_CAPABILITY_KINDS` are the others — and it is
     -- pinned rather than derived for their reason: a kind added to the ABI and
@@ -989,7 +1084,7 @@ pure func test_criterion_2_slots_are_the_rowed_set_minus_the_exclusion() -> bool
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = compose_manifest("r", "t", "7.3", "{}", ["env_get"], [], "r");
+    let m = compose_manifest("r", "t", "7.4", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_compose().installed_packages)
       && List.length(m.extension_packages) == 1
       && m.profile_id == compose_profile_id()

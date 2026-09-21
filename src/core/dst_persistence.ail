@@ -163,7 +163,7 @@ import std/result (Result, Ok, Err)
 
 import src/core/dst_interaction (
   IdentityBody,
-  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, WakeIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
   FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   CausalIdentity,
@@ -504,6 +504,7 @@ pure func identity_slots(b: IdentityBody) -> { a: string, b: string, c: string }
     ProviderIdentity(origin, step, model) => { a: origin, b: "${step}", c: model },
     ToolIdentity(origin, call_id, name) => { a: origin, b: call_id, c: name },
     ApprovalIdentity(origin, call_id, name) => { a: origin, b: call_id, c: name },
+    WakeIdentity(origin, request_id, wait_id) => { a: origin, b: request_id, c: wait_id },
     ExtensionEffectIdentity(ext, class_id, call_id) => { a: ext, b: class_id, c: call_id },
     EnvironmentReadIdentity(key) => { a: key, b: "", c: "" },
     RandomDrawIdentity(bounds) => { a: bounds, b: "", c: "" },
@@ -963,6 +964,8 @@ pure func body_of(kind: string, no: int, a: string, b: string, c: string)
     }
   else if kind == "expect_tool" then { body: [ToolIdentity(a, b, c)], refusals: [] }
   else if kind == "expect_approval" then { body: [ApprovalIdentity(a, b, c)], refusals: [] }
+  -- PLAN-002 W4 Part 4.
+  else if kind == "expect_wake" then { body: [WakeIdentity(a, b, c)], refusals: [] }
   else if kind == "expect_extension_effect" then
     { body: [ExtensionEffectIdentity(a, b, c)], refusals: [] }
   else if kind == "environment_read" then { body: [EnvironmentReadIdentity(a)], refusals: [] }

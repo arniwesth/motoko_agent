@@ -43,7 +43,7 @@ module scripts/dst/hook_guard_dst
 import std/io (println, exit)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/json (jo)
+import std/json (jo, ja)
 
 import src/core/config (VerificationConfig)
 import src/core/types (Msg)
@@ -116,6 +116,7 @@ func ctx() -> ExtCtx {
     env_server_url: "", budget_remaining: 10, history_slice: [], state_key: "k",
     finish_reason: "",
     work_in_flight: [],
+    open_waits: ja([]),
     context_limit: 0, ports: noop_ext_ports(), artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry(), world: empty_ext_world() }
 }

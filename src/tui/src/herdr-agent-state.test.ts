@@ -47,21 +47,55 @@ describe("run-state mapping", () => {
   it("maps every Motoko run state to a herdr state", () => {
     // Exhaustive by construction: the array is typed as the full union, so adding a RunState
     // member without extending mapRunState fails to compile here as well as at the ui.ts call site.
-    const all: MotokoRunState[] = ["idle", "thinking", "tools_wait", "tools_run", "error"];
+    const all: MotokoRunState[] = [
+      "idle", "thinking", "tools_wait", "tools_run", "error", "suspended", "done",
+      "parked", "suspended_child", "resuming",
+    ];
     expect(all.map((s) => mapRunState(s).state)).toEqual([
       "idle",
       "working",
       "working",
       "working",
       "blocked",
+      "blocked",
+      "idle",
+      "blocked",
+      "blocked",
+      "working",
     ]);
   });
 
-  it("carries a message only for the blocked state", () => {
+  it("carries a message only for the blocked states and done", () => {
     expect(mapRunState("error").message).toMatch(/error/);
-    for (const s of ["idle", "thinking", "tools_wait", "tools_run"] as MotokoRunState[]) {
+    expect(mapRunState("suspended").message).toMatch(/continue/);
+    // ADR-003 D7 / PLAN-003 P4 Part 6: both parks are blocked with a message that says "parked";
+    // only the dead-child one says the runtime exited.
+    expect(mapRunState("parked").message).toMatch(/^parked/);
+    expect(mapRunState("suspended_child").message).toMatch(/^parked, runtime exited/);
+    expect(mapRunState("parked").message).not.toEqual(mapRunState("suspended_child").message);
+    for (const s of ["idle", "thinking", "tools_wait", "tools_run", "resuming"] as MotokoRunState[]) {
       expect(mapRunState(s).message).toBeUndefined();
     }
+  });
+
+  // ADR-002 v4.2 D1.1 / PLAN-002 W1b: `done` is herdr idle with the message "done", which is the
+  // only thing that tells a finished Motoko from one that has not started.
+  it("maps done to idle with the message done", () => {
+    expect(mapRunState("done")).toEqual({ state: "idle", message: "done" });
+    expect(mapRunState("done")).not.toEqual(mapRunState("idle"));
+  });
+
+  // ADR-003 v6.1 D2. `suspended` and `error` are both `blocked`, so the STATE alone cannot tell an
+  // operator (or `herdr agent get`) which one a pane is in — the message is the whole difference,
+  // and a copy-paste that gave the new arm the old text would pass every assertion above.
+  it("distinguishes suspended from error by the message herdr shows", () => {
+    const suspended = mapRunState("suspended");
+    const errored = mapRunState("error");
+    expect(suspended.state).toBe(errored.state);
+    expect(suspended.message).not.toBe(errored.message);
+    // PLAN-003 P1 Part 6 pins the text: it has to name the cause and the remedy, because the
+    // sidebar row is the only place an operator watching a fleet of panes sees either.
+    expect(suspended.message).toBe("suspended: step budget — send continue");
   });
 });
 

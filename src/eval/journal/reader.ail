@@ -1,0 +1,2369 @@
+-- src/eval/journal/reader.ail
+--
+-- ADR-004 D1, PLAN-004 §3 P1.2a (graph id P1.2a-v2): reader I — the path, the
+-- strict decoding and the seed.
+--
+--   RunSelector = { leaf, run_id, start, end: EndAt(id) | CutoffBefore(id) }
+--   read_source(lines, selector) -> Result[ReaderSource, SourceRefusal]
+--
+-- WHAT IT DOES, in this order (each step's refusal is the first one found):
+--   1. ENVELOPES. Every line of the snapshot is decoded as an entry envelope
+--      (journal.ail decodes the whole file before it walks a path). A line
+--      without a `seq` is located by its line index (`line:<i>`); every other
+--      refusal names the entry's `seq` (`entry:<seq>`).
+--   2. PATH. Leaf to root by `parent_id` under ADR-003 D4. D4 rule 1 stops
+--      silently at a repeated or unknown id and then refuses `Header`; the
+--      reader is stricter and names the entry: a leaf that is not in the file,
+--      a `parent_id` that names no entry, or a cycle is `ChainBreak` at the
+--      entry that names it; a root that is not the `header`, or a `header`
+--      anywhere else on the path, is `ChainBreak` at that entry.
+--   3. HEADER. The copy of `header_of_entry`: an unknown `schema_version` is
+--      `UnknownSchema` at the header; a missing field is `MalformedEntry`.
+--   4. STRICT FOLD OF THE WHOLE PATH. The copy of `fold_journal` at the leaf
+--      (D4 rules 2–6): every entry decoded strictly, every `digest_after`
+--      recomputed, the head prefix, the transcript and the pairing rule. Its
+--      refusals map to D1's families:
+--        Entry(seq, "type=<k>")  -> UnknownEntryType(entry:seq)
+--        Entry(seq, field)       -> MalformedEntry(entry:seq, field)
+--          -- this includes the fold's refusal of a stray `wake` at
+--          -- `request_id` (no open park, an answered park, another request's
+--          -- id; journal.ail:1603–1614), which v5 D1 names MalformedEntry
+--        Digest(seq)             -> ChainBreak(entry:seq, "digest_after")
+--        Pairing(seq)            -> MalformedEntry(entry:seq, "pairing")
+--        HeadPrefix, Transcript  -> MalformedEntry(path, …)
+--        Schema                  -> UnknownSchema(entry:<header seq>)
+--      The fold's dangling-call repair is NOT used for the segment: the
+--      whole-path fold is a validation and its repaired history is only
+--      reported (`leaf_state`).
+--   5. SELECTOR. `start` must be on the path, a `history_appended` assistant of
+--      `run_id` that replaces nothing, after that run's `run_started`, with no
+--      assistant of any run between the two: `start` is the run's first call.
+--      `EndAt(e)` names an assistant of the run at or after `start`, whose turn
+--      (the tool results and `state_delta`s that directly follow it) is kept;
+--      `CutoffBefore(e)` names the first entry outside, strictly after `start`.
+--      A selector that fails is `BadSelector` — the entry author's input error,
+--      a precondition of the reader and NOT one of D1's refusal families.
+--   6. SEED. The copy of `fold_journal` at `start`'s parent: the fold of the
+--      path up to the entry before `start`, so every leading user entry after
+--      `run_started` is in it (r2.1: run_started 1054, user 1055, start 1056).
+--      The fold's dangling-call repair applies here and only here.
+--   7. SEGMENT. The path from `start` to the end, each entry decoded into a
+--      typed `SegmentEntry` with its `seq`, calls untouched.
+--
+-- WHAT IT LEAVES TO LATER PARTS, and the inputs it hands them:
+--   * `park` is P1.3's `Parked` cutoff: a park inside the segment is reported
+--     (`segment_parks`) and decoded, never refused here.
+--   * a run opened by a consumed wake is P1.2b's `ContinuationStart`:
+--     `opened_by_wake` is true when the path up to the run's `run_started`
+--     folds to a park answered by a wake (`BoundaryParked(p, Some(w))`).
+--   * the excerpt, association, attribution and argument refusals (P1.2b),
+--     every cutoff and the configuration (P1.3). The fold's `Pairing` is
+--     reported as `MalformedEntry(…, "pairing")` here; P1.2b owns attribution.
+--
+-- WHY COPIES AND NOT IMPORTS (v5 D5, "The evaluator"). The fold runs inside
+-- the measured process as common overhead for parent, control and candidate.
+-- Importing `src/core/journal.ail` would pull it into the protected closure and
+-- exclude exactly the fold and decoder changes D3's class admits. So every
+-- declaration the fold reaches in a candidate file — `journal.ail`, and what it
+-- imports from `phase_vocab.ail`, `config.ail` and `ext/ctx_defaults.ail` — is
+-- copied below. Nothing here imports `src/core`.
+--   * The digest steps (`chain_digest_after`, `chain_digest_base`,
+--     `chain_digest_over`, `chain_empty_base`) are NOT copied again: they are
+--     P1.4a's pinned copies, imported from `src/eval/journal/digests.ail`.
+--   * `BudgetPlan` and `TokenTelemetry` are imported from the ABI package,
+--     which the entry pins by lock and D5 refuses a candidate to touch.
+--
+-- THE PINS. Every copied declaration carries a `SOURCE` comment in P1.4a's
+-- format: file, line span and half-open 0-based byte span at A, and the SHA-256
+-- of those original bytes (first byte of the declaration line through the
+-- newline after its closing brace; a non-braced union through its last
+-- indented line), read with `git show A:<file>`. A is P1.1's commit
+-- 65003110ff5a15e2ae5b1f0e205e0ffa705d18dc. P1.4b's tool REPORTS drift between
+-- a copy and the candidate's source; it does not refuse on it. A copy's body is
+-- the source body with every copied name renamed — functions `ev_<name>`,
+-- types and constructors `Ev<Name>`, the four digest steps `eval_<name>` — and
+-- `export` dropped from functions; nothing else changed. An `@allow_empty_ok`
+-- line above a declaration is copied with it and is outside the pinned span.
+--
+-- The copy's equality with `journal.ail`'s `fold_journal` (:1679) at A is
+-- tested in `reader_at_a_test.ail`, the only reader module that imports
+-- src/core; its equality with the independent Python fold and reader in
+-- `testdata/gen_fixtures.py` is tested here.
+
+module src/eval/journal/reader
+
+import std/ai (Message, ToolCall, ImagePart)
+import std/json (Json, jo, ja, encode, decode, get, has, asString, asArray, asObject, asNumber, getString, getInt, getBool, getArray)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (startsWith, substring)
+import std/string as Str (length)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, TokenTelemetry)
+import src/eval/journal/digests (eval_payload_digest, eval_raw_frame_digest, eval_chain_digest_base, eval_chain_digest_after, eval_chain_digest_over, eval_chain_empty_base)
+import src/eval/journal/testdata/journal_fixtures (JournalFixture, fxj_all, fxj_clean, fxj_clean_cutoff_before, fxj_incomplete_tail, fxj_park_wake, fxj_park_in_segment, fxj_wake_opened_run, fxj_near_miss_chain_break, fxj_near_miss_malformed_entry, fxj_chain_break_digest, fxj_chain_break_parent, fxj_chain_break_cycle, fxj_chain_break_root, fxj_malformed_field, fxj_malformed_message, fxj_malformed_envelope, fxj_malformed_seq, fxj_malformed_pairing, fxj_stray_wake_no_park, fxj_stray_wake_answered, fxj_stray_wake_other_request, fxj_unknown_entry_type, fxj_unknown_schema, fxj_bad_selector_start, fxj_bad_selector_not_first_call)
+
+-- ============================================================================
+-- Copies: Shared types.
+-- ============================================================================
+
+-- SOURCE src/core/config.ail L30-33 B723-815 sha256:3a3a00a8408f012d897a2c5dd197d88c153dbe3be72e62005323f6ea9eb5f912 symbol=CostRates
+export type EvCostRates = {
+  input_per_1m_millicents: int,
+  output_per_1m_millicents: int
+}
+
+-- SOURCE src/core/phase_vocab.ail L142-148 B5625-5813 sha256:84728c0702c1cdd6927a33c9589f794bfd3228d1fd570d9023e9a27c9720dcd9 symbol=RuntimeStatusCounts
+export type EvRuntimeStatusCounts = {
+  provider_calls_started: int,
+  provider_calls_completed: int,
+  stage_applied_total: int,
+  stage_rejected_total: int,
+  compaction_ai_applied: int
+}
+
+-- SOURCE src/core/phase_vocab.ail L150-158 B5814-6045 sha256:229f6b8b0f2d3d84a9875fe5ff30454cdf9140b4a8730e3aa7ad54c4c0e382eb symbol=zero_runtime_status_counts
+pure func ev_zero_runtime_status_counts() -> EvRuntimeStatusCounts {
+  {
+    provider_calls_started: 0,
+    provider_calls_completed: 0,
+    stage_applied_total: 0,
+    stage_rejected_total: 0,
+    compaction_ai_applied: 0
+  }
+}
+
+-- SOURCE src/core/ext/ctx_defaults.ail L102-104 B4874-4934 sha256:5b7c9dddfc6628f75d9872ccca7dcbed838d9029d9390279a86f14fd80d2c54d symbol=empty_ext_artifacts
+pure func ev_empty_ext_artifacts() -> Json {
+  jo([])
+}
+
+-- SOURCE src/core/ext/ctx_defaults.ail L106-108 B4935-5079 sha256:879099a2b9453be45169807d8db371a83f7b5b7dd88d76b6d5d01ccf709b7417 symbol=zero_token_telemetry
+pure func ev_zero_token_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}
+
+-- SOURCE src/core/journal.ail L110-119 B5286-5483 sha256:bc712efe7930a5c8668fe9ea1fc5c2c07310f038896a4b0d2946997924bd8eb3 symbol=BootInputs
+export type EvBootInputs = {
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: EvCostRates
+}
+
+
+-- ============================================================================
+-- Copies: The sealed history and its checks (phase_vocab).
+-- ============================================================================
+
+-- SOURCE src/core/phase_vocab.ail L29-29 B1623-1659 sha256:5f0462c1a5699912f2314bb463db883fb9986caedab9cb3d6dd967b2d94ed967 symbol=History
+type EvHistory = EvMkHistory([Message])
+
+-- SOURCE src/core/phase_vocab.ail L31-35 B1660-1872 sha256:e02fc292128f617a7bf152e7c0de7fe62c442d327781c7691001db8250bf40d3 symbol=history_from_seed
+func ev_history_from_seed(msgs: [Message]) -> Result[EvHistory, string] {
+  if ev_system_is_head_prefix(msgs, true)
+  then Ok(EvMkHistory(msgs))
+  else Err("history seed: system messages must form a head prefix")
+}
+
+-- SOURCE src/core/phase_vocab.ail L74-76 B2937-3063 sha256:f5196673d8aef666551d65e2b7edb0c80d52db322227ca85022b19fe3427ac6b symbol=history_valid_transcript
+pure func ev_history_valid_transcript(h: EvHistory) -> bool {
+  match h { EvMkHistory(xs) => ev_valid_message_transcript(xs) }
+}
+
+-- SOURCE src/core/phase_vocab.ail L84-92 B3518-3789 sha256:2d53d862be91ce7b7b75a11110a993ffb723a6e161081ae6c64c5dbe92dbda07 symbol=system_is_head_prefix
+pure func ev_system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest =>
+      if m.role == "system"
+      then still_head && ev_system_is_head_prefix(rest, true)
+      else ev_system_is_head_prefix(rest, false)
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L108-113 B4175-4323 sha256:c56ed78dcbeb15a037b67cb2ac410b769bf3f6c18cdc60fceb74b4a49ed7f853 symbol=valid_tool_calls
+pure func ev_valid_tool_calls(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => c.id != "" && ev_valid_tool_calls(rest)
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L115-122 B4324-4602 sha256:4785eadcd80f735e7e6c8488005f28463882de04b3836dedf759cc92669c8982 symbol=valid_message_transcript
+pure func ev_valid_message_transcript(msgs: [Message]) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest =>
+      if m.role == "tool" then m.tool_call_id != "" && ev_valid_message_transcript(rest)
+      else ev_valid_tool_calls(m.tool_calls) && ev_valid_message_transcript(rest)
+  }
+}
+
+
+-- ============================================================================
+-- Copies: The wait decoder (phase_vocab).
+-- ============================================================================
+
+-- SOURCE src/core/phase_vocab.ail L442-445 B18343-18572 sha256:9ede7568550e55b7d96bb7cd5c31623db2affe53e06119377b9a674b04a9f5ea symbol=WaitDescriptor
+export type EvWaitDescriptor
+  = EvDelegateWait({ id: string, delegate_kind: string, locator: { pane: string }, answer_path: string, run_key: string })
+  | EvOperatorWait({ id: string })
+  | EvTimerWait({ id: string, deadline_ms: int })
+
+-- SOURCE src/core/phase_vocab.ail L455-460 B18731-18896 sha256:d9583305b7b26240383665a3bcad80dd2d1f38b6f276c33c793f25567ea8f2d1 symbol=json_field_names
+pure func ev_json_field_names(fields: [{key: string, value: Json}]) -> [string] {
+  match fields {
+    [] => [],
+    f :: rest => f.key :: ev_json_field_names(rest)
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L462-467 B18897-19046 sha256:3b465787a8934d56ec3fb7be1bb0ad7ddcb1be1e59fadb24adae27d0a918e3b2 symbol=string_list_has
+pure func ev_string_list_has(xs: [string], x: string) -> bool {
+  match xs {
+    [] => false,
+    y :: rest => y == x || ev_string_list_has(rest, x)
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L469-474 B19047-19231 sha256:9425873ad25caf51755c19936d13b76c775710387972f9eb6fe760f314609016 symbol=string_list_covers
+pure func ev_string_list_covers(have: [string], want: [string]) -> bool {
+  match want {
+    [] => true,
+    w :: rest => ev_string_list_has(have, w) && ev_string_list_covers(have, rest)
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L478-480 B19377-19580 sha256:bec18979ff078140747ca8f9880f97075763bafccc7a70ba798b3756f5f2f02d symbol=json_keys_exactly
+pure func ev_json_keys_exactly(fields: [{key: string, value: Json}], expected: [string]) -> bool {
+  List.length(fields) == List.length(expected) && ev_string_list_covers(ev_json_field_names(fields), expected)
+}
+
+-- SOURCE src/core/phase_vocab.ail L482-490 B19581-19906 sha256:2140ad91b78607d694cc95813f98e9318b9b84cd22b85e3b9e5a32ad57b61d1c symbol=wait_required_string
+pure func ev_wait_required_string(obj: Json, key: string) -> Result[string, string] {
+  match get(obj, key) {
+    None => Err("wait: missing `${key}`"),
+    Some(v) => match asString(v) {
+      None => Err("wait: `${key}` is not a string"),
+      Some(s) => if s == "" then Err("wait: `${key}` is empty") else Ok(s)
+    }
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L492-517 B19907-21029 sha256:813ce8bc30334bc9d73b9faad88a117ebd45dfd502659fb5e2fd07e74608504b symbol=delegate_wait_from_json
+pure func ev_delegate_wait_from_json(obj: Json) -> Result[EvWaitDescriptor, string] {
+  match ev_wait_required_string(obj, "id") {
+    Err(e) => Err(e),
+    Ok(id) => match ev_wait_required_string(obj, "delegate_kind") {
+      Err(e) => Err(e),
+      Ok(kind) => match ev_wait_required_string(obj, "answer_path") {
+        Err(e) => Err(e),
+        Ok(answer_path) => match ev_wait_required_string(obj, "run_key") {
+          Err(e) => Err(e),
+          Ok(run_key) => match get(obj, "locator") {
+            None => Err("wait: missing `locator`"),
+            Some(loc) => match asObject(loc) {
+              None => Err("wait: `locator` is not an object"),
+              Some(loc_fields) =>
+                if not ev_json_keys_exactly(loc_fields, ["pane"]) then Err("wait: `locator` must have exactly the key `pane`")
+                else match ev_wait_required_string(loc, "pane") {
+                  Err(e) => Err(e),
+                  Ok(pane) => Ok(EvDelegateWait({ id: id, delegate_kind: kind, locator: { pane: pane }, answer_path: answer_path, run_key: run_key }))
+                }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L519-535 B21030-21659 sha256:5fb8f190936fa2fda197ff811af19e9227c17ac1847bb8431d222b9779418bee symbol=timer_wait_from_json
+pure func ev_timer_wait_from_json(obj: Json) -> Result[EvWaitDescriptor, string] {
+  match ev_wait_required_string(obj, "id") {
+    Err(e) => Err(e),
+    Ok(id) => match get(obj, "deadline_ms") {
+      None => Err("wait: missing `deadline_ms`"),
+      Some(v) => match asNumber(v) {
+        None => Err("wait: `deadline_ms` is not a number"),
+        Some(f) => {
+          let n = floatToInt(f);
+          if _int_to_float(n) != f then Err("wait: `deadline_ms` is not an integer")
+          else if n < 0 then Err("wait: `deadline_ms` is negative")
+          else Ok(EvTimerWait({ id: id, deadline_ms: n }))
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/phase_vocab.ail L539-549 B21815-22445 sha256:b57f782dbe949888972215c2be807ccec99f2edf5ccb50662cec27eb11b096c8 symbol=wait_descriptor_from_json
+pure func ev_wait_descriptor_from_json(j: Json) -> Result[EvWaitDescriptor, string] {
+  match asObject(j) {
+    None => Err("wait: not an object"),
+    Some(fields) =>
+      if ev_json_keys_exactly(fields, ["id", "delegate_kind", "locator", "answer_path", "run_key"]) then ev_delegate_wait_from_json(j)
+      else if ev_json_keys_exactly(fields, ["id", "deadline_ms"]) then ev_timer_wait_from_json(j)
+      else if ev_json_keys_exactly(fields, ["id"]) then
+        match ev_wait_required_string(j, "id") { Err(e) => Err(e), Ok(id) => Ok(EvOperatorWait({ id: id })) }
+      else Err("wait: key set matches no variant (${encode(jo(fields))})")
+  }
+}
+
+
+-- ============================================================================
+-- Copies: The message codec (journal).
+-- ============================================================================
+
+-- SOURCE src/core/journal.ail L383-391 B17848-18123 sha256:d0ea2e14fe5d55437fe21e305379e436ec60e18ef9506d55f4270a8f065a3d1d symbol=req_string
+pure func ev_req_string(j: Json, key: string, where: string) -> Result[string, string] {
+  match get(j, key) {
+    None => Err("${where}.${key}: missing"),
+    Some(v) => match asString(v) {
+      None => Err("${where}.${key}: not a string"),
+      Some(s) => Ok(s)
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L393-401 B18124-18399 sha256:93bc5dd70f2d96d2d60f0833653efd2fc4eb77b730caeb1e90ec007dc7b5c93f symbol=req_array
+pure func ev_req_array(j: Json, key: string, where: string) -> Result[[Json], string] {
+  match get(j, key) {
+    None => Err("${where}.${key}: missing"),
+    Some(v) => match asArray(v) {
+      None => Err("${where}.${key}: not an array"),
+      Some(xs) => Ok(xs)
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L403-417 B18400-18839 sha256:6be8763c26d9fdea96159173edab7365855db269bfa03a026f4bb8a07a7c1c42 symbol=tool_call_of_json
+pure func ev_tool_call_of_json(j: Json, where: string) -> Result[ToolCall, string] {
+  match ev_req_string(j, "id", where) {
+    Err(e) => Err(e),
+    Ok(id) => match ev_req_string(j, "name", where) {
+      Err(e) => Err(e),
+      Ok(name) => match ev_req_string(j, "arguments", where) {
+        Err(e) => Err(e),
+        Ok(args) => {
+          let c: ToolCall = { id: id, name: name, arguments: args };
+          Ok(c)
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L426-437 B19433-19760 sha256:3b5e26cd912bfe8c74ceae40f72a7a69c1f290a4d98d7672e9160ec2164ff7e5 symbol=tool_calls_of_json
+@allow_empty_ok("a message with no tool calls is the common case, not a decode failure — an assistant without calls and a user message both carry []")
+pure func ev_tool_calls_of_json(xs: [Json], where: string) -> Result[[ToolCall], string] {
+  match xs {
+    [] => Ok([]),
+    j :: rest => match ev_tool_call_of_json(j, where) {
+      Err(e) => Err(e),
+      Ok(c) => match ev_tool_calls_of_json(rest, where) {
+        Err(e) => Err(e),
+        Ok(cs) => Ok(c :: cs)
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L439-450 B19761-20095 sha256:351415c33650b95c4130278aa7f90ba66a2d5d217a248373d4fd972a91280809 symbol=image_of_json
+pure func ev_image_of_json(j: Json, where: string) -> Result[ImagePart, string] {
+  match ev_req_string(j, "source", where) {
+    Err(e) => Err(e),
+    Ok(source) => match ev_req_string(j, "mime", where) {
+      Err(e) => Err(e),
+      Ok(mime) => {
+        let i: ImagePart = { source: source, mime: mime };
+        Ok(i)
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L453-464 B20228-20544 sha256:e1d2a7c03034e4dcbc45a85c23b932c170a693542ff0380ac8e4f90d73c2296e symbol=images_of_json
+@allow_empty_ok("a text-only message carries no images — [] is what every message in a history without vision inputs decodes to")
+pure func ev_images_of_json(xs: [Json], where: string) -> Result[[ImagePart], string] {
+  match xs {
+    [] => Ok([]),
+    j :: rest => match ev_image_of_json(j, where) {
+      Err(e) => Err(e),
+      Ok(i) => match ev_images_of_json(rest, where) {
+        Err(e) => Err(e),
+        Ok(is) => Ok(i :: is)
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L466-498 B20545-21694 sha256:506361f0197d8d41accf7eb4119e84ff07762377d1a9596acd35e4d3660e9dbc symbol=message_of_json_at
+pure func ev_message_of_json_at(j: Json, where: string) -> Result[Message, string] {
+  match ev_req_string(j, "role", where) {
+    Err(e) => Err(e),
+    Ok(role) => match ev_req_string(j, "content", where) {
+      Err(e) => Err(e),
+      Ok(content) => match ev_req_string(j, "tool_call_id", where) {
+        Err(e) => Err(e),
+        Ok(tool_call_id) => match ev_req_array(j, "tool_calls", where) {
+          Err(e) => Err(e),
+          Ok(raw_calls) => match ev_tool_calls_of_json(raw_calls, "${where}.tool_calls") {
+            Err(e) => Err(e),
+            Ok(calls) => match ev_req_array(j, "images", where) {
+              Err(e) => Err(e),
+              Ok(raw_images) => match ev_images_of_json(raw_images, "${where}.images") {
+                Err(e) => Err(e),
+                Ok(images) => {
+                  let m: Message = {
+                    role: role,
+                    content: content,
+                    tool_calls: calls,
+                    tool_call_id: tool_call_id,
+                    images: images
+                  };
+                  Ok(m)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L507-511 B22000-22072 sha256:6bee45d9015d74a8edd6714d23aa204f948a0d958f5f3ef86e516cb9b0b87a3c symbol=MessageDecodeAcc
+type EvMessageDecodeAcc = {
+  idx: int,
+  out: [Message],
+  err: string
+}
+
+-- SOURCE src/core/journal.ail L513-515 B22073-22152 sha256:a0fb14e101b5290a9d6852ba232e306b400742da7e1f241b30d44b7507d04583 symbol=cons_message
+pure func ev_cons_message(acc: [Message], m: Message) -> [Message] {
+  m :: acc
+}
+
+-- SOURCE src/core/journal.ail L537-539 B23381-23475 sha256:c9151dfeb27eae8726a9871eb447a8dead0f69160ca0492cb1fc88dd66cfd7e2 symbol=reverse_messages
+pure func ev_reverse_messages(ms: [Message]) -> [Message] {
+  List.foldl(ev_cons_message, [], ms)
+}
+
+-- SOURCE src/core/journal.ail L541-548 B23476-23828 sha256:de7271e3dc9bee0a4507459399a058f8b9c156202af9034cf565552842173af8 symbol=message_decode_step
+pure func ev_message_decode_step(acc: EvMessageDecodeAcc, j: Json) -> EvMessageDecodeAcc {
+  if acc.err != ""
+  then { idx: acc.idx + 1, out: acc.out, err: acc.err }
+  else match ev_message_of_json_at(j, "messages[${show(acc.idx)}]") {
+    Err(e) => { idx: acc.idx + 1, out: acc.out, err: e },
+    Ok(m) => { idx: acc.idx + 1, out: m :: acc.out, err: "" }
+  }
+}
+
+-- SOURCE src/core/journal.ail L552-560 B23988-24315 sha256:14514329cd3a204039d55967e52a323b00f4d540acecddc02874bb699e69a44b symbol=messages_of_json
+pure func ev_messages_of_json(j: Json) -> Result[[Message], string] {
+  match asArray(j) {
+    None => Err("messages: not an array"),
+    Some(xs) => {
+      let acc = List.foldl(ev_message_decode_step, { idx: 0, out: [], err: "" }, xs);
+      if acc.err != "" then Err(acc.err) else Ok(ev_reverse_messages(acc.out))
+    }
+  }
+}
+
+
+-- ============================================================================
+-- Copies: The refusal (journal).
+-- ============================================================================
+
+-- SOURCE src/core/journal.ail L581-592 B25494-25675 sha256:ed08c64b5215bc625e176492efad1c6adaffa22e2da8879ea580340061205ae2 symbol=Refusal
+export type EvRefusal
+  = EvHeader
+  | EvEntry(int, string)
+  | EvDigest(int)
+  | EvHeadPrefix
+  | EvTranscript(string)
+  | EvPairing(int)
+  | EvWorkdir
+  | EvExtSet
+  | EvPrompt
+  | EvLeased
+  | EvSchema
+
+-- SOURCE src/core/journal.ail L594-608 B25676-26044 sha256:078101cddca22da9c85aeaf1fe151d1004bc57893f52942b30207cc4fc2f1768 symbol=refusal_id
+pure func ev_refusal_id(r: EvRefusal) -> string {
+  match r {
+    EvHeader => "header",
+    EvEntry(_, _) => "entry",
+    EvDigest(_) => "digest",
+    EvHeadPrefix => "head-prefix",
+    EvTranscript(_) => "transcript",
+    EvPairing(_) => "pairing",
+    EvWorkdir => "workdir",
+    EvExtSet => "ext-set",
+    EvPrompt => "prompt",
+    EvLeased => "leased",
+    EvSchema => "schema"
+  }
+}
+
+
+-- ============================================================================
+-- Copies: The entry decoders (journal).
+-- ============================================================================
+
+-- SOURCE src/core/journal.ail L661-668 B29916-30036 sha256:15de460256a067c53d0f1bcd1669800010f5fc3f82f79faae2336218410b33c1 symbol=JournalEntry
+export type EvJournalEntry = {
+  id: string,
+  parent_id: string,
+  seq: int,
+  at_ms: int,
+  kind: string,
+  raw: Json
+}
+
+-- SOURCE src/core/journal.ail L670-672 B30037-30197 sha256:b6604f22593ab1d9fc687489565d38e73781481c8b2b06a8959b27b741920ca3 symbol=at_string
+pure func ev_at_string(j: Json, key: string, seq: int) -> Result[string, EvRefusal] {
+  match getString(j, key) { None => Err(EvEntry(seq, key)), Some(s) => Ok(s) }
+}
+
+-- SOURCE src/core/journal.ail L674-676 B30198-30349 sha256:b1340e729881fab49891578602b1a6d6afbd102015bbb7ed9ea3d48d3ebc0344 symbol=at_int
+pure func ev_at_int(j: Json, key: string, seq: int) -> Result[int, EvRefusal] {
+  match getInt(j, key) { None => Err(EvEntry(seq, key)), Some(n) => Ok(n) }
+}
+
+-- SOURCE src/core/journal.ail L678-680 B30350-30504 sha256:f9f6c30481807680e5234969bfe000312476e76d91611b9e490dd214f950507c symbol=at_bool
+pure func ev_at_bool(j: Json, key: string, seq: int) -> Result[bool, EvRefusal] {
+  match getBool(j, key) { None => Err(EvEntry(seq, key)), Some(b) => Ok(b) }
+}
+
+-- SOURCE src/core/journal.ail L682-684 B30505-30665 sha256:c15015faa1cc31eda08e9df832854422ed4f3b1da28c2649ebf718d44286e15e symbol=at_array
+pure func ev_at_array(j: Json, key: string, seq: int) -> Result[[Json], EvRefusal] {
+  match getArray(j, key) { None => Err(EvEntry(seq, key)), Some(xs) => Ok(xs) }
+}
+
+-- SOURCE src/core/journal.ail L686-691 B30666-30891 sha256:ccda026c38da705df4975d2fc3e467f3fdcaac4a51031c8dbe4687d7dbc64b02 symbol=at_object
+pure func ev_at_object(j: Json, key: string, seq: int) -> Result[Json, EvRefusal] {
+  match get(j, key) {
+    None => Err(EvEntry(seq, key)),
+    Some(v) => match asObject(v) { None => Err(EvEntry(seq, key)), Some(_) => Ok(v) }
+  }
+}
+
+-- SOURCE src/core/journal.ail L696-699 B31125-31331 sha256:4ffe9f948889c61ea759b148dbbb2485655fa2ceff1279e423d693a4e2d24271 symbol=opt_int
+pure func ev_opt_int(j: Json, key: string, seq: int) -> Result[Option[int], EvRefusal] {
+  if not has(j, key) then Ok(None)
+  else match getInt(j, key) { None => Err(EvEntry(seq, key)), Some(n) => Ok(Some(n)) }
+}
+
+-- SOURCE src/core/journal.ail L701-703 B31332-31441 sha256:83da5658f85fe24bccbdca4ac2ad243fde98df06de9577094bc03d220249af99 symbol=opt_json
+pure func ev_opt_json(j: Json, key: string) -> Option[Json] {
+  if not has(j, key) then None else get(j, key)
+}
+
+-- SOURCE src/core/journal.ail L705-708 B31442-31657 sha256:6735028f937d82bfffb9ff3e23a59a9cdde418a18a8a922204786f75048c2b56 symbol=opt_string
+pure func ev_opt_string(j: Json, key: string, seq: int) -> Result[Option[string], EvRefusal] {
+  if not has(j, key) then Ok(None)
+  else match getString(j, key) { None => Err(EvEntry(seq, key)), Some(s) => Ok(Some(s)) }
+}
+
+-- SOURCE src/core/journal.ail L714-734 B31905-32575 sha256:c3c1d59af93bb2f6ee62495bac03103046e4690bcf4bd72e85dade9674c6e444 symbol=journal_entry_of_json
+pure func ev_journal_entry_of_json(j: Json) -> Result[EvJournalEntry, EvRefusal] {
+  match ev_at_int(j, "seq", -1) {
+    Err(e) => Err(e),
+    Ok(seq) => match ev_at_string(j, "id", seq) {
+      Err(e) => Err(e),
+      Ok(id) => match ev_at_int(j, "at_ms", seq) {
+        Err(e) => Err(e),
+        Ok(at_ms) => match ev_at_string(j, "type", seq) {
+          Err(e) => Err(e),
+          Ok(kind) => {
+            let parent = match getString(j, "parent_id") { None => "", Some(p) => p };
+            let e: EvJournalEntry = {
+              id: id, parent_id: parent, seq: seq, at_ms: at_ms, kind: kind, raw: j
+            };
+            Ok(e)
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L737-746 B32620-32827 sha256:b2a5795200e1e0684542a9ce9a704dc3c42f43bee157614532e4258dab232723 symbol=HeaderEntry
+export type EvHeaderEntry = {
+  schema_version: int,
+  session_id: string,
+  workdir: string,
+  profile: string,
+  ext_set_digest: string,
+  model: string,
+  system_prefix_digest: string,
+  boot: EvBootInputs
+}
+
+-- SOURCE src/core/journal.ail L748-807 B32828-35845 sha256:16c9a877b02dfc1cad717145f18f95b6532fa5ccd8ca5f885a4c5b569f49e437 symbol=boot_of_json
+pure func ev_boot_of_json(j: Json, seq: int) -> Result[EvBootInputs, EvRefusal] {
+  match ev_at_object(j, "boot", seq) {
+    Err(e) => Err(e),
+    Ok(b) => match ev_at_string(b, "task", seq) {
+      Err(_) => Err(EvEntry(seq, "boot.task")),
+      Ok(task) => match ev_at_string(b, "env_url", seq) {
+        Err(_) => Err(EvEntry(seq, "boot.env_url")),
+        Ok(env_url) => match ev_at_bool(b, "hybrid_tools", seq) {
+          Err(_) => Err(EvEntry(seq, "boot.hybrid_tools")),
+          Ok(hybrid) => match ev_at_object(b, "budget", seq) {
+            Err(_) => Err(EvEntry(seq, "boot.budget")),
+            Ok(bp) => match ev_at_int(bp, "total", seq) {
+              Err(_) => Err(EvEntry(seq, "boot.budget.total")),
+              Ok(total) => match ev_at_int(bp, "solver", seq) {
+                Err(_) => Err(EvEntry(seq, "boot.budget.solver")),
+                Ok(solver) => match ev_at_int(bp, "verifier", seq) {
+                  Err(_) => Err(EvEntry(seq, "boot.budget.verifier")),
+                  Ok(verifier) => match ev_at_int(b, "step_budget", seq) {
+                    Err(_) => Err(EvEntry(seq, "boot.step_budget")),
+                    Ok(step_budget) => match ev_at_bool(b, "ohmy_pi", seq) {
+                      Err(_) => Err(EvEntry(seq, "boot.ohmy_pi")),
+                      Ok(ohmy) => match ev_at_int(b, "max_cost_millicents", seq) {
+                        Err(_) => Err(EvEntry(seq, "boot.max_cost_millicents")),
+                        Ok(max_cost) => match ev_at_object(b, "cost_rates", seq) {
+                          Err(_) => Err(EvEntry(seq, "boot.cost_rates")),
+                          Ok(cr) => match ev_at_int(cr, "input_per_1m_millicents", seq) {
+                            Err(_) => Err(EvEntry(seq, "boot.cost_rates.input_per_1m_millicents")),
+                            Ok(in_rate) => match ev_at_int(cr, "output_per_1m_millicents", seq) {
+                              Err(_) => Err(EvEntry(seq, "boot.cost_rates.output_per_1m_millicents")),
+                              Ok(out_rate) => {
+                                let boot: EvBootInputs = {
+                                  task: task,
+                                  env_url: env_url,
+                                  hybrid_tools: hybrid,
+                                  budget: { total: total, solver: solver, verifier: verifier },
+                                  step_budget: step_budget,
+                                  ohmy_pi: ohmy,
+                                  max_cost_millicents: max_cost,
+                                  cost_rates: {
+                                    input_per_1m_millicents: in_rate,
+                                    output_per_1m_millicents: out_rate
+                                  }
+                                };
+                                Ok(boot)
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L813-854 B36133-37734 sha256:38b787dda6d5c01e77fd9722480f75927a6a77289a4e08352042495048bf63de symbol=header_of_entry
+pure func ev_header_of_entry(e: EvJournalEntry) -> Result[EvHeaderEntry, EvRefusal] {
+  if e.kind != "header" then Err(EvHeader)
+  else match ev_at_int(e.raw, "schema_version", e.seq) {
+    Err(err) => Err(err),
+    Ok(v) =>
+      if v != 1 then Err(EvSchema)
+      else match ev_at_string(e.raw, "session_id", e.seq) {
+        Err(err) => Err(err),
+        Ok(session_id) => match ev_at_string(e.raw, "workdir", e.seq) {
+          Err(err) => Err(err),
+          Ok(workdir) => match ev_at_string(e.raw, "profile", e.seq) {
+            Err(err) => Err(err),
+            Ok(profile) => match ev_at_string(e.raw, "ext_set_digest", e.seq) {
+              Err(err) => Err(err),
+              Ok(ext_set) => match ev_at_string(e.raw, "model", e.seq) {
+                Err(err) => Err(err),
+                Ok(model) => match ev_at_string(e.raw, "system_prefix_digest", e.seq) {
+                  Err(err) => Err(err),
+                  Ok(sysd) => match ev_boot_of_json(e.raw, e.seq) {
+                    Err(err) => Err(err),
+                    Ok(boot) => {
+                      let h: EvHeaderEntry = {
+                        schema_version: v,
+                        session_id: session_id,
+                        workdir: workdir,
+                        profile: profile,
+                        ext_set_digest: ext_set,
+                        model: model,
+                        system_prefix_digest: sysd,
+                        boot: boot
+                      };
+                      Ok(h)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+  }
+}
+
+-- SOURCE src/core/journal.ail L856-862 B37735-37868 sha256:6707fa5052fe7f67a36372f0c7f10538af4e1ad471df3287dbd7acaab39e8836 symbol=AppendedEntry
+export type EvAppendedEntry = {
+  run_id: string,
+  step: int,
+  message: Message,
+  replaces_previous: bool,
+  digest_after: string
+}
+
+-- SOURCE src/core/journal.ail L864-890 B37869-38819 sha256:18ab8607be2377799d6a568afe19a3bb4a663e9966c805138c0bcebd735deff4 symbol=appended_of_entry
+pure func ev_appended_of_entry(e: EvJournalEntry) -> Result[EvAppendedEntry, EvRefusal] {
+  match ev_at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match ev_at_int(e.raw, "step", e.seq) {
+      Err(err) => Err(err),
+      Ok(step) => match ev_at_object(e.raw, "message", e.seq) {
+        Err(err) => Err(err),
+        Ok(mj) => match ev_message_of_json_at(mj, "message") {
+          Err(detail) => Err(EvEntry(e.seq, detail)),
+          Ok(m) => match ev_at_bool(e.raw, "replaces_previous", e.seq) {
+            Err(err) => Err(err),
+            Ok(rep) => match ev_at_string(e.raw, "digest_after", e.seq) {
+              Err(err) => Err(err),
+              Ok(d) => {
+                let a: EvAppendedEntry = {
+                  run_id: run_id, step: step, message: m,
+                  replaces_previous: rep, digest_after: d
+                };
+                Ok(a)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L892-899 B38820-38974 sha256:efb0a214d75de2374eeccfa562479b4bde9356a6392318336495b3ed5bbc4708 symbol=ReplacedEntry
+export type EvReplacedEntry = {
+  run_id: string,
+  step: int,
+  reason: string,
+  first_kept: Option[int],
+  messages: [Message],
+  digest_after: string
+}
+
+-- SOURCE src/core/journal.ail L901-930 B38975-40087 sha256:90a53ebe0a9237773f46324f576e7a32a22fb62f46d0aa15b0521b66d8a985db symbol=replaced_of_entry
+pure func ev_replaced_of_entry(e: EvJournalEntry) -> Result[EvReplacedEntry, EvRefusal] {
+  match ev_at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match ev_at_int(e.raw, "step", e.seq) {
+      Err(err) => Err(err),
+      Ok(step) => match ev_at_string(e.raw, "reason", e.seq) {
+        Err(err) => Err(err),
+        Ok(reason) => match ev_opt_int(e.raw, "first_kept", e.seq) {
+          Err(err) => Err(err),
+          Ok(first_kept) => match ev_at_array(e.raw, "messages", e.seq) {
+            Err(err) => Err(err),
+            Ok(_) => match ev_messages_of_json(ev_getOr_messages(e.raw)) {
+              Err(detail) => Err(EvEntry(e.seq, detail)),
+              Ok(ms) => match ev_at_string(e.raw, "digest_after", e.seq) {
+                Err(err) => Err(err),
+                Ok(d) => {
+                  let r: EvReplacedEntry = {
+                    run_id: run_id, step: step, reason: reason,
+                    first_kept: first_kept, messages: ms, digest_after: d
+                  };
+                  Ok(r)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L932-934 B40088-40194 sha256:7c06b205b3d6c00293c0e3f2b95df0c1506262edef9533176e82b53749301332 symbol=getOr_messages
+pure func ev_getOr_messages(j: Json) -> Json {
+  match get(j, "messages") { None => ja([]), Some(v) => v }
+}
+
+-- SOURCE src/core/journal.ail L936-943 B40195-40386 sha256:f50f0ec3259e8c792a6f231e407a2e07a23d18059a3b4ffa8606b091726e09a4 symbol=StateDeltaEntry
+export type EvStateDeltaEntry = {
+  run_id: string,
+  step: int,
+  cumulative: EvRuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts_digest: string,
+  ext_artifacts: Option[Json]
+}
+
+-- SOURCE src/core/journal.ail L945-974 B40387-41684 sha256:93ceb68c0a9c90f8a011b3fc661d6208fb2a7b8fe9ffbc838a21108025b0a936 symbol=counts_of_json
+pure func ev_counts_of_json(j: Json, key: string, seq: int) -> Result[EvRuntimeStatusCounts, EvRefusal] {
+  match ev_at_object(j, key, seq) {
+    Err(e) => Err(e),
+    Ok(c) => match ev_at_int(c, "provider_calls_started", seq) {
+      Err(_) => Err(EvEntry(seq, "${key}.provider_calls_started")),
+      Ok(started) => match ev_at_int(c, "provider_calls_completed", seq) {
+        Err(_) => Err(EvEntry(seq, "${key}.provider_calls_completed")),
+        Ok(completed) => match ev_at_int(c, "stage_applied_total", seq) {
+          Err(_) => Err(EvEntry(seq, "${key}.stage_applied_total")),
+          Ok(applied) => match ev_at_int(c, "stage_rejected_total", seq) {
+            Err(_) => Err(EvEntry(seq, "${key}.stage_rejected_total")),
+            Ok(rejected) => match ev_at_int(c, "compaction_ai_applied", seq) {
+              Err(_) => Err(EvEntry(seq, "${key}.compaction_ai_applied")),
+              Ok(ai) => {
+                let counts: EvRuntimeStatusCounts = {
+                  provider_calls_started: started,
+                  provider_calls_completed: completed,
+                  stage_applied_total: applied,
+                  stage_rejected_total: rejected,
+                  compaction_ai_applied: ai
+                };
+                Ok(counts)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L976-997 B41685-42487 sha256:1cd6d57da9d2a15e506d024712bcf3f942cc1cd0f8ba95d1b8af74dce614a3eb symbol=telemetry_of_json
+pure func ev_telemetry_of_json(j: Json, key: string, seq: int) -> Result[TokenTelemetry, EvRefusal] {
+  match ev_at_object(j, key, seq) {
+    Err(e) => Err(e),
+    Ok(t) => match ev_at_int(t, "last_input_tokens", seq) {
+      Err(_) => Err(EvEntry(seq, "${key}.last_input_tokens")),
+      Ok(li) => match ev_at_int(t, "last_output_tokens", seq) {
+        Err(_) => Err(EvEntry(seq, "${key}.last_output_tokens")),
+        Ok(lo) => match ev_at_int(t, "last_estimated_input_tokens", seq) {
+          Err(_) => Err(EvEntry(seq, "${key}.last_estimated_input_tokens")),
+          Ok(le) => {
+            let tel: TokenTelemetry = {
+              last_input_tokens: li,
+              last_output_tokens: lo,
+              last_estimated_input_tokens: le
+            };
+            Ok(tel)
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L999-1022 B42488-43381 sha256:dd4d9c821c7a21ce600f5b0fca363b662929264f30cd0f53f0af04cd4eb95b59 symbol=state_delta_of_entry
+pure func ev_state_delta_of_entry(e: EvJournalEntry) -> Result[EvStateDeltaEntry, EvRefusal] {
+  match ev_at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match ev_at_int(e.raw, "step", e.seq) {
+      Err(err) => Err(err),
+      Ok(step) => match ev_counts_of_json(e.raw, "cumulative", e.seq) {
+        Err(err) => Err(err),
+        Ok(counts) => match ev_telemetry_of_json(e.raw, "telemetry", e.seq) {
+          Err(err) => Err(err),
+          Ok(tel) => match ev_at_string(e.raw, "ext_artifacts_digest", e.seq) {
+            Err(err) => Err(err),
+            Ok(dig) => {
+              let d: EvStateDeltaEntry = {
+                run_id: run_id, step: step, cumulative: counts, telemetry: tel,
+                ext_artifacts_digest: dig, ext_artifacts: ev_opt_json(e.raw, "ext_artifacts")
+              };
+              Ok(d)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1024-1024 B43382-43431 sha256:cd4d058c889fc7a0ff160658f89cda9b97c0ff8b33fcb09c1872d308327bc1c9 symbol=RunStartedEntry
+export type EvRunStartedEntry = { run_id: string }
+
+-- SOURCE src/core/journal.ail L1026-1031 B43432-43674 sha256:20294a659afcf5e016cb8d21aa31cbc7e0673609659f357977444447aab444ba symbol=run_started_of_entry
+pure func ev_run_started_of_entry(e: EvJournalEntry) -> Result[EvRunStartedEntry, EvRefusal] {
+  match ev_at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => { let r: EvRunStartedEntry = { run_id: run_id }; Ok(r) }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1036-1041 B43879-44013 sha256:03a070b76a8475e28a458104c75a80c9a10f3de758a38833c8b9be98c6af95fb symbol=RunFinishedEntry
+export type EvRunFinishedEntry = {
+  run_id: string,
+  cumulative: EvRuntimeStatusCounts,
+  world_ordinal: int,
+  finish_reason: string
+}
+
+-- SOURCE src/core/journal.ail L1043-1062 B44014-44705 sha256:5140d67a5f5137159644a465e4789d0947911e5fdd003385a9836987ee1c4517 symbol=run_finished_of_entry
+pure func ev_run_finished_of_entry(e: EvJournalEntry) -> Result[EvRunFinishedEntry, EvRefusal] {
+  match ev_at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match ev_counts_of_json(e.raw, "cumulative", e.seq) {
+      Err(err) => Err(err),
+      Ok(counts) => match ev_at_int(e.raw, "world_ordinal", e.seq) {
+        Err(err) => Err(err),
+        Ok(ord) => match ev_at_string(e.raw, "finish_reason", e.seq) {
+          Err(err) => Err(err),
+          Ok(reason) => {
+            let r: EvRunFinishedEntry = {
+              run_id: run_id, cumulative: counts, world_ordinal: ord, finish_reason: reason
+            };
+            Ok(r)
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1068-1068 B44982-45061 sha256:7694d1c52c28c34e0d3ebd17858db781db119e53dfa09f739cbc92271400d4d6 symbol=SettingsEntry
+export type EvSettingsEntry = { model: Option[string], profile: Option[string] }
+
+-- SOURCE src/core/journal.ail L1070-1078 B45062-45411 sha256:40aafe0f3445f23e5b378d586c32ea4e0ef665d44427a90e614536ce2cca8036 symbol=settings_of_entry
+pure func ev_settings_of_entry(e: EvJournalEntry) -> Result[EvSettingsEntry, EvRefusal] {
+  match ev_opt_string(e.raw, "model", e.seq) {
+    Err(err) => Err(err),
+    Ok(model) => match ev_opt_string(e.raw, "profile", e.seq) {
+      Err(err) => Err(err),
+      Ok(profile) => { let s: EvSettingsEntry = { model: model, profile: profile }; Ok(s) }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1080-1080 B45412-45487 sha256:e5a193af6b0b0b6accee240273e40fdc29e798212fc4fb39d857e559abe5e214 symbol=SuspendedEntry
+export type EvSuspendedEntry = { run_id: string, reason: string, step: int }
+
+-- SOURCE src/core/journal.ail L1082-1096 B45488-45973 sha256:92a11ce80512fc32902014083032c188370cb487b43df59bd36ee32df036e313 symbol=suspended_of_entry
+pure func ev_suspended_of_entry(e: EvJournalEntry) -> Result[EvSuspendedEntry, EvRefusal] {
+  match ev_at_string(e.raw, "run_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(run_id) => match ev_at_string(e.raw, "reason", e.seq) {
+      Err(err) => Err(err),
+      Ok(reason) => match ev_at_int(e.raw, "step", e.seq) {
+        Err(err) => Err(err),
+        Ok(step) => {
+          let s: EvSuspendedEntry = { run_id: run_id, reason: reason, step: step };
+          Ok(s)
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1098-1107 B45974-46185 sha256:83d204f98ec2b92c2a1cb11923701b997123e264af08b0133b1f8b31fbcc143e symbol=ResumedEntry
+export type EvResumedEntry = {
+  resume_count: int,
+  from_id: string,
+  from_ordinal: int,
+  profile_from: string,
+  profile_to: string,
+  prompt_digest_from: string,
+  prompt_digest_to: string,
+  forced: bool
+}
+
+-- SOURCE src/core/journal.ail L1109-1142 B46186-47520 sha256:218052cc7a4f17f4b05f5f8627ddd44583fcc982ff5d2c738c8d17f9893a7273 symbol=resumed_of_entry
+pure func ev_resumed_of_entry(e: EvJournalEntry) -> Result[EvResumedEntry, EvRefusal] {
+  match ev_at_int(e.raw, "resume_count", e.seq) {
+    Err(err) => Err(err),
+    Ok(rc) => match ev_at_string(e.raw, "from_id", e.seq) {
+      Err(err) => Err(err),
+      Ok(from_id) => match ev_at_int(e.raw, "from_ordinal", e.seq) {
+        Err(err) => Err(err),
+        Ok(from_ord) => match ev_at_string(e.raw, "profile_from", e.seq) {
+          Err(err) => Err(err),
+          Ok(pf) => match ev_at_string(e.raw, "profile_to", e.seq) {
+            Err(err) => Err(err),
+            Ok(pt) => match ev_at_string(e.raw, "prompt_digest_from", e.seq) {
+              Err(err) => Err(err),
+              Ok(df) => match ev_at_string(e.raw, "prompt_digest_to", e.seq) {
+                Err(err) => Err(err),
+                Ok(dt) => match ev_at_bool(e.raw, "forced", e.seq) {
+                  Err(err) => Err(err),
+                  Ok(forced) => {
+                    let r: EvResumedEntry = {
+                      resume_count: rc, from_id: from_id, from_ordinal: from_ord,
+                      profile_from: pf, profile_to: pt,
+                      prompt_digest_from: df, prompt_digest_to: dt, forced: forced
+                    };
+                    Ok(r)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1144-1144 B47521-47594 sha256:c87b046ec2861b96332316b418894ddab5b24981b220e295340d44181d198456 symbol=ExitEntry
+export type EvExitEntry = { reason: string, pending_tool_calls: [string] }
+
+-- SOURCE src/core/journal.ail L1147-1158 B47744-48079 sha256:86ae1add3705d53d853a1aa185e56f7df78238cd29165d25eb5470d125a33513 symbol=strings_of_json
+@allow_empty_ok("an `exit` entry with no pending tool calls is the ordinary case — a clean exit strips nothing, and `[]` is its correct decoding")
+pure func ev_strings_of_json(xs: [Json], seq: int, field: string) -> Result[[string], EvRefusal] {
+  match xs {
+    [] => Ok([]),
+    j :: rest => match asString(j) {
+      None => Err(EvEntry(seq, field)),
+      Some(s) => match ev_strings_of_json(rest, seq, field) {
+        Err(e) => Err(e),
+        Ok(ss) => Ok(s :: ss)
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1160-1171 B48080-48545 sha256:4253c16d7a7cb59408cbe7eaf2eb1edf98714973c2d9629fcede6613e3a8477f symbol=exit_of_entry
+pure func ev_exit_of_entry(e: EvJournalEntry) -> Result[EvExitEntry, EvRefusal] {
+  match ev_at_string(e.raw, "reason", e.seq) {
+    Err(err) => Err(err),
+    Ok(reason) => match ev_at_array(e.raw, "pending_tool_calls", e.seq) {
+      Err(err) => Err(err),
+      Ok(xs) => match ev_strings_of_json(xs, e.seq, "pending_tool_calls") {
+        Err(err) => Err(err),
+        Ok(ids) => { let x: EvExitEntry = { reason: reason, pending_tool_calls: ids }; Ok(x) }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1179-1179 B49022-49105 sha256:4b38e91354542fec0225cc6eca838c6d4f96ed4a7b8be03c873d0cbbb94cf12d symbol=ParkEntry
+export type EvParkEntry = { request_id: string, step: int, waits: [EvWaitDescriptor] }
+
+-- SOURCE src/core/journal.ail L1180-1180 B49105-49202 sha256:16e58fcbe42e17df20c9cb4496a7dcf77de061ca25f566a0c0cd9f77ac021997 symbol=WakeEntry
+export type EvWakeEntry = { request_id: string, wait_id: string, outcome: string, detail: string }
+
+-- SOURCE src/core/journal.ail L1187-1189 B49596-49727 sha256:f058bc5c58c28f7b1cff03cfa80712ae49e494da52c46466d36d063dd0199cc7 symbol=all_wake_outcomes
+pure func ev_all_wake_outcomes() -> [string] {
+  ["settled", "lost", "operator_input", "timed_out", "host_error", "aborted"]
+}
+
+-- SOURCE src/core/journal.ail L1195-1206 B50150-50486 sha256:b7042306086e58f56c26194c4050d52b546aeec6d70674151392a263bee1e2c7 symbol=waits_of_json
+@allow_empty_ok("the recursion's base case only — a park with no waits is refused at `waits` by `park_of_entry` before the list is walked, so `[]` here is the end of a non-empty list")
+pure func ev_waits_of_json(xs: [Json], seq: int) -> Result[[EvWaitDescriptor], EvRefusal] {
+  match xs {
+    [] => Ok([]),
+    j :: rest => match ev_wait_descriptor_from_json(j) {
+      Err(_) => Err(EvEntry(seq, "waits")),
+      Ok(w) => match ev_waits_of_json(rest, seq) {
+        Err(e) => Err(e),
+        Ok(ws) => Ok(w :: ws)
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1211-1227 B50718-51353 sha256:50b9fc3ab232b96f47e8c7186ff602c4c153a27cafdac02e754b6a3dc3fffe02 symbol=park_of_entry
+pure func ev_park_of_entry(e: EvJournalEntry) -> Result[EvParkEntry, EvRefusal] {
+  match ev_at_string(e.raw, "request_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(request_id) => match ev_at_int(e.raw, "step", e.seq) {
+      Err(err) => Err(err),
+      Ok(step) => match ev_at_array(e.raw, "waits", e.seq) {
+        Err(err) => Err(err),
+        Ok(xs) =>
+          if List.length(xs) == 0 then Err(EvEntry(e.seq, "waits"))
+          else match ev_waits_of_json(xs, e.seq) {
+            Err(err) => Err(err),
+            Ok(waits) => { let p: EvParkEntry = { request_id: request_id, step: step, waits: waits }; Ok(p) }
+          }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1229-1248 B51354-52105 sha256:7b9a5e7e1d0e648b38ccb2aa8632a81e14fb0d7490b7869666609438f62683e0 symbol=wake_of_entry
+pure func ev_wake_of_entry(e: EvJournalEntry) -> Result[EvWakeEntry, EvRefusal] {
+  match ev_at_string(e.raw, "request_id", e.seq) {
+    Err(err) => Err(err),
+    Ok(request_id) => match ev_at_string(e.raw, "wait_id", e.seq) {
+      Err(err) => Err(err),
+      Ok(wid) => match ev_at_string(e.raw, "outcome", e.seq) {
+        Err(err) => Err(err),
+        Ok(outcome) =>
+          if not ev_contains_string(ev_all_wake_outcomes(), outcome) then Err(EvEntry(e.seq, "outcome"))
+          else match ev_at_string(e.raw, "detail", e.seq) {
+            Err(err) => Err(err),
+            Ok(detail) => {
+              let w: EvWakeEntry = { request_id: request_id, wait_id: wid, outcome: outcome, detail: detail };
+              Ok(w)
+            }
+          }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1253-1257 B52344-52560 sha256:1a53efabf95d904737514ef8d85c7061e00ad84e5d2a951fa4640ba9f5fd5869 symbol=all_entry_types
+pure func ev_all_entry_types() -> [string] {
+  ["header", "history_appended", "history_replaced", "state_delta",
+   "run_started", "run_finished", "settings", "suspended", "resumed", "exit",
+   "park", "wake"]
+}
+
+
+-- ============================================================================
+-- Copies: The fold (journal, D4).
+-- ============================================================================
+
+-- SOURCE src/core/journal.ail L1311-1316 B55890-56082 sha256:8e180655d81106108cdb9627f2d03eb1c721442153d261c1db2002f6f183e7e5 symbol=Boundary
+export type EvBoundary
+  = EvBoundaryRunFinished(string, int)
+  | EvBoundarySuspended(string, int)
+  | EvBoundaryExit(string)
+  | EvBoundaryOpen(string)
+  | EvBoundaryParked(EvParkEntry, Option[EvWakeEntry])
+
+-- SOURCE src/core/journal.ail L1318-1326 B56083-56358 sha256:8d1da36e8e96b576023e92b99563200436ceb39669bcf201a080e14212e899e6 symbol=boundary_id
+pure func ev_boundary_id(b: EvBoundary) -> string {
+  match b {
+    EvBoundaryRunFinished(_, _) => "run_finished",
+    EvBoundarySuspended(_, _) => "suspended",
+    EvBoundaryExit(_) => "exit",
+    EvBoundaryOpen(kind) => "open:${kind}",
+    EvBoundaryParked(_, _) => "parked"
+  }
+}
+
+-- SOURCE src/core/journal.ail L1328-1344 B56359-56953 sha256:27473752993c2b1082efce2f520319faa074b0996866da911e5c74e8e95d6f81 symbol=SessionState
+export type EvSessionState = {
+  header: EvHeaderEntry,
+  history: [Message],
+  dangling: [string],
+  cumulative: EvRuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts: Json,
+  model: string,
+  profile: string,
+  last: EvBoundary,
+  -- The last `run_finished.world_ordinal` on the path: D5's `from_ordinal`, which
+  -- is the previous frame's `final` itself (`RunSummary.world_ordinal`, P3ORD),
+  -- and carried here rather than read
+  -- off `last` because the last BOUNDARY is usually not a `run_finished` — a
+  -- restart ends in `exit`, a crash ends mid-run.
+  world_ordinal: int
+}
+
+-- SOURCE src/core/journal.ail L1349-1349 B57189-57229 sha256:c0985ef27661355b6df95b457579266cc3d6d0954349fb6b798ae3aa8a0aa3d2 symbol=HistMsg
+type EvHistMsg = { seq: int, m: Message }
+
+-- SOURCE src/core/journal.ail L1351-1351 B57230-57304 sha256:ce03f6e2cef84238528e280f212ad45d6ba376146ec8ccb95fdcaef724397a55 symbol=cons_hist
+pure func ev_cons_hist(acc: [EvHistMsg], h: EvHistMsg) -> [EvHistMsg] { h :: acc }
+
+-- SOURCE src/core/journal.ail L1352-1352 B57304-57389 sha256:cb95d5af4a3a77bf5116b2b5d021710660058ae16a7ee094b62fbcda02851e8e symbol=reverse_hist
+pure func ev_reverse_hist(xs: [EvHistMsg]) -> [EvHistMsg] { List.foldl(ev_cons_hist, [], xs) }
+
+-- SOURCE src/core/journal.ail L1354-1354 B57390-57480 sha256:801fd9217035c313a6bcc0f31199c2972b7c68d5e45464b3e57e880c2eb23db3 symbol=cons_entry
+pure func ev_cons_entry(acc: [EvJournalEntry], e: EvJournalEntry) -> [EvJournalEntry] { e :: acc }
+
+-- SOURCE src/core/journal.ail L1355-1355 B57480-57579 sha256:177f53dc93b34edc55b09a9c94dabda7e6e84e438af63e1d7ab49ae9339b91e4 symbol=reverse_entries
+pure func ev_reverse_entries(xs: [EvJournalEntry]) -> [EvJournalEntry] { List.foldl(ev_cons_entry, [], xs) }
+
+-- SOURCE src/core/journal.ail L1360-1362 B57736-57821 sha256:0e169666b6aabe8e03708105dc6f72cfb7ba48869e020f95b22f6f0348e4c3d2 symbol=hist_messages
+pure func ev_hist_messages(xs: [EvHistMsg]) -> [Message] {
+  List.map(ev_hist_message, xs)
+}
+
+-- SOURCE src/core/journal.ail L1364-1364 B57822-57876 sha256:250d1cae32ab38b44635d82b13ade18eea54065f9d25aeb7e1243536d088d148 symbol=hist_message
+pure func ev_hist_message(h: EvHistMsg) -> Message { h.m }
+
+-- SOURCE src/core/journal.ail L1366-1368 B57877-58031 sha256:8b56ed4894a09a411e4d5ff4e8fe107d07dae14ad20efda35b736477984ba638 symbol=contains_string
+pure func ev_contains_string(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else ev_contains_string(rest, t) }
+}
+
+-- SOURCE src/core/journal.ail L1370-1372 B58032-58209 sha256:163648bbf6b19307d1fde973c73d13f724d678c6c05aa18f5f5b1ac0036a8530 symbol=without_string
+pure func ev_without_string(xs: [string], t: string) -> [string] {
+  match xs { [] => [], x :: rest => if x == t then ev_without_string(rest, t) else x :: ev_without_string(rest, t) }
+}
+
+-- SOURCE src/core/journal.ail L1374-1376 B58210-58322 sha256:3b2300706a75077efbc15143560c3eb94e3dcd9df3440c7620085929452c0276 symbol=call_ids
+pure func ev_call_ids(cs: [ToolCall]) -> [string] {
+  match cs { [] => [], c :: rest => c.id :: ev_call_ids(rest) }
+}
+
+-- SOURCE src/core/journal.ail L1378-1381 B58323-58469 sha256:2aa86d577704cef6d0c1ec5009709464f52fbcc4431dd469dceb991ccb308c95 symbol=drop_hist
+pure func ev_drop_hist(n: int, xs: [EvHistMsg]) -> [EvHistMsg] {
+  if n <= 0 then xs
+  else match xs { [] => [], _ :: rest => ev_drop_hist(n - 1, rest) }
+}
+
+-- SOURCE src/core/journal.ail L1383-1388 B58470-58642 sha256:5bcfc9e9544369b9d44753846c8ac369f15cb63a475ca45bd62d966728832ea8 symbol=take_system_hist
+pure func ev_take_system_hist(xs: [EvHistMsg]) -> [EvHistMsg] {
+  match xs {
+    [] => [],
+    h :: rest => if h.m.role == "system" then h :: ev_take_system_hist(rest) else []
+  }
+}
+
+-- SOURCE src/core/journal.ail L1394-1399 B58825-59009 sha256:404f6f117c8d496489db37c70b86c273728af7fa402f503ed06b1002f1183069 symbol=find_entry
+pure func ev_find_entry(es: [EvJournalEntry], id: string) -> Option[EvJournalEntry] {
+  match es {
+    [] => None,
+    e :: rest => if e.id == id then Some(e) else ev_find_entry(rest, id)
+  }
+}
+
+-- SOURCE src/core/journal.ail L1405-1412 B59326-59620 sha256:db222e4cc4cb242276a0e9bd8d54ad215f6c1775d5f8a12f7efad01f707a9ffa symbol=path_up
+pure func ev_path_up(es: [EvJournalEntry], id: string, seen: [string], acc: [EvJournalEntry]) -> [EvJournalEntry] {
+  if id == "" then acc
+  else if ev_contains_string(seen, id) then acc
+  else match ev_find_entry(es, id) {
+    None => acc,
+    Some(e) => ev_path_up(es, e.parent_id, id :: seen, e :: acc)
+  }
+}
+
+-- SOURCE src/core/journal.ail L1414-1414 B59621-59681 sha256:20197f12669f4071d558e1deceecc07d7c1f0e597f0edc93499b9938c0fd7723 symbol=EnvAcc
+type EvEnvAcc = { out: [EvJournalEntry], err: Option[EvRefusal] }
+
+-- SOURCE src/core/journal.ail L1416-1424 B59682-59938 sha256:dcacecff0b3093179e29353656c63438a5c090973961f28182aeffb1bf2e0ced symbol=decode_envelope_step
+pure func ev_decode_envelope_step(acc: EvEnvAcc, j: Json) -> EvEnvAcc {
+  match acc.err {
+    Some(_) => acc,
+    None => match ev_journal_entry_of_json(j) {
+      Err(r) => { out: acc.out, err: Some(r) },
+      Ok(e) => { out: e :: acc.out, err: None }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1441-1453 B60862-61131 sha256:872394d4f39168d1c85c6b9b159b0a4561a257d0929519541f7cfbd65295936f symbol=FoldAcc
+type EvFoldAcc = {
+  err: Option[EvRefusal],
+  rev_msgs: [EvHistMsg],
+  digest: string,
+  digest_prev: string,
+  cumulative: EvRuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts: Json,
+  model: string,
+  profile: string,
+  last: EvBoundary,
+  world_ordinal: int
+}
+
+-- SOURCE src/core/journal.ail L1455-1473 B61132-61854 sha256:85c79010376bc036f2c0e82cba5e69a9aefda2b2055cc6cbbcc446ef9b26f04e symbol=fold_append
+pure func ev_fold_append(acc: EvFoldAcc, e: EvJournalEntry) -> EvFoldAcc {
+  match ev_appended_of_entry(e) {
+    Err(r) => { acc | err: Some(r) },
+    Ok(a) => {
+      let base = if a.replaces_previous then acc.digest_prev else acc.digest;
+      let kept = if a.replaces_previous
+                 then match acc.rev_msgs { [] => [], _ :: rest => rest }
+                 else acc.rev_msgs;
+      let expected = eval_chain_digest_after(base, a.message);
+      if a.digest_after != expected then { acc | err: Some(EvDigest(e.seq)) }
+      else {
+        acc | rev_msgs: ev_hist_msg(e.seq, a.message) :: kept,
+              digest: expected,
+              digest_prev: base,
+              last: EvBoundaryOpen("history_appended")
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1492-1517 B62915-64260 sha256:396876c5955325b2720bd0a3254159e7f4427fc4769628c4bb36b11edc6a8b46 symbol=fold_replace
+pure func ev_fold_replace(acc: EvFoldAcc, e: EvJournalEntry) -> EvFoldAcc {
+  match ev_replaced_of_entry(e) {
+    Err(r) => { acc | err: Some(r) },
+    Ok(rep) => {
+      -- `resume` is the same whole-history replacement (P3 Part 5's kill -9 gate):
+      -- the seed of a resume whose folded history is not the journal's chain — open
+      -- calls stripped, or a checkpoint-rebased chain — written by the host from the
+      -- seed and carrying its digest, exactly as a switch's is.
+      let switch = rep.reason == "profile_switch" || rep.reason == "resume";
+      let forward = ev_reverse_hist(acc.rev_msgs);
+      let prefix = if switch then [] else ev_take_system_hist(forward);
+      let kept = if switch then [] else match rep.first_kept { None => [], Some(i) => ev_drop_hist(i, forward) };
+      let replacement = ev_tag_messages(e.seq, rep.messages);
+      let emitted = prefix ++ replacement ++ kept;
+      let expected = if switch then eval_chain_digest_over(eval_chain_empty_base(), rep.messages)
+                     else eval_chain_digest_base(ev_hist_messages(prefix ++ replacement));
+      if rep.digest_after != expected then { acc | err: Some(EvDigest(e.seq)) }
+      else {
+        acc | rev_msgs: ev_reverse_hist(emitted),
+              digest: expected,
+              digest_prev: acc.digest,
+              last: EvBoundaryOpen("history_replaced")
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1519-1519 B64261-64336 sha256:c7f089d09f3816954f0edb7fc6288e39c0f477507baa933f82dc0c66a7509be6 symbol=hist_msg
+pure func ev_hist_msg(seq: int, m: Message) -> EvHistMsg { { seq: seq, m: m } }
+
+-- SOURCE src/core/journal.ail L1521-1523 B64337-64484 sha256:bd1ae31a76150fda08d4b1d4cdfd7d1795601447b9446dd4d3cc0a89d48f23de symbol=tag_messages
+pure func ev_tag_messages(seq: int, ms: [Message]) -> [EvHistMsg] {
+  match ms { [] => [], m :: rest => ev_hist_msg(seq, m) :: ev_tag_messages(seq, rest) }
+}
+
+-- SOURCE src/core/journal.ail L1525-1623 B64485-69775 sha256:570b540ff61ea36b15935607d7f3f2283d4790511795e89bc44e67fb03f534b6 symbol=fold_entry
+pure func ev_fold_entry(acc: EvFoldAcc, e: EvJournalEntry) -> EvFoldAcc {
+  match acc.err {
+    Some(_) => acc,
+    None =>
+      if e.kind == "history_appended" then ev_fold_append(acc, e)
+      else if e.kind == "history_replaced" then ev_fold_replace(acc, e)
+      else if e.kind == "state_delta" then match ev_state_delta_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(d) => {
+          acc | cumulative: d.cumulative,
+                telemetry: d.telemetry,
+                ext_artifacts: match d.ext_artifacts { None => acc.ext_artifacts, Some(v) => v },
+                last: EvBoundaryOpen("state_delta")
+        }
+      }
+      else if e.kind == "settings" then match ev_settings_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(s) => {
+          acc | model: match s.model { None => acc.model, Some(m) => m },
+                profile: match s.profile { None => acc.profile, Some(p) => p },
+                last: EvBoundaryOpen("settings")
+        }
+      }
+      else if e.kind == "run_started" then match ev_run_started_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(_) => { acc | last: EvBoundaryOpen("run_started") }
+      }
+      -- A `run_finished` THAT CLOSES THE RUN WHICH JUST SUSPENDED KEEPS THE
+      -- SUSPENSION AS THE BOUNDARY. Found by P3 Part 5's resume gate, not
+      -- anticipated: D2 puts `run_suspended` IMMEDIATELY BEFORE `run_summary` on
+      -- the wire (the P1 Part 1 fixture pins that order), so every suspended run's
+      -- journal ends `suspended, run_finished`, and D4 rule 6 read literally ("the
+      -- last entry's type") folds EVERY suspension to "between turns" — the held
+      -- continuation D6 step 5 routes `Suspended` to would be unreachable from any
+      -- journal a host or the twin can write. The summary is the frame closing, the
+      -- suspension is how it closed; the ordinal is still the summary's.
+      else if e.kind == "run_finished" then match ev_run_finished_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(f) => match acc.last {
+          EvBoundarySuspended(rid, _) =>
+            if rid == f.run_id then { acc | world_ordinal: f.world_ordinal }
+            else { acc | last: EvBoundaryRunFinished(f.run_id, f.world_ordinal), world_ordinal: f.world_ordinal },
+          _ => { acc | last: EvBoundaryRunFinished(f.run_id, f.world_ordinal), world_ordinal: f.world_ordinal }
+        }
+      }
+      else if e.kind == "suspended" then match ev_suspended_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(s) => { acc | last: EvBoundarySuspended(s.run_id, s.step) }
+      }
+      else if e.kind == "resumed" then match ev_resumed_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(_) => { acc | last: EvBoundaryOpen("resumed") }
+      }
+      -- AN `exit` AFTER A PARK KEEPS THE PARK (P4-Q4: ADR-002 D4 over the literal
+      -- text of ADR-003 D4 rule 6). The host writes `exit` when it quits or dies
+      -- during a durable park, and the park — with its wake, when one arrived and
+      -- no run consumed it — is what the resume re-observes.
+      else if e.kind == "exit" then match ev_exit_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(x) => match acc.last {
+          EvBoundaryParked(_, _) => acc,
+          _ => { acc | last: EvBoundaryExit(x.reason) }
+        }
+      }
+      -- D7's park (PLAN-003 P4 Part 1). It is the boundary until an entry of the
+      -- running kind follows — `run_started`, a history entry, `state_delta`,
+      -- `run_finished`, `suspended` — and every one of those arms already moves
+      -- `last` off it. That is D7's exactly-once rule inside the fold: a consumed
+      -- wake is followed by the `run_started` of the run it opened, so no later
+      -- fold offers it again.
+      else if e.kind == "park" then match ev_park_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(p) => { acc | last: EvBoundaryParked(p, None) }
+      }
+      -- A wake answers THE open park and nothing else: no park before it, a park
+      -- already answered, or a park for another request refuse at `request_id`.
+      -- An `aborted` wake CLOSES the park (P4-Q4): the request was cancelled, and
+      -- a resume that opens no run must not re-offer it.
+      else if e.kind == "wake" then match ev_wake_of_entry(e) {
+        Err(r) => { acc | err: Some(r) },
+        Ok(w) => match acc.last {
+          EvBoundaryParked(p, answered) => match answered {
+            Some(_) => { acc | err: Some(EvEntry(e.seq, "request_id")) },
+            None =>
+              if p.request_id != w.request_id then { acc | err: Some(EvEntry(e.seq, "request_id")) }
+              else if w.outcome == "aborted" then { acc | last: EvBoundaryOpen("wake:aborted") }
+              else { acc | last: EvBoundaryParked(p, Some(w)) }
+          },
+          _ => { acc | err: Some(EvEntry(e.seq, "request_id")) }
+        }
+      }
+      else if e.kind == "header" then { acc | err: Some(EvHeader) }
+      -- AN UNKNOWN TYPE IS A REFUSAL, not a skip: a fold that ignored what it did
+      -- not recognise would resume a session as though the entry it skipped had
+      -- never been written — which is what the fold before P4 Part 1 would have
+      -- done to a `park`.
+      else { acc | err: Some(EvEntry(e.seq, "type=${e.kind}")) }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1629-1634 B69989-70090 sha256:933fa5458f8f8cea1453d8eebdb9f941a0e1453368e905c4a463609449f4e14c symbol=PairAcc
+type EvPairAcc = {
+  err: Option[EvRefusal],
+  open_ids: [string],
+  cur_ids: [string],
+  cur_seq: int
+}
+
+-- SOURCE src/core/journal.ail L1636-1653 B70091-70936 sha256:7fefcfe57665874fa7e1e19c29f81f47a8cd9400c767205693cd63d4d19dee8a symbol=pair_step
+pure func ev_pair_step(acc: EvPairAcc, h: EvHistMsg) -> EvPairAcc {
+  match acc.err {
+    Some(_) => acc,
+    None =>
+      if h.m.role == "tool" then
+        if ev_contains_string(acc.cur_ids, h.m.tool_call_id)
+        then { acc | open_ids: ev_without_string(acc.open_ids, h.m.tool_call_id) }
+        else { acc | err: Some(EvPairing(h.seq)) }
+      else if List.length(acc.open_ids) > 0 then
+        -- Something that is not a result for the open batch arrived while calls
+        -- were still open: D4's "every call except a trailing one is answered".
+        -- The refusal names the ASSISTANT that made them, not the interloper.
+        { acc | err: Some(EvPairing(acc.cur_seq)) }
+      else if List.length(h.m.tool_calls) > 0 then
+        { acc | open_ids: ev_call_ids(h.m.tool_calls), cur_ids: ev_call_ids(h.m.tool_calls), cur_seq: h.seq }
+      else acc
+  }
+}
+
+-- SOURCE src/core/journal.ail L1655-1664 B70937-71336 sha256:25f660ec423fb5cba312feb5d46a1b09892c02df0d7ccdec11930f9d41aeb672 symbol=strip_dangling
+pure func ev_strip_dangling(dangling: [string], cur_seq: int, xs: [EvHistMsg]) -> [EvHistMsg] {
+  match xs {
+    [] => [],
+    h :: rest =>
+      if h.seq == cur_seq && List.length(h.m.tool_calls) > 0
+      then ev_hist_msg(h.seq, { h.m | tool_calls: ev_keep_calls(dangling, h.m.tool_calls) })
+             :: ev_strip_dangling(dangling, cur_seq, rest)
+      else h :: ev_strip_dangling(dangling, cur_seq, rest)
+  }
+}
+
+-- SOURCE src/core/journal.ail L1666-1673 B71337-71576 sha256:9eb2cbf933e204b9462436b55f6e20642d42e6d3baed0b4072171dd1216081d6 symbol=keep_calls
+pure func ev_keep_calls(dangling: [string], cs: [ToolCall]) -> [ToolCall] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      if ev_contains_string(dangling, c.id) then ev_keep_calls(dangling, rest)
+      else c :: ev_keep_calls(dangling, rest)
+  }
+}
+
+-- SOURCE src/core/journal.ail L1679-1715 B71758-72999 sha256:04d2c175ef421f547340687d83da3993779d5b9dd438afc2cabb41528760986d symbol=fold_journal
+pure func ev_fold_journal(entries: [Json], leaf: string) -> Result[EvSessionState, EvRefusal] {
+  let env0: EvEnvAcc = { out: [], err: None };
+  let decoded = List.foldl(ev_decode_envelope_step, env0, entries);
+  match decoded.err {
+    Some(r) => Err(r),
+    None => {
+      let all = ev_reverse_entries(decoded.out);
+      let path = ev_path_up(all, leaf, [], []);
+      match path {
+        [] => Err(EvHeader),
+        head_entry :: rest => match ev_header_of_entry(head_entry) {
+          Err(r) => Err(r),
+          Ok(header) => {
+            let acc0: EvFoldAcc = {
+              err: None,
+              rev_msgs: [],
+              digest: eval_chain_empty_base(),
+              digest_prev: eval_chain_empty_base(),
+              cumulative: ev_zero_runtime_status_counts(),
+              telemetry: ev_zero_token_telemetry(),
+              ext_artifacts: ev_empty_ext_artifacts(),
+              model: header.model,
+              profile: header.profile,
+              last: EvBoundaryOpen("header"),
+              world_ordinal: 0
+            };
+            let acc = List.foldl(ev_fold_entry, acc0, rest);
+            match acc.err {
+              Some(r) => Err(r),
+              None => ev_finish_fold(header, acc)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- SOURCE src/core/journal.ail L1717-1752 B73000-74339 sha256:446465b10146e5eb4720a9704cc8453ab876310b9ecaa7ad34ed6bc31667f8b5 symbol=finish_fold
+pure func ev_finish_fold(header: EvHeaderEntry, acc: EvFoldAcc) -> Result[EvSessionState, EvRefusal] {
+  let forward = ev_reverse_hist(acc.rev_msgs);
+  let pair0: EvPairAcc = { err: None, open_ids: [], cur_ids: [], cur_seq: -1 };
+  let pairs = List.foldl(ev_pair_step, pair0, forward);
+  match pairs.err {
+    Some(r) => Err(r),
+    None => {
+      let dangling = pairs.open_ids;
+      let stripped = if List.length(dangling) == 0 then forward
+                     else ev_strip_dangling(dangling, pairs.cur_seq, forward);
+      let msgs = ev_hist_messages(stripped);
+      if not ev_system_is_head_prefix(msgs, true) then Err(EvHeadPrefix)
+      else match ev_history_from_seed(msgs) {
+        Err(e) => Err(EvTranscript(e)),
+        Ok(h) =>
+          if not ev_history_valid_transcript(h)
+          then Err(EvTranscript("a tool message with no tool_call_id, or a tool call with no id"))
+          else {
+            let st: EvSessionState = {
+              header: header,
+              history: msgs,
+              dangling: dangling,
+              cumulative: acc.cumulative,
+              telemetry: acc.telemetry,
+              ext_artifacts: acc.ext_artifacts,
+              model: acc.model,
+              profile: acc.profile,
+              last: acc.last,
+              world_ordinal: acc.world_ordinal
+            };
+            Ok(st)
+          }
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- The reader (ADR-004 D1): selector, refusals, output.
+-- ============================================================================
+
+export type SegmentEnd = EndAt(string) | CutoffBefore(string)
+
+export type RunSelector = { leaf: string, run_id: string, start: string, end: SegmentEnd }
+
+-- Where a refusal is: an entry by `seq`, a line by index (an envelope with no
+-- `seq`), or the path as a whole (a property of the folded history).
+export type SourcePosition = AtEntry(int) | AtLine(int) | AtPath
+
+export type SourceRefusal
+  = ChainBreak(SourcePosition, string)
+  | MalformedEntry(SourcePosition, string)
+  | UnknownEntryType(SourcePosition, string)
+  | UnknownSchema(SourcePosition, string)
+  | BadSelector(string)
+
+export pure func position_label(p: SourcePosition) -> string {
+  match p {
+    AtEntry(s) => "entry:${show(s)}",
+    AtLine(i) => "line:${show(i)}",
+    AtPath => "path"
+  }
+}
+
+export pure func source_refusal_family(r: SourceRefusal) -> string {
+  match r {
+    ChainBreak(_, _) => "ChainBreak",
+    MalformedEntry(_, _) => "MalformedEntry",
+    UnknownEntryType(_, _) => "UnknownEntryType",
+    UnknownSchema(_, _) => "UnknownSchema",
+    BadSelector(_) => "BadSelector"
+  }
+}
+
+export pure func source_refusal_position(r: SourceRefusal) -> string {
+  match r {
+    ChainBreak(p, _) => position_label(p),
+    MalformedEntry(p, _) => position_label(p),
+    UnknownEntryType(p, _) => position_label(p),
+    UnknownSchema(p, _) => position_label(p),
+    BadSelector(_) => "path"
+  }
+}
+
+-- The field, the detail or the unknown type — never content.
+export pure func source_refusal_field(r: SourceRefusal) -> string {
+  match r {
+    ChainBreak(_, f) => f,
+    MalformedEntry(_, f) => f,
+    UnknownEntryType(_, f) => f,
+    UnknownSchema(_, f) => f,
+    BadSelector(f) => f
+  }
+}
+
+-- One segment entry, typed, with its `seq`. No `header`: the path's only
+-- header is its root, which is never inside a segment.
+export type SegmentEntry
+  = SegAppended(int, EvAppendedEntry)
+  | SegReplaced(int, EvReplacedEntry)
+  | SegStateDelta(int, EvStateDeltaEntry)
+  | SegRunStarted(int, EvRunStartedEntry)
+  | SegRunFinished(int, EvRunFinishedEntry)
+  | SegSettings(int, EvSettingsEntry)
+  | SegSuspended(int, EvSuspendedEntry)
+  | SegResumed(int, EvResumedEntry)
+  | SegExit(int, EvExitEntry)
+  | SegPark(int, EvParkEntry)
+  | SegWake(int, EvWakeEntry)
+
+export type ReaderSource = {
+  header: EvHeaderEntry,
+  selector: RunSelector,
+  path_length: int,
+  run_started_seq: int,
+  start_seq: int,
+  -- the fold of the path up to the entry before `start`, repaired
+  seed: [Message],
+  seed_digest: string,
+  seed_state: EvSessionState,
+  -- P1.2b's ContinuationStart input
+  opened_by_wake: bool,
+  segment: [SegmentEntry],
+  -- the strict fold of the whole path (a validation; not the segment)
+  leaf_state: EvSessionState
+}
+
+-- ----------------------------------------------------------------------------
+-- The fold's refusals as D1's families.
+-- ----------------------------------------------------------------------------
+
+pure func type_prefix() -> string { "type=" }
+
+pure func from_fold(r: EvRefusal, root_seq: int) -> SourceRefusal {
+  match r {
+    EvHeader => ChainBreak(AtPath, "header"),
+    EvEntry(seq, field) =>
+      if startsWith(field, type_prefix())
+      then UnknownEntryType(AtEntry(seq), substring(field, Str.length(type_prefix()), Str.length(field)))
+      else if seq < 0 then MalformedEntry(AtPath, field)
+      else MalformedEntry(AtEntry(seq), field),
+    EvDigest(seq) => ChainBreak(AtEntry(seq), "digest_after"),
+    EvHeadPrefix => MalformedEntry(AtPath, "head-prefix"),
+    EvTranscript(_) => MalformedEntry(AtPath, "transcript"),
+    EvPairing(seq) => MalformedEntry(AtEntry(seq), "pairing"),
+    EvSchema => UnknownSchema(AtEntry(root_seq), "schema_version"),
+    _ => MalformedEntry(AtPath, ev_refusal_id(r))
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Step 1: every envelope, located.
+-- ----------------------------------------------------------------------------
+
+type LineAcc = { idx: int, bad: Option[SourceRefusal], out: [EvJournalEntry] }
+
+pure func envelope_refusal(r: EvRefusal, idx: int) -> SourceRefusal {
+  match r {
+    EvEntry(seq, field) =>
+      if seq < 0 then MalformedEntry(AtLine(idx), field) else MalformedEntry(AtEntry(seq), field),
+    _ => MalformedEntry(AtLine(idx), ev_refusal_id(r))
+  }
+}
+
+pure func envelope_step(acc: LineAcc, j: Json) -> LineAcc {
+  match acc.bad {
+    Some(_) => acc,
+    None => match ev_journal_entry_of_json(j) {
+      Err(r) => { acc | bad: Some(envelope_refusal(r, acc.idx)) },
+      Ok(e) => { idx: acc.idx + 1, bad: None, out: e :: acc.out }
+    }
+  }
+}
+
+pure func envelopes(lines: [Json]) -> Result[[EvJournalEntry], SourceRefusal] {
+  let acc = List.foldl(envelope_step, { idx: 0, bad: None, out: [] }, lines);
+  match acc.bad {
+    Some(r) => Err(r),
+    None => Ok(ev_reverse_entries(acc.out))
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Step 2: the strict path, root first.
+-- ----------------------------------------------------------------------------
+
+pure func climb(es: [EvJournalEntry], e: EvJournalEntry, seen: [string], acc: [EvJournalEntry]) -> Result[[EvJournalEntry], SourceRefusal] {
+  let seen2 = e.id :: seen;
+  let acc2 = e :: acc;
+  if e.parent_id == "" then Ok(acc2)
+  else if ev_contains_string(seen2, e.parent_id) then Err(ChainBreak(AtEntry(e.seq), "parent_id"))
+  else match ev_find_entry(es, e.parent_id) {
+    None => Err(ChainBreak(AtEntry(e.seq), "parent_id")),
+    Some(p) => climb(es, p, seen2, acc2)
+  }
+}
+
+pure func first_header_seq(acc: int, e: EvJournalEntry) -> int {
+  if acc >= 0 then acc else if e.kind == "header" then e.seq else -1
+}
+
+export pure func strict_path(es: [EvJournalEntry], leaf: string) -> Result[[EvJournalEntry], SourceRefusal] {
+  match ev_find_entry(es, leaf) {
+    None => Err(ChainBreak(AtPath, "leaf")),
+    Some(e) => match climb(es, e, [], []) {
+      Err(r) => Err(r),
+      Ok(path) => match path {
+        [] => Err(ChainBreak(AtPath, "leaf")),
+        root :: rest =>
+          if root.kind != "header" then Err(ChainBreak(AtEntry(root.seq), "root"))
+          else {
+            let extra = List.foldl(first_header_seq, -1, rest);
+            if extra >= 0 then Err(ChainBreak(AtEntry(extra), "header")) else Ok(path)
+          }
+      }
+    }
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Indexing the path.
+-- ----------------------------------------------------------------------------
+
+type IndexAcc = { i: int, found: int }
+
+pure func index_of(path: [EvJournalEntry], id: string) -> int {
+  let acc = List.foldl(\a e. if a.found >= 0 then a else if e.id == id then { i: a.i + 1, found: a.i } else { a | i: a.i + 1 }, { i: 0, found: -1 }, path);
+  acc.found
+}
+
+pure func drop_entries(n: int, xs: [EvJournalEntry]) -> [EvJournalEntry] {
+  if n <= 0 then xs
+  else match xs { [] => [], _ :: rest => drop_entries(n - 1, rest) }
+}
+
+pure func nth_entry(path: [EvJournalEntry], i: int) -> Option[EvJournalEntry] {
+  if i < 0 then None
+  else match drop_entries(i, path) { [] => None, e :: _ => Some(e) }
+}
+
+type TakeAcc = { left: int, out: [EvJournalEntry] }
+
+pure func take_entries(n: int, xs: [EvJournalEntry]) -> [EvJournalEntry] {
+  let acc = List.foldl(\a e. if a.left <= 0 then a else { left: a.left - 1, out: e :: a.out }, { left: n, out: [] }, xs);
+  ev_reverse_entries(acc.out)
+}
+
+pure func slice_entries(path: [EvJournalEntry], from: int, until: int) -> [EvJournalEntry] {
+  take_entries(until - from, drop_entries(from, path))
+}
+
+-- ----------------------------------------------------------------------------
+-- Step 5: the selector.
+-- ----------------------------------------------------------------------------
+
+pure func assistant_of(e: EvJournalEntry) -> Option[EvAppendedEntry] {
+  if e.kind != "history_appended" then None
+  else match ev_appended_of_entry(e) {
+    Err(_) => None,
+    Ok(a) => if a.message.role == "assistant" then Some(a) else None
+  }
+}
+
+pure func is_assistant(e: EvJournalEntry) -> bool {
+  match assistant_of(e) { Some(_) => true, None => false }
+}
+
+pure func run_started_id(e: EvJournalEntry) -> string {
+  if e.kind != "run_started" then ""
+  else match ev_run_started_of_entry(e) { Err(_) => "", Ok(r) => r.run_id }
+}
+
+-- Before `start`: the last `run_started` of the run, and whether an assistant
+-- follows it.
+type RunAcc = { i: int, ri: int, asst_after: bool }
+
+pure func run_step(run_id: string, si: int, a: RunAcc, e: EvJournalEntry) -> RunAcc {
+  if a.i >= si then { a | i: a.i + 1 }
+  else if run_started_id(e) == run_id && run_id != "" then { i: a.i + 1, ri: a.i, asst_after: false }
+  else if is_assistant(e) then { a | i: a.i + 1, asst_after: true }
+  else { a | i: a.i + 1 }
+}
+
+type StartOk = { si: int, ri: int, start: EvJournalEntry, run_started: EvJournalEntry }
+
+pure func check_start(path: [EvJournalEntry], sel: RunSelector) -> Result[StartOk, SourceRefusal] {
+  let si = index_of(path, sel.start);
+  match nth_entry(path, si) {
+    None => Err(BadSelector("start")),
+    Some(s) => match assistant_of(s) {
+      None => Err(BadSelector("start")),
+      Some(a) =>
+        if a.run_id != sel.run_id || a.replaces_previous then Err(BadSelector("start"))
+        else {
+          let r = List.foldl(\acc e. run_step(sel.run_id, si, acc, e), { i: 0, ri: -1, asst_after: false }, path);
+          if r.ri < 0 then Err(BadSelector("run_id"))
+          else if r.asst_after then Err(BadSelector("start"))
+          else match nth_entry(path, r.ri) {
+            None => Err(BadSelector("run_id")),
+            Some(rs) => Ok({ si: si, ri: r.ri, start: s, run_started: rs })
+          }
+        }
+    }
+  }
+}
+
+pure func is_turn_tail(e: EvJournalEntry) -> bool {
+  if e.kind == "state_delta" then true
+  else if e.kind != "history_appended" then false
+  else match ev_appended_of_entry(e) { Err(_) => false, Ok(a) => a.message.role == "tool" }
+}
+
+type TailAcc = { n: int, going: bool }
+
+pure func tail_length(xs: [EvJournalEntry]) -> int {
+  let acc = List.foldl(\a e. if a.going && is_turn_tail(e) then { n: a.n + 1, going: true } else { a | going: false }, { n: 0, going: true }, xs);
+  acc.n
+}
+
+-- The exclusive end index of the segment.
+pure func segment_stop(path: [EvJournalEntry], si: int, sel: RunSelector) -> Result[int, SourceRefusal] {
+  match sel.end {
+    EndAt(id) => {
+      let ei = index_of(path, id);
+      if ei < si then Err(BadSelector("end"))
+      else match nth_entry(path, ei) {
+        None => Err(BadSelector("end")),
+        Some(e) => match assistant_of(e) {
+          None => Err(BadSelector("end")),
+          Some(a) =>
+            if a.run_id != sel.run_id then Err(BadSelector("end"))
+            else Ok(ei + 1 + tail_length(drop_entries(ei + 1, path)))
+        }
+      }
+    },
+    CutoffBefore(id) => {
+      let ei = index_of(path, id);
+      if ei <= si then Err(BadSelector("end")) else Ok(ei)
+    }
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Step 7: the typed segment.
+-- ----------------------------------------------------------------------------
+
+pure func seg_of(root_seq: int, e: EvJournalEntry) -> Result[SegmentEntry, SourceRefusal] {
+  let s = e.seq;
+  if e.kind == "history_appended" then match ev_appended_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegAppended(s, x)) }
+  else if e.kind == "history_replaced" then match ev_replaced_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegReplaced(s, x)) }
+  else if e.kind == "state_delta" then match ev_state_delta_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegStateDelta(s, x)) }
+  else if e.kind == "run_started" then match ev_run_started_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegRunStarted(s, x)) }
+  else if e.kind == "run_finished" then match ev_run_finished_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegRunFinished(s, x)) }
+  else if e.kind == "settings" then match ev_settings_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegSettings(s, x)) }
+  else if e.kind == "suspended" then match ev_suspended_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegSuspended(s, x)) }
+  else if e.kind == "resumed" then match ev_resumed_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegResumed(s, x)) }
+  else if e.kind == "exit" then match ev_exit_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegExit(s, x)) }
+  else if e.kind == "park" then match ev_park_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegPark(s, x)) }
+  else if e.kind == "wake" then match ev_wake_of_entry(e) { Err(r) => Err(from_fold(r, root_seq)), Ok(x) => Ok(SegWake(s, x)) }
+  else if e.kind == "header" then Err(ChainBreak(AtEntry(s), "header"))
+  else Err(UnknownEntryType(AtEntry(s), e.kind))
+}
+
+type SegAcc = { bad: Option[SourceRefusal], out: [SegmentEntry] }
+
+pure func segment_of(root_seq: int, es: [EvJournalEntry]) -> Result[[SegmentEntry], SourceRefusal] {
+  let acc = List.foldl(\a e. match a.bad {
+    Some(_) => a,
+    None => match seg_of(root_seq, e) { Err(r) => { a | bad: Some(r) }, Ok(x) => { a | out: x :: a.out } }
+  }, { bad: None, out: [] }, es);
+  match acc.bad {
+    Some(r) => Err(r),
+    None => Ok(List.foldl(\xs x. x :: xs, [], acc.out))
+  }
+}
+
+export pure func segment_entry_seq(x: SegmentEntry) -> int {
+  match x {
+    SegAppended(s, _) => s, SegReplaced(s, _) => s, SegStateDelta(s, _) => s,
+    SegRunStarted(s, _) => s, SegRunFinished(s, _) => s, SegSettings(s, _) => s,
+    SegSuspended(s, _) => s, SegResumed(s, _) => s, SegExit(s, _) => s,
+    SegPark(s, _) => s, SegWake(s, _) => s
+  }
+}
+
+export pure func segment_entry_kind(x: SegmentEntry) -> string {
+  match x {
+    SegAppended(_, _) => "history_appended", SegReplaced(_, _) => "history_replaced",
+    SegStateDelta(_, _) => "state_delta", SegRunStarted(_, _) => "run_started",
+    SegRunFinished(_, _) => "run_finished", SegSettings(_, _) => "settings",
+    SegSuspended(_, _) => "suspended", SegResumed(_, _) => "resumed", SegExit(_, _) => "exit",
+    SegPark(_, _) => "park", SegWake(_, _) => "wake"
+  }
+}
+
+-- The `seq` of every `park` inside the segment: P1.3's `Parked` cutoff input.
+export pure func segment_parks(seg: [SegmentEntry]) -> [int] {
+  List.foldl(\acc x. match x { SegPark(s, _) => acc ++ [s], _ => acc }, [], seg)
+}
+
+-- The call count of every assistant append in the segment, in order.
+export pure func segment_call_counts(seg: [SegmentEntry]) -> [int] {
+  List.foldl(\acc x. match x {
+    SegAppended(_, a) => if a.message.role == "assistant" then acc ++ [List.length(a.message.tool_calls)] else acc,
+    _ => acc
+  }, [], seg)
+}
+
+-- ----------------------------------------------------------------------------
+-- Steps 3, 4 and 6: the folds.
+-- ----------------------------------------------------------------------------
+
+export pure func eval_fold_journal(lines: [Json], leaf: string) -> Result[EvSessionState, EvRefusal] {
+  ev_fold_journal(lines, leaf)
+}
+
+-- `<refusal_id>:<seq>:<field>`, `seq` -1 where the refusal names none. The
+-- generator writes the same label.
+export pure func eval_refusal_label(r: EvRefusal) -> string {
+  match r {
+    EvEntry(seq, field) => "entry:${show(seq)}:${field}",
+    EvDigest(seq) => "digest:${show(seq)}:",
+    EvPairing(seq) => "pairing:${show(seq)}:",
+    _ => "${ev_refusal_id(r)}:-1:"
+  }
+}
+
+export pure func eval_boundary_id(b: EvBoundary) -> string {
+  ev_boundary_id(b)
+}
+
+pure func wake_answered(st: EvSessionState) -> bool {
+  match st.last {
+    EvBoundaryParked(_, w) => match w { Some(_) => true, None => false },
+    _ => false
+  }
+}
+
+pure func fold_at(lines: [Json], leaf: string, root_seq: int) -> Result[EvSessionState, SourceRefusal] {
+  match ev_fold_journal(lines, leaf) {
+    Err(r) => Err(from_fold(r, root_seq)),
+    Ok(st) => Ok(st)
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- The reader.
+-- ----------------------------------------------------------------------------
+
+export pure func read_source(lines: [Json], sel: RunSelector) -> Result[ReaderSource, SourceRefusal] {
+  match envelopes(lines) {
+    Err(r) => Err(r),
+    Ok(all) => match strict_path(all, sel.leaf) {
+      Err(r) => Err(r),
+      Ok(path) => match path {
+        [] => Err(ChainBreak(AtPath, "leaf")),
+        root :: _ => match ev_header_of_entry(root) {
+          Err(r) => Err(from_fold(r, root.seq)),
+          Ok(header) => match fold_at(lines, sel.leaf, root.seq) {
+            Err(r) => Err(r),
+            Ok(leaf_state) => match check_start(path, sel) {
+              Err(r) => Err(r),
+              Ok(st) => match segment_stop(path, st.si, sel) {
+                Err(r) => Err(r),
+                Ok(stop) => match fold_at(lines, st.start.parent_id, root.seq) {
+                  Err(r) => Err(r),
+                  Ok(seed_state) => match fold_at(lines, st.run_started.parent_id, root.seq) {
+                    Err(r) => Err(r),
+                    Ok(before_run) => match segment_of(root.seq, slice_entries(path, st.si, stop)) {
+                      Err(r) => Err(r),
+                      Ok(segment) => Ok({
+                        header: header,
+                        selector: sel,
+                        path_length: List.length(path),
+                        run_started_seq: st.run_started.seq,
+                        start_seq: st.start.seq,
+                        seed: seed_state.history,
+                        seed_digest: eval_payload_digest(seed_state.history),
+                        seed_state: seed_state,
+                        opened_by_wake: wake_answered(before_run),
+                        segment: segment,
+                        leaf_state: leaf_state
+                      })
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- The snapshot's lines, each decoded as JSON; the first that does not decode
+-- is named by index.
+type ParseAcc = { idx: int, err: string, out: [Json] }
+
+export pure func parse_lines(xs: [string]) -> Result[[Json], string] {
+  let acc = List.foldl(\a s. if a.err != "" then a else match decode(s) {
+    Err(_) => { a | err: "line ${show(a.idx)}: not JSON" },
+    Ok(j) => { idx: a.idx + 1, err: "", out: j :: a.out }
+  }, { idx: 0, err: "", out: [] }, xs);
+  if acc.err != "" then Err(acc.err) else Ok(List.foldl(\ys y. y :: ys, [], acc.out))
+}
+
+-- ============================================================================
+-- Tests (M1, and M15's M1 near-misses: the family's half).
+--
+-- Every fixture is synthetic and generated (`testdata/gen_fixtures.py`); each
+-- expectation below is asserted twice: literally in the test, and against the
+-- generator's independent fold and reader.
+-- ============================================================================
+
+pure func fx_selector(f: JournalFixture) -> RunSelector {
+  let end = if f.end_kind == "EndAt" then EndAt(f.end_id) else CutoffBefore(f.end_id);
+  { leaf: f.leaf, run_id: f.run_id, start: f.start, end: end }
+}
+
+pure func fx_lines(f: JournalFixture) -> [Json] {
+  match parse_lines(f.lines) { Ok(ls) => ls, Err(_) => [] }
+}
+
+pure func fx_read(f: JournalFixture) -> Result[ReaderSource, SourceRefusal] {
+  read_source(fx_lines(f), fx_selector(f))
+}
+
+pure func strings_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && strings_eq(xs, ys) }
+  }
+}
+
+pure func ints_eq(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && ints_eq(xs, ys) }
+  }
+}
+
+-- The reader against the generator, field for field.
+pure func reader_agrees(f: JournalFixture) -> bool {
+  List.length(fx_lines(f)) == List.length(f.lines) && (match fx_read(f) {
+    Err(r) =>
+      not f.reader_ok
+        && source_refusal_family(r) == f.reader_family
+        && source_refusal_position(r) == f.reader_position
+        && source_refusal_field(r) == f.reader_field,
+    Ok(src) =>
+      f.reader_ok
+        && List.length(src.seed) == f.seed_count
+        && src.seed_digest == f.seed_payload
+        && strings_eq(src.seed_state.dangling, f.seed_dangling)
+        && src.seed_state.model == f.seed_model
+        && strings_eq(List.map(segment_entry_kind, src.segment), f.segment_kinds)
+        && ints_eq(segment_call_counts(src.segment), f.segment_calls)
+        && ints_eq(segment_parks(src.segment), f.parks)
+        && src.opened_by_wake == f.opened_by_wake
+        && src.start_seq == f.start_seq
+        && src.run_started_seq == f.run_started_seq
+  })
+}
+
+-- The fold copy against the generator's fold, at the leaf.
+pure func fold_agrees(f: JournalFixture) -> bool {
+  match eval_fold_journal(fx_lines(f), f.leaf) {
+    Err(r) => not f.fold_ok && eval_refusal_label(r) == f.fold_refusal,
+    Ok(st) =>
+      f.fold_ok
+        && List.length(st.history) == f.history_count
+        && eval_payload_digest(st.history) == f.history_payload
+        && eval_raw_frame_digest(st.history) == f.history_raw
+        && strings_eq(st.dangling, f.dangling)
+        && eval_boundary_id(st.last) == f.boundary
+        && st.model == f.model
+        && st.profile == f.profile
+        && st.world_ordinal == f.world_ordinal
+  }
+}
+
+-- A refused fixture: the literal family, position and field, and the generator.
+pure func refused_as(f: JournalFixture, family: string, position: string, field: string) -> bool {
+  reader_agrees(f) && (match fx_read(f) {
+    Ok(_) => false,
+    Err(r) =>
+      source_refusal_family(r) == family
+        && source_refusal_position(r) == position
+        && source_refusal_field(r) == field
+  })
+}
+
+pure func reads(f: JournalFixture) -> bool {
+  reader_agrees(f) && (match fx_read(f) { Ok(_) => true, Err(_) => false })
+}
+
+-- ---- M1: ChainBreak ---------------------------------------------------------
+
+pure func test_m1_chain_break_digest() -> bool
+  tests [((), true)]
+  { refused_as(fxj_chain_break_digest(), "ChainBreak", "entry:17", "digest_after") }
+
+pure func test_m1_chain_break_parent() -> bool
+  tests [((), true)]
+  { refused_as(fxj_chain_break_parent(), "ChainBreak", "entry:15", "parent_id") }
+
+pure func test_m1_chain_break_cycle() -> bool
+  tests [((), true)]
+  { refused_as(fxj_chain_break_cycle(), "ChainBreak", "entry:2", "parent_id") }
+
+pure func test_m1_chain_break_root() -> bool
+  tests [((), true)]
+  { refused_as(fxj_chain_break_root(), "ChainBreak", "entry:1", "root") }
+
+-- ---- M1: MalformedEntry -----------------------------------------------------
+
+pure func test_m1_malformed_entry_field() -> bool
+  tests [((), true)]
+  { refused_as(fxj_malformed_field(), "MalformedEntry", "entry:16", "step") }
+
+pure func test_m1_malformed_entry_message() -> bool
+  tests [((), true)]
+  { refused_as(fxj_malformed_message(), "MalformedEntry", "entry:14", "message.images: missing") }
+
+pure func test_m1_malformed_entry_envelope() -> bool
+  tests [((), true)]
+  { refused_as(fxj_malformed_envelope(), "MalformedEntry", "entry:18", "at_ms") }
+
+pure func test_m1_malformed_entry_no_seq_located_by_line() -> bool
+  tests [((), true)]
+  { refused_as(fxj_malformed_seq(), "MalformedEntry", "line:18", "seq") }
+
+pure func test_m1_malformed_entry_pairing() -> bool
+  tests [((), true)]
+  { refused_as(fxj_malformed_pairing(), "MalformedEntry", "entry:14", "pairing") }
+
+-- A stray `wake` is the fold's refusal at `request_id` (journal.ail:1603–1614).
+pure func test_m1_stray_wake_no_open_park() -> bool
+  tests [((), true)]
+  { refused_as(fxj_stray_wake_no_park(), "MalformedEntry", "entry:22", "request_id") }
+
+pure func test_m1_stray_wake_answered_park() -> bool
+  tests [((), true)]
+  { refused_as(fxj_stray_wake_answered(), "MalformedEntry", "entry:24", "request_id") }
+
+pure func test_m1_stray_wake_other_request() -> bool
+  tests [((), true)]
+  { refused_as(fxj_stray_wake_other_request(), "MalformedEntry", "entry:23", "request_id") }
+
+-- ---- M1: UnknownEntryType, UnknownSchema ------------------------------------
+
+pure func test_m1_unknown_entry_type() -> bool
+  tests [((), true)]
+  { refused_as(fxj_unknown_entry_type(), "UnknownEntryType", "entry:15", "bogus_kind") }
+
+pure func test_m1_unknown_schema() -> bool
+  tests [((), true)]
+  { refused_as(fxj_unknown_schema(), "UnknownSchema", "entry:0", "schema_version") }
+
+-- ---- M1: the clean twins ----------------------------------------------------
+
+-- The twin of every refused fixture above: the same journal, unbroken.
+pure func test_m1_clean_twin_reads() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_clean()) && (match fx_read(fxj_clean()) {
+      Err(_) => false,
+      Ok(src) =>
+        src.path_length == 24 && src.header.schema_version == 1
+          && List.length(src.leaf_state.dangling) == 0
+          && eval_boundary_id(src.leaf_state.last) == "suspended"
+    })
+  }
+
+-- The stray wakes' twin: a park answered once, by its own request, decodes and
+-- is not refused; the park lies after the segment's cut.
+pure func test_m1_clean_twin_park_and_wake() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_park_wake()) && (match fx_read(fxj_park_wake()) {
+      Err(_) => false,
+      Ok(src) => List.length(segment_parks(src.segment)) == 0 && not src.opened_by_wake
+    })
+  }
+
+pure func test_m1_twelve_entry_types_decode() -> bool
+  tests [((), true)]
+  {
+    List.length(ev_all_entry_types()) == 12
+      && ev_contains_string(ev_all_entry_types(), "park")
+      && ev_contains_string(ev_all_entry_types(), "wake")
+  }
+
+-- ---- D1: the seed, the segment, the inputs to later parts -------------------
+
+-- r2.1's shape: run_started (e11), a leading user entry (e12), the first
+-- assistant (e13) is `start`. The seed is the fold through e12: six messages,
+-- the user message last, the model from the `settings` entry before the run.
+pure func test_seed_r21_leading_user() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_clean()) && (match fx_read(fxj_clean()) {
+      Err(_) => false,
+      Ok(src) =>
+        src.run_started_seq == 11 && src.start_seq == 13
+          && List.length(src.seed) == 6
+          && src.seed_digest == eval_payload_digest(src.seed)
+          && src.seed_state.model == "fx/model-b"
+          && eval_boundary_id(src.seed_state.last) == "open:history_appended"
+          && (match List.foldl(\acc m. Some(m), None, src.seed) {
+                None => false,
+                Some(m) => m.role == "user" && m.content == "now count the lines"
+              })
+    })
+  }
+
+-- `EndAt` keeps the named call's turn; `CutoffBefore` keeps nothing from the
+-- named entry on.
+pure func test_segment_end_forms() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_clean()) && reads(fxj_clean_cutoff_before())
+      && (match fx_read(fxj_clean()) {
+            Err(_) => false,
+            Ok(src) => List.length(src.segment) == 9 && ints_eq(segment_call_counts(src.segment), [1, 1, 1])
+          })
+      && (match fx_read(fxj_clean_cutoff_before()) {
+            Err(_) => false,
+            Ok(src) => List.length(src.segment) == 3 && ints_eq(segment_call_counts(src.segment), [1])
+          })
+  }
+
+pure func last_assistant_calls(seg: [SegmentEntry]) -> int {
+  List.foldl(\acc x. match x {
+    SegAppended(_, a) => if a.message.role == "assistant" then List.length(a.message.tool_calls) else acc,
+    _ => acc
+  }, -1, seg)
+}
+
+-- The dangling-call repair is the seed's only: the leaf ends in an unanswered
+-- call, the whole-path fold strips and reports it, the segment keeps it.
+pure func test_repair_is_the_seeds_only() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_incomplete_tail()) && (match fx_read(fxj_incomplete_tail()) {
+      Err(_) => false,
+      Ok(src) =>
+        strings_eq(src.leaf_state.dangling, ["c4"])
+          && List.length(src.seed_state.dangling) == 0
+          && last_assistant_calls(src.segment) == 1
+    })
+  }
+
+-- A `park` inside the segment is decoded and reported (P1.3's `Parked`
+-- cutoff), not refused.
+pure func test_park_in_segment_is_reported() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_park_in_segment()) && (match fx_read(fxj_park_in_segment()) {
+      Err(_) => false,
+      Ok(src) => ints_eq(segment_parks(src.segment), [22])
+    })
+  }
+
+-- A run opened by a consumed wake is flagged (P1.2b's `ContinuationStart`);
+-- a run opened after a `run_finished` is not.
+pure func test_wake_opened_run_is_flagged() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_wake_opened_run()) && (match fx_read(fxj_wake_opened_run()) {
+      Err(_) => false,
+      Ok(src) => src.opened_by_wake && src.run_started_seq == 24
+    }) && (match fx_read(fxj_clean()) {
+      Err(_) => false,
+      Ok(src) => not src.opened_by_wake
+    })
+  }
+
+pure func test_bad_selector_is_the_readers_precondition() -> bool
+  tests [((), true)]
+  {
+    refused_as(fxj_bad_selector_start(), "BadSelector", "path", "start")
+      && refused_as(fxj_bad_selector_not_first_call(), "BadSelector", "path", "start")
+  }
+
+-- ---- Equality with the independent generator --------------------------------
+
+pure func test_fold_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fxj_all()) == 24 && List.foldl(\acc f. acc && fold_agrees(f), true, fxj_all())
+  }
+
+pure func test_reader_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fxj_all()) == 24 && List.foldl(\acc f. acc && reader_agrees(f), true, fxj_all())
+  }
+
+-- ---- M15: the near-misses pass M1's refusals ---------------------------------
+
+pure func nth_tool_content(seg: [SegmentEntry], k: int) -> string {
+  let acc = List.foldl(\a x. match x {
+    SegAppended(_, e) => if e.message.role == "tool" then { n: a.n + 1, out: if a.n + 1 == k then e.message.content else a.out } else a,
+    _ => a
+  }, { n: 0, out: "" }, seg);
+  acc.out
+}
+
+pure func nth_assistant_content(seg: [SegmentEntry], k: int) -> string {
+  let acc = List.foldl(\a x. match x {
+    SegAppended(_, e) => if e.message.role == "assistant" then { n: a.n + 1, out: if a.n + 1 == k then e.message.content else a.out } else a,
+    _ => a
+  }, { n: 0, out: "" }, seg);
+  acc.out
+}
+
+-- ChainBreak's near-miss: the tool result at call 1 changed and the chain
+-- re-computed. M1 passes; call 2 exists, is a continuation (one call, one
+-- result) and is not the terminal call (three calls). The catching check's
+-- half — AdmissionCheck(A3) at Call(2) — is P1.7a-v2's.
+pure func test_m15_near_miss_chain_break_passes_m1() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_near_miss_chain_break()) && (match fx_read(fxj_near_miss_chain_break()) {
+      Err(_) => false,
+      Ok(nm) => match fx_read(fxj_clean()) {
+        Err(_) => false,
+        Ok(clean) =>
+          nth_tool_content(nm.segment, 1) != nth_tool_content(clean.segment, 1)
+            && nth_tool_content(nm.segment, 2) == nth_tool_content(clean.segment, 2)
+            && ints_eq(segment_call_counts(nm.segment), [1, 1, 1])
+            && nth_tool_content(nm.segment, 2) != ""
+            && nm.seed_digest == clean.seed_digest
+      }
+    })
+  }
+
+-- MalformedEntry's near-miss: call 1's assistant append with changed content,
+-- same type, chain re-computed. M1 passes; the next evaluated call (call 2)
+-- exists. The catching check's half — AdmissionCheck(A3) at Call(2) — is
+-- P1.7a-v2's.
+pure func test_m15_near_miss_malformed_entry_passes_m1() -> bool
+  tests [((), true)]
+  {
+    reads(fxj_near_miss_malformed_entry()) && (match fx_read(fxj_near_miss_malformed_entry()) {
+      Err(_) => false,
+      Ok(nm) => match fx_read(fxj_clean()) {
+        Err(_) => false,
+        Ok(clean) =>
+          nth_assistant_content(nm.segment, 1) != nth_assistant_content(clean.segment, 1)
+            && nth_assistant_content(nm.segment, 2) == nth_assistant_content(clean.segment, 2)
+            && ints_eq(segment_call_counts(nm.segment), [1, 1, 1])
+            && nm.seed_digest == clean.seed_digest
+      }
+    })
+  }

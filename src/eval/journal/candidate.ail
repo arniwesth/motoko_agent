@@ -1,0 +1,234 @@
+-- src/eval/journal/candidate.ail
+--
+-- ADR-004 v5 D3 ("Refused before running", the candidate verdict's `Refused`
+-- arm) and D5; PLAN-004 v2 §3 P1.9a: the candidate refusal vocabulary and the
+-- in-process half of the runner's candidate mode.
+--
+-- The refusals are decided in two places:
+--   * `scripts/eval/candidate.py` (the shell side, which owns git, the files,
+--     the guard and the compiler's records): `InadmissibleCandidate` (D3's
+--     path list, the package rule, the declared intent), `EvaluatorTouched`,
+--     `ProtectedRegionTouched`, `GuardTripped`, and every `PreflightMismatch`
+--     (K0), each named by `<class>:<what>`;
+--   * here, inside the assembled run: `ProgramUndecodable(ReplayRefusal)` —
+--     the entry's program artifact read with the harness's `load_program`
+--     (no second codec), then `validate_program` and `world_state_of`, the
+--     two functions that decide whether a replay can START
+--     (`dst_replay.ail:625–633`). A decode refusal (digest mismatch, a
+--     malformed line) and an unreadable file are
+--     `ProgramStructurallyInvalid(<rule>)`: the harness's `ReplayRefusal` has
+--     no decode arm, and a program that cannot be decoded has no position.
+--     K1 (P1.9b) re-asserts `world_state_of` and adds `reconstitution_balance`.
+--
+-- The runner prints, for K0 (compared by candidate.py against the entry):
+--   `K0BUILD <json>`  the build's profile, rule and vocabulary versions, the
+--                     empty extension set and the fixture's normalized
+--                     configuration (`build_identities_json`, P1.6);
+--   `PROGRAM <json>`  the loaded program's artifact digest, its interaction
+--                     count and the manifest fields K0 compares.
+--
+-- P1.9b wraps `CandidateRefusal` into the verdict's `Refused` arm.
+-- Synthetic only (§0.6).
+
+module src/eval/journal/candidate
+
+import std/json (jo, kv, js, jint, encode)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (replace)
+import src/core/dst_program (ExecutionProgram, validate_program, program_rule)
+import src/core/dst_replay (
+  world_state_of, refusal_rule, ReplayRefusal, ProgramStructurallyInvalid,
+  ProviderOutcomeUndecodable, ToolOutcomeUndecodable
+)
+import src/core/dst_fault_catalogue (required_class_ids)
+import src/core/dst_interaction (Interaction)
+import src/core/ports (encode_tool_outcome, ToolOutcome, ToolCompleted)
+import src/core/dst_persistence (
+  ProgramDecode, ProgramDecoded, ProgramDecodeRefused, decode_artifact, decode_rule, encode_body, program_digest,
+  load_program, LoadOutcome, Loaded, LoadRefused, LoadIoError
+)
+import src/eval/journal/admission (build_identities_json)
+import src/eval/journal/scan (program_artifact)
+import src/eval/journal/testdata/scan_fixtures (fxs_program, fxs_clean_parts, fxs_interaction_provider)
+
+export type CandidateRefusal
+  = InadmissibleCandidate(string)
+  | EvaluatorTouched(string)
+  | ProtectedRegionTouched(string)
+  | PreflightMismatch(string)
+  | GuardTripped(string)
+  | ProgramUndecodable(ReplayRefusal)
+
+export pure func candidate_refusal_label(r: CandidateRefusal) -> string {
+  match r {
+    InadmissibleCandidate(w) => "InadmissibleCandidate:${w}",
+    EvaluatorTouched(w) => "EvaluatorTouched:${w}",
+    ProtectedRegionTouched(w) => "ProtectedRegionTouched:${w}",
+    PreflightMismatch(w) => "PreflightMismatch:${w}",
+    GuardTripped(w) => "GuardTripped:${w}",
+    ProgramUndecodable(x) => "ProgramUndecodable:${replay_refusal_label(x)}"
+  }
+}
+
+export pure func replay_refusal_label(r: ReplayRefusal) -> string {
+  match r {
+    ProgramStructurallyInvalid(rule) => "ProgramStructurallyInvalid(${rule})",
+    ProviderOutcomeUndecodable(o, _) => "ProviderOutcomeUndecodable(${show(o)})",
+    ToolOutcomeUndecodable(o, _) => "ToolOutcomeUndecodable(${show(o)})"
+  }
+}
+
+-- A decoded program can start a replay: the structural validator, then the
+-- script and queue projections.
+export pure func program_refusal(p: ExecutionProgram) -> Option[ReplayRefusal] {
+  match validate_program(p, required_class_ids()) {
+    r :: _ => Some(ProgramStructurallyInvalid(program_rule(r))),
+    [] => match world_state_of(p, required_class_ids()) {
+      Err(x) => Some(x),
+      Ok(_) => None
+    }
+  }
+}
+
+-- The artifact's bytes, through the harness's decoder.
+export pure func program_of_bytes(bytes: string) -> Result[ExecutionProgram, ReplayRefusal] {
+  match decode_artifact(bytes) {
+    ProgramDecodeRefused(rs) => match rs {
+      r :: _ => Err(ProgramStructurallyInvalid(decode_rule(r))),
+      [] => Err(ProgramStructurallyInvalid("artifact-undecodable"))
+    },
+    ProgramDecoded(p) => match program_refusal(p) {
+      Some(x) => Err(x),
+      None => Ok(p)
+    }
+  }
+}
+
+-- The entry's artifact file, through the harness's `load_program`.
+export func load_entry_program(path: string) -> Result[ExecutionProgram, ReplayRefusal] ! {FS} {
+  match load_program(path) {
+    LoadIoError(_) => Err(ProgramStructurallyInvalid("artifact-unreadable")),
+    LoadRefused(rs) => match rs {
+      r :: _ => Err(ProgramStructurallyInvalid(decode_rule(r))),
+      [] => Err(ProgramStructurallyInvalid("artifact-undecodable"))
+    },
+    Loaded(p) => match program_refusal(p) {
+      Some(x) => Err(x),
+      None => Ok(p)
+    }
+  }
+}
+
+export pure func program_line(p: ExecutionProgram) -> string {
+  let m = p.manifest;
+  encode(jo([
+    kv("digest", js(program_digest(encode_body(p)))),
+    kv("interactions", jint(List.length(p.interactions))),
+    kv("manifest", jo([
+      kv("profile_id", js(m.profile_id)),
+      kv("profile_version", js(m.profile_version)),
+      kv("event_vocabulary_version", js(m.event_vocabulary_version)),
+      kv("toolchain", js(m.toolchain)),
+      kv("source_revision", js(m.source_revision))
+    ]))
+  ]))
+}
+
+export pure func k0_build_line(normalized_configuration: string) -> string {
+  build_identities_json(normalized_configuration)
+}
+
+-- The synthetic program the candidate tests pin: scan_fixtures' clean program
+-- with its ordinals made dense from 0 (`validate_program`'s rule), so that it
+-- can start a replay.
+export pure func synthetic_program() -> ExecutionProgram { synthetic_program_for(fxs_clean_parts().toolchain) }
+
+-- The same, its manifest naming `toolchain` (the entry's
+-- "<toolchain> binary=<sha256>", as `manifest_of` writes it at admission).
+export pure func synthetic_program_for(toolchain: string) -> ExecutionProgram {
+  let p = fxs_program({ fxs_clean_parts() | toolchain: toolchain });
+  { p | interactions: List.map(\i. ct_dense(i), p.interactions) }
+}
+
+-- Ordinals from 0; the tool outcome in the codec's own encoding.
+pure func ct_dense(i: Interaction) -> Interaction {
+  let j = { i | identity: { i.identity | ordinal: i.identity.ordinal - 1 } };
+  -- (the tool is interaction 2; its call id is the fixture's. A constructor
+  -- pattern on `ToolIdentity` here trips `ailang test`'s evaluator at v0.33.0.)
+  if j.identity.ordinal == 2
+  then { j | outcome: { j.outcome | payload: encode_tool_outcome(ToolCompleted({ tool_call_id: fxs_clean_parts().call_id, content: "ok", exit_code: -1 })) } }
+  else j
+}
+
+-- ============================================================================
+-- Tests (M13 ProgramUndecodable, and its clean twin)
+-- ============================================================================
+
+pure func ct_err_label(r: Result[ExecutionProgram, ReplayRefusal]) -> string {
+  match r { Ok(_) => "ok", Err(x) => replay_refusal_label(x) }
+}
+
+-- The clean synthetic program validates and projects. (Its decode round trip
+-- is `candidate_live_test.ail`'s: `decode_artifact`'s success path fails
+-- under `ailang test` at v0.33.0 — "function expects 1 arguments, got 3" —
+-- and runs under `ailang run`, as P1.8 found for `load_program`.)
+pure func test_m13_program_starts() -> bool
+  tests [((), true)]
+  {
+    match program_refusal(synthetic_program()) { None => true, Some(_) => false }
+  }
+
+-- One changed body byte: the artifact's digest line no longer matches.
+pure func test_m13_program_undecodable_digest() -> bool
+  tests [((), true)]
+  {
+    let a = program_artifact(synthetic_program());
+    ct_err_label(program_of_bytes(replace(a, "journal_admission", "journal_admissioN")))
+      == "ProgramStructurallyInvalid(artifact-digest-mismatch)"
+  }
+
+-- Not an artifact at all: the decoder's first rule (P1R C2: a literal).
+pure func test_m13_program_undecodable_garbage() -> bool
+  tests [((), true)]
+  {
+    ct_err_label(program_of_bytes("not an artifact\n")) == "ProgramStructurallyInvalid(artifact-not-an-execution-program)"
+      && ct_err_label(program_of_bytes("")) == "ProgramStructurallyInvalid(artifact-not-an-execution-program)"
+  }
+
+-- Decodes, but the structural validator refuses it (a duplicated ordinal;
+-- P1R C2: the rule is asserted literally).
+pure func test_m13_program_structurally_invalid() -> bool
+  tests [((), true)]
+  {
+    let p = synthetic_program();
+    let dup = { p | interactions: p.interactions ++ [fxs_interaction_provider(1, "payload=sha256:fx system=sha256:fx", "{\"served\":true}", "hello")] };
+    match program_refusal(dup) {
+      Some(x) => replay_refusal_label(x) == "ProgramStructurallyInvalid(program-duplicate-ordinal)",
+      None => false
+    }
+  }
+
+-- Decodes and validates, but a provider outcome cannot be re-served.
+pure func test_m13_program_provider_outcome_undecodable() -> bool
+  tests [((), true)]
+  {
+    let p = synthetic_program();
+    let bad = { p | interactions: List.map(\i. match i.identity.body {
+      _ => if i.identity.ordinal == 1 then { i | outcome: { i.outcome | payload: "not json" } } else i
+    }, p.interactions) };
+    match program_refusal(bad) {
+      Some(ProviderOutcomeUndecodable(1, _)) => true,
+      _ => false
+    }
+  }
+
+pure func test_m13_refusal_labels() -> bool
+  tests [((), true)]
+  {
+    candidate_refusal_label(InadmissibleCandidate("path:ailang.lock")) == "InadmissibleCandidate:path:ailang.lock"
+      && candidate_refusal_label(ProgramUndecodable(ProviderOutcomeUndecodable(2, "x")))
+           == "ProgramUndecodable:ProviderOutcomeUndecodable(2)"
+      && candidate_refusal_label(GuardTripped("trip")) == "GuardTripped:trip"
+  }
