@@ -885,6 +885,27 @@ view resets `decision_state` to `None` whatever the host context carries. 5 new 
 fixture. **Intake (orchestrator)**, in a clone at the commit: `src/core` **71/72**; runtime **36/36**; session
 **41/41**; `make anchors` 0; `mutgate.sh --clone-from` fresh clone **34/34**. Intake defects: 0.
 
+### P1.7r — 2026-09-21, commit `12a8ecd9`
+
+| | |
+|---|---|
+| Fixtures | the 17 `tools/ext_ambient_inventory/fixtures/hook_scope` rows: **15 migrated** onto the 8.0 head, **2 kept on 7.4 deliberately** (`control_capability_list_inline`, `reject_applied_local` — the gate is testing the old form), reasons in each header and in `expected.json`; the 39 `adr001_boundary` rows dispositioned kept by the orchestrator (P0.2's frozen evidence) |
+| Re-pins, by hand | `registration_heads` 18 × config-caps; `registration_shape_results` 18 × pass; `shape_binding_rejections` 35 → **0**; `capability_list_atoms` unchanged (45, hand-counted); `closure_port_mediated` unmoved |
+| Scope additions (orchestrator) | **classifier 2** `ext_call_inventory/derive.py` taught the 8.0 views (views derived by structure, same-named projections resolved, binders scoped) — **24 unresolved → 0**; **classifier 3** `ext_ambient_inventory/derive.py` shares that scanner — closure verdicts **18 UNRESOLVED → the pinned 4 PORT-MEDIATED + 14 AMBIENT**. `hook_scope.py`, `packages/`, `src/` untouched |
+| **Intake (orchestrator)** | R-G pre-gate at `12a8ecd9`: `ext_hook_scope` **GATE: GREEN**, `ext_hook_scope_selftest` 0 failures; `mutgate.sh --clone-from` fresh clone **40/40** |
+| Intake defects | 0 |
+
+### R-G pre-gate — 2026-09-21, at `12a8ecd9` (`evidence/R-G/`)
+
+**12 of 16 green**: `check_core` (60/0), `test`, `test_integration`, `conformance`, `ext_hook_scope`,
+`ext_hook_scope_selftest`, `profile_coverage`, `driver_plus_no_ops`, `registry_gen_check`, `anchors`,
+`driver_leaf_inventory`, `event_vocabulary`. **Red:** `profile_definition`, `driver_only`
+(`check_fixtures.py:161` reads `BudgetShaper((ExtCtx, BudgetPlan)` — an ABI-text reader unmasked by P1.7r's
+fix); `declared_vs_performed` 130/5 (a B8 probe on 7.4 types; four absorption pins the migration moved:
+rows 17→16, `Env` 17→16, `FS` 15→13, `Process` 9→3) — all three to a **third P1.5r follow-up**; and
+`cd src/tui && bun run test` (420/420 tests pass, 5 suites fail on a Jest teardown import from
+`env-server.test.ts`) — **identical at `2f3ee4d1`, pre-existing**, for the operator's ruling.
+
 ## 10. Estimates
 
 | phase | delegate-days |
