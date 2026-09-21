@@ -50,7 +50,7 @@ import src/core/ext_world (world_to_token, token_to_world, clear_holder) -- WI-B
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, effective_input_limit)
 import src/core/context_usage (resolve_context_limit_sum)
 import src/core/context_limit (Bounded, Catalogue, is_bounded, raw_window_of, working_budget_for_ext) -- PLAN-001 P1: the sum's three int projections; nothing else erases the reason
-import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence) -- 8.0: the D3 window default, on this line to hold the anchors
+import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence, noop_ext_ports) -- 8.0: the D3 window default, on this line to hold the anchors
 import src/core/ext/exit_manifest (publish_exit_manifest, manifest_path_var)
 import src/core/ext/runtime (
   dispatch_response_intercept,
@@ -6317,4 +6317,23 @@ func test_p4_state_from_parked_applies_the_wake_and_parks_at_p1() -> bool ! {IO,
       && park_request_id(identity.run_id, st.park_ordinal) == "s.r1.0.p1"
       && between_turn_request_id("s", "p", 1, 0) == "s.r1.0.p0"
       && List.length(st.msgs) == List.length(plain.msgs)
+  }
+
+-- 8.0 (031 ADR-001 D3), PLAN-001 P1.4r: THE PER-TURN HOST CONTEXT CARRIES THE
+-- TRUTHFUL DEFAULTS. Under line R nothing constructs evidence yet (P1.4x), so
+-- `mk_v2_ext_ctx` must say so: verification `NotReached` (not `Passed`, not
+-- `Disabled`), an EMPTY tool-evidence window that is NOT complete from session
+-- start with an UNKNOWN omitted count, and no decision state (the decision
+-- sites' `Some` is stamped per atom by `ext/runtime`'s cursor). Nothing here
+-- asserts success. At the end of the file so no anchor moves.
+func mk_v2_ext_ctx_carries_truthful_evidence_defaults_test() -> bool
+  tests [((), true)]
+  {
+    let ctx = mk_v2_ext_ctx("t", 2, "m", ".", "", false, { total: 10, solver: 6, verifier: 4 }, [], 0, "", [], ja([]),
+      noop_ext_ports(), jo([]), { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }, { token: jo([]) });
+    let verification = match ctx.verification { NotReached => true, _ => false };
+    let records = match ctx.tool_evidence.records { [] => true, _ => false };
+    let omitted = match ctx.tool_evidence.omitted_count { None => true, _ => false };
+    let state = match ctx.decision_state { None => true, _ => false };
+    verification && records && ctx.tool_evidence.complete_from_session_start == false && omitted && state
   }

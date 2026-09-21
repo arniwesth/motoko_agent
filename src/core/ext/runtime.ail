@@ -22,7 +22,7 @@ import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, FinalizeOutcome,
   PreStepDecision,
   DiagnosticField,
   Capability, ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExitAction, PublishFile, ExitIntentOutcome, WorkInFlight, WorkItem, WorkOutcome, DecisionSolverJudge, DecisionToolPolicy, -- B8: the 6.0 sum, same line so A5's anchor at :199 holds; 8.0 adds the two decision variants here for the same reason
-  ExtRuntime, ExtWorld, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, PureCtx, ProcessCtx, FsCtx, AiCtx, InterceptCtx, ProviderCtx, ExtPorts, FsPorts, AiPorts, InterceptPorts, pure_ctx_of, process_ctx, fs_ctx, ai_ctx, intercept_ctx, provider_ctx, fs_ports, ai_ports, intercept_ports, NotReached, DecisionPolicyDescriptor, JudgePreparation, JudgeImmediate, DecisionRequest, DecisionObservation, JudgeQuery, ToolPreparation, ToolImmediate, ToolQuery, DecisionUsage, Answered, Unavailable, UnconfiguredBackend, BinaryAnswer -- WI-B2b; on one line to hold A5's anchor at :190. 8.0 (031 ADR-001 D2): the six views, their ports records and the ABI's constructors, on this line for the :199 anchor; P1.3r's cursor names (D4) on it for the same reason
+  ExtRuntime, ExtWorld, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, PureCtx, ProcessCtx, FsCtx, AiCtx, InterceptCtx, ProviderCtx, ExtPorts, FsPorts, AiPorts, InterceptPorts, pure_ctx_of, process_ctx, fs_ctx, ai_ctx, intercept_ctx, provider_ctx, fs_ports, ai_ports, intercept_ports, NotReached, DecisionPolicyDescriptor, JudgePreparation, JudgeImmediate, DecisionRequest, DecisionObservation, JudgeQuery, ToolPreparation, ToolImmediate, ToolQuery, DecisionUsage, Answered, Unavailable, UnconfiguredBackend, BinaryAnswer, DecisionInvocationState, DecisionMode, EnforcingDecision, ShadowDecision, DisabledDecision, VerificationEvidence, ToolEvidenceWindow -- WI-B2b; on one line to hold A5's anchor at :190. 8.0 (031 ADR-001 D2): the six views, their ports records and the ABI's constructors, on this line for the :199 anchor; P1.3r's cursor names (D4) on it for the same reason
 )
 import src/core/types (Msg)
 -- WI-D24. The holder stamp: this fold is the ONE place in the tree that knows
@@ -232,8 +232,14 @@ func is_test_dummy(hook_id: string) -> bool {
 -- no helper here is typed `ExtPorts` or `ExtCtx` on a callback's behalf (no
 -- dummy ports); the ports records are the ABI's projections of `ctx.ports`.
 -- ============================================================================
+--
+-- 8.0 (D3), PLAN-001 P1.4r: `entry_base` is the ORDINARY view, so its
+-- `decision_state` is `None` whatever the host's context carries -- D3's
+-- "other hook sites receive `decision_state = None`" made structural here,
+-- not left to every host literal. A decision atom's view is built from it by
+-- `decision_view` below, in the cursor, and nowhere else.
 pure func entry_base(ctx: ExtCtx, e: ExtEntry) -> PureCtx {
-  pure_ctx_of(ctx, e.config)
+  { pure_ctx_of(ctx, e.config) | decision_state: None }
 }
 
 -- ============================================================================
@@ -272,9 +278,9 @@ pure func entry_base(ctx: ExtCtx, e: ExtEntry) -> PureCtx {
 -- keep. The live exchange is line X's (P1.3x), at the visible leaves in
 -- `session.ail`/`tool_phase.ail` D4 names, never inside this module.
 --
--- NOT HERE UNDER R: the descriptor's limits (D5's intervention skip and the
--- ledger) and D6's records. The descriptor is carried but not read;
--- `decision_state` is whatever the host's context carries (P1.4r).
+-- NOT HERE UNDER R: D5's intervention skip and the admission ledger, and D6's
+-- records. The descriptor is READ for one thing only: the decision state the
+-- atom's two callbacks are handed (P1.4r, below).
 -- ============================================================================
 export type DecisionSite = FinalizeSite | ToolPolicySite
 
@@ -286,6 +292,64 @@ pure func stub_usage() -> DecisionUsage {
 
 export pure func stub_decision_answer(_cursor: DecisionCursor) -> DecisionObservation {
   { result: Unavailable(UnconfiguredBackend), usage: stub_usage() }
+}
+
+-- ============================================================================
+-- 8.0 (031 ADR-001 D3), PLAN-001 P1.4r: THE DECISION STATE, STAMPED AT THE
+-- CURSOR FROM THE ATOM'S OWN DESCRIPTOR -- LINE R.
+--
+-- D3: "Decision callbacks always receive `Some` with identity and limits, the
+-- descriptor's two configuration values handed back, and the ledger terms as
+-- of the last decision reply." Only this cursor sees each atom's descriptor,
+-- so it is stamped here, per atom, onto the ordinary view (`entry_base`,
+-- whose `decision_state` is `None`); both `prepare` and `interpret` of that
+-- atom get the same view, and the next atom -- declared or legacy -- gets the
+-- ordinary one back. What each field says under R, and why it is truthful:
+--
+--   invocation_id   the atom's D6 identity: registered owner (the entry id,
+--                   `name#idx`), site, local ID. Line X adds the occurrence.
+--   mode            `EnforcingDecision`: under R the cursor applies every vote
+--                   through the family's merge (no shadow substitution, no
+--                   disabled skip exists yet), which is exactly enforcing.
+--   interventions_used  0: no intervention counter exists before line X's
+--                   host state (D5), and none has been applied through one.
+--   intervention_limit  the descriptor's `max_interventions`: with no operator
+--                   limit on line R, the lower of the two IS the descriptor's.
+--   question_config, interpretation_config  the descriptor's, byte for byte.
+--   allowance, known_spend, outstanding, run_cost  0: no allowance was
+--                   granted, nothing was reserved or spent -- the stub arm
+--                   contacts no provider and reports zero usage.
+--   run_cap_millicents  `None`, the Option's zero: D5 makes `Some(cap)` only
+--                   for a metered run with `max_cost_millicents > 0`, so
+--                   `Some(0)` is not a value this term can take; no cap is
+--                   claimed.
+-- The mirror's real terms and the counter are line X's (P1.4x).
+-- ============================================================================
+pure func site_label(site: DecisionSite) -> string {
+  match site {
+    FinalizeSite => "finalize",
+    ToolPolicySite => "tool_policy"
+  }
+}
+
+export pure func decision_invocation_state(ext_id: string, site: DecisionSite, d: DecisionPolicyDescriptor) -> DecisionInvocationState {
+  {
+    invocation_id: "${ext_id}/${site_label(site)}/${d.local_id}",
+    mode: EnforcingDecision,
+    interventions_used: 0,
+    intervention_limit: d.max_interventions,
+    question_config: d.question_config,
+    interpretation_config: d.interpretation_config,
+    allowance_millicents: 0,
+    known_spend_millicents: 0,
+    outstanding_millicents: 0,
+    run_cost_millicents: 0,
+    run_cap_millicents: None
+  }
+}
+
+export pure func decision_view(base: PureCtx, ext_id: string, site: DecisionSite, d: DecisionPolicyDescriptor) -> PureCtx {
+  { base | decision_state: Some(decision_invocation_state(ext_id, site, d)) }
 }
 
 func fold_prompt_atoms(id: string, caps: [Capability], i: int, view: PureCtx, base: string) -> string ! {IO, Clock} {
@@ -496,10 +560,11 @@ func collect_policy_atoms(id: string, caps: [Capability], i: int, di: int, view:
   match caps {
     [] => [],
     ToolPolicy(f) :: rest => decide_one_policy(id, i, f, view, call) :: collect_policy_atoms(id, rest, i + 1, di, view, call),
-    DecisionToolPolicy(_descriptor, prepare, interpret) :: rest => {
-      let vote = match prepare(view, call) {
+    DecisionToolPolicy(descriptor, prepare, interpret) :: rest => {
+      let dview = decision_view(view, id, ToolPolicySite, descriptor);
+      let vote = match prepare(dview, call) {
         ToolImmediate(v) => v,
-        ToolQuery(req) => interpret(view, call, req, stub_decision_answer({ ext_id: id, atom: di, site: ToolPolicySite, request: req }))
+        ToolQuery(req) => interpret(dview, call, req, stub_decision_answer({ ext_id: id, atom: di, site: ToolPolicySite, request: req }))
       };
       vote :: collect_policy_atoms(id, rest, i, di + 1, view, call)
     },
@@ -769,10 +834,11 @@ func collect_finalize_atoms(id: string, caps: [Capability], i: int, di: int, bas
       let next = collect_finalize_atoms(id, rest, i + 1, di, base, candidate, outcome.next_state);
       { decisions: outcome.decision :: next.decisions, next_state: next.next_state }
     },
-    DecisionSolverJudge(_descriptor, prepare, interpret) :: rest => {
-      let vote = match prepare(base, candidate) {
+    DecisionSolverJudge(descriptor, prepare, interpret) :: rest => {
+      let dview = decision_view(base, id, FinalizeSite, descriptor);
+      let vote = match prepare(dview, candidate) {
         JudgeImmediate(v) => v,
-        JudgeQuery(req) => interpret(base, candidate, req, stub_decision_answer({ ext_id: id, atom: di, site: FinalizeSite, request: req }))
+        JudgeQuery(req) => interpret(dview, candidate, req, stub_decision_answer({ ext_id: id, atom: di, site: FinalizeSite, request: req }))
       };
       let next = collect_finalize_atoms(id, rest, i, di + 1, base, candidate, world);
       { decisions: vote :: next.decisions, next_state: next.next_state }
@@ -1682,4 +1748,197 @@ func neutral_registration_is_neutral_through_the_cursor_test() -> bool ! {Proces
     let tool = tool_tag(dispatch_tool_policy(rt, ctx, probe_call())) == "noop;";
     let out = dispatch_solver_candidate(rt, ctx, "c");
     tool && judge_tag(out.decision) == "noop;" && encode(out.next_state.token) == encode(clear_holder(w).token)
+  }
+
+-- ============================================================================
+-- 8.0 (031 ADR-001 D3), PLAN-001 P1.4r: TRUTHFUL EVIDENCE DEFAULTS, AND THE
+-- DECISION STATE AT DECISION SITES. Each test is one clause of D3 against the
+-- real folds; `evidence/P1.4r/p14r_mutgate_spec.tsv` mutates the clause and
+-- expects the named test to go red. A probe callback reports what it was
+-- handed as ONE STRING in its vote, so the expected values below are literals,
+-- written from the descriptors, never recomputed through the code under test.
+-- ============================================================================
+
+-- What a view's three D3 fields read as.
+pure func verification_tag(v: VerificationEvidence) -> string {
+  match v {
+    NotReached => "not_reached",
+    Disabled => "disabled",
+    Passed(_) => "passed",
+    Failed(_) => "failed",
+    VerificationUnavailable(_, _) => "unavailable"
+  }
+}
+
+pure func window_tag(w: ToolEvidenceWindow) -> string {
+  let recs = match w.records { [] => "empty", _ => "records" };
+  let complete = if w.complete_from_session_start then "complete" else "incomplete";
+  let omitted = match w.omitted_count { None => "unknown", Some(n) => show(n) };
+  "${recs}:${complete}:${omitted}"
+}
+
+pure func mode_tag(m: DecisionMode) -> string {
+  match m { DisabledDecision => "disabled", ShadowDecision => "shadow", EnforcingDecision => "enforcing" }
+}
+
+pure func state_tag(st: Option[DecisionInvocationState]) -> string {
+  match st {
+    None => "none",
+    Some(s) => {
+      let cap = match s.run_cap_millicents { None => "none", Some(n) => "some(${show(n)})" };
+      "some[${s.invocation_id}|${mode_tag(s.mode)}|used=${show(s.interventions_used)}|limit=${show(s.intervention_limit)}|q=${encode(s.question_config)}|i=${encode(s.interpretation_config)}|ledger=${show(s.allowance_millicents)},${show(s.known_spend_millicents)},${show(s.outstanding_millicents)},${show(s.run_cost_millicents)},${cap}]"
+    }
+  }
+}
+
+pure func evidence_tag(v: VerificationEvidence, w: ToolEvidenceWindow, st: Option[DecisionInvocationState]) -> string {
+  "${verification_tag(v)}|${window_tag(w)}|${state_tag(st)}"
+}
+
+-- The truthful defaults, as one string: nothing reached, an empty INCOMPLETE
+-- window with an unknown omitted count, no decision state.
+pure func truthful_default_tag() -> string { "not_reached|empty:incomplete:unknown|none" }
+
+-- A host context that WRONGLY carries a decision state, with non-zero ledger
+-- terms and foreign projections: no atom may see it (entry_base resets it; a
+-- decision atom sees only its own).
+pure func foreign_state() -> DecisionInvocationState {
+  { invocation_id: "host/finalize/foreign", mode: ShadowDecision, interventions_used: 5, intervention_limit: 9,
+    question_config: jo([kv("foreign", js("q"))]), interpretation_config: jo([kv("foreign", js("i"))]),
+    allowance_millicents: 7, known_spend_millicents: 7, outstanding_millicents: 7, run_cost_millicents: 7, run_cap_millicents: Some(7) }
+}
+
+-- ORDINARY-SITE probes: each reports the three fields of the view it got.
+pure func evidence_shaper(ctx: PureCtx) -> PromptPatch {
+  { prepend: [], append: [evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state)] }
+}
+
+pure func evidence_policy(ctx: PureCtx, _c: ToolCallEnvelope) -> ToolPolicyDecision {
+  Deny(evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state))
+}
+
+func evidence_judge(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} {
+  { decision: ContinueWithFeedback(evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state)), next_state: ctx.world }
+}
+
+func evidence_work(ctx: FsCtx) -> WorkOutcome ! {FS} {
+  { items: [{ label: evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state), detail: "" }], next_state: ctx.world }
+}
+
+-- The runtime's host literal (`smoke_ctx`, D3's "legacy context fixtures must
+-- explicitly initialize these new fields") carries the truthful defaults, and
+-- every ordinary view projected from it shows them: a prompt shaper, a legacy
+-- tool policy, a legacy judge (ProcessCtx), a work declarer (FsCtx).
+func ordinary_sites_see_truthful_defaults_test() -> bool ! {Process, IO, Clock, FS}
+  tests [((), true)]
+  {
+    let e: ExtEntry = { id: "o#0", config: jo([]), caps: [PromptShaper(evidence_shaper), ToolPolicy(evidence_policy), SolverJudge(evidence_judge), WorkInFlight("w", evidence_work)] };
+    let rt = stamp_rt([e]);
+    let ctx = smoke_ctx();
+    let host = evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state) == truthful_default_tag();
+    let prompt = dispatch_build_system_prompt(rt, ctx, "base") == "base\n${truthful_default_tag()}";
+    let tool = tool_tag(dispatch_tool_policy(rt, ctx, probe_call())) == "deny(${truthful_default_tag()});";
+    let judge = judge_tag(dispatch_solver_candidate(rt, ctx, "c").decision) == "continue(${truthful_default_tag()});";
+    let work = match dispatch_work_in_flight(rt, ctx).items { x :: [] => x.label == truthful_default_tag(), _ => false };
+    host && prompt && tool && judge && work
+  }
+
+-- ...and an ordinary site sees `None` even when the host's context carries a
+-- state: `decision_state = None` at ordinary sites is the runtime's, not a
+-- property each host literal must remember.
+func ordinary_sites_see_none_whatever_the_host_carries_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let e: ExtEntry = { id: "o#0", config: jo([]), caps: [PromptShaper(evidence_shaper), ToolPolicy(evidence_policy), SolverJudge(evidence_judge)] };
+    let rt = stamp_rt([e]);
+    let ctx = { smoke_ctx() | decision_state: Some(foreign_state()) };
+    let prompt = dispatch_build_system_prompt(rt, ctx, "base") == "base\n${truthful_default_tag()}";
+    let tool = tool_tag(dispatch_tool_policy(rt, ctx, probe_call())) == "deny(${truthful_default_tag()});";
+    let judge = judge_tag(dispatch_solver_candidate(rt, ctx, "c").decision) == "continue(${truthful_default_tag()});";
+    prompt && tool && judge
+  }
+
+-- DECISION-SITE probes. Two descriptors that differ in EVERY field the state
+-- carries, so a projection taken from the wrong atom, a crossed projection or
+-- a wrong limit changes the string.
+pure func descriptor_a() -> DecisionPolicyDescriptor {
+  { local_id: "guard.a", question_version: "qa/1", question_config: jo([kv("binding", js("bind-a")), kv("window", jnum(3.0))]),
+    interpretation_version: "ia/1", interpretation_config: jo([kv("min_bp", jnum(6000.0))]), max_interventions: 2 }
+}
+
+pure func descriptor_b() -> DecisionPolicyDescriptor {
+  { local_id: "guard.b", question_version: "qb/1", question_config: jo([kv("binding", js("bind-b"))]),
+    interpretation_version: "ib/1", interpretation_config: jo([kv("deny_bp", jnum(7000.0)), kv("chars", jnum(200.0))]), max_interventions: 3 }
+}
+
+-- The expected state strings, written out: identity `owner/site/local_id`,
+-- enforcing, 0 used, the descriptor's limit, its two projections byte for
+-- byte, every ledger term zero and no cap.
+pure func expected_a(owner: string, site: string) -> string {
+  "some[${owner}/${site}/guard.a|enforcing|used=0|limit=2|q={\"binding\":\"bind-a\",\"window\":3}|i={\"min_bp\":6000}|ledger=0,0,0,0,none]"
+}
+
+pure func expected_b(owner: string, site: string) -> string {
+  "some[${owner}/${site}/guard.b|enforcing|used=0|limit=3|q={\"binding\":\"bind-b\"}|i={\"deny_bp\":7000,\"chars\":200}|ledger=0,0,0,0,none]"
+}
+
+-- `prepare` votes immediately with the state it was handed; the query-path
+-- probes ask, and `interpret` votes with the state IT was handed, so both
+-- callbacks are shown.
+pure func state_judge_now(ctx: PureCtx, _c: string) -> JudgePreparation { JudgeImmediate(ContinueWithFeedback(state_tag(ctx.decision_state))) }
+
+pure func state_judge_ask(ctx: PureCtx, _c: string) -> JudgePreparation { JudgeQuery(probe_request("p:${state_tag(ctx.decision_state)}")) }
+
+pure func state_judge_interpret(ctx: PureCtx, _c: string, req: DecisionRequest, _o: DecisionObservation) -> FinalizeDecision {
+  ContinueWithFeedback("${req.backend_binding}>i:${state_tag(ctx.decision_state)}")
+}
+
+pure func state_tool_now(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolImmediate(Deny(state_tag(ctx.decision_state))) }
+
+pure func state_tool_ask(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolQuery(probe_request("p:${state_tag(ctx.decision_state)}")) }
+
+pure func state_tool_interpret(ctx: PureCtx, _call: ToolCallEnvelope, req: DecisionRequest, _o: DecisionObservation) -> ToolPolicyDecision {
+  Deny("${req.backend_binding}>i:${state_tag(ctx.decision_state)}")
+}
+
+-- A `DecisionSolverJudge` atom sees `Some` with ITS OWN descriptor: two
+-- extensions, different descriptors, the host carrying a foreign state; the
+-- immediate path (prepare) and the query path (prepare and interpret); and a
+-- legacy judge behind a declared one in the SAME extension sees `None` again.
+func decision_solver_judge_sees_its_own_state_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let a: ExtEntry = { id: "ga#0", config: jo([]), caps: [DecisionSolverJudge(descriptor_a(), state_judge_now, neutral_interpret), SolverJudge(evidence_judge)] };
+    let b: ExtEntry = { id: "gb#1", config: jo([]), caps: [DecisionSolverJudge(descriptor_b(), state_judge_ask, state_judge_interpret)] };
+    let ctx = { smoke_ctx() | decision_state: Some(foreign_state()) };
+    let votes = collect_finalize_decisions(stamp_rt([a, b]).registry.entries, ctx, "cand", ctx.world);
+    let ea = expected_a("ga#0", "finalize");
+    let eb = expected_b("gb#1", "finalize");
+    judge_votes_tags(votes.decisions) == "continue(${ea});continue(${truthful_default_tag()});continue(p:${eb}>i:${eb});"
+  }
+
+-- ...and a `DecisionToolPolicy` atom likewise, the descriptors swapped between
+-- the two extensions so the state follows the atom, not the position.
+func decision_tool_policy_sees_its_own_state_test() -> bool ! {IO, Clock}
+  tests [((), true)]
+  {
+    let a: ExtEntry = { id: "pa#0", config: jo([]), caps: [DecisionToolPolicy(descriptor_b(), state_tool_now, never_tool_interpret), ToolPolicy(evidence_policy)] };
+    let b: ExtEntry = { id: "pb#1", config: jo([]), caps: [DecisionToolPolicy(descriptor_a(), state_tool_ask, state_tool_interpret)] };
+    let ctx = { smoke_ctx() | decision_state: Some(foreign_state()) };
+    let votes = collect_tool_decisions(stamp_rt([a, b]).registry.entries, ctx, probe_call());
+    let eb = expected_b("pa#0", "tool_policy");
+    let ea = expected_a("pb#1", "tool_policy");
+    tool_votes_tags(votes) == "deny(${eb});deny(${truthful_default_tag()});deny(p:${ea}>i:${ea});"
+  }
+
+-- One extension declaring BOTH decision variants: each atom sees its own
+-- descriptor at its own site, never the other family's.
+func both_families_in_one_extension_see_their_own_state_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let e: ExtEntry = { id: "both#0", config: jo([]), caps: [DecisionSolverJudge(descriptor_a(), state_judge_now, neutral_interpret), DecisionToolPolicy(descriptor_b(), state_tool_now, never_tool_interpret)] };
+    let rt = stamp_rt([e]);
+    let judge = judge_tag(dispatch_solver_candidate(rt, smoke_ctx(), "c").decision) == "continue(${expected_a("both#0", "finalize")});";
+    let tool = tool_tag(dispatch_tool_policy(rt, smoke_ctx(), probe_call())) == "deny(${expected_b("both#0", "tool_policy")});";
+    judge && tool
   }
