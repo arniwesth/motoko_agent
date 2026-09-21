@@ -1,0 +1,3 @@
+module src/core/no_abi
+import src/core/ports (Outcome, failed)
+export pure func code(o: Outcome) -> string { match o { Done => "", ToolFailed(f) => f.code } }

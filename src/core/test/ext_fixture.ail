@@ -15,10 +15,16 @@
 -- used to (byte-for-byte its body, re-keyed) -- the ABI no longer has a
 -- constructor, because a 6.0 registration has no "all eight slots" to fill. A
 -- fixture that overrides one kind still writes `{ fixture_defaults() | judge: f }`.
+--
+-- 8.0 (031 ADR-001 D2): every override takes its row's VIEW -- `PureCtx`,
+-- `AiCtx`, `ProviderCtx`, `InterceptCtx`, `ProcessCtx` -- and never `ExtCtx`;
+-- `describe` takes the extension's configuration; the overrides carry the
+-- registration's `config`, which `fixture_hooks` puts on the entry and the
+-- dispatchers stamp as `ext_config`. `fixture_defaults()` supplies `jo([])`.
 
 module src/core/test/ext_fixture
 
-import std/json (jo, kv, js)
+import std/json (Json, jo, kv, js)
 import std/option (None)
 import std/string (contains)
 import src/core/config (VerificationConfig)
@@ -27,7 +33,11 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolSchema,
   BudgetPlan,
   BudgetPatch,
-  ExtCtx,
+  PureCtx,
+  AiCtx,
+  ProviderCtx,
+  InterceptCtx,
+  ProcessCtx,
   ExtRuntime,
   FinalizeDecision,
   InterceptHandled,
@@ -65,40 +75,40 @@ pure func fixture_result(tool_call_id: string, tool: string, stdout: string) -> 
   }
 }
 
-pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+pure func empty_prompt_patch(_ctx: PureCtx) -> PromptPatch {
   { prepend: [], append: [] }
 }
 
-pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch {
+pure func empty_budget_patch(_ctx: PureCtx, _budget: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-pure func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+pure func allow_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Allow
 }
 
-pure func handle_tool(ctx: ExtCtx, call: ToolCallEnvelope)
-  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+pure func handle_tool(ctx: ProviderCtx, call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
   if call.tool == "FixtureEcho" then
     Handled(fixture_result("fixture-internal-tool-id", "FixtureEcho", "fixture handled ${call.id}"))
   else Delegate
 }, next_state: ctx.world } }
 
-pure func intercept_response(ctx: ExtCtx, response: string)
+pure func intercept_response(ctx: InterceptCtx, response: string)
   -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   if contains(response, "[FIXTURE_INTERCEPT]") then
     InterceptHandled(fixture_result("fixture-intercept-id", "FixtureIntercept", "fixture intercept"))
   else NoIntercept
 }, next_state: ctx.world } }
 
-pure func solve_candidate(ctx: ExtCtx, candidate: string)
+pure func solve_candidate(ctx: ProcessCtx, candidate: string)
   -> FinalizeOutcome ! {Process}  { { decision: {
   if contains(candidate, "[FIXTURE_CONTINUE]") then
     ContinueWithFeedback("fixture feedback")
   else NoDecision
 }, next_state: ctx.world } }
 
-pure func pre_step(ctx: ExtCtx, msgs: [Msg])
+pure func pre_step(ctx: AiCtx, msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}", empty_ext_artifacts())
 }, next_state: ctx.world } }
@@ -106,6 +116,7 @@ pure func pre_step(ctx: ExtCtx, msgs: [Msg])
 -- The fixture's own registration, through the constructor below.
 export pure func fixture_rt() -> ExtRuntime {
   let hooks = fixture_hooks("phase_b_fixture", {
+    config: jo([]),
     tools: ["FixtureEcho"],
     describe: \_ . [],
     prompt: empty_prompt_patch,
@@ -126,22 +137,24 @@ export pure func fixture_rt() -> ExtRuntime {
 -- fixture's atoms are exactly `(kind, 0)` for each kind.
 -- ============================================================================
 
--- What a fixture registers, keyed by the 6.0 capability kind. `tools` is the
--- advertised name list that `ToolProvider(names, handle)` carries at 6.0.
+-- What a fixture registers, keyed by the capability kind. `tools` is the
+-- advertised name list that `ToolProvider(names, handle)` carries; `config`
+-- (8.0) is the registration's disclosed configuration.
 export type FixtureOverrides = {
+  config: Json,
   tools: [string],
-  describe: () -> [ToolSchema],
-  prompt: (ExtCtx) -> PromptPatch,
-  budget: (ExtCtx, BudgetPlan) -> BudgetPatch,
-  compact: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace},
-  policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
-  provide: (ExtCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-  intercept: (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock},
-  judge: (ExtCtx, string) -> FinalizeOutcome ! {Process}
+  describe: (Json) -> [ToolSchema],
+  prompt: (PureCtx) -> PromptPatch,
+  budget: (PureCtx, BudgetPlan) -> BudgetPatch,
+  compact: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace},
+  policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision,
+  provide: (ProviderCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
+  intercept: (InterceptCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock},
+  judge: (ProcessCtx, string) -> FinalizeOutcome ! {Process}
 }
 
--- The registration value a fixture hands to `ExtRegistry`: D5's `{ id, caps }`
--- entry (B8). Every `-> FixtureHooks` signature followed without an edit.
+-- The registration value a fixture hands to `ExtRegistry`: D5's `{ id, config, caps }`
+-- entry (B8; 8.0 adds `config`). Every `-> FixtureHooks` signature followed without an edit.
 export type FixtureHooks = ExtEntry
 
 -- The neutral bindings, keyed by kind. Each result is the identity for its
@@ -151,6 +164,7 @@ export type FixtureHooks = ExtEntry
 -- the ABI's `default_hooks` through 5.0, byte-for-byte.)
 export pure func fixture_defaults() -> FixtureOverrides {
   {
+    config: jo([]),
     tools: [],
     describe: \_ . [],
     prompt: \_ctx. { prepend: [], append: [] },
@@ -167,7 +181,7 @@ export pure func fixture_defaults() -> FixtureOverrides {
     provide: \ctx _call. {
       decision: Delegate,
       next_state: ctx.world
-    } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
     intercept: \ctx _response_text. {
       decision: NoIntercept,
       next_state: ctx.world
@@ -180,10 +194,12 @@ export pure func fixture_defaults() -> FixtureOverrides {
 }
 
 -- THE CONSTRUCTOR. B8: builds the `Capability` list in the canonical kind
--- order; nothing that calls it changed.
+-- order; nothing that calls it changed. 8.0: the entry carries the overrides'
+-- `config`.
 export pure func fixture_hooks(id: string, ov: FixtureOverrides) -> FixtureHooks {
   {
     id: id,
+    config: ov.config,
     caps: [
       DescribeTools(ov.describe),
       PromptShaper(ov.prompt),

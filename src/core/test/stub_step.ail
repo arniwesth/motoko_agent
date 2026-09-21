@@ -36,7 +36,7 @@ import src/core/dst_interaction (
   ProviderIdentity, OutcomeOk, generator_authored_count
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtRuntime, ExtRegistry, ExtCtx,
+  ExtRuntime, ExtRegistry, PureCtx, AiCtx, ProcessCtx, InterceptCtx, ProviderCtx, -- 8.0: the views, on the line the host context held
   BudgetPlan, PromptPatch, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision,
   ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PassThrough
@@ -880,29 +880,30 @@ export pure func empty_rt() -> ExtRuntime {
 -- Use this when your scripted steps contain tool_calls — the deny policy
 -- prevents real tool execution while allowing the loop to recurse.
 export func deny_all_rt() -> ExtRuntime {
-  let deny_policy = func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  let deny_policy = func(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
     Deny("test: all tools denied")
   };
-  let no_handle = func(ctx: ExtCtx, _call: ToolCallEnvelope)
-    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+  let no_handle = func(ctx: ProviderCtx, _call: ToolCallEnvelope)
+    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
     Delegate
   }, next_state: ctx.world } };
-  let no_intercept = func(ctx: ExtCtx, _text: string)
+  let no_intercept = func(ctx: InterceptCtx, _text: string)
     -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
     NoIntercept
   }, next_state: ctx.world } };
-  let no_solver = func(ctx: ExtCtx, _text: string)
+  let no_solver = func(ctx: ProcessCtx, _text: string)
     -> FinalizeOutcome ! {Process}  { { decision: {
     NoDecision
   }, next_state: ctx.world } };
   let hooks = fixture_hooks("test_deny_all", {
+    config: jo([]),
     tools: [],
     describe: \_ . [],
-    prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
-    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+    prompt: func(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    compact: func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
     policy: deny_policy,

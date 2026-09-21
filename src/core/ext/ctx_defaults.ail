@@ -2,7 +2,8 @@ module src/core/ext/ctx_defaults
 
 import std/json (Json, jo)
 import std/result (Result, Err)
-import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, ExtPorts, Msg, TokenTelemetry)
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, ExtPorts, Msg, TokenTelemetry, ToolEvidenceWindow)
 
 func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
   Err("ext ai_step port unavailable")
@@ -105,4 +106,14 @@ export pure func empty_ext_artifacts() -> Json {
 
 export pure func zero_token_telemetry() -> TokenTelemetry {
   { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}
+
+-- 8.0 (ADR-001 (031) D3): the truthful EMPTY tool-evidence window -- no
+-- records, NOT complete from session start, omitted count unknown. It is what
+-- a context with nothing to report carries, and it asserts no success. The
+-- host's full `ExtCtx` literals (`session.ail`, `runtime.smoke_ctx`) read it;
+-- `pure_ctx` in the ABI supplies the same value for a bare `PureCtx`. P1.4r
+-- owns the evidence defaults' fixtures and the decision-site `Some`.
+export pure func empty_tool_evidence() -> ToolEvidenceWindow {
+  { records: [], complete_from_session_start: false, omitted_count: None }
 }
