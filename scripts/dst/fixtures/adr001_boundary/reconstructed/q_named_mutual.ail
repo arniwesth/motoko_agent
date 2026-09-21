@@ -1,0 +1,11 @@
+-- PLAN-001 (031) P0.2b. Reconstructed from shape, not quoted source.
+-- Review 5 (REVIEW-adr001-v0.5-verdicts-claude-fable-5-1.md) §A.3 table row, verbatim:
+-- | `q_named_mutual` | named `body` ↔ `helper`, effect in `helper` | 1 | — | rejected: app |
+module scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_mutual
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+func body(ctx: PureCtx) -> int { helper(ctx, 1) }
+func helper(ctx: PureCtx, n: int) -> int ! {IO} { if n > 1 then body(ctx) else { let _ = println(ctx.name); 1 } }
+func build() -> Slot { Pure(body) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

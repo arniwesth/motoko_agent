@@ -1,0 +1,96 @@
+
+-- P0.2: ADR-001 (031) registration-boundary probe suite (freeze evidence 2(a), 2(b)) --
+  ✓ PROVENANCE: adr001 boundary provenance: 52 fixtures are byte-identical to their quoted review sources (module/import path re-written only)
+  ✓ IMPORTED-SUM MECHANISM: 45 of 48 cases bind their payload into a sum IMPORTED from a sibling module, the position the real ABI puts the boundary in (B8 above; ADR N48). The 3 exceptions are the pinned set: n_dec_prepare_escape and v7_describe_config declare their sum LOCALLY, which is the PERMISSIVE position, so their verdicts are not imported-sum evidence; config_projection registers no capability at all and is the configuration-channel control
+  ✓ RECONSTRUCTED PROVENANCE: adr001 reconstructed provenance: 18 of 19 unquoted §A.3 rows reconstructed, each header quoting its table row byte-for-byte; 1 not reconstructed, reason recorded (q_named_toplevel_xmod)
+  ✓ RECONSTRUCTED IMPORTED-SUM MECHANISM: all 18 reconstructions bind their payload into a sum IMPORTED from a sibling module (scripts/dst/fixtures/adr001_boundary/types or scripts/dst/fixtures/adr001_boundary/reconstructed/judge_types), with no local-sum exceptions
+
+   class 2(a) — MISSING AUTHORITY: accepted at check, fails at invocation (ADR item 2(a), N23)
+  ✓ LIMITATION 3 still holds: an inline lambda calling ctx.ports.emit on a PureCtx that carries NO ports field is ACCEPTED by ailang check and fails only at invocation — the compile-time rejection ADR v0.3 claimed does not exist for lambdas (ADR fact 1) — a host control failure of the registration, not an Unavailable; fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 4 still holds: the same call under an explicit ! {} annotation on the lambda is ACCEPTED too — annotating the payload does not make the checker see the missing field — a host control failure of the registration, not an Unavailable; fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 5 still holds: an annotated ! {FS} lambda calling clock_now, a port OUTSIDE the FsCtx view, is accepted at check and fails at invocation — a narrow view's authority is enforced by the record's shape at runtime, not by the effect row at compile time — a host control failure of the registration, not an Unavailable; fb_30e82f6bdc5fc8c3
+
+   group 1 — COMPILER-REJECTED CONTROLS: the named arm the compiler itself enforces
+  ✓ GROUP 1 (direct): REJECTED by its own mechanism (/incompatible closed rows/) — an inline lambda performing println straight into the payload is rejected at the payload row
+  ✓ GROUP 1 (named): REJECTED by its own mechanism (/incompatible closed rows/) — the same body as a NAMED top-level function is rejected — the named arm is what carries the effect load (ADR D2 layer (b))
+  ✓ GROUP 1 (captured): REJECTED by its own mechanism (/incompatible closed rows/) — a lambda calling an effectful field of an UNTYPED captured record is rejected
+  ✓ GROUP 1 (capturedannot): REJECTED by its own mechanism (/incompatible closed rows/) — the same with the payload lambda annotated ! {} is rejected at its own annotation's row
+  ✓ GROUP 1 (capturednamed): REJECTED by its own mechanism (/incompatible closed rows/) — a NAMED body that builds the effectful record in its own body is rejected — a named function cannot capture, so the value must arrive by a charged call
+  ✓ GROUP 1 (localrecord): REJECTED by its own mechanism (/incompatible closed rows/) — a locally-typed record's field passed DIRECTLY as the payload, Pure(w.f), is rejected — the pass-through named call is what makes the escape, not the record
+  ✓ GROUP 1 (localunannot): REJECTED by its own mechanism (/incompatible closed rows/) — the same direct Pure(w.f) under an enclosing ! {IO} with the stored lambda unannotated is still rejected
+  ✓ GROUP 1 (localannot): REJECTED by its own mechanism (/incompatible closed rows/) — and with the stored lambda annotated ! {} — so group 3's escapes are attributable to the intervening named call, not to the local record type
+  ✓ GROUP 1 (helper): REJECTED by its own mechanism (/record field mismatch: expected 2 fields, got 1/) — the closed-record migration control: a callback cannot widen its own context by calling a helper that wants more fields — AILANG records are closed
+  ✓ GROUP 1 (missingnamed): REJECTED by its own mechanism (/record field 'ports' not found in concrete record/) — the same missing-port body as a NAMED function IS caught at compile time — which is exactly what class 2(a) above shows lambdas escape
+  ✓ GROUP 1 (missingworld): REJECTED by its own mechanism (/record field 'world' not found in concrete record/) — reading ctx.world from a view that has no world token is rejected — PureCtx drops the world as well as the ports
+  ✓ GROUP 1 (n_pure_named_localsmuggle): REJECTED by its own mechanism (/incompatible closed rows/) — a NAMED body building the local record in its own body is rejected — the fourth review's escape does not survive being named
+  ✓ GROUP 1 (n_pure_passthru_capturedfn): REJECTED by its own mechanism (/incompatible closed rows/) — the pass-through capturing a BARE FUNCTION VALUE instead of a record is rejected — the carrier must be a record FIELD, which is the 017 hole
+  ✓ GROUP 1 (n_pure_passthru_xmod): REJECTED by its own mechanism (/let annotation w/) — the same pass-through with the record type IMPORTED is rejected AT THE LET — a cross-module record type closes the escape, and this is where a migrated ABI type puts it
+  ✓ GROUP 1 (fs_direct): REJECTED by its own mechanism (/Effect checking failed for function 'build'/) — an inline lambda performing IO inside an FS view is charged to the enclosing build
+  ✓ GROUP 1 (fs_named): REJECTED by its own mechanism (/Effect checking failed for function 'body'/) — the same body named is charged to the named function itself
+  ✓ GROUP 1 (fs_direct_io): REJECTED by its own mechanism (/lambda at .* uses effects not declared in its/) — with the enclosing row widened to admit IO, the lambda is rejected AT ITS OWN ANNOTATION — so fs_direct's rejection is the row's doing, not the call being malformed
+  ✓ GROUP 1 (fs_named_io): REJECTED by its own mechanism (/Effect checking failed for function 'body'/) — the named variant under the same widened enclosing row is still charged to the named function — the enclosing row never absorbs a named atom
+  ✓ GROUP 1 (fs_smuggle_norow): REJECTED by its own mechanism (/Effect checking failed for function 'build'/) — dropping the enclosing ! {IO} turns the group-3 fs_smuggle escape into a rejection — the attribution control that makes that escape a positional fact
+  ✓ GROUP 1 (n_fs_named_localsmuggle): REJECTED by its own mechanism (/Effect checking failed for function 'body'/) — the FsCtx smuggle inside a NAMED body is charged to it
+  ✓ GROUP 1 (n_fs_named_indirect): REJECTED by its own mechanism (/Effect checking failed for function 'body'/) — and a named ! {IO} MAKER of the record does not help either — the call is charged
+  ✓ GROUP 1 (q_named_recfield_named): REJECTED by its own mechanism (/incompatible closed rows/) — a local record field holding println under a FALSE ! {} row is charged to the callback (fifth review's A.3 arm)
+  ✓ GROUP 1 (q_named_toplevel_apply): REJECTED by its own mechanism (/Effect checking failed for function 'w'/) — a MODULE-LEVEL let holding the effectful record is itself effect-checked as a rowless function — the one place a value could arrive without a call is closed
+  ✓ GROUP 1 (named_match_record): REJECTED by its own mechanism (/Effect checking failed for function 'body'/) — an effectful local lambda inside a MATCHED record is charged to the named body
+  ✓ GROUP 1 (named_list_lambda): REJECTED by its own mechanism (/incompatible closed rows/) — the same inside a LIST is rejected
+  ✓ GROUP 1 (named_tuple_lambda): REJECTED by its own mechanism (/incompatible closed rows/) — the same inside a TUPLE is rejected
+  ✓ GROUP 1 (named_module_env): REJECTED by its own mechanism (/Effect checking failed for function 'policy'/) — a module-level INITIALIZER reading the environment is charged to itself, with Missing effects: Env — registration-time ambient reads are not free
+  ✓ GROUP 1 RECONSTRUCTED (q_named_mutual): table reason 'app' == compiler: type unification failed at [function application at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_mutual.ail:9:28]: failed to unify parameter 0: failed to unify effect rows: incompatible  — RECONSTRUCTED: named body calls a mutually recursive helper declared ! {IO} that performs println; the effect reaches body and is rejected at Pure(body). With helper rowless, the pin rejects eff(helper) instead (evidence/P0.2b)
+  ✓ GROUP 1 RECONSTRUCTED (q_named_generic): table reason 'app' == compiler: type unification failed at [function application at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_generic.ail:9:28]: failed to unify parameter 0: failed to unify effect rows: incompatible — RECONSTRUCTED: a ! {}-annotated lambda performing println, passed through a generic higher-order helper, does not launder the row
+  ✓ GROUP 1 RECONSTRUCTED (q_named_pure_kw): table reason 'app' == compiler: type unification failed at [function application at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_pure_kw.ail:8:28]: failed to unify parameter 0: failed to unify effect rows: incompatible — RECONSTRUCTED: the pure keyword on a named body performing println is not what rejects it; the payload row is
+  ✓ GROUP 1 RECONSTRUCTED (q_named_emptyrow): table reason 'app' == compiler: type unification failed at [function application at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_emptyrow.ail:8:28]: failed to unify parameter 0: failed to unify effect rows: incompatibl — RECONSTRUCTED: an explicit ! {} on the named body performing println is rejected at the payload, not at its own signature
+  ✓ GROUP 1 RECONSTRUCTED (q_named_letannot): table reason 'app' == compiler: type unification failed at [function application at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_letannot.ail:8:28]: failed to unify parameter 0: failed to unify effect rows: incompatibl — RECONSTRUCTED: let g: (string) -> () ! {} = println does not erase println's IO
+  ✓ GROUP 1 RECONSTRUCTED (q_named_recfield_paren): table reason 'app' == compiler: type unification failed at [function application at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_recfield_paren.ail:9:28]: failed to unify parameter 0: failed to unify effect rows: incom — RECONSTRUCTED: the quoted recfield_named case applied as (r.f)(…) is rejected the same way
+  ✓ GROUP 1 RECONSTRUCTED (q_named_recfield_named_nolet): table reason 'app' == compiler: type unification failed at [function application at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_recfield_named_nolet.ail:9:28]: failed to unify parameter 0: failed to unify effect rows: — RECONSTRUCTED: the same with the let unannotated
+  ✓ GROUP 1 RECONSTRUCTED (q_named_recfield_xmod): table reason 'letann' == compiler: type unification failed at [let annotation r at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_recfield_xmod.ail:8:34]: failed to unify record field 'f': failed to unify effect rows: incom — RECONSTRUCTED: the same with R IMPORTED is rejected earlier, at the let annotation, as n_pure_passthru_xmod is
+  ✓ GROUP 1 RECONSTRUCTED (q_named_sumpayload_named): table reason 'eff:body' == compiler: Effect checking failed for function 'body' — RECONSTRUCTED: println in a local sum payload typed ! {}, matched out and applied in the named body, is charged to body
+  ✓ GROUP 1 RECONSTRUCTED (n_pure_named_applier): table reason 'eff:body' == compiler: Effect checking failed for function 'body' — RECONSTRUCTED: a named body applying the record built by mk() ! {IO} is charged for the call
+  ✓ GROUP 1 RECONSTRUCTED (q_named_toplevel_apply_paren): table reason 'eff:w' == compiler: Effect checking failed for function 'w' — RECONSTRUCTED: the quoted toplevel_apply case with (w.f)(ctx) is still charged to the module-level w
+  ✓ GROUP 1 RECONSTRUCTED (q_named_toplevel_apply_unannot): table reason 'eff:w' == compiler: Effect checking failed for function 'w' — RECONSTRUCTED: the same with the stored lambda unannotated
+  ✓ GROUP 1 RECONSTRUCTED (q_named_toplevel_noannot_let): table reason 'eff:w' == compiler: Effect checking failed for function 'w' — RECONSTRUCTED: the same with let w unannotated
+  ✓ GROUP 1 RECONSTRUCTED (q_dec_prepare_toplevel_escape): table reason 'eff:w' == compiler: Effect checking failed for function 'w' — RECONSTRUCTED: a module-level let at the (PureCtx, string) -> Prep prepare arity is charged to w, so the prepare arity has no module-level door
+  ✓ GROUP 1 RECONSTRUCTED (q_fs_named_toplevel_escape): table reason 'eff:w' == compiler: Effect checking failed for function 'w' — RECONSTRUCTED: a module-level let performing IO from FsCtx is charged to w
+  ✓ GROUP 1 RECONSTRUCTED (q_named_uppercase): table reason 'app' == compiler: type unification failed at [function application at scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_uppercase.ail:9:28]: failed to unify parameter 0: failed to unify effect rows: incompatib — RECONSTRUCTED: calling an effectful func Helper with an uppercase name is rejected by the compiler (the walk is blind to it, A.4)
+  ✓ GROUP 1 RECONSTRUCTED (q_named_collision): table reason 'eff:body' == compiler: Effect checking failed for function 'body' — RECONSTRUCTED: a local record field named file_read, built by mk() ! {IO}, is charged to body; a port-like name buys nothing
+
+   group 2 — COMPILER-ACCEPTED ORDINARY CONTROLS: what must keep compiling
+  ✓ GROUP 2 (clean): compiles and runs clean (/result=1/) — the ordinary pure registration compiles, runs and performs nothing
+  ✓ GROUP 2 (registration_record): compiles and runs clean (/result=1/) — D2's supported return shape { config: Json, caps: [Capability] } with a NAMED payload compiles, runs and performs nothing — the grammar the boundary is written around
+  ✓ GROUP 2 (named_static_constant): compiles and runs clean (/result=7/) — a named callback MAY read a pure module-level constant: that is code, versioned, not registration state (sixth review), and the boundary must not reject it
+  ✓ GROUP 2 (config_projection): compiles and runs clean (/question A.*question B/) — two different ext_config values project to two DIFFERENT questions under an unchanged policy state — the configuration channel D2 relies on. A control, not a registration
+  ✓ GROUP 2 (v7_describe_config): compiles and runs clean (/configured=1 empty=0/) — a DescribeTools-shaped named callback whose catalog DIFFERS between a configured and an empty tool set (N49) — measured on a LOCALLY declared sum, see the imported-sum row above
+  ✓ GROUP 2 (reconstructed/q_dec_prepare_named_ok): compiles and runs clean (/(^| )q=1( |$)/) — RECONSTRUCTED: a named, pure prepare at D2's real (PureCtx, string) -> Prep arity, bound through an IMPORTED Judge sum, compiles, runs and yields q=1
+
+   group 3 — COMPILER-ACCEPTED ESCAPES: accepted bare, and the D2 boundary (P0.3) must reject every one
+  ✓ LIMITATION 6 still holds: an inline PASS-THROUGH lambda that captures a locally-typed record and hands it to a named function performs IO from a PureCtx with no ports and no world (ADR fact 4) — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 7 still holds: the same pass-through with the stored lambda UNANNOTATED escapes too (fifth review N44, correcting the fourth review's table) — the ! {} annotation was never the precondition — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 8 still holds: the same construction performs OUT-OF-ROW IO from the narrow FsCtx view — a per-slot view restricts supplied authority but does not close this door — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 9 still holds: the same construction at D2's REAL prepare arity exfiltrates the candidate text through a pure slot — measured on a LOCALLY declared sum (see the imported-sum row above) — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 10 still holds: the PARENTHESIZED spelling (w.f)(ctx) escapes as readily as the dotted one, and the transitive walk cannot see it at all (_APPLY needs an identifier before the parenthesis) — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 11 still holds: a PARTIAL APPLICATION in payload position, Pure(apply_w(w)), compiles and performs — nothing but the shape rule can stop a call expression there — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 12 still holds: a local let body SHADOWING a top-level func body registers the lambda and performs from PureCtx — a binding that LOOKS named is not necessarily one (ADR fact 5) — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 13 still holds: a local let make_hooks shadowing a DELEGATED top-level func make_hooks performs, while a reader that resolves the delegation to the top-level declaration certifies a body that never runs (ADR fact 6) — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 14 still holds: a payload bound to a PARAMETER that shadows a top-level function performs, and the tool certifies it as that function because it never reads a signature (seventh review) — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 15 still holds: the same one hop earlier: the DELEGATED CALLEE is a parameter shadowing a top-level function — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 16 still holds: a COMPUTED capability list (if … then [ToolPolicy(…)] else []) compiles and performs, and a reader that enumerates only LITERAL lists never sees its payload — fb_30e82f6bdc5fc8c3
+  ✓ LIMITATION 17 still holds: a record-FIELD payload bound straight into the capability, Fs(w.f), performs out-of-row IO from FsCtx — the 017 record-field hole in payload position, and the oldest escape in this suite (third review) — fb_30e82f6bdc5fc8c3
+
+   group 4 — COMPILER-CLEAN, BOUNDARY-REJECTED BY DESIGN: the import shadow D2 over-rejects
+  ✓ LIMITATION 18 still holds: on v0.33.0 an IMPORTED make_hooks outranks a local let make_hooks of the same name: the import runs, the result is 2 and NO effect is performed — so D2's stricter locals-first order OVER-REJECTS a compiler-clean registration, deliberately and in the safe direction — a property of the v0.33.0 pin alongside fb_30e82f6bdc5fc8c3, though NOT that ticket: this is import precedence (ADR fact 6, N62), re-read with it at any bump (NOTE-001 §7)
+
+   -- P0.2 group scores (ADR freeze 2(b), plus 2(a) kept separate) --
+      class 2(a) missing authority (accepted, dies at call) 3/3
+      group 1  compiler-rejected controls            44/44
+      group 2  compiler-accepted ordinary controls   6/6
+      group 3  compiler-accepted escapes (boundary must reject) 12/12
+      group 4  compiler-clean, boundary-rejected by design 1/1
+  ✓ EVERY RECONSTRUCTION IS SCORED: 18 cases in scripts/dst/fixtures/adr001_boundary/reconstructed, 18 RECONSTRUCTED rows
+  ✓ EVERY FIXTURE IS SCORED: 66 cases in scripts/dst/fixtures/adr001_boundary, 66 rows, each in exactly one class
+      RED-FIRST RECORD: all 12 group-3 escapes are ACCEPTED by the bare compiler on the pin.
+      That is the documented PRE-BOUNDARY state. The D2 shape gate (P0.3) does not exist yet;
+      when it lands it must reject all 12 of them, and these rows do not move.
+
+ADR-001 section of scripts/dst/run_declared_vs_performed.sh (lines 1036-1527): 72 passed, 0 failed

@@ -1141,6 +1141,62 @@ adr_err() { echo "$1" | grep -E '^Error' | head -1; }
 # span the lines of a multi-line result (config_projection's two questions).
 adr_flat() { echo "$1" | tr '\n' ' '; }
 
+# P0.2b -- RECONSTRUCTED FROM SHAPE, NOT QUOTED SOURCE. Review 5 §A.3 measured
+# its named-arm attacks as a table of SHAPES and quoted source for only the five
+# P0.2 committed. PLAN-001 §2 P0.2b rebuilds the rest from their Shape column in
+# `$ADR_FX/reconstructed/`. That is NEW AUTHORSHIP, not the review's evidence,
+# so the reconstructions are kept apart: the P0.2 provenance row above never
+# reads that directory, and this row checks that each header quotes its table
+# row byte-for-byte, that the set of cases is derived from the table, and that
+# the one row that could not be built has its reason recorded rather than being
+# forced (`NOT_RECONSTRUCTED`, evidence/P0.2b/).
+ADR_RX=$ADR_FX/reconstructed
+if adr_rprov=$(python3 scripts/dst/adr001_boundary_reconstructed_provenance.py 2>&1); then
+  ok "RECONSTRUCTED PROVENANCE: $(echo "$adr_rprov" | tail -1)"
+else
+  bad "RECONSTRUCTED PROVENANCE: a reconstruction no longer quotes its review-5 §A.3 table row, or the set drifted from the table: $(echo "$adr_rprov" | tail -3 | tr '\n' ' ')"
+fi
+adr_n_recon=$(ls "$ADR_RX"/*.ail | grep -vE '/(judge_types|rec_types)\.ail$' | wc -l | tr -d ' ')
+adr_rlocal=$(for f in "$ADR_RX"/*.ail; do
+  n=$(basename "$f" .ail)
+  case "$n" in judge_types|rec_types) continue;; esac
+  grep -qE "^import $ADR_FX/(types|reconstructed/judge_types) \(.*(Slot|FsSlot|Judge)" "$f" || echo "$n"
+done | tr '\n' ' ' | sed 's/ $//')
+if [ -z "$adr_rlocal" ]; then
+  ok "RECONSTRUCTED IMPORTED-SUM MECHANISM: all $adr_n_recon reconstructions bind their payload into a sum IMPORTED from a sibling module ($ADR_FX/types or $ADR_RX/judge_types), with no local-sum exceptions"
+else
+  bad "RECONSTRUCTED IMPORTED-SUM MECHANISM: [$adr_rlocal] do not bind through an imported sum, so they measure the permissive position (B8 above), not where the ABI puts the boundary"
+fi
+rc_n=0
+
+# The REASON a reconstruction must reject for is its table row's, as review 5's
+# §A.3 preamble defines it:
+#   app     closed-row unification AT THE `Pure(body)` APPLICATION. The regex pins
+#           the line of `Pure(body)` in the fixture, so the same labels at another
+#           call site, such as a helper's parameter, do NOT pass as `app`.
+#   eff:X   `Effect checking failed for function 'X'` ... `Missing effects: IO`,
+#           naming that same function
+#   letann  rejected at the `let` annotation (`let annotation r`)
+# A rejection for any other reason is `bad`, with the compiler's line quoted.
+adr_rg1() {   # $1 case, $2 table reason (app | eff:X | letann), $3 what it establishes
+  g1_n=$((g1_n+1)); rc_n=$((rc_n+1))
+  local out re line
+  case "$2" in
+    app)    line=$(grep -n 'Pure(body)' "$ADR_RX/$1.ail" | grep 'func build' | cut -d: -f1)
+            re="function application at $ADR_RX/$1\.ail:$line:[0-9]+\]: failed to unify parameter 0: failed to unify effect rows: incompatible closed rows: r1 has extra labels \[\], r2 has extra labels \[IO\]" ;;
+    eff:*)  re="Effect checking failed for function '${2#eff:}'.*Missing effects: IO" ;;
+    letann) re="let annotation r at $ADR_RX/$1\.ail" ;;
+  esac
+  if out=$(adr_chk "reconstructed/$1"); then
+    bad "GROUP 1 RECONSTRUCTED ($1): the pinned compiler ACCEPTED a reconstruction of a review-5 §A.3 attack the review recorded as rejected ($2) — $3. Either the reconstruction is not the review's case or the named arm has weakened; re-read ADR freeze 2(b) before either"
+  elif adr_flat "$out" | grep -qE "$re"; then
+    ok "GROUP 1 RECONSTRUCTED ($1): table reason '$2' == compiler: $(adr_err "$out" | sed -E 's/^Error: [a-z ]+ in [^:]*: //' | cut -c1-200) — $3"
+    g1_held=$((g1_held+1))
+  else
+    bad "GROUP 1 RECONSTRUCTED ($1): rejected, but NOT for its table reason '$2' (/$re/), so it is not review 5's case: $(adr_err "$out")"
+  fi
+}
+
 g1_n=0; g1_held=0
 g2_n=0; g2_held=0
 g3_n=0; g3_held=0
@@ -1335,6 +1391,44 @@ adr_g1 named_tuple_lambda "incompatible closed rows" \
 adr_g1 named_module_env "Effect checking failed for function 'policy'" \
   "a module-level INITIALIZER reading the environment is charged to itself, with Missing effects: Env — registration-time ambient reads are not free"
 
+# P0.2b: review 5 §A.3's unquoted named-arm attacks, RECONSTRUCTED FROM SHAPE
+# (see adr_rg1 above). Each row passes the table's recorded reason, so a
+# reconstruction that rejects for another reason is not scored as the review's case.
+adr_rg1 q_named_mutual app \
+  "RECONSTRUCTED: named body calls a mutually recursive helper declared ! {IO} that performs println; the effect reaches body and is rejected at Pure(body). With helper rowless, the pin rejects eff(helper) instead (evidence/P0.2b)"
+adr_rg1 q_named_generic app \
+  "RECONSTRUCTED: a ! {}-annotated lambda performing println, passed through a generic higher-order helper, does not launder the row"
+adr_rg1 q_named_pure_kw app \
+  "RECONSTRUCTED: the pure keyword on a named body performing println is not what rejects it; the payload row is"
+adr_rg1 q_named_emptyrow app \
+  "RECONSTRUCTED: an explicit ! {} on the named body performing println is rejected at the payload, not at its own signature"
+adr_rg1 q_named_letannot app \
+  "RECONSTRUCTED: let g: (string) -> () ! {} = println does not erase println's IO"
+adr_rg1 q_named_recfield_paren app \
+  "RECONSTRUCTED: the quoted recfield_named case applied as (r.f)(…) is rejected the same way"
+adr_rg1 q_named_recfield_named_nolet app \
+  "RECONSTRUCTED: the same with the let unannotated"
+adr_rg1 q_named_recfield_xmod letann \
+  "RECONSTRUCTED: the same with R IMPORTED is rejected earlier, at the let annotation, as n_pure_passthru_xmod is"
+adr_rg1 q_named_sumpayload_named eff:body \
+  "RECONSTRUCTED: println in a local sum payload typed ! {}, matched out and applied in the named body, is charged to body"
+adr_rg1 n_pure_named_applier eff:body \
+  "RECONSTRUCTED: a named body applying the record built by mk() ! {IO} is charged for the call"
+adr_rg1 q_named_toplevel_apply_paren eff:w \
+  "RECONSTRUCTED: the quoted toplevel_apply case with (w.f)(ctx) is still charged to the module-level w"
+adr_rg1 q_named_toplevel_apply_unannot eff:w \
+  "RECONSTRUCTED: the same with the stored lambda unannotated"
+adr_rg1 q_named_toplevel_noannot_let eff:w \
+  "RECONSTRUCTED: the same with let w unannotated"
+adr_rg1 q_dec_prepare_toplevel_escape eff:w \
+  "RECONSTRUCTED: a module-level let at the (PureCtx, string) -> Prep prepare arity is charged to w, so the prepare arity has no module-level door"
+adr_rg1 q_fs_named_toplevel_escape eff:w \
+  "RECONSTRUCTED: a module-level let performing IO from FsCtx is charged to w"
+adr_rg1 q_named_uppercase app \
+  "RECONSTRUCTED: calling an effectful func Helper with an uppercase name is rejected by the compiler (the walk is blind to it, A.4)"
+adr_rg1 q_named_collision eff:body \
+  "RECONSTRUCTED: a local record field named file_read, built by mk() ! {IO}, is charged to body; a port-like name buys nothing"
+
 echo ""
 echo "   group 2 — COMPILER-ACCEPTED ORDINARY CONTROLS: what must keep compiling"
 
@@ -1348,6 +1442,10 @@ adr_g2 config_projection "question A.*question B" \
   "two different ext_config values project to two DIFFERENT questions under an unchanged policy state — the configuration channel D2 relies on. A control, not a registration"
 adr_g2 v7_describe_config "configured=1 empty=0" \
   "a DescribeTools-shaped named callback whose catalog DIFFERS between a configured and an empty tool set (N49) — measured on a LOCALLY declared sum, see the imported-sum row above"
+# P0.2b: review 5 §A.3's control, RECONSTRUCTED FROM SHAPE (table: check 0, run 0, `q=1`).
+rc_n=$((rc_n+1))
+adr_g2 reconstructed/q_dec_prepare_named_ok "(^| )q=1( |$)" \
+  "RECONSTRUCTED: a named, pure prepare at D2's real (PureCtx, string) -> Prep arity, bound through an IMPORTED Judge sum, compiles, runs and yields q=1"
 
 echo ""
 echo "   group 3 — COMPILER-ACCEPTED ESCAPES: accepted bare, and the D2 boundary (P0.3) must reject every one"
@@ -1408,6 +1506,14 @@ printf '      %-46s %s\n' "group 2  compiler-accepted ordinary controls"        
 printf '      %-46s %s\n' "group 3  compiler-accepted escapes (boundary must reject)" "$g3_held/$g3_n"
 printf '      %-46s %s\n' "group 4  compiler-clean, boundary-rejected by design"  "$g4_held/$g4_n"
 adr_scored=$((ga_n + g1_n + g2_n + g3_n + g4_n))
+# P0.2b: the reconstructions are scored in groups 1 and 2, so they count as cases.
+# A reconstruction without a row turns this red, and so does a row without a fixture.
+if [ "$rc_n" -eq "$adr_n_recon" ]; then
+  ok "EVERY RECONSTRUCTION IS SCORED: $adr_n_recon cases in $ADR_RX, $rc_n RECONSTRUCTED rows"
+else
+  bad "RECONSTRUCTION/ROW MISMATCH: $ADR_RX holds $adr_n_recon cases but $rc_n RECONSTRUCTED rows ran"
+fi
+adr_n_cases=$((adr_n_cases + adr_n_recon))
 if [ "$adr_scored" -eq "$adr_n_cases" ]; then
   ok "EVERY FIXTURE IS SCORED: $adr_scored cases in $ADR_FX, $adr_scored rows, each in exactly one class"
 else
