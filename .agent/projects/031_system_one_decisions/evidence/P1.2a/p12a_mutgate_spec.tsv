@@ -39,3 +39,15 @@ policy_dst_ctx	scripts/dst/compaction_policy_dst.ail	s/    context_limit: limit,
 seeded_dst_ctx	scripts/dst/compaction_seeded_dst.ail	s/    context_limit: limit,/    context_limit: 1,/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh run scripts/dst/compaction_seeded_dst.ail IO,Env,Rand
 full_loop_entry	scripts/smoke_v2_compaction_full_loop.ail	s/config: reg.config, caps: reg.caps }/config: reg.config, caps: [] }/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh run scripts/smoke_v2_compaction_full_loop.ail IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace < /dev/null
 c2_guard_budget	scripts/dst/phase_c2_wiring_scenarios.ail	s/  decide_with_budget(ctx, text, 2)/  decide_with_budget(ctx, text, 0)/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh run scripts/dst/phase_c2_wiring_scenarios.ail IO,Env,Clock,FS,Process,Trace < /dev/null
+#
+# --- attempt 2 (ADR-001 Amendment 2): each package's own [effects].max, checked as its own root
+# (p12a_pkgroot.sh). One row per effect this follow-up added: drop it -> the own-root check -> red.
+ceiling_cs_Trace	packages/motoko-ext-compaction-structural/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-compaction-structural
+ceiling_mr_Rand	packages/motoko-ext-microrag/ailang.toml	/^max = /s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-microrag
+ceiling_mr_Trace	packages/motoko-ext-microrag/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-microrag
+ceiling_og_AI	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "AI"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Net	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Net"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Clock	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Clock"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Stream	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Stream"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Rand	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Trace	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph

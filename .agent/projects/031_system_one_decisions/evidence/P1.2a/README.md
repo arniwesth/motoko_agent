@@ -96,3 +96,32 @@ registration, as before, and **not** disclosed (names, not values). Nothing else
 `p12a_ws.sh` (packages: check / test / smoke / channel / gate / tree), `p12a_core_check.sh` (core
 workspace), `p12a_omnigraph_channel.ail`, `p12a_mutgate_spec.tsv`, `p12a_mutgate.sh`,
 `mutgate-result.tsv`, `CHECKS.log`, `compaction_structural_test_at_74.log`.
+
+## Attempt 2 — package effect ceilings (ADR-001 Amendment 2, `6a6041d2`)
+
+Intake accepted attempt 1 (`df2df96e`). Its workspace locked each package but checked the modules
+from a root manifest, so no package's own `[effects].max` was enforced. The new exit is **each
+package checked as its own root with its own `ailang.toml`**. `p12a_pkgroot.sh` is adapted from
+`evidence/amendment-2/pkgcheck.sh`: it reads the cwd's working files instead of a git revision, so a
+mutation in a throwaway is what gets checked. It also keeps the ABI `version` constraint. Before the
+fix it reproduced the orchestrator's `RESULT.txt` for `df2df96e` exactly.
+
+| package | slots registered (rows) | added to `max` | why |
+|---|---|---|---|
+| compaction-structural | Compactor `{AI, IO, Trace}` | `Trace` | the named `pre_step` declares the Compactor's whole row |
+| microrag | DescribeTools, ToolPolicy `{}`; ToolProvider (all eleven) | `Rand`, `Trace` | `Trace`: the named `microrag_tool_handle` declares the ToolProvider row. `Rand`: the same row, and `auto_write_with_microrag` already declares `! {FS, Process, Rand}` (over the ceiling at 7.4 as well) |
+| omnigraph | PromptShaper, ToolPolicy `{}`; ToolProvider (all eleven) | `AI`, `Net`, `Clock`, `Stream`, `Rand`, `Trace` | the named `omnigraph_tool_handle` declares the ToolProvider row; `Rand` is also performed by `register_with_config` and `_smoke.main` (pre-existing, over the ceiling at 7.4) |
+| decision-framework, empty-stop-guard, progress-contract-guard | PromptShaper `{}`; SolverJudge `{Process}` | — | already admitted |
+
+Each added effect is load-bearing: dropping any one of the nine fails the own-root check, naming
+exactly that effect (mutgate rows `ceiling_*`).
+
+**Not changed, reported: surplus in three ceilings.** The brief said *widen*, so nothing was narrowed.
+Measured by narrowing and restoring:
+- compaction-structural passes with exactly `[AI, IO, Trace, Env, FS]`. Its existing
+  `Net, Process, SharedMem, Clock, Stream` admit no slot and no performed effect.
+- empty-stop-guard and progress-contract-guard pass with exactly `[Process, Env, FS]`. Their
+  `IO, AI, Net, SharedMem, Clock, Stream` are likewise unused.
+
+Under Amendment 2's "no more on account of the ABI", those are candidates for narrowing. That is the
+orchestrator's call.

@@ -203,3 +203,19 @@ p12a: run scripts/dst/phase_c2_wiring_scenarios.ail ok
 p12a: derive.py --hook-scope --no-provision exit 1 (nonzero is expected while batches B-D are red)
 REGISTRATION SHAPE: pass 6 of 18; fail 12
   binding rejections     32  (payload-inline-lambda 16, payload-let-bound 16)  -- ADR D2: red by these on the unmigrated tree
+
+## Attempt 2 (ADR-001 Amendment 2, 6a6041d2) -- 2026-09-21T17:00Z, HEAD eebc4d13
+# each package as its OWN root with its OWN ailang.toml ([effects].max and the ABI pin enforced): p12a_pkgroot.sh
+p12a: motoko-ext-compaction-structural own root ok (max=[IO,Env,AI,Net,FS,Process,SharedMem,Clock,Stream,Trace])
+p12a: motoko-ext-decision-framework own root ok (max=[])
+p12a: motoko-ext-empty-stop-guard own root ok (max=[IO,Env,AI,Net,FS,Process,SharedMem,Clock,Stream])
+p12a: motoko-ext-microrag own root ok (max=[IO,Process,FS,AI,Env,Net,SharedMem,Clock,Stream,Rand,Trace])
+p12a: motoko-ext-omnigraph own root ok (max=[Process,FS,Env,SharedMem,IO,AI,Net,Clock,Stream,Rand,Trace])
+p12a: motoko-ext-progress-contract-guard own root ok (max=[IO,Env,AI,Net,FS,Process,SharedMem,Clock,Stream])
+-> exit 0
+# workspace check (unchanged helper) and the gate, after the ceiling edits:
+#   ok lines: 23
+REGISTRATION SHAPE: pass 6 of 18; fail 12
+  binding rejections     32  (payload-inline-lambda 16, payload-let-bound 16)  -- ADR D2: red by these on the unmigrated tree
+-> tree exit 0
+# mutgate --overlay: 28/28 (19 attempt-1 rows + 9 ceiling rows), mutgate-result.tsv
