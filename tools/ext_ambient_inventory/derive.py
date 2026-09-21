@@ -207,6 +207,27 @@ def installable_extensions(repo: Path) -> dict[str, Path]:
 # the producer -- cached `ailang.iface/v1` interfaces
 # --------------------------------------------------------------------------
 
+def cache_roots(repo: Path) -> list[Path]:
+    """Where the producer reads compile caches: the three source trees, plus
+    the DST lane when `make` has redirected AILANG's cache into one.
+
+    The Makefile excludes `ext_ambient_inventory{,_selftest}` from
+    `DST_LANE_TARGETS` because this tool READS the cache it provisions and a
+    lane would leave it nothing to read.  `ext_hook_scope_selftest` was never
+    excluded, and P0.3 (031) measured the consequence in a fresh clone: the
+    provisioning `ailang check`s write into `.ailang/lane/ext_hook_scope_selftest/`,
+    the walk over `src/`, `packages/` and `scripts/` finds nothing, and every
+    std import is `no-cached-interface` -- red before any mutation, and a
+    warm checkout hides it.  Reading the lane too is the precondition
+    ESTABLISHED rather than assumed; on an unlaned run it adds nothing.
+    """
+    roots = [repo / "src", repo / "packages", repo / "scripts"]
+    lane = os.environ.get("AILANG_CACHE_DIR")
+    if lane:
+        roots.append(Path(lane))
+    return roots
+
+
 class Producer:
     """Per-symbol effect data from `.ailang/cache/compile/modules/std__*/iface.json`.
 
@@ -235,7 +256,11 @@ class Producer:
                     continue
                 if "iface.json" not in filenames:
                     continue
-                if "/cache/compile/modules/" not in dirpath.replace(os.sep, "/"):
+                # `<dir>/.ailang/cache/compile/modules/` is the per-directory
+                # cache; `.ailang/lane/<target>/compile/modules/` is a DST lane
+                # (Makefile `DST_LANE_TARGETS`, `AILANG_CACHE_DIR`), the same
+                # layout minus the `cache` segment.  Both are compile caches.
+                if "/compile/modules/" not in dirpath.replace(os.sep, "/"):
                     continue
                 if not Path(dirpath).name.startswith("std__"):
                     continue
@@ -570,7 +595,7 @@ def derive(repo: Path, do_provision: bool) -> dict:
     provision_failures = provision(exts, repo) if do_provision else []
 
     producer = Producer()
-    producer.load([repo / "src", repo / "packages", repo / "scripts"])
+    producer.load(cache_roots(repo))
 
     stdlib = Path(os.environ.get(STDLIB_ENV) or DEFAULT_STDLIB)
     builtins = builtin_effects(stdlib, producer) if stdlib.is_dir() else {}
@@ -749,7 +774,7 @@ def self_test(repo: Path) -> int:
     fails: list[str] = []
 
     producer = Producer()
-    producer.load([repo / "src", repo / "packages", repo / "scripts"])
+    producer.load(cache_roots(repo))
     stdlib = Path(os.environ.get(STDLIB_ENV) or DEFAULT_STDLIB)
     builtins = builtin_effects(stdlib, producer) if stdlib.is_dir() else {}
 
@@ -845,9 +870,15 @@ def _hook_scope(repo: Path, do_provision: bool, selftest: bool = False) -> int:
     resolves to itself under a name-based import, and a tool that fails closed on
     unresolved receivers must not be the thing importing the wrong module.
 
-    This mode REPORTS.  It does not change the verdict `derive.py` returns, and
+    This mode REPORTS the hook-scope reading and GATES the registration shape.
+    It does not change the verdict `derive.py` returns in its default mode, and
     the shipped closure verdict is what a profile may rely on -- promoting the
-    hook-scope answer is an ADR-scope decision, not an instrument's.
+    hook-scope answer is an ADR-scope decision, not an instrument's.  Since
+    P0.3 (031 ADR-001 D2, freeze item 8) the exit code of this mode is the
+    REGISTRATION-SHAPE result's alone: nonzero when any installable extension's
+    `registration_shape_result` is a fail, through `emit_hook_scope`, and
+    independent of every HOOK-UNRESOLVED verdict.  The default mode below is
+    untouched.
     """
     import importlib.util
     path = Path(__file__).resolve().parent / "hook_scope.py"
@@ -866,7 +897,7 @@ def _hook_scope(repo: Path, do_provision: bool, selftest: bool = False) -> int:
         return 1
 
     producer = Producer()
-    producer.load([repo / "src", repo / "packages", repo / "scripts"])
+    producer.load(cache_roots(repo))
     stdlib = Path(os.environ.get(STDLIB_ENV) or DEFAULT_STDLIB)
     builtins = builtin_effects(stdlib, producer) if stdlib.is_dir() else {}
     abi_types = c2.record_types(c2.strip_noise((repo / c2.ABI_TYPES).read_text()))
@@ -901,8 +932,10 @@ def main() -> int:
                     help="run the hook-scope fixture suite and pin BOTH yields")
     ap.add_argument("--hook-scope", action="store_true",
                     help="also derive criterion 2 over HOOK-reachable text (WI-D15) and print "
-                         "it beside the shipped closure verdict. Reports only; the closure "
-                         "verdict is what this tool returns and what a profile may rely on")
+                         "it beside the shipped closure verdict, then the registration-shape "
+                         "gate (031 ADR-001 D2; P0.3). The hook-scope verdicts report only; "
+                         "the EXIT is the registration-shape field's: nonzero when any "
+                         "installable extension fails it (`make ext_hook_scope`)")
     args = ap.parse_args()
 
     repo = Path(args.repo).resolve()

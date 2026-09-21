@@ -508,7 +508,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   profile_definition smoke_driver corpus_pr strict_replay world_state \
   corpus_rotating driver_plus_compose driver_plus_herdr driver_only seeded_generator \
   event_vocabulary phase_c_l1 recorded_stream driver_plus_no_ops \
-  ext_hook_scope_selftest invariants run_report discovery program_persistence \
+  ext_hook_scope_selftest ext_hook_scope invariants run_report discovery program_persistence \
   compaction_dst fault_catalogue ext_ambient_inventory_selftest \
   ext_ambient_inventory ext_call_inventory ext_call_inventory_selftest \
   conformance stream_parity latency_pair test_coverage_selftest \

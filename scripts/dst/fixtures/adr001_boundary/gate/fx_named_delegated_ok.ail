@@ -1,0 +1,6 @@
+module scripts/dst/fixtures/adr001_boundary/gate/fx_named_delegated_ok
+import std/json (JString)
+import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy, Registration)
+func body(_ctx: Ctx) -> int { 1 }
+func make_hooks(_n: int) -> [Capability] { [ToolPolicy(body)] }
+export func register_with_config(cfg: int) -> Registration { { config: JString("synthetic"), caps: make_hooks(cfg) } }

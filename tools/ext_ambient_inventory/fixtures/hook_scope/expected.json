@@ -24,7 +24,15 @@
     "that enumerates fewer atoms than are written cannot report the fixture",
     "green. The named-wide control is the one that carries B1's finding: the",
     "payload row bounds nothing in constructor-argument position, so a wide-rowed",
-    "named binding must be SCANNED, and it reaches std/env."
+    "named binding must be SCANNED, and it reaches std/env.",
+    "",
+    "P0.3 (031 ADR-001 D2, the registration-shape gate): every fixture also pins `head`, `shape` and",
+    "`shape_reasons` -- RE-PINNED BY HAND. All seventeen are written on the 7.4 bare list, so every",
+    "one FAILS the shape by `return-shape-unsupported`, plus whatever its payloads add: the eight-atom",
+    "controls bind inline lambdas; `same_kind` let-binds its handle; `binding_unresolvable`'s bare",
+    "name resolves nowhere; the four list rejections are `list-not-enumerable`; `computed`'s tail is `caps-computed` too --",
+    "neither a record nor a list nor a call, so its head is null. The gate's own fixtures, on the 8.0",
+    "head, live in scripts/dst/fixtures/adr001_boundary/gate/ and are run by the same self-test."
   ],
   "fixtures": {
     "control_registration_only": {
@@ -34,35 +42,65 @@
         "std/env.getEnvOr"
       ],
       "form": "registration reads Env; no hook reaches it (the WI-D6 shape)",
-      "atoms": 8
+      "atoms": 8,
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
     },
     "control_hook_reaches_env": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
       "form": "TWO-SIDED twin of the above: the same call, moved into a hook body",
-      "atoms": 8
+      "atoms": 8,
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
     },
     "control_named_hook_in_register": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
       "form": "the microrag shape -- a named ToolProvider handle in register.ail reaching std/fs",
-      "atoms": 8
+      "atoms": 8,
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
     },
     "control_ext_ports_call": {
       "verdict": "HOOK-PORT-MEDIATED",
       "shapes": [],
       "registration_only": [],
       "form": "property 1's positive half: ExtPorts.ai_step is admitted, not rejected",
-      "atoms": 8
+      "atoms": 8,
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
     },
     "control_interpolated_call": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
       "form": "door 4: the effectful call exists only inside a string interpolation",
-      "atoms": 8
+      "atoms": 8,
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
     },
     "reject_binding_unresolvable": {
       "verdict": "HOOK-UNRESOLVED",
@@ -70,7 +108,14 @@
         "hook-binding-unresolvable"
       ],
       "registration_only": [],
-      "form": "an atom bound to a bare name that resolves nowhere"
+      "form": "an atom bound to a bare name that resolves nowhere",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "payload-unresolved",
+        "return-shape-unsupported"
+      ]
     },
     "reject_unknown_callee": {
       "verdict": "HOOK-UNRESOLVED",
@@ -78,7 +123,13 @@
         "unknown-callee"
       ],
       "registration_only": [],
-      "form": "door 3: `show` -- a language builtin no producer at HEAD can classify"
+      "form": "door 3: `show` -- a language builtin no producer at HEAD can classify",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
     },
     "reject_applied_local": {
       "verdict": "HOOK-UNRESOLVED",
@@ -86,35 +137,64 @@
         "applied-local"
       ],
       "registration_only": [],
-      "form": "a hook APPLIES a value closed over at registration (door 6's corner)"
+      "form": "a hook APPLIES a value closed over at registration (door 6's corner)",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
     },
     "control_capability_list_inline": {
       "verdict": "HOOK-PORT-MEDIATED",
       "shapes": [],
       "registration_only": [],
       "atoms": 3,
-      "form": "B2: a literal [Kind(f), ...] list, three inline atoms (one lambda with a comma)"
+      "form": "B2: a literal [Kind(f), ...] list, three inline atoms (one lambda with a comma)",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
     },
     "control_capability_list_named_wide": {
       "verdict": "HOOK-AMBIENT",
       "shapes": [],
       "registration_only": [],
       "atoms": 1,
-      "form": "B2: a wide-rowed NAMED atom is scanned, not trusted -- it reaches std/env"
+      "form": "B2: a wide-rowed NAMED atom is scanned, not trusted -- it reaches std/env",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "return-shape-unsupported"
+      ]
     },
     "control_capability_list_same_kind": {
       "verdict": "HOOK-PORT-MEDIATED",
       "shapes": [],
       "registration_only": [],
       "atoms": 4,
-      "form": "B2: N>1 of one kind enumerated per index, ToolProvider(names, handle), behind a hop"
+      "form": "B2: N>1 of one kind enumerated per index, ToolProvider(names, handle), behind a hop",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "payload-let-bound",
+        "return-shape-unsupported"
+      ]
     },
     "control_capability_list_empty": {
       "verdict": "HOOK-PORT-MEDIATED",
       "shapes": [],
       "registration_only": [],
       "atoms": 0,
-      "form": "B2: `[]` resolves with ZERO atoms, pinned (D7 is B3's question, not the reader's)"
+      "form": "B2: `[]` resolves with ZERO atoms, pinned (D7 is B3's question, not the reader's)",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "return-shape-unsupported"
+      ]
     },
     "reject_capability_list_computed": {
       "verdict": "HOOK-UNRESOLVED",
@@ -122,7 +202,13 @@
         "capability-list-unresolvable"
       ],
       "registration_only": [],
-      "form": "B2: the list is built by `[..] ++ extra(cfg)` -- literal lists only"
+      "form": "B2: the list is built by `[..] ++ extra(cfg)` -- literal lists only",
+      "head": null,
+      "shape": "fail",
+      "shape_reasons": [
+        "caps-computed",
+        "return-shape-unsupported"
+      ]
     },
     "reject_capability_list_element": {
       "verdict": "HOOK-UNRESOLVED",
@@ -130,7 +216,13 @@
         "capability-list-unresolvable"
       ],
       "registration_only": [],
-      "form": "B2: one element is a call returning an atom -- a computed element"
+      "form": "B2: one element is a call returning an atom -- a computed element",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "list-not-enumerable",
+        "return-shape-unsupported"
+      ]
     },
     "reject_capability_list_arity": {
       "verdict": "HOOK-UNRESOLVED",
@@ -138,7 +230,13 @@
         "capability-list-unresolvable"
       ],
       "registration_only": [],
-      "form": "B2: ToolProvider applied to one argument -- the binding position is a guess"
+      "form": "B2: ToolProvider applied to one argument -- the binding position is a guess",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "list-not-enumerable",
+        "return-shape-unsupported"
+      ]
     },
     "reject_capability_list_unknown_kind": {
       "verdict": "HOOK-UNRESOLVED",
@@ -146,7 +244,13 @@
         "capability-list-unresolvable"
       ],
       "registration_only": [],
-      "form": "B2: `Judge(..)` is not a known constructor; plus a trailing comma (count discipline)"
+      "form": "B2: `Judge(..)` is not a known constructor; plus a trailing comma (count discipline)",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "list-not-enumerable",
+        "return-shape-unsupported"
+      ]
     },
     "reject_capability_list_juxtaposed": {
       "verdict": "HOOK-UNRESOLVED",
@@ -154,7 +258,13 @@
         "capability-list-unresolvable"
       ],
       "registration_only": [],
-      "form": "B2: `A(f) ++ B(g)` INSIDE the list -- one element, two constructor heads"
+      "form": "B2: `A(f) ++ B(g)` INSIDE the list -- one element, two constructor heads",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "list-not-enumerable",
+        "return-shape-unsupported"
+      ]
     }
   },
   "yield": {
@@ -173,7 +283,7 @@
       "resolve through the 6.0 list head and how many atoms each holds. Empty on",
       "the 5.x tree by construction; B8 re-pinned it BY HAND with seventeen entries",
       "of eight atoms each. Item 4 (6.0 trimming) re-pinned it BY HAND again: each",
-    "package now lists only the atoms it binds with a real body (39 over 17).",
+      "package now lists only the atoms it binds with a real body (39 over 17).",
       "",
       "RE-PINNED BY HAND for EIGHTEEN: `repetition_guard` joined ailang.toml's",
       "[extensions] packages and every pin here was still describing seventeen. It",
@@ -201,7 +311,22 @@
       "resumed from a handoff made zero delegations after its predecessor made ten,",
       "because the instruction lived only in a chat turn. The DOOR-3 residue is",
       "unchanged: the one predicate parameter that would have added `p` was written",
-      "as direct recursion instead."
+      "as direct recursion instead.",
+      "",
+      "P0.3 (031 ADR-001 D2; PLAN-001 P0.3) -- RE-PINNED BY HAND for the 8.0 `{ config, caps }` head.",
+      "`capability_list_atoms` now keys on either head and is unchanged: all eighteen still register",
+      "through the 7.4 list (45 atoms), which `registration_heads` pins per extension.",
+      "`registration_shape_results` pins the gate's own field per extension: all eighteen FAIL on the",
+      "unmigrated tree. `shape_binding_rejections` is the MEASURED count the ADR states the tree is red",
+      "by -- 35, and it came out 35 (payload-inline-lambda 19, payload-let-bound 16), matching D2's",
+      "migration table site for site. P1.2 flips heads and results batch by batch and re-pins by hand.",
+      "",
+      "DOOR-3 RESIDUE LOSES `f`, and this is the signature fix doing what N63 says. `f` was never a",
+      "language builtin: it is the function-typed PARAMETER of herdr's higher-order helpers, and it sat",
+      "in this residue only because the walk never read a signature. `_params_at` now reads it, so an",
+      "applied `f` is `applied-local` (a rejection, as before -- herdr stays HOOK-UNRESOLVED) rather",
+      "than `unknown-callee`. The counterfactual list loses herdr for the same reason. `show` and",
+      "`intToFloat` remain: those are real producer gaps."
     ],
     "extensions": 18,
     "closure_port_mediated": [
@@ -224,7 +349,6 @@
       "scratchpad"
     ],
     "door_3_residue": [
-      "f",
       "intToFloat",
       "show"
     ],
@@ -256,6 +380,47 @@
       "repetition_guard": 2,
       "scratchpad": 4,
       "test_dummy": 4
-    }
+    },
+    "registration_heads": {
+      "a2a": "capability-list",
+      "agentcli": "capability-list",
+      "ailang_docs": "capability-list",
+      "compaction_ai": "capability-list",
+      "compaction_structural": "capability-list",
+      "compose": "capability-list",
+      "context_mode": "capability-list",
+      "decision_framework": "capability-list",
+      "empty_stop_guard": "capability-list",
+      "exa_search": "capability-list",
+      "herdr": "capability-list",
+      "mcp": "capability-list",
+      "microrag": "capability-list",
+      "omnigraph": "capability-list",
+      "progress_contract_guard": "capability-list",
+      "repetition_guard": "capability-list",
+      "scratchpad": "capability-list",
+      "test_dummy": "capability-list"
+    },
+    "registration_shape_results": {
+      "a2a": "fail",
+      "agentcli": "fail",
+      "ailang_docs": "fail",
+      "compaction_ai": "fail",
+      "compaction_structural": "fail",
+      "compose": "fail",
+      "context_mode": "fail",
+      "decision_framework": "fail",
+      "empty_stop_guard": "fail",
+      "exa_search": "fail",
+      "herdr": "fail",
+      "mcp": "fail",
+      "microrag": "fail",
+      "omnigraph": "fail",
+      "progress_contract_guard": "fail",
+      "repetition_guard": "fail",
+      "scratchpad": "fail",
+      "test_dummy": "fail"
+    },
+    "shape_binding_rejections": 35
   }
 }

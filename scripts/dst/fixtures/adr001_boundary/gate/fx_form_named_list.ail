@@ -1,0 +1,4 @@
+module scripts/dst/fixtures/adr001_boundary/gate/fx_form_named_list
+import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy)
+func body(_ctx: Ctx) -> int { 1 }
+export func register_with_config(_cfg: int) -> [Capability] { [ToolPolicy(body)] }

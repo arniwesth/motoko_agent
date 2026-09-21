@@ -1,0 +1,7 @@
+module scripts/dst/fixtures/adr001_boundary/gate/fx_inline_lambda
+import std/io (println)
+import std/json (JString)
+import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy, Registration)
+type W = { f: (Ctx) -> int }
+func apply(ctx: Ctx, w: W) -> int { w.f(ctx) }
+export func register_with_config(_cfg: int) -> Registration ! {IO} { let w: W = { f: func(c: Ctx) -> int ! {} { let _ = println(c.name); 1 } }; { config: JString("synthetic"), caps: [ToolPolicy(func(ctx: Ctx) -> int { apply(ctx, w) })] } }

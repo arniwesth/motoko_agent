@@ -1,0 +1,338 @@
+{
+  "_comment": [
+    "PLAN-001 (031) P0.3 -- the registration-shape gate's fixtures (ADR-001 D2 'The gate's fixtures',",
+    "freeze item 8). Run by `python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures`",
+    "(no producer, no cache; add --ailang-check to assert `compiler`) and by",
+    "`make ext_hook_scope_selftest`, which also runs the walk and asserts `verdict` where pinned.",
+    "",
+    "Every fixture is SYNTHETIC. The escapes are P0.2's group-3 and group-4 constructions re-cast",
+    "onto the 8.0 `{ config, caps }` head (scripts/dst/fixtures/adr001_boundary/ holds the sources",
+    "the reviews quoted, on the 7.4 head); nothing here is from a session.",
+    "",
+    "GROUPS. `pass`: the positive controls -- a reader that resolves nothing passes every fail row,",
+    "so these carry the suite. `fail`: one per rejection reason in `SHAPE_REASONS`; the self-test",
+    "refuses a reason no fixture reaches. `fail-compiler-clean`: P0.2's group 4 -- the import shadow",
+    "the pinned compiler resolves the OTHER way (N62); the rule over-rejects it by design and the",
+    "`compiler: clean` pin is what says so. `form`: one per in-tree registration form at HEAD, on",
+    "the 7.4 head; P1.2 rewrites each to the migrated form and flips its pin to pass, batch by batch.",
+    "",
+    "`fx_residue` is the row that shows the two results are distinct: its walk verdict is",
+    "HOOK-UNRESOLVED (`show`, door 3) and its shape result is PASS. `fx_delegated_record` records a",
+    "READING of D2's grammar taken by P0.3: the record is written at `register_with_config`'s tail",
+    "and delegation is admitted at `caps`; a record reached only behind a delegation is unsupported.",
+    "If P1.2 needs the other reading, that is a numbered amendment citing this fixture, not a re-pin."
+  ],
+  "fixtures": {
+    "fx_named_ok": {
+      "shape": "pass",
+      "head": "config-caps",
+      "reasons": [],
+      "group": "pass",
+      "form": "8.0 head; three named top-level payloads, DescribeTools taking Json (N49)",
+      "atoms": 3,
+      "compiler": "clean",
+      "verdict": "HOOK-PORT-MEDIATED"
+    },
+    "fx_empty": {
+      "shape": "pass",
+      "head": "config-caps",
+      "reasons": [],
+      "group": "pass",
+      "form": "8.0 head; `caps: []` -- a recognised empty list passes (ADR D2 'The gate')",
+      "atoms": 0,
+      "compiler": "clean",
+      "verdict": "HOOK-PORT-MEDIATED"
+    },
+    "fx_residue": {
+      "shape": "pass",
+      "head": "config-caps",
+      "reasons": [],
+      "group": "pass",
+      "form": "named callback applying `show` -- door-3 walk residue beside a PASSING shape: distinct, never hidden",
+      "atoms": 1,
+      "compiler": "clean",
+      "verdict": "HOOK-UNRESOLVED",
+      "walk_shapes": [
+        "unknown-callee"
+      ]
+    },
+    "fx_named_delegated_ok": {
+      "shape": "pass",
+      "head": "config-caps",
+      "reasons": [],
+      "group": "pass",
+      "form": "8.0 head; `caps: make_hooks(cfg)` delegated to a named top-level function returning a literal list",
+      "atoms": 1,
+      "compiler": "clean",
+      "verdict": "HOOK-PORT-MEDIATED"
+    },
+    "fx_import_ok": {
+      "shape": "pass",
+      "head": "config-caps",
+      "reasons": [],
+      "group": "pass",
+      "form": "8.0 head; the payload resolves through the home module's IMPORT to a sibling's top-level func",
+      "atoms": 1,
+      "compiler": "clean",
+      "verdict": "HOOK-PORT-MEDIATED"
+    },
+    "fx_shadow": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "payload-let-bound"
+      ],
+      "group": "fail",
+      "form": "fact 5 / q_named_shadow: local `let body = func(..)` over top-level `func body`",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_delegate_shadow": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "delegation-let-bound"
+      ],
+      "group": "fail",
+      "form": "fact 6 / delegate_shadow: local `let make_hooks` over top-level `func make_hooks`",
+      "compiler": "clean"
+    },
+    "fx_param_shadow": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "payload-parameter-bound"
+      ],
+      "group": "fail",
+      "form": "v7_param_shadow: `make_hooks(body: (Ctx) -> int)` binds its PARAMETER under a top-level func's name",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_delegate_param": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "delegation-parameter-bound"
+      ],
+      "group": "fail",
+      "form": "v7_delegate_param: `build_with(mk: ..)` delegates to its PARAMETER under a top-level func's name",
+      "compiler": "clean"
+    },
+    "fx_partial": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "payload-partial-application"
+      ],
+      "group": "fail",
+      "form": "q_named_partial: `ToolPolicy(apply_w(w))` -- a function value built at registration",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_computed": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "caps-computed"
+      ],
+      "group": "fail",
+      "form": "computed_list: `caps: if .. then [ToolPolicy(..)] else []`",
+      "compiler": "clean"
+    },
+    "fx_match": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "caps-match-selected"
+      ],
+      "group": "fail",
+      "form": "`caps: match cfg { 0 => [], _ => [ToolPolicy(..)] }`",
+      "compiler": "clean"
+    },
+    "fx_unknown": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "caps-unknown"
+      ],
+      "group": "fail",
+      "form": "`let hooks = [..]; caps: hooks` -- a list the reader cannot resolve to a literal or a named func",
+      "compiler": "clean"
+    },
+    "fx_inline_lambda": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "payload-inline-lambda"
+      ],
+      "group": "fail",
+      "form": "8.0 head; `ToolPolicy(func(ctx) { apply(ctx, w) })` -- facts 1 and 4's construction",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_import_shadow": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "payload-let-bound"
+      ],
+      "group": "fail-compiler-clean",
+      "form": "v7_import_shadow: local `let body` over an IMPORTED `body`; the pinned compiler runs the import (N62)",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_delegate_import_shadow": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "delegation-let-bound"
+      ],
+      "group": "fail-compiler-clean",
+      "form": "v7_delegate_import_shadow: local `let make_hooks` over an IMPORTED `make_hooks`; the import runs (N62)",
+      "compiler": "clean"
+    },
+    "fx_delegate_unresolved": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "delegation-unresolved"
+      ],
+      "group": "fail",
+      "form": "`caps: make_hooks(cfg)` with no such function anywhere",
+      "compiler": "rejected"
+    },
+    "fx_payload_unresolved": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "payload-unresolved"
+      ],
+      "group": "fail",
+      "form": "`ToolPolicy(nowhere)` -- a bare name that resolves to nothing",
+      "atoms": 1,
+      "compiler": "rejected"
+    },
+    "fx_not_a_name": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "payload-not-a-name"
+      ],
+      "group": "fail",
+      "form": "`ToolPolicy(w.f)` -- a field read is neither a bare name nor an inline function",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_no_register": {
+      "shape": "fail",
+      "head": null,
+      "reasons": [
+        "registration-missing"
+      ],
+      "group": "fail",
+      "form": "a module with no `register_with_config` at all",
+      "compiler": "clean"
+    },
+    "fx_record_extra_field": {
+      "shape": "fail",
+      "head": null,
+      "reasons": [
+        "return-shape-unsupported"
+      ],
+      "group": "fail",
+      "form": "`{ config, caps, extra }` -- the head is exactly two fields",
+      "compiler": "rejected"
+    },
+    "fx_delegated_record": {
+      "shape": "fail",
+      "head": null,
+      "reasons": [
+        "return-shape-unsupported"
+      ],
+      "group": "fail",
+      "form": "`register_with_config(cfg) = make_reg(cfg)` -- the record only BEHIND a delegation; the rule admits delegation at `caps`",
+      "compiler": "clean"
+    },
+    "fx_list_not_enumerable": {
+      "shape": "fail",
+      "head": "config-caps",
+      "reasons": [
+        "list-not-enumerable"
+      ],
+      "group": "fail",
+      "form": "`[ToolPolicy(body), Judge(body)]` -- an unknown constructor; the list cannot be enumerated atom by atom",
+      "compiler": "rejected"
+    },
+    "fx_form_named_list": {
+      "shape": "fail",
+      "head": "capability-list",
+      "reasons": [
+        "return-shape-unsupported"
+      ],
+      "group": "form",
+      "form": "IN-TREE FORM (batch A: compaction-structural, decision-framework, empty-stop-guard, microrag): 7.4 bare list, named payload -- the head alone fails",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_form_inline_func": {
+      "shape": "fail",
+      "head": "capability-list",
+      "reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ],
+      "group": "form",
+      "form": "IN-TREE FORM (progress-contract-guard, omnigraph ToolProvider, compaction-ai): 7.4 list, inline `func(..) { .. }`",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_form_inline_backslash": {
+      "shape": "fail",
+      "head": "capability-list",
+      "reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ],
+      "group": "form",
+      "form": "IN-TREE FORM (context-mode, omnigraph, scratchpad PromptShaper; test-dummy): 7.4 list, `\\ctx. f(captured, ctx)`",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_form_let_lambda": {
+      "shape": "fail",
+      "head": "capability-list",
+      "reasons": [
+        "payload-let-bound",
+        "return-shape-unsupported"
+      ],
+      "group": "form",
+      "form": "IN-TREE FORM (repetition-guard, context-mode): 7.4 list, `let policy = func(..)` capturing a registration value",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_form_delegated_let": {
+      "shape": "fail",
+      "head": "capability-list",
+      "reasons": [
+        "payload-let-bound",
+        "return-shape-unsupported"
+      ],
+      "group": "form",
+      "form": "IN-TREE FORM (a2a, agentcli, ailang-docs, exa-search, mcp, scratchpad, compose, herdr): `make_hooks(cfg)` let-binding its payloads",
+      "atoms": 1,
+      "compiler": "clean"
+    },
+    "fx_form_describe_inline": {
+      "shape": "fail",
+      "head": "capability-list",
+      "reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ],
+      "group": "form",
+      "form": "IN-TREE FORM (a2a, agentcli, ailang-docs, scratchpad): `DescribeTools(\\_ . schemas)` capturing discovered schemas",
+      "atoms": 1,
+      "compiler": "clean"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+module scripts/dst/fixtures/adr001_boundary/gate/gate_imported
+import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy)
+export func body(_ctx: Ctx) -> int { 2 }
+export func make_hooks(_n: int) -> [Capability] { [ToolPolicy(body)] }

@@ -1,0 +1,7 @@
+module scripts/dst/fixtures/adr001_boundary/gate/fx_named_ok
+import std/json (Json, JString)
+import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy, PromptShaper, DescribeTools, Registration)
+func body(_ctx: Ctx) -> int { 1 }
+func shape(_ctx: Ctx) -> int { 2 }
+func describe(cfg: Json) -> [string] { match cfg { JString(s) => [s], _ => [] } }
+export func register_with_config(_cfg: int) -> Registration { { config: JString("synthetic"), caps: [ToolPolicy(body), PromptShaper(shape), DescribeTools(describe)] } }
