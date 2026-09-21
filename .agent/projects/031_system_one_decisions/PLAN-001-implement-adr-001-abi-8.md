@@ -874,6 +874,17 @@ one; **assigned to P1.7r**.
 | **Intake (orchestrator)** | `p16r_lock_check.py` GREEN; lock scanned (no credentials or tailnet addresses); `mutgate.sh --clone-from` fresh clone **17/17** |
 | Intake defects | 0 |
 
+### P1.4r — 2026-09-21, commit `516afc9d`
+
+Each `DecisionSolverJudge`/`DecisionToolPolicy` atom's `prepare` and `interpret` get `decision_state =
+Some(...)` built from **its own** descriptor — invocation id `<owner>/<site>/<local_id>` (D6),
+`EnforcingDecision`, `interventions_used 0`, `intervention_limit = max_interventions`, both config
+projections byte for byte, the four int ledger terms 0 and `run_cap_millicents None` (D5 `:673` admits
+`Some(cap)` only for `cap > 0`, so `Some(0)` is not a value the term can take — accepted); the ordinary
+view resets `decision_state` to `None` whatever the host context carries. 5 new runtime tests, a session
+fixture. **Intake (orchestrator)**, in a clone at the commit: `src/core` **71/72**; runtime **36/36**; session
+**41/41**; `make anchors` 0; `mutgate.sh --clone-from` fresh clone **34/34**. Intake defects: 0.
+
 ## 10. Estimates
 
 | phase | delegate-days |
