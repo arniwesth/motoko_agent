@@ -1,23 +1,27 @@
 module sunholo/motoko_ext_empty_stop_guard/register
 
-import std/option (None)
+import std/json (jo)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx,
-  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
-  FinalizeOutcome,
-  PassThrough, NoOpinion, Delegate, NoIntercept
+  ProcessCtx,
+  ExtRegistration,
+  SolverJudge,
+  FinalizeOutcome
 )
 import pkg/sunholo/motoko_ext_empty_stop_guard/empty_stop_guard (decide)
 
-func finalize(ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process} {
+func finalize(ctx: ProcessCtx, candidate: string) -> FinalizeOutcome ! {Process} {
   { decision: decide(ctx, candidate), next_state: ctx.world }
 }
 
--- B8: 6.0 Capability list. The former `default_hooks` neutral bodies are
--- inlined verbatim; only the judge slot is this extension's own.
-export func register_with_config(_cfg: a) -> [Capability] ! {Env, FS} {
+-- ABI 8.0 (031 ADR-001 D2): `{ config, caps }`, the payload a named top-level
+-- function bound directly. Nothing is captured at registration, so the
+-- disclosed configuration is empty; the host stamps it as `ext_config`.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
   -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
-  [
-    SolverJudge(finalize)
-  ]
+  {
+    config: jo([]),
+    caps: [
+      SolverJudge(finalize)
+    ]
+  }
 }

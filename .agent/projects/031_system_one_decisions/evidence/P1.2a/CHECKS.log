@@ -1,0 +1,205 @@
+# 031 PLAN-001 P1.2a -- exit-check receipts. HEAD before: 031c0f16 (brief); plan ruling 68791469. AILANG AILANG v0.33.0.
+# Run 2026-09-21T16:00Z in the primary checkout, pre-commit.
+
+## 1. ailang check, in place (repo root, AILANG_RELAX_MODULES=1 as hook_scope's provisioning uses)
+check packages/motoko-ext-compaction-structural/compaction_structural.ail -> exit 0
+check packages/motoko-ext-compaction-structural/register.ail -> exit 0
+check packages/motoko-ext-decision-framework/register.ail -> exit 0
+check packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail -> exit 0
+check packages/motoko-ext-empty-stop-guard/register.ail -> exit 0
+check packages/motoko-ext-microrag/register.ail -> exit 0
+check packages/motoko-ext-omnigraph/_smoke.ail -> exit 0
+check packages/motoko-ext-omnigraph/args.ail -> exit 0
+check packages/motoko-ext-omnigraph/exec.ail -> exit 0
+check packages/motoko-ext-omnigraph/guardrail.ail -> exit 0
+check packages/motoko-ext-omnigraph/normalize.ail -> exit 0
+check packages/motoko-ext-omnigraph/omnigraph.ail -> exit 0
+check packages/motoko-ext-omnigraph/prompts.ail -> exit 0
+check packages/motoko-ext-omnigraph/register.ail -> exit 0
+check packages/motoko-ext-omnigraph/types.ail -> exit 0
+check packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail -> exit 0
+check packages/motoko-ext-progress-contract-guard/register.ail -> exit 0
+
+## 1b. the same six packages in a throwaway workspace (p12a_ws.sh check; includes each package's own lock = its ABI pin)
+p12a: lock packages/motoko-ext-compaction-structural ok (ABI pin 8.0)
+p12a: check packages/motoko-ext-compaction-structural/compaction_structural.ail ok
+p12a: check packages/motoko-ext-compaction-structural/register.ail ok
+p12a: lock packages/motoko-ext-decision-framework ok (ABI pin 8.0)
+p12a: check packages/motoko-ext-decision-framework/register.ail ok
+p12a: lock packages/motoko-ext-empty-stop-guard ok (ABI pin 8.0)
+p12a: check packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail ok
+p12a: check packages/motoko-ext-empty-stop-guard/register.ail ok
+p12a: lock packages/motoko-ext-microrag ok (ABI pin 8.0)
+p12a: check packages/motoko-ext-microrag/register.ail ok
+p12a: lock packages/motoko-ext-omnigraph ok (ABI pin 8.0)
+p12a: check packages/motoko-ext-omnigraph/_smoke.ail ok
+p12a: check packages/motoko-ext-omnigraph/args.ail ok
+p12a: check packages/motoko-ext-omnigraph/exec.ail ok
+p12a: check packages/motoko-ext-omnigraph/guardrail.ail ok
+p12a: check packages/motoko-ext-omnigraph/normalize.ail ok
+p12a: check packages/motoko-ext-omnigraph/omnigraph.ail ok
+p12a: check packages/motoko-ext-omnigraph/prompts.ail ok
+p12a: check packages/motoko-ext-omnigraph/register.ail ok
+p12a: check packages/motoko-ext-omnigraph/types.ail ok
+p12a: lock packages/motoko-ext-progress-contract-guard ok (ABI pin 8.0)
+p12a: check packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail ok
+p12a: check packages/motoko-ext-progress-contract-guard/register.ail ok
+-> exit 0
+
+## 2. each package's own tests
+p12a: known red (pre-existing) test_oversized_recent_tool_result_is_capped_under_pressure_test_1
+p12a: test packages/motoko-ext-compaction-structural/compaction_structural.ail ok -- 11 tests: 9 passed, 1 failed, 1 skipped (2.263260845s)
+p12a: test packages/motoko-ext-decision-framework/register.ail ok -- 2 tests: 2 passed, 0 failed, 0 skipped (580.44358ms)
+p12a: test packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail ok -- 7 tests: 7 passed, 0 failed, 0 skipped (1.286663975s)
+p12a: test packages/motoko-ext-microrag/register.ail ok -- 2 tests: 2 passed, 0 failed, 0 skipped (582.875057ms)
+p12a: test packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail ok -- 20 tests: 20 passed, 0 failed, 0 skipped (3.67560463s)
+-> exit 0
+OK: register_with_config returned without panic
+p12a: smoke ok
+-> smoke exit 0
+OK: channel -- prompt disclosed as config and read back from ext_config only
+p12a: channel ok
+-> channel exit 0
+# compaction_structural's one red test is PRE-EXISTING: the same module at 181051d0 (P0.4's parent, ABI 7.4):
+#     ✗ test_oversized_recent_tool_result_is_capped_under_pressure_test_1 (138.991538ms)
+#   ✗ Some tests failed
+#   11 tests: 9 passed, 1 failed, 1 skipped (1.294834856s)
+#     ✗ Failed: 1
+
+## 3. the P0.3 gate
+# make ext_hook_scope (as written) -- fails closed on the cache precondition while batches B-D are 7.4:
+make ext_hook_scope -> exit 2
+#   extensions failing provisioning: 12
+#   agentcli ailang_docs compaction_ai compose context_mode exa_search herdr mcp repetition_guard scratchpad test_dummy 
+# stand-in: derive.py --hook-scope --no-provision (the shape field is computed from text):
+-> exit 1 (nonzero: 12 extensions still fail, by design)
+extension                 closure unit      hook scope            reg-only sources
+  a2a                     UNRESOLVED        HOOK-AMBIENT          4
+  agentcli                UNRESOLVED        HOOK-AMBIENT          1
+  ailang_docs             UNRESOLVED        HOOK-UNRESOLVED       2
+  compaction_ai           UNRESOLVED        HOOK-UNRESOLVED       2
+  compaction_structural   UNRESOLVED        HOOK-UNRESOLVED       0
+  compose                 UNRESOLVED        HOOK-UNRESOLVED       3
+  context_mode            UNRESOLVED        HOOK-UNRESOLVED       3
+  decision_framework      UNRESOLVED        HOOK-PORT-MEDIATED    0
+  empty_stop_guard        UNRESOLVED        HOOK-PORT-MEDIATED    0
+  exa_search              UNRESOLVED        HOOK-UNRESOLVED       3
+  herdr                   UNRESOLVED        HOOK-UNRESOLVED       4
+  mcp                     UNRESOLVED        HOOK-PORT-MEDIATED    3
+  microrag                UNRESOLVED        HOOK-UNRESOLVED       0
+  omnigraph               UNRESOLVED        HOOK-UNRESOLVED       4
+  progress_contract_guard UNRESOLVED        HOOK-PORT-MEDIATED    0
+  repetition_guard        UNRESOLVED        HOOK-PORT-MEDIATED    1
+  scratchpad              UNRESOLVED        HOOK-AMBIENT          1
+  test_dummy              UNRESOLVED        HOOK-PORT-MEDIATED    1
+
+HOOK-PORT-MEDIATED (6 of 18): decision_framework, empty_stop_guard, mcp, progress_contract_guard, repetition_guard, test_dummy
+HOOK-AMBIENT       (3): a2a, agentcli, scratchpad
+HOOK-UNRESOLVED    (9): ailang_docs, compaction_ai, compaction_structural, compose, context_mode, exa_search, herdr, microrag, omnigraph
+
+DOOR-3 RESIDUE -- applied names no producer at HEAD can classify:
+  show                 blocks 9 extension(s): ailang_docs, compaction_ai, compaction_structural, compose, context_mode, exa_search, herdr, microrag, omnigraph
+  intToFloat           blocks 1 extension(s): compose
+  COUNTERFACTUAL (not a verdict): were these resolved effect-free, HOOK-PORT-MEDIATED would be 8 of 18
+  adding compaction_ai, compaction_structural
+
+REGISTRATION-ONLY AMBIENT SOURCES -- in the closure, out of criterion 2's
+scope on the hooks reading, and NOT thereby harmless.  D5's disclosure
+obligation is what must account for these; this tool only names them.
+  a2a                       4  std/net.httpGet, std/fs.fileExists, std/fs.readFile, std/env.getEnvOr
+  agentcli                  1  std/env.getEnvOr
+  ailang_docs               2  std/fs.fileExists, std/env.getEnvOr
+  compaction_ai             2  std/env.getEnvOr, std/fs.readFileResult
+  compose                   3  std/fs.fileExists, std/fs.readFile, std/env.getEnvOr
+  context_mode              3  std/fs.fileExists, std/fs.readFile, std/env.getEnvOr
+  exa_search                3  std/fs.fileExists, std/fs.readFile, std/env.getEnvOr
+  herdr                     4  std/env.getEnvOr, std/fs.isDir, std/fs.listDir, std/fs.readFileResult
+  mcp                       3  std/fs.fileExists, std/fs.readFile, std/env.getEnvOr
+  omnigraph                 4  std/fs.fileExists, std/fs.readFile, std/env.getEnvOr, std/extension.requireWorkdirFile
+  repetition_guard          1  std/env.getEnvOr
+  scratchpad                1  std/env.getEnvOr
+  test_dummy                1  std/env.getEnvOr
+
+REGISTRATION SHAPE -- 031 ADR-001 D2 (a), the gate's own total result per
+installable extension: the `{ config, caps }` head, every atom enumerated,
+every payload a named unshadowed top-level function, every delegation resolved
+in scope.  Computed from `locate` and the binding pass, never from the walk.
+
+extension                 head              shape   reasons
+  a2a                     capability-list   fail    payload-inline-lambda, payload-let-bound, return-shape-unsupported
+  agentcli                capability-list   fail    payload-inline-lambda, payload-let-bound, return-shape-unsupported
+  ailang_docs             capability-list   fail    payload-inline-lambda x2, payload-let-bound, return-shape-unsupported
+  compaction_ai           capability-list   fail    payload-inline-lambda, return-shape-unsupported
+  compaction_structural   config-caps       pass    
+  compose                 capability-list   fail    payload-inline-lambda, payload-let-bound x2, return-shape-unsupported
+  context_mode            capability-list   fail    payload-inline-lambda, payload-let-bound x2, return-shape-unsupported
+  decision_framework      config-caps       pass    
+  empty_stop_guard        config-caps       pass    
+  exa_search              capability-list   fail    payload-inline-lambda, payload-let-bound, return-shape-unsupported
+  herdr                   capability-list   fail    payload-inline-lambda x2, payload-let-bound x4, return-shape-unsupported
+  mcp                     capability-list   fail    payload-let-bound, return-shape-unsupported
+  microrag                config-caps       pass    
+  omnigraph               config-caps       pass    
+  progress_contract_guard config-caps       pass    
+  repetition_guard        capability-list   fail    payload-let-bound x2, return-shape-unsupported
+  scratchpad              capability-list   fail    payload-inline-lambda x2, payload-let-bound, return-shape-unsupported
+  test_dummy              capability-list   fail    payload-inline-lambda x4, return-shape-unsupported
+
+REGISTRATION SHAPE: pass 6 of 18; fail 12
+  binding rejections     32  (payload-inline-lambda 16, payload-let-bound 16)  -- ADR D2: red by these on the unmigrated tree
+  head rejections        12  (return-shape-unsupported: the 7.4 bare list, or a record not at the registration tail)
+  delegation rejections   0
+  caps rejections         0
+  enumeration             0  (list-not-enumerable)
+GATE: RED -- exit 1 from the registration-shape field alone. Green means every
+
+## 4. src/core/test/integration_tests.ail
+in place: ailang check -> exit 0
+in place: ailang test (make test_integration's command) -> exit 0; 3 tests: 3 passed, 0 failed, 0 skipped (2.555691067s)
+p12a: test src/core/test/integration_tests.ail ok -- 3 tests: 3 passed, 0 failed, 0 skipped (9.808894843s)
+
+## 5. the masked files (now P1.2a's, PLAN-001 §3 P1.2 at 68791469), in the core workspace (p12a_core_check.sh)
+p12a: check src/core/test/integration_tests.ail ok
+p12a: check scripts/dst/compaction_policy_dst.ail ok
+p12a: check scripts/dst/compaction_seeded_dst.ail ok
+p12a: check scripts/smoke_v2_compaction_full_loop.ail ok
+p12a: check scripts/dst/phase_c2_wiring_scenarios.ail ok
+compaction_policy_dst PASS count=3
+p12a: run scripts/dst/compaction_policy_dst.ail ok
+compaction_seeded_dst PASS families=1 base_seed=1 seeds=5
+p12a: run scripts/dst/compaction_seeded_dst.ail ok
+p12a: run scripts/smoke_v2_compaction_full_loop.ail FAILED (exit 1)
+p12a: run scripts/dst/phase_c2_wiring_scenarios.ail FAILED (exit 1)
+# in place, the four scripts still stop at the 7.4 test_dummy package reached through src/core/ext/registry_generated.ail (batch B):
+in place: check scripts/dst/compaction_policy_dst.ail -> exit 0: 
+in place: check scripts/dst/compaction_seeded_dst.ail -> exit 0: 
+in place: check scripts/smoke_v2_compaction_full_loop.ail -> exit 1: Error: type error in pkg/sunholo/motoko_ext_test_dummy/register (decl 2): type unification failed at [function application at /workspaces/motoko_agent/packages/
+in place: check scripts/dst/phase_c2_wiring_scenarios.ail -> exit 1: Error: type error in pkg/sunholo/motoko_ext_test_dummy/register (decl 2): type unification failed at [function application at /workspaces/motoko_agent/packages/
+
+## 5 (re-run 16:25Z, the machine otherwise idle; the two FAILED run rows above were taken concurrently with the mutgate run and P1.5r's in-flight src/core/ext/runtime.ail edit)
+# working tree src/core:  M src/core/ext/runtime.ail
+smoke_v2_compaction_full_loop PASS
+p12a: run scripts/smoke_v2_compaction_full_loop.ail ok
+p12a: run scripts/dst/phase_c2_wiring_scenarios.ail FAILED (exit 1)
+# phase_c2 on the working tree's src/core fails OUTSIDE P1.2a's files:
+#   Error: type error in src/core/test/dst_harness (decl 4): type unification failed at [function application at src/core/test/dst_harness.ail:44:14]: failed to unify parameter 0: cannot unify list[Capability] with ()
+#   with src/core/ext/runtime.ail modified in the working tree (+289/-10, not P1.2a's; per the orchestrator, re-run after P1.5r commits).
+#   On HEAD's src/core (the mutgate throwaway) phase_c2 is green: mutgate row c2_guard_budget baseline GREEN, restored GREEN; 26 scenarios earlier today.
+
+## 5 (final) -- a fresh clone of HEAD 945afe00 (P1.5r committed) + P1.2a's paths only; P1.3r's uncommitted runtime.ail edit excluded
+p12a: check scripts/dst/compaction_policy_dst.ail ok
+p12a: check scripts/dst/compaction_seeded_dst.ail ok
+p12a: check scripts/smoke_v2_compaction_full_loop.ail ok
+p12a: check scripts/dst/phase_c2_wiring_scenarios.ail ok
+p12a: test src/core/test/integration_tests.ail ok -- 3 tests: 3 passed, 0 failed, 0 skipped (9.586193221s)
+compaction_policy_dst PASS count=3
+p12a: run scripts/dst/compaction_policy_dst.ail ok
+compaction_seeded_dst PASS families=1 base_seed=1 seeds=5
+p12a: run scripts/dst/compaction_seeded_dst.ail ok
+smoke_v2_compaction_full_loop PASS
+p12a: run scripts/smoke_v2_compaction_full_loop.ail ok
+phase_c2_wiring_scenarios PASS count=26
+p12a: run scripts/dst/phase_c2_wiring_scenarios.ail ok
+p12a: derive.py --hook-scope --no-provision exit 1 (nonzero is expected while batches B-D are red)
+REGISTRATION SHAPE: pass 6 of 18; fail 12
+  binding rejections     32  (payload-inline-lambda 16, payload-let-bound 16)  -- ADR D2: red by these on the unmigrated tree

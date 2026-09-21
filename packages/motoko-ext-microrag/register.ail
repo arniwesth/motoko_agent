@@ -31,23 +31,19 @@ import std/string (length, endsWith)
 import std/process (exec)
 import std/fs (writeFile)
 import std/bytes (toString)
-import std/json (get, asString, encode, jo)
-import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx,
-  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+import std/json (Json, get, asString, encode, jo)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx,
+  ProviderCtx,
+  ExtRegistration,
+  DescribeTools, ToolPolicy, ToolProvider,
   ToolSchema,
-  PromptPatch,
-  BudgetPlan,
-  BudgetPatch,
   ToolPolicyDecision,
   ToolHandleDecision,
+  ToolHandleOutcome,
   ToolCallEnvelope,
   ToolResultEnvelope,
-  ResponseInterceptDecision,
-  FinalizeDecision,
-  PreStepDecision,
-  Msg,
-  Allow, NoOpinion, Delegate, Handled, NoIntercept, NoDecision, PassThrough
+  NoOpinion, Delegate, Handled
 )
 
 -- Cap the retrieval text added to each tool result. ~2K chars = ~500 tokens
@@ -148,16 +144,17 @@ func auto_write_with_microrag(call: ToolCallEnvelope) -> ToolHandleDecision ! {F
   }
 }
 
-pure func microrag_describe_tools() -> [ToolSchema] { [] }
+-- 8.0: `DescribeTools` receives the extension's `config`; the catalog is fixed.
+pure func microrag_describe_tools(_cfg: Json) -> [ToolSchema] { [] }
 
-pure func microrag_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+pure func microrag_tool_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   NoOpinion
 }
 
 -- Auto-fire on WriteFile to .ail. For everything else, Delegate to motoko's
 -- default handlers (the actual WriteFile / EditFile / ReadFile path-validation
 -- + sha256 hash + emit_event chain in src/core/tool_runtime.ail).
-func microrag_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+func microrag_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
   if call.tool == "WriteFile" then {
     let path = get_str(call, "path");
     if is_ail_file(path) then auto_write_with_microrag(call)
@@ -166,17 +163,23 @@ func microrag_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutc
   else Delegate
 }, next_state: ctx.world } }
 
-export func register_with_config(_cfg: a) -> [Capability] {
+-- ABI 8.0 (031 ADR-001 D2): `{ config, caps }`, every payload a named
+-- top-level function bound directly. Nothing is captured at registration, so
+-- the disclosed configuration is empty.
+export func register_with_config(_cfg: a) -> ExtRegistration {
   -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
-  [
-    DescribeTools(microrag_describe_tools),
-    ToolPolicy(microrag_tool_policy),
-    -- Declare WriteFile so motoko's first_handle routes it through our
-    -- tool handler. Without this, dispatch_tool_handle skips us and
-    -- WriteFile goes straight to native dispatch — see ext/runtime.ail:
-    -- first_handle gates on the ToolProvider's advertised names.
-    -- We Delegate for non-.ail paths so motoko's native handler still
-    -- runs in those cases.
-    ToolProvider(["WriteFile"], microrag_tool_handle)
-  ]
+  {
+    config: jo([]),
+    caps: [
+      DescribeTools(microrag_describe_tools),
+      ToolPolicy(microrag_tool_policy),
+      -- Declare WriteFile so motoko's first_handle routes it through our
+      -- tool handler. Without this, dispatch_tool_handle skips us and
+      -- WriteFile goes straight to native dispatch — see ext/runtime.ail:
+      -- first_handle gates on the ToolProvider's advertised names.
+      -- We Delegate for non-.ail paths so motoko's native handler still
+      -- runs in those cases.
+      ToolProvider(["WriteFile"], microrag_tool_handle)
+    ]
+  }
 }

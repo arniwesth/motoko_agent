@@ -11,7 +11,7 @@ import std/ai (Message, ToolCall, ToolSchema, StreamChunk)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (contains, split)
-import std/json (jo, JString)
+import std/json (Json, jo, JString)
 import std/fs (writeFile, readFile)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/phase_vocab (
@@ -55,7 +55,11 @@ import src/core/types (Msg)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
-  ExtCtx,
+  PureCtx,
+  ProcessCtx,
+  AiCtx,
+  InterceptCtx,
+  ProviderCtx,
   ExtRuntime,
   FinalizeDecision,
   NoDecision,
@@ -212,37 +216,37 @@ func traced_persist_nudge_decisions_scenario() -> Scenario {
   { id: "phase_c.c2.traced_persist_nudge_decisions", seed: "fixed", run: scenario_traced_persist_nudge_decisions }
 }
 
-func no_describe() -> [ToolSchema] { [] }
+func no_describe(_cfg: Json) -> [ToolSchema] { [] }
 
-func no_prompt(_ctx: ExtCtx) -> PromptPatch {
+func no_prompt(_ctx: PureCtx) -> PromptPatch {
   { prepend: [], append: [] }
 }
 
-func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func no_budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-func no_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+func no_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   NoOpinion
 }
 
-func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("approval required", DenyAfterTimeout)
 }
 
-func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
   Delegate
 }, next_state: ctx.world } }
 
-func no_intercept(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
+func no_intercept(ctx: InterceptCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   NoIntercept
 }, next_state: ctx.world } }
 
-func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: {
+func no_solver(ctx: ProcessCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   NoDecision
 }, next_state: ctx.world } }
 
-func guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
+func guard_solver(ctx: ProcessCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   decide_with_budget(ctx, text, 2)
 }, next_state: ctx.world } }
 
@@ -250,8 +254,8 @@ func bad_system_msg() -> Msg {
   { role: "system", content: "bad", tool_calls: [], tool_call_id: "" }
 }
 
-func stage_pre(mode: string) -> (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
-  func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+func stage_pre(mode: string) -> (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     if mode == "pass" then PassThrough
     else if mode == "apply" then Compacted(msgs, "applied", jo([]))
     else Compacted([bad_system_msg()], "rejected", jo([]))
@@ -261,6 +265,7 @@ func stage_pre(mode: string) -> (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Tra
 func stage_hook(id: string, mode: string) -> FixtureHooks {
   let on_pre = stage_pre(mode);
   fixture_hooks(id, {
+    config: jo([]),
     tools: [],
     describe: no_describe,
     prompt: no_prompt,
@@ -275,11 +280,12 @@ func stage_hook(id: string, mode: string) -> FixtureHooks {
 
 func guard_hook() -> FixtureHooks {
   fixture_hooks("empty_stop_guard", {
+    config: jo([]),
     tools: [],
     describe: no_describe,
     prompt: no_prompt,
     budget: no_budget,
-    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    compact: func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
     policy: no_policy,
@@ -298,17 +304,18 @@ func guard_rt() -> ExtRuntime {
   }
 }
 
-func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
+func pc_guard_solver(ctx: ProcessCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   pc_decide_with_budget(ctx, text, 2)
 }, next_state: ctx.world } }
 
 func pc_guard_hook() -> FixtureHooks {
   fixture_hooks("progress_contract_guard", {
+    config: jo([]),
     tools: [],
     describe: no_describe,
     prompt: no_prompt,
     budget: no_budget,
-    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    compact: func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
     policy: no_policy,
@@ -363,6 +370,7 @@ func pending_rt() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
   {
     registry: { entries: [fixture_hooks("approval-pending", {
+      config: jo([]),
       tools: [],
       describe: no_describe,
       prompt: no_prompt,
@@ -1159,17 +1167,18 @@ func w2_count_runs(xs: [string]) -> int {
 
 -- The (a)/(b)/(e) solver: feedback on the candidate `first`, no opinion on any
 -- other. A `ContinueWithFeedback` solver is the ADR's named case.
-func w2_feedback_on_first(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
+func w2_feedback_on_first(ctx: ProcessCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   if text == "first" then ContinueWithFeedback("w2 solver feedback") else NoDecision
 }, next_state: ctx.world } }
 
 func w2_feedback_hook() -> FixtureHooks {
   fixture_hooks("w2_feedback_solver", {
+    config: jo([]),
     tools: [],
     describe: no_describe,
     prompt: no_prompt,
     budget: no_budget,
-    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    compact: func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
     policy: no_policy,

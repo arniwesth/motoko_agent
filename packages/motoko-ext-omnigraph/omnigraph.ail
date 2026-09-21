@@ -2,14 +2,14 @@ module sunholo/motoko_ext_omnigraph/omnigraph
 
 import std/json (Json, encode, jo, kv, js)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (ToolHandleOutcome, ToolCallEnvelope, ToolResultEnvelope, ExtCtx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision)
+import pkg/sunholo/motoko_ext_abi/types (ToolHandleOutcome, ToolCallEnvelope, ToolResultEnvelope, PureCtx, ProviderCtx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision)
 import pkg/sunholo/motoko_ext_omnigraph/exec (run_omnigraph)
 import pkg/sunholo/motoko_ext_omnigraph/args (arg_string)
 import pkg/sunholo/motoko_ext_omnigraph/guardrail (denied_mutation_reason)
 import pkg/sunholo/motoko_ext_omnigraph/prompts (build_prompt_patch)
 import pkg/sunholo/motoko_ext_omnigraph/normalize (normalize_call)
 
-func cwd_for(ctx: ExtCtx) -> string {
+func cwd_for(ctx: ProviderCtx) -> string {
   "${ctx.cwd}/omnigraph"
 }
 
@@ -62,11 +62,11 @@ export func provided_tools() -> [string] {
   ]
 }
 
-export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> PromptPatch {
+export func on_build_system_prompt(cached_prompt: string, _ctx: PureCtx) -> PromptPatch {
   build_prompt_patch(cached_prompt)
 }
 
-export func on_tool_policy(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+export func on_tool_policy(_ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
   match normalize_call(call) {
     Some(canonical) => match denied_mutation_reason(canonical) {
       Some(msg) => Deny(msg),
@@ -76,7 +76,7 @@ export func on_tool_policy(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDe
   }
 }
 
-func handle_branch(ctx: ExtCtx, req_id: string, args: Json) -> ToolHandleDecision ! {Process}  {
+func handle_branch(ctx: ProviderCtx, req_id: string, args: Json) -> ToolHandleDecision ! {Process}  {
   let action = arg_string(args, "action", "");
   let name = arg_optional(args, "name");
   let from = arg_optional(args, "from");
@@ -110,7 +110,7 @@ func handle_branch(ctx: ExtCtx, req_id: string, args: Json) -> ToolHandleDecisio
   }
 }
 
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process}  { { decision: {
+export func on_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process}  { { decision: {
   match normalize_call(call) {
     None => Delegate,
     Some(canonical) => {

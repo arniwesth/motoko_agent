@@ -1,10 +1,9 @@
 module sunholo/motoko_ext_progress_contract_guard/progress_contract_guard
 
 import std/string (trim, contains, toLower)
-import std/json (Json, jo, ja, js, asArray)
+import std/json (jo, ja, js, asArray)
 import std/option (Option, Some, None)
-import std/result (Result, Err)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ProcessCtx, pure_ctx, process_ctx, WorkItem, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg)
 
 export pure func guard_marker() -> string {
   "[motoko-progress-contract-guard]"
@@ -63,7 +62,7 @@ func history_has_contract(msgs: [Msg], candidate: string) -> bool {
   }
 }
 
-export pure func has_progress_contract(ctx: ExtCtx, candidate: string) -> bool {
+export pure func has_progress_contract(ctx: ProcessCtx, candidate: string) -> bool {
   text_has_contract(ctx.task) || history_has_contract(ctx.history_slice, candidate)
 }
 
@@ -122,7 +121,7 @@ export pure func candidate_claims_complete_or_allowed_stop(candidate: string) ->
 -- "Second occurrence".)
 --
 -- THE SIGNAL IS THE TOOL RESULT, NOT THE PROSE, and that distinction is the
--- whole point of this section. `ExtCtx` carries no in-flight delegate count --
+-- whole point of this section. The judge's view carries no in-flight delegate count --
 -- the herdr extension knows one and the ABI has no slot for it -- so the
 -- cheapest TRUTHFUL signal available here is the text the herdr extension
 -- itself wrote into a tool-role message. Those sentences are produced by
@@ -187,7 +186,7 @@ pure func last_delegate_signal(msgs: [Msg], seen: int) -> int {
 -- `has_open_delegate`. The transcript is the only source that survives
 -- compaction dropping the run file's session, and an extension that is not
 -- registered declares nothing.
-export pure func declared_work_in_flight(ctx: ExtCtx) -> bool {
+export pure func declared_work_in_flight(ctx: ProcessCtx) -> bool {
   match ctx.work_in_flight { [] => false, _ => true }
 }
 
@@ -197,7 +196,7 @@ export pure func declared_work_in_flight(ctx: ExtCtx) -> bool {
 -- this guard exists to prevent. So the two are OR-ed rather than the structural
 -- one replacing the textual one outright: 7.3 makes the answer reliable when it
 -- is available, and the transcript still answers when it is not.
-export pure func has_open_delegate(ctx: ExtCtx) -> bool {
+export pure func has_open_delegate(ctx: ProcessCtx) -> bool {
   declared_open_waits(ctx) || declared_work_in_flight(ctx) || last_delegate_signal(ctx.history_slice, 0) == 1
 }
 
@@ -206,14 +205,14 @@ export pure func has_open_delegate(ctx: ExtCtx) -> bool {
 -- wait is open. It is the guard's primary input once D2 is active; the prose
 -- reader above stays as the explicitly limited fallback (it cannot see A when
 -- B was launched and collected after A).
-export pure func declared_open_waits(ctx: ExtCtx) -> bool {
+export pure func declared_open_waits(ctx: ProcessCtx) -> bool {
   match asArray(ctx.open_waits) {
     Some(xs) => match xs { [] => false, _ => true },
     None => false
   }
 }
 
-export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
+export pure func decide_with_budget(ctx: ProcessCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
   if trim(candidate) != ""
      && has_progress_contract(ctx, candidate)
      && candidate_self_reports_incomplete(candidate)
@@ -275,7 +274,7 @@ pure func test_prose_still_answers_when_nothing_is_declared() -> bool
       && declared_work_in_flight(test_ctx_work("t", [], [{ label: "x", detail: "y" }]))
   }
 
-export pure func decide(ctx: ExtCtx, candidate: string) -> FinalizeDecision {
+export pure func decide(ctx: ProcessCtx, candidate: string) -> FinalizeDecision {
   decide_with_budget(ctx, candidate, budget())
 }
 
@@ -297,131 +296,24 @@ func tool(content: string) -> Msg {
   { role: "tool", content: content, tool_calls: [], tool_call_id: "tc" }
 }
 
-func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
-  Err("ext ai_step port unavailable")
-}, next_state: world } }
+func test_ctx(task: string, history: [Msg]) -> ProcessCtx { test_ctx_work(task, history, []) }
 
--- WI-D16 widened `ExtPorts.tool_handle` to thread the world token. Returning
--- `world` unchanged is S12's IDENTITY TRANSITION and is the correct answer for
--- exactly `noop_clock_now`'s reason below: this port executes nothing, so there
--- is no cursor to advance. It would be a silent defect in a binding that DID
--- something, and no type tells the two apart.
---
--- WI-D21 RENAMED THE PARAMETERS. They read `_cmd, _cwd` here, and the seam
--- takes a MOTOKO TOOL NAME and that tool's JSON ARGUMENTS -- see the ABI row.
--- Both are `string`, so the wrong reading compiled; this binding ignores them
--- and was harmless, but it is a template, and a real implementation written
--- from a `(cmd, cwd)` signature would shell out the tool name in a directory
--- named by a JSON blob. That is why the rename reached bindings that use
--- neither argument.
---
--- `exit_code: -1` (WI-D23), NOT 0: a no-op executes nothing, and -1 is
--- exactly the "no subprocess ran" value the ABI row's domain names. Writing
--- 0 here would assert a success no process produced.
-func noop_tool_handle(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
-  { output: "", exit_code: -1, next_state: world }
-}
-
--- WI-D16's file read seam. `present: false` is the honest answer for a port
--- with no filesystem behind it, and it is NOT the same claim as `content: ""` —
--- see `ExtFileRead`'s comment. A no-op that reported `present: true` with empty
--- contents would tell a caller an empty file exists, which is the branch this
--- seam was shaped to keep distinguishable.
-func noop_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
-  { present: false, content: "", next_state: world }
-}
-
--- WI-D17's filesystem MUTATOR seams. `ok: false` is the honest answer for a port
--- with no filesystem behind it, and it is the same judgement `noop_file_read`
--- makes with `present: false`: reporting success for a write that did not happen
--- tells the caller a fact about the world that is not true. The world token is
--- returned unchanged, which is S12's identity transition and correct here —
--- nothing was written, so there is no successor to thread.
-func noop_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} {
-  { ok: false, error: "no filesystem behind this port", next_state: world }
-}
-
-func noop_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
-  { ok: false, error: "no filesystem behind this port", next_state: world }
-}
-
--- WI-D18's DIRECTORY seams. `ExtPathMissing` and `present: false` for
--- `noop_file_read`'s reason: this port has no filesystem behind it, and a no-op
--- claiming a path is a file would state something about the world that is not
--- true.
-func noop_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} {
-  { kind: ExtPathMissing, next_state: world }
-}
-
-func noop_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} {
-  { present: false, entries: [], next_state: world }
-}
-
-func noop_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
-  { ok: false, error: "no filesystem behind this port", next_state: world }
-}
-
--- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
--- `world` unchanged is S12's IDENTITY TRANSITION, and here it is the correct
--- answer rather than a silent defect: this clock reads nothing, so there is no
--- cursor to advance. The distinction matters because the same expression is a
--- real defect in a port that DID something — S12 exists because no type tells
--- the two apart.
-func noop_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} {
-  { now_ms: 0, next_state: world }
-}
-
-func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
-  fallback
-}
-
-func noop_ext_ports() -> ExtPorts {
-  {
-    ai_step: noop_ai_step,
-    tool_handle: noop_tool_handle,
-    file_read: noop_file_read,
-    file_write: noop_file_write,
-    file_remove: noop_file_remove,
-    path_stat: noop_path_stat,
-    dir_list: noop_dir_list,
-    dir_make: noop_dir_make,
-    clock_now: noop_clock_now,
-    env_get: noop_env_get
-  }
-}
-
-pure func empty_ext_artifacts() -> Json {
-  jo([])
-}
-
-pure func zero_token_telemetry() -> TokenTelemetry {
-  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
-}
-
-func test_ctx(task: string, history: [Msg]) -> ExtCtx { test_ctx_work(task, history, []) }
-
-func test_ctx_work(task: string, history: [Msg], work: [WorkItem]) -> ExtCtx {
-  {
+-- ABI 8.0: the judge receives `ProcessCtx` -- no ports, the world kept for
+-- `next_state` -- so the test context is built through the ABI's constructors
+-- and needs no stub ports at all.
+func test_ctx_work(task: string, history: [Msg], work: [WorkItem]) -> ProcessCtx {
+  process_ctx({ pure_ctx(jo([])) |
     task: task,
-    step: 0,
     model: "m",
     cwd: ".",
-    hybrid_tools: false,
     budget: { total: 1, solver: 1, verifier: 0 },
     mode: "default",
     workdir: ".",
-    env_server_url: "",
     budget_remaining: 1,
     history_slice: history,
     state_key: "k",
-    finish_reason: "",
-    work_in_flight: work,
-    open_waits: ja([]),
-    context_limit: 0,
-    ports: noop_ext_ports(),
-    artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry(), world: empty_ext_world()
-  }
+    work_in_flight: work
+  }, empty_ext_world())
 }
 
 func contract_task() -> string {
