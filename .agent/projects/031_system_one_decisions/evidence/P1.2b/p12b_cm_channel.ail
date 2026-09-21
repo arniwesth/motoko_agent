@@ -1,0 +1,95 @@
+-- 031 PLAN-001 P1.2b: context-mode's captures -- the cached prompt and the one config record
+-- (`bin`, `timeout_ms`, `max_output_chars`, `snapshot_key_prefix`), shared by three callbacks --
+-- go through the configuration channel. Run by `p12b_ws.sh probe cm`, which writes a synthetic
+-- AGENT.md, sets CONTEXT_MODE_BIN=P12B-BIN, CONTEXT_MODE_TIMEOUT_MS=7000,
+-- CONTEXT_MODE_MAX_OUTPUT_CHARS=600, CONTEXT_MODE_SNAPSHOT_KEY_PREFIX=p12b:pfx:, and installs
+-- p12b_fake_bridge.mjs as the workdir's bridge script (it logs and echoes its argv, talks to
+-- nothing). On the disclosed config: the prompt; the provider passes the bin and timeout,
+-- truncates to ~600 and marks readiness under the configured prefix; the judge's index call
+-- carries the bin and timeout. On an EMPTY config: every default. The workdir is not disclosed.
+module p12b_cm_channel
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/fs (readFile, writeFile)
+import std/string (contains, length)
+import std/sem (load_frame)
+import std/option (Some, None)
+import std/json (Json, jo, kv, js, encode)
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, PromptShaper, ToolProvider, SolverJudge, Handled,
+  pure_ctx, provider_ctx, process_ctx, empty_ext_world
+)
+import pkg/sunholo/motoko_ext_context_mode/register (register_with_config)
+import src/core/ext/ctx_defaults (noop_ext_ports)
+
+func prompt(caps: [Capability], cfg: Json) -> string {
+  match caps {
+    [] => "<none>",
+    c :: rest => match c {
+      PromptShaper(f) => match f(pure_ctx(cfg)).append { [p] => p, [] => "", _ => "<many>" },
+      _ => prompt(rest, cfg)
+    }
+  }
+}
+
+func handled(caps: [Capability], cfg: Json, wd: string, sk: string) -> string ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match caps {
+    [] => "<no provider>",
+    c :: rest => match c {
+      ToolProvider(_, f) => {
+        let ctx = provider_ctx({ pure_ctx(cfg) | workdir: wd, cwd: wd, state_key: sk }, noop_ext_ports(), empty_ext_world());
+        match f(ctx, { id: "c1", tool: "CtxSearch", arguments: jo([kv("query", js("p12b"))]) }).decision {
+          Handled(r) => if r.stdout == "" then "<stderr> ${r.stderr}" else r.stdout,
+          _ => "<delegated>"
+        }
+      },
+      _ => handled(rest, cfg, wd, sk)
+    }
+  }
+}
+
+func judged(caps: [Capability], cfg: Json, wd: string, log: string) -> string ! {Process, FS} {
+  match caps {
+    [] => "<no judge>",
+    c :: rest => match c {
+      SolverJudge(f) => {
+        let _ = writeFile(log, "");
+        let _ = f(process_ctx({ pure_ctx(cfg) | workdir: wd, cwd: wd }, empty_ext_world()), "cand");
+        readFile(log)
+      },
+      _ => judged(rest, cfg, wd, log)
+    }
+  }
+}
+
+func present(key: string) -> bool ! {SharedMem} {
+  match load_frame(key) { Some(_) => true, None => false }
+}
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  let wd = getEnvOr("P12B_WORKDIR", "");
+  let log = getEnvOr("P12B_CALLS_LOG", "");
+  let reg = register_with_config(0);
+  let cfg = reg.config;
+  let disclosed = encode(cfg);
+  let out1 = handled(reg.caps, cfg, wd, "sk1");
+  let ready1 = present("p12b:pfx:ready:sk1");
+  let ready1_default = present("ctxmode:snapshot:ready:sk1");
+  let out0 = handled(reg.caps, jo([]), wd, "sk0");
+  let ready0 = present("ctxmode:snapshot:ready:sk0");
+  let j1 = judged(reg.caps, cfg, wd, log);
+  let j0 = judged(reg.caps, jo([]), wd, log);
+  if prompt(reg.caps, cfg) != "P12B-CM-PROMPT\n" then println("FAIL: prompt on the disclosed config: ${prompt(reg.caps, cfg)} (config ${disclosed})")
+  else if prompt(reg.caps, jo([])) != "" then println("FAIL: prompt on an EMPTY config -- not from ext_config")
+  else if not (contains(out1, "--context-mode-bin P12B-BIN") && contains(out1, "--timeout-ms 7000")) then println("FAIL: provider on the disclosed config: ${out1}")
+  else if length(out1) > 1000 then println("FAIL: provider on the disclosed config did not apply max_output_chars=600 (length ${show(length(out1))})")
+  else if not (contains(out0, "--context-mode-bin context-mode") && contains(out0, "--timeout-ms 25000")) then println("FAIL: provider on an EMPTY config: ${out0} -- bin/timeout not from ext_config")
+  else if length(out0) < 3000 then println("FAIL: provider on an EMPTY config truncated to ${show(length(out0))} -- the output cap is not from ext_config")
+  else if not ready1 || ready1_default then println("FAIL: readiness on the disclosed config not marked under the configured prefix (configured ${show(ready1)}, default ${show(ready1_default)})")
+  else if not ready0 then println("FAIL: readiness on an EMPTY config not marked under the default prefix -- the prefix is not from ext_config")
+  else if not (contains(j1, "--tool ctx_index") && contains(j1, "--context-mode-bin P12B-BIN") && contains(j1, "--timeout-ms 7000")) then println("FAIL: judge on the disclosed config ran: ${j1}")
+  else if not (contains(j0, "--context-mode-bin context-mode") && contains(j0, "--timeout-ms 25000")) then println("FAIL: judge on an EMPTY config ran: ${j0} -- not from ext_config")
+  else if wd != "" && contains(disclosed, wd) then println("FAIL: the disclosed config carries the workdir value")
+  else println("OK: channel -- prompt, bin, timeout, output cap and snapshot prefix disclosed as config and read back from ext_config only")
+}

@@ -4,11 +4,11 @@ version = "0.2.7"
 edition = "1"
 
 [dependencies]
-"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi", version = "8.0" }
 "sunholo/motoko_ext_mcp" = { path = "../motoko-ext-mcp" }
 
 [effects]
-max = ["Process", "FS", "Env"]
+max = ["Process", "FS", "Env", "IO", "AI", "Net", "SharedMem", "Clock", "Stream", "Rand", "Trace"]
 
 [exports]
 modules = [

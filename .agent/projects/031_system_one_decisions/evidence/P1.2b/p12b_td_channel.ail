@@ -1,0 +1,70 @@
+-- 031 PLAN-001 P1.2b: test-dummy's four captures (prompt marker, budget total, tool decision,
+-- finalize decision) go through the configuration channel. Run by `p12b_ws.sh probe td`, which
+-- sets EXT_DUMMY_PROMPT=P12B-MARK, EXT_DUMMY_BUDGET_TOTAL=17, EXT_DUMMY_TOOL_DECISION=deny and
+-- EXT_DUMMY_FINALIZE=accept (synthetic). Each callback on a view stamped with the disclosed
+-- config must act on its value; on an EMPTY config it must be the pass-through default.
+module p12b_td_channel
+
+import std/io (println)
+import std/json (Json, jo, encode)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, PromptShaper, BudgetShaper, ToolPolicy, SolverJudge,
+  Deny, Accept, pure_ctx, process_ctx, empty_ext_world
+)
+import pkg/sunholo/motoko_ext_test_dummy/register (register_with_config)
+
+func marker(caps: [Capability], cfg: Json) -> string {
+  match caps {
+    [] => "<none>",
+    c :: rest => match c {
+      PromptShaper(f) => match f(pure_ctx(cfg)).append { [m] => m, [] => "", _ => "<many>" },
+      _ => marker(rest, cfg)
+    }
+  }
+}
+
+func budget(caps: [Capability], cfg: Json) -> int {
+  match caps {
+    [] => -2,
+    c :: rest => match c {
+      BudgetShaper(f) => match f(pure_ctx(cfg), { total: 1, solver: 1, verifier: 0 }).requested_total { Some(n) => n, None => -1 },
+      _ => budget(rest, cfg)
+    }
+  }
+}
+
+func denies(caps: [Capability], cfg: Json) -> bool {
+  match caps {
+    [] => false,
+    c :: rest => match c {
+      ToolPolicy(f) => match f(pure_ctx(cfg), { id: "live", tool: "BashExec", arguments: jo([]) }) { Deny(_) => true, _ => false },
+      _ => denies(rest, cfg)
+    }
+  }
+}
+
+func accepts(caps: [Capability], cfg: Json) -> bool ! {Process} {
+  match caps {
+    [] => false,
+    c :: rest => match c {
+      SolverJudge(f) => match f(process_ctx(pure_ctx(cfg), empty_ext_world()), "cand").decision { Accept => true, _ => false },
+      _ => accepts(rest, cfg)
+    }
+  }
+}
+
+export func main() -> () ! {Env, IO, Process} {
+  let reg = register_with_config(0);
+  let cfg = reg.config;
+  let e = jo([]);
+  if marker(reg.caps, cfg) != "P12B-MARK" then println("FAIL: prompt marker on the disclosed config: ${marker(reg.caps, cfg)} (config ${encode(cfg)})")
+  else if marker(reg.caps, e) != "" then println("FAIL: prompt marker on an EMPTY config: ${marker(reg.caps, e)} -- not from ext_config")
+  else if budget(reg.caps, cfg) != 17 then println("FAIL: budget total on the disclosed config: ${show(budget(reg.caps, cfg))}")
+  else if budget(reg.caps, e) != -1 then println("FAIL: budget total on an EMPTY config: ${show(budget(reg.caps, e))} -- not from ext_config")
+  else if not denies(reg.caps, cfg) then println("FAIL: tool decision on the disclosed config did not deny")
+  else if denies(reg.caps, e) then println("FAIL: tool decision on an EMPTY config denied -- not from ext_config")
+  else if not accepts(reg.caps, cfg) then println("FAIL: finalize on the disclosed config did not accept")
+  else if accepts(reg.caps, e) then println("FAIL: finalize on an EMPTY config accepted -- not from ext_config")
+  else println("OK: channel -- marker, budget, tool decision and finalize disclosed as config and read back from ext_config only")
+}

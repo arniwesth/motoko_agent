@@ -1,0 +1,6 @@
+-- A named ToolProvider payload with the slot's whole row, in its own module.
+module local/@V@/handler
+import pkg/sunholo/motoko_ext_abi/types (ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, Delegate)
+export func handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}

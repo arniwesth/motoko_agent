@@ -1,11 +1,11 @@
 module sunholo/motoko_ext_scratchpad/scratchpad
 
 import std/option (Option, Some, None)
-import std/json (Json, jo, kv, js, get, asArray, asString)
+import std/json (Json, jo, kv, js, jint, get, getInt, asArray, asString)
 import std/string (contains)
 
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ToolSchema,
+  PureCtx, ProviderCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ToolSchema,
   BudgetPlan, BudgetPatch, PromptPatch,
   ToolCallEnvelope, ToolResultEnvelope,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision,
@@ -34,7 +34,9 @@ export func provided_tools() -> [string] {
   [tool_name()]
 }
 
-export func on_describe_tools() -> [ToolSchema] {
+-- `DescribeTools` receives the extension's configuration (ABI 8.0); the
+-- schema is fixed, so it ignores it.
+export func on_describe_tools(_cfg: Json) -> [ToolSchema] {
   [{
     name: tool_name(),
     description: "Run persistent scratchpad cells: Python/JavaScript for scripting and plots, AILANG (language:\"ail\" — source-backed scratchpad gated by ailang check with optional Z3 contracts), or Lean 4 (language:\"lean\" — persistent theorem-proving scratchpad with honest proof metadata).",
@@ -57,7 +59,7 @@ func cells_have_lean_effect_hatch(cells: [Json]) -> bool {
   }
 }
 
-export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+export func on_tool_policy(ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
   if not is_scratchpad_tool(call.tool) then NoOpinion
   else if ctx.mode == "restricted" || ctx.mode == "read_only" || ctx.mode == "readonly" then Deny("scratchpad is disabled in restricted/read-only mode")
   else if ctx.mode == "prove_only" || ctx.mode == "proof_only" then
@@ -79,7 +81,25 @@ func result_from_exec(call: ToolCallEnvelope, result: { stdout: string, stderr: 
   }
 }
 
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleOutcome ! {Net, Rand}  { { decision: {
+-- THE CELL TIMEOUT CROSSES AS CONFIGURATION (ABI 8.0, 031 ADR-001 D2 and
+-- Amendment 3): `register` reads `MOTOKO_SCRATCHPAD_TIMEOUT_SECS` once and
+-- discloses `{"timeout_secs": n}`; the provider decodes it per call from
+-- `ctx.ext_config`. Absent reads as the default.
+export pure func default_timeout_secs() -> int { 30 }
+
+export pure func timeout_config(timeout_secs: int) -> Json {
+  jo([kv("timeout_secs", jint(timeout_secs))])
+}
+
+export pure func timeout_secs_of(cfg: Json) -> int {
+  match getInt(cfg, "timeout_secs") { Some(n) => n, None => default_timeout_secs() }
+}
+
+export func scratchpad_prompt(_ctx: PureCtx) -> PromptPatch {
+  prompt_patch()
+}
+
+export func on_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleOutcome ! {Net, Rand}  { { decision: {
   if not is_scratchpad_tool(call.tool) then Delegate
   else {
     let cells = cells_arg(call.arguments);
@@ -87,14 +107,3 @@ export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: in
     Handled(result_from_exec(call, result))
   }
 }, next_state: ctx.world } }
-
-export func make_hooks(timeout_secs: int) -> [Capability] ! {Net, Rand} {
-  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call, timeout_secs) };
-  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
-  [
-    DescribeTools(\_ . on_describe_tools()),
-    PromptShaper(\_ctx. prompt_patch()),
-    ToolPolicy(on_tool_policy),
-    ToolProvider(provided_tools(), handle)
-  ]
-}
