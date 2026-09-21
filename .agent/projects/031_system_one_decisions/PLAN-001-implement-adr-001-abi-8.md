@@ -644,6 +644,17 @@ stand-ins above, verified; the two targets turn green at `R-G`, which already li
 The same holds for P0.6's "conformance harness green". This is a plan defect (§0 item 3 makes the tree
 red from P0.4, while P0.5's exit assumed it compiled), not an ADR one.
 
+### P0.6 — 2026-09-21, attempt 1 `37e8ba10` rejected; attempt 2 `6fb9d0ab` accepted
+
+| | |
+|---|---|
+| a1 `37e8ba10` | four example modules in `packages/motoko_ext_conformance/examples/`; scripted run PASS, shape gate 3/3 — **rejected at intake on criteria**: both decision consumers' `register_with_config(_cfg)` ignored their input (descriptor projections were module constants), so no configuration passed through the channel freeze 2(c) names; and the catalog example captured an environment-variable **value** at registration, against D2's names-not-values convention (`:370-372`) |
+| a2 `6fb9d0ab` | every `register_with_config(cfg)` builds its descriptor projections (or catalog) from its input with documented defaults and discloses them as `config` → `ext_config`; callbacks still read only `question_config`/`interpretation_config` (D2's conformance obligation); no environment read |
+| Votes (scripted, no provider) | finalize: `Answered(1500 bp)` → bounded `ContinueWithFeedback`, `Answered(9000)` / `Unavailable` → `NoDecision`; tool-policy: `Answered(9000)` → `Deny`, `Unavailable` → `NoOpinion`; a second registration `{min_failures: 1}` turns one typed failure from `NoOpinion` into `Deny`; `DescribeTools` **configured=1 empty=0** |
+| Unreachable exits | `make conformance`, `make ext_hook_scope_selftest` — the P0.5 stand-in applies (§9 P0.5) |
+| **Intake (orchestrator)** | scripted run exit 0; shape gate pass 3/3, inline-lambda controls 3/3 rejected; `mutgate.sh --clone-from` fresh clone **16/16 discriminate** (three register-ignores-input rows, two config-not-disclosed) |
+| Intake defects | **1** (a1), fixed in a2 — the line's first |
+
 ## 10. Estimates
 
 | phase | delegate-days |
