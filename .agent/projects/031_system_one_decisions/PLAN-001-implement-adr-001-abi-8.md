@@ -932,6 +932,18 @@ the class *tools that read the ABI's text or shapes*; a future ABI major should 
 **R-G pre-gate at `d059223d`: 15 of 16 green**; the one red, `cd src/tui && bun run test` (420/420 tests, 5
 suites fail on a Jest teardown import), is identical at `2f3ee4d1`.
 
+### P1.6r follow-up and the full sweep — 2026-09-22, commit `d78a7c3e`
+
+A full `make dst DST_JOBS=1` at `4571c21f` (not on `R-G`'s checklist; run for the record) found **9 NEW reds**:
+DST driver scripts left half-migrated — fixture records missing 8.0's `config`, `discovery`'s stale literal,
+`driver_plus_compose`'s 7.4 registry shape, `export_trace.ail` (behind `depth_canary`) and `park_wake`'s fixture
+literal. **Why no part owned them:** P1.1's inventory gave each file one owner; these carry a manifest ABI pin,
+were filed under P1.5r, which moved only the pin. **Why the pre-gate missed them:** `R-G`'s checklist has no
+full sweep. The follow-up fixed all nine (`scripts/` only, every assertion kept). **Intake (orchestrator):** my
+own **full `make dst DST_JOBS=1` at `d78a7c3e`, alone — exit 0, all targets passed, 1048 s** (`evidence/R-G/
+sweep3/`); R-G pre-gate run 3 at `d78a7c3e` 15/16; `mutgate.sh --clone-from` fresh clone **10/10**. The first
+all-green full sweep on the branch (SWEEP at `75fefdcb`: 49/51). Both `DST_KNOWN_RED` entries passed again.
+
 ## 10. Estimates
 
 | phase | delegate-days |
