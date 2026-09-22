@@ -426,7 +426,7 @@ red.
 ruling), **`make profile_definition` and `make driver_only`** (P1.5r's exit, so the `Q-SWEEP` ruling is
 enforced here), `make profile_coverage`, `make driver_plus_no_ops`,
 `make registry_gen_check`, `make anchors`, `make driver_leaf_inventory`, `make event_vocabulary` (still 1),
-`cd src/tui && bun run test`; both CI workflows green on the commit. 033's D1 is met; the release doc's G5
+`cd src/tui && bun run test`; **`make dst DST_JOBS=1` with 0 NEW reds against the `DST_KNOWN_RED` register** (added by the operator's R-G ruling, 2026-09-22: the checklist alone missed 9 DST reds); both CI workflows green on the commit. 033's D1 is met; the release doc's G5
 row records it. Registry publication (033 G8) may start from here.
 
 ## 4. P2 — persisted formats (`P1G` first; parallel with P3)
@@ -943,6 +943,16 @@ full sweep. The follow-up fixed all nine (`scripts/` only, every assertion kept)
 own **full `make dst DST_JOBS=1` at `d78a7c3e`, alone — exit 0, all targets passed, 1048 s** (`evidence/R-G/
 sweep3/`); R-G pre-gate run 3 at `d78a7c3e` 15/16; `mutgate.sh --clone-from` fresh clone **10/10**. The first
 all-green full sweep on the branch (SWEEP at `75fefdcb`: 49/51). Both `DST_KNOWN_RED` entries passed again.
+
+### R-G — the operator's rulings, 2026-09-22
+
+Adopting the orchestrator's recommendations: (1) `R-G`'s checklist gains the full sweep, **`make dst DST_JOBS=1`
+with 0 NEW reds** — green at `d78a7c3e`; (2) the TUI red — `cd src/tui && bun run test`, 420/420 tests passing,
+5 suites failing on a Jest teardown import from `env-server.test.ts` — is ruled a **known pre-existing red**
+(identical at `2f3ee4d1`), handed to the TUI's owner, not line R's; (3) CI: the token is to be fixed so the
+orchestrator can push `arniwesth/031-abi-8-0` to `origin` and `workflow_dispatch` both workflows (neither runs
+on a branch push). **At 2026-09-22 the token is still rejected** (`git push --dry-run`: "Invalid username or
+token"; `gh`: "Failed to log in") — the CI line is the one open `R-G` item.
 
 ## 10. Estimates
 
