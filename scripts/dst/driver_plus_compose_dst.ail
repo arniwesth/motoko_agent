@@ -652,7 +652,8 @@ func graded_world() -> WorldState {
 -- rather than one this file chose.
 func compose_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { entries: [{ id: "compose", caps: Compose.register_with_config(compose_cfg()) }] },
+  let reg = Compose.register_with_config(compose_cfg());
+  { registry: { entries: [{ id: "compose", config: reg.config, caps: reg.caps }] },
     strict_mode: false, verification: v }
 }
 

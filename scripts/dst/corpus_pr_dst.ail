@@ -192,7 +192,7 @@ import std/result (Result, Ok, Err)
 -- WI-D1. `decode` only, and it is the SAME decoder `tool_dispatch_adapter`
 -- calls: the malformed-arguments observer must ask the question production
 -- asks, not a lookalike question about braces.
-import std/json (decode)
+import std/json (Json, decode, jo)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -242,7 +242,7 @@ import src/core/dst_corpus (
   render_corpus, corpus_rules_version
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  BudgetPlan, BudgetPatch, Delegate, ExtCtx, ExtRuntime, FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
+  BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime, FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
   PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
   ToolPolicyDecision, ToolSchema
 )
@@ -317,26 +317,27 @@ func generated_world_at(version: string, seed: int) -> WorldState {
   { empty_world_state() | gen: e.state, env: e.entries }
 }
 
-func no_describe() -> [ToolSchema] { [] }
-func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
-func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func no_describe(_config: Json) -> [ToolSchema] { [] }
+func no_prompt(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
-func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } }
-func no_intercept(ctx: ExtCtx, _text: string)
+func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: InterceptCtx, _text: string)
   -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }
-func no_solver(ctx: ExtCtx, _text: string)
+func no_solver(ctx: ProcessCtx, _text: string)
   -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
-func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+func passthrough_pre_step(ctx: AiCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
-func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("generated: approval required", DenyAfterTimeout)
 }
 
 func approval_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   let hooks = fixture_hooks(id, {
+    config: jo([]),
     tools: [],
     describe: no_describe,
     prompt: no_prompt,
