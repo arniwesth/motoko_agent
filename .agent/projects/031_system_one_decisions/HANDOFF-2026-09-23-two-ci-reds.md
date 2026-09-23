@@ -13,12 +13,16 @@ over `measured_ms_per_seed()` (`:326`, 381).
 
 - At **`2f3ee4d1`** (before line R) the same gate measured **exactly 80000 against 80000** — it was passing
   with zero margin (run `35505033482`).
-- **Locally, on identical hardware, the target got faster across the migration**: 30000 ms at SWEEP
-  (`75fefdcb`) → **26000 ms** at line R's head (`d78a7c3e`), same 80000 ceiling.
+- **Measured cold, the way the gate runs** (fresh never-run clone, `make CI=1 sync_packages` so the clone
+  resolves its own packages — a clone that keeps the tracked lock resolves the PRIMARY checkout and measures
+  nothing): **`2f3ee4d1` 96 s, `42dc0c18` 87 s**. The gate was **already failing cold before line R**, and
+  line R made the target **9 s faster**. (Earlier warm figures — 30 s at SWEEP, 26 s at `d78a7c3e` — were
+  runs inside a warm `make dst` and are not comparable to this cold gate; the note in `dst_corpus.ail` says
+  the same, 47–50 s cold against 24 s warm.)
 - `src/core/dst_corpus.ail` is **untouched** by line R (`git log 2f3ee4d1..HEAD -- src/core/dst_corpus.ail`
   is empty).
 
-So this is a CI-runner-speed gate with no headroom, not a regression. The gate's own failure text says what
+So this is a gate whose ceiling is below the target's own cold cost on BOTH sides of line R (87-96 s locally, 106 s on a slower CI runner) — not a regression from the migration. The gate's own failure text says what
 to do: **re-measure on CI and move `measured_ms_per_seed()` with the ceiling** — raising the ceiling alone
 makes the seed minimums arithmetic over a stale constant. Several CI samples are needed for a trustworthy
 number.
