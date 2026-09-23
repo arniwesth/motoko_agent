@@ -1,6 +1,6 @@
 # PLAN-001: implement ADR-001 v0.8 — extension ABI 8.0 and the structured-decision capabilities
 
-Date: 2026-09-20. Status: **proposed (v1.1), the release line ready to start after `SWEEP`.** v1.1 splits the
+Date: 2026-09-20. Status: **release line R COMPLETE — `R-G` settled by the operator 2026-09-23** (v1.1; line X remains). v1.1 splits the
 plan into a **release line R** (ABI 8.0 closed: 14–18 delegate-days) and a **post-release line X** (the live
 decision runtime: additive, not ABI), after the operator's question on v1's total. Grounded at HEAD
 `2f3ee4d1` on `arniwesth/031-abi-8-0`; `src/core`, `packages`, `tools`, `scripts` and the Makefile are
@@ -970,6 +970,32 @@ shown pre-existing with evidence"; both reds go to their owners, outside this li
 (1) **D11's corpus ceiling**: re-measure on CI and move `measured_ms_per_seed()` (381) **with**
 `pr_target_ceiling_ms()` (80000), as the gate's own message instructs (013's surface);
 (2) **the `verify-extensions` job timeout**: raise it or split the job (CI policy, the operator's).
+
+### R-G = P1G — settled by the operator, 2026-09-23: **ABI 8.0 landed**
+
+Checklist, every item with its receipt (tree at `d78a7c3e`; CI at `42dc0c18`, the same tree plus a docs-only
+commit):
+
+| item | receipt |
+|---|---|
+| `make check_core` | 60 passed, 0 failed (and **passed in CI**) |
+| `make test`, `make test_integration` | green |
+| `make conformance` | green |
+| `make declared_vs_performed` | **137 passed, 0 failed** |
+| `make ext_hook_scope` on the migrated tree | **GATE: GREEN**, 18 of 18, 0 binding and 0 head rejections — P0.3's 35 all moved |
+| `make ext_hook_scope_selftest` | 0 failures |
+| `make profile_definition`, `make driver_only` | green |
+| `make profile_coverage`, `make driver_plus_no_ops`, `make registry_gen_check` | green |
+| `make anchors`, `make driver_leaf_inventory` | green, byte-identical |
+| `make event_vocabulary` | green (still 1) |
+| **`make dst DST_JOBS=1`** (added by the R-G ruling) | **exit 0, all targets passed**, 1048 s, run alone — the first all-green full sweep on the branch (SWEEP: 49/51) |
+| `cd src/tui && bun run test` | 420/420 tests pass; the 5-suite Jest teardown red **ruled pre-existing** (identical at `2f3ee4d1`) |
+| both CI workflows | under the amended line: `check_core` passed in CI; both reds **shown pre-existing** and handed to their owners (`HANDOFF-2026-09-23-two-ci-reds.md`) |
+
+**Consequences recorded:** 033 D1 is met — the tag may proceed; registry publication (033 G8) may start.
+**Line R's totals:** 19 delegate tasks, **24 attempts, 3 rejected at intake** (P0.6 a1, P1.1 a1, P1.2c a1),
+every settlement `verified` by the orchestrator's own mechanical receipt; **4 ADR amendments**, each with an
+artifact; 42 registration sites, 25 masked files, core, the dispatch cursor and the evidence defaults on 8.0.
 
 ## 10. Estimates
 
