@@ -426,7 +426,7 @@ red.
 ruling), **`make profile_definition` and `make driver_only`** (P1.5r's exit, so the `Q-SWEEP` ruling is
 enforced here), `make profile_coverage`, `make driver_plus_no_ops`,
 `make registry_gen_check`, `make anchors`, `make driver_leaf_inventory`, `make event_vocabulary` (still 1),
-`cd src/tui && bun run test`; **`make dst DST_JOBS=1` with 0 NEW reds against the `DST_KNOWN_RED` register** (added by the operator's R-G ruling, 2026-09-22: the checklist alone missed 9 DST reds); both CI workflows green on the commit. 033's D1 is met; the release doc's G5
+`cd src/tui && bun run test`; **`make dst DST_JOBS=1` with 0 NEW reds against the `DST_KNOWN_RED` register** (added by the operator's R-G ruling, 2026-09-22: the checklist alone missed 9 DST reds); both CI workflows green on the commit **— or each red shown pre-existing with evidence** (operator ruling, 2026-09-23; both reds at `42dc0c18` were so shown: see §9). 033's D1 is met; the release doc's G5
 row records it. Registry publication (033 G8) may start from here.
 
 ## 4. P2 — persisted formats (`P1G` first; parallel with P3)
@@ -953,6 +953,23 @@ with 0 NEW reds** — green at `d78a7c3e`; (2) the TUI red — `cd src/tui && bu
 orchestrator can push `arniwesth/031-abi-8-0` to `origin` and `workflow_dispatch` both workflows (neither runs
 on a branch push). **At 2026-09-22 the token is still rejected** (`git push --dry-run`: "Invalid username or
 token"; `gh`: "Failed to log in") — the CI line is the one open `R-G` item.
+
+### CI at `42dc0c18` — 2026-09-23 (R-G's last item)
+
+Run by the operator on `origin/arniwesth/031-abi-8-0` (`42dc0c18` = the orchestrator's tested HEAD plus a
+docs-only commit: 0 files under `src/`, `packages/`, `tools/`, `scripts/`), read back from the API.
+
+| workflow | run | result | what it means |
+|---|---|---|---|
+| verify-extensions | `35884988739` dispatch, `35884636239` PR | **cancelled** | the job's `timeout-minutes: 20` hit in step "DST AILANG gates" after 25 min. **`check_core` PASSED in CI first**, with the extension verification and the smoke step. The same job timed out identically at **`2f3ee4d1`** (`35505033481`, same step, 25 min) before line R; `main`'s scheduled runs finish it in 2.4 min |
+| dst-corpora | `35884992467` dispatch | success — but it ran `scheduled-corpus` only and **skipped `pr-corpus`**, so it does not cover the PR gate | |
+| dst-corpora | `35884636365` PR | **failure** in `pr-corpus`: "the PR corpus target took 106000 ms against a declared ceiling of 80000 ms" | at `2f3ee4d1` the same gate measured **exactly 80000 against 80000** — zero headroom. **Locally, same hardware, the target got faster across the migration: 30000 ms at SWEEP → 26000 ms at line R's head.** `src/core/dst_corpus.ail` (both constants) is untouched by line R |
+
+**Neither red is caused by line R.** Operator ruling (2026-09-23): R-G's CI line reads "green, or each red
+shown pre-existing with evidence"; both reds go to their owners, outside this line —
+(1) **D11's corpus ceiling**: re-measure on CI and move `measured_ms_per_seed()` (381) **with**
+`pr_target_ceiling_ms()` (80000), as the gate's own message instructs (013's surface);
+(2) **the `verify-extensions` job timeout**: raise it or split the job (CI policy, the operator's).
 
 ## 10. Estimates
 
