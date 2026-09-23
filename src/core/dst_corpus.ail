@@ -310,20 +310,41 @@ export type CorpusJob = {
 }
 
 -- MEASURED, not chosen: 100 seeds BUILT through the real driver — generated,
--- programmed, encoded, persisted and loaded back — in 38.2 s of wall clock, one
--- process start included: 381 ms per seed. Every number below is this constant
+-- programmed, encoded, persisted and loaded back — in 41.6 s of wall clock, one
+-- process start included: 416 ms per seed. Every number below is this constant
 -- times a declared budget, so re-measuring moves them together and the
 -- arithmetic is visible instead of being folded into a literal.
 --
--- RE-MEASURED AT WI-D4, 292 -> 381, AND THE RISE IS A CONSEQUENCE RATHER THAN
+-- RE-MEASURED AT WI-D4, 292 -> 381, AND THE RISE WAS A CONSEQUENCE RATHER THAN
 -- NOISE. Until WI-D4 the generator spent `max_interactions` against the whole
 -- interaction log, so every environment read the DRIVER made shortened the
 -- trajectory the generator was allowed to produce. Charging the budget only for
 -- generator-authored interactions gives each seed back the trajectory it was
 -- always declared to have, and a longer trajectory costs more to run, encode and
--- persist. The old constant was measuring a generator that had been quietly
--- truncated.
-export pure func measured_ms_per_seed() -> int { 381 }
+-- persist. That constant was measuring a generator that had been quietly
+-- truncated. Kept here because the 416 below is a re-measurement OF this number
+-- and the chain is the point: 292 -> 381 -> 416.
+--
+-- RE-MEASURED AT 013 D11-CEIL, 381 -> 416, AND THE HARNESS IS KEPT THIS TIME.
+-- `evidence/D11-CEIL/per_seed_bench.ail` builds N seeds through the same path
+-- `corpus_pr_dst.ail`'s `build_seed` takes, with the driver plumbing copied from
+-- it rather than reimplemented — a per-seed cost measured under a different
+-- profile, generator version or bounds is a cost for a different seed — and it
+-- prints a loaded-byte total so a run that did no work cannot be mistaken for a
+-- fast one. Two counts in one warm clone: 25 seeds in 17.8 s, 100 in 41.6 s.
+--
+-- TWO COUNTS RATHER THAN ONE, BECAUSE THE AVERAGE AND THE MARGINAL COST ARE
+-- DIFFERENT NUMBERS AND ONLY ONE OF THEM IS 416. The slope between the counts,
+-- (41558 - 17768) / 75, is 317 ms of marginal cost per seed; the remaining
+-- 9.8 s is process start and module load, which a 100-seed average amortises
+-- into every seed and so reports 416. The AVERAGE is what this constant keeps,
+-- for two reasons stated so nobody has to guess: it is the method the 381 was
+-- measured by, and a constant re-measured by a different method is not a
+-- comparison; and of the two it is the one that buys FEWER seeds per budget.
+-- Taking the 317 would have restored the comfortable margin under `pr_job()` by
+-- choosing the more flattering of two honest numbers, which is the move that
+-- paragraph exists to forbid.
+export pure func measured_ms_per_seed() -> int { 416 }
 
 export pure func seeds_affordable_in(budget_ms: int) -> int {
   budget_ms / measured_ms_per_seed()
@@ -331,12 +352,27 @@ export pure func seeds_affordable_in(budget_ms: int) -> int {
 
 -- The BLOCKING job. It runs on every PR, so its budget is a share of a gate a
 -- human waits for: `make dst` is 200 s measured at this item's start, and 5 s is
--- 2.5% of it. 5000 / 381 = 13 seeds affordable; the declared minimum is 12,
--- which still leaves the promoted and constructed members inside the same
--- budget — but by one seed rather than by five, and that is worth stating
--- plainly: the next measured rise in per-seed cost puts the affordable count
--- BELOW the declared minimum, and the honest response then is to raise the
--- budget or lower the minimum, not to re-measure until the number is convenient.
+-- 2.5% of it. 5000 / 416 = 12 seeds affordable; the declared minimum is 12.
+--
+-- THE WARNING THIS PARAGRAPH USED TO END WITH HAS VERY NEARLY COME TRUE, AND
+-- SAYING SO IS THE POINT OF HAVING WRITTEN IT. At 381 ms the budget bought one
+-- seed MORE than the minimum; at the re-measured 416 it buys EXACTLY the
+-- minimum, and `seeds_affordable_in(budget) >= minimum_seeds` now passes with
+-- nothing to spare. The next measured rise in per-seed cost puts the affordable
+-- count BELOW the declared minimum, and the honest response then is to raise
+-- the budget or lower the minimum, not to re-measure until the number is
+-- convenient.
+--
+-- 013 D11-CEIL DID NOT RAISE THE BUDGET, and the reason is a missing
+-- measurement rather than a finding that 5000 is still right. The budget is
+-- declared as 2.5% of `make dst`, and the 200 s it is 2.5% of was measured by a
+-- method this item cannot reconstruct: the `make dst` figure available here is a
+-- COLD, SERIAL (`DST_JOBS=1`) run, which is a different quantity and must not be
+-- substituted into the same rule — scaling a budget off whichever number happens
+-- to be at hand is the same error as re-measuring until the arithmetic is
+-- comfortable, wearing a different hat. Re-deriving this budget needs `make dst`
+-- timed the way the 200 s was, and whoever next meets this line should measure
+-- that before moving the budget.
 export pure func pr_job() -> CorpusJob {
   { job_id: "dst-pr-corpus",
     minimum_seeds: 12,
@@ -346,9 +382,11 @@ export pure func pr_job() -> CorpusJob {
 }
 
 -- The SCHEDULED job. Nobody waits for it, so the budget is a wall-clock window
--- rather than a share of a gate: 600 s / 381 ms = 1574 seeds affordable, and the
--- declared minimum is 240 — about 15% of what the budget permits, which is the
--- headroom a rotating window needs for the runs that terminate long.
+-- rather than a share of a gate: 600 s / 416 ms = 1442 seeds affordable, and the
+-- declared minimum is 240 — about 17% of what the budget permits, which is the
+-- headroom a rotating window needs for the runs that terminate long. (1574 at
+-- the old 381; the minimum is unchanged, and 013 D11-CEIL moved only the
+-- arithmetic this sentence reports.)
 --
 -- 4 shards of 60. `retention_runs` is 14: a fortnight of scheduled runs, which
 -- is the window in which a rotation that stopped moving is still visible in the
@@ -363,35 +401,104 @@ export pure func scheduled_job() -> CorpusJob {
 
 -- The whole TARGET's wall clock, which is a DIFFERENT quantity from the seed
 -- window's and is not derivable from it: `make corpus_pr` also persists every
--- member, loads each back off disk and runs twelve mutation rows. Re-measured at
--- WI-D4 for the whole PR target, which now runs FIFTEEN real driver seeds rather
--- than thirteen — the re-derived bank needs two witnesses per class and the
--- classes moved — over longer trajectories. The ceiling is a regression guard on
--- CI cost rather
--- than a budget — D11 delegates seed counts to measured cost, and a measured
--- constant nobody re-measures is exactly the kind of number this project keeps
--- finding stale. If this fires, re-measure and move `measured_ms_per_seed()`
--- with it rather than raising the ceiling alone.
+-- member, loads each back off disk and runs twelve mutation rows — and, on the
+-- cold tree CI always presents, compiles the whole module graph the target
+-- imports before any of that begins. The ceiling is a regression guard on CI
+-- cost rather than a budget — D11 delegates seed counts to measured cost, and a
+-- measured constant nobody re-measures is exactly the kind of number this
+-- project keeps finding stale. If this fires, re-measure and move
+-- `measured_ms_per_seed()` with it rather than raising the ceiling alone.
 --
--- WI-D4 MOVED BOTH, IN THAT ORDER, AND THE MEASUREMENT IS A RANGE RATHER THAN A
--- POINT. Observed at 47-50 s on a cold tree and 24 s within a warm `make dst`,
--- against 28.5 s at WI-A15. The ceiling is set from the SLOW end, because a
--- ceiling set from the fast one fails on the first cold run and teaches whoever
--- meets it to raise the ceiling — which is the failure mode the paragraph above
--- is written against. It keeps the same headroom ratio the previous pair had:
--- 45000/28500 = 1.58, and 50000 x 1.58 rounds to 80000, so the guard is as tight
--- relative to its measurement as it was before rather than being widened until
--- it stopped complaining.
+-- THE CHAIN SO FAR, kept because every number below is derived from it.
+-- WI-A15 measured 28.5 s and set 45000. WI-D4 re-measured the whole PR target —
+-- by then FIFTEEN real driver seeds rather than thirteen, the re-derived bank
+-- needing two witnesses per class — as a RANGE rather than a point: 47-50 s
+-- cold against 24 s warm. It set the ceiling from the SLOW end and kept
+-- WI-A15's headroom ratio, 45000/28500 = 1.58, so 50000 x 1.58 = 79000 rounded
+-- to 80000. THAT RATIO, 1.58, IS THE ONE THIS ITEM KEEPS, and the reason WI-D4
+-- gave for the slow end is the reason it is kept too: a ceiling set from the
+-- fast end fails on the first cold run and teaches whoever meets it to raise
+-- the ceiling.
 --
--- Two seeds of the rise are the re-derived bank (13 -> 15). The REST is not seed
--- count and is worth naming: at 381 ms/seed the fifteen seeds are under 6 s of
--- the 50, so the growth is in what the target does with each one — persistence,
--- load-back and the mutation rows over trajectories that are now longer, because
--- WI-D4 stopped the driver's environment reads from spending the generator's
--- budget. A bank of restored-length trajectories is more expensive than a bank
--- of truncated ones, and that is the cost of the repair rather than an
--- inefficiency in it.
-export pure func pr_target_ceiling_ms() -> int { 80000 }
+-- RE-MEASURED AT 013 D11-CEIL, 80000 -> 180000. Thirteen cold samples at
+-- cdf0f65f, which is code-identical to PR 186's head 42dc0c18 (the commits
+-- between them touch only `.agent/`), each one a FRESH CLONE followed by
+-- `make CI=1 sync_packages`. The NINE taken with no competing AILANG process on
+-- the machine were 86, 86, 86, 87, 88, 90, 90, 91 and 111 s: median 88, slow
+-- end 111. The other four (90, 94, 95, 97 s) overlapped another agent's run and
+-- are recorded in `evidence/D11-CEIL/` rather than averaged in.
+--
+-- Set from the SLOW end, as before and for the reason the note above gives.
+-- Eight of the nine clean samples sit in a tight 86-91 s band and the ninth is
+-- 111 s; a ceiling derived from the band is a ceiling that fails on a run like
+-- the ninth and teaches whoever meets it to raise the ceiling, which is the
+-- failure mode this whole comment is written against. Keeping the file's
+-- headroom ratio: 111000 x 1.58 = 175380, which rounds — as 79000 was rounded
+-- to 80000 — to 180000.
+--
+-- CI IS NOT THE SLOW END HERE, recorded because the obvious assumption is that
+-- it would be. CI measured 106 s on this code at 42dc0c18: INSIDE the local
+-- cold range and below the local slow end. So the ceiling is derived from the
+-- local 111 s and covers the CI number with margin, rather than the reverse.
+--
+-- AND THE OLD CEILING WAS INSIDE THE NOISE, which is the sharpest evidence that
+-- it had to move. Trying to prove this change by REVERTING the ceiling and
+-- watching the target go red does not work: a cold run measured 79000 ms
+-- against the reverted 80000 and PASSED BY ONE SECOND. Cold runs here span
+-- 79-111 s, so 80000 sat inside that band, and the CI history the brief carries
+-- is exactly what a gate inside its own noise band produces — one pass at
+-- exactly 80000 against 80000, then a failure at 106000. The gate was reporting
+-- which second the run landed in, not what the corpus cost. The mutgate row in
+-- `evidence/D11-CEIL/` therefore mutates to 50000 instead, and says why.
+--
+-- WHERE THE TIME WENT, MEASURED RATHER THAN ASSUMED — AND IT IS NOT THE CORPUS.
+-- The same clone run twice: 89.6 s cold, 30.1 s warm. So 59.5 s of a cold run
+-- is AILANG compiling the module graph and 30 s is the target doing its work.
+-- At WI-D4 that same split was 47-50 s cold against 24 s warm — about 25 s of
+-- compilation. The corpus work therefore went 24 -> 30 s while the compilation
+-- went 25 -> 60 s: of the ~40 s this ceiling has to absorb, ~35 s is
+-- compilation. The bank is UNCHANGED at fifteen seeds and one constructed
+-- member, and at the re-measured 416 ms/seed those fifteen seeds are 6.2 s of
+-- the 30. MORE THAN FOUR FIFTHS OF THE GROWTH IS THE COST OF COMPILING A
+-- CODEBASE THAT ROUGHLY DOUBLED between WI-D4 and ABI 8.0, and none of it is
+-- reachable by moving a seed count.
+--
+-- SO THE INSTRUCTION AT THE TOP WAS FOLLOWED AND ITS PREMISE DID NOT HOLD.
+-- Both constants were re-measured and both moved, as it demands — but the
+-- per-seed cost rose 9% (381 -> 416) while the target's cold wall clock roughly
+-- doubled (48 -> 88 s at the median, 50 -> 111 s at the slow end). They are no
+-- longer measuring the same pressure. The next firing of this gate is far more
+-- likely to be the module graph than the corpus, and trimming the bank to meet
+-- it would cost coverage while buying back a few seconds: re-measure BOTH
+-- again, and if they diverge again, say so rather than dropping seeds.
+--
+-- THE MEASUREMENT TRAP, which cost this item and the one before it several
+-- wrong numbers. `ailang.lock` is TRACKED and its path dependencies are
+-- ABSOLUTE paths into the checkout that generated it, so a plain `git clone`
+-- compiles and runs the PRIMARY checkout's packages and measures nothing about
+-- the clone. Every sample must be fresh clone -> `make CI=1 sync_packages` ->
+-- target, asserted with `grep -q "$CLONE" ailang.lock`. A second run in the
+-- same clone is WARM and is not this gate's number. And because the pass
+-- condition is wall clock, a sample taken while another agent is running AILANG
+-- work is not this gate's number either; the harness in `evidence/D11-CEIL/`
+-- identifies a competing process by its `/proc/<pid>/cwd`, because the target
+-- runs its script by a RELATIVE path and a command-line filter counts the
+-- sample's own work as contention.
+export pure func pr_target_ceiling_ms() -> int { 180000 }
+
+-- NOTHING READS THIS ONE, which 013 D11-CEIL recorded rather than repaired
+-- because the repair is a choice for its owner and not a measurement.
+-- `pr_target_ceiling_ms()` is enforced by the `corpus_pr` recipe, which greps
+-- the literal out of this file; `scheduled_target_ceiling_ms` appears in no
+-- Makefile target, no script and no workflow, so the scheduled target has a
+-- declared ceiling with no gate behind it and cannot fire however slow it gets.
+--
+-- Measured anyway, by the same method: `make corpus_rotating` cold from a fresh
+-- clone three times, 68.5, 68.8 and 74.5 s, no competing AILANG process. The
+-- number is LEFT WHERE IT IS, and not only because moving a constant nothing
+-- reads is a change with no behaviour: 74500 x 1.58 = 117710, which rounds to
+-- the 120000 already written here. The value is right; it is the wiring that is
+-- missing, and the honest repair is to gate the target on it or to delete it.
 export pure func scheduled_target_ceiling_ms() -> int { 120000 }
 
 -- One shard's share of a job. The minimum and the budget are DIVIDED, so a
