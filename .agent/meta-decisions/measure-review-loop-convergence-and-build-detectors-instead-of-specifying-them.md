@@ -9,6 +9,8 @@ Scope: any session running iterative adversarial review over a durable doc (ADR,
 session writing a decision doc that names a gate, detector, classifier, or validator; and any session
 choosing which assertion guards a migration.
 
+Amended 2026-09-20 with rules 4 and 5, from PLAN-004 P2.3 round 4 (013), where rules 1-3 all held
+and the loop still ran four rounds; see `.agent/projects/013_core_architecture_for_dst/`.
 Amended 2026-08-02 with rule 3, after WI-A12's execution confirmed the same shape one layer down, and
 sharpened 2026-08-03 after WI-A13 produced its mirror image. See
 `NOTE-cluster-6-execution-report-and-plan-corrections.md` and
@@ -32,6 +34,27 @@ converging, and more rounds will not fix it.**
 validates is only sound if it runs. Prose review will correctly find each specification unsound, the
 next pass will specify harder, and the cycle repeats indefinitely. **Build the smallest working
 version instead. The specification questions dissolve on contact with the artifact.**
+
+**4. Batch size multiplies the failure probability; count it before adding rounds.** Rule 1 says
+count findings per round. It does not say why a loop with real, falling findings can still fail to
+close. Measured on PLAN-004 P2.3 round 4: a five-item authorized fix set came back with **three of
+five items defective** — a 60% per-item rate. At that rate a five-item batch passes clean with
+probability `0.4^5 ≈ 1%`, a one-item batch with `40%`. The round count is then dominated by batch
+size, not by reviewer sharpness. The next fix set was **one item** and passed first time, with a
+mechanical discrimination record attached. **Estimate the per-item defect rate from the last round,
+and cap the batch so the whole set has a plausible chance of passing.** Batching feels efficient and
+is usually what makes the loop long. The exception is a set whose items are provably disjoint —
+different files, different legs — where one freeze beats three.
+
+**5. Where a detector runs decides what it costs.** Rule 2 says build the smallest working version.
+The companion is placement: the same check is a **two-minute author-side precondition** or a
+**thirty-minute reviewer round**, and only the first shortens the loop. Every defect in P2.3's fix
+sets was one class — a test that does not discriminate: vacuous (passes whatever the code does) or
+red-by-construction (fails whatever the code does). One two-sided check catches both —
+`baseline GREEN → mutated RED → restored GREEN, bytes identical` — and it is rule 3 applied to the
+test itself. Built as `mutgate.sh` and made a **submission precondition refused at intake**, not a
+review finding. **Move detection to the author and refuse at intake; a check that only runs in
+review has already cost the round it was meant to save.**
 
 **3. A one-sided assertion set cannot see failures in the other direction.** Reproducibility,
 type-checking, mutation coverage, and "the round found real defects" all feel like correctness. Each
