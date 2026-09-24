@@ -28,6 +28,14 @@ on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      # The line guard's mutation gate (see `defaults` below). Dispatch with
+      # this true and EVERY job must go red at its first run step, naming
+      # line_guard, in that step's own time -- not wedge.
+      line_guard_mutant:
+        description: 'Mutgate: print one 1 MB line in every run step; every job must go red fast, naming line_guard'
+        type: boolean
+        default: false
 
 # JOBS, AND WHY THERE ARE FIVE. Until 2026-09-24 this workflow ran everything in
 # one 20-minute job, and on a branch it never finished: measured cold that job is
@@ -52,6 +60,29 @@ env:
   # periodically, so anything keyed on "what is new" must compare against
   # main_dst -- see the new_contract_policy step.
   TRUNK: main_dst
+  # Read by scripts/ci_guarded_shell.sh; empty unless dispatched as the mutant.
+  LINE_GUARD_MUTANT: ${{ github.event.inputs.line_guard_mutant == 'true' && '1' || '' }}
+
+# EVERY RUN STEP IN THIS FILE GOES THROUGH THE LINE GUARD. The GitHub runner
+# spends time quadratic in a log line's length and services no timeout or
+# cancel while inside one: a 1 MB line is half an hour of silence, and that is
+# how DST gates (rest) died "cancelled" with no log for weeks (LEG-CI-COMPACTION;
+# scripts/line_guard.sh has the measurements). scripts/ci_guarded_shell.sh runs
+# each step exactly as `shell: bash` does -- bash -eo pipefail -- with stdout
+# and stderr through line_guard.sh 16384 --strict, and pipefail on that pipe
+# too, so a failing step can never be turned green by its filter. A line over
+# 16384 characters is cut before the runner sees it and turns its step red with
+# the reason. 16384 against what these jobs print, measured in CI (run
+# 36020314940): the longest line in any run step is 553 characters (the heavy
+# job), 4142 in the rest job only because compaction_dst's recipe cuts its own
+# megabyte events there; dst-setup's steps, which this does not cover
+# (composite-action steps take no workflow defaults), top out at 193.
+#
+# The path is relative to the workspace, so no step sets `working-directory:`;
+# one that needs another directory `cd`s inside its script.
+defaults:
+  run:
+    shell: bash scripts/ci_guarded_shell.sh {0}
 
 jobs:
   # ~5 min: the fast signal. check_core type-checks all of src/core against
@@ -120,21 +151,20 @@ jobs:
       # does not run this job at all (run 35990826715).
       #
       # The fix is in the Makefile: that recipe cuts its own lines at 4096.
-      # The gate is here: everything this line prints goes through
+      # The gate is the workflow's default shell (see `defaults` at the top),
+      # which puts this line -- like every run step here -- through
       # scripts/line_guard.sh --strict, so the NEXT target that prints a line
       # over 16384 characters is a fast red that names the problem, not an
-      # hour of silence. `shell: bash` runs with pipefail, so make's status
-      # survives the pipe. If a hang comes back that this does not explain,
+      # hour of silence. If a hang comes back that this does not explain,
       # split the line again and wrap each step in scripts/ci_hang_probe.sh,
       # which records a hang to files (uploaded under always()) instead of to
       # the pipe the runner may have stopped reading.
       - name: DST AILANG gates — rest
-        shell: bash
         run: |
           make --keep-going compaction_dst conformance phase_c_l1 profile_coverage \
             profile_definition driver_only fault_catalogue event_vocabulary \
             attribution_table predicate_anchors ext_call_inventory \
-            ext_call_inventory_selftest 2>&1 | scripts/line_guard.sh 16384 --strict
+            ext_call_inventory_selftest
 
   # ~11 min. The second coverage axis (WI-A17) plus smoke_parity: 334 s and
   # 108 s cold. check_core type-checks src/core and never runs its inline
@@ -249,9 +279,10 @@ jobs:
         with:
           bun-version: '1.3.14'
 
+      # `cd` rather than `working-directory:`, which would move the relative
+      # path of the default shell (see `defaults` at the top) out from under it.
       - name: Install TUI dependencies
-        working-directory: src/tui
-        run: bun install --frozen-lockfile
+        run: cd src/tui && bun install --frozen-lockfile
 
       - name: Layer-2 DST
         run: make dst_l2
