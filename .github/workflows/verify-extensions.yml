@@ -100,12 +100,51 @@ jobs:
         uses: actions/checkout@v4
       - uses: ./.github/actions/dst-setup
 
-      - name: DST AILANG gates — rest
-        run: |
-          make --keep-going compaction_dst conformance phase_c_l1 profile_coverage \
-            profile_definition driver_only fault_catalogue event_vocabulary \
-            attribution_table predicate_anchors ext_call_inventory \
-            ext_call_inventory_selftest
+      # ONE STEP PER TARGET, DELIBERATELY. As one `make --keep-going` line this
+      # step ran past 20 minutes in CI against 267 s of the same twelve targets
+      # measured cold locally (2026-09-24), while the heavy job came in at the
+      # expected 1.29x of its local time. So one of these hangs HERE and not on
+      # the dev box, and a single step reports that as a dead step with no name.
+      # It is not new: the pre-split job died in the same place at 2f3ee4d1,
+      # before the ABI 8.0 line, while main's scheduled run finishes the whole
+      # job in 2.4 min. Per-target steps cost nothing and make the next red say
+      # which target it is. Fold them back into one line once the hang is found
+      # and fixed.
+      - name: compaction_dst
+        run: make compaction_dst
+
+      - name: conformance
+        run: make conformance
+
+      - name: phase_c_l1
+        run: make phase_c_l1
+
+      - name: profile_coverage
+        run: make profile_coverage
+
+      - name: profile_definition
+        run: make profile_definition
+
+      - name: driver_only
+        run: make driver_only
+
+      - name: fault_catalogue
+        run: make fault_catalogue
+
+      - name: event_vocabulary
+        run: make event_vocabulary
+
+      - name: attribution_table
+        run: make attribution_table
+
+      - name: predicate_anchors
+        run: make predicate_anchors
+
+      - name: ext_call_inventory
+        run: make ext_call_inventory
+
+      - name: ext_call_inventory_selftest
+        run: make ext_call_inventory_selftest
 
   # ~11 min. The second coverage axis (WI-A17) plus smoke_parity: 334 s and
   # 108 s cold. check_core type-checks src/core and never runs its inline
