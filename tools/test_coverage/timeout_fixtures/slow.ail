@@ -1,0 +1,16 @@
+-- MUTANT for the per-file cap (LEG-CI-COVERAGE-CAP). Kept OUT of fixtures/ so
+-- the fixture walk never runs it under the real cap; `_constructed_rows()`
+-- runs it alone under a small one. One test, naive fib(30): ~25 s on the dev
+-- box, 5x a 5 s cap, so the timeout fires on any machine and names this file.
+
+module tools/test_coverage/timeout_fixtures/slow
+
+pure func fib(n: int) -> int {
+  if n < 2 then n else fib(n - 1) + fib(n - 2)
+}
+
+pure func slow_fib_is_positive() -> bool
+  tests [((), true)]
+{
+  fib(30) > 0
+}

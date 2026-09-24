@@ -3351,7 +3351,16 @@ ext_hook_scope_selftest:
 # how fast `make dst` can finish however many cores it is given. Its workers
 # each take a private compile-cache lane (see lane_env() in derive.py), which is
 # what makes --jobs pay: 207s at --jobs 1, 93s at --jobs 6, findings identical.
-TEST_COVERAGE_JOBS ?= 6
+#
+# Six on a machine with at least six cores, one per core below that. A fixed 6
+# on a 4-vCPU CI runner oversubscribes it and every file's wall time stretches
+# with its neighbours while its CPU does not (LEG-CI-COVERAGE-CAP, probe run
+# 36029843520, three runners): tool_phase 114-122 s at --jobs 6 against 66-67 s
+# at --jobs 4, session.ail 363-371 s against 338-343 s, and the whole walk
+# 527-532 s against 513-517 s -- more parallelism, a slower walk. The per-file
+# cap in derive.py is measured in wall time, so this is what keeps its margin a
+# property of the file rather than of the job count. `nproc` honours affinity.
+TEST_COVERAGE_JOBS ?= $(shell n=$$(nproc 2>/dev/null || echo 1); [ $$n -lt 6 ] && echo $$n || echo 6)
 
 .PHONY: test_coverage test_coverage_selftest
 test_coverage:
