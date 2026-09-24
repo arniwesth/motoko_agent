@@ -997,6 +997,53 @@ commit):
 every settlement `verified` by the orchestrator's own mechanical receipt; **4 ADR amendments**, each with an
 artifact; 42 registration sites, 25 masked files, core, the dispatch cursor and the evidence defaults on 8.0.
 
+### D11-CEIL — 2026-09-23, commit `d1b74768` (the corpus ceiling, R-G red #1)
+
+The first of the two reds R-G handed to its owner. Delegate re-measured, orchestrator re-measured
+independently; both constants in `src/core/dst_corpus.ail` moved together, as the gate's own message
+instructs:
+
+| constant | was | now | basis |
+|---|---|---|---|
+| `measured_ms_per_seed()` | 381 | **416** | cold, fresh never-run clone, own packages (`make CI=1 sync_packages`) |
+| `pr_target_ceiling_ms()` | 80000 | **180000** | CI's observed rate, not the local one — the headroom the old value never had |
+
+| receipt | result |
+|---|---|
+| orchestrator's own cold run of the PR corpus target | **91 s against the new 180 s ceiling** |
+| mutgate (`evidence/D11-CEIL/`) | **2 of 2** — the ceiling is load-bearing in both directions |
+
+**Why the ceiling tripled rather than tracking the 9 % local gain:** the gate runs cold in CI on slower
+hardware; the old 80000 was measured warm and locally and had **zero** headroom at `2f3ee4d1` (80000 against
+80000), which is why it went red on a tree that had made the target *faster*. The constant now describes CI.
+
+### CONTRACTS-PROD — 2026-09-24, commit `87efff5f` (027 ADR-001 §4, the 24 production funcs)
+
+Line R left 107 of 109 new `pure func` declarations without a contract or an excuse. The split (handoff
+`HANDOFF-2026-09-24-contract-debt.md`): **24 production**, **83 test-only scaffolding**. This leg closed the
+24; the 83 are **held** pending 027's ruling on `QUESTION-2026-09-24-test-scaffolding-in-scope.md`.
+
+| receipt (orchestrator's own run) | result |
+|---|---|
+| `make new_contract_policy BASE=origin/main_dst` | **83 of 109 unjustified** — exactly the held scaffolding, 24 closed |
+| `make profile_coverage` | **exit 0**, "2 contract properties skipped, pinned by name" |
+| `make verify_classify_check` | green |
+| mutgate (`evidence/CONTRACTS-PROD/mutgate.sh`, fresh clone) | **14 of 14** |
+
+**`new_contract_policy` stays red at 83 of 109 by design** until 027 rules; a gate that is legitimately red at
+baseline proves nothing by going red, so M2 is **count-based**: it deletes one accepted `-- contracts:` excuse
+and requires 83 → 84 *with the mutated name newly present*. M4 is the one that earns the leg its Makefile
+change: it moves a contract to a different function, holding the skip **count** at 2 while changing its
+**identity** — green under a count-based pin, red under the identity pin now at `Makefile:773`.
+
+**Intake note (orchestrator's method, not the delegate's work).** My first run scored **12 of 14**, both reds
+on `new_contract_policy` rows reporting `'none'`. Cause: in a clone whose `origin` is a local path,
+`origin/main_dst` mirrors the primary checkout's **local** `main_dst` (`600663a2`, months behind) rather than
+its remote-tracking ref (`31c5308e`), so the gate reported `527 of 575`. The wrapper's parser pins `of 109`
+and therefore **failed loudly instead of passing wrongly** — the right behaviour. The wrapper now resolves
+`BASE` to that SHA with an explicit `git cat-file -e` check, and the re-run is **14 of 14**. The delegate's
+envelope was accurate; the discrepancy was mine.
+
 ## 10. Estimates
 
 | phase | delegate-days |

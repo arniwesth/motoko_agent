@@ -28,6 +28,16 @@ set -euo pipefail
 
 TREE="${1:?usage: mutgate.sh <fresh-clone-path>}"
 cd "$TREE"
+
+# The base is a SHA, not the NAME `origin/main_dst`. In a clone whose origin is a
+# local path, `origin/main_dst` mirrors the PRIMARY checkout's LOCAL `main_dst`
+# branch (600663a2, months behind) instead of its remote-tracking ref, and the
+# gate then reports `527 of 575` -- which this script scores as a hard failure
+# rather than a pass, because count() pins `of 109`. Override with BASE= for a
+# branch cut somewhere else.
+BASE="${BASE:-31c5308e3ccf65041b3d5571c5f32346cea0cc73}"
+git cat-file -e "$BASE^{commit}" 2>/dev/null || {
+  echo "mutgate: base $BASE is not a commit in $TREE -- fetch it first"; exit 2; }
 OUT="$(mktemp -d)"
 trap 'git -C "$TREE" checkout -- src/core tools/verify_classify/contracts.register Makefile 2>/dev/null || true; rm -rf "$OUT"' EXIT
 
@@ -48,7 +58,7 @@ b_classify=$(run base_classify make verify_classify_check)
 [ "$b_classify" -eq 0 ] && ok "verify_classify_check green (exit 0)" \
                         || bad "verify_classify_check wanted green, got $b_classify"
 
-b_policy=$(run base_policy make new_contract_policy BASE=origin/main_dst)
+b_policy=$(run base_policy make new_contract_policy BASE="$BASE")
 b_n=$(count "$OUT/base_policy")
 [ "$b_n" = 83 ] && ok "new_contract_policy: 83 of 109 unjustified (the held scaffolding; exit $b_policy)" \
                 || bad "new_contract_policy: wanted 83 unjustified, got '${b_n:-none}'"
@@ -81,7 +91,7 @@ old = "-- contracts: SKIPPED — uses an unencodable builtin: std/string.charAt.
 assert t.count(old) == 1, "mutation target not found -- excuse text moved"
 p.write_text(t.replace(old, ""))
 PY
-m2=$(run m2 make new_contract_policy BASE=origin/main_dst)
+m2=$(run m2 make new_contract_policy BASE="$BASE")
 m2_n=$(count "$OUT/m2")
 [ "$m2_n" = 84 ] && ok "new_contract_policy: 84 of 109 -- one more than baseline (exit $m2)" \
                  || bad "wanted 84 unjustified, got '${m2_n:-none}'"
