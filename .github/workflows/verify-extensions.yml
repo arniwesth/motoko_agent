@@ -106,10 +106,19 @@ jobs:
       # expected 1.29x of its local time. So one of these hangs HERE and not on
       # the dev box, and a single step reports that as a dead step with no name.
       # It is not new: the pre-split job died in the same place at 2f3ee4d1,
-      # before the ABI 8.0 line, while main's scheduled run finishes the whole
-      # job in 2.4 min. Per-target steps cost nothing and make the next red say
-      # which target it is. Fold them back into one line once the hang is found
-      # and fixed.
+      # before the ABI 8.0 line. NOT a counter-example: main's scheduled run,
+      # which an earlier version of this comment cited as finishing "the whole
+      # job in 2.4 min". It does not run this job at all -- main is the release
+      # mirror, months behind main_dst, and its workflow has ONE job with no DST
+      # gates and no compaction_dst step (run 35990826715). There is no known
+      # green run of these targets in CI to diff against.
+      # Per-target steps cost nothing and make the next red say which target it
+      # is. Fold them back into one line once the hang is found and fixed.
+      #
+      # 2026-09-24, run 36010382877: the split named it -- `compaction_dst` ran
+      # past 20 min against 59 s cold locally, every later step pending behind
+      # it. The target is five `ailang run` invocations (Makefile:2447); the
+      # next split to make is between those five.
       - name: compaction_dst
         run: make compaction_dst
 
