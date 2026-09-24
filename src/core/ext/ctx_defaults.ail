@@ -114,6 +114,14 @@ export pure func zero_token_telemetry() -> TokenTelemetry {
 -- host's full `ExtCtx` literals (`session.ail`, `runtime.smoke_ctx`) read it;
 -- `pure_ctx` in the ABI supplies the same value for a bare `PureCtx`. P1.4r
 -- owns the evidence defaults' fixtures and the decision-site `Some`.
+-- contracts: BLOCKED — the empty list literal mis-sorts in the SMT encoding. A
+-- synthesised `ensures { true }` ERRORS with `Z3 error ... unknown constant
+-- mk_ToolEvidenceWindow (Bool Option (Seq Int))` against the declared
+-- `(Bool Option (Seq ToolEvidence))`: `records: []` is encoded as `Seq Int`, so the
+-- constructor never matches its own declaration. `not
+-- result.complete_from_session_start` -- the window asserts NO success, which is the
+-- whole reason this value exists rather than a `true`-defaulted one -- fails
+-- identically, so the block is the encoder's and not the property's.
 export pure func empty_tool_evidence() -> ToolEvidenceWindow {
   { records: [], complete_from_session_start: false, omitted_count: None }
 }

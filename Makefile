@@ -770,7 +770,62 @@ profile_coverage:
 	else \
 		echo "  ✓ all_capability_kinds() enumerates all $$n ABI capability kinds ($$producer)"; \
 	fi; \
-	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
+	: ; \
+	: '031 line R: this file'"'"'s two contracts (capability_purity_basis,'; \
+	: 'purity_name) are PROPERTIES to `ailang test`, and their parameters are'; \
+	: 'ADTs. The pinned toolchain (v0.33.0, ae36986c5) derives generators for'; \
+	: 'scalars, records, tuples and aliases but NOT for ADTs, so both properties'; \
+	: 'report "no generator" and never run -- and `ailang test` exits 1 whenever'; \
+	: 'anything was skipped. A bare `ailang test ... &&` therefore reds this'; \
+	: 'target for a reason that is not a defect.'; \
+	: ; \
+	: '--allow-skips is NOT the fix: it means "exit 0 even if ALL tests were'; \
+	: 'skipped", which would pass this target when nothing ran at all. So the'; \
+	: 'skips are pinned BY IDENTITY instead -- exactly these two property names,'; \
+	: 'no more and no others. A third skip, or a different property going quiet,'; \
+	: 'fails here; a real test failure always fails here.'; \
+	: ; \
+	: 'SELF-RETIRING. ADT generator derivation landed upstream in 03ab3e7de'; \
+	: '(2026-08-11), one week AFTER v0.33.0 (2026-08-04). Measured against a'; \
+	: 'build of that source, all four of line R'"'"'s contracts run 100 cases and'; \
+	: 'pass. So when the toolchain moves past it the skipped set becomes EMPTY,'; \
+	: 'which is accepted and announced rather than red: good news must not read'; \
+	: 'as a regression. Delete this block and restore the one-liner then.'; \
+	want="capability_purity_basis_property_1 purity_name_property_1"; \
+	out="$$(ailang test src/core/dst_profile_coverage.ail 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; \
+	nums="$$(printf '%s\n' "$$out" | sed -n 's/^[0-9][0-9]* tests:.*, \([0-9][0-9]*\) failed, \([0-9][0-9]*\) skipped.*/\1 \2/p' | tail -1)"; \
+	if [ -z "$$nums" ]; then \
+		echo "FAIL: could not parse ailang test's summary for"; \
+		echo "      src/core/dst_profile_coverage.ail. The output shape changed;"; \
+		echo "      this gate fails closed rather than guess that it passed."; \
+		printf '%s\n' "$$out" | tail -20 | sed 's/^/      /'; \
+		exit 1; \
+	fi; \
+	failed="$${nums% *}"; skipped="$${nums#* }"; \
+	: 'The trailing " (" matters: it keeps the per-property lines and drops'; \
+	: 'the summary tally "  ⊘ Skipped: 2", which otherwise parses as a name.'; \
+	got="$$(printf '%s\n' "$$out" | sed -n 's/^  ⊘ \([A-Za-z0-9_][A-Za-z0-9_]*\) (.*/\1/p' | sort | tr '\n' ' ')"; \
+	got="$${got% }"; \
+	if [ "$$failed" -ne 0 ]; then \
+		echo "FAIL: $$failed test(s) failed in src/core/dst_profile_coverage.ail."; \
+		printf '%s\n' "$$out" | sed -n '/✗/p' | head -10 | sed 's/^/      /'; \
+		exit 1; \
+	fi; \
+	if [ "$$skipped" -eq 0 ]; then \
+		echo "  ✓ src/core/dst_profile_coverage.ail (0 skipped -- the toolchain"; \
+		echo "      now derives ADT generators, so the skip pin in this recipe has"; \
+		echo "      expired and can go back to a plain \`ailang test ... &&\`)"; \
+	elif [ "$$got" = "$$want" ]; then \
+		echo "  ✓ src/core/dst_profile_coverage.ail (2 contract properties skipped,"; \
+		echo "      pinned by name: no ADT generator on the pinned toolchain)"; \
+	else \
+		echo "FAIL: the skipped set in src/core/dst_profile_coverage.ail is not the"; \
+		echo "      pinned one. A property stopped running, or a new one went quiet,"; \
+		echo "      and a count alone would not have noticed."; \
+		echo "        want: $$want"; \
+		echo "        got:  $$got"; \
+		exit 1; \
+	fi
 
 # ADR-001 Phase B, B4: multiplicity validation at the registration boundary.
 # `src/core/ext/registry_normalize.ail` is the ONE host-owned place the D3

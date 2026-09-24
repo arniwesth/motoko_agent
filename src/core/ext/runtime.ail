@@ -238,6 +238,11 @@ func is_test_dummy(hook_id: string) -> bool {
 -- "other hook sites receive `decision_state = None`" made structural here,
 -- not left to every host literal. A decision atom's view is built from it by
 -- `decision_view` below, in the cursor, and nowhere else.
+-- contracts: SKIPPED — "calls user function "pure_ctx_of" that is not SMT-encodable
+-- in this context". The property is the paragraph above made mechanical:
+-- `result.decision_state == None`, D3's "other hook sites receive
+-- `decision_state = None`" stated as a postcondition rather than trusted to every
+-- host literal. Tried in exactly that form and skipped on the same callee.
 pure func entry_base(ctx: ExtCtx, e: ExtEntry) -> PureCtx {
   { pure_ctx_of(ctx, e.config) | decision_state: None }
 }
@@ -286,10 +291,23 @@ export type DecisionSite = FinalizeSite | ToolPolicySite
 
 export type DecisionCursor = { ext_id: string, atom: int, site: DecisionSite, request: DecisionRequest }
 
-pure func stub_usage() -> DecisionUsage {
+-- The stub arm contacts no provider, so its usage is KNOWN ZERO -- `Some(0)` -- and
+-- never unknown. The contract pins that ONE term rather than the record: `None` would
+-- leave the run's cost accounting incomplete for a call that demonstrably cost
+-- nothing, and `Some(n > 0)` would bill for a provider never reached. Those are the
+-- two ways this stub could lie; the token counts are free, since a caller that
+-- summed them would be summing zeros either way.
+pure func stub_usage() -> DecisionUsage
+  ensures { result.cost_millicents == Some(0) }
+{
   { input_tokens: Some(0), output_tokens: Some(0), cost_millicents: Some(0) }
 }
 
+-- contracts: SKIPPED — "calls "stub_usage" whose signature uses an unencodable type
+-- "()"". A nullary callee is unencodable however the CALLER is annotated, so
+-- `result.usage.cost_millicents == Some(0)` -- the unconfigured arm bills nothing and
+-- says so rather than reporting unknown -- skips here even though `stub_usage` proves
+-- it one declaration above.
 export pure func stub_decision_answer(_cursor: DecisionCursor) -> DecisionObservation {
   { result: Unavailable(UnconfiguredBackend), usage: stub_usage() }
 }
@@ -325,13 +343,30 @@ export pure func stub_decision_answer(_cursor: DecisionCursor) -> DecisionObserv
 --                   claimed.
 -- The mirror's real terms and the counter are line X's (P1.4x).
 -- ============================================================================
-pure func site_label(site: DecisionSite) -> string {
+-- The contract is about `invocation_id`, which is `ext/site/local` with this as its
+-- MIDDLE SEGMENT. An empty label would collapse that to `ext//local`, and a label
+-- shared by both sites would give one extension's finalize and tool-policy
+-- invocations the same id -- the ledger terms D5 keys on invocation would then merge
+-- two invocations into one. `result != ""` refuses the first; the equivalence refuses
+-- the second from the finalize side, which is the side an id collision has to pass
+-- through. Strictly weaker than the body: the tool-policy arm's spelling is left
+-- free, so it can be renamed without touching this.
+pure func site_label(site: DecisionSite) -> string
+  ensures { result != "" && ((site == FinalizeSite) == (result == "finalize")) }
+{
   match site {
     FinalizeSite => "finalize",
     ToolPolicySite => "tool_policy"
   }
 }
 
+-- contracts: SKIPPED — uses an unencodable builtin: show, from the `invocation_id`
+-- interpolation ("Z3 has no SMT-LIB encoding for show"). Tried as
+-- `result.interventions_used == 0 && result.run_cap_millicents == None` -- a state
+-- built at the cursor has spent no intervention and claims no cap, which is the
+-- `run_cap_millicents` paragraph above ("`Some(0)` is not a value this term can
+-- take") stated where a reader would look for it -- and it skips on the builtin
+-- before the solver sees the clause.
 export pure func decision_invocation_state(ext_id: string, site: DecisionSite, d: DecisionPolicyDescriptor) -> DecisionInvocationState {
   {
     invocation_id: "${ext_id}/${site_label(site)}/${d.local_id}",
@@ -348,6 +383,11 @@ export pure func decision_invocation_state(ext_id: string, site: DecisionSite, d
   }
 }
 
+-- contracts: SKIPPED — "calls user function "decision_invocation_state" that is not
+-- SMT-encodable in this context". The mirror of `entry_base`'s property --
+-- `result.decision_state != None`, so that the cursor is the ONLY site that stamps
+-- one and `entry_base` the only one that clears it -- was tried and skips on that
+-- callee. The pair is what the P1.4r fixtures read.
 export pure func decision_view(base: PureCtx, ext_id: string, site: DecisionSite, d: DecisionPolicyDescriptor) -> PureCtx {
   { base | decision_state: Some(decision_invocation_state(ext_id, site, d)) }
 }

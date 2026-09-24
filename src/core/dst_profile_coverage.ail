@@ -271,7 +271,18 @@ export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
 -- table does not widen the ADR.
 export type PurityBasis = EffectRow | DeclaredEmptyRow | ViewsPlusBoundary
 
-export pure func capability_purity_basis(k: CapabilityKind) -> PurityBasis {
+-- The contract is D2's re-basing and nothing wider: EXACTLY the two decision slots
+-- rest on views-plus-boundary, and no pre-8.0 slot does. Both directions are the
+-- point. A decision kind quietly filed `DeclaredEmptyRow` would claim compile-time
+-- purity the pin does not check (NOTE-001), and a 7.x rowless kind promoted to
+-- `ViewsPlusBoundary` would widen the ADR by table edit. The ten remaining kinds'
+-- split between `EffectRow` and `DeclaredEmptyRow` is deliberately left free, so this
+-- is strictly weaker than the body: a slot that gains an effect row moves without
+-- touching the contract.
+export pure func capability_purity_basis(k: CapabilityKind) -> PurityBasis
+  ensures { (result == ViewsPlusBoundary)
+              == (k == DecisionSolverJudgeKind || k == DecisionToolPolicyKind) }
+{
   match k {
     DescribeToolsKind => DeclaredEmptyRow,
     PromptShaperKind => DeclaredEmptyRow,
@@ -861,6 +872,12 @@ pure func first_atom_id(xs: [AtomRef]) -> string {
 -- between a decision kind and an old rowless one, which is the reading this
 -- table exists to keep apart; so the decision kinds are asserted by name, and
 -- so is one old rowless kind keeping its declared-row basis.
+-- contracts: BLOCKED — RECURSIVE over the kind list. `result >= 0 && result <=
+-- length(ks)` -- a count is bounded by what it counts, so no bucket can claim more
+-- kinds than exist -- ERRORS rather than skipping: "unrolling recursive function:
+-- ... unsupported pattern type *core.ListPattern in SMT encoding". The split this
+-- serves is `test_purity_basis_split_six_four_two` below, and the by-name assertions
+-- there are what the counting alone would miss.
 pure func count_purity(ks: [CapabilityKind], want: string) -> int {
   match ks {
     [] => 0,
@@ -869,7 +886,17 @@ pure func count_purity(ks: [CapabilityKind], want: string) -> int {
   }
 }
 
-pure func purity_name(b: PurityBasis) -> string {
+-- This is `count_purity`'s BUCKET KEY, so two bases sharing a name would merge two
+-- buckets while the split still added to twelve -- the failure the six/four/two
+-- assertion cannot see by itself. The contract pins the separation that carries the
+-- ADR's weight: `views-plus-boundary` names `ViewsPlusBoundary` and nothing else,
+-- because that basis is SUPPLIED AUTHORITY rather than compile-time purity and
+-- conflating it with `DeclaredEmptyRow` is exactly D2's warning. The other two
+-- spellings are left free.
+pure func purity_name(b: PurityBasis) -> string
+  ensures { result != ""
+              && ((b == ViewsPlusBoundary) == (result == "views-plus-boundary")) }
+{
   match b { EffectRow => "effect-row", DeclaredEmptyRow => "declared-empty-row", ViewsPlusBoundary => "views-plus-boundary" }
 }
 

@@ -209,6 +209,14 @@ export pure func kind_name(c: Capability) -> string {
 -- `ToolPolicy`/`DecisionToolPolicy` per extension. Kind names are NOT the
 -- family key -- that is exactly what let a legacy and a new variant pass as
 -- "different kinds" -- so the walk below tracks families beside kinds.
+-- contracts: SKIPPED — the fragment cannot declare `Capability`'s sorts: "sort
+-- "Record_key_value" referenced in declaration of "Json" is not declared". The
+-- property worth stating is that these four kinds fall into exactly TWO families,
+-- so no vote kind is quietly its own family and D2's at-most-one is per family
+-- rather than per kind; tried as
+-- `result == None || result == Some("tool-policy") || result == Some("finalize")`
+-- and skipped on the same unresolved sort. The rule it serves is checked by the
+-- three one-family fixtures below.
 export pure func vote_family(c: Capability) -> Option[string] {
   match c {
     ToolPolicy(_) => Some("tool-policy"),
@@ -384,6 +392,11 @@ export pure func normalize_registry(regs: [ExtEntry]) -> Result[NormalizedRegist
 -- ============================================================================
 
 -- The data positions of one atom, as the epoch snapshot records them.
+-- contracts: SKIPPED — builds `Json`: "calls user function "js" that is not
+-- SMT-encodable in this context". `result != jo([])` -- every atom discloses at
+-- least its kind, so no atom hashes as the empty object -- skips on the same call.
+-- Which positions are disclosed is asserted by the four `test_config_digest_sees_*`
+-- cases below, each of which moves one position and requires the digest to move.
 export pure func capability_data(c: Capability) -> Json {
   let kind = kv("kind", js(kind_name(c)));
   match c {
@@ -394,6 +407,11 @@ export pure func capability_data(c: Capability) -> Json {
   }
 }
 
+-- contracts: BLOCKED — RECURSIVE over the name list. `length(result) == length(xs)`
+-- -- a provider's advertised names are neither dropped nor duplicated on the way
+-- into the digest material -- ERRORS rather than skipping: "unrolling recursive
+-- function: ... unsupported pattern type *core.ListPattern in SMT encoding". The
+-- fragment cannot unroll a cons pattern at all, so no contract reaches the solver.
 pure func strings_json(xs: [string]) -> [Json] {
   match xs {
     [] => [],
@@ -401,6 +419,10 @@ pure func strings_json(xs: [string]) -> [Json] {
   }
 }
 
+-- contracts: BLOCKED — RECURSIVE; see `strings_json`. `length(result) ==
+-- length(caps)` -- one data position per atom, list order preserved, which is what
+-- makes the digest sensitive to atom ORDER and not just to atom content -- ERRORS on
+-- the same ListPattern unrolling.
 pure func atoms_data(caps: [Capability]) -> [Json] {
   match caps {
     [] => [],
@@ -410,11 +432,23 @@ pure func atoms_data(caps: [Capability]) -> [Json] {
 
 -- The value the digest is taken over, before canonicalisation: `config` beside
 -- the atoms' data positions in list order.
+-- contracts: SKIPPED — builds `Json`: "calls user function "kv" that is not
+-- SMT-encodable in this context". The property is ADR-001 (031) N58's and it is the
+-- reason this function exists: the material carries `config` AND the atoms' data
+-- positions, so a digest cannot be blind to either half. `result != jo([])` skips on
+-- the same call. `test_config_digest_covers_config` holds the atoms fixed and moves
+-- the config; the four `sees` cases hold the config fixed and move a position.
 export pure func config_digest_material(config: Json, caps: [Capability]) -> Json {
   jo([kv("config", config), kv("atoms", ja(atoms_data(caps)))])
 }
 
 -- Byte-order string comparison (no `<` on strings at the pin): -1, 0, 1.
+-- contracts: SKIPPED — uses an unencodable builtin: std/string.charAt. Tried as
+-- `result == -1 || result == 0 || result == 1`, the ordering's three-valued range,
+-- and the builtin is refused before the contract is considered ("Z3 has no SMT-LIB
+-- encoding for std/string.charAt"). That this is a TOTAL order -- antisymmetric, so
+-- `sort_kvs` cannot depend on input order -- is what
+-- `test_config_digest_ignores_callbacks_and_is_canonical` reads through the digest.
 pure func compare_bytes(a: string, b: string, i: int) -> int {
   if i >= string_length(a) then (if i >= string_length(b) then 0 else -1)
   else if i >= string_length(b) then 1
@@ -425,6 +459,10 @@ pure func compare_bytes(a: string, b: string, i: int) -> int {
   }
 }
 
+-- contracts: BLOCKED — RECURSIVE over the sorted list. `length(result) ==
+-- length(sorted) + 1` -- insertion adds exactly one key and drops none, so sorting
+-- cannot silently deduplicate two equal keys into one -- ERRORS: "unrolling recursive
+-- function: ... unsupported pattern type *core.ListPattern in SMT encoding".
 pure func insert_kv(p: { key: string, value: Json }, sorted: [{ key: string, value: Json }]) -> [{ key: string, value: Json }] {
   match sorted {
     [] => [p],
@@ -432,6 +470,9 @@ pure func insert_kv(p: { key: string, value: Json }, sorted: [{ key: string, val
   }
 }
 
+-- contracts: BLOCKED — RECURSIVE; see `insert_kv`. `length(result) == length(kvs)`
+-- -- the sort is a PERMUTATION and not a filter, which is what makes canonicalisation
+-- order-only and the digest lossless -- ERRORS on the same ListPattern unrolling.
 pure func sort_kvs(kvs: [{ key: string, value: Json }]) -> [{ key: string, value: Json }] {
   match kvs {
     [] => [],
@@ -439,6 +480,10 @@ pure func sort_kvs(kvs: [{ key: string, value: Json }]) -> [{ key: string, value
   }
 }
 
+-- contracts: BLOCKED — MUTUALLY RECURSIVE with `canonical`: "circular function call
+-- detected: canonical_list → canonical → canonical_list". `length(result) ==
+-- length(kvs)` -- recursing into the values rewrites no key and loses no pair --
+-- fails to encode for the cycle, not for want of a property.
 pure func canonical_kvs(kvs: [{ key: string, value: Json }]) -> [{ key: string, value: Json }] {
   match kvs {
     [] => [],
@@ -449,6 +494,11 @@ pure func canonical_kvs(kvs: [{ key: string, value: Json }]) -> [{ key: string, 
   }
 }
 
+-- contracts: BLOCKED — MUTUALLY RECURSIVE; the verifier names the other arc of the
+-- same cycle: "circular function call detected: canonical → canonical_kvs →
+-- canonical". `length(result) == length(xs)` -- ARRAY ORDER IS PRESERVED, the half of
+-- canonicalisation that must NOT sort, since a tool-name list is ordered -- ERRORS
+-- there.
 pure func canonical_list(xs: [Json]) -> [Json] {
   match xs {
     [] => [],
@@ -457,6 +507,12 @@ pure func canonical_list(xs: [Json]) -> [Json] {
 }
 
 -- Object keys sorted by byte value at every depth; everything else unchanged.
+-- contracts: SKIPPED — "calls user function "canonical_kvs" that is not
+-- SMT-encodable in this context", that callee being blocked by the cycle above. The
+-- property is the comment's: key ORDER is the only thing canonicalisation changes.
+-- `result != JNull` skips on the same callee. Checked through the digest by
+-- `test_config_digest_ignores_callbacks_and_is_canonical`, which writes one config
+-- in two key orders and requires one digest.
 export pure func canonical(j: Json) -> Json {
   match j {
     JObject(kvs) => JObject(sort_kvs(canonical_kvs(kvs))),
@@ -465,11 +521,25 @@ export pure func canonical(j: Json) -> Json {
   }
 }
 
+-- contracts: BLOCKED — the `canonical` cycle again: "circular function call
+-- detected: canonical_list → canonical → canonical_kvs → canonical". Even
+-- `result != ""` ERRORS. Determinism for equal inputs -- the property this function
+-- exists for -- relates TWO calls, which the single-result `ensures` form cannot
+-- state even where the fragment reaches; the digest fixtures below compare two calls
+-- directly, which is the shape the claim actually has.
 export pure func canonical_json(j: Json) -> string {
   encode(canonical(j))
 }
 
 -- The digest: `sha256:` over the canonical JSON of the material.
+-- contracts: SKIPPED — uses an unencodable builtin: show, from the `"sha256:${...}"`
+-- interpolation ("Z3 has no SMT-LIB encoding for show"). `result != ""` was tried and
+-- skips on the same builtin. What the digest must depend on -- the config AND the
+-- constructor data positions, ADR-001 (031) N58 -- is a statement about how the
+-- result MOVES when an input moves, so it needs two calls: the four
+-- `test_config_digest_sees_*` cases each move one position and require a different
+-- digest, and `test_config_digest_ignores_callbacks_and_is_canonical` moves a
+-- callback and requires the same one.
 export pure func ext_config_digest(e: ExtEntry) -> string {
   "sha256:${sha256Hex(canonical_json(config_digest_material(e.config, e.caps)))}"
 }
@@ -477,6 +547,11 @@ export pure func ext_config_digest(e: ExtEntry) -> string {
 -- Every entry's digest, registry order -- the per-epoch snapshot's row list.
 export type ExtConfigDigest = { id: string, digest: string }
 
+-- contracts: BLOCKED — RECURSIVE, and through `ext_config_digest` it inherits the
+-- `canonical` cycle besides: "circular function call detected: canonical_json →
+-- canonical → canonical_list → canonical". `length(result) == length(entries)` --
+-- one row per entry in registry order, so a snapshot cannot silently omit an
+-- extension -- ERRORS for that reason.
 export pure func ext_config_digests(entries: [ExtEntry]) -> [ExtConfigDigest] {
   match entries {
     [] => [],
