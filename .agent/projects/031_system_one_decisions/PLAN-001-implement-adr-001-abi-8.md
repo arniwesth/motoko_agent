@@ -1093,6 +1093,40 @@ instead of another silent month. Every other target in the job measures at most 
 | `pipefail` is load-bearing | failing producer behind a succeeding filter: **rc=1 with it, rc=0 without** |
 | **CI `DST gates (rest)`** | **success in 7 m 21 s** (run `36020324853`) — first green, folded back to one step |
 
+### CI-LINEGUARD — 2026-09-24, commit `c722b952` (the gate generalised, operator's ruling)
+
+On the operator's ruling after CI-COMPACTION: extend the line guard from the one job that had it to the
+whole workflow, so the NEXT target that learns to print a megabyte line is a fast red with a name rather
+than another month of silent 25-minute cancellations.
+
+**One mechanism, not thirteen copies:** `defaults.run.shell: bash scripts/ci_guarded_shell.sh {0}`. The
+wrapper runs a step exactly as `shell: bash` does (`bash --noprofile --norc -eo pipefail`) with stdout and
+stderr through `line_guard.sh 16384 --strict`. **A step added later is guarded by construction**, not by
+someone remembering.
+
+**The bound is measured, not chosen.** Each job's longest line in CI (run `36020314940`): check_core 115,
+smoke_no_delegated_storm 63, heavy 553, rest 4142 (cut at source), smoke_parity 48, test_coverage 86,
+seeded/verify_core/mutations/classify 80/101/113/112, new_contract_policy ≤278, dst_l2 40/151. **16384 sits
+30x–300x above all of them.** No step's stdout has a consumer (no `tee`, no step summary; `dst-setup`'s
+`GITHUB_OUTPUT`/`GITHUB_PATH` are files).
+
+**Not covered, stated rather than glossed:** `dst-setup`'s composite-action steps take no workflow defaults
+(max 193 chars there today).
+
+| receipt (orchestrator's own run) | result |
+|---|---|
+| failing step keeps its status through the wrapper | **rc=3** |
+| **`pipefail` load-bearing**, by my own mutation | **rc=0 stripped vs rc=3 kept** |
+| 20 KB line on **stderr** reds a passing step | rc=1, named; the runner sees **16425**, not 20000 |
+| wrapped vs direct output of a real target | **byte-identical**, same status |
+| **mutant** run `36028248340` | **6 of 6 jobs red at their FIRST run step**, every one annotated `line_guard` |
+| **normal** run `36028240250` | green everywhere the guard touches; **neither red carries a `line_guard` annotation** |
+
+**Why the pair is the evidence.** Red-under-mutation alone would only show the guard can fail a job; green
+-without-it alone would only show it does not fire. Together they show it fires on exactly the condition it
+names. The `test_coverage` job is the one to check in the mutant run: it reds at `smoke_parity`, its first
+run step — **not** at the `session.ail` cap — so its pre-existing flake is not what produced the red.
+
 ## 10. Estimates
 
 | phase | delegate-days |
