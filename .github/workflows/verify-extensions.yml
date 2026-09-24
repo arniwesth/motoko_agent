@@ -153,6 +153,18 @@ jobs:
         timeout-minutes: 4
         run: scripts/ci_hang_probe.sh 150 make compaction_dst_long_qwen
 
+      # Runs 36014490004 and 36014504002 BOTH wedged in the step above, past
+      # the probe's 150 s and the step's own 4 min, and kept no log. Its output
+      # now goes to a file and this uploads it, so the evidence survives even a
+      # job that dies "cancelled".
+      - name: upload probe record (compaction_dst)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-hang-probe-compaction_dst
+          path: ${{ runner.temp }}/ci_hang_probe/
+          if-no-files-found: warn
+
       - name: conformance
         if: ${{ !cancelled() }}
         run: make conformance
@@ -161,6 +173,14 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 8
         run: scripts/ci_hang_probe.sh 360 make phase_c_l1
+
+      - name: upload probe record (phase_c_l1)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-hang-probe-phase_c_l1
+          path: ${{ runner.temp }}/ci_hang_probe/phase_c_l1.*
+          if-no-files-found: warn
 
       - name: profile_coverage
         if: ${{ !cancelled() }}
@@ -197,6 +217,45 @@ jobs:
       - name: ext_call_inventory_selftest
         if: ${{ !cancelled() }}
         run: make ext_call_inventory_selftest
+
+      # DIAGNOSTIC, LAST ON PURPOSE. long_qwen_compaction_dst prints 2.67 MB of
+      # session events, four of them single lines of 838 KB, 1.05 MB, 200 KB and
+      # 200 KB (history_seeded carrying the scenario's megabyte messages); no
+      # other script here prints a line over 1.5 KB. This step sends exactly
+      # those bytes through the runner with ailang out of the picture: `cat` of
+      # the file the probe captured. If it wedges the way the script's step did,
+      # the hang is the runner's handling of the output, not the script.
+      - name: 'diag: replay long_qwen raw stdout through the runner (no ailang)'
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: cat "$RUNNER_TEMP/ci_hang_probe/compaction_dst_long_qwen.out"
+
+  # DIAGNOSTIC. The same question as the replay above, with no checkout, no
+  # setup and no ailang: does one long line wedge a runner, and from what
+  # length? Ordered so the first step that wedges brackets the threshold.
+  runner_long_line:
+    name: 'diag: runner vs one long log line'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: control -- 1 MB as 1000 lines of 1000 chars
+        timeout-minutes: 2
+        run: python3 -c 'print(("x" * 1000 + "\n") * 1000, end="")'
+
+      - name: one line of 64 KB
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        run: python3 -c 'print("x" * 65536)'
+
+      - name: one line of 256 KB
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        run: python3 -c 'print("x" * 262144)'
+
+      - name: one line of 1 MB
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        run: python3 -c 'print("x" * 1048576)'
 
   # ~11 min. The second coverage axis (WI-A17) plus smoke_parity: 334 s and
   # 108 s cold. check_core type-checks src/core and never runs its inline
