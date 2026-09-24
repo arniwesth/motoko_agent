@@ -1173,6 +1173,51 @@ enforce. The change **increases** what the gate verifies.
 **Upstream:** the double-elaboration is AILANG ticket `fb_380d25d641a428b6` (NOTE-002), filed rather than
 absorbed.
 
+### CONTRACTS-SCOPE — 2026-09-24, commits `036f2fdc`, `80630f17` (027's ruling implemented)
+
+The last red on PR 186, and the only one that was red **by design**: `new_contract_policy` reported **83 of
+109** while 027 decided whether §4 covers test-only declarations. The operator ruled **reading 2**
+(`f6c3768b`): a `pure func` reachable **only** from a `tests [...]` block is out of scope; scope is
+**computed from the call graph, never asserted**.
+
+**Why the cheap implementations were rejected**, measured on the 83 held declarations: only **14** are named
+`test_*` and only **4** sit under a `test/` path, while **79** are test-only *declarations* inside production
+*files*. A naming convention catches 17%, a path rule 5%. And a self-declared `-- contracts: TEST-ONLY`
+token would repeat the very failure §4 exists to close — an honest comment and a misleading one look alike.
+
+**The pass** builds each module's reference graph: an edge wherever a declaration's text names another —
+applied, unapplied, aliased, in a contract, in a lambda, in a `${...}` interpolation. Production roots are
+exports and `main`; test roots are the `tests` clauses. It reads no name, path, suffix or comment and keeps
+no list. A private declaration cannot be named outside its module, so each file is analysed alone and **an
+export is never exempt**. A module the lexer cannot read keeps every declaration **in scope** — it fails
+toward requiring a contract.
+
+**It did not tune to the prediction.** The brief said 83 was a prediction, not a target; the pass reports
+**87 out of scope, 22 in scope, all justified**, and accounts for the difference: the 83, plus `count_purity`
+and `purity_name` — hand-classified as production but reached only by `test_purity_basis_split_six_four_two`
+— plus two `test_*` that already carried checked excuses. **The analysis corrected our manual
+classification**, which is the outcome that argues it is measuring something real.
+
+**A latent hole closed on the way:** the diff walk skipped `*_test.ail`. That was a path rule letting a
+production file out of §4 **by a rename**; it is gone.
+
+| receipt (orchestrator's own run) | result |
+|---|---|
+| `make new_contract_policy BASE=origin/main_dst` | **rc=0** — 22 in scope all justified, 87 out; each exemption prints its path |
+| **my own mutation A**: an exempt helper made reachable from an export | **rc=2 red**, naming `export tools_with_extensions -> catalog_rt`, cascading downstream |
+| **my own mutation B**: a production helper named `test_*` **and** commented `-- contracts: TEST-ONLY` | **rc=2 red** — "claims `TEST-ONLY`, and the claim could not be [verified]", plus the reachability path |
+| `test_new_contract_policy.py` (delegate's suite, run by `verify_classify_check`) | 13 tests, rc=0 |
+| CI `verify_core + mutations + classify + contract policy` | **success** (run `36050205464`) — first green on the branch |
+
+**Method note.** My first attempt at mutation B came back green and looked like a hole. It was not: the
+candidate set comes from the **committed** diff while reachability reads the **working tree**, so an
+uncommitted new declaration is never a candidate. Re-run with the mutation committed (unwound without
+`reset --hard`, since other sessions hold uncommitted work in this tree), it is caught. Recorded because a
+less careful check would have reported a false hole.
+
+**§4's text**: `DRAFT-2026-09-24-adr001-s4-scope-amendment.md` proposes the wording. It is **not adopted** —
+§4 is 027's document, and 027 adopts, amends or refuses it.
+
 ## 10. Estimates
 
 | phase | delegate-days |
