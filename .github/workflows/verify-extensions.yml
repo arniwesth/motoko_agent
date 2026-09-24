@@ -94,7 +94,10 @@ jobs:
   dst_gates_rest:
     name: DST gates (rest)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, not 20, only while compaction_dst's five scripts are probed one step
+    # each: if all five hang, 5 x ~3 min of probe plus phase_c_l1's re-run must
+    # still leave the rest of the job time to report. Back to 20 on the fold.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -117,42 +120,82 @@ jobs:
       #
       # 2026-09-24, run 36010382877: the split named it -- `compaction_dst` ran
       # past 20 min against 59 s cold locally, every later step pending behind
-      # it. The target is five `ailang run` invocations (Makefile:2447); the
-      # next split to make is between those five.
-      - name: compaction_dst
-        run: make compaction_dst
+      # it. The target is five `ailang run` invocations, so the next split is
+      # between those five: one step per script (the compaction_dst_* parts in
+      # the Makefile), each under scripts/ci_hang_probe.sh. The probe lets a
+      # script run 150 s -- the WHOLE target takes 59 s locally -- and past that
+      # prints what the process tree is blocked on (wait channels, fds, stdin,
+      # sockets, CPU sampled twice) and SIGQUITs ailang for a goroutine dump, so
+      # a hang fails in minutes with a signature instead of as "cancelled".
+      # Every later step runs `if: !cancelled()`, so one red names ALL of them.
+      # phase_c_l1 is probed too: `phase_c_l1: compaction_dst` re-runs all five.
+      - name: compaction_dst / compaction_policy_dst
+        timeout-minutes: 4
+        run: scripts/ci_hang_probe.sh 150 make compaction_dst_policy
+
+      - name: compaction_dst / compaction_catalog_dst
+        if: ${{ !cancelled() }}
+        timeout-minutes: 4
+        run: scripts/ci_hang_probe.sh 150 make compaction_dst_catalog
+
+      - name: compaction_dst / runtime_status_tool_dst
+        if: ${{ !cancelled() }}
+        timeout-minutes: 4
+        run: scripts/ci_hang_probe.sh 150 make compaction_dst_runtime_status
+
+      - name: compaction_dst / scripted_cursor_probe
+        if: ${{ !cancelled() }}
+        timeout-minutes: 4
+        run: scripts/ci_hang_probe.sh 150 make compaction_dst_cursor_probe
+
+      - name: compaction_dst / long_qwen_compaction_dst
+        if: ${{ !cancelled() }}
+        timeout-minutes: 4
+        run: scripts/ci_hang_probe.sh 150 make compaction_dst_long_qwen
 
       - name: conformance
+        if: ${{ !cancelled() }}
         run: make conformance
 
-      - name: phase_c_l1
-        run: make phase_c_l1
+      - name: phase_c_l1 (re-runs compaction_dst first)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 8
+        run: scripts/ci_hang_probe.sh 360 make phase_c_l1
 
       - name: profile_coverage
+        if: ${{ !cancelled() }}
         run: make profile_coverage
 
       - name: profile_definition
+        if: ${{ !cancelled() }}
         run: make profile_definition
 
       - name: driver_only
+        if: ${{ !cancelled() }}
         run: make driver_only
 
       - name: fault_catalogue
+        if: ${{ !cancelled() }}
         run: make fault_catalogue
 
       - name: event_vocabulary
+        if: ${{ !cancelled() }}
         run: make event_vocabulary
 
       - name: attribution_table
+        if: ${{ !cancelled() }}
         run: make attribution_table
 
       - name: predicate_anchors
+        if: ${{ !cancelled() }}
         run: make predicate_anchors
 
       - name: ext_call_inventory
+        if: ${{ !cancelled() }}
         run: make ext_call_inventory
 
       - name: ext_call_inventory_selftest
+        if: ${{ !cancelled() }}
         run: make ext_call_inventory_selftest
 
   # ~11 min. The second coverage axis (WI-A17) plus smoke_parity: 334 s and

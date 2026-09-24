@@ -2444,13 +2444,34 @@ dst_seeded:
 	ailang run --caps IO,Env,Rand --entry main scripts/dst/compaction_seeded_dst.ail
 	ailang run --caps IO,Env,Rand --entry main scripts/dst/phase_c_seeded_dst.ail
 
+# Each of the five lines is also its own target, so CI can give each script
+# its own step, time limit and name (LEG-CI-COMPACTION: the target ran past 20
+# minutes in CI against 59 s locally, and a five-line step cannot say which
+# line). The parts share compaction_dst's cache lane and compaction_dst keeps
+# its serial recipe, so `make compaction_dst` and `make dst` are unchanged.
+COMPACTION_DST_POLICY         = ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail
+COMPACTION_DST_CATALOG        = ailang run --caps IO,Env,FS --entry main scripts/dst/compaction_catalog_dst.ail
+COMPACTION_DST_RUNTIME_STATUS = ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
+COMPACTION_DST_CURSOR_PROBE   = ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/scripted_cursor_probe.ail < /dev/null
+COMPACTION_DST_LONG_QWEN      = ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
+  scripts/dst/long_qwen_compaction_dst.ail < /dev/null
+COMPACTION_DST_PARTS := compaction_dst_policy compaction_dst_catalog compaction_dst_runtime_status \
+  compaction_dst_cursor_probe compaction_dst_long_qwen
+
 compaction_dst:
-	ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail
-	ailang run --caps IO,Env,FS --entry main scripts/dst/compaction_catalog_dst.ail
-	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
-	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/scripted_cursor_probe.ail < /dev/null
-	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
-	  scripts/dst/long_qwen_compaction_dst.ail < /dev/null
+	$(COMPACTION_DST_POLICY)
+	$(COMPACTION_DST_CATALOG)
+	$(COMPACTION_DST_RUNTIME_STATUS)
+	$(COMPACTION_DST_CURSOR_PROBE)
+	$(COMPACTION_DST_LONG_QWEN)
+
+.PHONY: $(COMPACTION_DST_PARTS)
+$(COMPACTION_DST_PARTS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/compaction_dst
+compaction_dst_policy:         ; $(COMPACTION_DST_POLICY)
+compaction_dst_catalog:        ; $(COMPACTION_DST_CATALOG)
+compaction_dst_runtime_status: ; $(COMPACTION_DST_RUNTIME_STATUS)
+compaction_dst_cursor_probe:   ; $(COMPACTION_DST_CURSOR_PROBE)
+compaction_dst_long_qwen:      ; $(COMPACTION_DST_LONG_QWEN)
 
 conformance:
 	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/invariants.ail
