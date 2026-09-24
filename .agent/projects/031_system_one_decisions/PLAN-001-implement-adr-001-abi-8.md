@@ -1127,6 +1127,52 @@ seeded/verify_core/mutations/classify 80/101/113/112, new_contract_policy ≤278
 names. The `test_coverage` job is the one to check in the mutant run: it reds at `smoke_parity`, its first
 run step — **not** at the `session.ail` cap — so its pre-existing flake is not what produced the red.
 
+### CI-COVERAGE-CAP — 2026-09-24, commits `79781ab2`, `5a1b5f7a` (R-G red #2, operator's ruling)
+
+The second of R-G's three reds, and the last CI defect on the branch. `make test_coverage` had gone red on
+**9 of 11** CI runs, every time `src/core/session.ail` over the 300 s per-file cap.
+
+**Not flakiness, and not contention — the file's own cost.** `ailang test` (v0.33.0) re-runs the whole
+compile pipeline on a module **twice per test case** (`runner.go:67,78`); `session.ail` is the largest module
+and carries 41 cases, **40% of the walk's CPU**. On CI (4 vCPU, three runner draws) it measured 262–267 s
+alone and 338–371 s inside the walk, against a 300 s cap: **the cap was below the file's own cost**, and the
+greens were fast-runner luck. Contention added the last 10–15%, not the failure.
+
+**The split was measured and rejected, which is the part worth keeping.** Moving the tests to a companion
+module is **no cheaper** — 7.3 vs 8.1 CPU-s per case, because the import is re-elaborated per case too — and
+would have required exporting **45 private functions**, taking `session.ail` from 19 to ~64 exports. So it
+would have bought no real saving while tripling the module's public surface, purely to stop tripping a
+per-file cap. The tests stayed where they are.
+
+**The fix:** cap 300 → **600 s** (1.75x the worst measured, still catching a hang inside the job's 25-minute
+budget); `TEST_COVERAGE_JOBS = min(6, nproc)` (at 6 on 4 vCPU every file stretched and the walk got
+*slower*); and `derive.py` now records per-file wall and CPU and **prints the slowest three against the cap
+on every run**, so the margin is visible before it trips.
+
+**Scope, stated rather than assumed (`5a1b5f7a`, comment-only — no behaviour change):** deterministic on a
+**dedicated** runner, **advisory** on a shared one. `nproc` counts cores, not idle ones. A timed-out file now
+carries the CPU it had used when killed, and that cores figure separates the readings: at or above the file's
+usual rate it got more expensive; well under but not near zero, the machine starved it; near zero, it
+blocked. Jobs are deliberately **not** derived from load — a sampled input makes two runs on one machine
+differ, the load here arrives *mid-walk* (6.5 at one run's start, mean 28 across it), and a shared VM
+kernel's load average is not idle cores anyway (28 while 4.8 of 8 were busy).
+
+| receipt (orchestrator's own run) | result |
+|---|---|
+| **CI, five green runs across five independent draws** | `session.ail` at **43%, 46%, 54%, 58%** of the 600 s cap; next-slowest file 36% |
+| `make test_coverage_selftest` | **rc=0, 12 s**; a file over the cap fires `unrunnable`, **"killed at the cap, not waited for"**, and a file under it survives |
+| the timeout diagnostic, exercised directly | `did not finish within 5s, having used 7 CPU-s = **1.3 cores**` |
+| `79781ab2..5a1b5f7a` Makefile diff | **comment-only** — the CI evidence carries to HEAD |
+| my own local `make test_coverage` | **RED**, two files at the cap — and correctly so: `session.ail` alone on the same box is 330 s / 475 CPU-s, so the walk was starved by other sessions. The new margin line named both files and their percentages in one command. |
+
+**The strongest evidence that this is a fix and not a dodge is in the totals:** 557 tests across 49 files
+before, **598 across 50** after. Those **+41 are `session.ail`'s own cases**, which were never running while
+the file was `[unrunnable]` — the gate had been red *and* silently skipping the coverage it exists to
+enforce. The change **increases** what the gate verifies.
+
+**Upstream:** the double-elaboration is AILANG ticket `fb_380d25d641a428b6` (NOTE-002), filed rather than
+absorbed.
+
 ## 10. Estimates
 
 | phase | delegate-days |
