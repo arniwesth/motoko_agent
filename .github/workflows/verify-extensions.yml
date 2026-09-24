@@ -29,6 +29,18 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+# JOBS, AND WHY THERE ARE FIVE. Until 2026-09-24 this workflow ran everything in
+# one 20-minute job, and on a branch it never finished: measured cold that job is
+# ~25 min of work locally and ~30-34 min here (CI runs this serial, compile-bound
+# work about 1.15x slower than the dev box -- check_core: 139 s local, 160 s here).
+# It died in "DST AILANG gates" every time, including at 2f3ee4d1 before the ABI
+# 8.0 line. The targets were never the problem: all 15 gates pass cold in 644 s.
+# The split gives each share its own runner and its own red check, so a failure
+# names itself instead of arriving as "cancelled". Per-target cold measurements
+# (local seconds) are in the job comments; each job re-pays ~2.5 min of setup
+# through .github/actions/dst-setup, which is why the shares are grouped rather
+# than one-job-per-target.
+
 concurrency:
   group: verify-extensions-${{ github.ref }}
   cancel-in-progress: true
@@ -40,117 +52,16 @@ env:
   TRUNK: main_dst
 
 jobs:
-  verify_extensions:
-    name: verify_extensions + check_core + smoke_no_delegated_storm
+  # ~5 min: the fast signal. check_core type-checks all of src/core against
+  # freshly-resolved deps, so it is the check that should fail first and alone.
+  core:
+    name: check_core + verify_extensions + smoke_no_delegated_storm
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # new_contract_policy diffs against the PR base, which a depth-1
-          # checkout does not have.
-          fetch-depth: 0
-
-      - name: Read AILANG floor from ailang.toml (single source of truth)
-        id: pin
-        run: |
-          # Parse floor from: ailang = ">=X.Y.Z"
-          version=$(grep -E '^ailang\s*=' ailang.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
-          if [[ -z "$version" ]]; then
-            echo "::error::Could not parse ailang floor from ailang.toml" >&2
-            exit 1
-          fi
-          ref="v${version}"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "ailang.toml floor: $ref"
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22.5'
-          cache: false
-
-      - name: Build AILANG at pinned ref
-        env:
-          AILANG_REF: ${{ steps.pin.outputs.ref }}
-        run: |
-          set -euo pipefail
-          src="$HOME/.local/share/ailang"
-          git clone --depth 1 --branch "$AILANG_REF" \
-            https://github.com/sunholo-data/ailang "$src"
-          commit="$(git -C "$src" rev-parse HEAD)"
-          build_time="$(date -u '+%Y-%m-%d_%H:%M:%S')"
-          ldflags="-X github.com/sunholo-data/ailang/internal/version.Version=${AILANG_REF}"
-          ldflags="${ldflags} -X github.com/sunholo-data/ailang/internal/version.Commit=${commit}"
-          ldflags="${ldflags} -X github.com/sunholo-data/ailang/internal/version.BuildTime=${build_time}"
-          (cd "$src" && go build -ldflags "$ldflags" -o "$HOME/.local/bin/ailang" ./cmd/ailang)
-          mkdir -p "$HOME/.local/bin"
-          chmod +x "$HOME/.local/bin/ailang"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Confirm ailang version
-        run: ailang --version
-
-      # `ailang verify` shells out to Z3; without it EVERY module errors. That
-      # went unnoticed for as long as verify_core ran under continue-on-error,
-      # which discarded the exit code -- so the target has never actually
-      # verified anything here. Installing the solver is what makes the step
-      # mean what its name says. scripts/install-prerequisites.sh names z3 for
-      # the same reason; this job builds ailang directly and so must too.
-      - name: Install Z3
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends z3
-          z3 --version
-
-      - name: Hydrate extension packages
-        run: make CI=1 sync_packages
-
-      # verify_dagr_producer's contract leg -- the ONLY place a published dagr
-      # document is checked against the real schema -- runs only if a dagr
-      # binary is on PATH, and skips green otherwise. No step installed one, so
-      # that leg has never run in CI. Herdr is not installed here either, so
-      # this fetches the same checksum-verified release asset the plugin's own
-      # install.sh would, at the pin the Makefile names. DAGR_REQUIRED=1 on the
-      # step below is the other half: without it, a fetch that quietly fails
-      # would put the skip back and CI would be green for a check that did not
-      # run.
-      - name: Install pinned dagr (the contract checker)
-        run: |
-          set -euo pipefail
-          version=$(sed -nE 's/^DAGR_VERSION \?= ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' Makefile | head -n1)
-          if [[ -z "$version" ]]; then
-            echo "::error::Could not parse DAGR_VERSION from Makefile" >&2
-            exit 1
-          fi
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64)               target="x86_64-unknown-linux-musl" ;;
-            Linux-aarch64 | Linux-arm64) target="aarch64-unknown-linux-musl" ;;
-            *)
-              echo "::error::no pinned dagr build for $(uname -s)-$(uname -m)" >&2
-              exit 1
-              ;;
-          esac
-          base="https://github.com/aemrebarut/herdr-dagr/releases/download/v${version}"
-          tmp="$(mktemp -d)"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-            "$base/dagr-$target.tar.gz" -o "$tmp/dagr.tar.gz"
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-            "$base/dagr-$target.sha256" -o "$tmp/dagr.sha256"
-          expected=$(awk 'NR == 1 {print $1}' "$tmp/dagr.sha256")
-          actual=$(sha256sum "$tmp/dagr.tar.gz" | awk '{print $1}')
-          if [[ "$expected" != "$actual" ]]; then
-            echo "::error::dagr checksum mismatch (expected $expected, got $actual)" >&2
-            exit 1
-          fi
-          tar -xzf "$tmp/dagr.tar.gz" -C "$tmp"
-          mkdir -p "$HOME/.local/bin"
-          install -m 0755 "$tmp/dagr" "$HOME/.local/bin/dagr"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/dagr" --version
+      - uses: ./.github/actions/dst-setup
 
       - name: check_core (verify_extensions + type-check src/core/*.ail)
         env:
@@ -161,8 +72,74 @@ jobs:
       - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)
         run: make smoke_no_delegated_storm
 
-      - name: DST AILANG gates
-        run: make --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver
+  # ~10 min. The three heaviest DST gates, measured cold: terminal_trace 213 s,
+  # smoke_driver 92 s, world_state 72 s. They are one job so the other twelve
+  # are not held behind them.
+  dst_gates_heavy:
+    name: DST gates (heavy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/dst-setup
+
+      - name: DST AILANG gates — heavy
+        run: make --keep-going terminal_trace smoke_driver world_state
+
+  # ~8 min. The remaining twelve gates, 267 s cold together: phase_c_l1 65,
+  # compaction_dst 59, profile_definition 47, driver_only 29, fault_catalogue 19,
+  # event_vocabulary 17, conformance 13, ext_call_inventory(_selftest) 15,
+  # attribution_table + profile_coverage + predicate_anchors 3.
+  dst_gates_rest:
+    name: DST gates (rest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/dst-setup
+
+      - name: DST AILANG gates — rest
+        run: |
+          make --keep-going compaction_dst conformance phase_c_l1 profile_coverage \
+            profile_definition driver_only fault_catalogue event_vocabulary \
+            attribution_table predicate_anchors ext_call_inventory \
+            ext_call_inventory_selftest
+
+  # ~11 min. The second coverage axis (WI-A17) plus smoke_parity: 334 s and
+  # 108 s cold. check_core type-checks src/core and never runs its inline
+  # tests; test_coverage runs every one of them, and stays its own red check so
+  # a coverage regression is legible as itself.
+  coverage:
+    name: test_coverage + smoke_parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/dst-setup
+
+      - name: smoke_parity
+        run: make smoke_parity
+
+      - name: test_coverage (run every inline test under src/core)
+        run: make test_coverage_selftest test_coverage
+
+  # ~6 min: the seeded gate and the three verify ratchets (76 + 42 + 88 s cold),
+  # plus the contract policy, which needs the full history its checkout fetches.
+  verify:
+    name: verify_core + mutations + classify + contract policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # new_contract_policy diffs against the PR base, which a depth-1
+          # checkout does not have.
+          fetch-depth: 0
+      - uses: ./.github/actions/dst-setup
 
       - name: DST seeded gate
         run: |
@@ -171,16 +148,6 @@ jobs:
           else
             DST_SEEDS=5 DST_BASE_SEED=1 make dst_seeded
           fi
-
-      - name: smoke_parity
-        run: make smoke_parity
-
-      # The second coverage axis (WI-A17). check_core above type-checks
-      # src/core and never runs its inline tests; this runs every one of them.
-      # It is a separate step rather than another name in the DST gates list so
-      # a coverage regression is legible as its own red check.
-      - name: test_coverage (run every inline test under src/core)
-        run: make test_coverage_selftest test_coverage
 
       # Enforcing since MOT-130. verify_core no longer ticks a file that proves
       # nothing, and a `requires` with no `ensures` exits non-zero (ADR-001 §3).
