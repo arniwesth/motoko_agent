@@ -34,7 +34,9 @@ on:
 # ~25 min of work locally and ~30-34 min here (CI runs this serial, compile-bound
 # work about 1.15x slower than the dev box -- check_core: 139 s local, 160 s here).
 # It died in "DST AILANG gates" every time, including at 2f3ee4d1 before the ABI
-# 8.0 line. The targets were never the problem: all 15 gates pass cold in 644 s.
+# 8.0 line. The targets' run time was never the problem: all 15 gates pass cold
+# in 644 s. (Where it died was one target's OUTPUT, found only after this split:
+# see DST gates (rest) below.)
 # The split gives each share its own runner and its own red check, so a failure
 # names itself instead of arriving as "cancelled". Per-target cold measurements
 # (local seconds) are in the job comments; each job re-pays ~2.5 min of setup
@@ -94,168 +96,45 @@ jobs:
   dst_gates_rest:
     name: DST gates (rest)
     runs-on: ubuntu-latest
-    # 30, not 20, only while compaction_dst's five scripts are probed one step
-    # each: if all five hang, 5 x ~3 min of probe plus phase_c_l1's re-run must
-    # still leave the rest of the job time to report. Back to 20 on the fold.
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - uses: ./.github/actions/dst-setup
 
-      # ONE STEP PER TARGET, DELIBERATELY. As one `make --keep-going` line this
-      # step ran past 20 minutes in CI against 267 s of the same twelve targets
-      # measured cold locally (2026-09-24), while the heavy job came in at the
-      # expected 1.29x of its local time. So one of these hangs HERE and not on
-      # the dev box, and a single step reports that as a dead step with no name.
-      # It is not new: the pre-split job died in the same place at 2f3ee4d1,
-      # before the ABI 8.0 line. NOT a counter-example: main's scheduled run,
-      # which an earlier version of this comment cited as finishing "the whole
-      # job in 2.4 min". It does not run this job at all -- main is the release
-      # mirror, months behind main_dst, and its workflow has ONE job with no DST
-      # gates and no compaction_dst step (run 35990826715). There is no known
-      # green run of these targets in CI to diff against.
-      # Per-target steps cost nothing and make the next red say which target it
-      # is. Fold them back into one line once the hang is found and fixed.
+      # ONE LINE AGAIN, because the hang is found and fixed (LEG-CI-COMPACTION).
+      # For weeks this job ran past its budget and died "cancelled" with no log,
+      # against 267 s of the same targets locally. Splitting it named
+      # compaction_dst (run 36010382877), then long_qwen_compaction_dst among
+      # its five scripts (runs 36014490004, 36014504002: the other four passed
+      # in 1/7/58/3 s, that one sat 20+ min past its step's 4-minute timeout).
+      # The script was never slow: with its output in a file it passes here in
+      # 7 s at 1.7 GB RSS of 16 GB (runs 36018119963, 36018131861). What it
+      # does is PRINT single lines of 838 KB and 1.05 MB, and the runner spends
+      # time quadratic in a line's length -- measured here with no ailang at
+      # all, one line of 64 KB 7 s, of 256 KB 104-129 s, of 1 MB past 30 min --
+      # while servicing no timeout, no cancel and no read of the step's pipe.
+      # It was never ABI 8.0's: the pre-split job died in the same place at
+      # 2f3ee4d1. And main's scheduled run, once cited here as finishing "the
+      # whole job in 2.4 min", is no baseline -- main is the release mirror and
+      # does not run this job at all (run 35990826715).
       #
-      # 2026-09-24, run 36010382877: the split named it -- `compaction_dst` ran
-      # past 20 min against 59 s cold locally, every later step pending behind
-      # it. The target is five `ailang run` invocations, so the next split is
-      # between those five: one step per script (the compaction_dst_* parts in
-      # the Makefile), each under scripts/ci_hang_probe.sh. The probe lets a
-      # script run 150 s -- the WHOLE target takes 59 s locally -- and past that
-      # prints what the process tree is blocked on (wait channels, fds, stdin,
-      # sockets, CPU sampled twice) and SIGQUITs ailang for a goroutine dump, so
-      # a hang fails in minutes with a signature instead of as "cancelled".
-      # Every later step runs `if: !cancelled()`, so one red names ALL of them.
-      # phase_c_l1 is probed too: `phase_c_l1: compaction_dst` re-runs all five.
-      - name: compaction_dst / compaction_policy_dst
-        timeout-minutes: 4
-        run: scripts/ci_hang_probe.sh 150 make compaction_dst_policy
-
-      - name: compaction_dst / compaction_catalog_dst
-        if: ${{ !cancelled() }}
-        timeout-minutes: 4
-        run: scripts/ci_hang_probe.sh 150 make compaction_dst_catalog
-
-      - name: compaction_dst / runtime_status_tool_dst
-        if: ${{ !cancelled() }}
-        timeout-minutes: 4
-        run: scripts/ci_hang_probe.sh 150 make compaction_dst_runtime_status
-
-      - name: compaction_dst / scripted_cursor_probe
-        if: ${{ !cancelled() }}
-        timeout-minutes: 4
-        run: scripts/ci_hang_probe.sh 150 make compaction_dst_cursor_probe
-
-      - name: compaction_dst / long_qwen_compaction_dst
-        if: ${{ !cancelled() }}
-        timeout-minutes: 4
-        run: scripts/ci_hang_probe.sh 150 make compaction_dst_long_qwen
-
-      # Runs 36014490004 and 36014504002 BOTH wedged in the step above, past
-      # the probe's 150 s and the step's own 4 min, and kept no log. Its output
-      # now goes to a file and this uploads it, so the evidence survives even a
-      # job that dies "cancelled".
-      - name: upload probe record (compaction_dst)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-hang-probe-compaction_dst
-          path: ${{ runner.temp }}/ci_hang_probe/
-          if-no-files-found: warn
-
-      - name: conformance
-        if: ${{ !cancelled() }}
-        run: make conformance
-
-      - name: phase_c_l1 (re-runs compaction_dst first)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 8
-        run: scripts/ci_hang_probe.sh 360 make phase_c_l1
-
-      - name: upload probe record (phase_c_l1)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-hang-probe-phase_c_l1
-          path: ${{ runner.temp }}/ci_hang_probe/phase_c_l1.*
-          if-no-files-found: warn
-
-      - name: profile_coverage
-        if: ${{ !cancelled() }}
-        run: make profile_coverage
-
-      - name: profile_definition
-        if: ${{ !cancelled() }}
-        run: make profile_definition
-
-      - name: driver_only
-        if: ${{ !cancelled() }}
-        run: make driver_only
-
-      - name: fault_catalogue
-        if: ${{ !cancelled() }}
-        run: make fault_catalogue
-
-      - name: event_vocabulary
-        if: ${{ !cancelled() }}
-        run: make event_vocabulary
-
-      - name: attribution_table
-        if: ${{ !cancelled() }}
-        run: make attribution_table
-
-      - name: predicate_anchors
-        if: ${{ !cancelled() }}
-        run: make predicate_anchors
-
-      - name: ext_call_inventory
-        if: ${{ !cancelled() }}
-        run: make ext_call_inventory
-
-      - name: ext_call_inventory_selftest
-        if: ${{ !cancelled() }}
-        run: make ext_call_inventory_selftest
-
-      # DIAGNOSTIC, LAST ON PURPOSE. long_qwen_compaction_dst prints 2.67 MB of
-      # session events, four of them single lines of 838 KB, 1.05 MB, 200 KB and
-      # 200 KB (history_seeded carrying the scenario's megabyte messages); no
-      # other script here prints a line over 1.5 KB. This step sends exactly
-      # those bytes through the runner with ailang out of the picture: `cat` of
-      # the file the probe captured. If it wedges the way the script's step did,
-      # the hang is the runner's handling of the output, not the script.
-      - name: 'diag: replay long_qwen raw stdout through the runner (no ailang)'
-        if: ${{ !cancelled() }}
-        timeout-minutes: 3
-        run: cat "$RUNNER_TEMP/ci_hang_probe/compaction_dst_long_qwen.out"
-
-  # DIAGNOSTIC. The same question as the replay above, with no checkout, no
-  # setup and no ailang: does one long line wedge a runner, and from what
-  # length? Ordered so the first step that wedges brackets the threshold.
-  runner_long_line:
-    name: 'diag: runner vs one long log line'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: control -- 1 MB as 1000 lines of 1000 chars
-        timeout-minutes: 2
-        run: python3 -c 'print(("x" * 1000 + "\n") * 1000, end="")'
-
-      - name: one line of 64 KB
-        if: ${{ !cancelled() }}
-        timeout-minutes: 2
-        run: python3 -c 'print("x" * 65536)'
-
-      - name: one line of 256 KB
-        if: ${{ !cancelled() }}
-        timeout-minutes: 2
-        run: python3 -c 'print("x" * 262144)'
-
-      - name: one line of 1 MB
-        if: ${{ !cancelled() }}
-        timeout-minutes: 2
-        run: python3 -c 'print("x" * 1048576)'
+      # The fix is in the Makefile: that recipe cuts its own lines at 4096.
+      # The gate is here: everything this line prints goes through
+      # scripts/line_guard.sh --strict, so the NEXT target that prints a line
+      # over 16384 characters is a fast red that names the problem, not an
+      # hour of silence. `shell: bash` runs with pipefail, so make's status
+      # survives the pipe. If a hang comes back that this does not explain,
+      # split the line again and wrap each step in scripts/ci_hang_probe.sh,
+      # which records a hang to files (uploaded under always()) instead of to
+      # the pipe the runner may have stopped reading.
+      - name: DST AILANG gates — rest
+        shell: bash
+        run: |
+          make --keep-going compaction_dst conformance phase_c_l1 profile_coverage \
+            profile_definition driver_only fault_catalogue event_vocabulary \
+            attribution_table predicate_anchors ext_call_inventory \
+            ext_call_inventory_selftest 2>&1 | scripts/line_guard.sh 16384 --strict
 
   # ~11 min. The second coverage axis (WI-A17) plus smoke_parity: 334 s and
   # 108 s cold. check_core type-checks src/core and never runs its inline

@@ -2453,10 +2453,23 @@ COMPACTION_DST_POLICY         = ailang run --caps IO --entry main scripts/dst/co
 COMPACTION_DST_CATALOG        = ailang run --caps IO,Env,FS --entry main scripts/dst/compaction_catalog_dst.ail
 COMPACTION_DST_RUNTIME_STATUS = ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
 COMPACTION_DST_CURSOR_PROBE   = ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/scripted_cursor_probe.ail < /dev/null
-COMPACTION_DST_LONG_QWEN      = ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
-  scripts/dst/long_qwen_compaction_dst.ail < /dev/null
+COMPACTION_DST_LONG_QWEN      = set -o pipefail; \
+  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
+  scripts/dst/long_qwen_compaction_dst.ail < /dev/null | scripts/line_guard.sh 4096
 COMPACTION_DST_PARTS := compaction_dst_policy compaction_dst_catalog compaction_dst_runtime_status \
   compaction_dst_cursor_probe compaction_dst_long_qwen
+
+# THE long_qwen LINE IS CUT, AND THAT IS THE FIX FOR THE CI HANG. Its scenarios
+# carry megabyte messages and the session prints each `history_seeded` event
+# whole: single lines of 838 KB, 1.05 MB and 2 x 200 KB. The GitHub runner
+# spends time quadratic in a line's length (256 KB: 104 s; 1 MB: past 30 min)
+# and services no timeout meanwhile, so `DST gates (rest)` ran past every limit
+# it had and died "cancelled" with no log -- while the script itself passes in
+# CI in 7 s once its output is off the runner's pipe (run 36018119963). The
+# verdicts are short `scenario=` lines; the events keep their first 4096
+# characters, which carry their type and ids. bash for `pipefail`, so ailang's
+# status and not the filter's decides the target.
+compaction_dst compaction_dst_long_qwen: SHELL := /bin/bash
 
 compaction_dst:
 	$(COMPACTION_DST_POLICY)
