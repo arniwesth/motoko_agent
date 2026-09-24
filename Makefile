@@ -2996,7 +2996,11 @@ verify_classify_check:
 # ADR-001 §4: every NEW `pure func` in src/core/ carries a contract or a
 # `-- contracts: ...` line saying what blocks one -- and the excuse is checked by
 # synthesising a trivial contract and confirming the verifier really rejects the
-# function. Keyed on the diff: ~1545 declarations predate the rule.
+# function. Keyed on the diff: ~1545 declarations predate the rule. A declaration
+# reachable ONLY from a `tests [...]` block is out of scope (027's ruling of
+# 2026-09-24), computed from the module's reference graph, never from a name or a
+# path; test_new_contract_policy.py is its mutation gate, run by
+# verify_classify_check.
 #
 # BASE here is the development trunk, NOT the Makefile-wide BASE (line 83), which
 # is `make pr`'s target branch. main is a release mirror that main_dst is merged
