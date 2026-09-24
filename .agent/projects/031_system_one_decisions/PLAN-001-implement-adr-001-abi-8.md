@@ -1044,6 +1044,55 @@ and therefore **failed loudly instead of passing wrongly** — the right behavio
 `BASE` to that SHA with an explicit `git cat-file -e` check, and the re-run is **14 of 14**. The delegate's
 envelope was accurate; the discrepancy was mine.
 
+### CI-COMPACTION — 2026-09-24, commits `d80cba89`, `026f89ba`, `7ba20f68` (R-G red #3)
+
+The last of the three reds R-G handed to its owners. `DST gates (rest)` had been dying as *cancelled* with
+**no log kept**, for weeks, at `2f3ee4d1` (before line R) as well as on it.
+
+**Not our code, and not a slow target.** The **GitHub Actions runner spends time quadratic in the length of
+a single log line**, and while it is inside one line it drains no stdout, services no `timeout-minutes` and
+honours no cancel. Measured on `ubuntu-latest` with **no `ailang` involved at all** (runs `36018119963`,
+`36018131861`):
+
+| printed | runner time |
+|---|---|
+| 1 MB as 1000 lines of 1000 chars | **4 s** |
+| one line of 64 KB | 7 s |
+| one line of 256 KB | **104–129 s** |
+| one line of 1 MB | **never finished** — past the step timeout by minutes |
+
+`scripts/dst/long_qwen_compaction_dst.ail` prints session events whole: single lines of **838 KB, 1.05 MB
+and 2 x 200 KB** — about **50 minutes** of runner time. Its four siblings' longest line is under 1.5 KB.
+
+**This is why the hunt took three rounds, and the lesson worth keeping.** The first probe wrote its
+diagnostics to *the same stdout pipe* as the subject, so when the runner stopped draining that pipe the
+probe's first `echo` blocked exactly like `ailang` did: a probe that dies of the condition it is measuring
+reports nothing. Probe v2 put every diagnostic in a file under `$RUNNER_TEMP` and uploaded it under
+`always()`, which survives a cancelled job — and the same script then measured **rc=0 in 7 s in CI**, at
+1.2 GB RSS of 16 GB with memory PSI 0.00.
+
+**Two orchestrator hypotheses the evidence killed, both mine:** (1) *stdin* — the two scripts without
+`< /dev/null` were the candidates and both passed; (2) *OOM on the runner* — disproved by the sampler above.
+A third, in the workflow comment, was a **false baseline**: `main`'s scheduled run was cited as finishing
+this job in 2.4 min, but `main` is the release mirror and runs **no DST gates at all** (run `35990826715`).
+
+**The fix** (`scripts/line_guard.sh`): the `long_qwen` recipe line pipes through `line_guard.sh 4096`, which
+cuts long lines and says how much it cut; the target's shell is bash with `set -o pipefail` so `ailang`'s
+status, not the filter's, decides the result. The verdicts are short `scenario=` lines and the cut events
+keep their type and ids.
+
+**The gate is the part that generalises:** the whole rest job runs through `line_guard.sh 16384 --strict`,
+so the NEXT target that prints a long line is a fast red with a `::error` annotation naming the cause,
+instead of another silent month. Every other target in the job measures at most 1456 chars.
+
+| receipt (orchestrator's own run) | result |
+|---|---|
+| `make compaction_dst` after the fix | **rc=0, 9 s**; output 2,668,335 B → **501,587 B**; longest line **1,050,377 → 4,142** |
+| the five cut notices | byte counts match my own raw measurement of the unfixed script exactly |
+| `line_guard.sh` unit checks | cuts + annotates; `--strict` exits 1; short lines untouched, rc 0 |
+| `pipefail` is load-bearing | failing producer behind a succeeding filter: **rc=1 with it, rc=0 without** |
+| **CI `DST gates (rest)`** | **success in 7 m 21 s** (run `36020324853`) — first green, folded back to one step |
+
 ## 10. Estimates
 
 | phase | delegate-days |
