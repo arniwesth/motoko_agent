@@ -3360,6 +3360,18 @@ ext_hook_scope_selftest:
 # 527-532 s against 513-517 s -- more parallelism, a slower walk. The per-file
 # cap in derive.py is measured in wall time, so this is what keeps its margin a
 # property of the file rather than of the job count. `nproc` honours affinity.
+#
+# SCOPE: deterministic on a DEDICATED runner, advisory on a shared one. `nproc`
+# counts cores, not idle ones, so on the dev box, shared with other sessions'
+# ailang runs, a walk can be starved past the per-file cap and go red with
+# nothing wrong in the tree. A local `unrunnable` is read by the cores figure it
+# carries (derive.py, at --timeout, says how). Re-run when the box is quiet, or
+# with fewer workers: `make test_coverage TEST_COVERAGE_JOBS=2`.
+# Jobs are deliberately NOT derived from load. A sampled input makes two runs
+# on one machine behave differently. On this box the load has also arrived
+# mid-walk (6.5 at the start of one run, a mean of 28 across it), after a
+# start-time sample would have said go. And the load average of a VM kernel
+# shared between containers is not idle cores anyway: 28 there, with 4.8 of 8 busy.
 TEST_COVERAGE_JOBS ?= $(shell n=$$(nproc 2>/dev/null || echo 1); [ $$n -lt 6 ] && echo $$n || echo 6)
 
 .PHONY: test_coverage test_coverage_selftest

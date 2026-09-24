@@ -187,6 +187,7 @@ class FileResult:
     # rather than inferred, and wall/CPU can tell a costly file from a starved one.
     wall: float = 0.0
     cpu: float = 0.0
+    timed_out: bool = False
 
 
 def syntactic_forms(text: str) -> list[str]:
@@ -242,6 +243,15 @@ class Timed:
     cpu: float
 
 
+class CapExceeded(subprocess.TimeoutExpired):
+    """The cap fired. Carries the CPU the child had used when it was killed,
+    because a timed-out file's cores figure is what says who to blame."""
+
+    def __init__(self, cmd: list[str], timeout: float, cpu: float) -> None:
+        super().__init__(cmd, timeout)
+        self.cpu = cpu
+
+
 def run_timed(argv: list[str], timeout: float, env: dict[str, str]) -> Timed:
     """`subprocess.run(capture_output, timeout)`, plus the child's own wall and CPU.
 
@@ -262,9 +272,9 @@ def run_timed(argv: list[str], timeout: float, env: dict[str, str]) -> Timed:
                 break
             if time.monotonic() - start >= timeout:
                 proc.kill()
-                os.wait4(proc.pid, 0)
+                _, _, usage = os.wait4(proc.pid, 0)
                 proc.returncode = -9  # reaped here; Popen must not wait on it again
-                raise subprocess.TimeoutExpired(argv, timeout)
+                raise CapExceeded(argv, timeout, usage.ru_utime + usage.ru_stime)
             time.sleep(0.2)
         proc.returncode = os.waitstatus_to_exitcode(status)
         wall = time.monotonic() - start
@@ -286,9 +296,11 @@ def run_file(path: Path, timeout: int) -> FileResult:
     try:
         proc = run_timed(["ailang", "test", "--format", "json", str(path)],
                          timeout, lane_env())
-    except subprocess.TimeoutExpired:
-        res.wall = float(timeout)
-        res.harness_error = f"`ailang test` did not finish within {timeout}s"
+    except CapExceeded as exc:
+        res.timed_out, res.wall, res.cpu = True, float(timeout), exc.cpu
+        res.harness_error = (f"`ailang test` did not finish within {timeout}s, having used "
+                             f"{exc.cpu:.0f} CPU-s = {exc.cpu / timeout:.1f} cores "
+                             f"(how to read that: derive.py, at --timeout)")
         return res
     except FileNotFoundError:
         res.harness_error = "`ailang` is not on PATH"
@@ -561,7 +573,8 @@ def report(results: list[FileResult], findings: list[Finding], root: Path,
     if slowest:
         print(f"slowest against the {timeout}s per-file cap: " + "; ".join(
             f"{r.path} {r.wall:.0f}s = {r.wall / timeout:.0%}"
-            + (f", {r.cpu:.0f} CPU-s, {r.cpu / r.wall:.1f} cores" if r.cpu else ", timed out")
+            + (", timed out" if r.timed_out else "")
+            + f", {r.cpu:.0f} CPU-s, {r.cpu / r.wall:.1f} cores"
             for r in slowest))
 
     if findings:
@@ -865,6 +878,17 @@ def main() -> int:
     # and the job's other steps take <= 289 s, so a hang in it is named at ~20
     # minutes. Re-derive both bounds if the walk, the job, or the pin changes.
     # The margin is printed by report() on every run.
+    #
+    # THE BOUNDS ARE A DEDICATED RUNNER'S. On a machine shared with other
+    # sessions the walk can be starved past the cap: on the 8-core dev box,
+    # session.ail alone took 330 s / 475 CPU-s and the same walk went red twice,
+    # with ext/runtime.ail and session.ail both at 600 s. Read a timeout by the
+    # cores figure it now carries (CPU over the 600 s): at or above the file's
+    # usual rate (session.ail runs at 1.2-1.5, most files at 1.0-1.1) the file
+    # got more expensive, which is what the cap exists to catch; well under it
+    # but not near zero, the machine starved it, so re-run when the box is quiet
+    # before hunting a regression; near zero, it blocked, which is a hang.
+    # Determinism is claimed for CI only; see TEST_COVERAGE_JOBS in the Makefile.
     ap.add_argument("--timeout", type=int, default=600,
                     help="per-file timeout in seconds (a hang backstop; see the derivation above)")
     ap.add_argument("--self-test", action="store_true",
