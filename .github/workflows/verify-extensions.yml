@@ -60,6 +60,8 @@ env:
   # periodically, so anything keyed on "what is new" must compare against
   # main_dst -- see the new_contract_policy step.
   TRUNK: main_dst
+  # That release mirror: the only branch push: fires on, and never a base.
+  RELEASE_MIRROR: main
   # Read by scripts/ci_guarded_shell.sh; empty unless dispatched as the mutant.
   LINE_GUARD_MUTANT: ${{ github.event.inputs.line_guard_mutant == 'true' && '1' || '' }}
 
@@ -230,36 +232,50 @@ jobs:
         run: make verify_classify_check
 
       # Every new pure func in src/core carries a contract or a checked excuse.
-      # Keyed on the incoming diff, not the tree. PRs compare with their base
-      # branch; pushes compare with the pre-push commit (origin/main is already
-      # at HEAD after checkout and would make every push look empty).
+      # Keyed on the incoming diff, not the tree, and "new" means new to the
+      # TRUNK: every declaration on main_dst was gated when it landed there, or
+      # is one of the ~1545 that predate the rule (ADR-001 §4).
       #
       # TRUNK is main_dst, not main. main is a release mirror that main_dst is
       # periodically merged into, so it runs months behind: on 2026-08-30 it was
-      # still at PR #78 while main_dst was at #177. A main_dst -> main
-      # integration PR therefore diffs the whole trunk, and the gate that is
-      # keyed on the diff *precisely because* ~1545 declarations predate the rule
-      # (ADR-001 §4) turns back into the tree-wide gate it was designed not to
-      # be -- PR #154 reported 1565 of 1577 "new" declarations unjustified, every
-      # one of them old. Every commit on such a PR was already gated when it
-      # landed on main_dst, so gate the trunk against itself and get the empty
-      # diff that is the honest answer.
+      # still at PR #78 while main_dst was at #177. Anything diffed against main
+      # therefore diffs the whole trunk, and the gate that is keyed on the diff
+      # *precisely because* those declarations predate the rule turns back into
+      # the tree-wide gate it was designed not to be. So main is never the base,
+      # in either of the two ways it can become one:
+      #
+      #  * A PR into main (github.base_ref). PR #154 (main_dst -> main) reported
+      #    1565 of 1577 "new" declarations unjustified, every one of them old --
+      #    and so would any branch cut from the trunk and aimed at main, not
+      #    only main_dst itself.
+      #  * A push to main (github.event.before). push: fires on main only, and
+      #    main only ever receives the trunk, so "since main's previous tip" is
+      #    "everything the trunk did since the last sync". Run 36166159071, the
+      #    push of #154's merge, diffed against e48de909 (#78) and reported 1335
+      #    of 1384 unjustified. It is blind the other way too: a hotfix is in
+      #    `before` for every push after its own, so a red main turned green on
+      #    the next push. Do NOT reinstate event.before as a cheaper or "more
+      #    precise" base for a push: it is the defect, not an optimisation.
+      #
+      # This does not make the gate vacuous on main. The diff is three-dot, from
+      # the merge base: a main that has just taken the trunk diffs to nothing
+      # and is green because nothing is new, while whatever main has that the
+      # trunk does not -- a hotfix, a contributor PR merged straight into main --
+      # is still in the diff and still gated.
+      #
+      # A PR into any other branch (the trunk itself, or a stacked PR) answers
+      # for its own diff against that branch, unless its head IS the trunk:
+      # every commit on it was already gated when it landed on main_dst.
       - name: new_contract_policy
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE: ${{ github.base_ref }}
           PR_HEAD: ${{ github.head_ref }}
-          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if [[ "$PR_HEAD" == "$TRUNK" ]]; then
-              contract_base="origin/$TRUNK"
-            else
-              contract_base="origin/$PR_BASE"
-            fi
-          elif [[ "$EVENT_NAME" == "push" ]]; then
-            contract_base="$PUSH_BEFORE"
+          if [[ "$EVENT_NAME" == "pull_request" && "$PR_BASE" != "$RELEASE_MIRROR" \
+                && "$PR_HEAD" != "$TRUNK" ]]; then
+            contract_base="origin/$PR_BASE"
           else
             contract_base="origin/$TRUNK"
           fi
