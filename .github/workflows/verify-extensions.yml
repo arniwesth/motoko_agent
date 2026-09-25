@@ -56,10 +56,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The development trunk. main is a release mirror that main_dst is merged into
-  # periodically, so anything keyed on "what is new" must compare against
-  # main_dst -- see the new_contract_policy step.
-  TRUNK: main_dst
   # Read by scripts/ci_guarded_shell.sh; empty unless dispatched as the mutant.
   LINE_GUARD_MUTANT: ${{ github.event.inputs.line_guard_mutant == 'true' && '1' || '' }}
 
@@ -147,8 +143,8 @@ jobs:
       # while servicing no timeout, no cancel and no read of the step's pipe.
       # It was never ABI 8.0's: the pre-split job died in the same place at
       # 2f3ee4d1. And main's scheduled run, once cited here as finishing "the
-      # whole job in 2.4 min", is no baseline -- main is the release mirror and
-      # does not run this job at all (run 35990826715).
+      # whole job in 2.4 min", is no baseline -- main was then a release mirror
+      # that did not run this job at all (run 35990826715).
       #
       # The fix is in the Makefile: that recipe cuts its own lines at 4096.
       # The gate is the workflow's default shell (see `defaults` at the top),
@@ -195,8 +191,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # new_contract_policy diffs against the PR base, which a depth-1
-          # checkout does not have.
+          # new_contract_policy diffs against the PR base or the pre-push tip,
+          # which a depth-1 checkout does not have.
           fetch-depth: 0
       - uses: ./.github/actions/dst-setup
 
@@ -230,39 +226,60 @@ jobs:
         run: make verify_classify_check
 
       # Every new pure func in src/core carries a contract or a checked excuse.
-      # Keyed on the incoming diff, not the tree. PRs compare with their base
-      # branch; pushes compare with the pre-push commit (origin/main is already
-      # at HEAD after checkout and would make every push look empty).
+      # Keyed on the incoming diff, not the tree: ~1545 declarations predate the
+      # rule (ADR-001 §4). So the base is the tip the change is being added to:
       #
-      # TRUNK is main_dst, not main. main is a release mirror that main_dst is
-      # periodically merged into, so it runs months behind: on 2026-08-30 it was
-      # still at PR #78 while main_dst was at #177. A main_dst -> main
-      # integration PR therefore diffs the whole trunk, and the gate that is
-      # keyed on the diff *precisely because* ~1545 declarations predate the rule
-      # (ADR-001 §4) turns back into the tree-wide gate it was designed not to
-      # be -- PR #154 reported 1565 of 1577 "new" declarations unjustified, every
-      # one of them old. Every commit on such a PR was already gated when it
-      # landed on main_dst, so gate the trunk against itself and get the empty
-      # diff that is the honest answer.
+      #  * pull_request -- origin/<base_ref>: what the PR adds to its target,
+      #    a PR stacked onto another branch included.
+      #  * push (fires on main only) -- github.event.before, main's tip before
+      #    this push: what the push adds to the trunk. A merged PR is gated
+      #    again as it lands, and a direct push is gated at all. NOT origin/main:
+      #    after checkout that IS the pushed commit, the diff is empty, and every
+      #    push passes whatever it lands.
+      #  * schedule / workflow_dispatch -- origin/main. A scheduled run is on
+      #    main, so its diff is empty and it prints so; it is here for upstream
+      #    drift, not this gate. A dispatch on a branch gets what it adds to main.
+      #
+      # event.before is all zeros when the push CREATED the branch. After a
+      # force-push it names a commit no ref reaches, which this clone lacks; it
+      # is fetched by SHA, and the three-dot diff from there is right. If that
+      # fetch fails too, or before is all zeros, there is no previous tip to
+      # diff against, so the pushed tip is gated against its first parent,
+      # HEAD~1, and the step says so: for a PR's merge commit that is the whole
+      # PR, otherwise the last commit. Neither a silent pass nor "cannot resolve
+      # base ref".
+      #
+      # Until 2026-09-25 main was a release mirror of a separate trunk, main_dst,
+      # and this step compared with main_dst. That branch is retired (#154 merged
+      # it); main is the trunk. Do not route a push to origin/<the branch it
+      # pushed to>: that is the empty diff above, a gate that cannot go red.
       - name: new_contract_policy
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE: ${{ github.base_ref }}
-          PR_HEAD: ${{ github.head_ref }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if [[ "$PR_HEAD" == "$TRUNK" ]]; then
-              contract_base="origin/$TRUNK"
-            else
-              contract_base="origin/$PR_BASE"
-            fi
-          elif [[ "$EVENT_NAME" == "push" ]]; then
-            contract_base="$PUSH_BEFORE"
-          else
-            contract_base="origin/$TRUNK"
-          fi
+          case "$EVENT_NAME" in
+            pull_request)
+              contract_base="origin/$PR_BASE" ;;
+            push)
+              contract_base="$PUSH_BEFORE"
+              no_tip=""
+              if [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then
+                no_tip="event.before is all zeros: this push created $GITHUB_REF_NAME"
+              elif ! git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null \
+                   && ! git fetch --no-tags --quiet origin "$PUSH_BEFORE" 2>/dev/null; then
+                no_tip="event.before $PUSH_BEFORE is not fetchable (orphaned by a force-push)"
+              fi
+              if [[ -n "$no_tip" ]]; then
+                echo "new_contract_policy: $no_tip, so there is no previous tip to diff against;"
+                echo "  gating the pushed tip against its first parent, HEAD~1 = $(git rev-parse HEAD~1)"
+                contract_base="HEAD~1"
+              fi ;;
+            *)
+              contract_base="origin/main" ;;
+          esac
           echo "new_contract_policy base: $contract_base"
           make new_contract_policy BASE="$contract_base"
 
